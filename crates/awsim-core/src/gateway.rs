@@ -247,18 +247,29 @@ fn extract_service_info(
 fn resolve_service_from_target(target: &str) -> Option<String> {
     let prefix = target.split('.').next()?;
     let service = match prefix {
+        // Core services
         p if p.starts_with("DynamoDB") => "dynamodb",
-        p if p.starts_with("Kinesis") => "kinesis",
-        p if p.starts_with("AWSStepFunctions") => "states",
-        p if p.starts_with("AWSCognitoIdentityProviderService") => "cognito-idp",
-        p if p.starts_with("AWSCognitoIdentityService") => "cognito-identity",
-        p if p.starts_with("secretsmanager") => "secretsmanager",
-        p if p.starts_with("Logs") => "logs",
-        p if p.starts_with("AmazonSSM") => "ssm",
-        p if p.starts_with("TrentService") => "kms",
         p if p.starts_with("AmazonSQS") => "sqs",
         p if p.starts_with("AmazonSNS") => "sns",
+        p if p.starts_with("TrentService") => "kms",
+        p if p.starts_with("secretsmanager") => "secretsmanager",
+        p if p.starts_with("AmazonSSM") => "ssm",
+        p if p.starts_with("Logs") => "logs",
+        p if p.starts_with("Kinesis") => "kinesis",
+        p if p.starts_with("AWSStepFunctions") => "states",
         p if p.starts_with("AWSEvents") => "events",
+        // Auth
+        p if p.starts_with("AWSCognitoIdentityProviderService") => "cognito-idp",
+        p if p.starts_with("AWSCognitoIdentityService") => "cognito-identity",
+        // Containers
+        p if p.starts_with("AmazonEC2ContainerServiceV2") => "ecs",
+        p if p.starts_with("AmazonEC2ContainerRegistry") => "ecr",
+        // Data/Analytics
+        p if p.starts_with("AmazonAthena") => "athena",
+        p if p.starts_with("AWSGlue") => "glue",
+        // Security
+        p if p.starts_with("CertificateManager") => "acm",
+        p if p.starts_with("AWSWAF") => "wafv2",
         _ => return None,
     };
     Some(service.to_string())
