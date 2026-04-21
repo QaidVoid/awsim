@@ -5,7 +5,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 
 use crate::state::{S3Object, S3State};
-use crate::util::{compute_etag, now_rfc7231};
+use crate::util::{compute_etag, now_iso8601, now_rfc7231};
 
 use super::{opt_str, require_str};
 use super::bucket::no_such_bucket;
@@ -198,7 +198,10 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
     };
 
     let etag = compute_etag(&data);
-    let last_modified = now_rfc7231();
+    // Use RFC 7231 for the stored object (used in HTTP response headers like Last-Modified).
+    let last_modified_http = now_rfc7231();
+    // The CopyObjectResult XML body requires ISO 8601 / RFC 3339 timestamp.
+    let last_modified_iso = now_iso8601();
     let content_length = data.len() as u64;
 
     let dst_bucket_ref = state
@@ -212,7 +215,7 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
         content_type,
         content_length,
         etag: etag.clone(),
-        last_modified: last_modified.clone(),
+        last_modified: last_modified_http,
         metadata,
         version_id: None,
     };
@@ -222,7 +225,7 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
     Ok(json!({
         "CopyObjectResult": {
             "ETag": etag,
-            "LastModified": last_modified,
+            "LastModified": last_modified_iso,
         }
     }))
 }

@@ -41,7 +41,6 @@ impl StsService {
         Ok(json!({
             "Credentials": credentials,
             "AssumedRoleUser": assumed_role_user,
-            "PackedPolicySize": Value::Null,
         }))
     }
 

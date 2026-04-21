@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
+use crate::filter;
 use crate::state::{MessageAttribute, PublishedMessage, SnsState};
 
 // ---------------------------------------------------------------------------
@@ -55,17 +56,42 @@ pub fn publish(
         "Published message"
     );
 
+    // Build a Value-based view of message attributes for filter evaluation.
+    let filter_attrs: HashMap<String, Value> = published
+        .message_attributes
+        .iter()
+        .map(|(k, attr)| {
+            let val = json!({
+                "DataType": attr.data_type,
+                "Value": attr.string_value.as_deref().unwrap_or(""),
+            });
+            (k.clone(), val)
+        })
+        .collect();
+
     // Emit cross-service events for each active subscription.
     if let Some(bus) = ctx.event_bus.as_ref() {
         // Collect subscriptions for this topic that target SQS or Lambda.
-        let subs: Vec<(String, String)> = state
+        let subs: Vec<(String, String, Option<String>)> = state
             .subscriptions
             .iter()
             .filter(|s| s.topic_arn == topic_arn && (s.protocol == "sqs" || s.protocol == "lambda"))
-            .map(|s| (s.protocol.clone(), s.endpoint.clone()))
+            .map(|s| {
+                let filter_policy = s.attributes.get("FilterPolicy").cloned();
+                (s.protocol.clone(), s.endpoint.clone(), filter_policy)
+            })
             .collect();
 
-        for (protocol, endpoint) in subs {
+        for (protocol, endpoint, filter_policy) in subs {
+            // Apply filter policy if set
+            if let Some(filter_str) = &filter_policy {
+                if let Ok(filter_val) = serde_json::from_str::<Value>(filter_str) {
+                    if !filter::matches_filter(&filter_val, &filter_attrs) {
+                        continue; // Skip this subscription
+                    }
+                }
+            }
+
             let event = InternalEvent {
                 source: "sns".to_string(),
                 event_type: "sns:Publish".to_string(),
