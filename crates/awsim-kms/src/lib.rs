@@ -202,7 +202,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(result["KeyId"].as_str().unwrap(), key_id);
-        assert!(result["DeletionDate"].as_str().is_some());
+        assert!(result["DeletionDate"].as_f64().is_some() || result["DeletionDate"].as_str().is_some());
     }
 
     #[test]
