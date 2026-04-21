@@ -21,7 +21,7 @@ pub struct InternalEvent {
 
 /// A cheap-to-clone handle to the shared broadcast channel used as an
 /// internal event bus between services.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EventBus {
     sender: broadcast::Sender<InternalEvent>,
 }

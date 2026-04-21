@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, InternalEvent, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
@@ -14,7 +14,7 @@ use crate::state::{MessageAttribute, PublishedMessage, SnsState};
 pub fn publish(
     state: &SnsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     // TopicArn or TargetArn
     let topic_arn = input["TopicArn"]
@@ -55,7 +55,35 @@ pub fn publish(
         "Published message"
     );
 
-    // Log — cross-service delivery (SQS/Lambda) will be added later
+    // Emit cross-service events for each active subscription.
+    if let Some(bus) = ctx.event_bus.as_ref() {
+        // Collect subscriptions for this topic that target SQS or Lambda.
+        let subs: Vec<(String, String)> = state
+            .subscriptions
+            .iter()
+            .filter(|s| s.topic_arn == topic_arn && (s.protocol == "sqs" || s.protocol == "lambda"))
+            .map(|s| (s.protocol.clone(), s.endpoint.clone()))
+            .collect();
+
+        for (protocol, endpoint) in subs {
+            let event = InternalEvent {
+                source: "sns".to_string(),
+                event_type: "sns:Publish".to_string(),
+                region: ctx.region.clone(),
+                account_id: ctx.account_id.clone(),
+                detail: json!({
+                    "topic_arn": topic_arn,
+                    "message_id": message_id,
+                    "message": message,
+                    "subject": subject,
+                    "protocol": protocol,
+                    "endpoint": endpoint,
+                }),
+            };
+            bus.publish(event);
+        }
+    }
+
     let _ = published;
 
     Ok(json!({ "MessageId": message_id }))

@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
-use tracing::info;
+use tracing::{info, warn};
 
-use awsim_core::AppState;
+use awsim_core::{AppState, RequestContext};
 
 mod admin;
 
@@ -45,6 +45,9 @@ async fn main() -> Result<()> {
 
     let service_count = state.services.len();
 
+    // Spawn background event router — handles cross-service fan-out.
+    spawn_event_router(&state);
+
     let app = axum::Router::new()
         .route("/_awsim/health", axum::routing::get(admin::health))
         .route("/_awsim/services", axum::routing::get(admin::list_services))
@@ -66,6 +69,132 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Spawn a background task that consumes from the internal event bus and
+/// performs cross-service fan-out deliveries.
+///
+/// Currently handles:
+///   sns:Publish  → sqs  — enqueues the SNS message body into the target queue
+///   sns:Publish  → lambda — (future) invokes the target Lambda function
+fn spawn_event_router(state: &AppState) {
+    use std::sync::Arc;
+
+    let mut rx = state.event_bus.subscribe();
+    let services = Arc::clone(&state.services);
+    let default_region = state.default_region.clone();
+    let default_account_id = state.default_account_id.clone();
+
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let protocol = event.detail["protocol"].as_str().unwrap_or("").to_string();
+                    let endpoint = event.detail["endpoint"].as_str().unwrap_or("").to_string();
+                    let message = event.detail["message"].as_str().unwrap_or("").to_string();
+                    let message_id = event.detail["message_id"].as_str().unwrap_or("").to_string();
+                    let topic_arn = event.detail["topic_arn"].as_str().unwrap_or("").to_string();
+
+                    match event.event_type.as_str() {
+                        "sns:Publish" if protocol == "sqs" => {
+                            // endpoint is a queue ARN: arn:aws:sqs:{region}:{account}:{queue-name}
+                            // Derive the queue URL so SQS SendMessage can find the queue.
+                            let queue_url = arn_to_sqs_url(&endpoint, &default_region, &default_account_id);
+
+                            if let Some(sqs_handler) = services.get("sqs") {
+                                // Build a minimal context (no event bus needed for delivery calls).
+                                let ctx = RequestContext {
+                                    account_id: event.account_id.clone(),
+                                    region: event.region.clone(),
+                                    service: "sqs".to_string(),
+                                    access_key: None,
+                                    request_id: uuid::Uuid::new_v4().to_string(),
+                                    method: "POST".to_string(),
+                                    uri: "/".to_string(),
+                                    event_bus: None,
+                                };
+
+                                // Wrap the SNS message in the SNS notification envelope that
+                                // real AWS delivers to SQS subscribers.
+                                let body = serde_json::json!({
+                                    "Type": "Notification",
+                                    "MessageId": message_id,
+                                    "TopicArn": topic_arn,
+                                    "Message": message,
+                                })
+                                .to_string();
+
+                                let input = serde_json::json!({
+                                    "QueueUrl": queue_url,
+                                    "MessageBody": body,
+                                });
+
+                                match sqs_handler.handle("SendMessage", input, &ctx).await {
+                                    Ok(_) => {
+                                        info!(
+                                            topic = %topic_arn,
+                                            queue = %endpoint,
+                                            "SNS→SQS fan-out delivered"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            topic = %topic_arn,
+                                            queue = %endpoint,
+                                            error = %e.message,
+                                            "SNS→SQS fan-out delivery failed"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        "sns:Publish" if protocol == "lambda" => {
+                            // Lambda fan-out — reserved for future implementation.
+                            info!(
+                                topic = %topic_arn,
+                                function = %endpoint,
+                                "SNS→Lambda fan-out: not yet implemented"
+                            );
+                        }
+                        _ => {
+                            // Unknown or unhandled event type — ignore.
+                        }
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!(skipped = n, "Event bus receiver lagged; some events were dropped");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    // Sender dropped — bus is shut down, exit the task.
+                    break;
+                }
+            }
+        }
+    });
+}
+
+/// Convert a SQS queue ARN to its local URL.
+///
+/// ARN format:  `arn:aws:sqs:{region}:{account}:{queue-name}`
+/// URL format:  `http://sqs.{region}.localhost:4566/{account}/{queue-name}`
+///
+/// Falls back to a best-effort URL using the supplied defaults when the ARN
+/// cannot be parsed.
+fn arn_to_sqs_url(arn: &str, default_region: &str, default_account: &str) -> String {
+    // arn:aws:sqs:us-east-1:000000000000:my-queue
+    let parts: Vec<&str> = arn.splitn(6, ':').collect();
+    if parts.len() == 6 {
+        let region = parts[3];
+        let account = parts[4];
+        let queue = parts[5];
+        format!("http://sqs.{region}.localhost:4566/{account}/{queue}")
+    } else {
+        // ARN parse failed — try to use the last segment as a queue name.
+        let queue = arn.rsplit(':').next().unwrap_or(arn);
+        format!(
+            "http://sqs.{default_region}.localhost:4566/{default_account}/{queue}"
+        )
+    }
 }
 
 fn register_services(state: &mut AppState) {
