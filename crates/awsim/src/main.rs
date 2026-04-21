@@ -72,6 +72,9 @@ fn register_services(state: &mut AppState) {
     let sts = Arc::new(awsim_sts::StsService::new());
     state.register(sts, vec![]);
 
+    let sns = Arc::new(awsim_sns::SnsService::new());
+    state.register(sns, vec![]);
+
     let sqs = Arc::new(awsim_sqs::SqsService::new());
     state.register(sqs, vec![]);
 }

@@ -1,0 +1,178 @@
+use std::collections::HashMap;
+
+use awsim_core::{AwsError, RequestContext};
+use serde_json::{Value, json};
+use tracing::info;
+use uuid::Uuid;
+
+use crate::state::{MessageAttribute, PublishedMessage, SnsState};
+
+// ---------------------------------------------------------------------------
+// Publish
+// ---------------------------------------------------------------------------
+
+pub fn publish(
+    state: &SnsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    // TopicArn or TargetArn
+    let topic_arn = input["TopicArn"]
+        .as_str()
+        .or_else(|| input["TargetArn"].as_str())
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameter", "TopicArn or TargetArn is required")
+        })?;
+
+    let message = input["Message"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Message is required"))?;
+
+    if !state.topics.contains_key(topic_arn) {
+        return Err(AwsError::not_found(
+            "NotFound",
+            format!("Topic not found: {topic_arn}"),
+        ));
+    }
+
+    let subject = input["Subject"].as_str().map(str::to_string);
+    let message_attributes = parse_message_attributes(input);
+
+    let message_id = Uuid::new_v4().to_string();
+
+    let published = PublishedMessage {
+        message_id: message_id.clone(),
+        topic_arn: topic_arn.to_string(),
+        message: message.to_string(),
+        subject: subject.clone(),
+        message_attributes,
+    };
+
+    info!(
+        message_id = %message_id,
+        topic = %topic_arn,
+        subject = ?subject,
+        "Published message"
+    );
+
+    // Log — cross-service delivery (SQS/Lambda) will be added later
+    let _ = published;
+
+    Ok(json!({ "MessageId": message_id }))
+}
+
+// ---------------------------------------------------------------------------
+// PublishBatch
+// ---------------------------------------------------------------------------
+
+pub fn publish_batch(
+    state: &SnsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let topic_arn = input["TopicArn"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TopicArn is required"))?;
+
+    if !state.topics.contains_key(topic_arn) {
+        return Err(AwsError::not_found(
+            "NotFound",
+            format!("Topic not found: {topic_arn}"),
+        ));
+    }
+
+    let entries = input["PublishBatchRequestEntries"]
+        .as_array()
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameter",
+                "PublishBatchRequestEntries is required",
+            )
+        })?;
+
+    if entries.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameter",
+            "PublishBatchRequestEntries must not be empty",
+        ));
+    }
+    if entries.len() > 10 {
+        return Err(AwsError::bad_request(
+            "TooManyEntriesInBatchRequest",
+            "Maximum 10 entries per batch",
+        ));
+    }
+
+    let mut successful: Vec<Value> = Vec::new();
+    let mut failed: Vec<Value> = Vec::new();
+
+    for entry in entries {
+        let id = entry["Id"].as_str().unwrap_or("").to_string();
+        let message = entry["Message"].as_str();
+
+        match message {
+            None => {
+                failed.push(json!({
+                    "Id": id,
+                    "Code": "InvalidParameter",
+                    "Message": "Message is required",
+                    "SenderFault": true,
+                }));
+            }
+            Some(msg) => {
+                let message_id = Uuid::new_v4().to_string();
+                let subject = entry["Subject"].as_str().map(str::to_string);
+                let message_attributes = parse_message_attributes(entry);
+
+                info!(
+                    message_id = %message_id,
+                    topic = %topic_arn,
+                    batch_id = %id,
+                    "Published batch message"
+                );
+
+                let published = PublishedMessage {
+                    message_id: message_id.clone(),
+                    topic_arn: topic_arn.to_string(),
+                    message: msg.to_string(),
+                    subject,
+                    message_attributes,
+                };
+                let _ = published;
+
+                successful.push(json!({
+                    "Id": id,
+                    "MessageId": message_id,
+                }));
+            }
+        }
+    }
+
+    Ok(json!({
+        "Successful": successful,
+        "Failed": failed,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn parse_message_attributes(input: &Value) -> HashMap<String, MessageAttribute> {
+    let mut result = HashMap::new();
+    if let Some(attrs) = input["MessageAttributes"].as_object() {
+        for (name, attr) in attrs {
+            let data_type = attr["DataType"].as_str().unwrap_or("String").to_string();
+            let string_value = attr["StringValue"].as_str().map(str::to_string);
+            result.insert(
+                name.clone(),
+                MessageAttribute {
+                    data_type,
+                    string_value,
+                    binary_value: None,
+                },
+            );
+        }
+    }
+    result
+}

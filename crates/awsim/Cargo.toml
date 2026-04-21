@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 awsim-core = { workspace = true }
 awsim-iam = { workspace = true }
+awsim-sns = { workspace = true }
 awsim-sqs = { workspace = true }
 awsim-sts = { workspace = true }
 axum = { workspace = true }
