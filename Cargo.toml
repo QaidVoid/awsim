@@ -7,8 +7,10 @@ members = [
     "crates/awsim-dynamodb",
     "crates/awsim-eventbridge",
     "crates/awsim-iam",
+    "crates/awsim-kms",
     "crates/awsim-lambda",
     "crates/awsim-s3",
+    "crates/awsim-secretsmanager",
     "crates/awsim-sns",
     "crates/awsim-sqs",
     "crates/awsim-sts",
@@ -26,7 +28,9 @@ awsim-core = { path = "crates/awsim-core" }
 awsim-eventbridge = { path = "crates/awsim-eventbridge" }
 awsim-dynamodb = { path = "crates/awsim-dynamodb" }
 awsim-iam = { path = "crates/awsim-iam" }
+awsim-kms = { path = "crates/awsim-kms" }
 awsim-lambda = { path = "crates/awsim-lambda" }
+awsim-secretsmanager = { path = "crates/awsim-secretsmanager" }
 awsim-s3 = { path = "crates/awsim-s3" }
 awsim-sns = { path = "crates/awsim-sns" }
 awsim-sqs = { path = "crates/awsim-sqs" }

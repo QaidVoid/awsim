@@ -100,6 +100,12 @@ fn register_services(state: &mut AppState) {
 
     let eventbridge = Arc::new(awsim_eventbridge::EventBridgeService::new());
     state.register(eventbridge, vec![]);
+
+    let kms = Arc::new(awsim_kms::KmsService::new());
+    state.register(kms, vec![]);
+
+    let secretsmanager = Arc::new(awsim_secretsmanager::SecretsManagerService::new());
+    state.register(secretsmanager, vec![]);
 }
 
 async fn health() -> &'static str {

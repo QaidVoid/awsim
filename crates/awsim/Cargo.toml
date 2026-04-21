@@ -15,7 +15,9 @@ awsim-core = { workspace = true }
 awsim-dynamodb = { workspace = true }
 awsim-eventbridge = { workspace = true }
 awsim-iam = { workspace = true }
+awsim-kms = { workspace = true }
 awsim-lambda = { workspace = true }
+awsim-secretsmanager = { workspace = true }
 awsim-s3 = { workspace = true }
 awsim-sns = { workspace = true }
 awsim-sqs = { workspace = true }
