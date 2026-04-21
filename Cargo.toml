@@ -93,3 +93,4 @@ uuid = { version = "1", features = ["v4"] }
 md-5 = "0.10"
 base64 = "0.22"
 sha2 = "0.10"
+zip = "2"

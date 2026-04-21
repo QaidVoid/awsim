@@ -224,6 +224,15 @@ pub fn update_function_code(
         .get_mut(name)
         .ok_or_else(|| resource_not_found("function", name))?;
 
+    // Invalidate the on-disk code cache so the next invocation re-extracts.
+    let cache_dir = std::env::temp_dir()
+        .join("awsim-lambda")
+        .join(name)
+        .join("code");
+    if cache_dir.exists() {
+        let _ = std::fs::remove_dir_all(&cache_dir);
+    }
+
     f.code_data = code_data;
     f.code_sha256 = code_sha256;
     f.code_size = code_size;
