@@ -16,25 +16,27 @@ pub struct SigV4Credentials {
 /// Format: `AWS4-HMAC-SHA256 Credential={access_key}/{date}/{region}/{service}/aws4_request,
 ///          SignedHeaders={headers}, Signature={sig}`
 pub fn parse_authorization(header: &str) -> Option<SigV4Credentials> {
-    let header = header.strip_prefix("AWS4-HMAC-SHA256 ")?;
+    let header = header.strip_prefix("AWS4-HMAC-SHA256")?.trim_start();
 
     let mut credential = None;
     let mut signed_headers = None;
     let mut signature = None;
 
-    for part in header.split(", ") {
+    // Split on comma — handle both ", " and "," and ", " with extra whitespace
+    for part in header.split(',') {
+        let part = part.trim();
         if let Some(val) = part.strip_prefix("Credential=") {
-            credential = Some(val);
+            credential = Some(val.trim());
         } else if let Some(val) = part.strip_prefix("SignedHeaders=") {
-            signed_headers = Some(val);
+            signed_headers = Some(val.trim());
         } else if let Some(val) = part.strip_prefix("Signature=") {
-            signature = Some(val);
+            signature = Some(val.trim());
         }
     }
 
     let credential = credential?;
     let parts: Vec<&str> = credential.split('/').collect();
-    if parts.len() != 5 {
+    if parts.len() < 5 {
         return None;
     }
 
@@ -43,11 +45,12 @@ pub fn parse_authorization(header: &str) -> Option<SigV4Credentials> {
         date: parts[1].to_string(),
         region: parts[2].to_string(),
         service: parts[3].to_string(),
-        signed_headers: signed_headers?
+        signed_headers: signed_headers
+            .unwrap_or("")
             .split(';')
             .map(|s| s.to_string())
             .collect(),
-        signature: signature?.to_string(),
+        signature: signature.unwrap_or("").to_string(),
     })
 }
 

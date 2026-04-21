@@ -200,7 +200,7 @@ async fn process_request(
 fn extract_service_info(
     state: &AppState,
     headers: &HeaderMap,
-    _uri: &Uri,
+    uri: &Uri,
 ) -> (String, String, String) {
     // Try Authorization header first
     if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
@@ -235,11 +235,22 @@ fn extract_service_info(
         }
     }
 
+    // Try path-based detection as last resort (for REST services called without auth)
+    let path = uri.path();
+    if let Some(service) = resolve_service_from_path(path) {
+        return (
+            service,
+            state.default_region.clone(),
+            state.default_account_id.clone(),
+        );
+    }
+
     // Fallback: log what we received so we can diagnose routing failures
     warn!(
         auth = ?headers.get("authorization").map(|v| v.to_str().unwrap_or("<non-utf8>")),
         target = ?headers.get("x-amz-target").map(|v| v.to_str().unwrap_or("<non-utf8>")),
         host = ?headers.get("host").map(|v| v.to_str().unwrap_or("<non-utf8>")),
+        path = %path,
         "Could not determine service — falling back to 'unknown'"
     );
     (
@@ -296,4 +307,34 @@ fn extract_service_from_host(host: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Last-resort: guess the service from the URI path pattern.
+/// This handles REST-protocol services when no auth header is present
+/// (e.g., requests from the admin console).
+fn resolve_service_from_path(path: &str) -> Option<String> {
+    let service = match path {
+        // Lambda
+        p if p.starts_with("/2015-03-31/functions") || p.starts_with("/2018-10-31/layers") => "lambda",
+        // API Gateway v2
+        p if p.starts_with("/v2/apis") => "execute-api",
+        // SES v2
+        p if p.starts_with("/v2/email") => "ses",
+        // Route53
+        p if p.starts_with("/2013-04-01/hostedzone") || p.starts_with("/2013-04-01/healthcheck") || p.starts_with("/2013-04-01/tags") => "route53",
+        // CloudFront
+        p if p.starts_with("/2020-05-31/distribution") || p.starts_with("/2020-05-31/origin-access-control") || p.starts_with("/2020-05-31/cache-policy") || p.starts_with("/2020-05-31/tagging") => "cloudfront",
+        // AppSync
+        p if p.starts_with("/v1/apis") => "appsync",
+        // Bedrock
+        p if p.starts_with("/foundation-models") || p.starts_with("/guardrails") || p.starts_with("/model-customization") => "bedrock",
+        // Bedrock Runtime
+        p if p.starts_with("/model/") => "bedrock-runtime",
+        // EventBridge Scheduler
+        p if p.starts_with("/schedules") || p.starts_with("/schedule-groups") => "scheduler",
+        // S3 (catch-all — any path starting with / that doesn't match above could be S3)
+        // Don't add S3 here as it would catch everything
+        _ => return None,
+    };
+    Some(service.to_string())
 }
