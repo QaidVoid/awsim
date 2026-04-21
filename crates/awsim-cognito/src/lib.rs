@@ -135,14 +135,127 @@ impl ServiceHandler for CognitoService {
                 operations::mfa::admin_set_user_mfa_preference(&state, &input, ctx)
             }
 
+            // User Pool - additional config
+            "UpdateUserPool" => operations::pools::update_user_pool(&state, &input, ctx),
+            "ListUserPoolClients" => {
+                operations::pools::list_user_pool_clients(&state, &input, ctx)
+            }
+            "UpdateUserPoolClient" => {
+                operations::pools::update_user_pool_client(&state, &input, ctx)
+            }
+            "AddCustomAttributes" => {
+                operations::pools::add_custom_attributes(&state, &input, ctx)
+            }
+
             // Groups
             "CreateGroup" => operations::groups::create_group(&state, &input, ctx),
+            "GetGroup" => operations::groups::get_group(&state, &input, ctx),
+            "UpdateGroup" => operations::groups::update_group(&state, &input, ctx),
+            "DeleteGroup" => operations::groups::delete_group(&state, &input, ctx),
+            "ListGroups" => operations::groups::list_groups(&state, &input, ctx),
             "AdminAddUserToGroup" => {
                 operations::groups::admin_add_user_to_group(&state, &input, ctx)
+            }
+            "AdminRemoveUserFromGroup" => {
+                operations::groups::admin_remove_user_from_group(&state, &input, ctx)
             }
             "AdminListGroupsForUser" => {
                 operations::groups::admin_list_groups_for_user(&state, &input, ctx)
             }
+            "ListUsersInGroup" => {
+                operations::groups::list_users_in_group(&state, &input, ctx)
+            }
+
+            // Additional user management
+            "AdminEnableUser" => operations::users::admin_enable_user(&state, &input, ctx),
+            "AdminDisableUser" => operations::users::admin_disable_user(&state, &input, ctx),
+            "AdminResetUserPassword" => {
+                operations::users::admin_reset_user_password(&state, &input, ctx)
+            }
+            "AdminUpdateUserAttributes" => {
+                operations::users::admin_update_user_attributes(&state, &input, ctx)
+            }
+            "AdminDeleteUserAttributes" => {
+                operations::users::admin_delete_user_attributes(&state, &input, ctx)
+            }
+            "UpdateUserAttributes" => {
+                operations::users::update_user_attributes(&state, &input, ctx)
+            }
+            "DeleteUserAttributes" => {
+                operations::users::delete_user_attributes(&state, &input, ctx)
+            }
+            "DeleteUser" => operations::users::delete_user(&state, &input, ctx),
+            "ResendConfirmationCode" => {
+                operations::users::resend_confirmation_code(&state, &input, ctx)
+            }
+            "GetUserAttributeVerificationCode" => {
+                operations::users::get_user_attribute_verification_code(&state, &input, ctx)
+            }
+            "VerifyUserAttribute" => {
+                operations::users::verify_user_attribute(&state, &input, ctx)
+            }
+            "AdminUserGlobalSignOut" => {
+                operations::users::admin_user_global_sign_out(&state, &input, ctx)
+            }
+            "RevokeToken" => operations::users::revoke_token(&state, &input, ctx),
+            "AdminListUserAuthEvents" => {
+                operations::users::admin_list_user_auth_events(&state, &input, ctx)
+            }
+
+            // Resource Servers
+            "CreateResourceServer" => {
+                operations::resource_servers::create_resource_server(&state, &input, ctx)
+            }
+            "DescribeResourceServer" => {
+                operations::resource_servers::describe_resource_server(&state, &input, ctx)
+            }
+            "UpdateResourceServer" => {
+                operations::resource_servers::update_resource_server(&state, &input, ctx)
+            }
+            "DeleteResourceServer" => {
+                operations::resource_servers::delete_resource_server(&state, &input, ctx)
+            }
+            "ListResourceServers" => {
+                operations::resource_servers::list_resource_servers(&state, &input, ctx)
+            }
+
+            // Identity Providers
+            "CreateIdentityProvider" => {
+                operations::identity_providers::create_identity_provider(&state, &input, ctx)
+            }
+            "DescribeIdentityProvider" => {
+                operations::identity_providers::describe_identity_provider(&state, &input, ctx)
+            }
+            "UpdateIdentityProvider" => {
+                operations::identity_providers::update_identity_provider(&state, &input, ctx)
+            }
+            "DeleteIdentityProvider" => {
+                operations::identity_providers::delete_identity_provider(&state, &input, ctx)
+            }
+            "ListIdentityProviders" => {
+                operations::identity_providers::list_identity_providers(&state, &input, ctx)
+            }
+            "GetIdentityProviderByIdentifier" => {
+                operations::identity_providers::get_identity_provider_by_identifier(
+                    &state, &input, ctx,
+                )
+            }
+
+            // Domain management
+            "CreateUserPoolDomain" => {
+                operations::domain::create_user_pool_domain(&state, &input, ctx)
+            }
+            "DescribeUserPoolDomain" => {
+                operations::domain::describe_user_pool_domain(&state, &input, ctx)
+            }
+            "DeleteUserPoolDomain" => {
+                operations::domain::delete_user_pool_domain(&state, &input, ctx)
+            }
+
+            // Tags
+            "TagResource" => operations::tags::tag_resource(&state, &input, ctx),
+            "UntagResource" => operations::tags::untag_resource(&state, &input, ctx),
+            "ListTagsForResource" => operations::tags::list_tags_for_resource(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

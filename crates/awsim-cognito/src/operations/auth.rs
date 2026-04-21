@@ -155,7 +155,7 @@ pub fn initiate_auth(
             if mfa_required && user.totp_verified {
                 // Return SOFTWARE_TOKEN_MFA challenge
                 let session_id = Uuid::new_v4().to_string();
-                drop(user);
+                let _ = user;
                 drop(pool);
                 state.mfa_sessions.insert(
                     session_id.clone(),
@@ -329,7 +329,7 @@ pub fn admin_initiate_auth(
 
             if mfa_required && user.totp_verified {
                 let session_id = Uuid::new_v4().to_string();
-                drop(user);
+                let _ = user;
                 drop(pool);
                 state.mfa_sessions.insert(
                     session_id.clone(),
