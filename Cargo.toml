@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/awsim",
     "crates/awsim-core",
+    "crates/awsim-dynamodb",
     "crates/awsim-iam",
     "crates/awsim-s3",
     "crates/awsim-sns",
@@ -18,6 +19,7 @@ repository = "https://github.com/qaidvoid/awsim"
 
 [workspace.dependencies]
 awsim-core = { path = "crates/awsim-core" }
+awsim-dynamodb = { path = "crates/awsim-dynamodb" }
 awsim-iam = { path = "crates/awsim-iam" }
 awsim-s3 = { path = "crates/awsim-s3" }
 awsim-sns = { path = "crates/awsim-sns" }

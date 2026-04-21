@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 awsim-core = { workspace = true }
+awsim-dynamodb = { workspace = true }
 awsim-iam = { workspace = true }
 awsim-s3 = { workspace = true }
 awsim-sns = { workspace = true }
