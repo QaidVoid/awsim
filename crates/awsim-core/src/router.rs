@@ -24,6 +24,10 @@ pub struct RequestContext {
 
     /// URI path of the original request
     pub uri: String,
+
+    /// Internal event bus — present for requests routed through the gateway;
+    /// `None` in unit tests or any context where no bus was configured.
+    pub event_bus: Option<crate::events::EventBus>,
 }
 
 impl RequestContext {
@@ -36,6 +40,7 @@ impl RequestContext {
             request_id: uuid::Uuid::new_v4().to_string(),
             method: "POST".to_string(),
             uri: "/".to_string(),
+            event_bus: None,
         }
     }
 

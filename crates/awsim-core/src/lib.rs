@@ -1,11 +1,13 @@
 pub mod auth;
 pub mod error;
+pub mod events;
 pub mod gateway;
 pub mod protocol;
 pub mod router;
 pub mod state;
 
 pub use error::AwsError;
+pub use events::{EventBus, InternalEvent};
 pub use gateway::AppState;
 pub use protocol::{Protocol, RouteDefinition};
 pub use router::RequestContext;

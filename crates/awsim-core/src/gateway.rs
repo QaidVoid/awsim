@@ -9,6 +9,7 @@ use tracing::{debug, info, warn};
 
 use crate::auth;
 use crate::error::AwsError;
+use crate::events::EventBus;
 use crate::protocol::{self, Protocol, RouteDefinition};
 use crate::ServiceHandler;
 
@@ -23,6 +24,8 @@ pub struct AppState {
     pub default_region: String,
     /// Default AWS account ID.
     pub default_account_id: String,
+    /// Internal event bus for cross-service fan-out (SNS→SQS, etc.).
+    pub event_bus: EventBus,
 }
 
 impl AppState {
@@ -32,6 +35,7 @@ impl AppState {
             routes: Arc::new(HashMap::new()),
             default_region,
             default_account_id,
+            event_bus: EventBus::new(),
         }
     }
 
@@ -162,6 +166,7 @@ async fn process_request(
         request_id: request_id.to_string(),
         method: method.to_string(),
         uri: uri.to_string(),
+        event_bus: Some(state.event_bus.clone()),
     };
 
     // 7. Dispatch to service handler

@@ -1,0 +1,7 @@
+target/
+ui/node_modules/
+ui/.svelte-kit/
+ui/build/
+.git/
+.claude/
+*.md

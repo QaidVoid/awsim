@@ -1,0 +1,19 @@
+services:
+  awsim:
+    build: .
+    ports:
+      - "4566:4566"
+    environment:
+      - AWSIM_REGION=us-east-1
+      - AWSIM_ACCOUNT_ID=000000000000
+      - AWSIM_LOG_LEVEL=info
+    volumes:
+      - awsim-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_awsim/health"]
+      interval: 10s
+      timeout: 3s
+      start-period: 5s
+
+volumes:
+  awsim-data:
