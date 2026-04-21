@@ -11,6 +11,22 @@ pub enum VersioningStatus {
     Suspended,
 }
 
+/// A single notification destination (SQS, SNS, or Lambda).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationDestination {
+    /// "sqs", "sns", or "lambda"
+    pub dest_type: String,
+    pub arn: String,
+    /// Event name filter prefix, e.g. "s3:ObjectCreated:*"
+    pub events: Vec<String>,
+}
+
+/// Notification configuration for a bucket.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NotificationConfiguration {
+    pub destinations: Vec<NotificationDestination>,
+}
+
 impl VersioningStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -31,6 +47,8 @@ pub struct Bucket {
     pub tags: HashMap<String, String>,
     pub policy: Option<String>,
     pub cors: Option<String>,
+    /// Notification configuration (PutBucketNotificationConfiguration).
+    pub notification_config: NotificationConfiguration,
     /// Objects keyed by object key.
     pub objects: DashMap<String, S3Object>,
     /// Multipart uploads keyed by upload ID.
@@ -47,6 +65,7 @@ impl Bucket {
             tags: HashMap::new(),
             policy: None,
             cors: None,
+            notification_config: NotificationConfiguration::default(),
             objects: DashMap::new(),
             multipart_uploads: DashMap::new(),
         }
@@ -98,6 +117,8 @@ pub struct BucketSnapshot {
     pub tags: HashMap<String, String>,
     pub policy: Option<String>,
     pub cors: Option<String>,
+    #[serde(default)]
+    pub notification_config: NotificationConfiguration,
     /// Object metadata only — `data` field is intentionally empty to avoid huge snapshots.
     pub objects: Vec<S3ObjectMetadata>,
 }

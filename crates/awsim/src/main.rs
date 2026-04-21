@@ -94,6 +94,15 @@ async fn main() -> Result<()> {
     // Spawn background event router — handles cross-service fan-out.
     spawn_event_router(&state);
 
+    // Spawn SQS->Lambda poller: periodically polls SQS queues for event source mappings.
+    let poll_services = Arc::clone(&state.services);
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            integrations::poll_sqs_event_sources(&poll_services).await;
+        }
+    });
+
     // Build the API Gateway proxy state using the concrete Arc returned from register_services.
     let lambda_arc = state.services.get("lambda").cloned();
 
@@ -235,6 +244,9 @@ fn spawn_event_router(state: &AppState) {
                         }
                         "dynamodb:StreamRecord" => {
                             integrations::handle_dynamodb_stream(&services, &event).await;
+                        }
+                        t if t.starts_with("s3:ObjectCreated:") || t.starts_with("s3:ObjectRemoved:") => {
+                            integrations::handle_s3_event(&services, &event).await;
                         }
                         _ => {
                             // Unknown or unhandled event type — ignore.

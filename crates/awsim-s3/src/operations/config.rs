@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use awsim_core::AwsError;
 use serde_json::{Value, json};
 
-use crate::state::{S3State, VersioningStatus};
+use crate::state::{NotificationConfiguration, NotificationDestination, S3State, VersioningStatus};
 
 use super::require_str;
 use super::bucket::no_such_bucket;
@@ -212,6 +212,135 @@ pub fn delete_bucket_cors(state: &S3State, input: &Value) -> Result<Value, AwsEr
 
     bucket.cors = None;
     Ok(json!({}))
+}
+
+// ─── Notification Configuration ──────────────────────────────────────────────
+
+/// PUT /{Bucket}?notification
+pub fn put_bucket_notification_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let mut destinations: Vec<NotificationDestination> = Vec::new();
+
+    // Parse QueueConfigurations
+    if let Some(queue_configs) = input.get("NotificationConfiguration")
+        .and_then(|n| n.get("QueueConfiguration"))
+        .or_else(|| input.get("QueueConfiguration"))
+    {
+        let configs = match queue_configs {
+            Value::Array(arr) => arr.clone(),
+            other => vec![other.clone()],
+        };
+        for config in configs {
+            let arn = config.get("Queue").and_then(Value::as_str).unwrap_or("").to_string();
+            let events = parse_event_list(&config);
+            if !arn.is_empty() {
+                destinations.push(NotificationDestination { dest_type: "sqs".to_string(), arn, events });
+            }
+        }
+    }
+
+    // Parse TopicConfigurations (SNS)
+    if let Some(topic_configs) = input.get("NotificationConfiguration")
+        .and_then(|n| n.get("TopicConfiguration"))
+        .or_else(|| input.get("TopicConfiguration"))
+    {
+        let configs = match topic_configs {
+            Value::Array(arr) => arr.clone(),
+            other => vec![other.clone()],
+        };
+        for config in configs {
+            let arn = config.get("Topic").and_then(Value::as_str).unwrap_or("").to_string();
+            let events = parse_event_list(&config);
+            if !arn.is_empty() {
+                destinations.push(NotificationDestination { dest_type: "sns".to_string(), arn, events });
+            }
+        }
+    }
+
+    // Parse LambdaFunctionConfigurations
+    if let Some(lambda_configs) = input.get("NotificationConfiguration")
+        .and_then(|n| n.get("CloudFunctionConfiguration"))
+        .or_else(|| input.get("CloudFunctionConfiguration"))
+        .or_else(|| input.get("NotificationConfiguration").and_then(|n| n.get("LambdaFunctionConfiguration")))
+        .or_else(|| input.get("LambdaFunctionConfiguration"))
+    {
+        let configs = match lambda_configs {
+            Value::Array(arr) => arr.clone(),
+            other => vec![other.clone()],
+        };
+        for config in configs {
+            let arn = config.get("CloudFunction")
+                .or_else(|| config.get("LambdaFunctionArn"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let events = parse_event_list(&config);
+            if !arn.is_empty() {
+                destinations.push(NotificationDestination { dest_type: "lambda".to_string(), arn, events });
+            }
+        }
+    }
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.notification_config = NotificationConfiguration { destinations };
+    Ok(json!({}))
+}
+
+/// GET /{Bucket}?notification
+pub fn get_bucket_notification_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let queue_configs: Vec<Value> = bucket
+        .notification_config
+        .destinations
+        .iter()
+        .filter(|d| d.dest_type == "sqs")
+        .map(|d| json!({ "Queue": d.arn, "Event": d.events }))
+        .collect();
+
+    let topic_configs: Vec<Value> = bucket
+        .notification_config
+        .destinations
+        .iter()
+        .filter(|d| d.dest_type == "sns")
+        .map(|d| json!({ "Topic": d.arn, "Event": d.events }))
+        .collect();
+
+    let lambda_configs: Vec<Value> = bucket
+        .notification_config
+        .destinations
+        .iter()
+        .filter(|d| d.dest_type == "lambda")
+        .map(|d| json!({ "CloudFunction": d.arn, "Event": d.events }))
+        .collect();
+
+    Ok(json!({
+        "NotificationConfiguration": {
+            "QueueConfiguration": queue_configs,
+            "TopicConfiguration": topic_configs,
+            "CloudFunctionConfiguration": lambda_configs,
+        }
+    }))
+}
+
+/// Parse event list from a notification config entry.
+fn parse_event_list(config: &Value) -> Vec<String> {
+    let event_val = config.get("Event");
+    match event_val {
+        Some(Value::Array(arr)) => arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+        Some(Value::String(s)) => vec![s.clone()],
+        _ => Vec::new(),
+    }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

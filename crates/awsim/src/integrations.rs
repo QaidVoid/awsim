@@ -11,6 +11,287 @@ use std::sync::Arc;
 use awsim_core::{InternalEvent, RequestContext, ServiceHandler};
 use tracing::{debug, info, warn};
 
+/// Poll SQS queues for all enabled Lambda event source mappings and invoke Lambda
+/// with batches of messages.
+pub async fn poll_sqs_event_sources(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+) {
+    let lambda = match services.get("lambda") {
+        Some(l) => l,
+        None => return,
+    };
+    let sqs = match services.get("sqs") {
+        Some(s) => s,
+        None => return,
+    };
+
+    // List all event source mappings from Lambda
+    let ctx = RequestContext::new("lambda", "us-east-1");
+    let mappings_result = lambda.handle("ListEventSourceMappings", serde_json::json!({}), &ctx).await;
+
+    if let Ok(result) = mappings_result {
+        if let Some(mappings) = result["EventSourceMappings"].as_array() {
+            for mapping in mappings {
+                let enabled = mapping["State"].as_str() == Some("Enabled");
+                if !enabled { continue; }
+
+                let event_source_arn = match mapping["EventSourceArn"].as_str() {
+                    Some(arn) if arn.contains(":sqs:") => arn,
+                    _ => continue,
+                };
+                let function_name = match mapping["FunctionName"].as_str() {
+                    Some(n) => n,
+                    None => continue,
+                };
+                let batch_size = mapping["BatchSize"].as_u64().unwrap_or(10) as u32;
+
+                // Extract queue URL from ARN
+                // ARN format: arn:aws:sqs:{region}:{account}:{queue_name}
+                let parts: Vec<&str> = event_source_arn.split(':').collect();
+                if parts.len() < 6 { continue; }
+                let region = parts[3];
+                let account = parts[4];
+                let queue_name = parts[5];
+                let queue_url = format!("http://sqs.{region}.localhost:4566/{account}/{queue_name}");
+
+                // Receive messages from SQS
+                let receive_input = serde_json::json!({
+                    "QueueUrl": queue_url,
+                    "MaxNumberOfMessages": batch_size,
+                    "WaitTimeSeconds": 0,
+                });
+                let sqs_ctx = RequestContext::new("sqs", region);
+                if let Ok(receive_result) = sqs.handle("ReceiveMessage", receive_input, &sqs_ctx).await {
+                    if let Some(messages) = receive_result["Messages"].as_array() {
+                        if messages.is_empty() { continue; }
+
+                        // Build SQS event for Lambda
+                        let records: Vec<serde_json::Value> = messages.iter().map(|msg| {
+                            serde_json::json!({
+                                "messageId": msg["MessageId"],
+                                "receiptHandle": msg["ReceiptHandle"],
+                                "body": msg["Body"],
+                                "attributes": msg.get("Attributes").unwrap_or(&serde_json::json!({})),
+                                "messageAttributes": msg.get("MessageAttributes").unwrap_or(&serde_json::json!({})),
+                                "md5OfBody": msg["MD5OfBody"],
+                                "eventSource": "aws:sqs",
+                                "eventSourceARN": event_source_arn,
+                                "awsRegion": region,
+                            })
+                        }).collect();
+
+                        let lambda_event = serde_json::json!({ "Records": records });
+
+                        // Invoke Lambda
+                        let invoke_input = serde_json::json!({
+                            "FunctionName": function_name,
+                            "Payload": serde_json::to_string(&lambda_event).unwrap_or_default(),
+                            "InvocationType": "Event",
+                        });
+                        let lambda_ctx = RequestContext::new("lambda", region);
+                        if lambda.handle("Invoke", invoke_input, &lambda_ctx).await.is_ok() {
+                            // Delete messages on successful invocation
+                            for msg in messages {
+                                if let Some(receipt) = msg["ReceiptHandle"].as_str() {
+                                    let delete_input = serde_json::json!({
+                                        "QueueUrl": queue_url,
+                                        "ReceiptHandle": receipt,
+                                    });
+                                    let _ = sqs.handle("DeleteMessage", delete_input, &sqs_ctx).await;
+                                }
+                            }
+
+                            debug!(
+                                function = function_name,
+                                queue = queue_name,
+                                count = messages.len(),
+                                "SQS->Lambda: delivered batch"
+                            );
+                        } else {
+                            warn!(
+                                function = function_name,
+                                queue = queue_name,
+                                "SQS->Lambda: Lambda invocation failed, messages remain in queue"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Handle an S3 object event (ObjectCreated or ObjectRemoved) by routing it to
+/// the configured SNS, SQS, or Lambda destinations.
+pub async fn handle_s3_event(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+    event: &InternalEvent,
+) {
+    let bucket_name = match event.detail["bucket"]["name"].as_str() {
+        Some(n) => n.to_string(),
+        None => {
+            warn!("S3 event missing bucket name");
+            return;
+        }
+    };
+    let key = event.detail["object"]["key"].as_str().unwrap_or("").to_string();
+    let size = event.detail["object"]["size"].as_u64().unwrap_or(0);
+    let etag = event.detail["object"]["eTag"].as_str().unwrap_or("").to_string();
+
+    let configured_destinations = match event.detail["configuredDestinations"].as_array() {
+        Some(d) => d.clone(),
+        None => return,
+    };
+
+    if configured_destinations.is_empty() {
+        return;
+    }
+
+    // Build the S3 event record following the real AWS S3 notification format
+    let event_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
+    let s3_record = serde_json::json!({
+        "eventVersion": "2.1",
+        "eventSource": "aws:s3",
+        "awsRegion": event.region,
+        "eventTime": event_time,
+        "eventName": event.event_type.trim_start_matches("s3:"),
+        "s3": {
+            "s3SchemaVersion": "1.0",
+            "bucket": {
+                "name": bucket_name,
+                "arn": format!("arn:aws:s3:::{}", bucket_name),
+            },
+            "object": {
+                "key": key,
+                "size": size,
+                "eTag": etag,
+            }
+        }
+    });
+
+    let s3_event = serde_json::json!({ "Records": [s3_record] });
+
+    for dest in &configured_destinations {
+        let dest_type = dest["type"].as_str().unwrap_or("");
+        let dest_arn = dest["arn"].as_str().unwrap_or("");
+
+        match dest_type {
+            "sqs" => {
+                if let Some(sqs) = services.get("sqs") {
+                    // ARN format: arn:aws:sqs:{region}:{account}:{queue_name}
+                    let parts: Vec<&str> = dest_arn.splitn(6, ':').collect();
+                    let queue_url = if parts.len() == 6 {
+                        format!("http://sqs.{}.localhost:4566/{}/{}", parts[3], parts[4], parts[5])
+                    } else {
+                        continue;
+                    };
+                    let sqs_ctx = RequestContext {
+                        account_id: event.account_id.clone(),
+                        region: event.region.clone(),
+                        service: "sqs".to_string(),
+                        access_key: None,
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        method: "POST".to_string(),
+                        uri: "/".to_string(),
+                        event_bus: None,
+                    };
+                    let input = serde_json::json!({
+                        "QueueUrl": queue_url,
+                        "MessageBody": s3_event.to_string(),
+                    });
+                    match sqs.handle("SendMessage", input, &sqs_ctx).await {
+                        Ok(_) => info!(
+                            bucket = %bucket_name,
+                            event_type = %event.event_type,
+                            queue = %dest_arn,
+                            "S3->SQS notification delivered"
+                        ),
+                        Err(e) => warn!(
+                            bucket = %bucket_name,
+                            queue = %dest_arn,
+                            error = %e.message,
+                            "S3->SQS notification delivery failed"
+                        ),
+                    }
+                }
+            }
+            "sns" => {
+                if let Some(sns) = services.get("sns") {
+                    let sns_ctx = RequestContext {
+                        account_id: event.account_id.clone(),
+                        region: event.region.clone(),
+                        service: "sns".to_string(),
+                        access_key: None,
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        method: "POST".to_string(),
+                        uri: "/".to_string(),
+                        event_bus: None,
+                    };
+                    let input = serde_json::json!({
+                        "TopicArn": dest_arn,
+                        "Message": s3_event.to_string(),
+                        "Subject": format!("Amazon S3 Notification: {}", event.event_type),
+                    });
+                    match sns.handle("Publish", input, &sns_ctx).await {
+                        Ok(_) => info!(
+                            bucket = %bucket_name,
+                            event_type = %event.event_type,
+                            topic = %dest_arn,
+                            "S3->SNS notification delivered"
+                        ),
+                        Err(e) => warn!(
+                            bucket = %bucket_name,
+                            topic = %dest_arn,
+                            error = %e.message,
+                            "S3->SNS notification delivery failed"
+                        ),
+                    }
+                }
+            }
+            "lambda" => {
+                if let Some(lambda) = services.get("lambda") {
+                    let lambda_ctx = RequestContext {
+                        account_id: event.account_id.clone(),
+                        region: event.region.clone(),
+                        service: "lambda".to_string(),
+                        access_key: None,
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        method: "POST".to_string(),
+                        uri: "/".to_string(),
+                        event_bus: None,
+                    };
+                    let invoke_input = serde_json::json!({
+                        "FunctionName": dest_arn,
+                        "Payload": s3_event.to_string(),
+                        "InvocationType": "Event",
+                    });
+                    match lambda.handle("Invoke", invoke_input, &lambda_ctx).await {
+                        Ok(_) => info!(
+                            bucket = %bucket_name,
+                            event_type = %event.event_type,
+                            function = %dest_arn,
+                            "S3->Lambda notification delivered"
+                        ),
+                        Err(e) => warn!(
+                            bucket = %bucket_name,
+                            function = %dest_arn,
+                            error = %e.message,
+                            "S3->Lambda notification delivery failed"
+                        ),
+                    }
+                }
+            }
+            other => {
+                warn!(dest_type = %other, "Unknown S3 notification destination type");
+            }
+        }
+    }
+}
+
 /// Handle a `dynamodb:StreamRecord` event.
 ///
 /// Looks up all Lambda event source mappings whose `EventSourceArn` matches

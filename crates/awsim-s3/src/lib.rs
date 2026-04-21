@@ -5,11 +5,27 @@ mod util;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, RouteDefinition, ServiceHandler};
+use awsim_core::{AccountRegionStore, AwsError, InternalEvent, Protocol, RequestContext, RouteDefinition, ServiceHandler};
 use serde_json::Value;
 use tracing::debug;
 
 use state::{Bucket, S3State, S3StateSnapshot};
+
+/// Check whether an event name matches any of the configured event filters.
+/// Supports wildcard suffixes, e.g. "s3:ObjectCreated:*" matches any ObjectCreated event.
+fn event_matches(filters: &[String], event_name: &str) -> bool {
+    for filter in filters {
+        if filter == event_name {
+            return true;
+        }
+        if let Some(prefix) = filter.strip_suffix('*') {
+            if event_name.starts_with(prefix) {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 /// The AWSim S3 service handler.
 pub struct S3Service {
@@ -150,6 +166,20 @@ impl ServiceHandler for S3Service {
                 operation: "GetBucketLocation",
                 required_query_param: Some("location"),
             },
+            // PUT /{Bucket}?notification
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketNotificationConfiguration",
+                required_query_param: Some("notification"),
+            },
+            // GET /{Bucket}?notification
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketNotificationConfiguration",
+                required_query_param: Some("notification"),
+            },
             // GET /{Bucket}?list-type=2
             RouteDefinition {
                 method: "GET",
@@ -282,12 +312,141 @@ impl ServiceHandler for S3Service {
             "PutBucketCors" => operations::config::put_bucket_cors(&state, &input),
             "GetBucketCors" => operations::config::get_bucket_cors(&state, &input),
             "DeleteBucketCors" => operations::config::delete_bucket_cors(&state, &input),
+            "PutBucketNotificationConfiguration" => {
+                operations::config::put_bucket_notification_configuration(&state, &input)
+            }
+            "GetBucketNotificationConfiguration" => {
+                operations::config::get_bucket_notification_configuration(&state, &input)
+            }
 
             // Object operations
-            "PutObject" | "CopyObject" => operations::object::put_object(&state, &input, ctx),
+            "PutObject" => {
+                let result = operations::object::put_object(&state, &input, ctx)?;
+                // Emit s3:ObjectCreated:Put notification if configured
+                if let Some(bus) = &ctx.event_bus {
+                    let bucket_name = input.get("Bucket").and_then(Value::as_str).unwrap_or("");
+                    let key = input.get("Key").and_then(Value::as_str).unwrap_or("");
+                    if let Some(bucket) = state.buckets.get(bucket_name) {
+                        if !bucket.notification_config.destinations.is_empty() {
+                            let etag = result.get("ETag").and_then(Value::as_str).unwrap_or("").to_string();
+                            let obj = bucket.objects.get(key);
+                            let size = obj.as_ref().map(|o| o.content_length).unwrap_or(0);
+                            let configured_destinations: Vec<serde_json::Value> = bucket
+                                .notification_config
+                                .destinations
+                                .iter()
+                                .filter(|d| event_matches(&d.events, "s3:ObjectCreated:Put"))
+                                .map(|d| serde_json::json!({ "type": d.dest_type, "arn": d.arn }))
+                                .collect();
+                            if !configured_destinations.is_empty() {
+                                bus.publish(InternalEvent {
+                                    source: "s3".to_string(),
+                                    event_type: "s3:ObjectCreated:Put".to_string(),
+                                    region: ctx.region.clone(),
+                                    account_id: ctx.account_id.clone(),
+                                    detail: serde_json::json!({
+                                        "bucket": {
+                                            "name": bucket_name,
+                                            "arn": format!("arn:aws:s3:::{}", bucket_name),
+                                        },
+                                        "object": {
+                                            "key": key,
+                                            "size": size,
+                                            "eTag": etag,
+                                        },
+                                        "configuredDestinations": configured_destinations,
+                                    }),
+                                });
+                            }
+                        }
+                    }
+                }
+                Ok(result)
+            }
+            "CopyObject" => {
+                let result = operations::object::put_object(&state, &input, ctx)?;
+                // Emit s3:ObjectCreated:Copy notification if configured
+                if let Some(bus) = &ctx.event_bus {
+                    let bucket_name = input.get("Bucket").and_then(Value::as_str).unwrap_or("");
+                    let key = input.get("Key").and_then(Value::as_str).unwrap_or("");
+                    if let Some(bucket) = state.buckets.get(bucket_name) {
+                        if !bucket.notification_config.destinations.is_empty() {
+                            let obj = bucket.objects.get(key);
+                            let size = obj.as_ref().map(|o| o.content_length).unwrap_or(0);
+                            let etag = obj.as_ref().map(|o| o.etag.clone()).unwrap_or_default();
+                            let configured_destinations: Vec<serde_json::Value> = bucket
+                                .notification_config
+                                .destinations
+                                .iter()
+                                .filter(|d| event_matches(&d.events, "s3:ObjectCreated:Copy"))
+                                .map(|d| serde_json::json!({ "type": d.dest_type, "arn": d.arn }))
+                                .collect();
+                            if !configured_destinations.is_empty() {
+                                bus.publish(InternalEvent {
+                                    source: "s3".to_string(),
+                                    event_type: "s3:ObjectCreated:Copy".to_string(),
+                                    region: ctx.region.clone(),
+                                    account_id: ctx.account_id.clone(),
+                                    detail: serde_json::json!({
+                                        "bucket": {
+                                            "name": bucket_name,
+                                            "arn": format!("arn:aws:s3:::{}", bucket_name),
+                                        },
+                                        "object": {
+                                            "key": key,
+                                            "size": size,
+                                            "eTag": etag,
+                                        },
+                                        "configuredDestinations": configured_destinations,
+                                    }),
+                                });
+                            }
+                        }
+                    }
+                }
+                Ok(result)
+            }
+            "DeleteObject" => {
+                // Capture info before deletion for the event
+                let bucket_name = input.get("Bucket").and_then(Value::as_str).unwrap_or("").to_string();
+                let key = input.get("Key").and_then(Value::as_str).unwrap_or("").to_string();
+                let configured_destinations: Vec<serde_json::Value> = if let Some(bucket) = state.buckets.get(&bucket_name) {
+                    bucket.notification_config.destinations
+                        .iter()
+                        .filter(|d| event_matches(&d.events, "s3:ObjectRemoved:Delete"))
+                        .map(|d| serde_json::json!({ "type": d.dest_type, "arn": d.arn }))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                let result = operations::object::delete_object(&state, &input)?;
+
+                // Emit s3:ObjectRemoved:Delete notification if configured
+                if let Some(bus) = &ctx.event_bus {
+                    if !configured_destinations.is_empty() {
+                        bus.publish(InternalEvent {
+                            source: "s3".to_string(),
+                            event_type: "s3:ObjectRemoved:Delete".to_string(),
+                            region: ctx.region.clone(),
+                            account_id: ctx.account_id.clone(),
+                            detail: serde_json::json!({
+                                "bucket": {
+                                    "name": bucket_name,
+                                    "arn": format!("arn:aws:s3:::{}", bucket_name),
+                                },
+                                "object": {
+                                    "key": key,
+                                },
+                                "configuredDestinations": configured_destinations,
+                            }),
+                        });
+                    }
+                }
+                Ok(result)
+            }
             "GetObject" => operations::object::get_object(&state, &input, ctx),
             "HeadObject" => operations::object::head_object(&state, &input),
-            "DeleteObject" => operations::object::delete_object(&state, &input),
 
             // Listing / batch
             "ListObjectsV2" => operations::list::list_objects_v2(&state, &input),
@@ -334,6 +493,7 @@ impl ServiceHandler for S3Service {
                             tags: b.tags.clone(),
                             policy: b.policy.clone(),
                             cors: b.cors.clone(),
+                            notification_config: b.notification_config.clone(),
                             // Persist object metadata only — no data bytes
                             objects: b
                                 .objects
@@ -368,6 +528,7 @@ impl ServiceHandler for S3Service {
                 tags: bs.tags,
                 policy: bs.policy,
                 cors: bs.cors,
+                notification_config: bs.notification_config,
                 objects: {
                     let dm = DashMap::new();
                     for meta in bs.objects {
