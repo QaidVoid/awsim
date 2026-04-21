@@ -1,0 +1,51 @@
+use dashmap::DashMap;
+
+/// Per-account/region Bedrock state.
+#[derive(Debug, Default)]
+pub struct BedrockState {
+    /// guardrail_id → Guardrail
+    pub guardrails: DashMap<String, Guardrail>,
+    /// job_id → CustomizationJob
+    pub customization_jobs: DashMap<String, CustomizationJob>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Guardrail {
+    pub guardrail_id: String,
+    pub name: String,
+    pub arn: String,
+    pub blocked_input_messaging: String,
+    pub blocked_outputs_messaging: String,
+    pub status: String,
+    pub created_at: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CustomizationJob {
+    pub job_arn: String,
+    pub base_model_identifier: String,
+    pub custom_model_name: String,
+    pub status: String,
+    pub creation_time: String,
+}
+
+pub fn now_iso() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = (secs / 3600) % 24;
+    let days = secs / 86400;
+    let year = 1970 + days / 365;
+    let day_of_year = days % 365;
+    let month = day_of_year / 30 + 1;
+    let day = day_of_year % 30 + 1;
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, h, m, s
+    )
+}

@@ -1614,3 +1614,205 @@ export async function deleteDbInstance(id: string): Promise<string> {
 export async function listDbClusters(): Promise<string> {
     return rdsRequest('DescribeDBClusters');
 }
+
+// ---- ELB (Elastic Load Balancing v2) ----
+
+async function elbRequest(action: string, params: Record<string, string> = {}): Promise<string> {
+    const body = new URLSearchParams({ Action: action, Version: '2015-12-01', ...params });
+    const res = await loggedFetch('elasticloadbalancing', action, 'POST', ENDPOINT, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': authHeader('elasticloadbalancing'),
+            'X-Amz-Date': new Date().toISOString().replace(/[:-]/g, '').slice(0, 15) + 'Z',
+        },
+        body: body.toString(),
+    });
+    return res.text();
+}
+
+export interface ElbLoadBalancer {
+    arn: string;
+    name: string;
+    dnsName: string;
+    type: string;
+    scheme: string;
+    state: string;
+    createdTime: string;
+}
+
+export interface ElbTargetGroup {
+    arn: string;
+    name: string;
+    protocol: string;
+    port: string;
+    vpcId: string;
+    targetType: string;
+}
+
+export interface ElbListener {
+    arn: string;
+    loadBalancerArn: string;
+    port: string;
+    protocol: string;
+}
+
+export async function describeLoadBalancers(): Promise<{ loadBalancers: ElbLoadBalancer[] }> {
+    const xml = await elbRequest('DescribeLoadBalancers');
+    const raw = xmlArray(xml, 'member', ['LoadBalancerArn', 'LoadBalancerName', 'DNSName', 'Type', 'Scheme', 'CreatedTime']);
+    return {
+        loadBalancers: raw.map((lb) => ({
+            arn: lb['LoadBalancerArn'] ?? '',
+            name: lb['LoadBalancerName'] ?? '',
+            dnsName: lb['DNSName'] ?? '',
+            type: lb['Type'] ?? '',
+            scheme: lb['Scheme'] ?? '',
+            state: 'active',
+            createdTime: lb['CreatedTime'] ?? '',
+        })),
+    };
+}
+
+export async function createLoadBalancer(
+    name: string,
+    type: string,
+    scheme: string,
+): Promise<void> {
+    await elbRequest('CreateLoadBalancer', { Name: name, Type: type, Scheme: scheme });
+}
+
+export async function deleteLoadBalancer(arn: string): Promise<void> {
+    await elbRequest('DeleteLoadBalancer', { LoadBalancerArn: arn });
+}
+
+export async function describeTargetGroups(): Promise<{ targetGroups: ElbTargetGroup[] }> {
+    const xml = await elbRequest('DescribeTargetGroups');
+    const raw = xmlArray(xml, 'member', ['TargetGroupArn', 'TargetGroupName', 'Protocol', 'Port', 'VpcId', 'TargetType']);
+    return {
+        targetGroups: raw.map((tg) => ({
+            arn: tg['TargetGroupArn'] ?? '',
+            name: tg['TargetGroupName'] ?? '',
+            protocol: tg['Protocol'] ?? '',
+            port: tg['Port'] ?? '',
+            vpcId: tg['VpcId'] ?? '',
+            targetType: tg['TargetType'] ?? '',
+        })),
+    };
+}
+
+export async function createTargetGroup(
+    name: string,
+    protocol: string,
+    port: number,
+    targetType: string,
+): Promise<void> {
+    await elbRequest('CreateTargetGroup', {
+        Name: name,
+        Protocol: protocol,
+        Port: String(port),
+        TargetType: targetType,
+    });
+}
+
+export async function deleteTargetGroup(arn: string): Promise<void> {
+    await elbRequest('DeleteTargetGroup', { TargetGroupArn: arn });
+}
+
+export async function describeListeners(loadBalancerArn: string): Promise<{ listeners: ElbListener[] }> {
+    const xml = await elbRequest('DescribeListeners', { LoadBalancerArn: loadBalancerArn });
+    const raw = xmlArray(xml, 'member', ['ListenerArn', 'LoadBalancerArn', 'Port', 'Protocol']);
+    return {
+        listeners: raw.map((l) => ({
+            arn: l['ListenerArn'] ?? '',
+            loadBalancerArn: l['LoadBalancerArn'] ?? '',
+            port: l['Port'] ?? '',
+            protocol: l['Protocol'] ?? '',
+        })),
+    };
+}
+
+// ---- CloudFront ----
+
+function cloudfrontHeaders(): Record<string, string> {
+    return {
+        'Authorization': authHeader('cloudfront'),
+        'X-Amz-Date': new Date().toISOString().replace(/[:-]/g, '').slice(0, 15) + 'Z',
+        'Content-Type': 'application/xml',
+    };
+}
+
+export interface CloudFrontDistribution {
+    id: string;
+    arn: string;
+    domainName: string;
+    status: string;
+    comment: string;
+    enabled: boolean;
+    createdAt: string;
+}
+
+export async function listDistributions(): Promise<{ distributions: CloudFrontDistribution[] }> {
+    const res = await loggedFetch('cloudfront', 'ListDistributions', 'GET', `${ENDPOINT}/2020-05-31/distribution`, {
+        headers: cloudfrontHeaders(),
+    });
+    const text = await res.text();
+
+    const distributions: CloudFrontDistribution[] = [];
+    const itemRegex = /<DistributionSummary>([\s\S]*?)<\/DistributionSummary>/g;
+    let match;
+    while ((match = itemRegex.exec(text)) !== null) {
+        const block = match[1];
+        distributions.push({
+            id: xmlValue(block, 'Id'),
+            arn: xmlValue(block, 'ARN'),
+            domainName: xmlValue(block, 'DomainName'),
+            status: xmlValue(block, 'Status'),
+            comment: xmlValue(block, 'Comment'),
+            enabled: xmlValue(block, 'Enabled') === 'true',
+            createdAt: xmlValue(block, 'LastModifiedTime'),
+        });
+    }
+    return { distributions };
+}
+
+export async function createDistribution(originDomain: string, comment: string): Promise<void> {
+    const body = `<?xml version="1.0" encoding="UTF-8"?>
+<DistributionConfig>
+  <CallerReference>${Date.now()}</CallerReference>
+  <Origins>
+    <Quantity>1</Quantity>
+    <Items>
+      <Origin>
+        <Id>origin-1</Id>
+        <DomainName>${originDomain}</DomainName>
+      </Origin>
+    </Items>
+  </Origins>
+  <DefaultCacheBehavior>
+    <ViewerProtocolPolicy>redirect-to-https</ViewerProtocolPolicy>
+    <TargetOriginId>origin-1</TargetOriginId>
+    <ForwardedValues>
+      <QueryString>false</QueryString>
+      <Cookies><Forward>none</Forward></Cookies>
+    </ForwardedValues>
+    <MinTTL>0</MinTTL>
+  </DefaultCacheBehavior>
+  <Comment>${comment}</Comment>
+  <Enabled>true</Enabled>
+</DistributionConfig>`;
+
+    const res = await loggedFetch('cloudfront', 'CreateDistribution', 'POST', `${ENDPOINT}/2020-05-31/distribution`, {
+        method: 'POST',
+        headers: cloudfrontHeaders(),
+        body,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+}
+
+export async function deleteDistribution(id: string): Promise<void> {
+    const res = await loggedFetch('cloudfront', 'DeleteDistribution', 'DELETE', `${ENDPOINT}/2020-05-31/distribution/${id}`, {
+        method: 'DELETE',
+        headers: cloudfrontHeaders(),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+}
