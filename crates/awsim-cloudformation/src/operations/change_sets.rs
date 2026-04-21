@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, InternalEvent, RequestContext};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -153,7 +153,7 @@ pub fn create_change_set(
 pub fn execute_change_set(
     state: &CloudFormationState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let change_set_name = require_str(input, "ChangeSetName")?;
     let stack_name = require_str(input, "StackName")?;
@@ -217,6 +217,31 @@ pub fn execute_change_set(
             resource_status_reason: None,
         })
         .collect();
+
+    // Emit CreateResource events for background provisioning.
+    if let Some(ref bus) = ctx.event_bus {
+        for resource in &resources {
+            let properties = parsed
+                .resources
+                .iter()
+                .find(|r| r.logical_id == resource.logical_resource_id)
+                .map(|r| r.properties.clone())
+                .unwrap_or(Value::Object(serde_json::Map::new()));
+
+            bus.publish(InternalEvent {
+                source: "cloudformation".to_string(),
+                event_type: "cloudformation:CreateResource".to_string(),
+                region: ctx.region.clone(),
+                account_id: ctx.account_id.clone(),
+                detail: json!({
+                    "stackName": stack_name,
+                    "logicalId": resource.logical_resource_id,
+                    "resourceType": resource.resource_type,
+                    "properties": properties,
+                }),
+            });
+        }
+    }
 
     if let Some(mut stack) = state.stacks.get_mut(stack_name) {
         stack.template_body = template_body;

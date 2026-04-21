@@ -62,7 +62,7 @@ impl ServiceHandler for CloudFormationService {
         match operation {
             // Stacks
             "CreateStack" => operations::stacks::create_stack(&state, &input, ctx),
-            "DeleteStack" => operations::stacks::delete_stack(&state, &input),
+            "DeleteStack" => operations::stacks::delete_stack(&state, &input, ctx),
             "UpdateStack" => operations::stacks::update_stack(&state, &input, ctx),
             "DescribeStacks" => operations::stacks::describe_stacks(&state, &input),
             "DescribeStackEvents" => operations::stacks::describe_stack_events(&state, &input),

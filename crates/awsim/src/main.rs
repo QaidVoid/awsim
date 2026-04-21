@@ -5,6 +5,7 @@ use tracing::{info, warn};
 use awsim_core::{AppState, RequestContext};
 
 mod admin;
+mod integrations;
 
 #[derive(Parser)]
 #[command(name = "awsim", about = "AWSim — fully offline, free AWS development environment")]
@@ -74,9 +75,11 @@ async fn main() -> Result<()> {
 /// Spawn a background task that consumes from the internal event bus and
 /// performs cross-service fan-out deliveries.
 ///
-/// Currently handles:
-///   sns:Publish  → sqs  — enqueues the SNS message body into the target queue
-///   sns:Publish  → lambda — (future) invokes the target Lambda function
+/// Handles:
+///   sns:Publish                    → sqs  — enqueues the SNS message body into the target queue
+///   sns:Publish                    → lambda — (future) invokes the target Lambda function
+///   cloudformation:CreateResource  — provisions the resource in the target service
+///   cloudformation:DeleteResource  — deprovisions the resource from the target service
 fn spawn_event_router(state: &AppState) {
     use std::sync::Arc;
 
@@ -155,6 +158,12 @@ fn spawn_event_router(state: &AppState) {
                                 function = %endpoint,
                                 "SNS→Lambda fan-out: not yet implemented"
                             );
+                        }
+                        "cloudformation:CreateResource" => {
+                            integrations::handle_cf_create_resource(&services, &event).await;
+                        }
+                        "cloudformation:DeleteResource" => {
+                            integrations::handle_cf_delete_resource(&services, &event).await;
                         }
                         _ => {
                             // Unknown or unhandled event type — ignore.
