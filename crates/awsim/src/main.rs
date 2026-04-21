@@ -233,6 +233,9 @@ fn spawn_event_router(state: &AppState) {
                         "cloudformation:DeleteResource" => {
                             integrations::handle_cf_delete_resource(&services, &event).await;
                         }
+                        "dynamodb:StreamRecord" => {
+                            integrations::handle_dynamodb_stream(&services, &event).await;
+                        }
                         _ => {
                             // Unknown or unhandled event type — ignore.
                         }
@@ -346,6 +349,9 @@ fn register_services(state: &mut AppState) -> Arc<awsim_apigateway::ApiGatewaySe
 
     let ec2 = Arc::new(awsim_ec2::Ec2Service::new());
     state.register(ec2, vec![]);
+
+    let rds = Arc::new(awsim_rds::RdsService::new());
+    state.register(rds, vec![]);
 
     let cloudformation = Arc::new(awsim_cloudformation::CloudFormationService::new());
     state.register(cloudformation, vec![]);

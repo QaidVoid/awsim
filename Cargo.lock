@@ -129,6 +129,7 @@ dependencies = [
  "awsim-kinesis",
  "awsim-kms",
  "awsim-lambda",
+ "awsim-rds",
  "awsim-s3",
  "awsim-secretsmanager",
  "awsim-ses",
@@ -351,6 +352,19 @@ dependencies = [
  "tracing",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "awsim-rds"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

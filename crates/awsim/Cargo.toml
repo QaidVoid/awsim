@@ -22,6 +22,7 @@ awsim-ecs = { workspace = true }
 awsim-kinesis = { workspace = true }
 awsim-eventbridge = { workspace = true }
 awsim-iam = { workspace = true }
+awsim-rds = { workspace = true }
 awsim-kms = { workspace = true }
 awsim-lambda = { workspace = true }
 awsim-secretsmanager = { workspace = true }
