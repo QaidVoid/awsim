@@ -1,0 +1,13 @@
+pub mod create_stream;
+pub mod delete_stream;
+pub mod describe_stream;
+pub mod describe_stream_summary;
+pub mod list_streams;
+pub mod list_shards;
+pub mod put_record;
+pub mod put_records;
+pub mod get_shard_iterator;
+pub mod get_records;
+pub mod merge_split;
+pub mod tags;
+pub mod retention;

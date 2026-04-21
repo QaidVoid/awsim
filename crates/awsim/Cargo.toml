@@ -13,6 +13,7 @@ path = "src/main.rs"
 awsim-cloudwatch-logs = { workspace = true }
 awsim-core = { workspace = true }
 awsim-dynamodb = { workspace = true }
+awsim-kinesis = { workspace = true }
 awsim-eventbridge = { workspace = true }
 awsim-iam = { workspace = true }
 awsim-kms = { workspace = true }

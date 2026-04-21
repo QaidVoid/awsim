@@ -112,6 +112,9 @@ fn register_services(state: &mut AppState) {
 
     let stepfunctions = Arc::new(awsim_stepfunctions::StepFunctionsService::new());
     state.register(stepfunctions, vec![]);
+
+    let kinesis = Arc::new(awsim_kinesis::KinesisService::new());
+    state.register(kinesis, vec![]);
 }
 
 async fn health() -> &'static str {
