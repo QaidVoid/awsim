@@ -844,6 +844,7 @@ dependencies = [
  "aws-sdk-ssm",
  "aws-sdk-sts",
  "aws-types",
+ "awsim-acm",
  "awsim-apigateway",
  "awsim-appsync",
  "awsim-athena",
@@ -868,6 +869,7 @@ dependencies = [
  "awsim-rds",
  "awsim-route53",
  "awsim-s3",
+ "awsim-scheduler",
  "awsim-secretsmanager",
  "awsim-ses",
  "awsim-sns",
@@ -875,6 +877,7 @@ dependencies = [
  "awsim-ssm",
  "awsim-stepfunctions",
  "awsim-sts",
+ "awsim-waf",
  "axum",
  "base64",
  "bytes",
@@ -885,6 +888,20 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-acm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "base64",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
  "uuid",
 ]
 
@@ -1226,6 +1243,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "awsim-scheduler"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "awsim-secretsmanager"
 version = "0.1.0"
 dependencies = [
@@ -1311,6 +1341,19 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-waf"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
  "serde",
  "serde_json",
  "tracing",

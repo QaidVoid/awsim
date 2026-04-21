@@ -473,6 +473,19 @@ fn register_services(
     };
     state.register(Arc::new(cloudfront), cloudfront_routes);
 
+    let acm = Arc::new(awsim_acm::AcmService::new());
+    state.register(acm, vec![]);
+
+    let waf = Arc::new(awsim_waf::WafService::new());
+    state.register(waf, vec![]);
+
+    let scheduler = awsim_scheduler::SchedulerService::new();
+    let scheduler_routes = {
+        use awsim_core::ServiceHandler;
+        scheduler.routes()
+    };
+    state.register(Arc::new(scheduler), scheduler_routes);
+
     // API Gateway — registered last so we can return a clone of the Arc.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
     let apigw_routes = {

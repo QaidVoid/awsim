@@ -32,6 +32,9 @@
 		{ name: 'CloudWatch Metrics', href: '/monitoring', icon: '📈' },
 		{ name: 'Athena', href: '/athena', icon: '🔍' },
 		{ name: 'Glue', href: '/glue', icon: '🗂️' },
+		{ name: 'ACM', href: '/acm', icon: '🔏' },
+		{ name: 'WAF', href: '/waf', icon: '🛡️' },
+		{ name: 'Scheduler', href: '/scheduler', icon: '🕒' },
 		{ name: 'Request Log', href: '/logs', icon: '📋' },
 	];
 
