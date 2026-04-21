@@ -25,7 +25,7 @@
                 headers: {
                     'Content-Type': 'application/x-amz-json-1.1',
                     'X-Amz-Target': 'CertificateManager.ListCertificates',
-                    'X-Amz-Security-Token': 'local',
+                    'Authorization': 'AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/acm/aws4_request, SignedHeaders=host, Signature=fake',
                 },
                 body: JSON.stringify({}),
             });
@@ -51,7 +51,7 @@
                 headers: {
                     'Content-Type': 'application/x-amz-json-1.1',
                     'X-Amz-Target': 'CertificateManager.RequestCertificate',
-                    'X-Amz-Security-Token': 'local',
+                    'Authorization': 'AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/acm/aws4_request, SignedHeaders=host, Signature=fake',
                 },
                 body: JSON.stringify(body),
             });
@@ -77,7 +77,7 @@
             headers: {
                 'Content-Type': 'application/x-amz-json-1.1',
                 'X-Amz-Target': 'CertificateManager.DeleteCertificate',
-                'X-Amz-Security-Token': 'local',
+                'Authorization': 'AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/acm/aws4_request, SignedHeaders=host, Signature=fake',
             },
             body: JSON.stringify({ CertificateArn: arn }),
         });

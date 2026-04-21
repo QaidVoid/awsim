@@ -37,8 +37,12 @@
     let confirmDeleteGuardrail = $state<string | null>(null);
 
     async function apiFetch(path: string, opts?: RequestInit) {
+        const signingService = path.startsWith('/model/') ? 'bedrock-runtime' : 'bedrock';
         const res = await fetch(`${BASE}${path}`, {
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/${signingService}/aws4_request, SignedHeaders=host, Signature=fake`,
+            },
             ...opts,
         });
         if (!res.ok) {

@@ -45,7 +45,7 @@
             headers: {
                 'Content-Type': 'application/x-amz-json-1.1',
                 'X-Amz-Target': `AWSWAF_20190729.${operation}`,
-                'X-Amz-Security-Token': 'local',
+                'Authorization': 'AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/wafv2/aws4_request, SignedHeaders=host, Signature=fake',
             },
             body: JSON.stringify(body),
         });

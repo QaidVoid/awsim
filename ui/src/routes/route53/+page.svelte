@@ -19,7 +19,10 @@
         error = null;
         try {
             const res = await fetch(`${ENDPOINT}/2013-04-01/hostedzone`, {
-                headers: { 'Content-Type': 'application/xml' },
+                headers: {
+                    'Content-Type': 'application/xml',
+                    'Authorization': 'AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/route53/aws4_request, SignedHeaders=host, Signature=fake',
+                },
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const text = await res.text();
