@@ -535,6 +535,7 @@ fn topological_sort(resources: Vec<ResourceDef>) -> Result<Vec<ResourceDef>, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_parse_json_template() {
