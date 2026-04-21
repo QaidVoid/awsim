@@ -2,9 +2,12 @@
 resolver = "3"
 members = [
     "crates/awsim",
+    "crates/awsim-cloudwatch-logs",
     "crates/awsim-core",
     "crates/awsim-dynamodb",
+    "crates/awsim-eventbridge",
     "crates/awsim-iam",
+    "crates/awsim-lambda",
     "crates/awsim-s3",
     "crates/awsim-sns",
     "crates/awsim-sqs",
@@ -18,9 +21,12 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/qaidvoid/awsim"
 
 [workspace.dependencies]
+awsim-cloudwatch-logs = { path = "crates/awsim-cloudwatch-logs" }
 awsim-core = { path = "crates/awsim-core" }
+awsim-eventbridge = { path = "crates/awsim-eventbridge" }
 awsim-dynamodb = { path = "crates/awsim-dynamodb" }
 awsim-iam = { path = "crates/awsim-iam" }
+awsim-lambda = { path = "crates/awsim-lambda" }
 awsim-s3 = { path = "crates/awsim-s3" }
 awsim-sns = { path = "crates/awsim-sns" }
 awsim-sqs = { path = "crates/awsim-sqs" }
@@ -63,3 +69,4 @@ toml = "0.8"
 uuid = { version = "1", features = ["v4"] }
 md-5 = "0.10"
 base64 = "0.22"
+sha2 = "0.10"

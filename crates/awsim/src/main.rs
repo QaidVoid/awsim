@@ -87,6 +87,19 @@ fn register_services(state: &mut AppState) {
         s3.routes()
     };
     state.register(Arc::new(s3), s3_routes);
+
+    let lambda = awsim_lambda::LambdaService::new();
+    let lambda_routes = {
+        use awsim_core::ServiceHandler;
+        lambda.routes()
+    };
+    state.register(Arc::new(lambda), lambda_routes);
+
+    let logs = Arc::new(awsim_cloudwatch_logs::CloudWatchLogsService::new());
+    state.register(logs, vec![]);
+
+    let eventbridge = Arc::new(awsim_eventbridge::EventBridgeService::new());
+    state.register(eventbridge, vec![]);
 }
 
 async fn health() -> &'static str {
