@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 awsim-cloudwatch-logs = { workspace = true }
+awsim-cognito = { workspace = true }
 awsim-core = { workspace = true }
 awsim-dynamodb = { workspace = true }
 awsim-kinesis = { workspace = true }
@@ -20,6 +21,7 @@ awsim-kms = { workspace = true }
 awsim-lambda = { workspace = true }
 awsim-secretsmanager = { workspace = true }
 awsim-s3 = { workspace = true }
+awsim-ses = { workspace = true }
 awsim-sns = { workspace = true }
 awsim-sqs = { workspace = true }
 awsim-ssm = { workspace = true }

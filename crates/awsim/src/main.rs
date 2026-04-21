@@ -115,6 +115,16 @@ fn register_services(state: &mut AppState) {
 
     let kinesis = Arc::new(awsim_kinesis::KinesisService::new());
     state.register(kinesis, vec![]);
+
+    let ses = awsim_ses::SesService::new();
+    let ses_routes = {
+        use awsim_core::ServiceHandler;
+        ses.routes()
+    };
+    state.register(Arc::new(ses), ses_routes);
+
+    let cognito = Arc::new(awsim_cognito::CognitoService::new());
+    state.register(cognito, vec![]);
 }
 
 async fn health() -> &'static str {

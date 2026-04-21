@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/awsim",
     "crates/awsim-cloudwatch-logs",
+    "crates/awsim-cognito",
     "crates/awsim-core",
     "crates/awsim-dynamodb",
     "crates/awsim-eventbridge",
@@ -12,6 +13,7 @@ members = [
     "crates/awsim-lambda",
     "crates/awsim-s3",
     "crates/awsim-secretsmanager",
+    "crates/awsim-ses",
     "crates/awsim-sns",
     "crates/awsim-sqs",
     "crates/awsim-ssm",
@@ -27,6 +29,7 @@ repository = "https://github.com/qaidvoid/awsim"
 
 [workspace.dependencies]
 awsim-cloudwatch-logs = { path = "crates/awsim-cloudwatch-logs" }
+awsim-cognito = { path = "crates/awsim-cognito" }
 awsim-core = { path = "crates/awsim-core" }
 awsim-eventbridge = { path = "crates/awsim-eventbridge" }
 awsim-dynamodb = { path = "crates/awsim-dynamodb" }
@@ -36,6 +39,7 @@ awsim-kms = { path = "crates/awsim-kms" }
 awsim-lambda = { path = "crates/awsim-lambda" }
 awsim-secretsmanager = { path = "crates/awsim-secretsmanager" }
 awsim-s3 = { path = "crates/awsim-s3" }
+awsim-ses = { path = "crates/awsim-ses" }
 awsim-sns = { path = "crates/awsim-sns" }
 awsim-sqs = { path = "crates/awsim-sqs" }
 awsim-ssm = { path = "crates/awsim-ssm" }
