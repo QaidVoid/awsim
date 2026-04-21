@@ -23,7 +23,11 @@
 		{ name: 'ECS', href: '/ecs', icon: '🐳' },
 		{ name: 'ECR', href: '/ecr', icon: '📋' },
 		{ name: 'CloudFormation', href: '/cloudformation', icon: '🏗️' },
+		{ name: 'ELB', href: '/elb', icon: '⚖️' },
+		{ name: 'CloudFront', href: '/cloudfront', icon: '🌍' },
 		{ name: 'API Gateway', href: '/apigateway', icon: '🌐' },
+		{ name: 'Athena', href: '/athena', icon: '🔍' },
+		{ name: 'Glue', href: '/glue', icon: '🗂️' },
 		{ name: 'Request Log', href: '/logs', icon: '📋' },
 	];
 

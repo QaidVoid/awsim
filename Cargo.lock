@@ -845,20 +845,28 @@ dependencies = [
  "aws-sdk-sts",
  "aws-types",
  "awsim-apigateway",
+ "awsim-appsync",
+ "awsim-athena",
+ "awsim-bedrock",
  "awsim-cloudformation",
+ "awsim-cloudfront",
  "awsim-cloudwatch-logs",
+ "awsim-cloudwatch-metrics",
  "awsim-cognito",
  "awsim-core",
  "awsim-dynamodb",
  "awsim-ec2",
  "awsim-ecr",
  "awsim-ecs",
+ "awsim-elb",
  "awsim-eventbridge",
+ "awsim-glue",
  "awsim-iam",
  "awsim-kinesis",
  "awsim-kms",
  "awsim-lambda",
  "awsim-rds",
+ "awsim-route53",
  "awsim-s3",
  "awsim-secretsmanager",
  "awsim-ses",
@@ -897,6 +905,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "awsim-appsync"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-athena"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-bedrock"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "awsim-cloudformation"
 version = "0.1.0"
 dependencies = [
@@ -911,7 +958,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "awsim-cloudfront"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "awsim-cloudwatch-logs"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-cloudwatch-metrics"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -1015,7 +1088,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "awsim-elb"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "awsim-eventbridge"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-glue"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -1087,6 +1186,19 @@ dependencies = [
 
 [[package]]
 name = "awsim-rds"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-route53"
 version = "0.1.0"
 dependencies = [
  "async-trait",

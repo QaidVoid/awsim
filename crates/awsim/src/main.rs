@@ -423,8 +423,55 @@ fn register_services(
     let rds = Arc::new(awsim_rds::RdsService::new());
     state.register(rds, vec![]);
 
+    let appsync = awsim_appsync::AppSyncService::new();
+    let appsync_routes = {
+        use awsim_core::ServiceHandler;
+        appsync.routes()
+    };
+    state.register(Arc::new(appsync), appsync_routes);
+
+    let bedrock = awsim_bedrock::BedrockService::new();
+    let bedrock_routes = {
+        use awsim_core::ServiceHandler;
+        bedrock.routes()
+    };
+    state.register(Arc::new(bedrock), bedrock_routes);
+
+    let bedrock_runtime = awsim_bedrock::BedrockRuntimeService::new();
+    let bedrock_runtime_routes = {
+        use awsim_core::ServiceHandler;
+        bedrock_runtime.routes()
+    };
+    state.register(Arc::new(bedrock_runtime), bedrock_runtime_routes);
+
     let cloudformation = Arc::new(awsim_cloudformation::CloudFormationService::new());
     state.register(cloudformation, vec![]);
+
+    let route53 = awsim_route53::Route53Service::new();
+    let route53_routes = {
+        use awsim_core::ServiceHandler;
+        route53.routes()
+    };
+    state.register(Arc::new(route53), route53_routes);
+
+    let cloudwatch_metrics = Arc::new(awsim_cloudwatch_metrics::CloudWatchMetricsService::new());
+    state.register(cloudwatch_metrics, vec![]);
+
+    let athena = Arc::new(awsim_athena::AthenaService::new());
+    state.register(athena, vec![]);
+
+    let glue = Arc::new(awsim_glue::GlueService::new());
+    state.register(glue, vec![]);
+
+    let elb = Arc::new(awsim_elb::ElbService::new());
+    state.register(elb, vec![]);
+
+    let cloudfront = awsim_cloudfront::CloudFrontService::new();
+    let cloudfront_routes = {
+        use awsim_core::ServiceHandler;
+        cloudfront.routes()
+    };
+    state.register(Arc::new(cloudfront), cloudfront_routes);
 
     // API Gateway — registered last so we can return a clone of the Arc.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());

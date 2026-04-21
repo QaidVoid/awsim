@@ -3,7 +3,11 @@ resolver = "3"
 members = [
     "crates/awsim",
     "crates/awsim-apigateway",
+    "crates/awsim-appsync",
+    "crates/awsim-athena",
+    "crates/awsim-bedrock",
     "crates/awsim-cloudformation",
+    "crates/awsim-cloudfront",
     "crates/awsim-cloudwatch-logs",
     "crates/awsim-cognito",
     "crates/awsim-core",
@@ -12,11 +16,15 @@ members = [
     "crates/awsim-ecr",
     "crates/awsim-ecs",
     "crates/awsim-eventbridge",
+    "crates/awsim-elb",
+    "crates/awsim-glue",
     "crates/awsim-iam",
     "crates/awsim-rds",
     "crates/awsim-kinesis",
     "crates/awsim-kms",
     "crates/awsim-lambda",
+    "crates/awsim-route53",
+    "crates/awsim-cloudwatch-metrics",
     "crates/awsim-s3",
     "crates/awsim-secretsmanager",
     "crates/awsim-ses",
@@ -35,7 +43,11 @@ repository = "https://github.com/qaidvoid/awsim"
 
 [workspace.dependencies]
 awsim-apigateway = { path = "crates/awsim-apigateway" }
+awsim-appsync = { path = "crates/awsim-appsync" }
+awsim-athena = { path = "crates/awsim-athena" }
+awsim-bedrock = { path = "crates/awsim-bedrock" }
 awsim-cloudformation = { path = "crates/awsim-cloudformation" }
+awsim-cloudfront = { path = "crates/awsim-cloudfront" }
 awsim-cloudwatch-logs = { path = "crates/awsim-cloudwatch-logs" }
 awsim-cognito = { path = "crates/awsim-cognito" }
 awsim-core = { path = "crates/awsim-core" }
@@ -43,12 +55,16 @@ awsim-ec2 = { path = "crates/awsim-ec2" }
 awsim-ecr = { path = "crates/awsim-ecr" }
 awsim-ecs = { path = "crates/awsim-ecs" }
 awsim-eventbridge = { path = "crates/awsim-eventbridge" }
+awsim-elb = { path = "crates/awsim-elb" }
+awsim-glue = { path = "crates/awsim-glue" }
 awsim-dynamodb = { path = "crates/awsim-dynamodb" }
 awsim-iam = { path = "crates/awsim-iam" }
 awsim-rds = { path = "crates/awsim-rds" }
 awsim-kinesis = { path = "crates/awsim-kinesis" }
 awsim-kms = { path = "crates/awsim-kms" }
 awsim-lambda = { path = "crates/awsim-lambda" }
+awsim-route53 = { path = "crates/awsim-route53" }
+awsim-cloudwatch-metrics = { path = "crates/awsim-cloudwatch-metrics" }
 awsim-secretsmanager = { path = "crates/awsim-secretsmanager" }
 awsim-s3 = { path = "crates/awsim-s3" }
 awsim-ses = { path = "crates/awsim-ses" }

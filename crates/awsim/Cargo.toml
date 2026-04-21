@@ -11,7 +11,11 @@ path = "src/main.rs"
 
 [dependencies]
 awsim-apigateway = { workspace = true }
+awsim-appsync = { workspace = true }
+awsim-athena = { workspace = true }
+awsim-bedrock = { workspace = true }
 awsim-cloudformation = { workspace = true }
+awsim-cloudfront = { workspace = true }
 awsim-cloudwatch-logs = { workspace = true }
 awsim-cognito = { workspace = true }
 awsim-core = { workspace = true }
@@ -19,12 +23,16 @@ awsim-dynamodb = { workspace = true }
 awsim-ec2 = { workspace = true }
 awsim-ecr = { workspace = true }
 awsim-ecs = { workspace = true }
+awsim-elb = { workspace = true }
 awsim-kinesis = { workspace = true }
 awsim-eventbridge = { workspace = true }
+awsim-glue = { workspace = true }
 awsim-iam = { workspace = true }
 awsim-rds = { workspace = true }
 awsim-kms = { workspace = true }
 awsim-lambda = { workspace = true }
+awsim-route53 = { workspace = true }
+awsim-cloudwatch-metrics = { workspace = true }
 awsim-secretsmanager = { workspace = true }
 awsim-s3 = { workspace = true }
 awsim-ses = { workspace = true }
