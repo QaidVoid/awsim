@@ -1,0 +1,20 @@
+[package]
+name = "awsim"
+description = "AWSim — a fully offline, free AWS development environment"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "awsim"
+path = "src/main.rs"
+
+[dependencies]
+awsim-core = { workspace = true }
+awsim-auth = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
