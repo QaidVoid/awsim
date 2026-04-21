@@ -28,6 +28,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     })?;
 
     let now = Instant::now();
+    let now_epoch = unix_epoch_secs();
     let message_id = Uuid::new_v4().to_string();
     let md5 = md5_of(body);
 
@@ -37,6 +38,11 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         .unwrap_or_else(|| queue.delay_seconds());
     let delay_until = if delay_secs > 0 {
         Some(now + Duration::from_secs(delay_secs))
+    } else {
+        None
+    };
+    let delay_until_secs = if delay_secs > 0 {
+        Some(now_epoch + delay_secs)
     } else {
         None
     };
@@ -95,10 +101,9 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     };
 
     // Populate system attributes
-    let unix_secs = unix_epoch_secs();
     let mut attributes: HashMap<String, String> = HashMap::new();
     attributes.insert("SenderId".to_string(), "AIDA000000000000EXAMPLE".to_string());
-    attributes.insert("SentTimestamp".to_string(), (unix_secs * 1000).to_string());
+    attributes.insert("SentTimestamp".to_string(), (now_epoch * 1000).to_string());
     attributes.insert("ApproximateReceiveCount".to_string(), "0".to_string());
     attributes.insert(
         "ApproximateFirstReceiveTimestamp".to_string(),
@@ -131,7 +136,9 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         md5_of_body: md5.clone(),
         attributes,
         message_attributes,
-        sent_at: now,
+        sent_at_secs: now_epoch,
+        delay_until_secs,
+        sent_at: Some(now),
         delay_until,
         sequence_number: sequence_number.clone(),
         receive_count: 0,

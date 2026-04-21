@@ -1,8 +1,9 @@
 use anyhow::Result;
 use clap::Parser;
+use std::sync::Arc;
 use tracing::{info, warn};
 
-use awsim_core::{AppState, RequestContext};
+use awsim_core::{AppState, PersistenceManager, RequestContext};
 
 mod admin;
 mod integrations;
@@ -43,6 +44,49 @@ async fn main() -> Result<()> {
 
     // Register all services
     register_services(&mut state);
+
+    // Persistence: restore snapshots if --data-dir was provided.
+    if let Some(ref data_dir) = cli.data_dir {
+        let pm = PersistenceManager::new(data_dir);
+        info!(data_dir = %data_dir, "Persistence enabled — restoring snapshots");
+        pm.restore_all(&state.services);
+
+        // Spawn graceful-shutdown handler that saves snapshots on SIGINT/SIGTERM.
+        let services_for_shutdown = Arc::clone(&state.services);
+        let pm_shutdown = Arc::new(PersistenceManager::new(data_dir));
+        tokio::spawn(async move {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{SignalKind, signal};
+                let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+                let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+                tokio::select! {
+                    _ = sigint.recv() => {}
+                    _ = sigterm.recv() => {}
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                tokio::signal::ctrl_c().await.ok();
+            }
+
+            info!("Shutdown signal received — saving snapshots...");
+            pm_shutdown.save_all(&services_for_shutdown);
+            info!("Snapshots saved. Exiting.");
+            std::process::exit(0);
+        });
+
+        // Spawn periodic auto-save every 30 seconds.
+        let services_for_autosave = Arc::clone(&state.services);
+        let pm_autosave = Arc::new(PersistenceManager::new(data_dir));
+        tokio::spawn(async move {
+            let interval = std::time::Duration::from_secs(30);
+            loop {
+                tokio::time::sleep(interval).await;
+                pm_autosave.save_all(&services_for_autosave);
+            }
+        });
+    }
 
     let service_count = state.services.len();
 

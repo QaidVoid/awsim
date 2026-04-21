@@ -36,6 +36,17 @@ impl<T: Default + Send + Sync + 'static> AccountRegionStore<T> {
     pub fn clear(&self) {
         self.inner.clear();
     }
+
+    /// Iterate over all (account_id, region) → state entries.
+    ///
+    /// Returns a snapshot of the keys paired with the `Arc<T>` values so the
+    /// caller can read state without holding any DashMap locks long-term.
+    pub fn iter_all(&self) -> Vec<((String, String), Arc<T>)> {
+        self.inner
+            .iter()
+            .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
+            .collect()
+    }
 }
 
 impl<T: Default + Send + Sync + 'static> Default for AccountRegionStore<T> {

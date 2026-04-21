@@ -1,8 +1,9 @@
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
 /// Versioning status for a bucket.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum VersioningStatus {
     #[default]
     Disabled,
@@ -53,7 +54,7 @@ impl Bucket {
 }
 
 /// An S3 object stored in a bucket.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct S3Object {
     pub key: String,
     /// Raw object content.
@@ -70,7 +71,7 @@ pub struct S3Object {
 }
 
 /// A multipart upload in progress.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultipartUpload {
     pub upload_id: String,
     pub key: String,
@@ -81,10 +82,56 @@ pub struct MultipartUpload {
 }
 
 /// Data for a single uploaded part.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartData {
     pub data: Vec<u8>,
     pub etag: String,
+}
+
+/// Serializable snapshot of a single bucket (without object data bytes).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BucketSnapshot {
+    pub name: String,
+    pub region: String,
+    pub created_at: String,
+    pub versioning: VersioningStatus,
+    pub tags: HashMap<String, String>,
+    pub policy: Option<String>,
+    pub cors: Option<String>,
+    /// Object metadata only — `data` field is intentionally empty to avoid huge snapshots.
+    pub objects: Vec<S3ObjectMetadata>,
+}
+
+/// Object metadata without the raw data bytes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct S3ObjectMetadata {
+    pub key: String,
+    pub content_type: String,
+    pub content_length: u64,
+    pub etag: String,
+    pub last_modified: String,
+    pub metadata: HashMap<String, String>,
+    pub version_id: Option<String>,
+}
+
+impl From<&S3Object> for S3ObjectMetadata {
+    fn from(obj: &S3Object) -> Self {
+        Self {
+            key: obj.key.clone(),
+            content_type: obj.content_type.clone(),
+            content_length: obj.content_length,
+            etag: obj.etag.clone(),
+            last_modified: obj.last_modified.clone(),
+            metadata: obj.metadata.clone(),
+            version_id: obj.version_id.clone(),
+        }
+    }
+}
+
+/// Serializable snapshot of `S3State`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct S3StateSnapshot {
+    pub buckets: Vec<BucketSnapshot>,
 }
 
 /// Global S3 state — all buckets are stored here.

@@ -9,7 +9,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, RouteDe
 use serde_json::Value;
 use tracing::debug;
 
-use state::S3State;
+use state::{Bucket, S3State, S3StateSnapshot};
 
 /// The AWSim S3 service handler.
 pub struct S3Service {
@@ -311,5 +311,88 @@ impl ServiceHandler for S3Service {
 
             _ => Err(AwsError::unknown_operation(operation)),
         }
+    }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        use state::{BucketSnapshot, S3ObjectMetadata};
+
+        let buckets: Vec<BucketSnapshot> = self
+            .store
+            .iter_all()
+            .into_iter()
+            .flat_map(|(_, state)| {
+                state
+                    .buckets
+                    .iter()
+                    .map(|entry| {
+                        let b = entry.value();
+                        BucketSnapshot {
+                            name: b.name.clone(),
+                            region: b.region.clone(),
+                            created_at: b.created_at.clone(),
+                            versioning: b.versioning.clone(),
+                            tags: b.tags.clone(),
+                            policy: b.policy.clone(),
+                            cors: b.cors.clone(),
+                            // Persist object metadata only — no data bytes
+                            objects: b
+                                .objects
+                                .iter()
+                                .map(|oe| S3ObjectMetadata::from(oe.value()))
+                                .collect(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        serde_json::to_vec(&S3StateSnapshot { buckets }).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        use dashmap::DashMap;
+        use state::S3Object;
+
+        let snapshot: S3StateSnapshot =
+            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+
+        // S3 state is global per account — always use "global" region.
+        let state = self.store.get("000000000000", "global");
+
+        for bs in snapshot.buckets {
+            let bucket = Bucket {
+                name: bs.name.clone(),
+                region: bs.region.clone(),
+                created_at: bs.created_at.clone(),
+                versioning: bs.versioning,
+                tags: bs.tags,
+                policy: bs.policy,
+                cors: bs.cors,
+                objects: {
+                    let dm = DashMap::new();
+                    for meta in bs.objects {
+                        // Restore metadata; data is empty — object data is not persisted
+                        dm.insert(
+                            meta.key.clone(),
+                            S3Object {
+                                key: meta.key,
+                                data: Vec::new(), // not persisted
+                                content_type: meta.content_type,
+                                content_length: meta.content_length,
+                                etag: meta.etag,
+                                last_modified: meta.last_modified,
+                                metadata: meta.metadata,
+                                version_id: meta.version_id,
+                            },
+                        );
+                    }
+                    dm
+                },
+                multipart_uploads: DashMap::new(), // not persisted
+            };
+            state.buckets.insert(bs.name, bucket);
+        }
+
+        Ok(())
     }
 }

@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
@@ -76,6 +76,11 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
             if let Some(mut msg) = queue.messages.remove(pos) {
                 let receipt_handle = Uuid::new_v4().to_string();
                 let visible_at = now + Duration::from_secs(visibility_timeout);
+                let now_epoch = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let visible_at_secs = now_epoch + visibility_timeout;
 
                 // Build attributes subset
                 let mut attrs = serde_json::Map::new();
@@ -142,7 +147,8 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                 // Move to inflight
                 let im = crate::state::InflightMessage {
                     message: msg,
-                    visible_at,
+                    visible_at: Some(visible_at),
+                    visible_at_secs,
                     receipt_handle: receipt_handle.clone(),
                 };
                 queue.inflight.insert(receipt_handle, im);

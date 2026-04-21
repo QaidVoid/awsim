@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 
 /// A published SNS message (stored for local-dev debugging/inspection).
 /// Fields will be read once cross-service delivery (SQS/Lambda) is implemented.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct PublishedMessage {
     pub message_id: String,
@@ -15,7 +16,7 @@ pub struct PublishedMessage {
 }
 
 /// A message attribute value.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct MessageAttribute {
     pub data_type: String,
@@ -24,7 +25,7 @@ pub struct MessageAttribute {
 }
 
 /// A single SNS subscription.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Subscription {
     pub arn: String,
     pub topic_arn: String,
@@ -35,7 +36,7 @@ pub struct Subscription {
 }
 
 /// A single SNS topic.
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct Topic {
     pub arn: String,
@@ -72,6 +73,13 @@ impl Topic {
             created_at,
         }
     }
+}
+
+/// Serializable snapshot of `SnsState`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SnsStateSnapshot {
+    pub topics: Vec<Topic>,
+    pub subscriptions: Vec<Subscription>,
 }
 
 fn default_topic_attributes(is_fifo: bool, arn: &str) -> HashMap<String, String> {
@@ -122,4 +130,33 @@ pub struct SnsState {
     pub topics: DashMap<String, Topic>,
     /// SubscriptionArn → Subscription
     pub subscriptions: DashMap<String, Subscription>,
+}
+
+impl SnsState {
+    pub fn to_snapshot(&self) -> SnsStateSnapshot {
+        SnsStateSnapshot {
+            topics: self.topics.iter().map(|e| {
+                let t = e.value();
+                Topic {
+                    arn: t.arn.clone(),
+                    name: t.name.clone(),
+                    attributes: t.attributes.clone(),
+                    tags: t.tags.clone(),
+                    is_fifo: t.is_fifo,
+                    subscription_arns: t.subscription_arns.clone(),
+                    created_at: t.created_at.clone(),
+                }
+            }).collect(),
+            subscriptions: self.subscriptions.iter().map(|e| e.value().clone()).collect(),
+        }
+    }
+
+    pub fn restore_from_snapshot(&self, snapshot: SnsStateSnapshot) {
+        for topic in snapshot.topics {
+            self.topics.insert(topic.arn.clone(), topic);
+        }
+        for sub in snapshot.subscriptions {
+            self.subscriptions.insert(sub.arn.clone(), sub);
+        }
+    }
 }

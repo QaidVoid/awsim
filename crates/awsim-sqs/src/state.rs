@@ -2,9 +2,10 @@ use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 
 /// A message attribute value (type + value).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageAttribute {
     pub data_type: String,
     pub string_value: Option<String>,
@@ -12,29 +13,85 @@ pub struct MessageAttribute {
 }
 
 /// A message stored in a queue.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub message_id: String,
     pub body: String,
     pub md5_of_body: String,
     pub attributes: HashMap<String, String>,
     pub message_attributes: HashMap<String, MessageAttribute>,
-    pub sent_at: Instant,
-    pub delay_until: Option<Instant>,
+    /// Wall-clock timestamp (seconds since Unix epoch) — replaces `Instant`.
+    pub sent_at_secs: u64,
+    /// Epoch seconds when the message becomes visible; `None` = immediately.
+    pub delay_until_secs: Option<u64>,
     pub sequence_number: Option<String>,
     pub receive_count: u32,
     /// Deduplication ID for FIFO queues.
     pub dedup_id: Option<String>,
     /// Group ID for FIFO queues.
     pub group_id: Option<String>,
+    /// Non-serialized original `Instant` used for in-process delay calculations.
+    /// Re-derived from `delay_until_secs` on restore.
+    #[serde(skip)]
+    pub sent_at: Option<Instant>,
+    #[serde(skip)]
+    pub delay_until: Option<Instant>,
+}
+
+impl Message {
+    /// Reconstruct `Instant`-based fields from the persisted epoch-second fields.
+    pub fn reinit_instants(&mut self) {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+        let now_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let now_instant = Instant::now();
+
+        // Reconstruct sent_at as an Instant relative to now
+        let sent_offset = now_epoch.saturating_sub(self.sent_at_secs);
+        self.sent_at = Some(now_instant - Duration::from_secs(sent_offset));
+
+        // Reconstruct delay_until
+        self.delay_until = self.delay_until_secs.map(|due| {
+            if due > now_epoch {
+                now_instant + Duration::from_secs(due - now_epoch)
+            } else {
+                // Already past — make it immediately visible
+                now_instant
+            }
+        });
+    }
 }
 
 /// A message that has been received and is now invisible ("inflight").
-#[derive(Debug, Clone)]
+/// Inflight messages are intentionally not persisted — on restore they are
+/// treated as if their visibility timeout expired (i.e., returned to the queue).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InflightMessage {
     pub message: Message,
-    pub visible_at: Instant,
+    /// Epoch seconds when the message becomes visible again.
+    pub visible_at_secs: u64,
     pub receipt_handle: String,
+    #[serde(skip)]
+    pub visible_at: Option<Instant>,
+}
+
+impl InflightMessage {
+    pub fn reinit_instants(&mut self) {
+        self.message.reinit_instants();
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+        let now_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let now_instant = Instant::now();
+        self.visible_at = Some(if self.visible_at_secs > now_epoch {
+            now_instant + Duration::from_secs(self.visible_at_secs - now_epoch)
+        } else {
+            now_instant
+        });
+    }
 }
 
 /// Per-account/region SQS state.
@@ -42,6 +99,29 @@ pub struct InflightMessage {
 pub struct SqsState {
     /// Queue name → Queue (DashMap for concurrent access)
     pub queues: DashMap<String, Queue>,
+}
+
+/// Serializable snapshot of `SqsState`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SqsStateSnapshot {
+    pub queues: Vec<QueueSnapshot>,
+}
+
+/// Serializable snapshot of a single queue.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct QueueSnapshot {
+    pub name: String,
+    pub url: String,
+    pub arn: String,
+    pub attributes: HashMap<String, String>,
+    pub tags: HashMap<String, String>,
+    pub messages: VecDeque<Message>,
+    /// Inflight messages are stored so they can be re-queued on restore.
+    pub inflight: Vec<InflightMessage>,
+    pub is_fifo: bool,
+    pub created_at: String,
+    /// FIFO dedup cache: dedup_id → (expiry epoch secs, message_id)
+    pub dedup_cache: HashMap<String, (u64, String)>,
 }
 
 /// A single SQS queue.
@@ -100,7 +180,7 @@ impl Queue {
         let expired: Vec<String> = self
             .inflight
             .values()
-            .filter(|m| m.visible_at <= now)
+            .filter(|m| m.visible_at.map_or(true, |v| v <= now))
             .map(|m| m.receipt_handle.clone())
             .collect();
 

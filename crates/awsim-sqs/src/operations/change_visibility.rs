@@ -37,7 +37,14 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         )
     })?;
 
-    im.visible_at = Instant::now() + Duration::from_secs(visibility_timeout);
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = Instant::now();
+    let now_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    im.visible_at = Some(now + Duration::from_secs(visibility_timeout));
+    im.visible_at_secs = now_epoch + visibility_timeout;
 
     Ok(json!({}))
 }

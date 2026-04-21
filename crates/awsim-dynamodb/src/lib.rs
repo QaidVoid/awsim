@@ -9,7 +9,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use state::DynamoState;
+use state::{DynamoState, DynamoStateSnapshot, Table};
 
 /// The AWSim DynamoDB service handler.
 pub struct DynamoDbService {
@@ -85,5 +85,57 @@ impl ServiceHandler for DynamoDbService {
 
             _ => Err(AwsError::unknown_operation(operation)),
         }
+    }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let tables: Vec<Table> = self
+            .store
+            .iter_all()
+            .into_iter()
+            .flat_map(|(_, state)| {
+                state
+                    .tables
+                    .iter()
+                    .map(|e| {
+                        let t = e.value();
+                        Table {
+                            name: t.name.clone(),
+                            arn: t.arn.clone(),
+                            key_schema: t.key_schema.clone(),
+                            attribute_definitions: t.attribute_definitions.clone(),
+                            billing_mode: t.billing_mode.clone(),
+                            status: t.status.clone(),
+                            created_at: t.created_at.clone(),
+                            gsi: t.gsi.clone(),
+                            lsi: t.lsi.clone(),
+                            items: t.items.clone(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        serde_json::to_vec(&DynamoStateSnapshot { tables }).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let snapshot: DynamoStateSnapshot =
+            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+
+        for table in snapshot.tables {
+            // Derive account+region from table ARN.
+            // DynamoDB ARN: arn:aws:dynamodb:{region}:{account}:table/{name}
+            let parts: Vec<&str> = table.arn.splitn(6, ':').collect();
+            let (account, region) = if parts.len() == 6 {
+                (parts[4].to_string(), parts[3].to_string())
+            } else {
+                ("000000000000".to_string(), "us-east-1".to_string())
+            };
+
+            let state = self.store.get(&account, &region);
+            state.tables.insert(table.name.clone(), table);
+        }
+
+        Ok(())
     }
 }

@@ -10,7 +10,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use state::IamState;
+use state::{IamState, IamStateSnapshot};
 
 /// IAM is a global service — we use account-only namespacing.
 /// The region key is always "global" for IAM state lookups.
@@ -130,5 +130,68 @@ impl ServiceHandler for IamService {
 
             _ => Err(AwsError::unknown_operation(operation)),
         }
+    }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let mut snapshot = IamStateSnapshot {
+            users: vec![],
+            groups: vec![],
+            roles: vec![],
+            policies: vec![],
+            instance_profiles: vec![],
+        };
+
+        for (_, state) in self.store.iter_all() {
+            snapshot.users.extend(state.users.iter().map(|e| e.value().clone()));
+            snapshot.groups.extend(state.groups.iter().map(|e| e.value().clone()));
+            snapshot.roles.extend(state.roles.iter().map(|e| e.value().clone()));
+            snapshot.policies.extend(state.policies.iter().map(|e| e.value().clone()));
+            snapshot.instance_profiles.extend(state.instance_profiles.iter().map(|e| e.value().clone()));
+        }
+
+        serde_json::to_vec(&snapshot).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let snapshot: IamStateSnapshot =
+            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+
+        // IAM is global — always use the "global" region key.
+        // Derive the account from the ARN of the first entity, or fall back to default.
+        let account_id = snapshot
+            .users
+            .first()
+            .map(|u| {
+                // ARN: arn:aws:iam::{account}:user/{name}
+                let parts: Vec<&str> = u.arn.splitn(6, ':').collect();
+                if parts.len() >= 5 { parts[4].to_string() } else { "000000000000".to_string() }
+            })
+            .or_else(|| {
+                snapshot.roles.first().map(|r| {
+                    let parts: Vec<&str> = r.arn.splitn(6, ':').collect();
+                    if parts.len() >= 5 { parts[4].to_string() } else { "000000000000".to_string() }
+                })
+            })
+            .unwrap_or_else(|| "000000000000".to_string());
+
+        let state = self.store.get(&account_id, IAM_REGION);
+
+        for user in snapshot.users {
+            state.users.insert(user.user_name.clone(), user);
+        }
+        for group in snapshot.groups {
+            state.groups.insert(group.group_name.clone(), group);
+        }
+        for role in snapshot.roles {
+            state.roles.insert(role.role_name.clone(), role);
+        }
+        for policy in snapshot.policies {
+            state.policies.insert(policy.arn.clone(), policy);
+        }
+        for ip in snapshot.instance_profiles {
+            state.instance_profiles.insert(ip.instance_profile_name.clone(), ip);
+        }
+
+        Ok(())
     }
 }

@@ -3,7 +3,7 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::operations::{publish, subscriptions, tags, topics};
-use crate::state::SnsState;
+use crate::state::{SnsState, SnsStateSnapshot};
 
 /// The SNS service handler.
 pub struct SnsService {
@@ -78,5 +78,66 @@ impl ServiceHandler for SnsService {
 
             _ => Err(AwsError::unknown_operation(operation)),
         }
+    }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let mut all: Vec<SnsStateSnapshot> = Vec::new();
+
+        for ((_account, _region), state) in self.store.iter_all() {
+            all.push(state.to_snapshot());
+        }
+
+        // Combine all per-account-region snapshots into one flat structure
+        let combined = SnsStateSnapshot {
+            topics: all.iter().flat_map(|s| s.topics.iter().cloned()).collect(),
+            subscriptions: all.iter().flat_map(|s| s.subscriptions.iter().cloned()).collect(),
+        };
+
+        serde_json::to_vec(&combined).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let snapshot: SnsStateSnapshot =
+            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+
+        // Group by account+region derived from topic ARN.
+        // Topic ARN format: arn:aws:sns:{region}:{account}:{name}
+        use std::collections::HashMap;
+        let mut by_acct_region: HashMap<(String, String), SnsStateSnapshot> = HashMap::new();
+
+        for topic in snapshot.topics {
+            let parts: Vec<&str> = topic.arn.splitn(6, ':').collect();
+            let (account, region) = if parts.len() == 6 {
+                (parts[4].to_string(), parts[3].to_string())
+            } else {
+                ("000000000000".to_string(), "us-east-1".to_string())
+            };
+            by_acct_region
+                .entry((account, region))
+                .or_insert_with(|| SnsStateSnapshot { topics: vec![], subscriptions: vec![] })
+                .topics
+                .push(topic);
+        }
+
+        for sub in snapshot.subscriptions {
+            let parts: Vec<&str> = sub.topic_arn.splitn(6, ':').collect();
+            let (account, region) = if parts.len() == 6 {
+                (parts[4].to_string(), parts[3].to_string())
+            } else {
+                ("000000000000".to_string(), "us-east-1".to_string())
+            };
+            by_acct_region
+                .entry((account, region))
+                .or_insert_with(|| SnsStateSnapshot { topics: vec![], subscriptions: vec![] })
+                .subscriptions
+                .push(sub);
+        }
+
+        for ((account, region), snap) in by_acct_region {
+            let state = self.store.get(&account, &region);
+            state.restore_from_snapshot(snap);
+        }
+
+        Ok(())
     }
 }

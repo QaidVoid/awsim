@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// A DynamoDB attribute value (typed).
@@ -8,7 +9,7 @@ use serde_json::Value;
 pub type DynamoItem = HashMap<String, Value>;
 
 /// Key schema element: hash key or range key.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeySchemaElement {
     pub attribute_name: String,
     /// "HASH" or "RANGE"
@@ -16,7 +17,7 @@ pub struct KeySchemaElement {
 }
 
 /// Attribute definition: type of an attribute used in key schemas.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttributeDefinition {
     pub attribute_name: String,
     /// "S", "N", or "B"
@@ -24,14 +25,14 @@ pub struct AttributeDefinition {
 }
 
 /// Projection type for secondary indexes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Projection {
     pub projection_type: String, // ALL | KEYS_ONLY | INCLUDE
     pub non_key_attributes: Vec<String>,
 }
 
 /// Global Secondary Index definition.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalSecondaryIndex {
     pub index_name: String,
     pub key_schema: Vec<KeySchemaElement>,
@@ -40,7 +41,7 @@ pub struct GlobalSecondaryIndex {
 }
 
 /// Local Secondary Index definition.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalSecondaryIndex {
     pub index_name: String,
     pub key_schema: Vec<KeySchemaElement>,
@@ -48,6 +49,7 @@ pub struct LocalSecondaryIndex {
 }
 
 /// A DynamoDB Table.
+#[derive(Serialize, Deserialize)]
 pub struct Table {
     pub name: String,
     pub arn: String,
@@ -60,6 +62,12 @@ pub struct Table {
     pub lsi: Vec<LocalSecondaryIndex>,
     /// Composite key (pk\0sk or pk alone) → item.
     pub items: BTreeMap<String, DynamoItem>,
+}
+
+/// Serializable snapshot of `DynamoState`.
+#[derive(Serialize, Deserialize)]
+pub struct DynamoStateSnapshot {
+    pub tables: Vec<Table>,
 }
 
 impl Table {

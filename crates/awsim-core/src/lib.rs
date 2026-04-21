@@ -2,6 +2,7 @@ pub mod auth;
 pub mod error;
 pub mod events;
 pub mod gateway;
+pub mod persistence;
 pub mod protocol;
 pub mod router;
 pub mod state;
@@ -9,6 +10,7 @@ pub mod state;
 pub use error::AwsError;
 pub use events::{EventBus, InternalEvent};
 pub use gateway::AppState;
+pub use persistence::PersistenceManager;
 pub use protocol::{Protocol, RouteDefinition};
 pub use router::RequestContext;
 pub use state::AccountRegionStore;
@@ -46,4 +48,18 @@ pub trait ServiceHandler: Send + Sync {
         input: Value,
         ctx: &RequestContext,
     ) -> Result<Value, AwsError>;
+
+    /// Serialize the service's state to bytes for persistence.
+    ///
+    /// Return `None` if this service does not support snapshots.
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Restore the service's state from a previous snapshot.
+    ///
+    /// The default implementation is a no-op and always succeeds.
+    fn restore(&self, _data: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
 }

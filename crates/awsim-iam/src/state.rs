@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// IAM state — global per account (region is always "global" for IAM).
@@ -12,7 +13,17 @@ pub struct IamState {
     pub instance_profiles: DashMap<String, InstanceProfile>,
 }
 
-#[derive(Debug, Clone)]
+/// Serializable snapshot of `IamState`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IamStateSnapshot {
+    pub users: Vec<User>,
+    pub groups: Vec<Group>,
+    pub roles: Vec<Role>,
+    pub policies: Vec<Policy>,
+    pub instance_profiles: Vec<InstanceProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub user_name: String,
     /// AIDA... format, 20 chars
@@ -29,7 +40,7 @@ pub struct User {
     pub groups: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessKey {
     pub access_key_id: String,
     pub secret_access_key: String,
@@ -37,7 +48,7 @@ pub struct AccessKey {
     pub create_date: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Group {
     pub group_name: String,
     /// AGPA... format
@@ -53,7 +64,7 @@ pub struct Group {
     pub inline_policies: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Role {
     pub role_name: String,
     /// AROA... format
@@ -69,7 +80,7 @@ pub struct Role {
     pub inline_policies: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Policy {
     pub policy_name: String,
     /// ANPA... format
@@ -84,7 +95,7 @@ pub struct Policy {
     pub attachment_count: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstanceProfile {
     pub instance_profile_name: String,
     /// AIPA... format
