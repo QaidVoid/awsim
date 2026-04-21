@@ -66,8 +66,14 @@ async fn main() -> Result<()> {
 fn register_services(state: &mut AppState) {
     use std::sync::Arc;
 
+    let iam = Arc::new(awsim_iam::IamService::new());
+    state.register(iam, vec![]);
+
     let sts = Arc::new(awsim_sts::StsService::new());
     state.register(sts, vec![]);
+
+    let sqs = Arc::new(awsim_sqs::SqsService::new());
+    state.register(sqs, vec![]);
 }
 
 async fn health() -> &'static str {

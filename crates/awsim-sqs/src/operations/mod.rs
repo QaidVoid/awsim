@@ -1,0 +1,11 @@
+pub mod attributes;
+pub mod change_visibility;
+pub mod create_queue;
+pub mod delete_message;
+pub mod delete_queue;
+pub mod get_queue_url;
+pub mod list_queues;
+pub mod purge_queue;
+pub mod receive_message;
+pub mod send_message;
+pub mod tags;

@@ -1,3 +1,6 @@
-// SQS service implementation — work in progress.
-pub mod state;
+mod handler;
 mod operations;
+mod state;
+mod util;
+
+pub use handler::SqsService;

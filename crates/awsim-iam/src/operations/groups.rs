@@ -1,0 +1,181 @@
+use awsim_core::{AwsError, RequestContext};
+use serde_json::{Value, json};
+use std::collections::HashMap;
+
+use crate::{
+    error::{delete_conflict, entity_already_exists, no_such_entity},
+    ids::{new_group_id, normalize_path, now_iso8601},
+    state::{Group, IamState},
+};
+
+use super::{opt_str, require_str};
+
+fn group_to_value(g: &Group) -> Value {
+    json!({
+        "GroupName": g.group_name,
+        "GroupId": g.group_id,
+        "Arn": g.arn,
+        "Path": g.path,
+        "CreateDate": g.create_date,
+    })
+}
+
+pub fn create_group(
+    state: &IamState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let group_name = require_str(input, "GroupName")?;
+    let path = normalize_path(opt_str(input, "Path"));
+
+    if state.groups.contains_key(group_name) {
+        return Err(entity_already_exists("Group", group_name));
+    }
+
+    let group_id = new_group_id();
+    let arn = format!(
+        "arn:aws:iam::{}:group{}{}",
+        ctx.account_id, path, group_name
+    );
+
+    let group = Group {
+        group_name: group_name.to_string(),
+        group_id,
+        arn,
+        path,
+        create_date: now_iso8601(),
+        members: Vec::new(),
+        attached_policies: Vec::new(),
+        inline_policies: HashMap::new(),
+    };
+
+    let result = group_to_value(&group);
+    state.groups.insert(group_name.to_string(), group);
+
+    Ok(json!({ "Group": result }))
+}
+
+pub fn get_group(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let group_name = require_str(input, "GroupName")?;
+
+    let group = state
+        .groups
+        .get(group_name)
+        .ok_or_else(|| no_such_entity("Group", group_name))?;
+
+    // Collect user details for members
+    let users: Vec<Value> = group
+        .members
+        .iter()
+        .filter_map(|uname| {
+            state.users.get(uname).map(|u| {
+                json!({
+                    "UserName": u.user_name,
+                    "UserId": u.user_id,
+                    "Arn": u.arn,
+                    "Path": u.path,
+                    "CreateDate": u.create_date,
+                })
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "Group": group_to_value(&group),
+        "Users": { "member": users },
+        "IsTruncated": false,
+    }))
+}
+
+pub fn delete_group(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let group_name = require_str(input, "GroupName")?;
+
+    {
+        let group = state
+            .groups
+            .get(group_name)
+            .ok_or_else(|| no_such_entity("Group", group_name))?;
+
+        if !group.members.is_empty() {
+            return Err(delete_conflict(format!(
+                "Cannot delete group {group_name}: group has members"
+            )));
+        }
+        if !group.attached_policies.is_empty() {
+            return Err(delete_conflict(format!(
+                "Cannot delete group {group_name}: group has attached policies"
+            )));
+        }
+    }
+
+    state.groups.remove(group_name);
+    Ok(json!({}))
+}
+
+pub fn list_groups(state: &IamState, _input: &Value) -> Result<Value, AwsError> {
+    let groups: Vec<Value> = state.groups.iter().map(|g| group_to_value(&g)).collect();
+
+    Ok(json!({
+        "Groups": { "member": groups },
+        "IsTruncated": false,
+    }))
+}
+
+pub fn add_user_to_group(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let group_name = require_str(input, "GroupName")?;
+    let user_name = require_str(input, "UserName")?;
+
+    // Validate both exist
+    if !state.users.contains_key(user_name) {
+        return Err(no_such_entity("User", user_name));
+    }
+
+    {
+        let mut group = state
+            .groups
+            .get_mut(group_name)
+            .ok_or_else(|| no_such_entity("Group", group_name))?;
+
+        if !group.members.contains(&user_name.to_string()) {
+            group.members.push(user_name.to_string());
+        }
+    }
+
+    // Add group to user's group list
+    if let Some(mut user) = state.users.get_mut(user_name) {
+        if !user.groups.contains(&group_name.to_string()) {
+            user.groups.push(group_name.to_string());
+        }
+    }
+
+    Ok(json!({}))
+}
+
+pub fn remove_user_from_group(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let group_name = require_str(input, "GroupName")?;
+    let user_name = require_str(input, "UserName")?;
+
+    {
+        let mut group = state
+            .groups
+            .get_mut(group_name)
+            .ok_or_else(|| no_such_entity("Group", group_name))?;
+
+        let before = group.members.len();
+        group.members.retain(|m| m != user_name);
+
+        if group.members.len() == before {
+            return Err(no_such_entity(
+                "User in group",
+                &format!("{user_name} in {group_name}"),
+            ));
+        }
+    }
+
+    // Remove group from user's group list
+    if let Some(mut user) = state.users.get_mut(user_name) {
+        user.groups.retain(|g| g != group_name);
+    }
+
+    Ok(json!({}))
+}

@@ -1,0 +1,26 @@
+use awsim_core::AwsError;
+
+pub fn entity_already_exists(entity: &str, name: &str) -> AwsError {
+    AwsError::conflict(
+        "EntityAlreadyExists",
+        format!("{entity} with name {name} already exists"),
+    )
+}
+
+pub fn no_such_entity(entity: &str, name: &str) -> AwsError {
+    AwsError::not_found(
+        "NoSuchEntity",
+        format!("{entity} {name} cannot be found"),
+    )
+}
+
+pub fn missing_parameter(param: &str) -> AwsError {
+    AwsError::bad_request(
+        "MissingParameter",
+        format!("The request must contain the parameter {param}"),
+    )
+}
+
+pub fn delete_conflict(message: impl Into<String>) -> AwsError {
+    AwsError::conflict("DeleteConflict", message)
+}
