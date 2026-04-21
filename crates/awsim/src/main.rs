@@ -7,6 +7,7 @@ use awsim_core::{AppState, PersistenceManager, RequestContext};
 
 mod admin;
 mod integrations;
+mod proxy;
 
 #[derive(Parser)]
 #[command(name = "awsim", about = "AWSim — fully offline, free AWS development environment")]
@@ -42,8 +43,8 @@ async fn main() -> Result<()> {
 
     let mut state = AppState::new(cli.region.clone(), cli.account_id.clone());
 
-    // Register all services
-    register_services(&mut state);
+    // Register all services; get back the ApiGateway Arc for proxy routing.
+    let apigw_service = register_services(&mut state);
 
     // Persistence: restore snapshots if --data-dir was provided.
     if let Some(ref data_dir) = cli.data_dir {
@@ -93,13 +94,36 @@ async fn main() -> Result<()> {
     // Spawn background event router — handles cross-service fan-out.
     spawn_event_router(&state);
 
-    let app = axum::Router::new()
+    // Build the API Gateway proxy state using the concrete Arc returned from register_services.
+    let lambda_arc = state.services.get("lambda").cloned();
+
+    let proxy_state = proxy::ProxyState {
+        apigw: apigw_service,
+        lambda: lambda_arc,
+        default_account_id: cli.account_id.clone(),
+        default_region: cli.region.clone(),
+    };
+
+    // Build the proxy sub-router (finalized with its own state).
+    let proxy_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/restapis/{api_id}/{stage}/{*path}",
+            axum::routing::any(proxy::handle_proxy),
+        )
+        .with_state(proxy_state);
+
+    // Build the main router (finalized with AppState).
+    let main_router: axum::Router<()> = axum::Router::new()
         .route("/_awsim/health", axum::routing::get(admin::health))
         .route("/_awsim/services", axum::routing::get(admin::list_services))
         .route("/_awsim/config", axum::routing::get(admin::config))
         .fallback(awsim_core::gateway::handle_request)
-        .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
+
+    // Merge both routers and add shared middleware.
+    let app = main_router
+        .merge(proxy_router)
+        .layer(tower_http::cors::CorsLayer::permissive());
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], cli.port));
     info!(
@@ -250,7 +274,8 @@ fn arn_to_sqs_url(arn: &str, default_region: &str, default_account: &str) -> Str
     }
 }
 
-fn register_services(state: &mut AppState) {
+/// Register all services and return any handles needed for proxy routing.
+fn register_services(state: &mut AppState) -> Arc<awsim_apigateway::ApiGatewayService> {
     use std::sync::Arc;
 
     let iam = Arc::new(awsim_iam::IamService::new());
@@ -324,4 +349,15 @@ fn register_services(state: &mut AppState) {
 
     let cloudformation = Arc::new(awsim_cloudformation::CloudFormationService::new());
     state.register(cloudformation, vec![]);
+
+    // API Gateway — registered last so we can return a clone of the Arc.
+    let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
+    let apigw_routes = {
+        use awsim_core::ServiceHandler;
+        apigateway.routes()
+    };
+    let apigw_clone = Arc::clone(&apigateway);
+    state.register(apigateway, apigw_routes);
+
+    apigw_clone
 }

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/awsim",
+    "crates/awsim-apigateway",
     "crates/awsim-cloudformation",
     "crates/awsim-cloudwatch-logs",
     "crates/awsim-cognito",
@@ -32,6 +33,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/qaidvoid/awsim"
 
 [workspace.dependencies]
+awsim-apigateway = { path = "crates/awsim-apigateway" }
 awsim-cloudformation = { path = "crates/awsim-cloudformation" }
 awsim-cloudwatch-logs = { path = "crates/awsim-cloudwatch-logs" }
 awsim-cognito = { path = "crates/awsim-cognito" }
@@ -63,6 +65,7 @@ axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 hyper = { version = "1", features = ["full"] }
+bytes = "1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

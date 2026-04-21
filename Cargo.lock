@@ -115,6 +115,7 @@ name = "awsim"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "awsim-apigateway",
  "awsim-cloudformation",
  "awsim-cloudwatch-logs",
  "awsim-cognito",
@@ -137,12 +138,30 @@ dependencies = [
  "awsim-stepfunctions",
  "awsim-sts",
  "axum",
+ "base64",
+ "bytes",
  "clap",
  "serde_json",
  "tokio",
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-apigateway"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "axum",
+ "base64",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 
