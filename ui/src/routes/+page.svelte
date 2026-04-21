@@ -1,10 +1,12 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { fetchHealth, fetchServices, fetchConfig } from '$lib/api';
+	import { onMount, onDestroy } from 'svelte';
+	import { fetchHealth, fetchServices, fetchConfig, fetchStats } from '$lib/api';
 
 	let health = $state<any>(null);
 	let services = $state<any[]>([]);
 	let config = $state<any>(null);
+	let stats = $state<any>(null);
+	let interval: ReturnType<typeof setInterval>;
 
 	onMount(async () => {
 		[health, { services }, config] = await Promise.all([
@@ -12,14 +14,26 @@
 			fetchServices(),
 			fetchConfig(),
 		]);
+
+		const pollStats = async () => {
+			try {
+				stats = await fetchStats();
+			} catch {}
+		};
+		pollStats();
+		interval = setInterval(pollStats, 2000);
+	});
+
+	onDestroy(() => {
+		if (interval) clearInterval(interval);
 	});
 </script>
 
 <div class="p-6">
 	<h1 class="text-2xl font-bold mb-6">Dashboard</h1>
 
-	<!-- Status cards -->
-	<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+	<!-- Metrics grid: 2 cols on mobile, 3 cols on md+ -->
+	<div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
 		<div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
 			<div class="text-zinc-500 text-sm">Status</div>
 			<div class="text-2xl font-bold mt-1">
@@ -37,6 +51,24 @@
 		<div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
 			<div class="text-zinc-500 text-sm">Services</div>
 			<div class="text-2xl font-bold mt-1">{services.length || '...'}</div>
+		</div>
+		<div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
+			<div class="text-zinc-500 text-sm">Uptime</div>
+			<div class="text-2xl font-bold mt-1 font-mono">
+				{stats?.uptimeFormatted ?? '...'}
+			</div>
+		</div>
+		<div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
+			<div class="text-zinc-500 text-sm">Total Requests</div>
+			<div class="text-2xl font-bold mt-1 font-mono">
+				{stats?.totalRequests ?? '...'}
+			</div>
+		</div>
+		<div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
+			<div class="text-zinc-500 text-sm">Requests / sec</div>
+			<div class="text-2xl font-bold mt-1 font-mono">
+				{stats?.requestsPerSecond ?? '...'}
+			</div>
 		</div>
 	</div>
 
