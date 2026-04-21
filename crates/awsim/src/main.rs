@@ -2,6 +2,8 @@ use anyhow::Result;
 use clap::Parser;
 use tracing::info;
 
+use awsim_core::AppState;
+
 #[derive(Parser)]
 #[command(name = "awsim", about = "AWSim — fully offline, free AWS development environment")]
 struct Cli {
@@ -34,19 +36,26 @@ async fn main() -> Result<()> {
         .with_env_filter(&cli.log_level)
         .init();
 
+    let mut state = AppState::new(cli.region.clone(), cli.account_id.clone());
+
+    // Register all services
+    register_services(&mut state);
+
+    let service_count = state.services.len();
+
+    let app = axum::Router::new()
+        .route("/_awsim/health", axum::routing::get(health))
+        .fallback(awsim_core::gateway::handle_request)
+        .with_state(state);
+
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], cli.port));
     info!(
         port = cli.port,
         region = %cli.region,
         account_id = %cli.account_id,
-        "Starting AWSim"
+        services = service_count,
+        "AWSim started"
     );
-
-    let app = axum::Router::new()
-        .route("/_awsim/health", axum::routing::get(health))
-        .fallback(handle_aws_request);
-
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], cli.port));
-    info!("Listening on http://{addr}");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
@@ -54,32 +63,14 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn health() -> &'static str {
-    r#"{"status":"ok","service":"awsim"}"#
+fn register_services(state: &mut AppState) {
+    // Services will be registered here as they are implemented.
+    // Example:
+    // let sts = Arc::new(awsim_sts::StsService::new());
+    // state.register(sts, vec![]);
+    let _ = state;
 }
 
-async fn handle_aws_request(
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
-) -> axum::http::Response<axum::body::Body> {
-    tracing::debug!(
-        method = %method,
-        uri = %uri,
-        content_type = ?headers.get("content-type"),
-        target = ?headers.get("x-amz-target"),
-        "Incoming AWS request"
-    );
-
-    // TODO: Protocol detection, service routing, handler dispatch
-    let _ = (method, uri, headers, body);
-
-    axum::http::Response::builder()
-        .status(501)
-        .header("Content-Type", "application/json")
-        .body(axum::body::Body::from(
-            r#"{"__type":"NotImplemented","message":"AWSim is starting up — no services registered yet"}"#,
-        ))
-        .unwrap()
+async fn health() -> &'static str {
+    r#"{"status":"ok","service":"awsim"}"#
 }

@@ -12,6 +12,7 @@ tower-http = { workspace = true }
 hyper = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
+bytes = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 quick-xml = { workspace = true }

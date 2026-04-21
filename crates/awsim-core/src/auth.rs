@@ -1,4 +1,4 @@
-use awsim_core::RequestContext;
+use crate::router::RequestContext;
 
 /// Credentials extracted from an AWS SigV4 Authorization header.
 #[derive(Debug, Clone)]
@@ -52,8 +52,6 @@ pub fn parse_authorization(header: &str) -> Option<SigV4Credentials> {
 }
 
 /// Build a RequestContext from parsed SigV4 credentials.
-///
-/// In bypass mode (default), we accept any credentials and just extract metadata.
 pub fn build_request_context(
     creds: &SigV4Credentials,
     method: &str,

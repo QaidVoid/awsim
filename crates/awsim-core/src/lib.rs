@@ -1,11 +1,15 @@
+pub mod auth;
 pub mod error;
+pub mod gateway;
 pub mod protocol;
 pub mod router;
 pub mod state;
 
 pub use error::AwsError;
-pub use protocol::Protocol;
+pub use gateway::AppState;
+pub use protocol::{Protocol, RouteDefinition};
 pub use router::RequestContext;
+pub use state::AccountRegionStore;
 
 use serde_json::Value;
 
@@ -19,7 +23,7 @@ pub trait ServiceHandler: Send + Sync {
     fn service_name(&self) -> &str;
 
     /// The signing name used in SigV4 Authorization headers.
-    /// Usually the same as service_name, but not always (e.g., "execute-api" for API Gateway).
+    /// Usually the same as service_name, but not always.
     fn signing_name(&self) -> &str {
         self.service_name()
     }
@@ -27,13 +31,13 @@ pub trait ServiceHandler: Send + Sync {
     /// The primary protocol this service uses.
     fn protocol(&self) -> Protocol;
 
+    /// Route definitions for REST-protocol services.
+    /// Not needed for RPC-style protocols (awsJson, awsQuery).
+    fn routes(&self) -> Vec<RouteDefinition> {
+        Vec::new()
+    }
+
     /// Handle an AWS API operation.
-    ///
-    /// - `operation`: The operation name (e.g., "CreateBucket", "PutItem")
-    /// - `input`: The parsed request body as a JSON Value
-    /// - `ctx`: Request context (account ID, region, request ID, etc.)
-    ///
-    /// Returns the response body as a JSON Value, or an AwsError.
     async fn handle(
         &self,
         operation: &str,

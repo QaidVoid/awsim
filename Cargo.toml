@@ -3,7 +3,6 @@ resolver = "3"
 members = [
     "crates/awsim",
     "crates/awsim-core",
-    "crates/awsim-auth",
 ]
 
 [workspace.package]
@@ -14,7 +13,6 @@ repository = "https://github.com/qaidvoid/awsim"
 
 [workspace.dependencies]
 awsim-core = { path = "crates/awsim-core" }
-awsim-auth = { path = "crates/awsim-auth" }
 
 # Async
 tokio = { version = "1", features = ["full"] }
