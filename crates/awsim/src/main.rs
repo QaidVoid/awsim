@@ -103,6 +103,15 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Spawn Kinesis->Lambda poller: periodically polls Kinesis streams for event source mappings.
+    let kinesis_poll_services = Arc::clone(&state.services);
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            integrations::poll_kinesis_event_sources(&kinesis_poll_services).await;
+        }
+    });
+
     // Build the API Gateway proxy state using the concrete Arc returned from register_services.
     let lambda_arc = state.services.get("lambda").cloned();
 
@@ -126,6 +135,7 @@ async fn main() -> Result<()> {
         .route("/_awsim/health", axum::routing::get(admin::health))
         .route("/_awsim/services", axum::routing::get(admin::list_services))
         .route("/_awsim/config", axum::routing::get(admin::config))
+        .route("/_awsim/stats", axum::routing::get(admin::stats))
         .fallback(awsim_core::gateway::handle_request)
         .with_state(state);
 
@@ -135,6 +145,22 @@ async fn main() -> Result<()> {
         .layer(tower_http::cors::CorsLayer::permissive());
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], cli.port));
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    // Startup banner
+    println!();
+    println!("  AWSim v{}", env!("CARGO_PKG_VERSION"));
+    println!("  Fully Offline AWS Dev Environment");
+    println!();
+    println!("  Endpoint:  http://localhost:{}", cli.port);
+    println!("  Region:    {}", cli.region);
+    println!("  Account:   {}", cli.account_id);
+    println!("  Services:  {} registered", service_count);
+    if let Some(ref data_dir) = cli.data_dir {
+        println!("  Persist:   {}", data_dir);
+    }
+    println!();
+
     info!(
         port = cli.port,
         region = %cli.region,
@@ -143,7 +169,6 @@ async fn main() -> Result<()> {
         "AWSim started"
     );
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
 
     Ok(())
@@ -244,6 +269,9 @@ fn spawn_event_router(state: &AppState) {
                         }
                         "dynamodb:StreamRecord" => {
                             integrations::handle_dynamodb_stream(&services, &event).await;
+                        }
+                        "eventbridge:TargetInvocation" => {
+                            integrations::handle_eventbridge_target(&services, &event).await;
                         }
                         t if t.starts_with("s3:ObjectCreated:") || t.starts_with("s3:ObjectRemoved:") => {
                             integrations::handle_s3_event(&services, &event).await;

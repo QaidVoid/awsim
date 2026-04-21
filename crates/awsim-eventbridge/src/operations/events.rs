@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, InternalEvent, RequestContext};
 use serde_json::{Value, json};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -70,8 +70,24 @@ pub fn put_events(
 
         let event_id = Uuid::new_v4().to_string();
 
+        // Build the original event object for target invocations.
+        let original_event = json!({
+            "id": event_id,
+            "source": source,
+            "detail-type": detail_type,
+            "detail": detail,
+            "resources": resources,
+        });
+
         // Match event against rules on the bus
-        let matched_rules = match_event_against_rules(state, bus_name, &source, &detail_type);
+        let matched_rules = match_event_against_rules_with_targets(
+            state,
+            bus_name,
+            &source,
+            &detail_type,
+            &original_event,
+            ctx,
+        );
 
         if !matched_rules.is_empty() {
             info!(
@@ -117,28 +133,53 @@ pub fn put_events(
 // ---------------------------------------------------------------------------
 
 /// Return the names of all ENABLED rules on `bus_name` that match this event.
-fn match_event_against_rules(
+/// For each matched rule, emit an `eventbridge:TargetInvocation` InternalEvent
+/// for every configured target so the integration layer can dispatch them.
+fn match_event_against_rules_with_targets(
     state: &EventBridgeState,
     bus_name: &str,
     source: &str,
     detail_type: &str,
+    original_event: &Value,
+    ctx: &RequestContext,
 ) -> Vec<String> {
     let bus = match state.event_buses.get(bus_name) {
         Some(b) => b,
         None => return vec![],
     };
 
-    bus.rules
-        .values()
-        .filter(|rule| rule.state == "ENABLED")
-        .filter_map(|rule| {
-            if matches_pattern(rule, source, detail_type) {
-                Some(rule.name.clone())
-            } else {
-                None
+    let mut matched_rule_names: Vec<String> = Vec::new();
+
+    for rule in bus.rules.values() {
+        if rule.state != "ENABLED" {
+            continue;
+        }
+        if !matches_pattern(rule, source, detail_type) {
+            continue;
+        }
+
+        matched_rule_names.push(rule.name.clone());
+
+        // Emit one InternalEvent per target so the router can dispatch them.
+        if let Some(ref event_bus) = ctx.event_bus {
+            for target in &rule.targets {
+                event_bus.publish(InternalEvent {
+                    source: "events".to_string(),
+                    event_type: "eventbridge:TargetInvocation".to_string(),
+                    region: ctx.region.clone(),
+                    account_id: ctx.account_id.clone(),
+                    detail: json!({
+                        "targetArn": target.arn,
+                        "targetId": target.id,
+                        "ruleName": rule.name,
+                        "event": original_event,
+                    }),
+                });
             }
-        })
-        .collect()
+        }
+    }
+
+    matched_rule_names
 }
 
 /// Check whether an event matches a rule's EventPattern.

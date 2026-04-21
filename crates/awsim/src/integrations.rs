@@ -402,6 +402,182 @@ pub async fn handle_dynamodb_stream(
     }
 }
 
+/// Handle an `eventbridge:TargetInvocation` event by dispatching to the
+/// appropriate service (Lambda, SQS, or SNS) based on the target ARN.
+pub async fn handle_eventbridge_target(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+    event: &InternalEvent,
+) {
+    let target_arn = event.detail["targetArn"].as_str().unwrap_or("");
+    let payload = &event.detail["event"];
+
+    if target_arn.contains(":function:") {
+        // Lambda target
+        if let Some(lambda) = services.get("lambda") {
+            let func_name = target_arn
+                .split(":function:")
+                .last()
+                .unwrap_or("");
+            let input = serde_json::json!({
+                "FunctionName": func_name,
+                "Payload": serde_json::to_string(payload).unwrap_or_default(),
+                "InvocationType": "Event",
+            });
+            let ctx = RequestContext::new("lambda", &event.region);
+            match lambda.handle("Invoke", input, &ctx).await {
+                Ok(_) => info!(function = %func_name, rule = ?event.detail["ruleName"], "EventBridge->Lambda invocation delivered"),
+                Err(e) => warn!(function = %func_name, error = %e.message, "EventBridge->Lambda invocation failed"),
+            }
+        }
+    } else if target_arn.contains(":sqs:") {
+        // SQS target — ARN format: arn:aws:sqs:{region}:{account}:{queue_name}
+        if let Some(sqs) = services.get("sqs") {
+            let parts: Vec<&str> = target_arn.splitn(6, ':').collect();
+            let queue_url = if parts.len() == 6 {
+                format!("http://sqs.{}.localhost:4566/{}/{}", parts[3], parts[4], parts[5])
+            } else {
+                // Fallback: extract last segment as queue name
+                let queue_name = target_arn.split(':').last().unwrap_or("");
+                format!("http://sqs.{}.localhost:4566/000000000000/{}", event.region, queue_name)
+            };
+            let input = serde_json::json!({
+                "QueueUrl": queue_url,
+                "MessageBody": serde_json::to_string(payload).unwrap_or_default(),
+            });
+            let ctx = RequestContext::new("sqs", &event.region);
+            match sqs.handle("SendMessage", input, &ctx).await {
+                Ok(_) => info!(queue = %target_arn, rule = ?event.detail["ruleName"], "EventBridge->SQS message delivered"),
+                Err(e) => warn!(queue = %target_arn, error = %e.message, "EventBridge->SQS delivery failed"),
+            }
+        }
+    } else if target_arn.contains(":sns:") {
+        // SNS target
+        if let Some(sns) = services.get("sns") {
+            let input = serde_json::json!({
+                "TopicArn": target_arn,
+                "Message": serde_json::to_string(payload).unwrap_or_default(),
+            });
+            let ctx = RequestContext::new("sns", &event.region);
+            match sns.handle("Publish", input, &ctx).await {
+                Ok(_) => info!(topic = %target_arn, rule = ?event.detail["ruleName"], "EventBridge->SNS message delivered"),
+                Err(e) => warn!(topic = %target_arn, error = %e.message, "EventBridge->SNS delivery failed"),
+            }
+        }
+    } else {
+        warn!(target_arn = %target_arn, "EventBridge target type not supported");
+    }
+}
+
+/// Poll Kinesis streams for all enabled Lambda event source mappings and invoke
+/// Lambda with batches of records.
+pub async fn poll_kinesis_event_sources(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+) {
+    let lambda = match services.get("lambda") {
+        Some(l) => l,
+        None => return,
+    };
+    let kinesis = match services.get("kinesis") {
+        Some(k) => k,
+        None => return,
+    };
+
+    // List all event source mappings from Lambda
+    let ctx = RequestContext::new("lambda", "us-east-1");
+    let mappings_result = lambda.handle("ListEventSourceMappings", serde_json::json!({}), &ctx).await;
+
+    if let Ok(result) = mappings_result {
+        if let Some(mappings) = result["EventSourceMappings"].as_array() {
+            for mapping in mappings {
+                if mapping["State"].as_str() != Some("Enabled") {
+                    continue;
+                }
+
+                let event_source_arn = match mapping["EventSourceArn"].as_str() {
+                    Some(arn) if arn.contains(":kinesis:") => arn,
+                    _ => continue,
+                };
+
+                let function_name = match mapping["FunctionName"].as_str() {
+                    Some(f) => f,
+                    None => continue,
+                };
+                let batch_size = mapping["BatchSize"].as_u64().unwrap_or(100);
+
+                // Extract stream name from ARN: arn:aws:kinesis:{region}:{account}:stream/{name}
+                let stream_name = event_source_arn.split('/').last().unwrap_or("");
+                if stream_name.is_empty() {
+                    continue;
+                }
+
+                // Derive the region from the ARN if possible
+                let parts: Vec<&str> = event_source_arn.splitn(6, ':').collect();
+                let region = if parts.len() >= 4 { parts[3] } else { "us-east-1" };
+
+                let kinesis_ctx = RequestContext::new("kinesis", region);
+
+                // Get shard iterator (TRIM_HORIZON to pick up unread records)
+                let iter_input = serde_json::json!({
+                    "StreamName": stream_name,
+                    "ShardId": "shardId-000000000000",
+                    "ShardIteratorType": "TRIM_HORIZON",
+                });
+                let iter_result = match kinesis.handle("GetShardIterator", iter_input, &kinesis_ctx).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(stream = %stream_name, error = %e.message, "Kinesis->Lambda: GetShardIterator failed");
+                        continue;
+                    }
+                };
+
+                let iterator = match iter_result["ShardIterator"].as_str() {
+                    Some(i) => i.to_string(),
+                    None => continue,
+                };
+
+                let records_input = serde_json::json!({
+                    "ShardIterator": iterator,
+                    "Limit": batch_size,
+                });
+                let records_result = match kinesis.handle("GetRecords", records_input, &kinesis_ctx).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(stream = %stream_name, error = %e.message, "Kinesis->Lambda: GetRecords failed");
+                        continue;
+                    }
+                };
+
+                let records = match records_result["Records"].as_array() {
+                    Some(r) if !r.is_empty() => r.clone(),
+                    _ => continue,
+                };
+
+                let lambda_event = serde_json::json!({ "Records": records });
+                let invoke_input = serde_json::json!({
+                    "FunctionName": function_name,
+                    "Payload": serde_json::to_string(&lambda_event).unwrap_or_default(),
+                    "InvocationType": "Event",
+                });
+                let lambda_ctx = RequestContext::new("lambda", region);
+                match lambda.handle("Invoke", invoke_input, &lambda_ctx).await {
+                    Ok(_) => debug!(
+                        function = %function_name,
+                        stream = %stream_name,
+                        count = records.len(),
+                        "Kinesis->Lambda: delivered batch"
+                    ),
+                    Err(e) => warn!(
+                        function = %function_name,
+                        stream = %stream_name,
+                        error = %e.message,
+                        "Kinesis->Lambda: Lambda invocation failed"
+                    ),
+                }
+            }
+        }
+    }
+}
+
 /// Handle a `cloudformation:CreateResource` event by calling the appropriate
 /// service's Create operation.
 pub async fn handle_cf_create_resource(

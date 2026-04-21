@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::body::Body;
 use axum::extract::State;
@@ -26,6 +27,10 @@ pub struct AppState {
     pub default_account_id: String,
     /// Internal event bus for cross-service fan-out (SNS→SQS, etc.).
     pub event_bus: EventBus,
+    /// Total number of AWS API requests handled since startup.
+    pub request_count: Arc<AtomicU64>,
+    /// Server startup time.
+    pub start_time: std::time::Instant,
 }
 
 impl AppState {
@@ -36,6 +41,8 @@ impl AppState {
             default_region,
             default_account_id,
             event_bus: EventBus::new(),
+            request_count: Arc::new(AtomicU64::new(0)),
+            start_time: std::time::Instant::now(),
         }
     }
 
@@ -72,6 +79,8 @@ pub async fn handle_request(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
+    state.request_count.fetch_add(1, Ordering::Relaxed);
+
     let request_id = uuid::Uuid::new_v4().to_string();
 
     debug!(
