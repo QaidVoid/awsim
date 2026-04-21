@@ -1,0 +1,558 @@
+use std::collections::HashMap;
+
+use awsim_core::{AwsError, RequestContext};
+use serde_json::{Value, json};
+use tracing::info;
+
+use crate::error;
+use crate::state::{Secret, SecretVersion, SecretsState};
+use crate::util::{new_version_id, now_iso8601, random_suffix};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Resolve a SecretId which may be a name or an ARN. Returns the canonical name key.
+fn resolve_name<'a>(state: &'a SecretsState, secret_id: &str) -> Result<String, AwsError> {
+    // Direct name lookup
+    if state.secrets.contains_key(secret_id) {
+        return Ok(secret_id.to_string());
+    }
+
+    // ARN lookup — ARN format: arn:aws:secretsmanager:{region}:{account}:secret:{name}-{suffix}
+    if secret_id.starts_with("arn:aws:secretsmanager:") {
+        for entry in state.secrets.iter() {
+            if entry.value().arn == secret_id {
+                return Ok(entry.key().clone());
+            }
+        }
+        return Err(error::resource_not_found(secret_id));
+    }
+
+    Err(error::resource_not_found(secret_id))
+}
+
+fn build_arn(region: &str, account_id: &str, name: &str) -> String {
+    let suffix = random_suffix(6);
+    format!("arn:aws:secretsmanager:{region}:{account_id}:secret:{name}-{suffix}")
+}
+
+fn secret_metadata(secret: &Secret) -> Value {
+    let versions_to_stages: serde_json::Map<String, Value> = secret
+        .versions
+        .iter()
+        .map(|(vid, v)| {
+            let stages: Vec<Value> = v.stages.iter().map(|s| json!(s)).collect();
+            (vid.clone(), json!(stages))
+        })
+        .collect();
+
+    let mut meta = json!({
+        "ARN": secret.arn,
+        "Name": secret.name,
+        "Description": secret.description,
+        "CreatedDate": secret.created_date,
+        "LastChangedDate": secret.last_changed_date,
+        "VersionIdsToStages": versions_to_stages,
+    });
+
+    if !secret.tags.is_empty() {
+        let tags: Vec<Value> = secret
+            .tags
+            .iter()
+            .map(|(k, v)| json!({ "Key": k, "Value": v }))
+            .collect();
+        meta["Tags"] = json!(tags);
+    }
+
+    if let Some(ref dd) = secret.deleted_date {
+        meta["DeletedDate"] = json!(dd);
+    }
+
+    meta
+}
+
+// ---------------------------------------------------------------------------
+// CreateSecret
+// ---------------------------------------------------------------------------
+
+pub fn create_secret(
+    state: &SecretsState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["Name"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("Name"))?;
+
+    if state.secrets.contains_key(name) {
+        return Err(error::resource_exists(name));
+    }
+
+    let description = input["Description"].as_str().unwrap_or("").to_string();
+
+    let secret_string = input["SecretString"].as_str().map(|s| s.to_string());
+    let secret_binary = input["SecretBinary"].as_str().map(|s| s.to_string());
+
+    if secret_string.is_none() && secret_binary.is_none() {
+        return Err(error::invalid_parameter(
+            "Either SecretString or SecretBinary must be provided",
+        ));
+    }
+
+    // Tags
+    let mut tags = HashMap::new();
+    if let Some(tag_list) = input["Tags"].as_array() {
+        for tag in tag_list {
+            if let (Some(k), Some(v)) = (tag["Key"].as_str(), tag["Value"].as_str()) {
+                tags.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+
+    let arn = build_arn(&ctx.region, &ctx.account_id, name);
+    let now = now_iso8601();
+    let version_id = new_version_id();
+
+    let version = SecretVersion {
+        version_id: version_id.clone(),
+        secret_string,
+        secret_binary,
+        stages: vec!["AWSCURRENT".to_string()],
+        created_date: now.clone(),
+    };
+
+    let mut versions = HashMap::new();
+    versions.insert(version_id.clone(), version);
+
+    let secret = Secret {
+        arn: arn.clone(),
+        name: name.to_string(),
+        description,
+        versions,
+        current_version_id: version_id.clone(),
+        tags,
+        created_date: now.clone(),
+        last_changed_date: now,
+        deleted_date: None,
+    };
+
+    info!(name = %name, arn = %arn, "Created secret");
+    state.secrets.insert(name.to_string(), secret);
+
+    Ok(json!({
+        "ARN": arn,
+        "Name": name,
+        "VersionId": version_id,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// GetSecretValue
+// ---------------------------------------------------------------------------
+
+pub fn get_secret_value(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let secret = state.secrets.get(&name).ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    if secret.deleted_date.is_some() {
+        return Err(error::invalid_request(
+            "Secret is marked for deletion",
+        ));
+    }
+
+    let version_stage = input["VersionStage"].as_str().unwrap_or("AWSCURRENT");
+    let version_id = if let Some(vid) = input["VersionId"].as_str() {
+        // Explicit version ID requested
+        if !secret.versions.contains_key(vid) {
+            return Err(error::resource_not_found(vid));
+        }
+        vid.to_string()
+    } else {
+        // Find the version that has the requested stage
+        secret
+            .versions
+            .iter()
+            .find(|(_, v)| v.stages.contains(&version_stage.to_string()))
+            .map(|(id, _)| id.clone())
+            .ok_or_else(|| {
+                error::resource_not_found(&format!("stage {version_stage}"))
+            })?
+    };
+
+    let version = secret.versions.get(&version_id).ok_or_else(|| error::resource_not_found(&version_id))?;
+
+    let mut response = json!({
+        "ARN": secret.arn,
+        "Name": secret.name,
+        "VersionId": version.version_id,
+        "VersionStages": version.stages,
+        "CreatedDate": version.created_date,
+    });
+
+    if let Some(ref ss) = version.secret_string {
+        response["SecretString"] = json!(ss);
+    }
+    if let Some(ref sb) = version.secret_binary {
+        response["SecretBinary"] = json!(sb);
+    }
+
+    Ok(response)
+}
+
+// ---------------------------------------------------------------------------
+// PutSecretValue
+// ---------------------------------------------------------------------------
+
+pub fn put_secret_value(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let mut secret = state
+        .secrets
+        .get_mut(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    if secret.deleted_date.is_some() {
+        return Err(error::invalid_request("Secret is marked for deletion"));
+    }
+
+    let secret_string = input["SecretString"].as_str().map(|s| s.to_string());
+    let secret_binary = input["SecretBinary"].as_str().map(|s| s.to_string());
+
+    if secret_string.is_none() && secret_binary.is_none() {
+        return Err(error::invalid_parameter(
+            "Either SecretString or SecretBinary must be provided",
+        ));
+    }
+
+    let now = now_iso8601();
+    let new_version_id_str = new_version_id();
+
+    // Determine stages for new version
+    let requested_stages: Vec<String> = if let Some(stages) = input["VersionStages"].as_array() {
+        stages
+            .iter()
+            .filter_map(|s| s.as_str().map(|s| s.to_string()))
+            .collect()
+    } else {
+        vec!["AWSCURRENT".to_string()]
+    };
+
+    // If new version will be AWSCURRENT, demote old AWSCURRENT to AWSPREVIOUS
+    if requested_stages.contains(&"AWSCURRENT".to_string()) {
+        let old_current = secret.current_version_id.clone();
+        if let Some(old_ver) = secret.versions.get_mut(&old_current) {
+            old_ver.stages.retain(|s| s != "AWSCURRENT");
+            if !old_ver.stages.contains(&"AWSPREVIOUS".to_string()) {
+                old_ver.stages.push("AWSPREVIOUS".to_string());
+            }
+        }
+        secret.current_version_id = new_version_id_str.clone();
+    }
+
+    let new_version = SecretVersion {
+        version_id: new_version_id_str.clone(),
+        secret_string,
+        secret_binary,
+        stages: requested_stages,
+        created_date: now.clone(),
+    };
+
+    secret.versions.insert(new_version_id_str.clone(), new_version);
+    secret.last_changed_date = now;
+
+    let arn = secret.arn.clone();
+    let sname = secret.name.clone();
+    drop(secret);
+
+    Ok(json!({
+        "ARN": arn,
+        "Name": sname,
+        "VersionId": new_version_id_str,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// DescribeSecret
+// ---------------------------------------------------------------------------
+
+pub fn describe_secret(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let secret = state
+        .secrets
+        .get(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    Ok(secret_metadata(&secret))
+}
+
+// ---------------------------------------------------------------------------
+// ListSecrets
+// ---------------------------------------------------------------------------
+
+pub fn list_secrets(
+    state: &SecretsState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let list: Vec<Value> = state
+        .secrets
+        .iter()
+        .map(|entry| secret_metadata(entry.value()))
+        .collect();
+
+    Ok(json!({ "SecretList": list }))
+}
+
+// ---------------------------------------------------------------------------
+// UpdateSecret
+// ---------------------------------------------------------------------------
+
+pub fn update_secret(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let mut secret = state
+        .secrets
+        .get_mut(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    if secret.deleted_date.is_some() {
+        return Err(error::invalid_request("Secret is marked for deletion"));
+    }
+
+    if let Some(desc) = input["Description"].as_str() {
+        secret.description = desc.to_string();
+    }
+
+    let has_new_value = input["SecretString"].as_str().is_some()
+        || input["SecretBinary"].as_str().is_some();
+
+    let now = now_iso8601();
+
+    if has_new_value {
+        let secret_string = input["SecretString"].as_str().map(|s| s.to_string());
+        let secret_binary = input["SecretBinary"].as_str().map(|s| s.to_string());
+        let new_vid = new_version_id();
+
+        // Demote old AWSCURRENT
+        let old_current = secret.current_version_id.clone();
+        if let Some(old_ver) = secret.versions.get_mut(&old_current) {
+            old_ver.stages.retain(|s| s != "AWSCURRENT");
+            if !old_ver.stages.contains(&"AWSPREVIOUS".to_string()) {
+                old_ver.stages.push("AWSPREVIOUS".to_string());
+            }
+        }
+
+        let new_version = SecretVersion {
+            version_id: new_vid.clone(),
+            secret_string,
+            secret_binary,
+            stages: vec!["AWSCURRENT".to_string()],
+            created_date: now.clone(),
+        };
+        secret.versions.insert(new_vid.clone(), new_version);
+        secret.current_version_id = new_vid;
+    }
+
+    secret.last_changed_date = now;
+
+    let arn = secret.arn.clone();
+    let sname = secret.name.clone();
+    let vid = secret.current_version_id.clone();
+    drop(secret);
+
+    Ok(json!({
+        "ARN": arn,
+        "Name": sname,
+        "VersionId": vid,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// DeleteSecret
+// ---------------------------------------------------------------------------
+
+pub fn delete_secret(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let mut secret = state
+        .secrets
+        .get_mut(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    if secret.deleted_date.is_some() {
+        return Err(error::invalid_request("Secret is already scheduled for deletion"));
+    }
+
+    let force = input["ForceDeleteWithoutRecovery"]
+        .as_bool()
+        .unwrap_or(false);
+
+    let arn = secret.arn.clone();
+    let sname = secret.name.clone();
+
+    if force {
+        drop(secret);
+        state.secrets.remove(&name);
+        return Ok(json!({
+            "ARN": arn,
+            "Name": sname,
+            "DeletionDate": now_iso8601(),
+        }));
+    }
+
+    let recovery_days = input["RecoveryWindowInDays"].as_u64().unwrap_or(30);
+    if !(7..=30).contains(&recovery_days) {
+        return Err(error::invalid_parameter(
+            "RecoveryWindowInDays must be between 7 and 30",
+        ));
+    }
+
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let deletion_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        + recovery_days * 86400;
+    let deletion_date = crate::util::secs_to_iso8601(deletion_secs);
+
+    secret.deleted_date = Some(deletion_date.clone());
+    drop(secret);
+
+    info!(name = %name, "Secret scheduled for deletion");
+
+    Ok(json!({
+        "ARN": arn,
+        "Name": sname,
+        "DeletionDate": deletion_date,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// RestoreSecret
+// ---------------------------------------------------------------------------
+
+pub fn restore_secret(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let mut secret = state
+        .secrets
+        .get_mut(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    if secret.deleted_date.is_none() {
+        return Err(error::invalid_request("Secret is not scheduled for deletion"));
+    }
+
+    secret.deleted_date = None;
+
+    let arn = secret.arn.clone();
+    let sname = secret.name.clone();
+    drop(secret);
+
+    Ok(json!({ "ARN": arn, "Name": sname }))
+}
+
+// ---------------------------------------------------------------------------
+// TagResource
+// ---------------------------------------------------------------------------
+
+pub fn tag_resource(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let mut secret = state
+        .secrets
+        .get_mut(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    if let Some(tag_list) = input["Tags"].as_array() {
+        for tag in tag_list {
+            if let (Some(k), Some(v)) = (tag["Key"].as_str(), tag["Value"].as_str()) {
+                secret.tags.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// UntagResource
+// ---------------------------------------------------------------------------
+
+pub fn untag_resource(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let mut secret = state
+        .secrets
+        .get_mut(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    if let Some(key_list) = input["TagKeys"].as_array() {
+        for key in key_list {
+            if let Some(k) = key.as_str() {
+                secret.tags.remove(k);
+            }
+        }
+    }
+
+    Ok(json!({}))
+}
