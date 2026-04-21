@@ -141,6 +141,7 @@ async fn main() -> Result<()> {
         default_account_id: cli.account_id.clone(),
         default_region: cli.region.clone(),
         auth_codes: Arc::new(dashmap::DashMap::new()),
+        revoked_refresh_tokens: Arc::new(dashmap::DashMap::new()),
         port: cli.port,
     });
     let cognito_oauth_router = awsim_cognito::oauth::router(cognito_oauth_state);

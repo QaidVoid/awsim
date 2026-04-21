@@ -108,6 +108,29 @@ impl ServiceHandler for CognitoService {
             // Auth flows
             "InitiateAuth" => operations::auth::initiate_auth(&state, &input, ctx),
             "AdminInitiateAuth" => operations::auth::admin_initiate_auth(&state, &input, ctx),
+            "RespondToAuthChallenge" => {
+                operations::mfa::respond_to_auth_challenge(&state, &input, ctx)
+            }
+
+            // MFA configuration
+            "SetUserPoolMfaConfig" => {
+                operations::mfa::set_user_pool_mfa_config(&state, &input, ctx)
+            }
+            "GetUserPoolMfaConfig" => {
+                operations::mfa::get_user_pool_mfa_config(&state, &input, ctx)
+            }
+            "AssociateSoftwareToken" => {
+                operations::mfa::associate_software_token(&state, &input, ctx)
+            }
+            "VerifySoftwareToken" => {
+                operations::mfa::verify_software_token(&state, &input, ctx)
+            }
+            "SetUserMFAPreference" => {
+                operations::mfa::set_user_mfa_preference(&state, &input, ctx)
+            }
+            "AdminSetUserMFAPreference" => {
+                operations::mfa::admin_set_user_mfa_preference(&state, &input, ctx)
+            }
 
             // Groups
             "CreateGroup" => operations::groups::create_group(&state, &input, ctx),

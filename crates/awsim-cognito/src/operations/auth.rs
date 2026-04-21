@@ -1,11 +1,12 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, InternalEvent, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
+use uuid::Uuid;
 
+use crate::state::{CognitoState, MfaSession};
 use crate::jwt;
-use crate::state::CognitoState;
 
-fn build_auth_result(
+pub fn build_auth_result_pub(
     user_sub: &str,
     username: &str,
     region: &str,
@@ -13,8 +14,10 @@ fn build_auth_result(
     client_id: &str,
     attributes: &std::collections::HashMap<String, String>,
 ) -> Value {
-    let id_tok = jwt::id_token(user_sub, region, pool_id, client_id, username, attributes);
-    let access_tok = jwt::access_token(user_sub, region, pool_id, client_id, username);
+    // Use default openid scope for direct auth flows (InitiateAuth, etc.)
+    let default_scopes: Vec<String> = vec!["openid".to_string(), "email".to_string(), "profile".to_string()];
+    let id_tok = jwt::id_token(user_sub, region, pool_id, client_id, username, attributes, &default_scopes, None);
+    let access_tok = jwt::access_token(user_sub, region, pool_id, client_id, username, &default_scopes);
     let refresh_tok = jwt::refresh_token(user_sub);
 
     json!({
@@ -26,6 +29,34 @@ fn build_auth_result(
             "TokenType": "Bearer"
         }
     })
+}
+
+fn build_auth_result(
+    user_sub: &str,
+    username: &str,
+    region: &str,
+    pool_id: &str,
+    client_id: &str,
+    attributes: &std::collections::HashMap<String, String>,
+) -> Value {
+    build_auth_result_pub(user_sub, username, region, pool_id, client_id, attributes)
+}
+
+/// Publish a fire-and-forget Lambda trigger event onto the event bus.
+fn invoke_trigger(ctx: &RequestContext, trigger_source: &str, lambda_arn: &str, event: &Value) {
+    if let Some(ref bus) = ctx.event_bus {
+        bus.publish(InternalEvent {
+            source: "cognito-idp".to_string(),
+            event_type: "cognito:LambdaTrigger".to_string(),
+            region: ctx.region.clone(),
+            account_id: ctx.account_id.clone(),
+            detail: json!({
+                "triggerSource": trigger_source,
+                "functionArn": lambda_arn,
+                "event": event,
+            }),
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +101,17 @@ pub fn initiate_auth(
                 .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PASSWORD is required"))?;
 
             let pool = state.user_pools.get(&pool_id).unwrap();
+
+            // Pre-Authentication trigger (fire-and-forget)
+            if let Some(arn) = pool.lambda_config.get("PreAuthentication") {
+                let trigger_event = json!({
+                    "userPoolId": pool_id,
+                    "userName": username,
+                    "callerContext": { "clientId": client_id }
+                });
+                invoke_trigger(ctx, "PreAuthentication_Authentication", arn, &trigger_event);
+            }
+
             let user = pool.users.get(username).ok_or_else(|| {
                 AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
             })?;
@@ -88,15 +130,53 @@ pub fn initiate_auth(
                 ));
             }
 
-            info!(username = %username, "Cognito: InitiateAuth success");
-            Ok(build_auth_result(
+            // Check whether MFA is required
+            let mfa_required = pool.mfa_configuration == "ON"
+                || (pool.mfa_configuration == "OPTIONAL" && user.mfa_enabled);
+
+            if mfa_required && user.totp_verified {
+                // Return SOFTWARE_TOKEN_MFA challenge
+                let session_id = Uuid::new_v4().to_string();
+                drop(user);
+                drop(pool);
+                state.mfa_sessions.insert(
+                    session_id.clone(),
+                    MfaSession {
+                        pool_id: pool_id.clone(),
+                        username: username.to_string(),
+                    },
+                );
+                info!(username = %username, "Cognito: InitiateAuth → MFA challenge");
+                return Ok(json!({
+                    "ChallengeName": "SOFTWARE_TOKEN_MFA",
+                    "Session": session_id,
+                    "ChallengeParameters": {
+                        "USER_ID_FOR_SRP": username,
+                    }
+                }));
+            }
+
+            // Post-Authentication trigger (fire-and-forget)
+            if let Some(arn) = pool.lambda_config.get("PostAuthentication") {
+                let trigger_event = json!({
+                    "userPoolId": pool_id,
+                    "userName": username,
+                    "callerContext": { "clientId": client_id }
+                });
+                invoke_trigger(ctx, "PostAuthentication_Authentication", arn, &trigger_event);
+            }
+
+            let result = build_auth_result(
                 &user.sub,
                 username,
                 &ctx.region,
                 &pool_id,
                 client_id,
                 &user.attributes,
-            ))
+            );
+
+            info!(username = %username, "Cognito: InitiateAuth success");
+            Ok(result)
         }
         "REFRESH_TOKEN_AUTH" | "REFRESH_TOKEN" => {
             // Accept any refresh token for local dev; return fresh tokens.
@@ -179,6 +259,16 @@ pub fn admin_initiate_auth(
                 .as_str()
                 .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PASSWORD is required"))?;
 
+            // Pre-Authentication trigger (fire-and-forget)
+            if let Some(arn) = pool.lambda_config.get("PreAuthentication") {
+                let trigger_event = json!({
+                    "userPoolId": pool_id,
+                    "userName": username,
+                    "callerContext": { "clientId": client_id }
+                });
+                invoke_trigger(ctx, "PreAuthentication_Authentication", arn, &trigger_event);
+            }
+
             let user = pool.users.get(username).ok_or_else(|| {
                 AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
             })?;
@@ -197,15 +287,52 @@ pub fn admin_initiate_auth(
                 ));
             }
 
-            info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth success");
-            Ok(build_auth_result(
+            // Check whether MFA is required
+            let mfa_required = pool.mfa_configuration == "ON"
+                || (pool.mfa_configuration == "OPTIONAL" && user.mfa_enabled);
+
+            if mfa_required && user.totp_verified {
+                let session_id = Uuid::new_v4().to_string();
+                drop(user);
+                drop(pool);
+                state.mfa_sessions.insert(
+                    session_id.clone(),
+                    MfaSession {
+                        pool_id: pool_id.to_string(),
+                        username: username.to_string(),
+                    },
+                );
+                info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth → MFA challenge");
+                return Ok(json!({
+                    "ChallengeName": "SOFTWARE_TOKEN_MFA",
+                    "Session": session_id,
+                    "ChallengeParameters": {
+                        "USER_ID_FOR_SRP": username,
+                    }
+                }));
+            }
+
+            // Post-Authentication trigger (fire-and-forget)
+            if let Some(arn) = pool.lambda_config.get("PostAuthentication") {
+                let trigger_event = json!({
+                    "userPoolId": pool_id,
+                    "userName": username,
+                    "callerContext": { "clientId": client_id }
+                });
+                invoke_trigger(ctx, "PostAuthentication_Authentication", arn, &trigger_event);
+            }
+
+            let result = build_auth_result(
                 &user.sub,
                 username,
                 &ctx.region,
                 pool_id,
                 client_id,
                 &user.attributes,
-            ))
+            );
+
+            info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth success");
+            Ok(result)
         }
         flow => Err(AwsError::bad_request(
             "InvalidParameter",

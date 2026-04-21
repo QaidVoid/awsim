@@ -1,9 +1,80 @@
 use std::collections::HashMap;
 
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
+
+/// Password policy for a user pool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasswordPolicy {
+    pub minimum_length: u32,
+    pub require_lowercase: bool,
+    pub require_uppercase: bool,
+    pub require_numbers: bool,
+    pub require_symbols: bool,
+    pub temporary_password_validity_days: u32,
+}
+
+impl Default for PasswordPolicy {
+    fn default() -> Self {
+        Self {
+            minimum_length: 8,
+            require_lowercase: true,
+            require_uppercase: true,
+            require_numbers: true,
+            require_symbols: false,
+            temporary_password_validity_days: 7,
+        }
+    }
+}
+
+/// A custom schema attribute definition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaAttribute {
+    pub name: String,
+    pub attribute_data_type: String, // String, Number, DateTime, Boolean
+    pub required: bool,
+    pub mutable: bool,
+}
+
+/// Email configuration for a user pool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailConfig {
+    pub source_arn: Option<String>,
+    pub reply_to_email_address: Option<String>,
+    pub email_sending_account: String,
+}
+
+/// A resource server scope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceServerScope {
+    pub scope_name: String,
+    pub scope_description: String,
+}
+
+/// A resource server registered with a user pool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceServer {
+    pub identifier: String,
+    pub name: String,
+    pub scopes: Vec<ResourceServerScope>,
+    pub user_pool_id: String,
+}
+
+/// An identity provider registered with a user pool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentityProvider {
+    pub provider_name: String,
+    pub provider_type: String,
+    pub provider_details: HashMap<String, String>,
+    pub attribute_mapping: HashMap<String, String>,
+    pub idp_identifiers: Vec<String>,
+    pub creation_date: u64,
+    pub last_modified_date: u64,
+    pub user_pool_id: String,
+}
 
 /// A Cognito User Pool.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserPool {
     pub id: String,
     pub name: String,
@@ -12,10 +83,22 @@ pub struct UserPool {
     pub users: HashMap<String, CognitoUser>,
     pub groups: HashMap<String, CognitoGroup>,
     pub created_date: u64,
+    // Extended fields
+    pub policies: PasswordPolicy,
+    pub mfa_configuration: String, // OFF, OPTIONAL, ON
+    pub software_token_mfa_enabled: bool,
+    pub auto_verified_attributes: Vec<String>,
+    pub lambda_config: HashMap<String, String>, // trigger_type → function_arn
+    pub schema: Vec<SchemaAttribute>,
+    pub email_configuration: Option<EmailConfig>,
+    pub domain: Option<String>,
+    pub resource_servers: Vec<ResourceServer>,
+    pub identity_providers: Vec<IdentityProvider>,
+    pub tags: HashMap<String, String>,
 }
 
 /// A Cognito User Pool App Client.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct UserPoolClient {
     pub client_id: String,
@@ -23,29 +106,52 @@ pub struct UserPoolClient {
     pub user_pool_id: String,
     pub explicit_auth_flows: Vec<String>,
     pub created_date: u64,
+    // Extended fields
+    pub client_secret: Option<String>,
+    pub callback_urls: Vec<String>,
+    pub logout_urls: Vec<String>,
+    pub allowed_oauth_flows: Vec<String>,
+    pub allowed_oauth_scopes: Vec<String>,
+    pub supported_identity_providers: Vec<String>,
+    pub access_token_validity: u64,  // seconds
+    pub id_token_validity: u64,      // seconds
+    pub refresh_token_validity: u64, // seconds
 }
 
 /// A Cognito user.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CognitoUser {
     pub username: String,
     pub sub: String,
     /// Store plaintext for dev/emulator use.
     pub password: String,
     pub attributes: HashMap<String, String>,
-    /// CONFIRMED | UNCONFIRMED | FORCE_CHANGE_PASSWORD
+    /// CONFIRMED | UNCONFIRMED | FORCE_CHANGE_PASSWORD | RESET_REQUIRED
     pub status: String,
     pub enabled: bool,
     pub groups: Vec<String>,
     pub created_date: u64,
+    /// Pending verification codes, keyed by attribute name.
+    pub pending_verifications: HashMap<String, String>,
+    /// Revoked refresh tokens for this user.
+    pub revoked_refresh_tokens: Vec<String>,
+    /// Whether MFA is enabled for this user.
+    pub mfa_enabled: bool,
+    /// Preferred MFA method: "SOFTWARE_TOKEN_MFA" or "SMS_MFA"
+    pub mfa_preferred: Option<String>,
+    /// Base32-encoded TOTP secret.
+    pub totp_secret: Option<String>,
+    /// Whether TOTP has been verified by the user.
+    pub totp_verified: bool,
 }
 
 /// A Cognito User Pool group.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CognitoGroup {
     pub group_name: String,
     pub description: Option<String>,
     pub role_arn: Option<String>,
+    pub precedence: Option<u32>,
     pub user_pool_id: String,
     pub created_date: u64,
 }
@@ -57,6 +163,14 @@ pub struct TokenRevocationStore {
     pub revoked: DashMap<String, ()>,
 }
 
+/// An in-flight MFA session produced after credentials are validated but before
+/// the TOTP challenge response is received.
+#[derive(Debug, Clone)]
+pub struct MfaSession {
+    pub pool_id: String,
+    pub username: String,
+}
+
 /// Per-account/region Cognito state.
 #[derive(Debug, Default, Clone)]
 pub struct CognitoState {
@@ -64,4 +178,10 @@ pub struct CognitoState {
     pub user_pools: DashMap<String, UserPool>,
     /// Revoked tokens (GlobalSignOut).
     pub revoked_tokens: TokenRevocationStore,
+    /// Domain → PoolId mapping for domain lookups.
+    pub domain_pool_map: DashMap<String, String>,
+    /// ResourceArn → Tags for tag management.
+    pub resource_tags: DashMap<String, HashMap<String, String>>,
+    /// In-flight MFA sessions: session_id → (pool_id, username).
+    pub mfa_sessions: DashMap<String, MfaSession>,
 }

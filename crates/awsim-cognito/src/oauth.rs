@@ -7,12 +7,15 @@
 ///   GET  /cognito/{pool_id}/.well-known/openid-configuration
 ///   GET  /cognito/{pool_id}/.well-known/jwks.json
 ///   GET  /cognito/{pool_id}/oauth2/authorize
+///   POST /cognito/{pool_id}/oauth2/authorize   (login form submission)
 ///   POST /cognito/{pool_id}/oauth2/token
 ///   GET  /cognito/{pool_id}/oauth2/userInfo
+///   POST /cognito/{pool_id}/oauth2/revoke
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use axum::body::Body;
 use axum::extract::{Form, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Redirect, Response};
@@ -39,24 +42,25 @@ pub struct AuthCodeEntry {
     pub username: String,
     /// Unix timestamp of when the code was issued (5-minute TTL).
     pub issued_at: u64,
+    /// PKCE code_challenge (base64url-encoded SHA256 or plain).
+    pub code_challenge: Option<String>,
+    /// "S256" or "plain".
+    pub code_challenge_method: Option<String>,
+    /// Requested scopes.
+    pub scopes: Vec<String>,
+    /// OIDC nonce (passed through to ID token).
+    pub nonce: Option<String>,
 }
 
 /// Shared state for the OAuth/OIDC router.
-///
-/// The `cognito` field is an `Arc<CognitoState>` for the default account+region.
-/// Because `CognitoState` uses `DashMap` internally (which is `Send + Sync`),
-/// sharing it across the OAuth router is safe without cloning its contents.
 #[derive(Clone)]
 pub struct CognitoOAuthState {
-    /// Cognito state for the default account/region (shared with CognitoService).
     pub cognito: Arc<CognitoState>,
-    /// Default region (stored for JWT issuer construction).
     pub default_region: String,
-    /// Default account ID.
     pub default_account_id: String,
-    /// Pending authorization codes: code → entry.
     pub auth_codes: Arc<DashMap<String, AuthCodeEntry>>,
-    /// Port the server is listening on (for constructing URLs).
+    /// Revoked refresh tokens (token string → ()).
+    pub revoked_refresh_tokens: Arc<DashMap<String, ()>>,
     pub port: u16,
 }
 
@@ -86,7 +90,7 @@ pub fn router(state: Arc<CognitoOAuthState>) -> axum::Router {
         )
         .route(
             "/cognito/{pool_id}/oauth2/authorize",
-            axum::routing::get(authorize),
+            axum::routing::get(authorize_get).post(authorize_post),
         )
         .route(
             "/cognito/{pool_id}/oauth2/token",
@@ -95,6 +99,10 @@ pub fn router(state: Arc<CognitoOAuthState>) -> axum::Router {
         .route(
             "/cognito/{pool_id}/oauth2/userInfo",
             axum::routing::get(userinfo),
+        )
+        .route(
+            "/cognito/{pool_id}/oauth2/revoke",
+            axum::routing::post(revoke),
         )
         .with_state(state)
 }
@@ -120,6 +128,146 @@ fn purge_expired_codes(codes: &DashMap<String, AuthCodeEntry>) {
     codes.retain(|_, v| v.issued_at >= cutoff);
 }
 
+/// Parse scopes from a space-separated string.
+fn parse_scopes(scope_str: &str) -> Vec<String> {
+    scope_str
+        .split_whitespace()
+        .map(String::from)
+        .collect()
+}
+
+/// Verify a PKCE code_verifier against a stored code_challenge.
+fn verify_pkce(code_verifier: &str, code_challenge: &str, method: &str) -> bool {
+    match method {
+        "S256" => {
+            use sha2::{Digest, Sha256};
+            let hash = Sha256::digest(code_verifier.as_bytes());
+            let encoded = base64url_encode(&hash);
+            encoded == code_challenge
+        }
+        "plain" => code_verifier == code_challenge,
+        _ => false,
+    }
+}
+
+fn base64url_encode(data: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
+}
+
+/// Extract the username AND secret from HTTP Basic Auth credentials (client_id:client_secret).
+fn basic_auth_credentials(headers: &HeaderMap) -> Option<(String, String)> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let auth = headers.get("authorization")?.to_str().ok()?;
+    let encoded = auth.strip_prefix("Basic ")?;
+    let decoded = STANDARD.decode(encoded).ok()?;
+    let s = String::from_utf8(decoded).ok()?;
+    let mut parts = s.splitn(2, ':');
+    let username = parts.next()?.to_string();
+    let password = parts.next().unwrap_or("").to_string();
+    Some((username, password))
+}
+
+/// Build a JSON error response compatible with RFC 6749.
+fn error_response(status: StatusCode, error: &str, description: &str) -> Response {
+    (
+        status,
+        Json(json!({
+            "error": error,
+            "error_description": description
+        })),
+    )
+        .into_response()
+}
+
+/// Percent-encode a string for use in a URL query/fragment.
+fn urlencoding(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
+                vec![c]
+            } else {
+                let mut buf = [0u8; 4];
+                let bytes = c.encode_utf8(&mut buf);
+                bytes
+                    .bytes()
+                    .flat_map(|b| {
+                        let hi = char::from_digit((b >> 4) as u32, 16)
+                            .unwrap()
+                            .to_uppercase()
+                            .next()
+                            .unwrap();
+                        let lo = char::from_digit((b & 0xf) as u32, 16)
+                            .unwrap()
+                            .to_uppercase()
+                            .next()
+                            .unwrap();
+                        vec!['%', hi, lo]
+                    })
+                    .collect()
+            }
+        })
+        .collect()
+}
+
+/// Render the login page HTML.
+fn login_page_html(
+    pool_id: &str,
+    response_type: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    scope: &str,
+    state_param: &str,
+    nonce: &str,
+    code_challenge: &str,
+    code_challenge_method: &str,
+    error_msg: Option<&str>,
+) -> Response {
+    let error_html = error_msg
+        .map(|e| format!(r#"<div class="error">{e}</div>"#))
+        .unwrap_or_default();
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html><head><title>AWSim Login</title>
+<style>
+body {{ font-family: sans-serif; background: #18181b; color: #e4e4e7; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
+.card {{ background: #27272a; border: 1px solid #3f3f46; border-radius: 12px; padding: 32px; width: 360px; }}
+h2 {{ margin-top: 0; color: #fb923c; }}
+input {{ width: 100%; padding: 10px; margin: 8px 0; background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; box-sizing: border-box; }}
+button {{ width: 100%; padding: 10px; background: #ea580c; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; margin-top: 12px; }}
+button:hover {{ background: #f97316; }}
+.pool {{ color: #71717a; font-size: 12px; margin-bottom: 16px; }}
+.error {{ background: #450a0a; border: 1px solid #991b1b; border-radius: 6px; padding: 10px; margin-bottom: 12px; color: #fca5a5; font-size: 14px; }}
+</style></head>
+<body>
+<div class="card">
+<h2>Sign In</h2>
+<div class="pool">Pool: {pool_id}</div>
+{error_html}
+<form method="POST" action="/cognito/{pool_id}/oauth2/authorize">
+<input type="hidden" name="response_type" value="{response_type}">
+<input type="hidden" name="client_id" value="{client_id}">
+<input type="hidden" name="redirect_uri" value="{redirect_uri}">
+<input type="hidden" name="scope" value="{scope}">
+<input type="hidden" name="state" value="{state_param}">
+<input type="hidden" name="nonce" value="{nonce}">
+<input type="hidden" name="code_challenge" value="{code_challenge}">
+<input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
+<input type="text" name="username" placeholder="Username" required autofocus>
+<input type="password" name="password" placeholder="Password" required>
+<button type="submit">Sign In</button>
+</form>
+</div></body></html>"#
+    );
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/html; charset=utf-8")
+        .body(Body::from(html))
+        .unwrap()
+}
+
 // ---------------------------------------------------------------------------
 // 1. OIDC Discovery
 // ---------------------------------------------------------------------------
@@ -134,13 +282,15 @@ async fn openid_config(
         "authorization_endpoint": format!("{base}/oauth2/authorize"),
         "token_endpoint": format!("{base}/oauth2/token"),
         "userinfo_endpoint": format!("{base}/oauth2/userInfo"),
+        "revocation_endpoint": format!("{base}/oauth2/revoke"),
         "jwks_uri": format!("{}/cognito/{pool_id}/.well-known/jwks.json", state.base_url()),
         "response_types_supported": ["code", "token", "id_token"],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
         "scopes_supported": ["openid", "email", "phone", "profile"],
         "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
-        "grant_types_supported": ["authorization_code", "implicit", "client_credentials", "refresh_token"]
+        "grant_types_supported": ["authorization_code", "implicit", "client_credentials", "refresh_token"],
+        "code_challenge_methods_supported": ["S256", "plain"]
     }))
 }
 
@@ -149,10 +299,6 @@ async fn openid_config(
 // ---------------------------------------------------------------------------
 
 async fn jwks() -> Json<Value> {
-    // Fixed dummy RSA public key. The modulus (n) is a 2048-bit value encoded
-    // as base64url. Clients that fetch JWKS for structural validation will
-    // accept this; cryptographic verification will fail (by design for a local
-    // emulator that uses dummy signatures in jwt.rs).
     Json(json!({
         "keys": [{
             "kty": "RSA",
@@ -171,7 +317,7 @@ async fn jwks() -> Json<Value> {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Authorization endpoint
+// 3a. Authorization endpoint — GET (show login page)
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -181,11 +327,12 @@ struct AuthorizeParams {
     redirect_uri: Option<String>,
     scope: Option<String>,
     state: Option<String>,
-    #[serde(rename = "nonce")]
-    _nonce: Option<String>,
+    nonce: Option<String>,
+    code_challenge: Option<String>,
+    code_challenge_method: Option<String>,
 }
 
-async fn authorize(
+async fn authorize_get(
     State(oauth_state): State<Arc<CognitoOAuthState>>,
     Path(pool_id): Path<String>,
     Query(params): Query<AuthorizeParams>,
@@ -196,6 +343,113 @@ async fn authorize(
             return (StatusCode::BAD_REQUEST, "redirect_uri is required").into_response();
         }
     };
+
+    // Validate pool exists.
+    if !oauth_state.cognito.user_pools.contains_key(&pool_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("User pool not found: {pool_id}"),
+        )
+            .into_response();
+    }
+
+    // Validate redirect_uri against client's callback_urls.
+    if let Some(pool_ref) = oauth_state.cognito.user_pools.get(&pool_id) {
+        if let Some(client) = pool_ref.clients.get(&params.client_id) {
+            if !client.callback_urls.is_empty()
+                && !client.callback_urls.contains(&redirect_uri)
+            {
+                warn!(
+                    client_id = %params.client_id,
+                    redirect_uri = %redirect_uri,
+                    "OAuth authorize: redirect_uri not in callback_urls"
+                );
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "redirect_uri does not match any registered callback URL",
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    login_page_html(
+        &pool_id,
+        &params.response_type,
+        &params.client_id,
+        &redirect_uri,
+        params.scope.as_deref().unwrap_or("openid"),
+        params.state.as_deref().unwrap_or(""),
+        params.nonce.as_deref().unwrap_or(""),
+        params.code_challenge.as_deref().unwrap_or(""),
+        params.code_challenge_method.as_deref().unwrap_or(""),
+        None,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// 3b. Authorization endpoint — POST (login form submission)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Default)]
+struct AuthorizeForm {
+    response_type: Option<String>,
+    client_id: Option<String>,
+    redirect_uri: Option<String>,
+    scope: Option<String>,
+    state: Option<String>,
+    nonce: Option<String>,
+    code_challenge: Option<String>,
+    code_challenge_method: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+}
+
+async fn authorize_post(
+    State(oauth_state): State<Arc<CognitoOAuthState>>,
+    Path(pool_id): Path<String>,
+    Form(form): Form<AuthorizeForm>,
+) -> Response {
+    let response_type = form
+        .response_type
+        .as_deref()
+        .unwrap_or("code")
+        .to_string();
+    let client_id = form.client_id.as_deref().unwrap_or("").to_string();
+    let redirect_uri = match &form.redirect_uri {
+        Some(u) if !u.is_empty() => u.clone(),
+        _ => {
+            return (StatusCode::BAD_REQUEST, "redirect_uri is required").into_response();
+        }
+    };
+    let scope_str = form
+        .scope
+        .as_deref()
+        .unwrap_or("openid")
+        .to_string();
+    let state_param = form.state.as_deref().unwrap_or("").to_string();
+    let nonce = form.nonce.clone();
+    let code_challenge = form.code_challenge.clone();
+    let code_challenge_method = form.code_challenge_method.clone();
+
+    let username = match &form.username {
+        Some(u) if !u.is_empty() => u.clone(),
+        _ => {
+            return login_page_html(
+                &pool_id,
+                &response_type,
+                &client_id,
+                &redirect_uri,
+                &scope_str,
+                &state_param,
+                nonce.as_deref().unwrap_or(""),
+                code_challenge.as_deref().unwrap_or(""),
+                code_challenge_method.as_deref().unwrap_or(""),
+                Some("Username is required"),
+            );
+        }
+    };
+    let password = form.password.as_deref().unwrap_or("");
 
     let cognito = &oauth_state.cognito;
 
@@ -211,60 +465,110 @@ async fn authorize(
         }
     };
 
-    // Validate client_id exists in this pool.
-    if !pool_ref.clients.contains_key(&params.client_id) {
-        warn!(
-            client_id = %params.client_id,
-            pool_id = %pool_id,
-            "OAuth authorize: unknown client_id"
-        );
-        // Still continue — in local dev we're lenient.
-    }
-
-    // Pick the first confirmed user in the pool to auto-authenticate.
-    // In a real Cognito setup there would be a login page; here we skip it.
-    let user = pool_ref
-        .users
-        .values()
-        .find(|u| u.status == "CONFIRMED" && u.enabled)
-        .or_else(|| pool_ref.users.values().next())
-        .cloned();
-
-    let (user_sub, username, attributes) = match user {
-        Some(u) => (u.sub.clone(), u.username.clone(), u.attributes.clone()),
-        None => {
+    // Validate redirect_uri against client callback_urls.
+    if let Some(client) = pool_ref.clients.get(&client_id) {
+        if !client.callback_urls.is_empty() && !client.callback_urls.contains(&redirect_uri) {
             return (
                 StatusCode::BAD_REQUEST,
-                format!("No users in pool {pool_id} — create a user first"),
+                "redirect_uri does not match any registered callback URL",
             )
                 .into_response();
         }
+    }
+
+    // Authenticate user.
+    let user = pool_ref.users.get(&username).cloned();
+    let user = match user {
+        Some(u) => u,
+        None => {
+            return login_page_html(
+                &pool_id,
+                &response_type,
+                &client_id,
+                &redirect_uri,
+                &scope_str,
+                &state_param,
+                nonce.as_deref().unwrap_or(""),
+                code_challenge.as_deref().unwrap_or(""),
+                code_challenge_method.as_deref().unwrap_or(""),
+                Some("Invalid username or password"),
+            );
+        }
     };
 
-    let state_param = params.state.as_deref().unwrap_or("").to_string();
-    let _scope = params.scope.as_deref().unwrap_or("openid");
+    if user.password != password {
+        return login_page_html(
+            &pool_id,
+            &response_type,
+            &client_id,
+            &redirect_uri,
+            &scope_str,
+            &state_param,
+            nonce.as_deref().unwrap_or(""),
+            code_challenge.as_deref().unwrap_or(""),
+            code_challenge_method.as_deref().unwrap_or(""),
+            Some("Invalid username or password"),
+        );
+    }
 
-    match params.response_type.as_str() {
+    if !user.enabled {
+        return login_page_html(
+            &pool_id,
+            &response_type,
+            &client_id,
+            &redirect_uri,
+            &scope_str,
+            &state_param,
+            nonce.as_deref().unwrap_or(""),
+            code_challenge.as_deref().unwrap_or(""),
+            code_challenge_method.as_deref().unwrap_or(""),
+            Some("User account is disabled"),
+        );
+    }
+
+    // Validate scopes against client's allowed_oauth_scopes (if configured).
+    let requested_scopes = parse_scopes(&scope_str);
+    let effective_scopes = if let Some(client) = pool_ref.clients.get(&client_id) {
+        if client.allowed_oauth_scopes.is_empty() {
+            requested_scopes.clone()
+        } else {
+            requested_scopes
+                .iter()
+                .filter(|s| client.allowed_oauth_scopes.contains(s))
+                .cloned()
+                .collect()
+        }
+    } else {
+        requested_scopes.clone()
+    };
+
+    drop(pool_ref);
+
+    match response_type.as_str() {
         "code" => {
-            // Authorization code flow: generate a code and redirect.
             purge_expired_codes(&oauth_state.auth_codes);
             let code = new_code();
             oauth_state.auth_codes.insert(
                 code.clone(),
                 AuthCodeEntry {
                     pool_id: pool_id.clone(),
-                    client_id: params.client_id.clone(),
+                    client_id: client_id.clone(),
                     redirect_uri: redirect_uri.clone(),
-                    user_sub,
-                    username,
+                    user_sub: user.sub.clone(),
+                    username: user.username.clone(),
                     issued_at: now_epoch(),
+                    code_challenge: code_challenge.filter(|s| !s.is_empty()),
+                    code_challenge_method: code_challenge_method.filter(|s| !s.is_empty()),
+                    scopes: effective_scopes,
+                    nonce: nonce.filter(|s| !s.is_empty()),
                 },
             );
 
             info!(
                 pool_id = %pool_id,
-                client_id = %params.client_id,
-                "OAuth: issued authorization code"
+                client_id = %client_id,
+                username = %user.username,
+                "OAuth: issued authorization code via login form"
             );
 
             let mut url = format!("{redirect_uri}?code={code}");
@@ -274,27 +578,31 @@ async fn authorize(
             Redirect::to(&url).into_response()
         }
         "token" => {
-            // Implicit flow: return tokens directly in the fragment.
+            let attributes = user.attributes.clone();
             let access_tok = jwt::access_token(
-                &user_sub,
+                &user.sub,
                 &oauth_state.default_region,
                 &pool_id,
-                &params.client_id,
-                &username,
+                &client_id,
+                &user.username,
+                &effective_scopes,
             );
             let id_tok = jwt::id_token(
-                &user_sub,
+                &user.sub,
                 &oauth_state.default_region,
                 &pool_id,
-                &params.client_id,
-                &username,
+                &client_id,
+                &user.username,
                 &attributes,
+                &effective_scopes,
+                nonce.as_deref(),
             );
 
             info!(
                 pool_id = %pool_id,
-                client_id = %params.client_id,
-                "OAuth: implicit flow — issued tokens"
+                client_id = %client_id,
+                username = %user.username,
+                "OAuth: implicit flow via login form"
             );
 
             let mut fragment = format!(
@@ -323,13 +631,11 @@ struct TokenForm {
     grant_type: Option<String>,
     code: Option<String>,
     client_id: Option<String>,
-    #[allow(dead_code)]
     client_secret: Option<String>,
-    #[allow(dead_code)]
     redirect_uri: Option<String>,
     refresh_token: Option<String>,
-    #[allow(dead_code)]
     scope: Option<String>,
+    code_verifier: Option<String>,
 }
 
 async fn token(
@@ -338,12 +644,18 @@ async fn token(
     headers: HeaderMap,
     Form(form): Form<TokenForm>,
 ) -> Response {
-    // client_id may come from Basic Auth or form body.
+    // client_id and client_secret may come from Basic Auth or form body.
+    let (basic_client_id, basic_client_secret) = basic_auth_credentials(&headers)
+        .map(|(id, sec)| (Some(id), Some(sec)))
+        .unwrap_or((None, None));
+
     let client_id = form
         .client_id
         .clone()
-        .or_else(|| basic_auth_username(&headers))
+        .or(basic_client_id.clone())
         .unwrap_or_default();
+
+    let client_secret_provided = form.client_secret.clone().or(basic_client_secret.clone());
 
     let grant_type = form.grant_type.as_deref().unwrap_or("authorization_code");
     let cognito = &oauth_state.cognito;
@@ -353,7 +665,11 @@ async fn token(
             let code = match &form.code {
                 Some(c) => c.clone(),
                 None => {
-                    return error_response(StatusCode::BAD_REQUEST, "invalid_request", "code is required");
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_request",
+                        "code is required",
+                    );
                 }
             };
 
@@ -378,7 +694,24 @@ async fn token(
                 );
             }
 
-            // Look up user by sub.
+            let effective_client_id = if client_id.is_empty() {
+                entry.client_id.clone()
+            } else {
+                client_id.clone()
+            };
+
+            // Validate redirect_uri if provided.
+            if let Some(req_redirect) = &form.redirect_uri {
+                if !req_redirect.is_empty() && *req_redirect != entry.redirect_uri {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_grant",
+                        "redirect_uri mismatch",
+                    );
+                }
+            }
+
+            // Look up the pool and client for secret validation.
             let pool = match cognito.user_pools.get(&pool_id) {
                 Some(p) => p,
                 None => {
@@ -390,6 +723,59 @@ async fn token(
                 }
             };
 
+            // Validate client_secret for confidential clients.
+            if let Some(client) = pool.clients.get(&effective_client_id) {
+                if let Some(expected_secret) = &client.client_secret {
+                    match &client_secret_provided {
+                        Some(provided) if provided == expected_secret => {
+                            // OK
+                        }
+                        Some(_) => {
+                            return error_response(
+                                StatusCode::UNAUTHORIZED,
+                                "invalid_client",
+                                "Invalid client_secret",
+                            );
+                        }
+                        None => {
+                            return error_response(
+                                StatusCode::UNAUTHORIZED,
+                                "invalid_client",
+                                "client_secret is required for this client",
+                            );
+                        }
+                    }
+                }
+                // Public clients (no client_secret) don't require it.
+            }
+
+            // PKCE verification.
+            if let Some(challenge) = &entry.code_challenge {
+                let method = entry
+                    .code_challenge_method
+                    .as_deref()
+                    .unwrap_or("plain");
+                match &form.code_verifier {
+                    Some(verifier) => {
+                        if !verify_pkce(verifier, challenge, method) {
+                            return error_response(
+                                StatusCode::BAD_REQUEST,
+                                "invalid_grant",
+                                "PKCE code_verifier does not match code_challenge",
+                            );
+                        }
+                    }
+                    None => {
+                        return error_response(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request",
+                            "code_verifier is required (PKCE)",
+                        );
+                    }
+                }
+            }
+
+            // Look up user by sub.
             let user = pool
                 .users
                 .values()
@@ -398,17 +784,11 @@ async fn token(
 
             let (sub, username, attributes) = match user {
                 Some(u) => (u.sub.clone(), u.username.clone(), u.attributes.clone()),
-                None => {
-                    // Fall back to what was in the code entry.
-                    (entry.user_sub.clone(), entry.username.clone(), HashMap::new())
-                }
+                None => (entry.user_sub.clone(), entry.username.clone(), HashMap::new()),
             };
 
-            let effective_client_id = if client_id.is_empty() {
-                entry.client_id.clone()
-            } else {
-                client_id.clone()
-            };
+            let scopes = entry.scopes.clone();
+            let nonce = entry.nonce.clone();
 
             let access_tok = jwt::access_token(
                 &sub,
@@ -416,6 +796,7 @@ async fn token(
                 &pool_id,
                 &effective_client_id,
                 &username,
+                &scopes,
             );
             let id_tok = jwt::id_token(
                 &sub,
@@ -424,6 +805,8 @@ async fn token(
                 &effective_client_id,
                 &username,
                 &attributes,
+                &scopes,
+                nonce.as_deref(),
             );
             let refresh_tok = jwt::refresh_token(&sub);
 
@@ -444,11 +827,76 @@ async fn token(
         }
 
         "client_credentials" => {
-            // Machine-to-machine: return an access token only (no user context).
+            // Machine-to-machine: client_secret is REQUIRED.
             let effective_client_id = if client_id.is_empty() {
-                "unknown-client".to_string()
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "client_id is required for client_credentials",
+                );
             } else {
                 client_id.clone()
+            };
+
+            // Validate client and secret.
+            let pool = match cognito.user_pools.get(&pool_id) {
+                Some(p) => p,
+                None => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_request",
+                        "User pool not found",
+                    );
+                }
+            };
+
+            if let Some(client) = pool.clients.get(&effective_client_id) {
+                if let Some(expected_secret) = &client.client_secret {
+                    match &client_secret_provided {
+                        Some(provided) if provided == expected_secret => {}
+                        Some(_) => {
+                            return error_response(
+                                StatusCode::UNAUTHORIZED,
+                                "invalid_client",
+                                "Invalid client_secret",
+                            );
+                        }
+                        None => {
+                            return error_response(
+                                StatusCode::UNAUTHORIZED,
+                                "invalid_client",
+                                "client_secret is required",
+                            );
+                        }
+                    }
+                } else {
+                    // client_credentials grant requires a client with a secret.
+                    return error_response(
+                        StatusCode::UNAUTHORIZED,
+                        "invalid_client",
+                        "client_credentials grant requires a confidential client (with client_secret)",
+                    );
+                }
+            } else {
+                return error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_client",
+                    "Client not found in this user pool",
+                );
+            }
+
+            let requested_scopes = parse_scopes(form.scope.as_deref().unwrap_or(""));
+            let effective_scopes = if let Some(client) = pool.clients.get(&effective_client_id) {
+                if client.allowed_oauth_scopes.is_empty() {
+                    requested_scopes
+                } else {
+                    requested_scopes
+                        .into_iter()
+                        .filter(|s| client.allowed_oauth_scopes.contains(s))
+                        .collect()
+                }
+            } else {
+                requested_scopes
             };
 
             let access_tok = jwt::access_token(
@@ -457,6 +905,7 @@ async fn token(
                 &pool_id,
                 &effective_client_id,
                 &effective_client_id,
+                &effective_scopes,
             );
 
             info!(
@@ -485,6 +934,18 @@ async fn token(
                 }
             };
 
+            // Check if token has been revoked.
+            if oauth_state
+                .revoked_refresh_tokens
+                .contains_key(&refresh_tok)
+            {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "Refresh token has been revoked",
+                );
+            }
+
             // Parse our opaque format: "refresh-{sub}-{uuid}"
             let sub = refresh_tok
                 .strip_prefix("refresh-")
@@ -511,10 +972,7 @@ async fn token(
 
             let (user_sub, username, attributes) = match user {
                 Some(u) => (u.sub.clone(), u.username.clone(), u.attributes.clone()),
-                None => {
-                    // Lenient: issue generic tokens for unknown sub.
-                    (sub.clone(), sub.clone(), HashMap::new())
-                }
+                None => (sub.clone(), sub.clone(), HashMap::new()),
             };
 
             let effective_client_id = if client_id.is_empty() {
@@ -523,12 +981,15 @@ async fn token(
                 client_id.clone()
             };
 
+            let scopes = parse_scopes(form.scope.as_deref().unwrap_or("openid"));
+
             let access_tok = jwt::access_token(
                 &user_sub,
                 &oauth_state.default_region,
                 &pool_id,
                 &effective_client_id,
                 &username,
+                &scopes,
             );
             let id_tok = jwt::id_token(
                 &user_sub,
@@ -537,6 +998,8 @@ async fn token(
                 &effective_client_id,
                 &username,
                 &attributes,
+                &scopes,
+                None,
             );
             let new_refresh = jwt::refresh_token(&user_sub);
 
@@ -585,7 +1048,6 @@ async fn userinfo(
         }
     };
 
-    // Extract username from the JWT payload (no sig verification in emulator).
     let username = match jwt::extract_username_from_access_token(&token) {
         Some(u) => u,
         None => {
@@ -608,12 +1070,7 @@ async fn userinfo(
     let user = match pool.users.get(&username) {
         Some(u) => u.clone(),
         None => {
-            // Try by sub (client_credentials tokens use sub=client_id).
-            let found = pool
-                .users
-                .values()
-                .find(|u| u.sub == username)
-                .cloned();
+            let found = pool.users.values().find(|u| u.sub == username).cloned();
             match found {
                 Some(u) => u,
                 None => {
@@ -632,7 +1089,6 @@ async fn userinfo(
         "username": user.username,
     });
 
-    // Merge user attributes.
     if let Some(obj) = claims.as_object_mut() {
         for (k, v) in &user.attributes {
             obj.insert(k.clone(), Value::String(v.clone()));
@@ -643,56 +1099,58 @@ async fn userinfo(
 }
 
 // ---------------------------------------------------------------------------
+// 6. Revoke endpoint
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Default)]
+struct RevokeForm {
+    token: Option<String>,
+    client_id: Option<String>,
+    #[allow(dead_code)]
+    client_secret: Option<String>,
+}
+
+async fn revoke(
+    State(oauth_state): State<Arc<CognitoOAuthState>>,
+    Path(pool_id): Path<String>,
+    headers: HeaderMap,
+    Form(form): Form<RevokeForm>,
+) -> Response {
+    let _ = pool_id; // may be used for client validation in the future
+
+    let (basic_client_id, _basic_client_secret) = basic_auth_credentials(&headers)
+        .map(|(id, sec)| (Some(id), Some(sec)))
+        .unwrap_or((None, None));
+
+    let _client_id = form.client_id.or(basic_client_id).unwrap_or_default();
+
+    let token = match &form.token {
+        Some(t) if !t.is_empty() => t.clone(),
+        _ => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "token is required",
+            );
+        }
+    };
+
+    // Add to revocation store.
+    oauth_state
+        .revoked_refresh_tokens
+        .insert(token.clone(), ());
+
+    info!("OAuth: revoked refresh token");
+
+    // Per RFC 7009, return 200 with empty body on success.
+    StatusCode::OK.into_response()
+}
+
+// ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
 
-/// Extract the Bearer token from an Authorization header.
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
     let auth = headers.get("authorization")?.to_str().ok()?;
     auth.strip_prefix("Bearer ").map(|t| t.trim().to_string())
-}
-
-/// Extract the username from HTTP Basic Auth credentials.
-fn basic_auth_username(headers: &HeaderMap) -> Option<String> {
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    let auth = headers.get("authorization")?.to_str().ok()?;
-    let encoded = auth.strip_prefix("Basic ")?;
-    let decoded = STANDARD.decode(encoded).ok()?;
-    let s = String::from_utf8(decoded).ok()?;
-    s.split(':').next().map(|u| u.to_string())
-}
-
-/// Build a JSON error response compatible with RFC 6749.
-fn error_response(status: StatusCode, error: &str, description: &str) -> Response {
-    (
-        status,
-        Json(json!({
-            "error": error,
-            "error_description": description
-        })),
-    )
-        .into_response()
-}
-
-/// Percent-encode a string for use in a URL query/fragment.
-fn urlencoding(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| {
-            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
-                vec![c]
-            } else {
-                // Encode as %HH per byte.
-                let mut buf = [0u8; 4];
-                let bytes = c.encode_utf8(&mut buf);
-                bytes
-                    .bytes()
-                    .flat_map(|b| {
-                        let hi = char::from_digit((b >> 4) as u32, 16).unwrap().to_uppercase().next().unwrap();
-                        let lo = char::from_digit((b & 0xf) as u32, 16).unwrap().to_uppercase().next().unwrap();
-                        vec!['%', hi, lo]
-                    })
-                    .collect()
-            }
-        })
-        .collect()
 }

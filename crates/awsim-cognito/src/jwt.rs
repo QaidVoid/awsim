@@ -25,6 +25,16 @@ fn build_jwt(header: &Value, payload: &Value) -> String {
 }
 
 /// Generate an ID token for a user.
+///
+/// The `scopes` list controls which claims are included:
+/// - `openid`: base claims always present when this scope is in the list
+/// - `email`: includes `email` and `email_verified`
+/// - `phone`: includes `phone_number` and `phone_number_verified`
+/// - `profile`: includes `name`, `given_name`, `family_name`, `nickname`,
+///              `preferred_username`, `picture`, `website`, `gender`,
+///              `birthdate`, `zoneinfo`, `locale`, `updated_at`
+///
+/// The `nonce` parameter (if Some) is included in the token.
 pub fn id_token(
     sub: &str,
     region: &str,
@@ -32,6 +42,8 @@ pub fn id_token(
     client_id: &str,
     username: &str,
     attributes: &HashMap<String, String>,
+    scopes: &[String],
+    nonce: Option<&str>,
 ) -> String {
     let now = now_epoch();
     let header = json!({
@@ -39,6 +51,8 @@ pub fn id_token(
         "typ": "JWT",
         "kid": "awsim-key-1"
     });
+
+    let scope_str = scopes.join(" ");
 
     let mut payload = json!({
         "sub": sub,
@@ -48,26 +62,80 @@ pub fn id_token(
         "cognito:username": username,
         "auth_time": now,
         "iat": now,
-        "exp": now + 3600
+        "exp": now + 3600,
+        "scope": scope_str
     });
 
-    // Merge user attributes into payload
-    if let Some(obj) = payload.as_object_mut() {
-        for (k, v) in attributes {
-            obj.insert(k.clone(), Value::String(v.clone()));
+    if let Some(n) = nonce {
+        if !n.is_empty() {
+            payload["nonce"] = Value::String(n.to_string());
         }
+    }
+
+    let obj = payload.as_object_mut().unwrap();
+
+    // email scope: include email claims.
+    if scopes.iter().any(|s| s == "email") {
+        let scope_attrs = ["email", "email_verified"];
+        for attr in &scope_attrs {
+            if let Some(v) = attributes.get(*attr) {
+                obj.insert(attr.to_string(), Value::String(v.clone()));
+            }
+        }
+    }
+
+    // phone scope: include phone claims.
+    if scopes.iter().any(|s| s == "phone") {
+        let scope_attrs = ["phone_number", "phone_number_verified"];
+        for attr in &scope_attrs {
+            if let Some(v) = attributes.get(*attr) {
+                obj.insert(attr.to_string(), Value::String(v.clone()));
+            }
+        }
+    }
+
+    // profile scope: include profile claims.
+    if scopes.iter().any(|s| s == "profile") {
+        let profile_attrs = [
+            "name",
+            "given_name",
+            "family_name",
+            "middle_name",
+            "nickname",
+            "preferred_username",
+            "picture",
+            "website",
+            "gender",
+            "birthdate",
+            "zoneinfo",
+            "locale",
+            "updated_at",
+        ];
+        for attr in &profile_attrs {
+            if let Some(v) = attributes.get(*attr) {
+                obj.insert(attr.to_string(), Value::String(v.clone()));
+            }
+        }
+    }
+
+    // Always merge remaining user attributes (cognito:* etc.) not already present.
+    for (k, v) in attributes {
+        obj.entry(k.clone()).or_insert_with(|| Value::String(v.clone()));
     }
 
     build_jwt(&header, &payload)
 }
 
 /// Generate an access token for a user.
+///
+/// The `scopes` list is included as a space-separated `scope` claim.
 pub fn access_token(
     sub: &str,
     region: &str,
     pool_id: &str,
     client_id: &str,
     username: &str,
+    scopes: &[String],
 ) -> String {
     let now = now_epoch();
     let header = json!({
@@ -76,12 +144,18 @@ pub fn access_token(
         "kid": "awsim-key-1"
     });
 
+    let scope_str = if scopes.is_empty() {
+        "aws.cognito.signin.user.admin".to_string()
+    } else {
+        scopes.join(" ")
+    };
+
     let payload = json!({
         "sub": sub,
         "iss": format!("https://cognito-idp.{region}.amazonaws.com/{pool_id}"),
         "client_id": client_id,
         "token_use": "access",
-        "scope": "aws.cognito.signin.user.admin",
+        "scope": scope_str,
         "username": username,
         "auth_time": now,
         "iat": now,

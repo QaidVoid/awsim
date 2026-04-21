@@ -1,12 +1,29 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, InternalEvent, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
 use crate::state::{CognitoState, CognitoUser};
+
+/// Fire-and-forget Lambda trigger via the event bus.
+fn invoke_trigger(ctx: &RequestContext, trigger_source: &str, lambda_arn: &str, event: &Value) {
+    if let Some(ref bus) = ctx.event_bus {
+        bus.publish(InternalEvent {
+            source: "cognito-idp".to_string(),
+            event_type: "cognito:LambdaTrigger".to_string(),
+            region: ctx.region.clone(),
+            account_id: ctx.account_id.clone(),
+            detail: json!({
+                "triggerSource": trigger_source,
+                "functionArn": lambda_arn,
+                "event": event,
+            }),
+        });
+    }
+}
 
 fn now_epoch() -> u64 {
     SystemTime::now()
@@ -15,7 +32,7 @@ fn now_epoch() -> u64 {
         .as_secs()
 }
 
-fn user_to_value(user: &CognitoUser) -> Value {
+pub fn user_to_value(user: &CognitoUser) -> Value {
     let attributes: Vec<Value> = user
         .attributes
         .iter()
@@ -32,6 +49,40 @@ fn user_to_value(user: &CognitoUser) -> Value {
     })
 }
 
+fn make_user(username: &str, password: &str, attributes: HashMap<String, String>, status: &str) -> CognitoUser {
+    let sub = Uuid::new_v4().to_string();
+    let mut attrs = attributes;
+    attrs.insert("sub".to_string(), sub.clone());
+    CognitoUser {
+        username: username.to_string(),
+        sub,
+        password: password.to_string(),
+        attributes: attrs,
+        status: status.to_string(),
+        enabled: true,
+        groups: Vec::new(),
+        created_date: now_epoch(),
+        pending_verifications: HashMap::new(),
+        revoked_refresh_tokens: Vec::new(),
+        mfa_enabled: false,
+        mfa_preferred: None,
+        totp_secret: None,
+        totp_verified: false,
+    }
+}
+
+fn parse_user_attributes(input: &Value, key: &str) -> HashMap<String, String> {
+    let mut attrs = HashMap::new();
+    if let Some(arr) = input[key].as_array() {
+        for attr in arr {
+            if let (Some(k), Some(v)) = (attr["Name"].as_str(), attr["Value"].as_str()) {
+                attrs.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+    attrs
+}
+
 // ---------------------------------------------------------------------------
 // SignUp
 // ---------------------------------------------------------------------------
@@ -39,7 +90,7 @@ fn user_to_value(user: &CognitoUser) -> Value {
 pub fn sign_up(
     state: &CognitoState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let client_id = input["ClientId"]
         .as_str()
@@ -51,7 +102,6 @@ pub fn sign_up(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Password is required"))?;
 
-    // Find the pool that owns this client
     let pool_entry = state
         .user_pools
         .iter()
@@ -59,7 +109,6 @@ pub fn sign_up(
 
     let mut pool = match pool_entry {
         Some(e) => {
-            // We need a mutable ref — drop the immutable ref and get_mut
             let pool_id = e.id.clone();
             drop(e);
             state.user_pools.get_mut(&pool_id).unwrap()
@@ -79,28 +128,9 @@ pub fn sign_up(
         ));
     }
 
-    let mut attributes: HashMap<String, String> = HashMap::new();
-    if let Some(arr) = input["UserAttributes"].as_array() {
-        for attr in arr {
-            if let (Some(k), Some(v)) = (attr["Name"].as_str(), attr["Value"].as_str()) {
-                attributes.insert(k.to_string(), v.to_string());
-            }
-        }
-    }
-
-    let sub = Uuid::new_v4().to_string();
-    attributes.insert("sub".to_string(), sub.clone());
-
-    let user = CognitoUser {
-        username: username.to_string(),
-        sub: sub.clone(),
-        password: password.to_string(),
-        attributes,
-        status: "UNCONFIRMED".to_string(),
-        enabled: true,
-        groups: Vec::new(),
-        created_date: now_epoch(),
-    };
+    let attributes = parse_user_attributes(input, "UserAttributes");
+    let user = make_user(username, password, attributes, "UNCONFIRMED");
+    let sub = user.sub.clone();
 
     info!(username = %username, pool_id = %pool.id, "Cognito: user signed up");
     pool.users.insert(username.to_string(), user);
@@ -231,29 +261,8 @@ pub fn admin_create_user(
         ));
     }
 
-    let mut attributes: HashMap<String, String> = HashMap::new();
-    if let Some(arr) = input["UserAttributes"].as_array() {
-        for attr in arr {
-            if let (Some(k), Some(v)) = (attr["Name"].as_str(), attr["Value"].as_str()) {
-                attributes.insert(k.to_string(), v.to_string());
-            }
-        }
-    }
-
-    let sub = Uuid::new_v4().to_string();
-    attributes.insert("sub".to_string(), sub.clone());
-
-    let user = CognitoUser {
-        username: username.to_string(),
-        sub,
-        password: password.to_string(),
-        attributes,
-        status: "FORCE_CHANGE_PASSWORD".to_string(),
-        enabled: true,
-        groups: Vec::new(),
-        created_date: now_epoch(),
-    };
-
+    let attributes = parse_user_attributes(input, "UserAttributes");
+    let user = make_user(username, password, attributes, "FORCE_CHANGE_PASSWORD");
     let user_value = user_to_value(&user);
     info!(username = %username, pool_id = %pool_id, "Cognito: admin created user");
     pool.users.insert(username.to_string(), user);
@@ -409,7 +418,6 @@ pub fn get_user(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
 
-    // Check revocation
     if state.revoked_tokens.revoked.contains_key(access_token) {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
@@ -421,7 +429,6 @@ pub fn get_user(
         || AwsError::bad_request("NotAuthorizedException", "Invalid access token"),
     )?;
 
-    // Find the user across all pools (access token doesn't carry pool_id in our impl)
     for pool_entry in state.user_pools.iter() {
         if let Some(user) = pool_entry.users.get(&username) {
             let attributes: Vec<Value> = user
@@ -459,7 +466,6 @@ pub fn forgot_password(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
 
-    // Verify the user exists
     let pool_entry = state
         .user_pools
         .iter()
@@ -481,7 +487,6 @@ pub fn forgot_password(
         ));
     }
 
-    // For local dev, return a mock delivery destination
     let dest = pool
         .users
         .get(username)
@@ -515,7 +520,6 @@ pub fn confirm_forgot_password(
     let password = input["Password"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Password is required"))?;
-    // ConfirmationCode — auto-confirm for local dev, so we just accept anything
 
     let pool_entry = state
         .user_pools
@@ -615,4 +619,543 @@ pub fn global_sign_out(
 
     info!("Cognito: global sign out");
     Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// AdminEnableUser
+// ---------------------------------------------------------------------------
+
+pub fn admin_enable_user(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let username = input["Username"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+
+    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
+
+    let user = pool.users.get_mut(username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+
+    user.enabled = true;
+    info!(username = %username, pool_id = %pool_id, "Cognito: admin enabled user");
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// AdminDisableUser
+// ---------------------------------------------------------------------------
+
+pub fn admin_disable_user(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let username = input["Username"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+
+    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
+
+    let user = pool.users.get_mut(username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+
+    user.enabled = false;
+    info!(username = %username, pool_id = %pool_id, "Cognito: admin disabled user");
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// AdminResetUserPassword
+// ---------------------------------------------------------------------------
+
+pub fn admin_reset_user_password(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let username = input["Username"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+
+    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
+
+    let user = pool.users.get_mut(username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+
+    user.status = "RESET_REQUIRED".to_string();
+    info!(username = %username, pool_id = %pool_id, "Cognito: admin reset user password");
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// AdminUpdateUserAttributes
+// ---------------------------------------------------------------------------
+
+pub fn admin_update_user_attributes(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let username = input["Username"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+
+    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
+
+    let user = pool.users.get_mut(username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+
+    let new_attrs = parse_user_attributes(input, "UserAttributes");
+    for (k, v) in new_attrs {
+        user.attributes.insert(k, v);
+    }
+
+    info!(username = %username, pool_id = %pool_id, "Cognito: admin updated user attributes");
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// AdminDeleteUserAttributes
+// ---------------------------------------------------------------------------
+
+pub fn admin_delete_user_attributes(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let username = input["Username"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+
+    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
+
+    let user = pool.users.get_mut(username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+
+    if let Some(names) = input["UserAttributeNames"].as_array() {
+        for name in names {
+            if let Some(n) = name.as_str() {
+                user.attributes.remove(n);
+            }
+        }
+    }
+
+    info!(username = %username, pool_id = %pool_id, "Cognito: admin deleted user attributes");
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// UpdateUserAttributes (authenticated user updates own attributes)
+// ---------------------------------------------------------------------------
+
+pub fn update_user_attributes(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let access_token = input["AccessToken"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+
+    if state.revoked_tokens.revoked.contains_key(access_token) {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Token has been revoked",
+        ));
+    }
+
+    let username = crate::jwt::extract_username_from_access_token(access_token)
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+
+    let new_attrs = parse_user_attributes(input, "UserAttributes");
+
+    for mut pool_entry in state.user_pools.iter_mut() {
+        if let Some(user) = pool_entry.users.get_mut(&username) {
+            for (k, v) in new_attrs {
+                user.attributes.insert(k, v);
+            }
+            return Ok(json!({ "CodeDeliveryDetailsList": [] }));
+        }
+    }
+
+    Err(AwsError::not_found(
+        "UserNotFoundException",
+        format!("User not found: {username}"),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// DeleteUserAttributes (authenticated user deletes own attributes)
+// ---------------------------------------------------------------------------
+
+pub fn delete_user_attributes(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let access_token = input["AccessToken"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+
+    if state.revoked_tokens.revoked.contains_key(access_token) {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Token has been revoked",
+        ));
+    }
+
+    let username = crate::jwt::extract_username_from_access_token(access_token)
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+
+    let attr_names: Vec<String> = input["UserAttributeNames"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    for mut pool_entry in state.user_pools.iter_mut() {
+        if let Some(user) = pool_entry.users.get_mut(&username) {
+            for name in &attr_names {
+                user.attributes.remove(name);
+            }
+            return Ok(json!({}));
+        }
+    }
+
+    Err(AwsError::not_found(
+        "UserNotFoundException",
+        format!("User not found: {username}"),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// DeleteUser (authenticated user deletes own account)
+// ---------------------------------------------------------------------------
+
+pub fn delete_user(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let access_token = input["AccessToken"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+
+    if state.revoked_tokens.revoked.contains_key(access_token) {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Token has been revoked",
+        ));
+    }
+
+    let username = crate::jwt::extract_username_from_access_token(access_token)
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+
+    for mut pool_entry in state.user_pools.iter_mut() {
+        if pool_entry.users.remove(&username).is_some() {
+            state
+                .revoked_tokens
+                .revoked
+                .insert(access_token.to_string(), ());
+            info!(username = %username, "Cognito: user deleted own account");
+            return Ok(json!({}));
+        }
+    }
+
+    Err(AwsError::not_found(
+        "UserNotFoundException",
+        format!("User not found: {username}"),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// ResendConfirmationCode
+// ---------------------------------------------------------------------------
+
+pub fn resend_confirmation_code(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let client_id = input["ClientId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
+    let username = input["Username"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+
+    let pool_entry = state
+        .user_pools
+        .iter()
+        .find(|e| e.clients.contains_key(client_id));
+
+    let pool_id = pool_entry
+        .map(|e| e.id.clone())
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("No pool found for client: {client_id}"),
+            )
+        })?;
+
+    let pool = state.user_pools.get(&pool_id).unwrap();
+    if !pool.users.contains_key(username) {
+        return Err(AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        ));
+    }
+
+    info!(username = %username, "Cognito: resend confirmation code");
+    Ok(json!({
+        "CodeDeliveryDetails": {
+            "AttributeName": "email",
+            "DeliveryMedium": "EMAIL",
+            "Destination": "***"
+        }
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// GetUserAttributeVerificationCode
+// ---------------------------------------------------------------------------
+
+pub fn get_user_attribute_verification_code(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let access_token = input["AccessToken"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+    let attribute_name = input["AttributeName"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AttributeName is required"))?;
+
+    if state.revoked_tokens.revoked.contains_key(access_token) {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Token has been revoked",
+        ));
+    }
+
+    let username = crate::jwt::extract_username_from_access_token(access_token)
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+
+    for mut pool_entry in state.user_pools.iter_mut() {
+        if let Some(user) = pool_entry.users.get_mut(&username) {
+            user.pending_verifications
+                .insert(attribute_name.to_string(), "123456".to_string());
+            return Ok(json!({
+                "CodeDeliveryDetails": {
+                    "AttributeName": attribute_name,
+                    "DeliveryMedium": "EMAIL",
+                    "Destination": "***"
+                }
+            }));
+        }
+    }
+
+    Err(AwsError::not_found(
+        "UserNotFoundException",
+        format!("User not found: {username}"),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// VerifyUserAttribute
+// ---------------------------------------------------------------------------
+
+pub fn verify_user_attribute(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let access_token = input["AccessToken"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+    let attribute_name = input["AttributeName"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AttributeName is required"))?;
+    let _code = input["Code"].as_str();
+
+    if state.revoked_tokens.revoked.contains_key(access_token) {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Token has been revoked",
+        ));
+    }
+
+    let username = crate::jwt::extract_username_from_access_token(access_token)
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+
+    for mut pool_entry in state.user_pools.iter_mut() {
+        if let Some(user) = pool_entry.users.get_mut(&username) {
+            let verified_key = format!("{attribute_name}_verified");
+            user.attributes.insert(verified_key, "true".to_string());
+            user.pending_verifications.remove(attribute_name);
+            info!(username = %username, attribute_name = %attribute_name, "Cognito: verified user attribute");
+            return Ok(json!({}));
+        }
+    }
+
+    Err(AwsError::not_found(
+        "UserNotFoundException",
+        format!("User not found: {username}"),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// AdminUserGlobalSignOut
+// ---------------------------------------------------------------------------
+
+pub fn admin_user_global_sign_out(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let username = input["Username"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+
+    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
+
+    let user = pool.users.get_mut(username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+
+    for token in &user.revoked_refresh_tokens {
+        state.revoked_tokens.revoked.insert(token.clone(), ());
+    }
+    user.revoked_refresh_tokens.clear();
+
+    info!(username = %username, pool_id = %pool_id, "Cognito: admin global sign out");
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// RevokeToken
+// ---------------------------------------------------------------------------
+
+pub fn revoke_token(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let token = input["Token"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Token is required"))?;
+    let _client_id = input["ClientId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
+
+    state.revoked_tokens.revoked.insert(token.to_string(), ());
+    info!("Cognito: revoke token");
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// AdminListUserAuthEvents
+// ---------------------------------------------------------------------------
+
+pub fn admin_list_user_auth_events(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let username = input["Username"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+
+    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
+
+    if !pool.users.contains_key(username) {
+        return Err(AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        ));
+    }
+
+    Ok(json!({ "AuthEvents": [] }))
 }
