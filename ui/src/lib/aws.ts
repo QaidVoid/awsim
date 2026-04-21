@@ -401,6 +401,131 @@ export async function listTopics(): Promise<{ topics: SnsTopic[] }> {
     };
 }
 
+// ---- IAM ----
+
+function xmlValue(xml: string, tag: string): string {
+    const match = xml.match(new RegExp(`<${tag}>([^<]*)</${tag}>`));
+    return match ? match[1] : '';
+}
+
+function xmlArray(xml: string, itemTag: string, fields: string[]): Record<string, string>[] {
+    const items: Record<string, string>[] = [];
+    const regex = new RegExp(`<${itemTag}>([\\s\\S]*?)</${itemTag}>`, 'g');
+    let match;
+    while ((match = regex.exec(xml)) !== null) {
+        const item: Record<string, string> = {};
+        for (const field of fields) {
+            item[field] = xmlValue(match[1], field);
+        }
+        items.push(item);
+    }
+    return items;
+}
+
+async function iamRequest(action: string, params: Record<string, string> = {}): Promise<string> {
+    const body = new URLSearchParams({ Action: action, Version: '2010-05-08', ...params });
+    const res = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': authHeader('iam'),
+            'X-Amz-Date': new Date().toISOString().replace(/[:-]/g, '').slice(0, 15) + 'Z',
+        },
+        body: body.toString(),
+    });
+    return res.text();
+}
+
+export interface IamUser {
+    userName: string;
+    userId: string;
+    arn: string;
+    createDate: string;
+}
+
+export interface IamRole {
+    roleName: string;
+    roleId: string;
+    arn: string;
+}
+
+export interface IamPolicy {
+    policyName: string;
+    arn: string;
+    attachmentCount: string;
+}
+
+export interface IamGroup {
+    groupName: string;
+    groupId: string;
+    arn: string;
+}
+
+export async function listUsers(): Promise<{ users: IamUser[] }> {
+    const xml = await iamRequest('ListUsers');
+    const raw = xmlArray(xml, 'member', ['UserName', 'UserId', 'Arn', 'CreateDate']);
+    return {
+        users: raw.map((u) => ({
+            userName: u['UserName'] ?? '',
+            userId: u['UserId'] ?? '',
+            arn: u['Arn'] ?? '',
+            createDate: u['CreateDate'] ?? '',
+        })),
+    };
+}
+
+export async function createUser(userName: string): Promise<void> {
+    await iamRequest('CreateUser', { UserName: userName });
+}
+
+export async function deleteUser(userName: string): Promise<void> {
+    await iamRequest('DeleteUser', { UserName: userName });
+}
+
+export async function listRoles(): Promise<{ roles: IamRole[] }> {
+    const xml = await iamRequest('ListRoles');
+    const raw = xmlArray(xml, 'member', ['RoleName', 'RoleId', 'Arn']);
+    return {
+        roles: raw.map((r) => ({
+            roleName: r['RoleName'] ?? '',
+            roleId: r['RoleId'] ?? '',
+            arn: r['Arn'] ?? '',
+        })),
+    };
+}
+
+export async function createRole(roleName: string, assumeRolePolicy: string): Promise<void> {
+    await iamRequest('CreateRole', { RoleName: roleName, AssumeRolePolicyDocument: assumeRolePolicy });
+}
+
+export async function deleteRole(roleName: string): Promise<void> {
+    await iamRequest('DeleteRole', { RoleName: roleName });
+}
+
+export async function listPolicies(): Promise<{ policies: IamPolicy[] }> {
+    const xml = await iamRequest('ListPolicies', { Scope: 'Local' });
+    const raw = xmlArray(xml, 'member', ['PolicyName', 'Arn', 'AttachmentCount']);
+    return {
+        policies: raw.map((p) => ({
+            policyName: p['PolicyName'] ?? '',
+            arn: p['Arn'] ?? '',
+            attachmentCount: p['AttachmentCount'] ?? '0',
+        })),
+    };
+}
+
+export async function listGroups(): Promise<{ groups: IamGroup[] }> {
+    const xml = await iamRequest('ListGroups');
+    const raw = xmlArray(xml, 'member', ['GroupName', 'GroupId', 'Arn']);
+    return {
+        groups: raw.map((g) => ({
+            groupName: g['GroupName'] ?? '',
+            groupId: g['GroupId'] ?? '',
+            arn: g['Arn'] ?? '',
+        })),
+    };
+}
+
 // ---- Lambda ----
 
 export interface LambdaFunction {
@@ -411,12 +536,16 @@ export interface LambdaFunction {
     lastModified: string;
 }
 
+function lambdaHeaders(): Record<string, string> {
+    return {
+        'Authorization': authHeader('lambda'),
+        'X-Amz-Date': new Date().toISOString().replace(/[:-]/g, '').slice(0, 15) + 'Z',
+    };
+}
+
 export async function listFunctions(): Promise<{ functions: LambdaFunction[] }> {
     const res = await fetch(`${ENDPOINT}/2015-03-31/functions`, {
-        headers: {
-            'Authorization': authHeader('lambda'),
-            'X-Amz-Date': new Date().toISOString().replace(/[:-]/g, '').slice(0, 15) + 'Z',
-        },
+        headers: lambdaHeaders(),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json() as { Functions?: { FunctionName: string; Runtime: string; MemorySize: number; Handler: string; LastModified: string }[] };
@@ -429,6 +558,124 @@ export async function listFunctions(): Promise<{ functions: LambdaFunction[] }> 
             lastModified: f.LastModified,
         })),
     };
+}
+
+export async function createFunction(
+    name: string,
+    runtime: string,
+    handler: string,
+    roleArn: string,
+    code: string
+): Promise<void> {
+    const res = await fetch(`${ENDPOINT}/2015-03-31/functions`, {
+        method: 'POST',
+        headers: {
+            ...lambdaHeaders(),
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            FunctionName: name,
+            Runtime: runtime,
+            Handler: handler,
+            Role: roleArn,
+            Code: { ZipFile: code },
+        }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+}
+
+export async function deleteFunction(name: string): Promise<void> {
+    const res = await fetch(`${ENDPOINT}/2015-03-31/functions/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        headers: lambdaHeaders(),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+}
+
+export async function invokeFunction(name: string, payload: string): Promise<string> {
+    const res = await fetch(`${ENDPOINT}/2015-03-31/functions/${encodeURIComponent(name)}/invocations`, {
+        method: 'POST',
+        headers: {
+            ...lambdaHeaders(),
+            'Content-Type': 'application/json',
+        },
+        body: payload,
+    });
+    const text = await res.text();
+    return text;
+}
+
+// ---- Cognito ----
+
+async function cognitoRequest(action: string, body: unknown): Promise<unknown> {
+    const res = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-amz-json-1.1',
+            'X-Amz-Target': `AWSCognitoIdentityProviderService.${action}`,
+            'Authorization': authHeader('cognito-idp'),
+            'X-Amz-Date': new Date().toISOString().replace(/[:-]/g, '').slice(0, 15) + 'Z',
+        },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    return res.json();
+}
+
+export interface CognitoUserPool {
+    id: string;
+    name: string;
+    status: string;
+    creationDate: string;
+}
+
+export interface CognitoUser {
+    username: string;
+    status: string;
+    createDate: string;
+}
+
+export async function listUserPools(): Promise<{ userPools: CognitoUserPool[] }> {
+    const data = await cognitoRequest('ListUserPools', { MaxResults: 60 }) as {
+        UserPools?: { Id: string; Name: string; Status?: string; CreationDate?: number }[]
+    };
+    return {
+        userPools: (data.UserPools ?? []).map((p) => ({
+            id: p.Id,
+            name: p.Name,
+            status: p.Status ?? 'ACTIVE',
+            creationDate: p.CreationDate ? new Date(p.CreationDate * 1000).toISOString() : '',
+        })),
+    };
+}
+
+export async function createUserPool(poolName: string): Promise<void> {
+    await cognitoRequest('CreateUserPool', { PoolName: poolName });
+}
+
+export async function deleteUserPool(userPoolId: string): Promise<void> {
+    await cognitoRequest('DeleteUserPool', { UserPoolId: userPoolId });
+}
+
+export async function listCognitoUsers(userPoolId: string): Promise<{ users: CognitoUser[] }> {
+    const data = await cognitoRequest('ListUsers', { UserPoolId: userPoolId }) as {
+        Users?: { Username: string; UserStatus?: string; UserCreateDate?: number }[]
+    };
+    return {
+        users: (data.Users ?? []).map((u) => ({
+            username: u.Username,
+            status: u.UserStatus ?? '',
+            createDate: u.UserCreateDate ? new Date(u.UserCreateDate * 1000).toISOString() : '',
+        })),
+    };
+}
+
+export async function adminCreateUser(userPoolId: string, username: string): Promise<void> {
+    await cognitoRequest('AdminCreateUser', { UserPoolId: userPoolId, Username: username });
+}
+
+export async function adminDeleteUser(userPoolId: string, username: string): Promise<void> {
+    await cognitoRequest('AdminDeleteUser', { UserPoolId: userPoolId, Username: username });
 }
 
 // ---- Secrets Manager ----
