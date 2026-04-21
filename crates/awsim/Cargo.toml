@@ -21,7 +21,9 @@ awsim-secretsmanager = { workspace = true }
 awsim-s3 = { workspace = true }
 awsim-sns = { workspace = true }
 awsim-sqs = { workspace = true }
+awsim-ssm = { workspace = true }
 awsim-sts = { workspace = true }
+awsim-stepfunctions = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }

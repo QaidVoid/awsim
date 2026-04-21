@@ -106,6 +106,12 @@ fn register_services(state: &mut AppState) {
 
     let secretsmanager = Arc::new(awsim_secretsmanager::SecretsManagerService::new());
     state.register(secretsmanager, vec![]);
+
+    let ssm = Arc::new(awsim_ssm::SsmService::new());
+    state.register(ssm, vec![]);
+
+    let stepfunctions = Arc::new(awsim_stepfunctions::StepFunctionsService::new());
+    state.register(stepfunctions, vec![]);
 }
 
 async fn health() -> &'static str {

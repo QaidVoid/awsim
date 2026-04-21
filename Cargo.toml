@@ -13,7 +13,9 @@ members = [
     "crates/awsim-secretsmanager",
     "crates/awsim-sns",
     "crates/awsim-sqs",
+    "crates/awsim-ssm",
     "crates/awsim-sts",
+    "crates/awsim-stepfunctions",
 ]
 
 [workspace.package]
@@ -34,7 +36,9 @@ awsim-secretsmanager = { path = "crates/awsim-secretsmanager" }
 awsim-s3 = { path = "crates/awsim-s3" }
 awsim-sns = { path = "crates/awsim-sns" }
 awsim-sqs = { path = "crates/awsim-sqs" }
+awsim-ssm = { path = "crates/awsim-ssm" }
 awsim-sts = { path = "crates/awsim-sts" }
+awsim-stepfunctions = { path = "crates/awsim-stepfunctions" }
 
 # Async
 tokio = { version = "1", features = ["full"] }
