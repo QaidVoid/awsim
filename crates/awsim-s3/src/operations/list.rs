@@ -4,6 +4,7 @@ use awsim_core::AwsError;
 use serde_json::{Value, json};
 
 use crate::state::S3State;
+use crate::util::rfc7231_to_iso8601;
 
 use super::require_str;
 use super::bucket::no_such_bucket;
@@ -78,7 +79,7 @@ pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError
                 "Key": obj.key,
                 "ETag": obj.etag,
                 "Size": obj.content_length,
-                "LastModified": obj.last_modified,
+                "LastModified": rfc7231_to_iso8601(&obj.last_modified),
                 "StorageClass": "STANDARD",
             }));
         }
@@ -95,6 +96,7 @@ pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError
     let actual_key_count = contents.len() + common_prefix_list.len();
 
     let mut result = json!({
+        "__xml_root": "ListBucketResult",
         "Name": bucket_name,
         "Prefix": prefix,
         "MaxKeys": max_keys,

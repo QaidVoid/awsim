@@ -58,6 +58,18 @@ fn doy_to_month_day(doy: u64, leap: bool) -> (u64, u64) {
     (12, 31)
 }
 
+/// Return the current time as a Unix epoch float (seconds + fraction).
+///
+/// The AWS JSON 1.1 protocol serialises timestamps as JSON numbers
+/// (seconds since epoch), so this value should be embedded directly in
+/// `serde_json::json!` macros as a number, not as a quoted string.
+pub fn now_epoch_f64() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
+
 /// Generate a new random UUID version ID.
 pub fn new_version_id() -> String {
     Uuid::new_v4().to_string()

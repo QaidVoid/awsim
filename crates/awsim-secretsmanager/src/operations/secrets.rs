@@ -6,7 +6,7 @@ use tracing::info;
 
 use crate::error;
 use crate::state::{Secret, SecretVersion, SecretsState};
-use crate::util::{new_version_id, now_iso8601, random_suffix};
+use crate::util::{new_version_id, now_epoch_f64, random_suffix};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -111,7 +111,7 @@ pub fn create_secret(
     }
 
     let arn = build_arn(&ctx.region, &ctx.account_id, name);
-    let now = now_iso8601();
+    let now = now_epoch_f64();
     let version_id = new_version_id();
 
     let version = SecretVersion {
@@ -240,7 +240,7 @@ pub fn put_secret_value(
         ));
     }
 
-    let now = now_iso8601();
+    let now = now_epoch_f64();
     let new_version_id_str = new_version_id();
 
     // Determine stages for new version
@@ -357,7 +357,7 @@ pub fn update_secret(
     let has_new_value = input["SecretString"].as_str().is_some()
         || input["SecretBinary"].as_str().is_some();
 
-    let now = now_iso8601();
+    let now = now_epoch_f64();
 
     if has_new_value {
         let secret_string = input["SecretString"].as_str().map(|s| s.to_string());
@@ -434,7 +434,7 @@ pub fn delete_secret(
         return Ok(json!({
             "ARN": arn,
             "Name": sname,
-            "DeletionDate": now_iso8601(),
+            "DeletionDate": now_epoch_f64(),
         }));
     }
 
@@ -446,14 +446,13 @@ pub fn delete_secret(
     }
 
     use std::time::{SystemTime, UNIX_EPOCH};
-    let deletion_secs = SystemTime::now()
+    let deletion_epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs()
-        + recovery_days * 86400;
-    let deletion_date = crate::util::secs_to_iso8601(deletion_secs);
+        .as_secs_f64()
+        + (recovery_days * 86400) as f64;
 
-    secret.deleted_date = Some(deletion_date.clone());
+    secret.deleted_date = Some(deletion_epoch);
     drop(secret);
 
     info!(name = %name, "Secret scheduled for deletion");
@@ -461,7 +460,7 @@ pub fn delete_secret(
     Ok(json!({
         "ARN": arn,
         "Name": sname,
-        "DeletionDate": deletion_date,
+        "DeletionDate": deletion_epoch,
     }))
 }
 

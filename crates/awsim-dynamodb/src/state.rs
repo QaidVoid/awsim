@@ -87,7 +87,8 @@ pub struct Table {
     pub attribute_definitions: Vec<AttributeDefinition>,
     pub billing_mode: String,
     pub status: String,
-    pub created_at: String,
+    /// Unix epoch seconds — matches awsJson1.1 timestamp wire format.
+    pub created_at: f64,
     pub gsi: Vec<GlobalSecondaryIndex>,
     pub lsi: Vec<LocalSecondaryIndex>,
     /// Composite key (pk\0sk or pk alone) → item.

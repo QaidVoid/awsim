@@ -61,17 +61,28 @@ pub fn parse_xml_request(
     let mut input = if body.is_empty() {
         Value::Object(serde_json::Map::new())
     } else {
-        // Try to parse XML body. If it fails (e.g., binary object data for S3 PutObject),
-        // fall back to storing the raw bytes as base64 in "__raw_body".
-        match parse_xml_body(body) {
-            Ok(v) => v,
-            Err(_) => {
-                use base64::Engine;
-                let encoded = base64::engine::general_purpose::STANDARD.encode(body);
-                let mut map = serde_json::Map::new();
-                map.insert("__raw_body".to_string(), Value::String(encoded));
-                Value::Object(map)
+        // Only attempt XML parsing if the body actually looks like XML (starts
+        // with '<').  Otherwise treat it as raw binary data and store it as
+        // base64 in `__raw_body` so handlers like S3 PutObject can access it.
+        let looks_like_xml = body.first().is_some_and(|&b| b == b'<');
+        if looks_like_xml {
+            match parse_xml_body(body) {
+                Ok(v) => v,
+                Err(_) => {
+                    use base64::Engine;
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(body);
+                    let mut map = serde_json::Map::new();
+                    map.insert("__raw_body".to_string(), Value::String(encoded));
+                    Value::Object(map)
+                }
             }
+        } else {
+            // Non-XML body — always store as raw binary.
+            use base64::Engine;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(body);
+            let mut map = serde_json::Map::new();
+            map.insert("__raw_body".to_string(), Value::String(encoded));
+            Value::Object(map)
         }
     };
 
@@ -109,6 +120,13 @@ fn match_route<'a>(
     query_string: &str,
     routes: &'a [RouteDefinition],
 ) -> Result<(&'a str, Vec<(String, String)>), AwsError> {
+    // Strip a trailing slash so `PUT /bucket/` matches `/{Bucket}` just like
+    // `PUT /bucket`. The AWS SDK (v1+) appends a trailing slash for S3
+    // path-style bucket operations.
+    let path = path.strip_suffix('/').unwrap_or(path);
+    // But preserve a lone "/" (root path → ListBuckets).
+    let path = if path.is_empty() { "/" } else { path };
+
     let query_params: Vec<(String, String)> = parse_query_string(query_string);
 
     // Try routes with required_query_param first (more specific matches)
@@ -330,27 +348,110 @@ fn parse_xml_element(xml: &str) -> Result<Value, AwsError> {
 }
 
 /// Serialize a restXml success response.
+///
+/// Special convention: if `output` contains a `__raw_body` key (base64-encoded),
+/// the binary content is returned directly as the response body.  All other
+/// top-level keys are placed in response headers (e.g., `Content-Type`,
+/// `ETag`, `Last-Modified`).  This allows services such as S3 GetObject to
+/// return arbitrary binary data.
 pub fn serialize_xml_response(
     output: &Value,
     request_id: &str,
 ) -> (StatusCode, HeaderMap, Bytes) {
-    let body = if output.is_null()
-        || (output.is_object() && output.as_object().unwrap().is_empty())
+    let mut headers = HeaderMap::new();
+    headers.insert("x-amz-request-id", request_id.parse().unwrap());
+
+    // --- Raw binary response (e.g. S3 GetObject) ---
+    if let Some(raw_b64) = output.get("__raw_body").and_then(Value::as_str) {
+        use base64::Engine;
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(raw_b64)
+            .unwrap_or_default();
+
+        // Promote scalar fields to response headers.
+        if let Some(map) = output.as_object() {
+            for (key, val) in map {
+                if key == "__raw_body" || key == "Body" {
+                    continue;
+                }
+                let header_name = pascal_to_header(key);
+                let header_value = match val {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    _ => continue,
+                };
+                if let (Ok(k), Ok(v)) = (
+                    axum::http::header::HeaderName::from_bytes(header_name.as_bytes()),
+                    axum::http::HeaderValue::from_str(&header_value),
+                ) {
+                    headers.insert(k, v);
+                }
+            }
+        }
+
+        return (StatusCode::OK, headers, Bytes::from(data));
+    }
+
+    // --- Normal XML response ---
+    // If `__xml_root` is present, wrap fields in that root element (with S3 namespace).
+    let xml_root = output
+        .get("__xml_root")
+        .and_then(Value::as_str)
+        .map(|s| s.to_string());
+
+    let output_for_xml = if xml_root.is_some() {
+        // Build a Value without the __xml_root sentinel key.
+        if let Some(map) = output.as_object() {
+            let filtered: serde_json::Map<String, Value> = map
+                .iter()
+                .filter(|(k, _)| k.as_str() != "__xml_root")
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            Value::Object(filtered)
+        } else {
+            output.clone()
+        }
+    } else {
+        output.clone()
+    };
+
+    let body = if output_for_xml.is_null()
+        || (output_for_xml.is_object() && output_for_xml.as_object().unwrap().is_empty())
     {
         String::new()
+    } else if let Some(root) = xml_root {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <{root} xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n\
+             {fields}\
+             </{root}>",
+            fields = super::query::json_to_xml_fields(&output_for_xml)
+        )
     } else {
         format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{}",
-            super::query::json_to_xml_fields(output)
+            super::query::json_to_xml_fields(&output_for_xml)
         )
     };
 
-    let mut headers = HeaderMap::new();
     if !body.is_empty() {
         headers.insert("content-type", "application/xml".parse().unwrap());
     }
-    headers.insert("x-amz-request-id", request_id.parse().unwrap());
     (StatusCode::OK, headers, Bytes::from(body))
+}
+
+/// Convert a PascalCase field name to a lowercase HTTP header name.
+/// e.g., "ContentType" → "content-type", "ETag" → "etag"
+fn pascal_to_header(name: &str) -> String {
+    let mut out = String::new();
+    for (i, ch) in name.char_indices() {
+        if ch.is_uppercase() && i > 0 {
+            out.push('-');
+        }
+        out.extend(ch.to_lowercase());
+    }
+    out
 }
 
 #[cfg(test)]

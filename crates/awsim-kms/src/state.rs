@@ -12,10 +12,12 @@ pub struct KmsKey {
     pub key_spec: String,
     /// "ENCRYPT_DECRYPT", "SIGN_VERIFY"
     pub key_usage: String,
-    pub creation_date: String,
+    /// Unix epoch seconds — matches awsJson1.1 timestamp wire format.
+    pub creation_date: f64,
     /// Random bytes used for XOR-based emulated encryption.
     pub secret: Vec<u8>,
-    pub deletion_date: Option<String>,
+    /// Unix epoch seconds at which this key is scheduled for deletion.
+    pub deletion_date: Option<f64>,
 }
 
 /// Per-account/region KMS state.

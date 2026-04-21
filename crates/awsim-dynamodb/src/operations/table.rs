@@ -12,58 +12,13 @@ use crate::state::{
 
 use super::{opt_str, require_str};
 
-fn now_iso8601() -> String {
-    let secs = SystemTime::now()
+fn now_epoch_f64() -> f64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    let (y, mo, d, h, min, s) = unix_to_ymd_hms(secs);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{min:02}:{s:02}Z")
+        .as_secs_f64()
 }
 
-fn unix_to_ymd_hms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
-    let s = secs % 60;
-    let mins = secs / 60;
-    let min = mins % 60;
-    let hours = mins / 60;
-    let h = hours % 24;
-    let days = hours / 24;
-    let (y, doy) = days_to_year(days);
-    let (mo, d) = doy_to_month_day(doy, is_leap(y));
-    (y, mo, d, h, min, s)
-}
-
-fn is_leap(y: u64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
-}
-
-fn days_to_year(mut days: u64) -> (u64, u64) {
-    let mut y = 1970u64;
-    loop {
-        let dy = if is_leap(y) { 366 } else { 365 };
-        if days < dy {
-            return (y, days);
-        }
-        days -= dy;
-        y += 1;
-    }
-}
-
-fn doy_to_month_day(doy: u64, leap: bool) -> (u64, u64) {
-    let months: &[u64] = if leap {
-        &[31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        &[31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-    let mut rem = doy;
-    for (i, &days) in months.iter().enumerate() {
-        if rem < days {
-            return ((i + 1) as u64, rem + 1);
-        }
-        rem -= days;
-    }
-    (12, 31)
-}
 
 fn parse_key_schema(input: &Value) -> Vec<KeySchemaElement> {
     input
@@ -328,7 +283,7 @@ pub fn create_table(
         attribute_definitions,
         billing_mode,
         status: "ACTIVE".to_string(),
-        created_at: now_iso8601(),
+        created_at: now_epoch_f64(),
         gsi,
         lsi,
         items: BTreeMap::new(),

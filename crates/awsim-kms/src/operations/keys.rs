@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::error;
 use crate::state::{KmsKey, KmsState};
-use crate::util::{now_iso8601, random_secret};
+use crate::util::{now_epoch_f64, random_secret};
 
 // ---------------------------------------------------------------------------
 // CreateKey
@@ -41,7 +41,7 @@ pub fn create_key(
         ctx.region, ctx.account_id, key_id
     );
     let secret = random_secret(32);
-    let creation_date = now_iso8601();
+    let creation_date = now_epoch_f64();
 
     let key = KmsKey {
         key_id: key_id.clone(),
@@ -191,24 +191,23 @@ pub fn schedule_key_deletion(
     let resolved_id = resolve_key_id(state, key_id_input)?;
     let mut key = state.keys.get_mut(&resolved_id).ok_or_else(|| error::not_found("Key"))?;
 
-    // Compute deletion date: now + pending_window_in_days seconds (emulated with days as secs for simplicity)
+    // Compute deletion date: now + pending_window_in_days seconds.
     use std::time::{SystemTime, UNIX_EPOCH};
-    let deletion_secs = SystemTime::now()
+    let deletion_epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs()
-        + pending_window_in_days * 86400;
-    let deletion_date = format_iso8601(deletion_secs);
+        .as_secs_f64()
+        + (pending_window_in_days * 86400) as f64;
 
     key.key_state = "PendingDeletion".to_string();
-    key.deletion_date = Some(deletion_date.clone());
+    key.deletion_date = Some(deletion_epoch);
 
     let key_id = key.key_id.clone();
     drop(key);
 
     Ok(json!({
         "KeyId": key_id,
-        "DeletionDate": deletion_date,
+        "DeletionDate": deletion_epoch,
         "PendingWindowInDays": pending_window_in_days,
     }))
 }

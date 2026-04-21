@@ -1,7 +1,18 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+/// Current time as Unix epoch seconds (f64).
+///
+/// AWS JSON protocols serialise timestamps as JSON numbers (seconds since epoch).
+pub fn now_epoch_f64() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
+
 /// Current UTC timestamp in ISO 8601 format.
+#[allow(dead_code)]
 pub fn now_iso8601() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)

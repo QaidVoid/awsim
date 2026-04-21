@@ -10,7 +10,8 @@ pub struct SecretVersion {
     pub secret_binary: Option<String>,
     /// e.g. ["AWSCURRENT"], ["AWSPREVIOUS"]
     pub stages: Vec<String>,
-    pub created_date: String,
+    /// Unix epoch seconds (f64) — matches awsJson1.1 timestamp wire format.
+    pub created_date: f64,
 }
 
 /// A secret and all its versions.
@@ -23,9 +24,12 @@ pub struct Secret {
     pub versions: HashMap<String, SecretVersion>,
     pub current_version_id: String,
     pub tags: HashMap<String, String>,
-    pub created_date: String,
-    pub last_changed_date: String,
-    pub deleted_date: Option<String>,
+    /// Unix epoch seconds (f64) — matches awsJson1.1 timestamp wire format.
+    pub created_date: f64,
+    /// Unix epoch seconds (f64).
+    pub last_changed_date: f64,
+    /// Unix epoch seconds (f64), or None if not scheduled for deletion.
+    pub deleted_date: Option<f64>,
 }
 
 /// Per-account/region Secrets Manager state.

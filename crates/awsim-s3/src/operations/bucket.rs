@@ -2,7 +2,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::state::{Bucket, S3State};
-use crate::util::now_rfc7231;
+use crate::util::now_iso8601;
 
 use super::require_str;
 
@@ -29,6 +29,7 @@ pub fn list_buckets(state: &S3State, ctx: &RequestContext) -> Result<Value, AwsE
     });
 
     Ok(json!({
+        "__xml_root": "ListAllMyBucketsResult",
         "Buckets": { "Bucket": buckets },
         "Owner": {
             "ID": ctx.account_id,
@@ -50,7 +51,7 @@ pub fn create_bucket(state: &S3State, input: &Value, ctx: &RequestContext) -> Re
         ));
     }
 
-    let bucket = Bucket::new(bucket_name, &ctx.region, now_rfc7231());
+    let bucket = Bucket::new(bucket_name, &ctx.region, now_iso8601());
     state.buckets.insert(bucket_name.to_string(), bucket);
 
     Ok(json!({}))

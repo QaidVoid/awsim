@@ -148,7 +148,7 @@ async fn process_request(
 
     // 5. Parse the request
     let parsed = protocol::parse_request(detected, method, uri, headers, body, routes)
-        .map_err(|e| (protocol, e))?;
+        .map_err(|e| (detected, e))?;
 
     debug!(
         service = %service_name,
@@ -173,11 +173,14 @@ async fn process_request(
     let result = handler
         .handle(&parsed.operation, parsed.input, &ctx)
         .await
-        .map_err(|e| (protocol, e))?;
+        .map_err(|e| (detected, e))?;
 
-    // 8. Serialize response
+    // 8. Serialize response using the *detected* protocol so that the wire
+    // format matches what the client expects.  A client that sends an
+    // awsQuery (form-encoded) request expects an XML response, even if the
+    // service declares AwsJson as its primary protocol.
     Ok(protocol::serialize_response(
-        protocol,
+        detected,
         &parsed.operation,
         &result,
         request_id,
