@@ -43,8 +43,11 @@ async fn main() -> Result<()> {
 
     let mut state = AppState::new(cli.region.clone(), cli.account_id.clone());
 
-    // Register all services; get back the ApiGateway Arc for proxy routing.
-    let apigw_service = register_services(&mut state);
+    // Register all services; get back the ApiGateway Arc for proxy routing and
+    // an Arc<CognitoState> for the default account+region so the OAuth router
+    // can share user-pool state with the CognitoService.
+    let (apigw_service, cognito_state) =
+        register_services(&mut state, &cli.account_id, &cli.region);
 
     // Persistence: restore snapshots if --data-dir was provided.
     if let Some(ref data_dir) = cli.data_dir {
@@ -130,6 +133,18 @@ async fn main() -> Result<()> {
         )
         .with_state(proxy_state);
 
+    // Build the Cognito OAuth/OIDC sub-router (standard HTTP, no SigV4).
+    // `cognito_state` is an Arc<CognitoState> for the default account+region,
+    // shared with the CognitoService so OAuth and API calls see the same pools.
+    let cognito_oauth_state = Arc::new(awsim_cognito::CognitoOAuthState {
+        cognito: cognito_state,
+        default_account_id: cli.account_id.clone(),
+        default_region: cli.region.clone(),
+        auth_codes: Arc::new(dashmap::DashMap::new()),
+        port: cli.port,
+    });
+    let cognito_oauth_router = awsim_cognito::oauth::router(cognito_oauth_state);
+
     // Build the main router (finalized with AppState).
     let main_router: axum::Router<()> = axum::Router::new()
         .route("/_awsim/health", axum::routing::get(admin::health))
@@ -139,8 +154,9 @@ async fn main() -> Result<()> {
         .fallback(awsim_core::gateway::handle_request)
         .with_state(state);
 
-    // Merge both routers and add shared middleware.
-    let app = main_router
+    // Merge all routers and add shared middleware.
+    let app = cognito_oauth_router
+        .merge(main_router)
         .merge(proxy_router)
         .layer(tower_http::cors::CorsLayer::permissive());
 
@@ -317,8 +333,17 @@ fn arn_to_sqs_url(arn: &str, default_region: &str, default_account: &str) -> Str
     }
 }
 
-/// Register all services and return any handles needed for proxy routing.
-fn register_services(state: &mut AppState) -> Arc<awsim_apigateway::ApiGatewayService> {
+/// Register all services and return handles needed by the router:
+///   - the ApiGateway Arc (for proxy routing)
+///   - an `Arc<CognitoState>` for the default account+region (for OAuth/OIDC)
+fn register_services(
+    state: &mut AppState,
+    default_account_id: &str,
+    default_region: &str,
+) -> (
+    Arc<awsim_apigateway::ApiGatewayService>,
+    Arc<awsim_cognito::CognitoState>,
+) {
     use std::sync::Arc;
 
     let iam = Arc::new(awsim_iam::IamService::new());
@@ -378,7 +403,9 @@ fn register_services(state: &mut AppState) -> Arc<awsim_apigateway::ApiGatewaySe
     };
     state.register(Arc::new(ses), ses_routes);
 
+    // Cognito — keep an Arc so we can share its state with the OAuth router.
     let cognito = Arc::new(awsim_cognito::CognitoService::new());
+    let cognito_arc_state = cognito.state_for(default_account_id, default_region);
     state.register(cognito, vec![]);
 
     let cognito_identity = Arc::new(awsim_cognito::CognitoIdentityService::new());
@@ -408,5 +435,5 @@ fn register_services(state: &mut AppState) -> Arc<awsim_apigateway::ApiGatewaySe
     let apigw_clone = Arc::clone(&apigateway);
     state.register(apigateway, apigw_routes);
 
-    apigw_clone
+    (apigw_clone, cognito_arc_state)
 }

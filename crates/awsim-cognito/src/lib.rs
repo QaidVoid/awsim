@@ -1,9 +1,12 @@
 mod identity;
 mod jwt;
 mod operations;
-mod state;
+pub mod state;
+pub mod oauth;
 
 pub use identity::CognitoIdentityService;
+pub use oauth::CognitoOAuthState;
+pub use state::CognitoState;
 
 use std::sync::Arc;
 
@@ -11,8 +14,6 @@ use async_trait::async_trait;
 use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
 use serde_json::Value;
 use tracing::debug;
-
-use state::CognitoState;
 
 pub struct CognitoService {
     store: AccountRegionStore<CognitoState>,
@@ -27,6 +28,12 @@ impl CognitoService {
 
     fn get_state(&self, ctx: &RequestContext) -> Arc<CognitoState> {
         self.store.get(&ctx.account_id, &ctx.region)
+    }
+
+    /// Return the `Arc<CognitoState>` for a given account+region so the OAuth
+    /// router can share the same user-pool state without needing a store clone.
+    pub fn state_for(&self, account_id: &str, region: &str) -> Arc<CognitoState> {
+        self.store.get(account_id, region)
     }
 }
 

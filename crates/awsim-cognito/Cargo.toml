@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 awsim-core = { workspace = true }
 async-trait = { workspace = true }
+axum = { workspace = true }
 dashmap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
