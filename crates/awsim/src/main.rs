@@ -341,6 +341,9 @@ fn register_services(state: &mut AppState) -> Arc<awsim_apigateway::ApiGatewaySe
     let cognito = Arc::new(awsim_cognito::CognitoService::new());
     state.register(cognito, vec![]);
 
+    let cognito_identity = Arc::new(awsim_cognito::CognitoIdentityService::new());
+    state.register(cognito_identity, vec![]);
+
     let ecr = Arc::new(awsim_ecr::EcrService::new());
     state.register(ecr, vec![]);
 

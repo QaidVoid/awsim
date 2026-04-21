@@ -1,6 +1,9 @@
+mod identity;
 mod jwt;
 mod operations;
 mod state;
+
+pub use identity::CognitoIdentityService;
 
 use std::sync::Arc;
 
