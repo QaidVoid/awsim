@@ -1,5 +1,9 @@
 pub mod auth;
+pub mod domain;
 pub mod groups;
+pub mod identity_providers;
 pub mod mfa;
 pub mod pools;
+pub mod resource_servers;
+pub mod tags;
 pub mod users;

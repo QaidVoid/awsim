@@ -879,3 +879,47 @@ pub async fn handle_cf_delete_resource(
         }
     }
 }
+
+/// Handle a `cognito:LambdaTrigger` event by invoking the configured Lambda
+/// function with the trigger payload.
+pub async fn handle_cognito_trigger(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+    event: &InternalEvent,
+) {
+    let lambda = match services.get("lambda") {
+        Some(l) => l,
+        None => return,
+    };
+
+    let arn = event.detail["functionArn"].as_str().unwrap_or("");
+    let trigger_event = &event.detail["event"];
+    let trigger_source = event.detail["triggerSource"].as_str().unwrap_or("");
+
+    // Extract function name from the ARN: arn:aws:lambda:{region}:{account}:function:{name}
+    let func_name = if arn.contains(":function:") {
+        arn.split(":function:").last().unwrap_or(arn)
+    } else {
+        arn
+    };
+
+    let input = serde_json::json!({
+        "FunctionName": func_name,
+        "Payload": serde_json::to_string(trigger_event).unwrap_or_default(),
+        "InvocationType": "Event",
+    });
+
+    let ctx = RequestContext::new("lambda", &event.region);
+    match lambda.handle("Invoke", input, &ctx).await {
+        Ok(_) => info!(
+            function = %func_name,
+            trigger = %trigger_source,
+            "Cognito trigger → Lambda invocation delivered"
+        ),
+        Err(e) => warn!(
+            function = %func_name,
+            trigger = %trigger_source,
+            error = %e.message,
+            "Cognito trigger → Lambda invocation failed"
+        ),
+    }
+}

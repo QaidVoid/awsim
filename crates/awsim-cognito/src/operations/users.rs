@@ -132,6 +132,27 @@ pub fn sign_up(
     let user = make_user(username, password, attributes, "UNCONFIRMED");
     let sub = user.sub.clone();
 
+    // Pre Sign-Up trigger (fire-and-forget)
+    if let Some(arn) = pool.lambda_config.get("PreSignUp") {
+        let trigger_event = json!({
+            "userPoolId": pool.id,
+            "userName": username,
+            "callerContext": { "clientId": client_id },
+            "request": { "userAttributes": {} }
+        });
+        invoke_trigger(ctx, "PreSignUp_SignUp", arn, &trigger_event);
+    }
+
+    // Custom Message trigger (fire-and-forget)
+    if let Some(arn) = pool.lambda_config.get("CustomMessage") {
+        let trigger_event = json!({
+            "userPoolId": pool.id,
+            "userName": username,
+            "triggerSource": "CustomMessage_SignUp"
+        });
+        invoke_trigger(ctx, "CustomMessage_SignUp", arn, &trigger_event);
+    }
+
     info!(username = %username, pool_id = %pool.id, "Cognito: user signed up");
     pool.users.insert(username.to_string(), user);
 
@@ -153,7 +174,7 @@ pub fn sign_up(
 pub fn confirm_sign_up(
     state: &CognitoState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let client_id = input["ClientId"]
         .as_str()
@@ -188,6 +209,16 @@ pub fn confirm_sign_up(
     user.status = "CONFIRMED".to_string();
     info!(username = %username, "Cognito: user confirmed sign-up");
 
+    // Post-Confirmation trigger (fire-and-forget)
+    if let Some(arn) = pool.lambda_config.get("PostConfirmation") {
+        let trigger_event = json!({
+            "userPoolId": pool_id,
+            "userName": username,
+            "callerContext": { "clientId": client_id }
+        });
+        invoke_trigger(ctx, "PostConfirmation_ConfirmSignUp", arn, &trigger_event);
+    }
+
     Ok(json!({}))
 }
 
@@ -198,7 +229,7 @@ pub fn confirm_sign_up(
 pub fn admin_confirm_sign_up(
     state: &CognitoState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let pool_id = input["UserPoolId"]
         .as_str()
@@ -223,6 +254,15 @@ pub fn admin_confirm_sign_up(
 
     user.status = "CONFIRMED".to_string();
     info!(username = %username, pool_id = %pool_id, "Cognito: admin confirmed sign-up");
+
+    // Post-Confirmation trigger (fire-and-forget)
+    if let Some(arn) = pool.lambda_config.get("PostConfirmation") {
+        let trigger_event = json!({
+            "userPoolId": pool_id,
+            "userName": username,
+        });
+        invoke_trigger(ctx, "PostConfirmation_ConfirmSignUp", arn, &trigger_event);
+    }
 
     Ok(json!({}))
 }
@@ -457,7 +497,7 @@ pub fn get_user(
 pub fn forgot_password(
     state: &CognitoState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let client_id = input["ClientId"]
         .as_str()
@@ -492,6 +532,16 @@ pub fn forgot_password(
         .get(username)
         .and_then(|u| u.attributes.get("email").cloned())
         .unwrap_or_else(|| "***@example.com".to_string());
+
+    // Custom Message trigger (fire-and-forget)
+    if let Some(arn) = pool.lambda_config.get("CustomMessage") {
+        let trigger_event = json!({
+            "userPoolId": pool_id,
+            "userName": username,
+            "triggerSource": "CustomMessage_ForgotPassword"
+        });
+        invoke_trigger(ctx, "CustomMessage_ForgotPassword", arn, &trigger_event);
+    }
 
     Ok(json!({
         "CodeDeliveryDetails": {

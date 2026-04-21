@@ -290,6 +290,9 @@ fn spawn_event_router(state: &AppState) {
                         "eventbridge:TargetInvocation" => {
                             integrations::handle_eventbridge_target(&services, &event).await;
                         }
+                        "cognito:LambdaTrigger" => {
+                            integrations::handle_cognito_trigger(&services, &event).await;
+                        }
                         t if t.starts_with("s3:ObjectCreated:") || t.starts_with("s3:ObjectRemoved:") => {
                             integrations::handle_s3_event(&services, &event).await;
                         }

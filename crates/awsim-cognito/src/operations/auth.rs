@@ -130,6 +130,24 @@ pub fn initiate_auth(
                 ));
             }
 
+            // FORCE_CHANGE_PASSWORD challenge
+            if user.status == "FORCE_CHANGE_PASSWORD" {
+                let session_id = Uuid::new_v4().to_string();
+                let user_attrs_json = serde_json::to_string(
+                    &user.attributes.iter().map(|(k,v)| json!({"Name":k,"Value":v})).collect::<Vec<_>>()
+                ).unwrap_or_default();
+                info!(username = %username, "Cognito: InitiateAuth → NEW_PASSWORD_REQUIRED");
+                return Ok(json!({
+                    "ChallengeName": "NEW_PASSWORD_REQUIRED",
+                    "Session": session_id,
+                    "ChallengeParameters": {
+                        "USER_ID_FOR_SRP": username,
+                        "userAttributes": user_attrs_json,
+                        "requiredAttributes": "[]"
+                    }
+                }));
+            }
+
             // Check whether MFA is required
             let mfa_required = pool.mfa_configuration == "ON"
                 || (pool.mfa_configuration == "OPTIONAL" && user.mfa_enabled);
@@ -287,6 +305,24 @@ pub fn admin_initiate_auth(
                 ));
             }
 
+            // FORCE_CHANGE_PASSWORD challenge
+            if user.status == "FORCE_CHANGE_PASSWORD" {
+                let session_id = Uuid::new_v4().to_string();
+                let user_attrs_json = serde_json::to_string(
+                    &user.attributes.iter().map(|(k,v)| json!({"Name":k,"Value":v})).collect::<Vec<_>>()
+                ).unwrap_or_default();
+                info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth → NEW_PASSWORD_REQUIRED");
+                return Ok(json!({
+                    "ChallengeName": "NEW_PASSWORD_REQUIRED",
+                    "Session": session_id,
+                    "ChallengeParameters": {
+                        "USER_ID_FOR_SRP": username,
+                        "userAttributes": user_attrs_json,
+                        "requiredAttributes": "[]"
+                    }
+                }));
+            }
+
             // Check whether MFA is required
             let mfa_required = pool.mfa_configuration == "ON"
                 || (pool.mfa_configuration == "OPTIONAL" && user.mfa_enabled);
@@ -337,6 +373,195 @@ pub fn admin_initiate_auth(
         flow => Err(AwsError::bad_request(
             "InvalidParameter",
             format!("Unsupported AuthFlow: {flow}"),
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RespondToAuthChallenge
+// ---------------------------------------------------------------------------
+
+pub fn respond_to_auth_challenge(
+    state: &CognitoState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let client_id = input["ClientId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
+    let challenge_name = input["ChallengeName"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ChallengeName is required"))?;
+    let responses = &input["ChallengeResponses"];
+
+    let pool_entry = state
+        .user_pools
+        .iter()
+        .find(|e| e.clients.contains_key(client_id));
+
+    let pool_id = pool_entry
+        .map(|e| e.id.clone())
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("No pool found for client: {client_id}"),
+            )
+        })?;
+
+    match challenge_name {
+        "NEW_PASSWORD_REQUIRED" => {
+            let username = responses["USERNAME"]
+                .as_str()
+                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required in ChallengeResponses"))?;
+            let new_password = responses["NEW_PASSWORD"]
+                .as_str()
+                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "NEW_PASSWORD is required in ChallengeResponses"))?;
+
+            let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+            let user = pool.users.get_mut(username).ok_or_else(|| {
+                AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+            })?;
+
+            user.password = new_password.to_string();
+            user.status = "CONFIRMED".to_string();
+
+            let result = build_auth_result(
+                &user.sub,
+                username,
+                &ctx.region,
+                &pool_id,
+                client_id,
+                &user.attributes,
+            );
+
+            info!(username = %username, "Cognito: RespondToAuthChallenge NEW_PASSWORD_REQUIRED success");
+            Ok(result)
+        }
+        "SOFTWARE_TOKEN_MFA" => {
+            let session_id = input["Session"].as_str().unwrap_or("");
+            if let Some(session) = state.mfa_sessions.remove(session_id) {
+                let pool = state.user_pools.get(&session.1.pool_id).ok_or_else(|| {
+                    AwsError::not_found("ResourceNotFoundException", "Pool not found")
+                })?;
+                let user = pool.users.get(&session.1.username).ok_or_else(|| {
+                    AwsError::not_found("UserNotFoundException", "User not found")
+                })?;
+                let result = build_auth_result(
+                    &user.sub,
+                    &user.username,
+                    &ctx.region,
+                    &session.1.pool_id,
+                    client_id,
+                    &user.attributes,
+                );
+                info!(username = %session.1.username, "Cognito: RespondToAuthChallenge SOFTWARE_TOKEN_MFA success");
+                Ok(result)
+            } else {
+                Ok(json!({ "AuthenticationResult": {} }))
+            }
+        }
+        "MFA_SETUP" => {
+            Ok(json!({
+                "ChallengeName": "MFA_SETUP",
+                "ChallengeParameters": {},
+                "Session": input["Session"]
+            }))
+        }
+        name => Err(AwsError::bad_request(
+            "InvalidParameter",
+            format!("Unsupported ChallengeName: {name}"),
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AdminRespondToAuthChallenge
+// ---------------------------------------------------------------------------
+
+pub fn admin_respond_to_auth_challenge(
+    state: &CognitoState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let client_id = input["ClientId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
+    let challenge_name = input["ChallengeName"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ChallengeName is required"))?;
+    let responses = &input["ChallengeResponses"];
+
+    match challenge_name {
+        "NEW_PASSWORD_REQUIRED" => {
+            let username = responses["USERNAME"]
+                .as_str()
+                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required in ChallengeResponses"))?;
+            let new_password = responses["NEW_PASSWORD"]
+                .as_str()
+                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "NEW_PASSWORD is required in ChallengeResponses"))?;
+
+            let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+                AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("User pool not found: {pool_id}"),
+                )
+            })?;
+
+            if !pool.clients.contains_key(client_id) {
+                return Err(AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("Client not found: {client_id}"),
+                ));
+            }
+
+            let user = pool.users.get_mut(username).ok_or_else(|| {
+                AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+            })?;
+
+            user.password = new_password.to_string();
+            user.status = "CONFIRMED".to_string();
+
+            let result = build_auth_result(
+                &user.sub,
+                username,
+                &ctx.region,
+                pool_id,
+                client_id,
+                &user.attributes,
+            );
+
+            info!(username = %username, pool_id = %pool_id, "Cognito: AdminRespondToAuthChallenge NEW_PASSWORD_REQUIRED success");
+            Ok(result)
+        }
+        "SOFTWARE_TOKEN_MFA" => {
+            let session_id = input["Session"].as_str().unwrap_or("");
+            if let Some(session) = state.mfa_sessions.remove(session_id) {
+                let pool = state.user_pools.get(&session.1.pool_id).ok_or_else(|| {
+                    AwsError::not_found("ResourceNotFoundException", "Pool not found")
+                })?;
+                let user = pool.users.get(&session.1.username).ok_or_else(|| {
+                    AwsError::not_found("UserNotFoundException", "User not found")
+                })?;
+                let result = build_auth_result(
+                    &user.sub,
+                    &user.username,
+                    &ctx.region,
+                    &session.1.pool_id,
+                    client_id,
+                    &user.attributes,
+                );
+                info!(username = %session.1.username, pool_id = %pool_id, "Cognito: AdminRespondToAuthChallenge SOFTWARE_TOKEN_MFA success");
+                Ok(result)
+            } else {
+                Ok(json!({ "AuthenticationResult": {} }))
+            }
+        }
+        name => Err(AwsError::bad_request(
+            "InvalidParameter",
+            format!("Unsupported ChallengeName: {name}"),
         )),
     }
 }

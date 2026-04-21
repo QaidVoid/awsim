@@ -109,7 +109,10 @@ impl ServiceHandler for CognitoService {
             "InitiateAuth" => operations::auth::initiate_auth(&state, &input, ctx),
             "AdminInitiateAuth" => operations::auth::admin_initiate_auth(&state, &input, ctx),
             "RespondToAuthChallenge" => {
-                operations::mfa::respond_to_auth_challenge(&state, &input, ctx)
+                operations::auth::respond_to_auth_challenge(&state, &input, ctx)
+            }
+            "AdminRespondToAuthChallenge" => {
+                operations::auth::admin_respond_to_auth_challenge(&state, &input, ctx)
             }
 
             // MFA configuration
