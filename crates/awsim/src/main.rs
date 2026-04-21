@@ -125,6 +125,18 @@ fn register_services(state: &mut AppState) {
 
     let cognito = Arc::new(awsim_cognito::CognitoService::new());
     state.register(cognito, vec![]);
+
+    let ecr = Arc::new(awsim_ecr::EcrService::new());
+    state.register(ecr, vec![]);
+
+    let ecs = Arc::new(awsim_ecs::EcsService::new());
+    state.register(ecs, vec![]);
+
+    let ec2 = Arc::new(awsim_ec2::Ec2Service::new());
+    state.register(ec2, vec![]);
+
+    let cloudformation = Arc::new(awsim_cloudformation::CloudFormationService::new());
+    state.register(cloudformation, vec![]);
 }
 
 async fn health() -> &'static str {

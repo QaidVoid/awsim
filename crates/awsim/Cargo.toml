@@ -10,10 +10,14 @@ name = "awsim"
 path = "src/main.rs"
 
 [dependencies]
+awsim-cloudformation = { workspace = true }
 awsim-cloudwatch-logs = { workspace = true }
 awsim-cognito = { workspace = true }
 awsim-core = { workspace = true }
 awsim-dynamodb = { workspace = true }
+awsim-ec2 = { workspace = true }
+awsim-ecr = { workspace = true }
+awsim-ecs = { workspace = true }
 awsim-kinesis = { workspace = true }
 awsim-eventbridge = { workspace = true }
 awsim-iam = { workspace = true }

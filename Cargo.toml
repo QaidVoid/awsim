@@ -2,10 +2,14 @@
 resolver = "3"
 members = [
     "crates/awsim",
+    "crates/awsim-cloudformation",
     "crates/awsim-cloudwatch-logs",
     "crates/awsim-cognito",
     "crates/awsim-core",
     "crates/awsim-dynamodb",
+    "crates/awsim-ec2",
+    "crates/awsim-ecr",
+    "crates/awsim-ecs",
     "crates/awsim-eventbridge",
     "crates/awsim-iam",
     "crates/awsim-kinesis",
@@ -28,9 +32,13 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/qaidvoid/awsim"
 
 [workspace.dependencies]
+awsim-cloudformation = { path = "crates/awsim-cloudformation" }
 awsim-cloudwatch-logs = { path = "crates/awsim-cloudwatch-logs" }
 awsim-cognito = { path = "crates/awsim-cognito" }
 awsim-core = { path = "crates/awsim-core" }
+awsim-ec2 = { path = "crates/awsim-ec2" }
+awsim-ecr = { path = "crates/awsim-ecr" }
+awsim-ecs = { path = "crates/awsim-ecs" }
 awsim-eventbridge = { path = "crates/awsim-eventbridge" }
 awsim-dynamodb = { path = "crates/awsim-dynamodb" }
 awsim-iam = { path = "crates/awsim-iam" }
@@ -59,6 +67,7 @@ hyper = { version = "1", features = ["full"] }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 quick-xml = { version = "0.37", features = ["serialize"] }
 serde_urlencoded = "0.7"
 
