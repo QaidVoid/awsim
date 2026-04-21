@@ -4,7 +4,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::state::SqsState;
+use crate::state::{Message, SqsState};
 use crate::util::queue_name_from_url;
 
 pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
@@ -50,19 +50,39 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     let want_all_msg_attrs =
         message_attribute_names.contains(&"All") || message_attribute_names.is_empty();
 
+    // Snapshot the redrive policy so we can release the queue borrow later.
+    let redrive_policy = queue.redrive_policy.clone();
+
     let mut messages_json = vec![];
-    let mut to_inflight = vec![];
+    let mut to_inflight: Vec<String> = vec![];
+    let mut dlq_messages: Vec<Message> = vec![];
 
     // Collect up to max_messages visible messages
     for msg in queue.messages.iter() {
-        if messages_json.len() >= max_messages {
+        if to_inflight.len() + dlq_messages.len() >= max_messages {
             break;
         }
         // Skip delayed messages
         if msg.delay_until.map_or(false, |d| d > now) {
             continue;
         }
+
+        // Check if this message has exceeded maxReceiveCount — route to DLQ
+        if let Some(ref rp) = redrive_policy {
+            if msg.receive_count >= rp.max_receive_count {
+                dlq_messages.push(msg.clone());
+                continue;
+            }
+        }
+
         to_inflight.push(msg.message_id.clone());
+    }
+
+    // Remove DLQ-bound messages from main queue first
+    for dlq_msg in &dlq_messages {
+        if let Some(pos) = queue.messages.iter().position(|m| m.message_id == dlq_msg.message_id) {
+            queue.messages.remove(pos);
+        }
     }
 
     // Move selected messages to inflight
@@ -82,6 +102,9 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                     .as_secs();
                 let visible_at_secs = now_epoch + visibility_timeout;
 
+                // Increment receive_count now
+                msg.receive_count += 1;
+
                 // Build attributes subset
                 let mut attrs = serde_json::Map::new();
                 for (k, v) in &msg.attributes {
@@ -92,7 +115,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                 // Update receive count in the attribute map for the response
                 msg.attributes.insert(
                     "ApproximateReceiveCount".to_string(),
-                    (msg.receive_count + 1).to_string(),
+                    msg.receive_count.to_string(),
                 );
 
                 // Build message attributes subset
@@ -152,6 +175,22 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                     receipt_handle: receipt_handle.clone(),
                 };
                 queue.inflight.insert(receipt_handle, im);
+            }
+        }
+    }
+
+    // Release the queue borrow before writing to DLQ (avoids deadlock on DashMap)
+    drop(queue);
+
+    // Move DLQ-bound messages to the dead-letter queue
+    if !dlq_messages.is_empty() {
+        if let Some(ref rp) = redrive_policy {
+            if let Some(dlq_name) = state.queue_name_by_arn(&rp.dead_letter_target_arn) {
+                if let Some(mut dlq) = state.queues.get_mut(&dlq_name) {
+                    for msg in dlq_messages {
+                        dlq.messages.push_back(msg);
+                    }
+                }
             }
         }
     }

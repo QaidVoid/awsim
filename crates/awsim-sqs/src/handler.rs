@@ -9,7 +9,7 @@ use crate::operations::{
     attributes, change_visibility, create_queue, delete_message, delete_queue, get_queue_url,
     list_queues, purge_queue, receive_message, send_message, tags,
 };
-use crate::state::{InflightMessage, Queue, QueueSnapshot, SqsState, SqsStateSnapshot};
+use crate::state::{InflightMessage, Queue, QueueSnapshot, SqsState, SqsStateSnapshot, parse_redrive_policy_from_attrs};
 
 /// The SQS service handler.
 pub struct SqsService {
@@ -114,6 +114,7 @@ impl ServiceHandler for SqsService {
                     is_fifo: q.is_fifo,
                     created_at: q.created_at.clone(),
                     dedup_cache,
+                    redrive_policy: q.redrive_policy.clone(),
                 });
             }
         }
@@ -178,6 +179,10 @@ impl ServiceHandler for SqsService {
                 }
             }
 
+            // Re-derive redrive_policy from attributes (covers old snapshots without the field)
+            let redrive_policy = qs.redrive_policy
+                .or_else(|| parse_redrive_policy_from_attrs(&qs.attributes));
+
             let queue = Queue {
                 name: qs.name.clone(),
                 url: qs.url.clone(),
@@ -189,6 +194,7 @@ impl ServiceHandler for SqsService {
                 is_fifo: qs.is_fifo,
                 created_at: qs.created_at,
                 dedup_cache,
+                redrive_policy,
             };
 
             state.queues.insert(qs.name, queue);

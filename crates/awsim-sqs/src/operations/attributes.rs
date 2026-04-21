@@ -123,5 +123,8 @@ pub fn set_queue_attributes(
         }
     }
 
+    // Refresh the cached redrive_policy in case RedrivePolicy attribute changed
+    queue.refresh_redrive_policy();
+
     Ok(json!({}))
 }

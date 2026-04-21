@@ -4,6 +4,15 @@ use std::time::Instant;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
+/// RedrivePolicy parsed from a queue attribute.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedrivePolicy {
+    /// ARN of the dead-letter queue.
+    pub dead_letter_target_arn: String,
+    /// How many times a message can be received before being moved to the DLQ.
+    pub max_receive_count: u32,
+}
+
 /// A message attribute value (type + value).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageAttribute {
@@ -101,6 +110,18 @@ pub struct SqsState {
     pub queues: DashMap<String, Queue>,
 }
 
+impl SqsState {
+    /// Find a queue by its ARN. Returns the queue name if found.
+    pub fn queue_name_by_arn(&self, arn: &str) -> Option<String> {
+        for entry in self.queues.iter() {
+            if entry.value().arn == arn {
+                return Some(entry.key().clone());
+            }
+        }
+        None
+    }
+}
+
 /// Serializable snapshot of `SqsState`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SqsStateSnapshot {
@@ -122,6 +143,8 @@ pub struct QueueSnapshot {
     pub created_at: String,
     /// FIFO dedup cache: dedup_id → (expiry epoch secs, message_id)
     pub dedup_cache: HashMap<String, (u64, String)>,
+    #[serde(default)]
+    pub redrive_policy: Option<RedrivePolicy>,
 }
 
 /// A single SQS queue.
@@ -139,6 +162,8 @@ pub struct Queue {
     pub created_at: String,
     /// FIFO dedup cache: dedup_id → (expiry Instant, message_id)
     pub dedup_cache: HashMap<String, (Instant, String)>,
+    /// Parsed RedrivePolicy, if configured.
+    pub redrive_policy: Option<RedrivePolicy>,
 }
 
 impl Queue {
@@ -157,6 +182,10 @@ impl Queue {
         }
         // Ensure QueueArn is always set
         attributes.insert("QueueArn".to_string(), arn.clone());
+
+        // Parse RedrivePolicy from attributes if present
+        let redrive_policy = parse_redrive_policy_from_attrs(&attributes);
+
         Queue {
             name,
             url,
@@ -168,13 +197,26 @@ impl Queue {
             is_fifo,
             created_at,
             dedup_cache: HashMap::new(),
+            redrive_policy,
         }
     }
 
+    /// Re-parse and cache the RedrivePolicy from the attributes map.
+    /// Call this after `attributes` is mutated (e.g. SetQueueAttributes).
+    pub fn refresh_redrive_policy(&mut self) {
+        self.redrive_policy = parse_redrive_policy_from_attrs(&self.attributes);
+    }
+
     /// Move any messages whose `delay_until` has passed back into the visible pool.
-    /// Also expire inflight messages whose visibility timeout has passed.
+    /// Also expire inflight messages whose visibility timeout has passed, and
+    /// discard messages older than the retention period.
     pub fn tick(&mut self) {
         let now = Instant::now();
+        let now_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let retention_secs = self.message_retention_period_secs();
 
         // Re-enqueue expired inflight messages
         let expired: Vec<String> = self
@@ -186,6 +228,10 @@ impl Queue {
 
         for rh in expired {
             if let Some(im) = self.inflight.remove(&rh) {
+                // Check retention — drop if expired
+                if now_epoch.saturating_sub(im.message.sent_at_secs) >= retention_secs {
+                    continue;
+                }
                 let mut msg = im.message;
                 msg.receive_count += 1;
                 // Re-insert at front so it can be received again quickly
@@ -193,10 +239,23 @@ impl Queue {
             }
         }
 
+        // Discard messages in main queue that have exceeded the retention period
+        self.messages.retain(|m| {
+            now_epoch.saturating_sub(m.sent_at_secs) < retention_secs
+        });
+
         // Purge stale FIFO dedup cache entries (5-minute window)
         let five_min = std::time::Duration::from_secs(300);
         self.dedup_cache
             .retain(|_, (expiry, _)| now < *expiry + five_min);
+    }
+
+    /// Message retention period in seconds (default 4 days).
+    pub fn message_retention_period_secs(&self) -> u64 {
+        self.attributes
+            .get("MessageRetentionPeriod")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(345600)
     }
 
     /// Number of visible messages (not delayed, not inflight).
@@ -237,6 +296,25 @@ impl Queue {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0)
     }
+}
+
+/// Parse a `RedrivePolicy` from the queue attributes map.
+/// The attribute value is a JSON string like:
+/// `{"deadLetterTargetArn":"arn:...","maxReceiveCount":3}`
+pub fn parse_redrive_policy_from_attrs(
+    attributes: &HashMap<String, String>,
+) -> Option<RedrivePolicy> {
+    let raw = attributes.get("RedrivePolicy")?;
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let dlq_arn = v["deadLetterTargetArn"].as_str()?.to_string();
+    let max = v["maxReceiveCount"]
+        .as_u64()
+        .or_else(|| v["maxReceiveCount"].as_str()?.parse().ok())?
+        as u32;
+    Some(RedrivePolicy {
+        dead_letter_target_arn: dlq_arn,
+        max_receive_count: max,
+    })
 }
 
 fn default_attributes(is_fifo: bool) -> HashMap<String, String> {
