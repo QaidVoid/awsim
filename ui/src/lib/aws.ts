@@ -722,12 +722,316 @@ export async function listCognitoUsers(userPoolId: string): Promise<{ users: Cog
     };
 }
 
-export async function adminCreateUser(userPoolId: string, username: string): Promise<void> {
-    await cognitoRequest('AdminCreateUser', { UserPoolId: userPoolId, Username: username });
+export async function describeUserPool(userPoolId: string): Promise<unknown> {
+    return cognitoRequest('DescribeUserPool', { UserPoolId: userPoolId });
+}
+
+export async function updateUserPool(userPoolId: string, config: unknown): Promise<void> {
+    await cognitoRequest('UpdateUserPool', { UserPoolId: userPoolId, ...(config as Record<string, unknown>) });
+}
+
+// User Pool Clients
+
+export interface CognitoUserPoolClient {
+    clientId: string;
+    clientName: string;
+    userPoolId: string;
+}
+
+export interface CognitoUserPoolClientDetail {
+    clientId: string;
+    clientName: string;
+    clientSecret?: string;
+    explicitAuthFlows: string[];
+    callbackUrLs: string[];
+    allowedOAuthScopes: string[];
+}
+
+export async function listUserPoolClients(userPoolId: string): Promise<{ clients: CognitoUserPoolClient[] }> {
+    const data = await cognitoRequest('ListUserPoolClients', { UserPoolId: userPoolId, MaxResults: 60 }) as {
+        UserPoolClients?: { ClientId: string; ClientName: string; UserPoolId: string }[]
+    };
+    return {
+        clients: (data.UserPoolClients ?? []).map((c) => ({
+            clientId: c.ClientId,
+            clientName: c.ClientName,
+            userPoolId: c.UserPoolId,
+        })),
+    };
+}
+
+export async function createUserPoolClient(
+    userPoolId: string,
+    clientName: string,
+    opts?: { generateSecret?: boolean; authFlows?: string[]; callbackUrls?: string[] }
+): Promise<{ clientId: string }> {
+    const body: Record<string, unknown> = { UserPoolId: userPoolId, ClientName: clientName };
+    if (opts?.generateSecret !== undefined) body['GenerateSecret'] = opts.generateSecret;
+    if (opts?.authFlows) body['ExplicitAuthFlows'] = opts.authFlows;
+    if (opts?.callbackUrls) body['CallbackURLs'] = opts.callbackUrls;
+    const data = await cognitoRequest('CreateUserPoolClient', body) as {
+        UserPoolClient?: { ClientId: string }
+    };
+    return { clientId: data.UserPoolClient?.ClientId ?? '' };
+}
+
+export async function describeUserPoolClient(userPoolId: string, clientId: string): Promise<CognitoUserPoolClientDetail> {
+    const data = await cognitoRequest('DescribeUserPoolClient', { UserPoolId: userPoolId, ClientId: clientId }) as {
+        UserPoolClient?: {
+            ClientId: string; ClientName: string; ClientSecret?: string;
+            ExplicitAuthFlows?: string[]; CallbackURLs?: string[]; AllowedOAuthScopes?: string[]
+        }
+    };
+    const c = data.UserPoolClient ?? {} as NonNullable<typeof data.UserPoolClient>;
+    return {
+        clientId: c?.ClientId ?? clientId,
+        clientName: c?.ClientName ?? '',
+        clientSecret: c?.ClientSecret,
+        explicitAuthFlows: c?.ExplicitAuthFlows ?? [],
+        callbackUrLs: c?.CallbackURLs ?? [],
+        allowedOAuthScopes: c?.AllowedOAuthScopes ?? [],
+    };
+}
+
+export async function deleteUserPoolClient(userPoolId: string, clientId: string): Promise<void> {
+    await cognitoRequest('DeleteUserPoolClient', { UserPoolId: userPoolId, ClientId: clientId });
+}
+
+// Users
+
+export interface CognitoUserDetail {
+    username: string;
+    status: string;
+    enabled: boolean;
+    createDate: string;
+    attributes: { name: string; value: string }[];
+}
+
+export async function adminCreateUser(
+    userPoolId: string,
+    username: string,
+    opts?: { tempPassword?: string; email?: string }
+): Promise<void> {
+    const body: Record<string, unknown> = { UserPoolId: userPoolId, Username: username };
+    if (opts?.tempPassword) body['TemporaryPassword'] = opts.tempPassword;
+    if (opts?.email) body['UserAttributes'] = [{ Name: 'email', Value: opts.email }];
+    await cognitoRequest('AdminCreateUser', body);
 }
 
 export async function adminDeleteUser(userPoolId: string, username: string): Promise<void> {
     await cognitoRequest('AdminDeleteUser', { UserPoolId: userPoolId, Username: username });
+}
+
+export async function adminGetUser(userPoolId: string, username: string): Promise<CognitoUserDetail> {
+    const data = await cognitoRequest('AdminGetUser', { UserPoolId: userPoolId, Username: username }) as {
+        Username?: string; UserStatus?: string; Enabled?: boolean;
+        UserCreateDate?: number;
+        UserAttributes?: { Name: string; Value: string }[]
+    };
+    return {
+        username: data.Username ?? username,
+        status: data.UserStatus ?? '',
+        enabled: data.Enabled ?? true,
+        createDate: data.UserCreateDate ? new Date(data.UserCreateDate * 1000).toISOString() : '',
+        attributes: (data.UserAttributes ?? []).map((a) => ({ name: a.Name, value: a.Value })),
+    };
+}
+
+export async function adminSetUserPassword(
+    userPoolId: string,
+    username: string,
+    password: string,
+    permanent = true
+): Promise<void> {
+    await cognitoRequest('AdminSetUserPassword', { UserPoolId: userPoolId, Username: username, Password: password, Permanent: permanent });
+}
+
+export async function adminEnableUser(userPoolId: string, username: string): Promise<void> {
+    await cognitoRequest('AdminEnableUser', { UserPoolId: userPoolId, Username: username });
+}
+
+export async function adminDisableUser(userPoolId: string, username: string): Promise<void> {
+    await cognitoRequest('AdminDisableUser', { UserPoolId: userPoolId, Username: username });
+}
+
+export async function adminUpdateUserAttributes(
+    userPoolId: string,
+    username: string,
+    attrs: { Name: string; Value: string }[]
+): Promise<void> {
+    await cognitoRequest('AdminUpdateUserAttributes', { UserPoolId: userPoolId, Username: username, UserAttributes: attrs });
+}
+
+export async function listCognitoUsersWithAttrs(userPoolId: string): Promise<{ users: CognitoUser[] }> {
+    return listCognitoUsers(userPoolId);
+}
+
+// Groups
+
+export interface CognitoGroup {
+    name: string;
+    description: string;
+    roleArn: string;
+}
+
+export async function listCognitoGroups(userPoolId: string): Promise<{ groups: CognitoGroup[] }> {
+    const data = await cognitoRequest('ListGroups', { UserPoolId: userPoolId }) as {
+        Groups?: { GroupName: string; Description?: string; RoleArn?: string }[]
+    };
+    return {
+        groups: (data.Groups ?? []).map((g) => ({
+            name: g.GroupName,
+            description: g.Description ?? '',
+            roleArn: g.RoleArn ?? '',
+        })),
+    };
+}
+
+export async function createCognitoGroup(
+    userPoolId: string,
+    name: string,
+    opts?: { description?: string; roleArn?: string }
+): Promise<void> {
+    const body: Record<string, unknown> = { UserPoolId: userPoolId, GroupName: name };
+    if (opts?.description) body['Description'] = opts.description;
+    if (opts?.roleArn) body['RoleArn'] = opts.roleArn;
+    await cognitoRequest('CreateGroup', body);
+}
+
+export async function deleteCognitoGroup(userPoolId: string, name: string): Promise<void> {
+    await cognitoRequest('DeleteGroup', { UserPoolId: userPoolId, GroupName: name });
+}
+
+export async function adminAddUserToGroup(userPoolId: string, username: string, groupName: string): Promise<void> {
+    await cognitoRequest('AdminAddUserToGroup', { UserPoolId: userPoolId, Username: username, GroupName: groupName });
+}
+
+export async function adminRemoveUserFromGroup(userPoolId: string, username: string, groupName: string): Promise<void> {
+    await cognitoRequest('AdminRemoveUserFromGroup', { UserPoolId: userPoolId, Username: username, GroupName: groupName });
+}
+
+export async function listUsersInGroup(userPoolId: string, groupName: string): Promise<{ users: CognitoUser[] }> {
+    const data = await cognitoRequest('ListUsersInGroup', { UserPoolId: userPoolId, GroupName: groupName }) as {
+        Users?: { Username: string; UserStatus?: string; UserCreateDate?: number }[]
+    };
+    return {
+        users: (data.Users ?? []).map((u) => ({
+            username: u.Username,
+            status: u.UserStatus ?? '',
+            createDate: u.UserCreateDate ? new Date(u.UserCreateDate * 1000).toISOString() : '',
+        })),
+    };
+}
+
+export async function adminListGroupsForUser(userPoolId: string, username: string): Promise<{ groups: CognitoGroup[] }> {
+    const data = await cognitoRequest('AdminListGroupsForUser', { UserPoolId: userPoolId, Username: username }) as {
+        Groups?: { GroupName: string; Description?: string; RoleArn?: string }[]
+    };
+    return {
+        groups: (data.Groups ?? []).map((g) => ({
+            name: g.GroupName,
+            description: g.Description ?? '',
+            roleArn: g.RoleArn ?? '',
+        })),
+    };
+}
+
+// Auth Testing
+
+export async function cognitoSignUp(
+    clientId: string,
+    username: string,
+    password: string,
+    email?: string
+): Promise<unknown> {
+    const body: Record<string, unknown> = { ClientId: clientId, Username: username, Password: password };
+    if (email) body['UserAttributes'] = [{ Name: 'email', Value: email }];
+    return cognitoRequest('SignUp', body);
+}
+
+export async function cognitoInitiateAuth(
+    clientId: string,
+    username: string,
+    password: string
+): Promise<{
+    accessToken?: string; idToken?: string; refreshToken?: string;
+    expiresIn?: number; tokenType?: string; challengeName?: string
+}> {
+    const data = await cognitoRequest('InitiateAuth', {
+        ClientId: clientId,
+        AuthFlow: 'USER_PASSWORD_AUTH',
+        AuthParameters: { USERNAME: username, PASSWORD: password },
+    }) as {
+        AuthenticationResult?: {
+            AccessToken?: string; IdToken?: string; RefreshToken?: string;
+            ExpiresIn?: number; TokenType?: string
+        };
+        ChallengeName?: string;
+    };
+    return {
+        accessToken: data.AuthenticationResult?.AccessToken,
+        idToken: data.AuthenticationResult?.IdToken,
+        refreshToken: data.AuthenticationResult?.RefreshToken,
+        expiresIn: data.AuthenticationResult?.ExpiresIn,
+        tokenType: data.AuthenticationResult?.TokenType,
+        challengeName: data.ChallengeName,
+    };
+}
+
+export async function cognitoGetUser(accessToken: string): Promise<unknown> {
+    return cognitoRequest('GetUser', { AccessToken: accessToken });
+}
+
+// Identity Pools
+
+async function cognitoIdentityRequest(action: string, body: unknown): Promise<unknown> {
+    const res = await loggedFetch('cognito-identity', action, 'POST', ENDPOINT, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-amz-json-1.1',
+            'X-Amz-Target': `AWSCognitoIdentityService.${action}`,
+            'Authorization': authHeader('cognito-identity'),
+            'X-Amz-Date': new Date().toISOString().replace(/[:-]/g, '').slice(0, 15) + 'Z',
+        },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    return res.json();
+}
+
+export interface CognitoIdentityPool {
+    id: string;
+    name: string;
+    allowUnauthenticated: boolean;
+}
+
+export async function listIdentityPools(): Promise<{ identityPools: CognitoIdentityPool[] }> {
+    const data = await cognitoIdentityRequest('ListIdentityPools', { MaxResults: 60 }) as {
+        IdentityPools?: { IdentityPoolId: string; IdentityPoolName: string; AllowUnauthenticatedIdentities?: boolean }[]
+    };
+    return {
+        identityPools: (data.IdentityPools ?? []).map((p) => ({
+            id: p.IdentityPoolId,
+            name: p.IdentityPoolName,
+            allowUnauthenticated: p.AllowUnauthenticatedIdentities ?? false,
+        })),
+    };
+}
+
+export async function createIdentityPool(name: string, allowUnauth: boolean): Promise<{ id: string }> {
+    const data = await cognitoIdentityRequest('CreateIdentityPool', {
+        IdentityPoolName: name,
+        AllowUnauthenticatedIdentities: allowUnauth,
+    }) as { IdentityPoolId?: string };
+    return { id: data.IdentityPoolId ?? '' };
+}
+
+export async function deleteIdentityPool(id: string): Promise<void> {
+    await cognitoIdentityRequest('DeleteIdentityPool', { IdentityPoolId: id });
+}
+
+export async function describeIdentityPool(id: string): Promise<unknown> {
+    return cognitoIdentityRequest('DescribeIdentityPool', { IdentityPoolId: id });
 }
 
 // ---- Secrets Manager ----
@@ -1171,6 +1475,55 @@ export async function startExecution(stateMachineArn: string, input: string): Pr
         stateMachineArn,
         input,
     } as unknown as Record<string, string>, 'json', 'AWSStepFunctions');
+}
+
+export async function describeStateMachine(arn: string): Promise<{ definition: string; name: string; type: string; status: string }> {
+    const data = await awsRequest('states', 'DescribeStateMachine', { stateMachineArn: arn } as unknown as Record<string, string>, 'json', 'AWSStepFunctions') as {
+        definition?: string; name?: string; type?: string; status?: string;
+    };
+    return {
+        definition: data.definition ?? '{}',
+        name: data.name ?? '',
+        type: data.type ?? '',
+        status: data.status ?? '',
+    };
+}
+
+export interface SfnHistoryEvent {
+    id: number;
+    type: string;
+    timestamp: number;
+    stateEnteredEventDetails?: { name: string; input?: string };
+    stateExitedEventDetails?: { name: string; output?: string };
+    taskSucceededEventDetails?: { output?: string };
+    taskFailedEventDetails?: { error?: string; cause?: string };
+}
+
+export async function getExecutionHistory(arn: string): Promise<{ events: SfnHistoryEvent[] }> {
+    const data = await awsRequest('states', 'GetExecutionHistory', { executionArn: arn } as unknown as Record<string, string>, 'json', 'AWSStepFunctions') as {
+        events?: {
+            id: number; type: string; timestamp: number;
+            stateEnteredEventDetails?: { name: string; input?: string };
+            stateExitedEventDetails?: { name: string; output?: string };
+            taskSucceededEventDetails?: { output?: string };
+            taskFailedEventDetails?: { error?: string; cause?: string };
+        }[]
+    };
+    return { events: data.events ?? [] };
+}
+
+export async function describeExecution(arn: string): Promise<{ status: string; input?: string; output?: string; startDate: number; stopDate?: number; name: string }> {
+    const data = await awsRequest('states', 'DescribeExecution', { executionArn: arn } as unknown as Record<string, string>, 'json', 'AWSStepFunctions') as {
+        status?: string; input?: string; output?: string; startDate?: number; stopDate?: number; name?: string;
+    };
+    return {
+        status: data.status ?? '',
+        input: data.input,
+        output: data.output,
+        startDate: data.startDate ?? 0,
+        stopDate: data.stopDate,
+        name: data.name ?? '',
+    };
 }
 
 // ---- EC2 ----
