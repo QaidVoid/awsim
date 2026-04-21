@@ -77,6 +77,13 @@ fn register_services(state: &mut AppState) {
 
     let sqs = Arc::new(awsim_sqs::SqsService::new());
     state.register(sqs, vec![]);
+
+    let s3 = awsim_s3::S3Service::new();
+    let s3_routes = {
+        use awsim_core::ServiceHandler;
+        s3.routes()
+    };
+    state.register(Arc::new(s3), s3_routes);
 }
 
 async fn health() -> &'static str {

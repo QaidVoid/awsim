@@ -61,8 +61,18 @@ pub fn parse_xml_request(
     let mut input = if body.is_empty() {
         Value::Object(serde_json::Map::new())
     } else {
-        // Try to parse XML body into JSON-like structure
-        parse_xml_body(body)?
+        // Try to parse XML body. If it fails (e.g., binary object data for S3 PutObject),
+        // fall back to storing the raw bytes as base64 in "__raw_body".
+        match parse_xml_body(body) {
+            Ok(v) => v,
+            Err(_) => {
+                use base64::Engine;
+                let encoded = base64::engine::general_purpose::STANDARD.encode(body);
+                let mut map = serde_json::Map::new();
+                map.insert("__raw_body".to_string(), Value::String(encoded));
+                Value::Object(map)
+            }
+        }
     };
 
     // Merge path parameters
