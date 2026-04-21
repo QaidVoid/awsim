@@ -235,7 +235,13 @@ fn extract_service_info(
         }
     }
 
-    // Fallback: try to guess from path or default to unknown
+    // Fallback: log what we received so we can diagnose routing failures
+    warn!(
+        auth = ?headers.get("authorization").map(|v| v.to_str().unwrap_or("<non-utf8>")),
+        target = ?headers.get("x-amz-target").map(|v| v.to_str().unwrap_or("<non-utf8>")),
+        host = ?headers.get("host").map(|v| v.to_str().unwrap_or("<non-utf8>")),
+        "Could not determine service — falling back to 'unknown'"
+    );
     (
         "unknown".to_string(),
         state.default_region.clone(),
