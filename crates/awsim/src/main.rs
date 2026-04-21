@@ -4,6 +4,8 @@ use tracing::info;
 
 use awsim_core::AppState;
 
+mod admin;
+
 #[derive(Parser)]
 #[command(name = "awsim", about = "AWSim — fully offline, free AWS development environment")]
 struct Cli {
@@ -44,8 +46,11 @@ async fn main() -> Result<()> {
     let service_count = state.services.len();
 
     let app = axum::Router::new()
-        .route("/_awsim/health", axum::routing::get(health))
+        .route("/_awsim/health", axum::routing::get(admin::health))
+        .route("/_awsim/services", axum::routing::get(admin::list_services))
+        .route("/_awsim/config", axum::routing::get(admin::config))
         .fallback(awsim_core::gateway::handle_request)
+        .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], cli.port));
@@ -137,8 +142,4 @@ fn register_services(state: &mut AppState) {
 
     let cloudformation = Arc::new(awsim_cloudformation::CloudFormationService::new());
     state.register(cloudformation, vec![]);
-}
-
-async fn health() -> &'static str {
-    r#"{"status":"ok","service":"awsim"}"#
 }
