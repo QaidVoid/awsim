@@ -10,14 +10,15 @@ use crate::state::{Parameter, ParameterVersion, SsmState};
 // Helpers
 // ---------------------------------------------------------------------------
 
-pub fn now_iso8601() -> String {
-    let secs = SystemTime::now()
+/// Return the current time as Unix epoch seconds.
+///
+/// The AWS SDK for SSM deserialises `LastModifiedDate` as a JSON number (f64).
+/// Storing and emitting it as a `u64` integer satisfies the SDK's expectation.
+pub fn now_epoch_secs() -> u64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    // Simple epoch float representation; real AWS returns ISO-8601 but
-    // clients typically accept epoch seconds as a JSON number.
-    secs.to_string()
+        .as_secs()
 }
 
 fn build_arn(ctx: &RequestContext, name: &str) -> String {
@@ -100,7 +101,7 @@ pub fn put_parameter(
         }
     }
 
-    let now = now_iso8601();
+    let now = now_epoch_secs();
     let arn = build_arn(ctx, name);
 
     if let Some(mut existing) = state.parameters.get_mut(name) {

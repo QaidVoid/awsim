@@ -51,14 +51,14 @@ pub struct CognitoGroup {
 }
 
 /// A simple revocation store for invalidated tokens.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TokenRevocationStore {
     /// Set of access token strings that have been signed out.
     pub revoked: DashMap<String, ()>,
 }
 
 /// Per-account/region Cognito state.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct CognitoState {
     /// PoolId → UserPool
     pub user_pools: DashMap<String, UserPool>,

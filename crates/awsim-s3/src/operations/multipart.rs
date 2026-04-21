@@ -38,6 +38,7 @@ pub fn create_multipart_upload(state: &S3State, input: &Value) -> Result<Value, 
     bucket.multipart_uploads.insert(upload_id.clone(), upload);
 
     Ok(json!({
+        "__xml_root": "InitiateMultipartUploadResult",
         "Bucket": bucket_name,
         "Key": key,
         "UploadId": upload_id,
@@ -122,6 +123,8 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
     bucket.objects.insert(key.to_string(), obj);
 
     Ok(json!({
+        "__xml_root": "CompleteMultipartUploadResult",
+        "Location": format!("/{}/{}", bucket_name, key),
         "Bucket": bucket_name,
         "Key": key,
         "ETag": etag,

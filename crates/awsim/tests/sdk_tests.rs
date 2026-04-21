@@ -90,6 +90,19 @@ async fn start_server() -> String {
     let secrets = Arc::new(awsim_secretsmanager::SecretsManagerService::new());
     state.register(secrets, vec![]);
 
+    // CloudWatch Logs
+    let logs = Arc::new(awsim_cloudwatch_logs::CloudWatchLogsService::new());
+    state.register(logs, vec![]);
+
+    // SSM Parameter Store
+    let ssm = Arc::new(awsim_ssm::SsmService::new());
+    state.register(ssm, vec![]);
+
+    // Lambda (REST-based, provides its own route definitions)
+    let lambda = awsim_lambda::LambdaService::new();
+    let lambda_routes = lambda.routes();
+    state.register(Arc::new(lambda), lambda_routes);
+
     let app = axum::Router::new()
         .route(
             "/_awsim/health",

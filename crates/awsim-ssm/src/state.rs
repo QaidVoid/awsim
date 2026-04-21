@@ -7,7 +7,8 @@ use dashmap::DashMap;
 pub struct ParameterVersion {
     pub value: String,
     pub version: u64,
-    pub date: String,
+    /// Unix epoch seconds (stored as u64, serialised as a JSON number).
+    pub date: u64,
     pub description: String,
 }
 
@@ -20,7 +21,8 @@ pub struct Parameter {
     pub value: String,
     pub description: String,
     pub version: u64,
-    pub last_modified_date: String,
+    /// Unix epoch seconds (stored as u64, serialised as a JSON number).
+    pub last_modified_date: u64,
     pub tags: HashMap<String, String>,
     pub history: Vec<ParameterVersion>,
     pub tier: String,
