@@ -64,11 +64,10 @@ async fn main() -> Result<()> {
 }
 
 fn register_services(state: &mut AppState) {
-    // Services will be registered here as they are implemented.
-    // Example:
-    // let sts = Arc::new(awsim_sts::StsService::new());
-    // state.register(sts, vec![]);
-    let _ = state;
+    use std::sync::Arc;
+
+    let sts = Arc::new(awsim_sts::StsService::new());
+    state.register(sts, vec![]);
 }
 
 async fn health() -> &'static str {
