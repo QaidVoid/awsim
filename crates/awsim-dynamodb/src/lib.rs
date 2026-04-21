@@ -83,6 +83,12 @@ impl ServiceHandler for DynamoDbService {
             "TransactGetItems" => operations::transact::transact_get_items(&state, &input, ctx),
             "TransactWriteItems" => operations::transact::transact_write_items(&state, &input, ctx),
 
+            // DynamoDB Streams (target prefix DynamoDBStreams_20120810)
+            "DescribeStream" => operations::streams::describe_stream(&state, &input, ctx),
+            "GetShardIterator" => operations::streams::get_shard_iterator(&state, &input, ctx),
+            "GetRecords" => operations::streams::get_records(&state, &input, ctx),
+            "ListStreams" => operations::streams::list_streams(&state, &input, ctx),
+
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
@@ -109,6 +115,11 @@ impl ServiceHandler for DynamoDbService {
                             gsi: t.gsi.clone(),
                             lsi: t.lsi.clone(),
                             items: t.items.clone(),
+                            stream_enabled: t.stream_enabled,
+                            stream_arn: t.stream_arn.clone(),
+                            stream_view_type: t.stream_view_type.clone(),
+                            stream_records: t.stream_records.clone(),
+                            stream_sequence: t.stream_sequence,
                         }
                     })
                     .collect::<Vec<_>>()

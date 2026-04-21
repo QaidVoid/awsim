@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
@@ -12,7 +13,6 @@ use crate::state::{
 use super::{opt_str, require_str};
 
 fn now_iso8601() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -238,6 +238,17 @@ pub fn table_description(table: &Table) -> Value {
         desc["LocalSecondaryIndexes"] = json!(lsi);
     }
 
+    if table.stream_enabled {
+        desc["StreamSpecification"] = json!({
+            "StreamEnabled": true,
+            "StreamViewType": table.stream_view_type.as_deref().unwrap_or("NEW_AND_OLD_IMAGES"),
+        });
+        if let Some(ref arn) = table.stream_arn {
+            desc["LatestStreamArn"] = json!(arn);
+            desc["LatestStreamLabel"] = json!(arn.rsplit('/').next().unwrap_or(""));
+        }
+    }
+
     desc
 }
 
@@ -280,6 +291,36 @@ pub fn create_table(
         ctx.region, ctx.account_id, table_name
     );
 
+    // Parse optional StreamSpecification.
+    let (stream_enabled, stream_arn, stream_view_type) = {
+        if let Some(spec) = input.get("StreamSpecification") {
+            let enabled = spec
+                .get("StreamEnabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if enabled {
+                let view_type = spec
+                    .get("StreamViewType")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("NEW_AND_OLD_IMAGES")
+                    .to_string();
+                let timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let stream_arn = format!(
+                    "arn:aws:dynamodb:{}:{}:table/{}/stream/{}",
+                    ctx.region, ctx.account_id, table_name, timestamp
+                );
+                (true, Some(stream_arn), Some(view_type))
+            } else {
+                (false, None, None)
+            }
+        } else {
+            (false, None, None)
+        }
+    };
+
     let table = Table {
         name: table_name.to_string(),
         arn,
@@ -291,6 +332,11 @@ pub fn create_table(
         gsi,
         lsi,
         items: BTreeMap::new(),
+        stream_enabled,
+        stream_arn,
+        stream_view_type,
+        stream_records: Vec::new(),
+        stream_sequence: 0,
     };
 
     let desc = table_description(&table);
@@ -393,6 +439,43 @@ pub fn update_table(
     // Update billing mode if provided
     if let Some(billing_mode) = opt_str(input, "BillingMode") {
         table.billing_mode = billing_mode.to_string();
+    }
+
+    // Update StreamSpecification if provided
+    if let Some(spec) = input.get("StreamSpecification") {
+        let enabled = spec
+            .get("StreamEnabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if enabled && !table.stream_enabled {
+            let view_type = spec
+                .get("StreamViewType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("NEW_AND_OLD_IMAGES")
+                .to_string();
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            table.stream_arn = Some(format!(
+                "arn:aws:dynamodb:{}:table/{}/stream/{}",
+                // region/account from table ARN: arn:aws:dynamodb:{region}:{account}:table/{name}
+                {
+                    let parts: Vec<&str> = table.arn.splitn(6, ':').collect();
+                    if parts.len() == 6 {
+                        format!("{}:{}", parts[3], parts[4])
+                    } else {
+                        "us-east-1:000000000000".to_string()
+                    }
+                },
+                table.name,
+                timestamp
+            ));
+            table.stream_view_type = Some(view_type);
+            table.stream_enabled = true;
+        } else if !enabled {
+            table.stream_enabled = false;
+        }
     }
 
     // Update GSI (add new ones from GlobalSecondaryIndexUpdates)

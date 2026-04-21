@@ -4,6 +4,36 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Data captured for a single item change in a DynamoDB Stream.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamRecordData {
+    /// Key attribute(s) of the modified item.
+    pub keys: HashMap<String, Value>,
+    /// Image of the item after the modification (INSERT / MODIFY).
+    pub new_image: Option<HashMap<String, Value>>,
+    /// Image of the item before the modification (MODIFY / REMOVE).
+    pub old_image: Option<HashMap<String, Value>>,
+    /// Monotonically increasing sequence number within the stream.
+    pub sequence_number: String,
+    /// Approximate size of the record in bytes.
+    pub size_bytes: u64,
+    /// Always "NEW_AND_OLD_IMAGES" for AWSim.
+    pub stream_view_type: String,
+}
+
+/// A single stream record representing one item-level DynamoDB change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamRecord {
+    /// Globally unique identifier for this stream event.
+    pub event_id: String,
+    /// "INSERT", "MODIFY", or "REMOVE".
+    pub event_name: String,
+    /// The change data payload.
+    pub dynamodb: StreamRecordData,
+    /// ARN of the stream this record belongs to.
+    pub event_source_arn: String,
+}
+
 /// A DynamoDB attribute value (typed).
 /// Keys are the type discriminator: "S", "N", "B", "BOOL", "NULL", "L", "M", "SS", "NS", "BS".
 pub type DynamoItem = HashMap<String, Value>;
@@ -62,6 +92,21 @@ pub struct Table {
     pub lsi: Vec<LocalSecondaryIndex>,
     /// Composite key (pk\0sk or pk alone) → item.
     pub items: BTreeMap<String, DynamoItem>,
+    /// Whether DynamoDB Streams is enabled for this table.
+    #[serde(default)]
+    pub stream_enabled: bool,
+    /// Stream ARN when streaming is enabled.
+    #[serde(default)]
+    pub stream_arn: Option<String>,
+    /// View type for the stream (e.g. "NEW_AND_OLD_IMAGES").
+    #[serde(default)]
+    pub stream_view_type: Option<String>,
+    /// Bounded ring buffer of recent stream records (last 1 000).
+    #[serde(default)]
+    pub stream_records: Vec<StreamRecord>,
+    /// Monotonically increasing counter used to generate sequence numbers.
+    #[serde(default)]
+    pub stream_sequence: u64,
 }
 
 /// Serializable snapshot of `DynamoState`.

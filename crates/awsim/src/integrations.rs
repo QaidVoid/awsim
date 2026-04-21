@@ -11,6 +11,116 @@ use std::sync::Arc;
 use awsim_core::{InternalEvent, RequestContext, ServiceHandler};
 use tracing::{debug, info, warn};
 
+/// Handle a `dynamodb:StreamRecord` event.
+///
+/// Looks up all Lambda event source mappings whose `EventSourceArn` matches
+/// the stream ARN in the event, then invokes each matching function with the
+/// DynamoDB stream event payload (the standard `{ "Records": [...] }` envelope
+/// that the real AWS Lambda runtime receives).
+pub async fn handle_dynamodb_stream(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+    event: &InternalEvent,
+) {
+    let stream_arn = match event.detail["streamArn"].as_str() {
+        Some(a) => a.to_string(),
+        None => {
+            warn!("dynamodb:StreamRecord event missing streamArn");
+            return;
+        }
+    };
+
+    let records = match event.detail["records"].as_array() {
+        Some(r) => r.clone(),
+        None => {
+            warn!("dynamodb:StreamRecord event missing records array");
+            return;
+        }
+    };
+
+    // Build the standard Lambda DynamoDB stream event envelope.
+    let lambda_payload = serde_json::json!({ "Records": records });
+
+    let lambda_handler = match services.get("lambda") {
+        Some(h) => h.clone(),
+        None => return,
+    };
+
+    // List all event source mappings and filter those that match the stream ARN.
+    let ctx = RequestContext {
+        account_id: event.account_id.clone(),
+        region: event.region.clone(),
+        service: "lambda".to_string(),
+        access_key: None,
+        request_id: uuid::Uuid::new_v4().to_string(),
+        method: "GET".to_string(),
+        uri: "/".to_string(),
+        event_bus: None,
+    };
+
+    let list_input = serde_json::json!({ "EventSourceArn": stream_arn });
+    let mappings = match lambda_handler
+        .handle("ListEventSourceMappings", list_input, &ctx)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e.message, "Failed to list event source mappings for DDB stream");
+            return;
+        }
+    };
+
+    let mapping_list = match mappings["EventSourceMappings"].as_array() {
+        Some(m) => m.clone(),
+        None => return,
+    };
+
+    for mapping in mapping_list {
+        let state = mapping["State"].as_str().unwrap_or("Disabled");
+        if state != "Enabled" {
+            continue;
+        }
+
+        let function_arn = match mapping["FunctionArn"].as_str() {
+            Some(f) => f.to_string(),
+            None => continue,
+        };
+
+        let invoke_ctx = RequestContext {
+            account_id: event.account_id.clone(),
+            region: event.region.clone(),
+            service: "lambda".to_string(),
+            access_key: None,
+            request_id: uuid::Uuid::new_v4().to_string(),
+            method: "POST".to_string(),
+            uri: format!("/2015-03-31/functions/{function_arn}/invocations"),
+            event_bus: None,
+        };
+
+        let invoke_input = serde_json::json!({
+            "FunctionName": function_arn,
+            "InvocationType": "Event",
+            "Payload": lambda_payload,
+        });
+
+        match lambda_handler
+            .handle("Invoke", invoke_input, &invoke_ctx)
+            .await
+        {
+            Ok(_) => info!(
+                function = %function_arn,
+                stream = %stream_arn,
+                "DynamoDB stream triggered Lambda function"
+            ),
+            Err(e) => warn!(
+                function = %function_arn,
+                stream = %stream_arn,
+                error = %e.message,
+                "DynamoDB stream Lambda invocation failed"
+            ),
+        }
+    }
+}
+
 /// Handle a `cloudformation:CreateResource` event by calling the appropriate
 /// service's Create operation.
 pub async fn handle_cf_create_resource(
