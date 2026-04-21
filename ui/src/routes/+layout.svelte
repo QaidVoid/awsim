@@ -19,9 +19,12 @@
 		{ name: 'SES', href: '/ses', icon: '✉️' },
 		{ name: 'Cognito', href: '/cognito', icon: '👤' },
 		{ name: 'EC2', href: '/ec2', icon: '🖥️' },
+		{ name: 'RDS', href: '/rds', icon: '🗃️' },
 		{ name: 'ECS', href: '/ecs', icon: '🐳' },
 		{ name: 'ECR', href: '/ecr', icon: '📋' },
 		{ name: 'CloudFormation', href: '/cloudformation', icon: '🏗️' },
+		{ name: 'API Gateway', href: '/apigateway', icon: '🌐' },
+		{ name: 'Request Log', href: '/logs', icon: '📋' },
 	];
 
 	let { children } = $props();

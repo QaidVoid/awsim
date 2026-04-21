@@ -6,6 +6,58 @@ function authHeader(service: string): string {
     return `AWS4-HMAC-SHA256 Credential=test/${FAKE_DATE}/us-east-1/${service}/aws4_request, SignedHeaders=host;x-amz-date, Signature=fakesignature`;
 }
 
+// ---- Request Log ----
+
+export interface RequestLogEntry {
+    id: number;
+    timestamp: string;
+    method: string;
+    service: string;
+    operation: string;
+    status: number;
+    duration: number;
+}
+
+let requestLog: RequestLogEntry[] = [];
+let logId = 0;
+
+export function getRequestLog(): RequestLogEntry[] {
+    return [...requestLog].reverse();
+}
+
+export function clearRequestLog(): void {
+    requestLog = [];
+    logId = 0;
+}
+
+async function loggedFetch(
+    service: string,
+    operation: string,
+    method: string,
+    input: RequestInfo | URL,
+    init?: RequestInit
+): Promise<Response> {
+    const start = Date.now();
+    let status = 0;
+    try {
+        const res = await fetch(input, init);
+        status = res.status;
+        return res;
+    } finally {
+        const duration = Date.now() - start;
+        requestLog.push({
+            id: ++logId,
+            timestamp: new Date().toISOString(),
+            method,
+            service,
+            operation,
+            status,
+            duration,
+        });
+        if (requestLog.length > 500) requestLog.shift();
+    }
+}
+
 async function awsRequest(
     service: string,
     action: string,
@@ -15,7 +67,7 @@ async function awsRequest(
 ): Promise<unknown> {
     if (protocol === 'query') {
         const body = new URLSearchParams({ Action: action, Version: '2010-05-08', ...params });
-        const res = await fetch(ENDPOINT, {
+        const res = await loggedFetch(service, action, 'POST', ENDPOINT, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
@@ -28,7 +80,7 @@ async function awsRequest(
         return { ok: res.ok, text, status: res.status };
     } else {
         const target = targetPrefix ? `${targetPrefix}.${action}` : action;
-        const res = await fetch(ENDPOINT, {
+        const res = await loggedFetch(service, action, 'POST', ENDPOINT, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-amz-json-1.0',
@@ -63,7 +115,7 @@ function parseXmlListBuckets(xml: string): { buckets: S3Bucket[] } {
 }
 
 export async function listBuckets(): Promise<{ buckets: S3Bucket[] }> {
-    const res = await fetch(`${ENDPOINT}/`, {
+    const res = await loggedFetch('s3', 'ListBuckets', 'GET', `${ENDPOINT}/`, {
         headers: {
             'Authorization': authHeader('s3'),
             'X-Amz-Date': new Date().toISOString().replace(/[:-]/g, '').slice(0, 15) + 'Z',
@@ -82,7 +134,7 @@ function s3Headers(): Record<string, string> {
 }
 
 export async function createBucket(name: string): Promise<void> {
-    const res = await fetch(`${ENDPOINT}/${encodeURIComponent(name)}`, {
+    const res = await loggedFetch('s3', 'CreateBucket', 'PUT', `${ENDPOINT}/${encodeURIComponent(name)}`, {
         method: 'PUT',
         headers: s3Headers(),
     });
@@ -90,7 +142,7 @@ export async function createBucket(name: string): Promise<void> {
 }
 
 export async function deleteBucket(name: string): Promise<void> {
-    const res = await fetch(`${ENDPOINT}/${encodeURIComponent(name)}`, {
+    const res = await loggedFetch('s3', 'DeleteBucket', 'DELETE', `${ENDPOINT}/${encodeURIComponent(name)}`, {
         method: 'DELETE',
         headers: s3Headers(),
     });
@@ -151,7 +203,7 @@ export async function listObjects(bucket: string, prefix?: string, delimiter?: s
     if (prefix) params.set('prefix', prefix);
     if (delimiter !== undefined) params.set('delimiter', delimiter);
 
-    const res = await fetch(`${ENDPOINT}/${encodeURIComponent(bucket)}?${params.toString()}`, {
+    const res = await loggedFetch('s3', 'ListObjectsV2', 'GET', `${ENDPOINT}/${encodeURIComponent(bucket)}?${params.toString()}`, {
         headers: s3Headers(),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -160,7 +212,7 @@ export async function listObjects(bucket: string, prefix?: string, delimiter?: s
 }
 
 export async function deleteObject(bucket: string, key: string): Promise<void> {
-    const res = await fetch(`${ENDPOINT}/${encodeURIComponent(bucket)}/${key.split('/').map(encodeURIComponent).join('/')}`, {
+    const res = await loggedFetch('s3', 'DeleteObject', 'DELETE', `${ENDPOINT}/${encodeURIComponent(bucket)}/${key.split('/').map(encodeURIComponent).join('/')}`, {
         method: 'DELETE',
         headers: s3Headers(),
     });
@@ -424,7 +476,7 @@ function xmlArray(xml: string, itemTag: string, fields: string[]): Record<string
 
 async function iamRequest(action: string, params: Record<string, string> = {}): Promise<string> {
     const body = new URLSearchParams({ Action: action, Version: '2010-05-08', ...params });
-    const res = await fetch(ENDPOINT, {
+    const res = await loggedFetch('iam', action, 'POST', ENDPOINT, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -544,7 +596,7 @@ function lambdaHeaders(): Record<string, string> {
 }
 
 export async function listFunctions(): Promise<{ functions: LambdaFunction[] }> {
-    const res = await fetch(`${ENDPOINT}/2015-03-31/functions`, {
+    const res = await loggedFetch('lambda', 'ListFunctions', 'GET', `${ENDPOINT}/2015-03-31/functions`, {
         headers: lambdaHeaders(),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -567,7 +619,7 @@ export async function createFunction(
     roleArn: string,
     code: string
 ): Promise<void> {
-    const res = await fetch(`${ENDPOINT}/2015-03-31/functions`, {
+    const res = await loggedFetch('lambda', 'CreateFunction', 'POST', `${ENDPOINT}/2015-03-31/functions`, {
         method: 'POST',
         headers: {
             ...lambdaHeaders(),
@@ -585,7 +637,7 @@ export async function createFunction(
 }
 
 export async function deleteFunction(name: string): Promise<void> {
-    const res = await fetch(`${ENDPOINT}/2015-03-31/functions/${encodeURIComponent(name)}`, {
+    const res = await loggedFetch('lambda', 'DeleteFunction', 'DELETE', `${ENDPOINT}/2015-03-31/functions/${encodeURIComponent(name)}`, {
         method: 'DELETE',
         headers: lambdaHeaders(),
     });
@@ -593,7 +645,7 @@ export async function deleteFunction(name: string): Promise<void> {
 }
 
 export async function invokeFunction(name: string, payload: string): Promise<string> {
-    const res = await fetch(`${ENDPOINT}/2015-03-31/functions/${encodeURIComponent(name)}/invocations`, {
+    const res = await loggedFetch('lambda', 'Invoke', 'POST', `${ENDPOINT}/2015-03-31/functions/${encodeURIComponent(name)}/invocations`, {
         method: 'POST',
         headers: {
             ...lambdaHeaders(),
@@ -608,7 +660,7 @@ export async function invokeFunction(name: string, payload: string): Promise<str
 // ---- Cognito ----
 
 async function cognitoRequest(action: string, body: unknown): Promise<unknown> {
-    const res = await fetch(ENDPOINT, {
+    const res = await loggedFetch('cognito-idp', action, 'POST', ENDPOINT, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/x-amz-json-1.1',
@@ -996,7 +1048,7 @@ function sesHeaders(): Record<string, string> {
 }
 
 export async function listEmailIdentities(): Promise<{ identities: SesIdentity[] }> {
-    const res = await fetch(`${ENDPOINT}/v2/email/identities`, {
+    const res = await loggedFetch('ses', 'ListEmailIdentities', 'GET', `${ENDPOINT}/v2/email/identities`, {
         headers: sesHeaders(),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -1013,7 +1065,7 @@ export async function listEmailIdentities(): Promise<{ identities: SesIdentity[]
 }
 
 export async function createEmailIdentity(emailIdentity: string): Promise<void> {
-    const res = await fetch(`${ENDPOINT}/v2/email/identities`, {
+    const res = await loggedFetch('ses', 'CreateEmailIdentity', 'POST', `${ENDPOINT}/v2/email/identities`, {
         method: 'POST',
         headers: sesHeaders(),
         body: JSON.stringify({ EmailIdentity: emailIdentity }),
@@ -1022,7 +1074,7 @@ export async function createEmailIdentity(emailIdentity: string): Promise<void> 
 }
 
 export async function deleteEmailIdentity(emailIdentity: string): Promise<void> {
-    const res = await fetch(`${ENDPOINT}/v2/email/identities/${encodeURIComponent(emailIdentity)}`, {
+    const res = await loggedFetch('ses', 'DeleteEmailIdentity', 'DELETE', `${ENDPOINT}/v2/email/identities/${encodeURIComponent(emailIdentity)}`, {
         method: 'DELETE',
         headers: sesHeaders(),
     });
@@ -1030,7 +1082,7 @@ export async function deleteEmailIdentity(emailIdentity: string): Promise<void> 
 }
 
 export async function listEmailTemplates(): Promise<{ templates: SesTemplate[] }> {
-    const res = await fetch(`${ENDPOINT}/v2/email/templates`, {
+    const res = await loggedFetch('ses', 'ListEmailTemplates', 'GET', `${ENDPOINT}/v2/email/templates`, {
         headers: sesHeaders(),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -1050,7 +1102,7 @@ export async function createEmailTemplate(
     subject: string,
     htmlBody: string
 ): Promise<void> {
-    const res = await fetch(`${ENDPOINT}/v2/email/templates`, {
+    const res = await loggedFetch('ses', 'CreateEmailTemplate', 'POST', `${ENDPOINT}/v2/email/templates`, {
         method: 'POST',
         headers: sesHeaders(),
         body: JSON.stringify({
@@ -1065,7 +1117,7 @@ export async function createEmailTemplate(
 }
 
 export async function deleteEmailTemplate(templateName: string): Promise<void> {
-    const res = await fetch(`${ENDPOINT}/v2/email/templates/${encodeURIComponent(templateName)}`, {
+    const res = await loggedFetch('ses', 'DeleteEmailTemplate', 'DELETE', `${ENDPOINT}/v2/email/templates/${encodeURIComponent(templateName)}`, {
         method: 'DELETE',
         headers: sesHeaders(),
     });
@@ -1125,7 +1177,7 @@ export async function startExecution(stateMachineArn: string, input: string): Pr
 
 async function ec2Request(action: string, params: Record<string, string> = {}): Promise<string> {
     const body = new URLSearchParams({ Action: action, Version: '2016-11-15', ...params });
-    const res = await fetch(ENDPOINT, {
+    const res = await loggedFetch('ec2', action, 'POST', ENDPOINT, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -1313,7 +1365,7 @@ export async function deleteRepository(name: string): Promise<void> {
 
 async function cfRequest(action: string, params: Record<string, string> = {}): Promise<string> {
     const body = new URLSearchParams({ Action: action, Version: '2010-05-15', ...params });
-    const res = await fetch(ENDPOINT, {
+    const res = await loggedFetch('cloudformation', action, 'POST', ENDPOINT, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -1474,4 +1526,91 @@ export async function deleteStream(name: string): Promise<void> {
     await awsRequest('kinesis', 'DeleteStream', {
         StreamName: name,
     } as unknown as Record<string, string>, 'json', 'Kinesis_20131202');
+}
+
+// ---- STS ----
+
+export interface StsIdentity {
+    account: string;
+    arn: string;
+    userId: string;
+}
+
+export interface StsCredentials {
+    accessKeyId: string;
+    secretAccessKey: string;
+    sessionToken: string;
+    expiration: string;
+}
+
+async function stsRequest(action: string, params: Record<string, string> = {}): Promise<string> {
+    const body = new URLSearchParams({ Action: action, Version: '2011-06-15', ...params });
+    const res = await loggedFetch('sts', action, 'POST', ENDPOINT, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': authHeader('sts'),
+            'X-Amz-Date': new Date().toISOString().replace(/[:-]/g, '').slice(0, 15) + 'Z',
+        },
+        body: body.toString(),
+    });
+    return res.text();
+}
+
+export async function getCallerIdentity(): Promise<StsIdentity> {
+    const xml = await stsRequest('GetCallerIdentity');
+    return {
+        account: xmlValue(xml, 'Account'),
+        arn: xmlValue(xml, 'Arn'),
+        userId: xmlValue(xml, 'UserId'),
+    };
+}
+
+export async function assumeRole(roleArn: string, roleSessionName: string): Promise<StsCredentials> {
+    const xml = await stsRequest('AssumeRole', { RoleArn: roleArn, RoleSessionName: roleSessionName });
+    return {
+        accessKeyId: xmlValue(xml, 'AccessKeyId'),
+        secretAccessKey: xmlValue(xml, 'SecretAccessKey'),
+        sessionToken: xmlValue(xml, 'SessionToken'),
+        expiration: xmlValue(xml, 'Expiration'),
+    };
+}
+
+// ---- RDS ----
+
+async function rdsRequest(action: string, params: Record<string, string> = {}): Promise<string> {
+    const body = new URLSearchParams({ Action: action, Version: '2014-10-31', ...params });
+    const res = await loggedFetch('rds', action, 'POST', ENDPOINT, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': authHeader('rds'),
+            'X-Amz-Date': new Date().toISOString().replace(/[:-]/g, '').slice(0, 15) + 'Z',
+        },
+        body: body.toString(),
+    });
+    return res.text();
+}
+
+export async function listDbInstances(): Promise<string> {
+    return rdsRequest('DescribeDBInstances');
+}
+
+export async function createDbInstance(id: string, engine: string, instanceClass: string): Promise<string> {
+    return rdsRequest('CreateDBInstance', {
+        DBInstanceIdentifier: id,
+        Engine: engine,
+        DBInstanceClass: instanceClass,
+        MasterUsername: 'admin',
+        MasterUserPassword: 'password123',
+        AllocatedStorage: '20',
+    });
+}
+
+export async function deleteDbInstance(id: string): Promise<string> {
+    return rdsRequest('DeleteDBInstance', { DBInstanceIdentifier: id, SkipFinalSnapshot: 'true' });
+}
+
+export async function listDbClusters(): Promise<string> {
+    return rdsRequest('DescribeDBClusters');
 }
