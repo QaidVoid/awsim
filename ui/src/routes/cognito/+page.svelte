@@ -128,12 +128,14 @@
     let signUpResult = $state<unknown>(null);
     let signUpError = $state<string | null>(null);
     let signingUp = $state(false);
+    let signUpSuccess = $state(false);
 
     // Sign In
     let signInUsername = $state('');
     let signInPassword = $state('');
     let signInError = $state<string | null>(null);
     let signingIn = $state(false);
+    let signInSuccess = $state(false);
     let authTokens = $state<{ accessToken?: string; idToken?: string; refreshToken?: string; expiresIn?: number } | null>(null);
     let tokenExpiry = $state<Date | null>(null);
     let showIdToken = $state(false);
@@ -605,10 +607,16 @@
 
     // ---- Auth Tester ----
     async function loadAuthClients() {
+        authClients = [];
+        authClientId = '';
         if (!authPoolId) return;
         try {
             const data = await listUserPoolClients(authPoolId);
             authClients = data.clients;
+            // Auto-select the first client if only one exists
+            if (authClients.length === 1) {
+                authClientId = authClients[0].clientId;
+            }
         } catch {
             authClients = [];
         }
@@ -619,8 +627,11 @@
         signingUp = true;
         signUpError = null;
         signUpResult = null;
+        signUpSuccess = false;
         try {
             signUpResult = await cognitoSignUp(authClientId, signUpUsername, signUpPassword, signUpEmail || undefined);
+            signUpSuccess = true;
+            setTimeout(() => { signUpSuccess = false; }, 3000);
         } catch (e) {
             signUpError = e instanceof Error ? e.message : 'Sign up failed';
         } finally {
@@ -634,9 +645,12 @@
         signInError = null;
         authTokens = null;
         getUserResult = null;
+        signInSuccess = false;
         try {
             const result = await cognitoInitiateAuth(authClientId, signInUsername, signInPassword);
             authTokens = result;
+            signInSuccess = true;
+            setTimeout(() => { signInSuccess = false; }, 3000);
             if (result.expiresIn) {
                 tokenExpiry = new Date(Date.now() + result.expiresIn * 1000);
             }
@@ -673,17 +687,26 @@
         <p class="text-zinc-500 mt-1">User authentication, authorization, and identity management.</p>
     </div>
 
-    <!-- Top-level tabs -->
-    <div class="flex gap-1 mb-6 border-b border-zinc-800">
-        {#each [['userpools', 'User Pools'], ['identitypools', 'Identity Pools'], ['authtester', 'Auth Tester']] as [tab, label]}
+    <!-- Top-level tabs — segmented button style -->
+    <div class="flex bg-zinc-900 rounded-lg p-1 border border-zinc-800 mb-6">
+        {#each [
+            { id: 'userpools', label: 'User Pools', count: pools.length },
+            { id: 'identitypools', label: 'Identity Pools', count: identityPools.length },
+            { id: 'authtester', label: 'Auth Tester', count: null },
+        ] as tab}
             <button
                 onclick={() => {
-                    topTab = tab as typeof topTab;
-                    if (tab === 'identitypools' && identityPools.length === 0) loadIdentityPools();
+                    topTab = tab.id as typeof topTab;
+                    if (tab.id === 'identitypools' && identityPools.length === 0) loadIdentityPools();
                 }}
-                class="px-4 py-2 text-sm font-medium border-b-2 transition-colors {topTab === tab ? 'border-orange-400 text-orange-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}"
+                class="flex-1 px-4 py-2 text-sm font-medium rounded-md transition-all focus:outline-none focus:ring-2 focus:ring-orange-500/50 active:scale-[0.98] {topTab === tab.id
+                    ? 'bg-zinc-700 text-orange-400 shadow-sm'
+                    : 'text-zinc-500 hover:text-zinc-300'}"
             >
-                {label}
+                {tab.label}
+                {#if tab.count !== null}
+                    <span class="ml-1.5 text-xs px-1.5 py-0.5 rounded-full {topTab === tab.id ? 'bg-orange-500/20 text-orange-400' : 'bg-zinc-800 text-zinc-500'}">{tab.count}</span>
+                {/if}
             </button>
         {/each}
     </div>
@@ -696,15 +719,18 @@
             <span class="text-sm text-zinc-400">{pools.length} pool{pools.length !== 1 ? 's' : ''}</span>
             <button
                 onclick={() => { showCreatePool = !showCreatePool; createPoolError = null; }}
-                class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 rounded text-sm font-medium transition-colors"
+                class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 rounded text-sm font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50"
             >
                 Create User Pool
             </button>
         </div>
 
         {#if showCreatePool}
-            <div class="bg-zinc-900 border border-zinc-700 rounded-lg p-4 mb-4">
-                <h3 class="font-semibold mb-3">Create User Pool</h3>
+            <div class="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mb-4 shadow-lg shadow-black/20">
+                <h3 class="font-semibold mb-3 flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                    Create User Pool
+                </h3>
                 {#if createPoolError}
                     <div class="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-sm mb-3">{createPoolError}</div>
                 {/if}
@@ -715,7 +741,7 @@
                             type="text"
                             bind:value={newPoolName}
                             onkeydown={(e) => e.key === 'Enter' && handleCreatePool()}
-                            class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500"
+                            class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200"
                             placeholder="my-user-pool"
                         />
                     </div>
@@ -723,7 +749,7 @@
                         <label class="block text-xs text-zinc-400 mb-1">MFA Configuration</label>
                         <select
                             bind:value={newPoolMfa}
-                            class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500"
+                            class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200 [&>option]:bg-zinc-800 [&>option]:text-zinc-200"
                         >
                             <option value="OFF">OFF</option>
                             <option value="OPTIONAL">OPTIONAL</option>
@@ -735,13 +761,13 @@
                     <button
                         onclick={handleCreatePool}
                         disabled={creatingPool || !newPoolName.trim()}
-                        class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
+                        class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50"
                     >
                         {creatingPool ? 'Creating...' : 'Create'}
                     </button>
                     <button
                         onclick={() => { showCreatePool = false; createPoolError = null; newPoolName = ''; }}
-                        class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-sm transition-colors"
+                        class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-sm transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50"
                     >
                         Cancel
                     </button>
@@ -754,17 +780,22 @@
         {:else if poolsError}
             <div class="bg-red-900/20 border border-red-800 rounded-lg p-4 text-red-400">{poolsError}</div>
         {:else if pools.length === 0}
-            <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-8 text-center">
-                <p class="text-zinc-500">No user pools yet.</p>
-                <button onclick={() => showCreatePool = true} class="mt-3 px-3 py-1.5 bg-orange-600 hover:bg-orange-500 rounded text-sm font-medium">
-                    Create your first pool
+            <div class="bg-gradient-to-br from-zinc-900 to-zinc-950 rounded-lg border border-zinc-800 p-12 text-center shadow-lg shadow-black/20">
+                <div class="text-4xl mb-3 opacity-30">🔑</div>
+                <p class="text-zinc-500 mb-1">No user pools yet</p>
+                <p class="text-zinc-600 text-sm mb-4">Create a user pool to manage authentication</p>
+                <button
+                    onclick={() => showCreatePool = true}
+                    class="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-sm font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50"
+                >
+                    Create User Pool
                 </button>
             </div>
         {:else}
             <div class="flex gap-4">
                 <!-- Pool list -->
                 <div class="w-72 shrink-0">
-                    <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
+                    <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden shadow-lg shadow-black/20">
                         {#each pools as pool}
                             <div class="border-b border-zinc-800/50 last:border-0 {selectedPool?.id === pool.id ? 'bg-zinc-800' : 'hover:bg-zinc-800/40'} transition-colors">
                                 <div class="px-4 py-3 flex items-start justify-between gap-2">
@@ -775,17 +806,17 @@
                                     </button>
                                     <button
                                         onclick={(e) => { e.stopPropagation(); confirmDeletePool = pool.id; }}
-                                        class="px-2 py-1 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded text-xs shrink-0 transition-colors"
+                                        class="px-2 py-1 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded text-xs shrink-0 transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-red-500/40"
                                     >
                                         Delete
                                     </button>
                                 </div>
                                 {#if confirmDeletePool === pool.id}
-                                    <div class="px-4 pb-3 bg-red-900/10 border-t border-red-900/30">
+                                    <div class="px-4 pb-3 bg-red-950/30 border-t border-red-900/30 backdrop-blur">
                                         <p class="text-xs text-red-400 mb-2">Delete "{pool.name}"?</p>
                                         <div class="flex gap-2">
-                                            <button onclick={() => handleDeletePool(pool.id)} class="px-2 py-1 bg-red-700 hover:bg-red-600 rounded text-xs font-medium">Confirm</button>
-                                            <button onclick={() => confirmDeletePool = null} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs">Cancel</button>
+                                            <button onclick={() => handleDeletePool(pool.id)} class="px-2 py-1 bg-red-700 hover:bg-red-600 rounded text-xs font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-red-500/40">Confirm</button>
+                                            <button onclick={() => confirmDeletePool = null} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">Cancel</button>
                                         </div>
                                     </div>
                                 {/if}
@@ -797,7 +828,7 @@
                 <!-- Pool detail -->
                 <div class="flex-1 min-w-0">
                     {#if selectedPool}
-                        <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
+                        <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden shadow-lg shadow-black/20">
                             <!-- Pool header -->
                             <div class="px-4 py-3 border-b border-zinc-800">
                                 <h2 class="font-semibold text-orange-400 font-mono">{selectedPool.name}</h2>
@@ -805,13 +836,23 @@
                             </div>
 
                             <!-- Pool sub-tabs -->
-                            <div class="flex gap-1 px-4 border-b border-zinc-800 bg-zinc-900/50">
-                                {#each [['users', 'Users'], ['groups', 'Groups'], ['clients', 'App Clients'], ['settings', 'Settings']] as [tab, label]}
+                            <div class="flex gap-1 px-2 border-b border-zinc-800 bg-zinc-900/50">
+                                {#each [
+                                    { id: 'users', label: 'Users', count: users.length },
+                                    { id: 'groups', label: 'Groups', count: groups.length },
+                                    { id: 'clients', label: 'App Clients', count: clients.length },
+                                    { id: 'settings', label: 'Settings', count: null },
+                                ] as tab}
                                     <button
-                                        onclick={() => switchPoolSubTab(tab as typeof poolSubTab)}
-                                        class="px-3 py-2 text-xs font-medium border-b-2 transition-colors {poolSubTab === tab ? 'border-orange-400 text-orange-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}"
+                                        onclick={() => switchPoolSubTab(tab.id as typeof poolSubTab)}
+                                        class="px-4 py-2.5 text-sm font-medium border-b-2 transition-all active:scale-[0.98] focus:outline-none {poolSubTab === tab.id
+                                            ? 'border-orange-400 text-orange-400'
+                                            : 'border-transparent text-zinc-500 hover:text-zinc-300 hover:border-zinc-600'}"
                                     >
-                                        {label}
+                                        {tab.label}
+                                        {#if tab.count !== null}
+                                            <span class="ml-1 text-xs text-zinc-600">({tab.count})</span>
+                                        {/if}
                                     </button>
                                 {/each}
                             </div>
@@ -821,10 +862,13 @@
                                 <div class="flex h-full">
                                     <div class="{selectedUser ? 'w-1/2' : 'w-full'} border-r border-zinc-800/50">
                                         <div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
-                                            <span class="text-sm font-medium">Users ({users.length})</span>
+                                            <span class="text-sm font-medium flex items-center gap-2">
+                                                <span class="w-1.5 h-1.5 rounded-full bg-orange-500"></span>
+                                                Users ({users.length})
+                                            </span>
                                             <button
                                                 onclick={() => { showCreateUser = !showCreateUser; createUserError = null; }}
-                                                class="px-3 py-1 bg-orange-600 hover:bg-orange-500 rounded text-xs font-medium transition-colors"
+                                                class="px-3 py-1 bg-orange-600 hover:bg-orange-500 rounded text-xs font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50"
                                             >
                                                 Create User
                                             </button>
@@ -840,19 +884,19 @@
                                                     <input
                                                         type="text"
                                                         bind:value={newUsername}
-                                                        class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500"
+                                                        class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200"
                                                         placeholder="Username *"
                                                     />
                                                     <input
                                                         type="password"
                                                         bind:value={newUserTempPassword}
-                                                        class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500"
+                                                        class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200"
                                                         placeholder="Temporary password (optional)"
                                                     />
                                                     <input
                                                         type="email"
                                                         bind:value={newUserEmail}
-                                                        class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500"
+                                                        class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200"
                                                         placeholder="Email (optional)"
                                                     />
                                                 </div>
@@ -860,13 +904,13 @@
                                                     <button
                                                         onclick={handleCreateUser}
                                                         disabled={creatingUser || !newUsername.trim()}
-                                                        class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium transition-colors"
+                                                        class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-xs font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50"
                                                     >
                                                         {creatingUser ? 'Creating...' : 'Create'}
                                                     </button>
                                                     <button
                                                         onclick={() => { showCreateUser = false; createUserError = null; newUsername = ''; newUserTempPassword = ''; newUserEmail = ''; }}
-                                                        class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors"
+                                                        class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50"
                                                     >
                                                         Cancel
                                                     </button>
@@ -907,11 +951,11 @@
                                                                 <td class="px-4 py-2.5" onclick={(e) => e.stopPropagation()}>
                                                                     {#if confirmDeleteUser === user.username}
                                                                         <div class="flex gap-1">
-                                                                            <button onclick={() => handleDeleteUser(user.username)} class="px-1.5 py-0.5 bg-red-700 hover:bg-red-600 rounded text-xs">OK</button>
-                                                                            <button onclick={() => confirmDeleteUser = null} class="px-1.5 py-0.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs">No</button>
+                                                                            <button onclick={() => handleDeleteUser(user.username)} class="px-1.5 py-0.5 bg-red-700 hover:bg-red-600 rounded text-xs transition-all active:scale-[0.98]">OK</button>
+                                                                            <button onclick={() => confirmDeleteUser = null} class="px-1.5 py-0.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98]">No</button>
                                                                         </div>
                                                                     {:else}
-                                                                        <button onclick={() => confirmDeleteUser = user.username} class="text-red-400 hover:text-red-300 text-xs">Del</button>
+                                                                        <button onclick={() => confirmDeleteUser = user.username} class="text-red-400 hover:text-red-300 text-xs transition-colors">Del</button>
                                                                     {/if}
                                                                 </td>
                                                             </tr>
@@ -937,7 +981,7 @@
                                                                 <span class="text-xs {selectedUser.enabled ? 'text-green-400' : 'text-red-400'}">{selectedUser.enabled ? 'Enabled' : 'Disabled'}</span>
                                                             </div>
                                                         </div>
-                                                        <button onclick={() => selectedUser = null} class="text-zinc-500 hover:text-zinc-300 text-xs">Close</button>
+                                                        <button onclick={() => selectedUser = null} class="text-zinc-500 hover:text-zinc-300 text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500/50 rounded">Close</button>
                                                     </div>
 
                                                     {#if userActionError}
@@ -947,14 +991,24 @@
                                                     <!-- Actions -->
                                                     <div class="flex flex-wrap gap-2 mb-4">
                                                         {#if selectedUser.enabled}
-                                                            <button onclick={handleDisableUser} class="px-2 py-1 bg-yellow-900/30 text-yellow-400 hover:bg-yellow-900/50 rounded text-xs transition-colors">Disable</button>
+                                                            <button onclick={handleDisableUser} class="px-2 py-1 bg-yellow-900/30 text-yellow-400 hover:bg-yellow-900/50 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-yellow-500/40">Disable</button>
                                                         {:else}
-                                                            <button onclick={handleEnableUser} class="px-2 py-1 bg-green-900/30 text-green-400 hover:bg-green-900/50 rounded text-xs transition-colors">Enable</button>
+                                                            <button onclick={handleEnableUser} class="px-2 py-1 bg-green-900/30 text-green-400 hover:bg-green-900/50 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-green-500/40">Enable</button>
                                                         {/if}
-                                                        <button onclick={() => setPasswordMode = !setPasswordMode} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors">Set Password</button>
-                                                        <button onclick={() => editingAttrs = !editingAttrs} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-colors">Edit Attrs</button>
-                                                        <button onclick={() => confirmDeleteUser = selectedUser?.username ?? null} class="px-2 py-1 bg-red-900/30 text-red-400 hover:bg-red-900/50 rounded text-xs transition-colors">Delete</button>
+                                                        <button onclick={() => setPasswordMode = !setPasswordMode} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">Set Password</button>
+                                                        <button onclick={() => editingAttrs = !editingAttrs} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">Edit Attrs</button>
+                                                        <button onclick={() => confirmDeleteUser = selectedUser?.username ?? null} class="px-2 py-1 bg-red-900/30 text-red-400 hover:bg-red-900/50 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-red-500/40">Delete</button>
                                                     </div>
+
+                                                    {#if confirmDeleteUser === selectedUser.username}
+                                                        <div class="bg-red-950/30 border border-red-900/30 rounded p-3 mb-4">
+                                                            <p class="text-xs text-red-400 mb-2">Delete "{selectedUser.username}"?</p>
+                                                            <div class="flex gap-2">
+                                                                <button onclick={() => handleDeleteUser(selectedUser!.username)} class="px-2 py-1 bg-red-700 hover:bg-red-600 rounded text-xs font-medium transition-all active:scale-[0.98]">Confirm</button>
+                                                                <button onclick={() => confirmDeleteUser = null} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98]">Cancel</button>
+                                                            </div>
+                                                        </div>
+                                                    {/if}
 
                                                     {#if setPasswordMode}
                                                         <div class="bg-zinc-800 rounded p-3 mb-4">
@@ -962,7 +1016,7 @@
                                                             <input
                                                                 type="password"
                                                                 bind:value={newPasswordValue}
-                                                                class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-orange-500 mb-2"
+                                                                class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200 mb-2"
                                                                 placeholder="New password"
                                                             />
                                                             <label class="flex items-center gap-2 text-xs text-zinc-400 mb-2 cursor-pointer">
@@ -970,10 +1024,10 @@
                                                                 Permanent (not temporary)
                                                             </label>
                                                             <div class="flex gap-2">
-                                                                <button onclick={handleSetPassword} disabled={settingPassword || !newPasswordValue} class="px-2 py-1 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium">
+                                                                <button onclick={handleSetPassword} disabled={settingPassword || !newPasswordValue} class="px-2 py-1 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-xs font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">
                                                                     {settingPassword ? 'Setting...' : 'Set'}
                                                                 </button>
-                                                                <button onclick={() => { setPasswordMode = false; newPasswordValue = ''; }} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs">Cancel</button>
+                                                                <button onclick={() => { setPasswordMode = false; newPasswordValue = ''; }} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">Cancel</button>
                                                             </div>
                                                         </div>
                                                     {/if}
@@ -984,19 +1038,19 @@
                                                             <h4 class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Attributes</h4>
                                                             {#if editingAttrs}
                                                                 <div class="flex gap-2">
-                                                                    <button onclick={handleSaveAttrs} disabled={savingAttrs} class="px-2 py-0.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs">Save</button>
-                                                                    <button onclick={() => { editingAttrs = false; editedAttrs = selectedUser?.attributes.map(a => ({...a})) ?? []; }} class="px-2 py-0.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs">Cancel</button>
+                                                                    <button onclick={handleSaveAttrs} disabled={savingAttrs} class="px-2 py-0.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">Save</button>
+                                                                    <button onclick={() => { editingAttrs = false; editedAttrs = selectedUser?.attributes.map(a => ({...a})) ?? []; }} class="px-2 py-0.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">Cancel</button>
                                                                 </div>
                                                             {/if}
                                                         </div>
                                                         {#if editingAttrs}
                                                             {#each editedAttrs as attr, i}
                                                                 <div class="flex gap-2 mb-1.5">
-                                                                    <input bind:value={editedAttrs[i].name} class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-orange-500" placeholder="Name" />
-                                                                    <input bind:value={editedAttrs[i].value} class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-orange-500" placeholder="Value" />
+                                                                    <input bind:value={editedAttrs[i].name} class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Name" />
+                                                                    <input bind:value={editedAttrs[i].value} class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Value" />
                                                                 </div>
                                                             {/each}
-                                                            <button onclick={() => editedAttrs = [...editedAttrs, { name: '', value: '' }]} class="text-xs text-orange-400 hover:text-orange-300">+ Add attribute</button>
+                                                            <button onclick={() => editedAttrs = [...editedAttrs, { name: '', value: '' }]} class="text-xs text-orange-400 hover:text-orange-300 transition-colors">+ Add attribute</button>
                                                         {:else}
                                                             <div class="bg-zinc-800 rounded overflow-hidden">
                                                                 {#each selectedUser.attributes as attr}
@@ -1015,26 +1069,26 @@
                                                     <div>
                                                         <div class="flex items-center justify-between mb-2">
                                                             <h4 class="text-xs font-medium text-zinc-400 uppercase tracking-wider">Groups</h4>
-                                                            <button onclick={() => showAddGroup = !showAddGroup} class="text-xs text-orange-400 hover:text-orange-300">+ Add</button>
+                                                            <button onclick={() => showAddGroup = !showAddGroup} class="text-xs text-orange-400 hover:text-orange-300 transition-colors">+ Add</button>
                                                         </div>
                                                         {#if showAddGroup}
                                                             <div class="flex gap-2 mb-2">
                                                                 <input
                                                                     bind:value={addGroupName}
-                                                                    class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-orange-500"
+                                                                    class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200"
                                                                     placeholder="Group name"
                                                                 />
-                                                                <button onclick={handleAddUserToGroup} disabled={addingToGroup || !addGroupName.trim()} class="px-2 py-1 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs">
+                                                                <button onclick={handleAddUserToGroup} disabled={addingToGroup || !addGroupName.trim()} class="px-2 py-1 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">
                                                                     {addingToGroup ? '...' : 'Add'}
                                                                 </button>
-                                                                <button onclick={() => { showAddGroup = false; addGroupName = ''; }} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs">Cancel</button>
+                                                                <button onclick={() => { showAddGroup = false; addGroupName = ''; }} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">Cancel</button>
                                                             </div>
                                                         {/if}
                                                         <div class="bg-zinc-800 rounded overflow-hidden">
                                                             {#each userGroups as g}
                                                                 <div class="flex items-center justify-between px-3 py-2 border-b border-zinc-700/50 last:border-0">
                                                                     <span class="text-xs font-mono text-zinc-200">{g.name}</span>
-                                                                    <button onclick={() => handleRemoveFromGroup(g.name)} class="text-xs text-red-400 hover:text-red-300">Remove</button>
+                                                                    <button onclick={() => handleRemoveFromGroup(g.name)} class="text-xs text-red-400 hover:text-red-300 transition-colors">Remove</button>
                                                                 </div>
                                                             {:else}
                                                                 <div class="px-3 py-2 text-xs text-zinc-500">Not in any groups</div>
@@ -1052,10 +1106,13 @@
                                 <div class="flex">
                                     <div class="{selectedGroup ? 'w-1/2' : 'w-full'} border-r border-zinc-800/50">
                                         <div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
-                                            <span class="text-sm font-medium">Groups ({groups.length})</span>
+                                            <span class="text-sm font-medium flex items-center gap-2">
+                                                <span class="w-1.5 h-1.5 rounded-full bg-orange-500"></span>
+                                                Groups ({groups.length})
+                                            </span>
                                             <button
                                                 onclick={() => { showCreateGroup = !showCreateGroup; createGroupError = null; }}
-                                                class="px-3 py-1 bg-orange-600 hover:bg-orange-500 rounded text-xs font-medium transition-colors"
+                                                class="px-3 py-1 bg-orange-600 hover:bg-orange-500 rounded text-xs font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50"
                                             >
                                                 Create Group
                                             </button>
@@ -1067,13 +1124,13 @@
                                                     <div class="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-xs mb-2">{createGroupError}</div>
                                                 {/if}
                                                 <div class="grid grid-cols-1 gap-2 mb-2">
-                                                    <input bind:value={newGroupName} class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500" placeholder="Group name *" />
-                                                    <input bind:value={newGroupDescription} class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500" placeholder="Description (optional)" />
-                                                    <input bind:value={newGroupRoleArn} class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-orange-500" placeholder="Role ARN (optional)" />
+                                                    <input bind:value={newGroupName} class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Group name *" />
+                                                    <input bind:value={newGroupDescription} class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Description (optional)" />
+                                                    <input bind:value={newGroupRoleArn} class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Role ARN (optional)" />
                                                 </div>
                                                 <div class="flex gap-2">
-                                                    <button onclick={handleCreateGroup} disabled={creatingGroup || !newGroupName.trim()} class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium">{creatingGroup ? 'Creating...' : 'Create'}</button>
-                                                    <button onclick={() => { showCreateGroup = false; createGroupError = null; newGroupName = ''; newGroupDescription = ''; newGroupRoleArn = ''; }} class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs">Cancel</button>
+                                                    <button onclick={handleCreateGroup} disabled={creatingGroup || !newGroupName.trim()} class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-xs font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">{creatingGroup ? 'Creating...' : 'Create'}</button>
+                                                    <button onclick={() => { showCreateGroup = false; createGroupError = null; newGroupName = ''; newGroupDescription = ''; newGroupRoleArn = ''; }} class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">Cancel</button>
                                                 </div>
                                             </div>
                                         {/if}
@@ -1101,11 +1158,11 @@
                                                             <td class="px-4 py-2.5" onclick={(e) => e.stopPropagation()}>
                                                                 {#if confirmDeleteGroup === group.name}
                                                                     <div class="flex gap-1">
-                                                                        <button onclick={() => handleDeleteGroup(group.name)} class="px-1.5 py-0.5 bg-red-700 hover:bg-red-600 rounded text-xs">OK</button>
-                                                                        <button onclick={() => confirmDeleteGroup = null} class="px-1.5 py-0.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs">No</button>
+                                                                        <button onclick={() => handleDeleteGroup(group.name)} class="px-1.5 py-0.5 bg-red-700 hover:bg-red-600 rounded text-xs transition-all active:scale-[0.98]">OK</button>
+                                                                        <button onclick={() => confirmDeleteGroup = null} class="px-1.5 py-0.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98]">No</button>
                                                                     </div>
                                                                 {:else}
-                                                                    <button onclick={() => confirmDeleteGroup = group.name} class="text-red-400 hover:text-red-300 text-xs">Del</button>
+                                                                    <button onclick={() => confirmDeleteGroup = group.name} class="text-red-400 hover:text-red-300 text-xs transition-colors">Del</button>
                                                                 {/if}
                                                             </td>
                                                         </tr>
@@ -1119,7 +1176,7 @@
                                         <div class="w-1/2 p-4">
                                             <div class="flex items-center justify-between mb-3">
                                                 <h3 class="font-mono text-orange-400 font-semibold">{selectedGroup.name}</h3>
-                                                <button onclick={() => selectedGroup = null} class="text-zinc-500 hover:text-zinc-300 text-xs">Close</button>
+                                                <button onclick={() => selectedGroup = null} class="text-zinc-500 hover:text-zinc-300 text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500/50 rounded">Close</button>
                                             </div>
                                             {#if selectedGroup.description}
                                                 <p class="text-sm text-zinc-400 mb-3">{selectedGroup.description}</p>
@@ -1154,10 +1211,13 @@
                                 <div class="flex">
                                     <div class="{selectedClient ? 'w-1/2' : 'w-full'} border-r border-zinc-800/50">
                                         <div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
-                                            <span class="text-sm font-medium">App Clients ({clients.length})</span>
+                                            <span class="text-sm font-medium flex items-center gap-2">
+                                                <span class="w-1.5 h-1.5 rounded-full bg-orange-500"></span>
+                                                App Clients ({clients.length})
+                                            </span>
                                             <button
                                                 onclick={() => { showCreateClient = !showCreateClient; createClientError = null; }}
-                                                class="px-3 py-1 bg-orange-600 hover:bg-orange-500 rounded text-xs font-medium transition-colors"
+                                                class="px-3 py-1 bg-orange-600 hover:bg-orange-500 rounded text-xs font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50"
                                             >
                                                 Create Client
                                             </button>
@@ -1168,7 +1228,7 @@
                                                 {#if createClientError}
                                                     <div class="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-xs mb-2">{createClientError}</div>
                                                 {/if}
-                                                <input bind:value={newClientName} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500 mb-2" placeholder="Client name *" />
+                                                <input bind:value={newClientName} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200 mb-2" placeholder="Client name *" />
                                                 <label class="flex items-center gap-2 text-xs text-zinc-400 mb-3 cursor-pointer">
                                                     <input type="checkbox" bind:checked={newClientGenerateSecret} class="rounded" />
                                                     Generate client secret
@@ -1190,8 +1250,8 @@
                                                     </div>
                                                 </div>
                                                 <div class="flex gap-2">
-                                                    <button onclick={handleCreateClient} disabled={creatingClient || !newClientName.trim()} class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium">{creatingClient ? 'Creating...' : 'Create'}</button>
-                                                    <button onclick={() => { showCreateClient = false; createClientError = null; newClientName = ''; }} class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs">Cancel</button>
+                                                    <button onclick={handleCreateClient} disabled={creatingClient || !newClientName.trim()} class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-xs font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">{creatingClient ? 'Creating...' : 'Create'}</button>
+                                                    <button onclick={() => { showCreateClient = false; createClientError = null; newClientName = ''; }} class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">Cancel</button>
                                                 </div>
                                             </div>
                                         {/if}
@@ -1219,11 +1279,11 @@
                                                             <td class="px-4 py-2.5" onclick={(e) => e.stopPropagation()}>
                                                                 {#if confirmDeleteClient === client.clientId}
                                                                     <div class="flex gap-1">
-                                                                        <button onclick={() => handleDeleteClient(client.clientId)} class="px-1.5 py-0.5 bg-red-700 hover:bg-red-600 rounded text-xs">OK</button>
-                                                                        <button onclick={() => confirmDeleteClient = null} class="px-1.5 py-0.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs">No</button>
+                                                                        <button onclick={() => handleDeleteClient(client.clientId)} class="px-1.5 py-0.5 bg-red-700 hover:bg-red-600 rounded text-xs transition-all active:scale-[0.98]">OK</button>
+                                                                        <button onclick={() => confirmDeleteClient = null} class="px-1.5 py-0.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98]">No</button>
                                                                     </div>
                                                                 {:else}
-                                                                    <button onclick={() => confirmDeleteClient = client.clientId} class="text-red-400 hover:text-red-300 text-xs">Del</button>
+                                                                    <button onclick={() => confirmDeleteClient = client.clientId} class="text-red-400 hover:text-red-300 text-xs transition-colors">Del</button>
                                                                 {/if}
                                                             </td>
                                                         </tr>
@@ -1239,8 +1299,8 @@
                                                 <div class="text-zinc-500 text-sm">Loading...</div>
                                             {:else}
                                                 <div class="flex items-center justify-between mb-3">
-                                                    <h3 class="font-semibold">{selectedClient.clientName}</h3>
-                                                    <button onclick={() => selectedClient = null} class="text-zinc-500 hover:text-zinc-300 text-xs">Close</button>
+                                                    <h3 class="font-semibold text-zinc-200">{selectedClient.clientName}</h3>
+                                                    <button onclick={() => selectedClient = null} class="text-zinc-500 hover:text-zinc-300 text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500/50 rounded">Close</button>
                                                 </div>
                                                 <div class="space-y-3">
                                                     <div>
@@ -1254,7 +1314,7 @@
                                                                 <div class="font-mono text-xs text-zinc-200 bg-zinc-800 rounded px-2 py-1 flex-1">
                                                                     {showClientSecret ? selectedClient.clientSecret : '••••••••••••••••••••••••'}
                                                                 </div>
-                                                                <button onclick={() => showClientSecret = !showClientSecret} class="text-xs text-orange-400 hover:text-orange-300">{showClientSecret ? 'Hide' : 'Show'}</button>
+                                                                <button onclick={() => showClientSecret = !showClientSecret} class="text-xs text-orange-400 hover:text-orange-300 transition-colors">{showClientSecret ? 'Hide' : 'Show'}</button>
                                                             </div>
                                                         </div>
                                                     {/if}
@@ -1303,7 +1363,7 @@
                                         <div class="space-y-4">
                                             <div>
                                                 <h4 class="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2">MFA Configuration</h4>
-                                                <div class="bg-zinc-800 rounded px-3 py-2 text-sm">
+                                                <div class="bg-zinc-800 rounded px-3 py-2 text-sm text-zinc-200">
                                                     {String(up['MfaConfiguration'] ?? 'OFF')}
                                                 </div>
                                             </div>
@@ -1377,7 +1437,7 @@
                             {/if}
                         </div>
                     {:else}
-                        <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-8 text-center text-zinc-500 text-sm">
+                        <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-8 text-center text-zinc-500 text-sm shadow-lg shadow-black/20">
                             Select a user pool to view details and manage users.
                         </div>
                     {/if}
@@ -1394,22 +1454,25 @@
             <span class="text-sm text-zinc-400">{identityPools.length} pool{identityPools.length !== 1 ? 's' : ''}</span>
             <button
                 onclick={() => { showCreateIdentityPool = !showCreateIdentityPool; createIdentityPoolError = null; }}
-                class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 rounded text-sm font-medium transition-colors"
+                class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 rounded text-sm font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50"
             >
                 Create Identity Pool
             </button>
         </div>
 
         {#if showCreateIdentityPool}
-            <div class="bg-zinc-900 border border-zinc-700 rounded-lg p-4 mb-4">
-                <h3 class="font-semibold mb-3">Create Identity Pool</h3>
+            <div class="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mb-4 shadow-lg shadow-black/20">
+                <h3 class="font-semibold mb-3 flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                    Create Identity Pool
+                </h3>
                 {#if createIdentityPoolError}
                     <div class="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-sm mb-3">{createIdentityPoolError}</div>
                 {/if}
                 <input
                     type="text"
                     bind:value={newIdentityPoolName}
-                    class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 mb-3"
+                    class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200 mb-3"
                     placeholder="Identity pool name"
                 />
                 <label class="flex items-center gap-2 text-sm text-zinc-400 mb-3 cursor-pointer">
@@ -1417,10 +1480,10 @@
                     Allow unauthenticated identities
                 </label>
                 <div class="flex gap-2">
-                    <button onclick={handleCreateIdentityPool} disabled={creatingIdentityPool || !newIdentityPoolName.trim()} class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-sm font-medium">
+                    <button onclick={handleCreateIdentityPool} disabled={creatingIdentityPool || !newIdentityPoolName.trim()} class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">
                         {creatingIdentityPool ? 'Creating...' : 'Create'}
                     </button>
-                    <button onclick={() => { showCreateIdentityPool = false; createIdentityPoolError = null; newIdentityPoolName = ''; }} class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-sm">Cancel</button>
+                    <button onclick={() => { showCreateIdentityPool = false; createIdentityPoolError = null; newIdentityPoolName = ''; }} class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-sm transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">Cancel</button>
                 </div>
             </div>
         {/if}
@@ -1430,14 +1493,16 @@
         {:else if identityPoolsError}
             <div class="bg-red-900/20 border border-red-800 rounded-lg p-4 text-red-400">{identityPoolsError}</div>
         {:else if identityPools.length === 0}
-            <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-8 text-center">
-                <p class="text-zinc-500">No identity pools yet.</p>
-                <button onclick={() => showCreateIdentityPool = true} class="mt-3 px-3 py-1.5 bg-orange-600 hover:bg-orange-500 rounded text-sm font-medium">Create your first identity pool</button>
+            <div class="bg-gradient-to-br from-zinc-900 to-zinc-950 rounded-lg border border-zinc-800 p-12 text-center shadow-lg shadow-black/20">
+                <div class="text-4xl mb-3 opacity-30">🪪</div>
+                <p class="text-zinc-500 mb-1">No identity pools yet</p>
+                <p class="text-zinc-600 text-sm mb-4">Create an identity pool for federated identity access</p>
+                <button onclick={() => showCreateIdentityPool = true} class="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-sm font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">Create your first identity pool</button>
             </div>
         {:else}
             <div class="flex gap-4">
                 <div class="w-72 shrink-0">
-                    <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
+                    <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden shadow-lg shadow-black/20">
                         {#each identityPools as pool}
                             <div class="border-b border-zinc-800/50 last:border-0 {selectedIdentityPool?.id === pool.id ? 'bg-zinc-800' : 'hover:bg-zinc-800/40'} transition-colors">
                                 <div class="px-4 py-3 flex items-start justify-between gap-2">
@@ -1450,14 +1515,14 @@
                                             </span>
                                         </div>
                                     </button>
-                                    <button onclick={(e) => { e.stopPropagation(); confirmDeleteIdentityPool = pool.id; }} class="px-2 py-1 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded text-xs shrink-0 transition-colors">Delete</button>
+                                    <button onclick={(e) => { e.stopPropagation(); confirmDeleteIdentityPool = pool.id; }} class="px-2 py-1 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded text-xs shrink-0 transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-red-500/40">Delete</button>
                                 </div>
                                 {#if confirmDeleteIdentityPool === pool.id}
-                                    <div class="px-4 pb-3 bg-red-900/10 border-t border-red-900/30">
+                                    <div class="px-4 pb-3 bg-red-950/30 border-t border-red-900/30 backdrop-blur">
                                         <p class="text-xs text-red-400 mb-2">Delete "{pool.name}"?</p>
                                         <div class="flex gap-2">
-                                            <button onclick={() => handleDeleteIdentityPool(pool.id)} class="px-2 py-1 bg-red-700 hover:bg-red-600 rounded text-xs font-medium">Confirm</button>
-                                            <button onclick={() => confirmDeleteIdentityPool = null} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs">Cancel</button>
+                                            <button onclick={() => handleDeleteIdentityPool(pool.id)} class="px-2 py-1 bg-red-700 hover:bg-red-600 rounded text-xs font-medium transition-all active:scale-[0.98]">Confirm</button>
+                                            <button onclick={() => confirmDeleteIdentityPool = null} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98]">Cancel</button>
                                         </div>
                                     </div>
                                 {/if}
@@ -1468,7 +1533,7 @@
 
                 <div class="flex-1 min-w-0">
                     {#if selectedIdentityPool}
-                        <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
+                        <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4 shadow-lg shadow-black/20">
                             <h2 class="font-semibold text-orange-400 font-mono mb-1">{selectedIdentityPool.name}</h2>
                             <div class="text-xs text-zinc-500 font-mono mb-4">{selectedIdentityPool.id}</div>
                             {#if identityPoolDetailLoading}
@@ -1523,7 +1588,7 @@
                             {/if}
                         </div>
                     {:else}
-                        <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-8 text-center text-zinc-500 text-sm">
+                        <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-8 text-center text-zinc-500 text-sm shadow-lg shadow-black/20">
                             Select an identity pool to view details.
                         </div>
                     {/if}
@@ -1540,15 +1605,18 @@
             <!-- Left: Config + Sign Up/In -->
             <div class="space-y-4">
                 <!-- Pool & Client selector -->
-                <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
-                    <h3 class="font-semibold mb-3">Configuration</h3>
+                <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4 shadow-lg shadow-black/20">
+                    <h3 class="font-semibold mb-3 flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                        Configuration
+                    </h3>
                     <div class="space-y-3">
                         <div>
                             <label class="block text-xs text-zinc-400 mb-1">User Pool</label>
                             <select
                                 bind:value={authPoolId}
                                 onchange={loadAuthClients}
-                                class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500"
+                                class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200 [&>option]:bg-zinc-800 [&>option]:text-zinc-200"
                             >
                                 <option value="">Select a user pool...</option>
                                 {#each pools as pool}
@@ -1560,7 +1628,7 @@
                             <label class="block text-xs text-zinc-400 mb-1">App Client</label>
                             <select
                                 bind:value={authClientId}
-                                class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500"
+                                class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200 [&>option]:bg-zinc-800 [&>option]:text-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed disabled:bg-zinc-900"
                                 disabled={!authPoolId}
                             >
                                 <option value="">Select a client...</option>
@@ -1573,12 +1641,21 @@
                 </div>
 
                 <!-- Sign Up -->
-                <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
-                    <h3 class="font-semibold mb-3">Sign Up</h3>
+                <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4 shadow-lg shadow-black/20">
+                    <h3 class="font-semibold mb-3 flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                        Sign Up
+                    </h3>
+                    {#if signUpSuccess}
+                        <div class="bg-green-900/30 border border-green-700/50 rounded p-2 text-green-400 text-xs mb-3 flex items-center gap-2">
+                            <span class="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0"></span>
+                            Sign up successful!
+                        </div>
+                    {/if}
                     <div class="space-y-2 mb-3">
-                        <input bind:value={signUpUsername} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500" placeholder="Username" />
-                        <input type="password" bind:value={signUpPassword} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500" placeholder="Password" />
-                        <input type="email" bind:value={signUpEmail} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500" placeholder="Email (optional)" />
+                        <input bind:value={signUpUsername} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Username" />
+                        <input type="password" bind:value={signUpPassword} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Password" />
+                        <input type="email" bind:value={signUpEmail} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Email (optional)" />
                     </div>
                     {#if signUpError}
                         <div class="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-xs mb-3">{signUpError}</div>
@@ -1586,7 +1663,7 @@
                     <button
                         onclick={handleSignUp}
                         disabled={signingUp || !authClientId || !signUpUsername || !signUpPassword}
-                        class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-sm font-medium transition-colors"
+                        class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50"
                     >
                         {signingUp ? 'Signing Up...' : 'Sign Up'}
                     </button>
@@ -1599,11 +1676,20 @@
                 </div>
 
                 <!-- Sign In -->
-                <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
-                    <h3 class="font-semibold mb-3">Sign In</h3>
+                <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4 shadow-lg shadow-black/20">
+                    <h3 class="font-semibold mb-3 flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                        Sign In
+                    </h3>
+                    {#if signInSuccess}
+                        <div class="bg-green-900/30 border border-green-700/50 rounded p-2 text-green-400 text-xs mb-3 flex items-center gap-2">
+                            <span class="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0"></span>
+                            Signed in successfully!
+                        </div>
+                    {/if}
                     <div class="space-y-2 mb-3">
-                        <input bind:value={signInUsername} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500" placeholder="Username" />
-                        <input type="password" bind:value={signInPassword} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500" placeholder="Password" />
+                        <input bind:value={signInUsername} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Username" />
+                        <input type="password" bind:value={signInPassword} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Password" />
                     </div>
                     {#if signInError}
                         <div class="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-xs mb-3">{signInError}</div>
@@ -1611,7 +1697,7 @@
                     <button
                         onclick={handleSignIn}
                         disabled={signingIn || !authClientId || !signInUsername || !signInPassword}
-                        class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-sm font-medium transition-colors"
+                        class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50"
                     >
                         {signingIn ? 'Signing In...' : 'Sign In'}
                     </button>
@@ -1633,10 +1719,13 @@
 
                 <!-- Test GetUser -->
                 {#if authTokens?.accessToken}
-                    <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
+                    <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4 shadow-lg shadow-black/20">
                         <div class="flex items-center justify-between mb-3">
-                            <h3 class="font-semibold">Test GetUser</h3>
-                            <button onclick={handleGetUser} disabled={gettingUser} class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-sm font-medium">
+                            <h3 class="font-semibold flex items-center gap-2">
+                                <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                                Test GetUser
+                            </h3>
+                            <button onclick={handleGetUser} disabled={gettingUser} class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">
                                 {gettingUser ? 'Loading...' : 'GetUser'}
                             </button>
                         </div>
@@ -1652,8 +1741,11 @@
 
             <!-- Right: Token Inspector -->
             <div class="space-y-4">
-                <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
-                    <h3 class="font-semibold mb-3">Token Inspector</h3>
+                <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4 shadow-lg shadow-black/20">
+                    <h3 class="font-semibold mb-3 flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                        Token Inspector
+                    </h3>
                     {#if !authTokens}
                         <div class="text-zinc-500 text-sm">Sign in to inspect tokens.</div>
                     {:else}
@@ -1664,7 +1756,7 @@
                                 <div class="border border-zinc-700 rounded-lg overflow-hidden">
                                     <div class="flex items-center justify-between px-3 py-2 bg-zinc-800 border-b border-zinc-700">
                                         <span class="text-sm font-medium text-zinc-200">ID Token</span>
-                                        <button onclick={() => showIdToken = !showIdToken} class="text-xs text-orange-400 hover:text-orange-300">{showIdToken ? 'Hide raw' : 'Show raw'}</button>
+                                        <button onclick={() => showIdToken = !showIdToken} class="text-xs text-orange-400 hover:text-orange-300 transition-colors">{showIdToken ? 'Hide raw' : 'Show raw'}</button>
                                     </div>
                                     {#if showIdToken}
                                         <div class="p-3">
@@ -1673,6 +1765,18 @@
                                     {/if}
                                     {#if decoded}
                                         <div class="p-3 space-y-3">
+                                            {#if decoded.payload}
+                                                {@const p = decoded.payload as Record<string, unknown>}
+                                                <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-3 bg-zinc-800/50 rounded p-3">
+                                                    {#if p.sub}<span class="text-zinc-500">Subject (sub)</span><span class="text-zinc-200 font-mono truncate">{String(p.sub)}</span>{/if}
+                                                    {#if p.iss}<span class="text-zinc-500">Issuer (iss)</span><span class="text-zinc-200 font-mono truncate">{String(p.iss)}</span>{/if}
+                                                    {#if p.token_use}<span class="text-zinc-500">Token Use</span><span class="text-zinc-200">{String(p.token_use)}</span>{/if}
+                                                    {#if p.exp}<span class="text-zinc-500">Expires</span><span class="text-zinc-200">{new Date(Number(p.exp) * 1000).toLocaleString()}</span>{/if}
+                                                    {#if p.scope}<span class="text-zinc-500">Scopes</span><span class="text-zinc-200">{String(p.scope)}</span>{/if}
+                                                    {#if p['cognito:username']}<span class="text-zinc-500">Username</span><span class="text-zinc-200">{String(p['cognito:username'])}</span>{/if}
+                                                    {#if p.email}<span class="text-zinc-500">Email</span><span class="text-zinc-200">{String(p.email)}</span>{/if}
+                                                </div>
+                                            {/if}
                                             <div>
                                                 <span class="text-xs text-zinc-500 font-medium">Header</span>
                                                 <pre class="text-xs text-blue-400 mt-1 bg-zinc-800 rounded p-2 overflow-auto">{JSON.stringify(decoded.header, null, 2)}</pre>
@@ -1692,7 +1796,7 @@
                                 <div class="border border-zinc-700 rounded-lg overflow-hidden">
                                     <div class="flex items-center justify-between px-3 py-2 bg-zinc-800 border-b border-zinc-700">
                                         <span class="text-sm font-medium text-zinc-200">Access Token</span>
-                                        <button onclick={() => showAccessToken = !showAccessToken} class="text-xs text-orange-400 hover:text-orange-300">{showAccessToken ? 'Hide raw' : 'Show raw'}</button>
+                                        <button onclick={() => showAccessToken = !showAccessToken} class="text-xs text-orange-400 hover:text-orange-300 transition-colors">{showAccessToken ? 'Hide raw' : 'Show raw'}</button>
                                     </div>
                                     {#if showAccessToken}
                                         <div class="p-3">
@@ -1701,6 +1805,18 @@
                                     {/if}
                                     {#if decoded}
                                         <div class="p-3 space-y-3">
+                                            {#if decoded.payload}
+                                                {@const p = decoded.payload as Record<string, unknown>}
+                                                <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-3 bg-zinc-800/50 rounded p-3">
+                                                    {#if p.sub}<span class="text-zinc-500">Subject (sub)</span><span class="text-zinc-200 font-mono truncate">{String(p.sub)}</span>{/if}
+                                                    {#if p.iss}<span class="text-zinc-500">Issuer (iss)</span><span class="text-zinc-200 font-mono truncate">{String(p.iss)}</span>{/if}
+                                                    {#if p.token_use}<span class="text-zinc-500">Token Use</span><span class="text-zinc-200">{String(p.token_use)}</span>{/if}
+                                                    {#if p.exp}<span class="text-zinc-500">Expires</span><span class="text-zinc-200">{new Date(Number(p.exp) * 1000).toLocaleString()}</span>{/if}
+                                                    {#if p.scope}<span class="text-zinc-500">Scopes</span><span class="text-zinc-200">{String(p.scope)}</span>{/if}
+                                                    {#if p['cognito:username']}<span class="text-zinc-500">Username</span><span class="text-zinc-200">{String(p['cognito:username'])}</span>{/if}
+                                                    {#if p.client_id}<span class="text-zinc-500">Client ID</span><span class="text-zinc-200 font-mono truncate">{String(p.client_id)}</span>{/if}
+                                                </div>
+                                            {/if}
                                             <div>
                                                 <span class="text-xs text-zinc-500 font-medium">Header</span>
                                                 <pre class="text-xs text-blue-400 mt-1 bg-zinc-800 rounded p-2 overflow-auto">{JSON.stringify(decoded.header, null, 2)}</pre>
