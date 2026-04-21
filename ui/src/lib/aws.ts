@@ -746,3 +746,732 @@ export async function listStateMachines(): Promise<{ stateMachines: StateMachine
         })),
     };
 }
+
+// ---- EventBridge ----
+
+export interface EventBus {
+    name: string;
+    arn: string;
+}
+
+export interface EventRule {
+    name: string;
+    arn: string;
+    state: string;
+    eventPattern?: string;
+    description?: string;
+}
+
+export async function listEventBuses(): Promise<{ eventBuses: EventBus[] }> {
+    const data = await awsRequest('events', 'ListEventBuses', {}, 'json', 'AWSEvents') as {
+        EventBuses?: { Name: string; Arn: string }[]
+    };
+    return {
+        eventBuses: (data.EventBuses ?? []).map((b) => ({
+            name: b.Name,
+            arn: b.Arn,
+        })),
+    };
+}
+
+export async function listRules(busName?: string): Promise<{ rules: EventRule[] }> {
+    const params: Record<string, unknown> = {};
+    if (busName) params['EventBusName'] = busName;
+    const data = await awsRequest('events', 'ListRules', params as unknown as Record<string, string>, 'json', 'AWSEvents') as {
+        Rules?: { Name: string; Arn: string; State: string; EventPattern?: string; Description?: string }[]
+    };
+    return {
+        rules: (data.Rules ?? []).map((r) => ({
+            name: r.Name,
+            arn: r.Arn,
+            state: r.State,
+            eventPattern: r.EventPattern,
+            description: r.Description,
+        })),
+    };
+}
+
+export async function putRule(name: string, busName: string, eventPattern: string): Promise<void> {
+    await awsRequest('events', 'PutRule', {
+        Name: name,
+        EventBusName: busName,
+        EventPattern: eventPattern,
+        State: 'ENABLED',
+    } as unknown as Record<string, string>, 'json', 'AWSEvents');
+}
+
+export async function deleteRule(name: string, busName: string): Promise<void> {
+    await awsRequest('events', 'DeleteRule', {
+        Name: name,
+        EventBusName: busName,
+    } as unknown as Record<string, string>, 'json', 'AWSEvents');
+}
+
+export async function putEvents(entries: { Source: string; DetailType: string; Detail: string; EventBusName?: string }[]): Promise<void> {
+    await awsRequest('events', 'PutEvents', {
+        Entries: entries,
+    } as unknown as Record<string, string>, 'json', 'AWSEvents');
+}
+
+// ---- KMS ----
+
+export interface KmsKey {
+    keyId: string;
+    keyArn: string;
+}
+
+export interface KmsKeyDetail {
+    keyId: string;
+    keyArn: string;
+    description: string;
+    keyState: string;
+    creationDate: string;
+}
+
+export interface KmsAlias {
+    aliasName: string;
+    aliasArn: string;
+    targetKeyId: string;
+}
+
+export async function listKeys(): Promise<{ keys: KmsKey[] }> {
+    const data = await awsRequest('kms', 'ListKeys', {}, 'json', 'TrentService') as {
+        Keys?: { KeyId: string; KeyArn: string }[]
+    };
+    return {
+        keys: (data.Keys ?? []).map((k) => ({
+            keyId: k.KeyId,
+            keyArn: k.KeyArn,
+        })),
+    };
+}
+
+export async function describeKey(keyId: string): Promise<KmsKeyDetail> {
+    const data = await awsRequest('kms', 'DescribeKey', { KeyId: keyId } as unknown as Record<string, string>, 'json', 'TrentService') as {
+        KeyMetadata?: { KeyId: string; Arn: string; Description?: string; KeyState: string; CreationDate: number }
+    };
+    const k = data.KeyMetadata ?? {} as NonNullable<typeof data.KeyMetadata>;
+    return {
+        keyId: k?.KeyId ?? keyId,
+        keyArn: k?.Arn ?? '',
+        description: k?.Description ?? '',
+        keyState: k?.KeyState ?? '',
+        creationDate: k?.CreationDate ? new Date(k.CreationDate * 1000).toISOString() : '',
+    };
+}
+
+export async function createKey(description?: string): Promise<{ keyId: string }> {
+    const params: Record<string, unknown> = {};
+    if (description) params['Description'] = description;
+    const data = await awsRequest('kms', 'CreateKey', params as unknown as Record<string, string>, 'json', 'TrentService') as {
+        KeyMetadata?: { KeyId: string }
+    };
+    return { keyId: data.KeyMetadata?.KeyId ?? '' };
+}
+
+export async function listAliases(): Promise<{ aliases: KmsAlias[] }> {
+    const data = await awsRequest('kms', 'ListAliases', {}, 'json', 'TrentService') as {
+        Aliases?: { AliasName: string; AliasArn: string; TargetKeyId?: string }[]
+    };
+    return {
+        aliases: (data.Aliases ?? []).map((a) => ({
+            aliasName: a.AliasName,
+            aliasArn: a.AliasArn,
+            targetKeyId: a.TargetKeyId ?? '',
+        })),
+    };
+}
+
+export async function createAlias(aliasName: string, targetKeyId: string): Promise<void> {
+    await awsRequest('kms', 'CreateAlias', {
+        AliasName: aliasName,
+        TargetKeyId: targetKeyId,
+    } as unknown as Record<string, string>, 'json', 'TrentService');
+}
+
+export async function kmsEncrypt(keyId: string, plaintext: string): Promise<{ ciphertextBlob: string }> {
+    // plaintext must be base64-encoded for KMS
+    const encoded = btoa(plaintext);
+    const data = await awsRequest('kms', 'Encrypt', {
+        KeyId: keyId,
+        Plaintext: encoded,
+    } as unknown as Record<string, string>, 'json', 'TrentService') as {
+        CiphertextBlob: string
+    };
+    return { ciphertextBlob: data.CiphertextBlob ?? '' };
+}
+
+export async function kmsDecrypt(ciphertextBlob: string): Promise<{ plaintext: string }> {
+    const data = await awsRequest('kms', 'Decrypt', {
+        CiphertextBlob: ciphertextBlob,
+    } as unknown as Record<string, string>, 'json', 'TrentService') as {
+        Plaintext: string
+    };
+    // Plaintext is returned as base64
+    return { plaintext: atob(data.Plaintext ?? '') };
+}
+
+// ---- SSM Parameter Store ----
+
+export interface SsmParameter {
+    name: string;
+    type: string;
+    version: number;
+    lastModifiedDate: string;
+}
+
+export interface SsmParameterValue {
+    name: string;
+    type: string;
+    value: string;
+    version: number;
+}
+
+export async function listParameters(): Promise<{ parameters: SsmParameter[] }> {
+    const data = await awsRequest('ssm', 'DescribeParameters', {}, 'json', 'AmazonSSM') as {
+        Parameters?: { Name: string; Type: string; Version?: number; LastModifiedDate?: number }[]
+    };
+    return {
+        parameters: (data.Parameters ?? []).map((p) => ({
+            name: p.Name,
+            type: p.Type,
+            version: p.Version ?? 1,
+            lastModifiedDate: p.LastModifiedDate
+                ? new Date(p.LastModifiedDate * 1000).toISOString()
+                : '',
+        })),
+    };
+}
+
+export async function getParameter(name: string): Promise<SsmParameterValue> {
+    const data = await awsRequest('ssm', 'GetParameter', {
+        Name: name,
+        WithDecryption: true,
+    } as unknown as Record<string, string>, 'json', 'AmazonSSM') as {
+        Parameter?: { Name: string; Type: string; Value: string; Version?: number }
+    };
+    const p = data.Parameter ?? {} as NonNullable<typeof data.Parameter>;
+    return {
+        name: p?.Name ?? name,
+        type: p?.Type ?? '',
+        value: p?.Value ?? '',
+        version: p?.Version ?? 1,
+    };
+}
+
+export async function putParameter(name: string, value: string, type: string): Promise<void> {
+    await awsRequest('ssm', 'PutParameter', {
+        Name: name,
+        Value: value,
+        Type: type,
+        Overwrite: true,
+    } as unknown as Record<string, string>, 'json', 'AmazonSSM');
+}
+
+export async function deleteParameter(name: string): Promise<void> {
+    await awsRequest('ssm', 'DeleteParameter', {
+        Name: name,
+    } as unknown as Record<string, string>, 'json', 'AmazonSSM');
+}
+
+// ---- SES v2 ----
+
+export interface SesIdentity {
+    emailIdentity: string;
+    verificationStatus: string;
+    identityType: string;
+}
+
+export interface SesTemplate {
+    templateName: string;
+    createdTimestamp: string;
+}
+
+function sesHeaders(): Record<string, string> {
+    return {
+        'Authorization': authHeader('ses'),
+        'X-Amz-Date': new Date().toISOString().replace(/[:-]/g, '').slice(0, 15) + 'Z',
+        'Content-Type': 'application/json',
+    };
+}
+
+export async function listEmailIdentities(): Promise<{ identities: SesIdentity[] }> {
+    const res = await fetch(`${ENDPOINT}/v2/email/identities`, {
+        headers: sesHeaders(),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    const data = await res.json() as {
+        EmailIdentities?: { IdentityName: string; VerificationStatus?: string; IdentityType?: string }[]
+    };
+    return {
+        identities: (data.EmailIdentities ?? []).map((i) => ({
+            emailIdentity: i.IdentityName,
+            verificationStatus: i.VerificationStatus ?? 'VERIFIED',
+            identityType: i.IdentityType ?? 'EMAIL_ADDRESS',
+        })),
+    };
+}
+
+export async function createEmailIdentity(emailIdentity: string): Promise<void> {
+    const res = await fetch(`${ENDPOINT}/v2/email/identities`, {
+        method: 'POST',
+        headers: sesHeaders(),
+        body: JSON.stringify({ EmailIdentity: emailIdentity }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+}
+
+export async function deleteEmailIdentity(emailIdentity: string): Promise<void> {
+    const res = await fetch(`${ENDPOINT}/v2/email/identities/${encodeURIComponent(emailIdentity)}`, {
+        method: 'DELETE',
+        headers: sesHeaders(),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+}
+
+export async function listEmailTemplates(): Promise<{ templates: SesTemplate[] }> {
+    const res = await fetch(`${ENDPOINT}/v2/email/templates`, {
+        headers: sesHeaders(),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    const data = await res.json() as {
+        TemplatesMetadata?: { TemplateName: string; CreatedTimestamp?: string }[]
+    };
+    return {
+        templates: (data.TemplatesMetadata ?? []).map((t) => ({
+            templateName: t.TemplateName,
+            createdTimestamp: t.CreatedTimestamp ?? '',
+        })),
+    };
+}
+
+export async function createEmailTemplate(
+    templateName: string,
+    subject: string,
+    htmlBody: string
+): Promise<void> {
+    const res = await fetch(`${ENDPOINT}/v2/email/templates`, {
+        method: 'POST',
+        headers: sesHeaders(),
+        body: JSON.stringify({
+            TemplateName: templateName,
+            TemplateContent: {
+                Subject: subject,
+                Html: htmlBody,
+            },
+        }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+}
+
+export async function deleteEmailTemplate(templateName: string): Promise<void> {
+    const res = await fetch(`${ENDPOINT}/v2/email/templates/${encodeURIComponent(templateName)}`, {
+        method: 'DELETE',
+        headers: sesHeaders(),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+}
+
+// ---- Step Functions (extended) ----
+
+export interface SfnExecution {
+    name: string;
+    arn: string;
+    status: string;
+    startDate: string;
+    stopDate?: string;
+}
+
+export async function createStateMachine(name: string, definition: string): Promise<void> {
+    await awsRequest('states', 'CreateStateMachine', {
+        name,
+        definition,
+        roleArn: 'arn:aws:iam::000000000000:role/exec',
+        type: 'STANDARD',
+    } as unknown as Record<string, string>, 'json', 'AWSStepFunctions');
+}
+
+export async function deleteStateMachine(arn: string): Promise<void> {
+    await awsRequest('states', 'DeleteStateMachine', {
+        stateMachineArn: arn,
+    } as unknown as Record<string, string>, 'json', 'AWSStepFunctions');
+}
+
+export async function listExecutions(stateMachineArn: string): Promise<{ executions: SfnExecution[] }> {
+    const data = await awsRequest('states', 'ListExecutions', {
+        stateMachineArn,
+    } as unknown as Record<string, string>, 'json', 'AWSStepFunctions') as {
+        executions?: { name: string; executionArn: string; status: string; startDate: number; stopDate?: number }[]
+    };
+    return {
+        executions: (data.executions ?? []).map((e) => ({
+            name: e.name,
+            arn: e.executionArn,
+            status: e.status,
+            startDate: e.startDate ? new Date(e.startDate).toISOString() : '—',
+            stopDate: e.stopDate ? new Date(e.stopDate).toISOString() : undefined,
+        })),
+    };
+}
+
+export async function startExecution(stateMachineArn: string, input: string): Promise<void> {
+    await awsRequest('states', 'StartExecution', {
+        stateMachineArn,
+        input,
+    } as unknown as Record<string, string>, 'json', 'AWSStepFunctions');
+}
+
+// ---- EC2 ----
+
+async function ec2Request(action: string, params: Record<string, string> = {}): Promise<string> {
+    const body = new URLSearchParams({ Action: action, Version: '2016-11-15', ...params });
+    const res = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': authHeader('ec2'),
+            'X-Amz-Date': new Date().toISOString().replace(/[:-]/g, '').slice(0, 15) + 'Z',
+        },
+        body: body.toString(),
+    });
+    return res.text();
+}
+
+export interface Ec2Vpc {
+    vpcId: string;
+    cidrBlock: string;
+    state: string;
+    isDefault: string;
+}
+
+export interface Ec2Subnet {
+    subnetId: string;
+    vpcId: string;
+    cidrBlock: string;
+    availabilityZone: string;
+    availableIpAddressCount: string;
+}
+
+export interface Ec2SecurityGroup {
+    groupId: string;
+    groupName: string;
+    description: string;
+    vpcId: string;
+}
+
+export async function describeVpcs(): Promise<{ vpcs: Ec2Vpc[] }> {
+    const xml = await ec2Request('DescribeVpcs');
+    const raw = xmlArray(xml, 'item', ['vpcId', 'cidrBlock', 'state', 'isDefault']);
+    return {
+        vpcs: raw.map((v) => ({
+            vpcId: v['vpcId'] ?? '',
+            cidrBlock: v['cidrBlock'] ?? '',
+            state: v['state'] ?? '',
+            isDefault: v['isDefault'] ?? '',
+        })),
+    };
+}
+
+export async function describeSubnets(): Promise<{ subnets: Ec2Subnet[] }> {
+    const xml = await ec2Request('DescribeSubnets');
+    const raw = xmlArray(xml, 'item', ['subnetId', 'vpcId', 'cidrBlock', 'availabilityZone', 'availableIpAddressCount']);
+    return {
+        subnets: raw.map((s) => ({
+            subnetId: s['subnetId'] ?? '',
+            vpcId: s['vpcId'] ?? '',
+            cidrBlock: s['cidrBlock'] ?? '',
+            availabilityZone: s['availabilityZone'] ?? '',
+            availableIpAddressCount: s['availableIpAddressCount'] ?? '',
+        })),
+    };
+}
+
+export async function describeSecurityGroups(): Promise<{ securityGroups: Ec2SecurityGroup[] }> {
+    const xml = await ec2Request('DescribeSecurityGroups');
+    const raw = xmlArray(xml, 'item', ['groupId', 'groupName', 'groupDescription', 'vpcId']);
+    return {
+        securityGroups: raw.map((g) => ({
+            groupId: g['groupId'] ?? '',
+            groupName: g['groupName'] ?? '',
+            description: g['groupDescription'] ?? '',
+            vpcId: g['vpcId'] ?? '',
+        })),
+    };
+}
+
+export async function createVpc(cidrBlock: string): Promise<void> {
+    await ec2Request('CreateVpc', { CidrBlock: cidrBlock });
+}
+
+export async function deleteVpc(vpcId: string): Promise<void> {
+    await ec2Request('DeleteVpc', { VpcId: vpcId });
+}
+
+export async function createSecurityGroup(name: string, desc: string, vpcId: string): Promise<void> {
+    await ec2Request('CreateSecurityGroup', { GroupName: name, Description: desc, VpcId: vpcId });
+}
+
+export async function deleteSecurityGroup(groupId: string): Promise<void> {
+    await ec2Request('DeleteSecurityGroup', { GroupId: groupId });
+}
+
+// ---- ECS ----
+
+export interface EcsCluster {
+    clusterArn: string;
+    clusterName: string;
+    status: string;
+}
+
+export async function listClusters(): Promise<{ clusterArns: string[] }> {
+    const data = await awsRequest('ecs', 'ListClusters', {}, 'json', 'AmazonEC2ContainerServiceV20141113') as {
+        clusterArns?: string[]
+    };
+    return { clusterArns: data.clusterArns ?? [] };
+}
+
+export async function describeClusters(clusterArns: string[]): Promise<{ clusters: EcsCluster[] }> {
+    const data = await awsRequest('ecs', 'DescribeClusters', {
+        clusters: clusterArns,
+    } as unknown as Record<string, string>, 'json', 'AmazonEC2ContainerServiceV20141113') as {
+        clusters?: { clusterArn: string; clusterName: string; status: string }[]
+    };
+    return {
+        clusters: (data.clusters ?? []).map((c) => ({
+            clusterArn: c.clusterArn,
+            clusterName: c.clusterName,
+            status: c.status,
+        })),
+    };
+}
+
+export async function createCluster(name: string): Promise<void> {
+    await awsRequest('ecs', 'CreateCluster', {
+        clusterName: name,
+    } as unknown as Record<string, string>, 'json', 'AmazonEC2ContainerServiceV20141113');
+}
+
+export async function deleteCluster(cluster: string): Promise<void> {
+    await awsRequest('ecs', 'DeleteCluster', {
+        cluster,
+    } as unknown as Record<string, string>, 'json', 'AmazonEC2ContainerServiceV20141113');
+}
+
+export async function listTaskDefinitions(): Promise<{ taskDefinitionArns: string[] }> {
+    const data = await awsRequest('ecs', 'ListTaskDefinitions', {}, 'json', 'AmazonEC2ContainerServiceV20141113') as {
+        taskDefinitionArns?: string[]
+    };
+    return { taskDefinitionArns: data.taskDefinitionArns ?? [] };
+}
+
+export async function listServices(cluster: string): Promise<{ serviceArns: string[] }> {
+    const data = await awsRequest('ecs', 'ListServices', {
+        cluster,
+    } as unknown as Record<string, string>, 'json', 'AmazonEC2ContainerServiceV20141113') as {
+        serviceArns?: string[]
+    };
+    return { serviceArns: data.serviceArns ?? [] };
+}
+
+// ---- ECR ----
+
+export interface EcrRepository {
+    repositoryName: string;
+    repositoryUri: string;
+    repositoryArn: string;
+    createdAt: string;
+}
+
+export async function listRepositories(): Promise<{ repositories: EcrRepository[] }> {
+    const data = await awsRequest('ecr', 'DescribeRepositories', {}, 'json', 'AmazonEC2ContainerRegistry_V20150921') as {
+        repositories?: { repositoryName: string; repositoryUri: string; repositoryArn: string; createdAt?: number }[]
+    };
+    return {
+        repositories: (data.repositories ?? []).map((r) => ({
+            repositoryName: r.repositoryName,
+            repositoryUri: r.repositoryUri,
+            repositoryArn: r.repositoryArn,
+            createdAt: r.createdAt ? new Date(r.createdAt * 1000).toISOString() : '—',
+        })),
+    };
+}
+
+export async function createRepository(name: string): Promise<void> {
+    await awsRequest('ecr', 'CreateRepository', {
+        repositoryName: name,
+    } as unknown as Record<string, string>, 'json', 'AmazonEC2ContainerRegistry_V20150921');
+}
+
+export async function deleteRepository(name: string): Promise<void> {
+    await awsRequest('ecr', 'DeleteRepository', {
+        repositoryName: name,
+        force: true,
+    } as unknown as Record<string, string>, 'json', 'AmazonEC2ContainerRegistry_V20150921');
+}
+
+// ---- CloudFormation ----
+
+async function cfRequest(action: string, params: Record<string, string> = {}): Promise<string> {
+    const body = new URLSearchParams({ Action: action, Version: '2010-05-15', ...params });
+    const res = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': authHeader('cloudformation'),
+            'X-Amz-Date': new Date().toISOString().replace(/[:-]/g, '').slice(0, 15) + 'Z',
+        },
+        body: body.toString(),
+    });
+    return res.text();
+}
+
+export interface CfStack {
+    stackName: string;
+    stackId: string;
+    stackStatus: string;
+    creationTime: string;
+    description: string;
+}
+
+export interface CfStackResource {
+    logicalResourceId: string;
+    physicalResourceId: string;
+    resourceType: string;
+    resourceStatus: string;
+}
+
+export interface CfStackEvent {
+    eventId: string;
+    stackName: string;
+    logicalResourceId: string;
+    resourceType: string;
+    resourceStatus: string;
+    timestamp: string;
+}
+
+export async function listStacks(): Promise<{ stacks: CfStack[] }> {
+    const xml = await cfRequest('ListStacks');
+    const raw = xmlArray(xml, 'member', ['StackName', 'StackId', 'StackStatus', 'CreationTime', 'TemplateDescription']);
+    return {
+        stacks: raw.map((s) => ({
+            stackName: s['StackName'] ?? '',
+            stackId: s['StackId'] ?? '',
+            stackStatus: s['StackStatus'] ?? '',
+            creationTime: s['CreationTime'] ?? '',
+            description: s['TemplateDescription'] ?? '',
+        })),
+    };
+}
+
+export async function describeStacks(stackName?: string): Promise<{ stacks: CfStack[] }> {
+    const params: Record<string, string> = stackName ? { StackName: stackName } : {};
+    const xml = await cfRequest('DescribeStacks', params);
+    const raw = xmlArray(xml, 'member', ['StackName', 'StackId', 'StackStatus', 'CreationTime', 'Description']);
+    return {
+        stacks: raw.map((s) => ({
+            stackName: s['StackName'] ?? '',
+            stackId: s['StackId'] ?? '',
+            stackStatus: s['StackStatus'] ?? '',
+            creationTime: s['CreationTime'] ?? '',
+            description: s['Description'] ?? '',
+        })),
+    };
+}
+
+export async function createStack(name: string, templateBody: string): Promise<void> {
+    await cfRequest('CreateStack', { StackName: name, TemplateBody: templateBody });
+}
+
+export async function deleteStack(name: string): Promise<void> {
+    await cfRequest('DeleteStack', { StackName: name });
+}
+
+export async function describeStackResources(stackName: string): Promise<{ resources: CfStackResource[] }> {
+    const xml = await cfRequest('DescribeStackResources', { StackName: stackName });
+    const raw = xmlArray(xml, 'member', ['LogicalResourceId', 'PhysicalResourceId', 'ResourceType', 'ResourceStatus']);
+    return {
+        resources: raw.map((r) => ({
+            logicalResourceId: r['LogicalResourceId'] ?? '',
+            physicalResourceId: r['PhysicalResourceId'] ?? '',
+            resourceType: r['ResourceType'] ?? '',
+            resourceStatus: r['ResourceStatus'] ?? '',
+        })),
+    };
+}
+
+export async function describeStackEvents(stackName: string): Promise<{ events: CfStackEvent[] }> {
+    const xml = await cfRequest('DescribeStackEvents', { StackName: stackName });
+    const raw = xmlArray(xml, 'member', ['EventId', 'StackName', 'LogicalResourceId', 'ResourceType', 'ResourceStatus', 'Timestamp']);
+    return {
+        events: raw.map((e) => ({
+            eventId: e['EventId'] ?? '',
+            stackName: e['StackName'] ?? '',
+            logicalResourceId: e['LogicalResourceId'] ?? '',
+            resourceType: e['ResourceType'] ?? '',
+            resourceStatus: e['ResourceStatus'] ?? '',
+            timestamp: e['Timestamp'] ?? '',
+        })),
+    };
+}
+
+// ---- Kinesis ----
+
+export interface KinesisStream {
+    streamName: string;
+    streamStatus: string;
+    shardCount: number;
+    retentionPeriodHours: number;
+}
+
+export interface KinesisShard {
+    shardId: string;
+    startingSequenceNumber: string;
+    endingSequenceNumber?: string;
+}
+
+export async function listStreams(): Promise<{ streamNames: string[] }> {
+    const data = await awsRequest('kinesis', 'ListStreams', {}, 'json', 'Kinesis_20131202') as {
+        StreamNames?: string[]
+    };
+    return { streamNames: data.StreamNames ?? [] };
+}
+
+export async function describeStream(name: string): Promise<{ stream: KinesisStream; shards: KinesisShard[] }> {
+    const data = await awsRequest('kinesis', 'DescribeStream', {
+        StreamName: name,
+    } as unknown as Record<string, string>, 'json', 'Kinesis_20131202') as {
+        StreamDescription?: {
+            StreamName: string;
+            StreamStatus: string;
+            RetentionPeriodHours: number;
+            Shards: { ShardId: string; SequenceNumberRange: { StartingSequenceNumber: string; EndingSequenceNumber?: string } }[]
+        }
+    };
+    const desc = data.StreamDescription;
+    return {
+        stream: {
+            streamName: desc?.StreamName ?? name,
+            streamStatus: desc?.StreamStatus ?? '',
+            shardCount: desc?.Shards?.length ?? 0,
+            retentionPeriodHours: desc?.RetentionPeriodHours ?? 24,
+        },
+        shards: (desc?.Shards ?? []).map((s) => ({
+            shardId: s.ShardId,
+            startingSequenceNumber: s.SequenceNumberRange.StartingSequenceNumber,
+            endingSequenceNumber: s.SequenceNumberRange.EndingSequenceNumber,
+        })),
+    };
+}
+
+export async function createStream(name: string, shardCount: number): Promise<void> {
+    await awsRequest('kinesis', 'CreateStream', {
+        StreamName: name,
+        ShardCount: shardCount,
+    } as unknown as Record<string, string>, 'json', 'Kinesis_20131202');
+}
+
+export async function deleteStream(name: string): Promise<void> {
+    await awsRequest('kinesis', 'DeleteStream', {
+        StreamName: name,
+    } as unknown as Record<string, string>, 'json', 'Kinesis_20131202');
+}
