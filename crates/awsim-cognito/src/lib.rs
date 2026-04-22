@@ -8,11 +8,13 @@ pub use identity::CognitoIdentityService;
 pub use oauth::CognitoOAuthState;
 pub use state::CognitoState;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
 use serde_json::Value;
+use state::UserPool;
 use tracing::debug;
 
 pub struct CognitoService {
@@ -360,4 +362,46 @@ impl ServiceHandler for CognitoService {
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let entries = self.store.iter_all();
+        let snap: Vec<(String, String, CognitoSnapshot)> = entries
+            .into_iter()
+            .map(|((account, region), state)| {
+                let pools: HashMap<String, UserPool> = state
+                    .user_pools
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect();
+                let domains: HashMap<String, String> = state
+                    .domain_pool_map
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect();
+                (account, region, CognitoSnapshot { pools, domains })
+            })
+            .collect();
+        serde_json::to_vec(&snap).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let snap: Vec<(String, String, CognitoSnapshot)> =
+            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        for (account, region, cs) in snap {
+            let state = self.store.get(&account, &region);
+            for (id, pool) in cs.pools {
+                state.user_pools.insert(id, pool);
+            }
+            for (domain, pool_id) in cs.domains {
+                state.domain_pool_map.insert(domain, pool_id);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CognitoSnapshot {
+    pools: HashMap<String, UserPool>,
+    domains: HashMap<String, String>,
 }
