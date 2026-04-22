@@ -2,6 +2,11 @@
     import { onMount } from 'svelte';
     import {
         listUserPools, createUserPool, deleteUserPool, describeUserPool,
+        updateUserPool,
+        createUserPoolDomain, deleteUserPoolDomain,
+        listResourceServers, createResourceServer, deleteResourceServer,
+        listIdentityProviders, createIdentityProvider, deleteIdentityProvider,
+        addCustomAttributes,
         listUserPoolClients, createUserPoolClient, describeUserPoolClient, deleteUserPoolClient,
         listCognitoUsers, adminCreateUser, adminDeleteUser, adminGetUser,
         adminSetUserPassword, adminEnableUser, adminDisableUser, adminUpdateUserAttributes,
@@ -11,7 +16,7 @@
         listIdentityPools, createIdentityPool, deleteIdentityPool, describeIdentityPool,
         type CognitoUserPool, type CognitoUser, type CognitoUserPoolClient,
         type CognitoUserPoolClientDetail, type CognitoGroup, type CognitoUserDetail,
-        type CognitoIdentityPool,
+        type CognitoIdentityPool, type CognitoResourceServer, type CognitoIdentityProvider,
     } from '$lib/aws';
 
     // ---- Top-level tabs ----
@@ -100,6 +105,84 @@
     // ---- Settings sub-tab ----
     let poolDetail = $state<unknown>(null);
     let poolDetailLoading = $state(false);
+
+    // General
+    let settingDeletionProtection = $state(false);
+    let savingDeletionProtection = $state(false);
+    let savedDeletionProtection = $state(false);
+
+    // MFA
+    let settingMfaConfig = $state<'OFF' | 'OPTIONAL' | 'ON'>('OFF');
+    let settingMfaTotp = $state(false);
+    let settingMfaSms = $state(false);
+    let savingMfa = $state(false);
+    let savedMfa = $state(false);
+
+    // Password Policy
+    let settingPwMinLength = $state(8);
+    let settingPwUppercase = $state(true);
+    let settingPwLowercase = $state(true);
+    let settingPwNumbers = $state(true);
+    let settingPwSymbols = $state(false);
+    let settingPwTempExpiry = $state(7);
+    let savingPassword = $state(false);
+    let savedPassword = $state(false);
+
+    // Lambda Triggers
+    const TRIGGER_KEYS = [
+        'PreSignUp', 'PostConfirmation', 'PreAuthentication', 'PostAuthentication',
+        'PreTokenGeneration', 'CustomMessage', 'DefineAuthChallenge',
+        'CreateAuthChallenge', 'VerifyAuthChallengeResponse', 'UserMigration',
+    ] as const;
+    type TriggerKey = typeof TRIGGER_KEYS[number];
+    let settingTriggers = $state<Record<TriggerKey, string>>({
+        PreSignUp: '', PostConfirmation: '', PreAuthentication: '', PostAuthentication: '',
+        PreTokenGeneration: '', CustomMessage: '', DefineAuthChallenge: '',
+        CreateAuthChallenge: '', VerifyAuthChallengeResponse: '', UserMigration: '',
+    });
+    let savingTriggers = $state(false);
+    let savedTriggers = $state(false);
+
+    // Domain
+    let currentDomain = $state('');
+    let newDomainPrefix = $state('');
+    let savingDomain = $state(false);
+    let deletingDomain = $state(false);
+    let domainError = $state<string | null>(null);
+
+    // Auto-Verified Attributes
+    let settingAutoVerifyEmail = $state(false);
+    let settingAutoVerifyPhone = $state(false);
+    let savingAutoVerify = $state(false);
+    let savedAutoVerify = $state(false);
+
+    // User Attribute Schema
+    let poolSchemaAttrs = $state<{ name: string; type: string; mutable: boolean; required: boolean }[]>([]);
+    let newCustomAttrName = $state('');
+    let newCustomAttrType = $state('String');
+    let addingCustomAttr = $state(false);
+    let customAttrError = $state<string | null>(null);
+
+    // Resource Servers
+    let resourceServers = $state<CognitoResourceServer[]>([]);
+    let resourceServersLoading = $state(false);
+    let showCreateResourceServer = $state(false);
+    let newRsIdentifier = $state('');
+    let newRsName = $state('');
+    let newRsScopes = $state<{ name: string; description: string }[]>([{ name: '', description: '' }]);
+    let creatingResourceServer = $state(false);
+    let resourceServerError = $state<string | null>(null);
+
+    // Identity Providers (per pool)
+    let poolIdps = $state<CognitoIdentityProvider[]>([]);
+    let poolIdpsLoading = $state(false);
+    let showCreateIdp = $state(false);
+    let newIdpType = $state('OIDC');
+    let newIdpName = $state('');
+    let newIdpDetails = $state<{ key: string; value: string }[]>([{ key: 'client_id', value: '' }, { key: 'client_secret', value: '' }, { key: 'authorize_scopes', value: 'openid' }]);
+    let newIdpMapping = $state<{ key: string; value: string }[]>([{ key: 'email', value: 'email' }]);
+    let creatingIdp = $state(false);
+    let idpError = $state<string | null>(null);
 
     // ---- Identity Pools ----
     let identityPools = $state<CognitoIdentityPool[]>([]);
@@ -529,11 +612,278 @@
         try {
             const data = await describeUserPool(selectedPool.id);
             poolDetail = data;
+            const pd = data as Record<string, unknown>;
+            const up = (pd['UserPool'] ?? {}) as Record<string, unknown>;
+
+            // MFA
+            const mfa = String(up['MfaConfiguration'] ?? 'OFF') as 'OFF' | 'OPTIONAL' | 'ON';
+            settingMfaConfig = mfa;
+            const enabledMfas = (up['EnabledMfas'] as string[] | undefined) ?? [];
+            settingMfaTotp = enabledMfas.includes('SOFTWARE_TOKEN_MFA');
+            settingMfaSms = enabledMfas.includes('SMS_MFA');
+
+            // Password Policy
+            const policies = ((up['Policies'] as Record<string, unknown> | undefined)?.['PasswordPolicy'] as Record<string, unknown> | undefined) ?? {};
+            settingPwMinLength = Number(policies['MinimumLength'] ?? 8);
+            settingPwUppercase = Boolean(policies['RequireUppercase'] ?? true);
+            settingPwLowercase = Boolean(policies['RequireLowercase'] ?? true);
+            settingPwNumbers = Boolean(policies['RequireNumbers'] ?? true);
+            settingPwSymbols = Boolean(policies['RequireSymbols'] ?? false);
+            settingPwTempExpiry = Number(policies['TemporaryPasswordValidityDays'] ?? 7);
+
+            // Deletion Protection
+            settingDeletionProtection = String(up['DeletionProtection'] ?? 'INACTIVE') === 'ACTIVE';
+
+            // Lambda Triggers
+            const lambdaConfig = (up['LambdaConfig'] as Record<string, string> | undefined) ?? {};
+            for (const key of TRIGGER_KEYS) {
+                settingTriggers[key] = lambdaConfig[key] ?? '';
+            }
+
+            // Auto-Verified Attributes
+            const autoVerified = (up['AutoVerifiedAttributes'] as string[] | undefined) ?? [];
+            settingAutoVerifyEmail = autoVerified.includes('email');
+            settingAutoVerifyPhone = autoVerified.includes('phone_number');
+
+            // Schema Attributes
+            const schema = (up['SchemaAttributes'] as { Name: string; AttributeDataType: string; Mutable?: boolean; Required?: boolean }[] | undefined) ?? [];
+            poolSchemaAttrs = schema.map((s) => ({
+                name: s.Name,
+                type: s.AttributeDataType,
+                mutable: s.Mutable ?? true,
+                required: s.Required ?? false,
+            }));
+
+            // Domain
+            currentDomain = String(up['Domain'] ?? '');
+
         } catch {
             poolDetail = null;
         } finally {
             poolDetailLoading = false;
         }
+
+        // Load resource servers and IdPs in parallel
+        if (selectedPool) {
+            resourceServersLoading = true;
+            poolIdpsLoading = true;
+            try {
+                const [rsData, idpData] = await Promise.all([
+                    listResourceServers(selectedPool.id),
+                    listIdentityProviders(selectedPool.id),
+                ]);
+                resourceServers = rsData.servers;
+                poolIdps = idpData.providers;
+            } catch {
+                resourceServers = [];
+                poolIdps = [];
+            } finally {
+                resourceServersLoading = false;
+                poolIdpsLoading = false;
+            }
+        }
+    }
+
+    async function saveMfa() {
+        if (!selectedPool) return;
+        savingMfa = true;
+        savedMfa = false;
+        try {
+            const enabledMfas: string[] = [];
+            if (settingMfaTotp) enabledMfas.push('SOFTWARE_TOKEN_MFA');
+            if (settingMfaSms) enabledMfas.push('SMS_MFA');
+            await updateUserPool(selectedPool.id, {
+                MfaConfiguration: settingMfaConfig,
+                ...(enabledMfas.length > 0 ? { EnabledMfas: enabledMfas } : {}),
+            });
+            savedMfa = true;
+            setTimeout(() => { savedMfa = false; }, 2500);
+        } catch { /* ignore */ } finally {
+            savingMfa = false;
+        }
+    }
+
+    async function savePasswordPolicy() {
+        if (!selectedPool) return;
+        savingPassword = true;
+        savedPassword = false;
+        try {
+            await updateUserPool(selectedPool.id, {
+                Policies: {
+                    PasswordPolicy: {
+                        MinimumLength: settingPwMinLength,
+                        RequireUppercase: settingPwUppercase,
+                        RequireLowercase: settingPwLowercase,
+                        RequireNumbers: settingPwNumbers,
+                        RequireSymbols: settingPwSymbols,
+                        TemporaryPasswordValidityDays: settingPwTempExpiry,
+                    },
+                },
+            });
+            savedPassword = true;
+            setTimeout(() => { savedPassword = false; }, 2500);
+        } catch { /* ignore */ } finally {
+            savingPassword = false;
+        }
+    }
+
+    async function saveDeletionProtection() {
+        if (!selectedPool) return;
+        savingDeletionProtection = true;
+        savedDeletionProtection = false;
+        try {
+            await updateUserPool(selectedPool.id, {
+                DeletionProtection: settingDeletionProtection ? 'ACTIVE' : 'INACTIVE',
+            });
+            savedDeletionProtection = true;
+            setTimeout(() => { savedDeletionProtection = false; }, 2500);
+        } catch { /* ignore */ } finally {
+            savingDeletionProtection = false;
+        }
+    }
+
+    async function saveTriggers() {
+        if (!selectedPool) return;
+        savingTriggers = true;
+        savedTriggers = false;
+        try {
+            const lambdaConfig: Record<string, string> = {};
+            for (const key of TRIGGER_KEYS) {
+                if (settingTriggers[key].trim()) {
+                    lambdaConfig[key] = settingTriggers[key].trim();
+                }
+            }
+            await updateUserPool(selectedPool.id, { LambdaConfig: lambdaConfig });
+            savedTriggers = true;
+            setTimeout(() => { savedTriggers = false; }, 2500);
+        } catch { /* ignore */ } finally {
+            savingTriggers = false;
+        }
+    }
+
+    async function saveAutoVerify() {
+        if (!selectedPool) return;
+        savingAutoVerify = true;
+        savedAutoVerify = false;
+        try {
+            const attrs: string[] = [];
+            if (settingAutoVerifyEmail) attrs.push('email');
+            if (settingAutoVerifyPhone) attrs.push('phone_number');
+            await updateUserPool(selectedPool.id, { AutoVerifiedAttributes: attrs });
+            savedAutoVerify = true;
+            setTimeout(() => { savedAutoVerify = false; }, 2500);
+        } catch { /* ignore */ } finally {
+            savingAutoVerify = false;
+        }
+    }
+
+    async function handleCreateDomain() {
+        if (!selectedPool || !newDomainPrefix.trim()) return;
+        savingDomain = true;
+        domainError = null;
+        try {
+            await createUserPoolDomain(selectedPool.id, newDomainPrefix.trim());
+            currentDomain = newDomainPrefix.trim();
+            newDomainPrefix = '';
+        } catch (e) {
+            domainError = e instanceof Error ? e.message : 'Failed to create domain';
+        } finally {
+            savingDomain = false;
+        }
+    }
+
+    async function handleDeleteDomain() {
+        if (!selectedPool || !currentDomain) return;
+        deletingDomain = true;
+        domainError = null;
+        try {
+            await deleteUserPoolDomain(selectedPool.id, currentDomain);
+            currentDomain = '';
+        } catch (e) {
+            domainError = e instanceof Error ? e.message : 'Failed to delete domain';
+        } finally {
+            deletingDomain = false;
+        }
+    }
+
+    async function handleAddCustomAttr() {
+        if (!selectedPool || !newCustomAttrName.trim()) return;
+        addingCustomAttr = true;
+        customAttrError = null;
+        try {
+            await addCustomAttributes(selectedPool.id, [{ Name: newCustomAttrName.trim(), AttributeDataType: newCustomAttrType }]);
+            poolSchemaAttrs = [...poolSchemaAttrs, { name: `custom:${newCustomAttrName.trim()}`, type: newCustomAttrType, mutable: true, required: false }];
+            newCustomAttrName = '';
+            newCustomAttrType = 'String';
+        } catch (e) {
+            customAttrError = e instanceof Error ? e.message : 'Failed to add attribute';
+        } finally {
+            addingCustomAttr = false;
+        }
+    }
+
+    async function handleCreateResourceServer() {
+        if (!selectedPool || !newRsIdentifier.trim() || !newRsName.trim()) return;
+        creatingResourceServer = true;
+        resourceServerError = null;
+        try {
+            await createResourceServer(selectedPool.id, newRsIdentifier.trim(), newRsName.trim(),
+                newRsScopes.filter((s) => s.name.trim()));
+            showCreateResourceServer = false;
+            newRsIdentifier = '';
+            newRsName = '';
+            newRsScopes = [{ name: '', description: '' }];
+            const data = await listResourceServers(selectedPool.id);
+            resourceServers = data.servers;
+        } catch (e) {
+            resourceServerError = e instanceof Error ? e.message : 'Failed to create resource server';
+        } finally {
+            creatingResourceServer = false;
+        }
+    }
+
+    async function handleDeleteResourceServer(identifier: string) {
+        if (!selectedPool) return;
+        try {
+            await deleteResourceServer(selectedPool.id, identifier);
+            resourceServers = resourceServers.filter((s) => s.identifier !== identifier);
+        } catch { /* ignore */ }
+    }
+
+    async function handleCreateIdp() {
+        if (!selectedPool || !newIdpName.trim() || !newIdpType) return;
+        creatingIdp = true;
+        idpError = null;
+        try {
+            const details: Record<string, string> = {};
+            for (const e of newIdpDetails) {
+                if (e.key.trim()) details[e.key.trim()] = e.value;
+            }
+            const mapping: Record<string, string> = {};
+            for (const e of newIdpMapping) {
+                if (e.key.trim()) mapping[e.key.trim()] = e.value;
+            }
+            await createIdentityProvider(selectedPool.id, newIdpName.trim(), newIdpType, details, mapping);
+            showCreateIdp = false;
+            newIdpName = '';
+            newIdpType = 'OIDC';
+            newIdpDetails = [{ key: 'client_id', value: '' }, { key: 'client_secret', value: '' }, { key: 'authorize_scopes', value: 'openid' }];
+            newIdpMapping = [{ key: 'email', value: 'email' }];
+            const data = await listIdentityProviders(selectedPool.id);
+            poolIdps = data.providers;
+        } catch (e) {
+            idpError = e instanceof Error ? e.message : 'Failed to create IdP';
+        } finally {
+            creatingIdp = false;
+        }
+    }
+
+    async function handleDeleteIdp(providerName: string) {
+        if (!selectedPool) return;
+        try {
+            await deleteIdentityProvider(selectedPool.id, providerName);
+            poolIdps = poolIdps.filter((p) => p.providerName !== providerName);
+        } catch { /* ignore */ }
     }
 
     // ---- Sub-tab switch ----
@@ -1348,84 +1698,504 @@
 
                             <!-- ---- Settings sub-tab ---- -->
                             {:else if poolSubTab === 'settings'}
-                                <div class="p-4">
+                                <div class="p-4 overflow-auto">
                                     {#if poolDetailLoading}
                                         <div class="text-zinc-500 text-sm">Loading settings...</div>
-                                    {:else if poolDetail}
-                                        {@const pd = poolDetail as Record<string, unknown>}
-                                        {@const up = (pd['UserPool'] ?? {}) as Record<string, unknown>}
+                                    {:else if !poolDetail}
+                                        <div class="text-zinc-500 text-sm">No settings available.</div>
+                                    {:else}
                                         <div class="space-y-4">
-                                            <div>
-                                                <h4 class="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2">MFA Configuration</h4>
-                                                <div class="bg-zinc-800 rounded px-3 py-2 text-sm text-zinc-200">
-                                                    {String(up['MfaConfiguration'] ?? 'OFF')}
-                                                </div>
-                                            </div>
-                                            {#if up['Policies']}
-                                                {@const policies = (up['Policies'] as Record<string, unknown>)['PasswordPolicy'] as Record<string, unknown> | undefined}
-                                                {#if policies}
-                                                    <div>
-                                                        <h4 class="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2">Password Policy</h4>
-                                                        <div class="bg-zinc-800 rounded p-3 space-y-1">
-                                                            <div class="flex justify-between text-xs">
-                                                                <span class="text-zinc-400">Minimum Length</span>
-                                                                <span class="text-zinc-200">{String(policies['MinimumLength'] ?? '8')}</span>
-                                                            </div>
-                                                            <div class="flex justify-between text-xs">
-                                                                <span class="text-zinc-400">Require Uppercase</span>
-                                                                <span class="{policies['RequireUppercase'] ? 'text-green-400' : 'text-zinc-500'}">{policies['RequireUppercase'] ? 'Yes' : 'No'}</span>
-                                                            </div>
-                                                            <div class="flex justify-between text-xs">
-                                                                <span class="text-zinc-400">Require Lowercase</span>
-                                                                <span class="{policies['RequireLowercase'] ? 'text-green-400' : 'text-zinc-500'}">{policies['RequireLowercase'] ? 'Yes' : 'No'}</span>
-                                                            </div>
-                                                            <div class="flex justify-between text-xs">
-                                                                <span class="text-zinc-400">Require Numbers</span>
-                                                                <span class="{policies['RequireNumbers'] ? 'text-green-400' : 'text-zinc-500'}">{policies['RequireNumbers'] ? 'Yes' : 'No'}</span>
-                                                            </div>
-                                                            <div class="flex justify-between text-xs">
-                                                                <span class="text-zinc-400">Require Symbols</span>
-                                                                <span class="{policies['RequireSymbols'] ? 'text-green-400' : 'text-zinc-500'}">{policies['RequireSymbols'] ? 'Yes' : 'No'}</span>
-                                                            </div>
+
+                                            <!-- 1. General Settings -->
+                                            <div class="bg-zinc-800/50 rounded-lg border border-zinc-800 p-4">
+                                                <h4 class="text-sm font-medium text-zinc-200 flex items-center gap-2 mb-3">
+                                                    <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                                                    General Settings
+                                                </h4>
+                                                <div class="space-y-3">
+                                                    <div class="flex items-center justify-between">
+                                                        <div>
+                                                            <div class="text-xs text-zinc-400">Pool Name</div>
+                                                            <div class="text-sm text-zinc-200">{selectedPool?.name}</div>
                                                         </div>
                                                     </div>
+                                                    <div class="flex items-center justify-between">
+                                                        <div>
+                                                            <div class="text-xs text-zinc-400">Pool ID</div>
+                                                            <div class="text-xs font-mono text-zinc-300 bg-zinc-800 rounded px-2 py-1 mt-0.5">{selectedPool?.id}</div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="flex items-center justify-between pt-1">
+                                                        <div>
+                                                            <div class="text-xs text-zinc-200">Deletion Protection</div>
+                                                            <div class="text-xs text-zinc-500 mt-0.5">Prevent this pool from being deleted</div>
+                                                        </div>
+                                                        <div class="flex items-center gap-3">
+                                                            {#if savedDeletionProtection}
+                                                                <span class="text-xs text-green-400">Saved</span>
+                                                            {/if}
+                                                            <button
+                                                                onclick={() => { settingDeletionProtection = !settingDeletionProtection; }}
+                                                                aria-label="Toggle deletion protection"
+                                                                class="relative w-10 h-5 rounded-full transition-colors {settingDeletionProtection ? 'bg-orange-600' : 'bg-zinc-700'}"
+                                                            >
+                                                                <span class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform {settingDeletionProtection ? 'translate-x-5' : ''}"></span>
+                                                            </button>
+                                                            <button
+                                                                onclick={saveDeletionProtection}
+                                                                disabled={savingDeletionProtection}
+                                                                class="px-3 py-1 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium transition-all"
+                                                            >
+                                                                {savingDeletionProtection ? 'Saving...' : 'Save'}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <!-- 2. Sign-in Experience (MFA) -->
+                                            <div class="bg-zinc-800/50 rounded-lg border border-zinc-800 p-4">
+                                                <div class="flex items-center justify-between mb-3">
+                                                    <h4 class="text-sm font-medium text-zinc-200 flex items-center gap-2">
+                                                        <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                                                        Sign-in Experience
+                                                    </h4>
+                                                    <div class="flex items-center gap-2">
+                                                        {#if savedMfa}
+                                                            <span class="text-xs text-green-400">Saved</span>
+                                                        {/if}
+                                                        <button onclick={saveMfa} disabled={savingMfa}
+                                                            class="px-3 py-1 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium transition-all">
+                                                            {savingMfa ? 'Saving...' : 'Save'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="space-y-4">
+                                                    <div>
+                                                        <div class="text-xs text-zinc-400 mb-2">MFA Configuration</div>
+                                                        <div class="flex gap-4">
+                                                            {#each (['OFF', 'OPTIONAL', 'ON'] as const) as option}
+                                                                <label class="flex items-center gap-2 cursor-pointer">
+                                                                    <input type="radio" name="mfa-config" value={option} bind:group={settingMfaConfig}
+                                                                        class="text-orange-500 focus:ring-orange-500/50 accent-orange-500" />
+                                                                    <span class="text-sm {settingMfaConfig === option ? 'text-zinc-200' : 'text-zinc-500'}">{option}</span>
+                                                                </label>
+                                                            {/each}
+                                                        </div>
+                                                    </div>
+                                                    {#if settingMfaConfig !== 'OFF'}
+                                                        <div>
+                                                            <div class="text-xs text-zinc-400 mb-2">MFA Methods</div>
+                                                            <div class="space-y-2">
+                                                                <label class="flex items-center gap-2 cursor-pointer">
+                                                                    <input type="checkbox" bind:checked={settingMfaTotp} class="rounded accent-orange-500" />
+                                                                    <span class="text-sm text-zinc-300">TOTP (Authenticator app)</span>
+                                                                </label>
+                                                                <label class="flex items-center gap-2 cursor-pointer">
+                                                                    <input type="checkbox" bind:checked={settingMfaSms} class="rounded accent-orange-500" />
+                                                                    <span class="text-sm text-zinc-300">SMS (stub)</span>
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                    {/if}
+                                                </div>
+                                            </div>
+
+                                            <!-- 3. Password Policy -->
+                                            <div class="bg-zinc-800/50 rounded-lg border border-zinc-800 p-4">
+                                                <div class="flex items-center justify-between mb-3">
+                                                    <h4 class="text-sm font-medium text-zinc-200 flex items-center gap-2">
+                                                        <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                                                        Password Policy
+                                                    </h4>
+                                                    <div class="flex items-center gap-2">
+                                                        {#if savedPassword}
+                                                            <span class="text-xs text-green-400">Saved</span>
+                                                        {/if}
+                                                        <button onclick={savePasswordPolicy} disabled={savingPassword}
+                                                            class="px-3 py-1 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium transition-all">
+                                                            {savingPassword ? 'Saving...' : 'Save'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="space-y-3">
+                                                    <div class="flex items-center justify-between">
+                                                        <label class="text-xs text-zinc-300">Minimum length</label>
+                                                        <input
+                                                            type="number" min="6" max="99"
+                                                            bind:value={settingPwMinLength}
+                                                            class="w-20 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30"
+                                                        />
+                                                    </div>
+                                                    <div class="flex items-center justify-between">
+                                                        <label class="text-xs text-zinc-300">Temporary password expiry (days)</label>
+                                                        <input
+                                                            type="number" min="1" max="365"
+                                                            bind:value={settingPwTempExpiry}
+                                                            class="w-20 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30"
+                                                        />
+                                                    </div>
+                                                    {#each [
+                                                        { label: 'Require uppercase', key: 'settingPwUppercase', get: () => settingPwUppercase, set: (v: boolean) => { settingPwUppercase = v; } },
+                                                        { label: 'Require lowercase', key: 'settingPwLowercase', get: () => settingPwLowercase, set: (v: boolean) => { settingPwLowercase = v; } },
+                                                        { label: 'Require numbers', key: 'settingPwNumbers', get: () => settingPwNumbers, set: (v: boolean) => { settingPwNumbers = v; } },
+                                                        { label: 'Require symbols', key: 'settingPwSymbols', get: () => settingPwSymbols, set: (v: boolean) => { settingPwSymbols = v; } },
+                                                    ] as item}
+                                                        <div class="flex items-center justify-between">
+                                                            <span class="text-xs text-zinc-300">{item.label}</span>
+                                                            <button
+                                                                onclick={() => item.set(!item.get())}
+                                                                aria-label={item.label}
+                                                                class="relative w-10 h-5 rounded-full transition-colors {item.get() ? 'bg-orange-600' : 'bg-zinc-700'}"
+                                                            >
+                                                                <span class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform {item.get() ? 'translate-x-5' : ''}"></span>
+                                                            </button>
+                                                        </div>
+                                                    {/each}
+                                                </div>
+                                            </div>
+
+                                            <!-- 4. Lambda Triggers -->
+                                            <div class="bg-zinc-800/50 rounded-lg border border-zinc-800 p-4">
+                                                <div class="flex items-center justify-between mb-3">
+                                                    <h4 class="text-sm font-medium text-zinc-200 flex items-center gap-2">
+                                                        <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                                                        Lambda Triggers
+                                                    </h4>
+                                                    <div class="flex items-center gap-2">
+                                                        {#if savedTriggers}
+                                                            <span class="text-xs text-green-400">Saved</span>
+                                                        {/if}
+                                                        <button onclick={saveTriggers} disabled={savingTriggers}
+                                                            class="px-3 py-1 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium transition-all">
+                                                            {savingTriggers ? 'Saving...' : 'Save Triggers'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="space-y-2">
+                                                    {#each TRIGGER_KEYS as key}
+                                                        <div class="flex items-center gap-2">
+                                                            <span class="text-xs text-zinc-400 w-52 shrink-0">{key}</span>
+                                                            <input
+                                                                bind:value={settingTriggers[key]}
+                                                                class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30"
+                                                                placeholder="arn:aws:lambda:..."
+                                                            />
+                                                            {#if settingTriggers[key]}
+                                                                <button
+                                                                    onclick={() => { settingTriggers[key] = ''; }}
+                                                                    class="text-red-400 hover:text-red-300 text-xs px-1 transition-colors"
+                                                                >x</button>
+                                                            {/if}
+                                                        </div>
+                                                    {/each}
+                                                </div>
+                                            </div>
+
+                                            <!-- 5. Domain -->
+                                            <div class="bg-zinc-800/50 rounded-lg border border-zinc-800 p-4">
+                                                <h4 class="text-sm font-medium text-zinc-200 flex items-center gap-2 mb-3">
+                                                    <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                                                    Domain
+                                                </h4>
+                                                {#if domainError}
+                                                    <div class="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-xs mb-3">{domainError}</div>
                                                 {/if}
-                                            {/if}
-                                            {#if up['LambdaConfig']}
-                                                {@const lambdaConfig = up['LambdaConfig'] as Record<string, string>}
-                                                <div>
-                                                    <h4 class="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2">Lambda Triggers</h4>
-                                                    <div class="bg-zinc-800 rounded overflow-hidden">
-                                                        {#each Object.entries(lambdaConfig) as [trigger, arn]}
-                                                            <div class="flex px-3 py-2 border-b border-zinc-700/50 last:border-0">
-                                                                <span class="text-xs text-zinc-400 w-40 shrink-0">{trigger}</span>
-                                                                <span class="text-xs font-mono text-zinc-200 truncate">{arn}</span>
+                                                {#if currentDomain}
+                                                    <div class="flex items-center justify-between bg-zinc-800 rounded px-3 py-2 mb-2">
+                                                        <div>
+                                                            <div class="text-xs text-zinc-400 mb-0.5">Current domain</div>
+                                                            <div class="text-xs font-mono text-orange-400">{currentDomain}</div>
+                                                            <div class="text-xs text-zinc-500 mt-1 font-mono">
+                                                                http://localhost:4566/cognito/{selectedPool?.id}/oauth2/authorize
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            onclick={handleDeleteDomain}
+                                                            disabled={deletingDomain}
+                                                            class="px-2 py-1 bg-red-900/30 text-red-400 hover:bg-red-900/50 rounded text-xs transition-all disabled:opacity-50"
+                                                        >
+                                                            {deletingDomain ? '...' : 'Delete'}
+                                                        </button>
+                                                    </div>
+                                                {:else}
+                                                    <div class="flex gap-2">
+                                                        <input
+                                                            bind:value={newDomainPrefix}
+                                                            class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30"
+                                                            placeholder="Domain prefix"
+                                                        />
+                                                        <button
+                                                            onclick={handleCreateDomain}
+                                                            disabled={savingDomain || !newDomainPrefix.trim()}
+                                                            class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium transition-all"
+                                                        >
+                                                            {savingDomain ? 'Creating...' : 'Create'}
+                                                        </button>
+                                                    </div>
+                                                {/if}
+                                            </div>
+
+                                            <!-- 6. Auto-Verified Attributes -->
+                                            <div class="bg-zinc-800/50 rounded-lg border border-zinc-800 p-4">
+                                                <div class="flex items-center justify-between mb-3">
+                                                    <h4 class="text-sm font-medium text-zinc-200 flex items-center gap-2">
+                                                        <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                                                        Auto-Verified Attributes
+                                                    </h4>
+                                                    <div class="flex items-center gap-2">
+                                                        {#if savedAutoVerify}
+                                                            <span class="text-xs text-green-400">Saved</span>
+                                                        {/if}
+                                                        <button onclick={saveAutoVerify} disabled={savingAutoVerify}
+                                                            class="px-3 py-1 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium transition-all">
+                                                            {savingAutoVerify ? 'Saving...' : 'Save'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="space-y-2">
+                                                    <label class="flex items-center gap-2 cursor-pointer">
+                                                        <input type="checkbox" bind:checked={settingAutoVerifyEmail} class="rounded accent-orange-500" />
+                                                        <span class="text-sm text-zinc-300">email</span>
+                                                    </label>
+                                                    <label class="flex items-center gap-2 cursor-pointer">
+                                                        <input type="checkbox" bind:checked={settingAutoVerifyPhone} class="rounded accent-orange-500" />
+                                                        <span class="text-sm text-zinc-300">phone_number</span>
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            <!-- 7. User Attribute Schema -->
+                                            <div class="bg-zinc-800/50 rounded-lg border border-zinc-800 p-4">
+                                                <h4 class="text-sm font-medium text-zinc-200 flex items-center gap-2 mb-3">
+                                                    <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                                                    User Attribute Schema
+                                                </h4>
+                                                {#if poolSchemaAttrs.length > 0}
+                                                    <div class="bg-zinc-900 rounded overflow-hidden mb-3">
+                                                        <table class="w-full text-xs">
+                                                            <thead>
+                                                                <tr class="border-b border-zinc-800 text-zinc-500">
+                                                                    <th class="px-3 py-2 text-left">Name</th>
+                                                                    <th class="px-3 py-2 text-left">Type</th>
+                                                                    <th class="px-3 py-2 text-left">Mutable</th>
+                                                                    <th class="px-3 py-2 text-left">Required</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                {#each poolSchemaAttrs as attr}
+                                                                    <tr class="border-b border-zinc-800/50 last:border-0">
+                                                                        <td class="px-3 py-1.5 font-mono text-zinc-300">{attr.name}</td>
+                                                                        <td class="px-3 py-1.5 text-zinc-400">{attr.type}</td>
+                                                                        <td class="px-3 py-1.5 {attr.mutable ? 'text-green-400' : 'text-zinc-500'}">{attr.mutable ? 'Yes' : 'No'}</td>
+                                                                        <td class="px-3 py-1.5 {attr.required ? 'text-orange-400' : 'text-zinc-500'}">{attr.required ? 'Yes' : 'No'}</td>
+                                                                    </tr>
+                                                                {/each}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                {:else}
+                                                    <div class="text-xs text-zinc-500 mb-3">No attributes defined.</div>
+                                                {/if}
+                                                {#if customAttrError}
+                                                    <div class="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-xs mb-2">{customAttrError}</div>
+                                                {/if}
+                                                <div class="flex gap-2 items-center">
+                                                    <span class="text-xs text-zinc-400 shrink-0">Add custom:</span>
+                                                    <input
+                                                        bind:value={newCustomAttrName}
+                                                        class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30"
+                                                        placeholder="attribute name"
+                                                    />
+                                                    <select
+                                                        bind:value={newCustomAttrType}
+                                                        class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-orange-500 [&>option]:bg-zinc-800"
+                                                    >
+                                                        <option value="String">String</option>
+                                                        <option value="Number">Number</option>
+                                                        <option value="DateTime">DateTime</option>
+                                                        <option value="Boolean">Boolean</option>
+                                                    </select>
+                                                    <button
+                                                        onclick={handleAddCustomAttr}
+                                                        disabled={addingCustomAttr || !newCustomAttrName.trim()}
+                                                        class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium transition-all"
+                                                    >
+                                                        {addingCustomAttr ? '...' : 'Add'}
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <!-- 8. Resource Servers -->
+                                            <div class="bg-zinc-800/50 rounded-lg border border-zinc-800 p-4">
+                                                <div class="flex items-center justify-between mb-3">
+                                                    <h4 class="text-sm font-medium text-zinc-200 flex items-center gap-2">
+                                                        <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                                                        Resource Servers
+                                                    </h4>
+                                                    <button
+                                                        onclick={() => { showCreateResourceServer = !showCreateResourceServer; resourceServerError = null; }}
+                                                        class="px-3 py-1 bg-orange-600 hover:bg-orange-500 rounded text-xs font-medium transition-all"
+                                                    >
+                                                        {showCreateResourceServer ? 'Cancel' : 'Create'}
+                                                    </button>
+                                                </div>
+
+                                                {#if showCreateResourceServer}
+                                                    <div class="bg-zinc-900 rounded p-3 mb-3 space-y-2">
+                                                        {#if resourceServerError}
+                                                            <div class="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-xs">{resourceServerError}</div>
+                                                        {/if}
+                                                        <input bind:value={newRsIdentifier} class="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 font-mono" placeholder="Identifier (e.g. https://api.example.com)" />
+                                                        <input bind:value={newRsName} class="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30" placeholder="Name" />
+                                                        <div class="space-y-1">
+                                                            <span class="text-xs text-zinc-400">Scopes</span>
+                                                            {#each newRsScopes as scope, i}
+                                                                <div class="flex gap-2">
+                                                                    <input bind:value={newRsScopes[i].name} class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30" placeholder="Scope name" />
+                                                                    <input bind:value={newRsScopes[i].description} class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30" placeholder="Description" />
+                                                                    <button onclick={() => { newRsScopes = newRsScopes.filter((_, j) => j !== i); }} class="text-red-400 hover:text-red-300 text-xs px-1">x</button>
+                                                                </div>
+                                                            {/each}
+                                                            <button onclick={() => { newRsScopes = [...newRsScopes, { name: '', description: '' }]; }} class="text-xs text-orange-400 hover:text-orange-300">+ Add Scope</button>
+                                                        </div>
+                                                        <button
+                                                            onclick={handleCreateResourceServer}
+                                                            disabled={creatingResourceServer || !newRsIdentifier.trim() || !newRsName.trim()}
+                                                            class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium transition-all"
+                                                        >
+                                                            {creatingResourceServer ? 'Creating...' : 'Create Resource Server'}
+                                                        </button>
+                                                    </div>
+                                                {/if}
+
+                                                {#if resourceServersLoading}
+                                                    <div class="text-xs text-zinc-500">Loading...</div>
+                                                {:else if resourceServers.length === 0}
+                                                    <div class="text-xs text-zinc-500">No resource servers configured.</div>
+                                                {:else}
+                                                    <div class="space-y-2">
+                                                        {#each resourceServers as rs}
+                                                            <div class="bg-zinc-900 rounded p-3">
+                                                                <div class="flex items-start justify-between gap-2">
+                                                                    <div class="min-w-0">
+                                                                        <div class="text-xs font-semibold text-zinc-200">{rs.name}</div>
+                                                                        <div class="text-xs font-mono text-zinc-400 truncate">{rs.identifier}</div>
+                                                                        {#if rs.scopes.length > 0}
+                                                                            <div class="flex flex-wrap gap-1 mt-1">
+                                                                                {#each rs.scopes as scope}
+                                                                                    <span class="px-1.5 py-0.5 bg-zinc-700 rounded text-xs font-mono">{scope.name}</span>
+                                                                                {/each}
+                                                                            </div>
+                                                                        {/if}
+                                                                    </div>
+                                                                    <button onclick={() => handleDeleteResourceServer(rs.identifier)} class="text-red-400 hover:text-red-300 text-xs shrink-0 transition-colors">Delete</button>
+                                                                </div>
                                                             </div>
                                                         {/each}
                                                     </div>
+                                                {/if}
+                                            </div>
+
+                                            <!-- 9. Identity Providers -->
+                                            <div class="bg-zinc-800/50 rounded-lg border border-zinc-800 p-4">
+                                                <div class="flex items-center justify-between mb-3">
+                                                    <h4 class="text-sm font-medium text-zinc-200 flex items-center gap-2">
+                                                        <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                                                        Identity Providers
+                                                    </h4>
+                                                    <button
+                                                        onclick={() => { showCreateIdp = !showCreateIdp; idpError = null; }}
+                                                        class="px-3 py-1 bg-orange-600 hover:bg-orange-500 rounded text-xs font-medium transition-all"
+                                                    >
+                                                        {showCreateIdp ? 'Cancel' : 'Add Provider'}
+                                                    </button>
                                                 </div>
-                                            {/if}
-                                            {#if up['AutoVerifiedAttributes']}
-                                                <div>
-                                                    <h4 class="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2">Auto-Verified Attributes</h4>
-                                                    <div class="flex flex-wrap gap-1">
-                                                        {#each (up['AutoVerifiedAttributes'] as string[]) as attr}
-                                                            <span class="px-2 py-0.5 bg-zinc-700 rounded text-xs">{attr}</span>
+
+                                                {#if showCreateIdp}
+                                                    <div class="bg-zinc-900 rounded p-3 mb-3 space-y-3">
+                                                        {#if idpError}
+                                                            <div class="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-xs">{idpError}</div>
+                                                        {/if}
+                                                        <div class="grid grid-cols-2 gap-2">
+                                                            <div>
+                                                                <label class="text-xs text-zinc-400 block mb-1">Type</label>
+                                                                <select bind:value={newIdpType} class="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-orange-500 [&>option]:bg-zinc-800">
+                                                                    <option value="OIDC">OIDC</option>
+                                                                    <option value="SAML">SAML</option>
+                                                                    <option value="Google">Google</option>
+                                                                    <option value="Facebook">Facebook</option>
+                                                                    <option value="SignInWithApple">Apple</option>
+                                                                    <option value="LoginWithAmazon">Amazon</option>
+                                                                </select>
+                                                            </div>
+                                                            <div>
+                                                                <label class="text-xs text-zinc-400 block mb-1">Provider Name</label>
+                                                                <input bind:value={newIdpName} class="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30" placeholder="e.g. MyOIDCProvider" />
+                                                            </div>
+                                                        </div>
+
+                                                        <div>
+                                                            <div class="text-xs text-zinc-400 mb-1">Provider Details</div>
+                                                            <div class="space-y-1.5">
+                                                                {#each newIdpDetails as entry, i}
+                                                                    <div class="flex gap-2">
+                                                                        <input bind:value={newIdpDetails[i].key} class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30" placeholder="Key" />
+                                                                        <input bind:value={newIdpDetails[i].value} class="flex-2 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 w-48" placeholder="Value" />
+                                                                        <button onclick={() => { newIdpDetails = newIdpDetails.filter((_, j) => j !== i); }} class="text-red-400 hover:text-red-300 text-xs px-1">x</button>
+                                                                    </div>
+                                                                {/each}
+                                                                <button onclick={() => { newIdpDetails = [...newIdpDetails, { key: '', value: '' }]; }} class="text-xs text-orange-400 hover:text-orange-300">+ Add</button>
+                                                            </div>
+                                                        </div>
+
+                                                        <div>
+                                                            <div class="text-xs text-zinc-400 mb-1">Attribute Mapping</div>
+                                                            <div class="space-y-1.5">
+                                                                {#each newIdpMapping as entry, i}
+                                                                    <div class="flex gap-2">
+                                                                        <input bind:value={newIdpMapping[i].key} class="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30" placeholder="User pool attr" />
+                                                                        <input bind:value={newIdpMapping[i].value} class="flex-2 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-200 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 w-48" placeholder="IdP attribute" />
+                                                                        <button onclick={() => { newIdpMapping = newIdpMapping.filter((_, j) => j !== i); }} class="text-red-400 hover:text-red-300 text-xs px-1">x</button>
+                                                                    </div>
+                                                                {/each}
+                                                                <button onclick={() => { newIdpMapping = [...newIdpMapping, { key: '', value: '' }]; }} class="text-xs text-orange-400 hover:text-orange-300">+ Add</button>
+                                                            </div>
+                                                        </div>
+
+                                                        <button
+                                                            onclick={handleCreateIdp}
+                                                            disabled={creatingIdp || !newIdpName.trim()}
+                                                            class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium transition-all"
+                                                        >
+                                                            {creatingIdp ? 'Creating...' : 'Create Identity Provider'}
+                                                        </button>
+                                                    </div>
+                                                {/if}
+
+                                                {#if poolIdpsLoading}
+                                                    <div class="text-xs text-zinc-500">Loading...</div>
+                                                {:else if poolIdps.length === 0}
+                                                    <div class="text-xs text-zinc-500">No identity providers configured.</div>
+                                                {:else}
+                                                    <div class="space-y-2">
+                                                        {#each poolIdps as idp}
+                                                            <div class="bg-zinc-900 rounded p-3 flex items-center justify-between gap-2">
+                                                                <div>
+                                                                    <span class="text-xs font-semibold text-zinc-200">{idp.providerName}</span>
+                                                                    <span class="ml-2 px-1.5 py-0.5 bg-zinc-700 rounded text-xs text-zinc-400">{idp.providerType}</span>
+                                                                    {#if idp.creationDate}
+                                                                        <div class="text-xs text-zinc-500 mt-0.5">{formatDate(idp.creationDate)}</div>
+                                                                    {/if}
+                                                                </div>
+                                                                <button onclick={() => handleDeleteIdp(idp.providerName)} class="text-red-400 hover:text-red-300 text-xs shrink-0 transition-colors">Delete</button>
+                                                            </div>
                                                         {/each}
                                                     </div>
-                                                </div>
-                                            {/if}
-                                            <div>
-                                                <h4 class="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2">Pool ID</h4>
-                                                <div class="font-mono text-xs text-zinc-300 bg-zinc-800 rounded px-3 py-2">{String(up['Id'] ?? selectedPool.id)}</div>
+                                                {/if}
                                             </div>
-                                            <div>
-                                                <h4 class="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2">Creation Date</h4>
-                                                <div class="text-xs text-zinc-300 bg-zinc-800 rounded px-3 py-2">{up['CreationDate'] ? formatDate(new Date(Number(up['CreationDate']) * 1000).toISOString()) : '—'}</div>
-                                            </div>
+
                                         </div>
-                                    {:else}
-                                        <div class="text-zinc-500 text-sm">No settings available.</div>
                                     {/if}
                                 </div>
                             {/if}

@@ -730,6 +730,113 @@ export async function updateUserPool(userPoolId: string, config: unknown): Promi
     await cognitoRequest('UpdateUserPool', { UserPoolId: userPoolId, ...(config as Record<string, unknown>) });
 }
 
+// Domain
+
+export async function createUserPoolDomain(userPoolId: string, domain: string): Promise<void> {
+    await cognitoRequest('CreateUserPoolDomain', { UserPoolId: userPoolId, Domain: domain });
+}
+
+export async function deleteUserPoolDomain(userPoolId: string, domain: string): Promise<void> {
+    await cognitoRequest('DeleteUserPoolDomain', { UserPoolId: userPoolId, Domain: domain });
+}
+
+// Resource Servers
+
+export interface CognitoResourceServerScope {
+    name: string;
+    description: string;
+}
+
+export interface CognitoResourceServer {
+    identifier: string;
+    name: string;
+    scopes: CognitoResourceServerScope[];
+}
+
+export async function listResourceServers(userPoolId: string): Promise<{ servers: CognitoResourceServer[] }> {
+    const data = await cognitoRequest('ListResourceServers', { UserPoolId: userPoolId, MaxResults: 50 }) as {
+        ResourceServers?: { Identifier: string; Name: string; Scopes?: { ScopeName: string; ScopeDescription: string }[] }[]
+    };
+    return {
+        servers: (data.ResourceServers ?? []).map((s) => ({
+            identifier: s.Identifier,
+            name: s.Name,
+            scopes: (s.Scopes ?? []).map((sc) => ({ name: sc.ScopeName, description: sc.ScopeDescription })),
+        })),
+    };
+}
+
+export async function createResourceServer(
+    userPoolId: string,
+    identifier: string,
+    name: string,
+    scopes: CognitoResourceServerScope[]
+): Promise<void> {
+    await cognitoRequest('CreateResourceServer', {
+        UserPoolId: userPoolId,
+        Identifier: identifier,
+        Name: name,
+        Scopes: scopes.map((s) => ({ ScopeName: s.name, ScopeDescription: s.description })),
+    });
+}
+
+export async function deleteResourceServer(userPoolId: string, identifier: string): Promise<void> {
+    await cognitoRequest('DeleteResourceServer', { UserPoolId: userPoolId, Identifier: identifier });
+}
+
+// Identity Providers (User Pool)
+
+export interface CognitoIdentityProvider {
+    providerName: string;
+    providerType: string;
+    creationDate?: string;
+}
+
+export async function listIdentityProviders(userPoolId: string): Promise<{ providers: CognitoIdentityProvider[] }> {
+    const data = await cognitoRequest('ListIdentityProviders', { UserPoolId: userPoolId, MaxResults: 60 }) as {
+        Providers?: { ProviderName: string; ProviderType: string; CreationDate?: number }[]
+    };
+    return {
+        providers: (data.Providers ?? []).map((p) => ({
+            providerName: p.ProviderName,
+            providerType: p.ProviderType,
+            creationDate: p.CreationDate ? new Date(p.CreationDate * 1000).toISOString() : undefined,
+        })),
+    };
+}
+
+export async function createIdentityProvider(
+    userPoolId: string,
+    providerName: string,
+    providerType: string,
+    providerDetails: Record<string, string>,
+    attributeMapping: Record<string, string>
+): Promise<void> {
+    await cognitoRequest('CreateIdentityProvider', {
+        UserPoolId: userPoolId,
+        ProviderName: providerName,
+        ProviderType: providerType,
+        ProviderDetails: providerDetails,
+        AttributeMapping: attributeMapping,
+    });
+}
+
+export async function deleteIdentityProvider(userPoolId: string, providerName: string): Promise<void> {
+    await cognitoRequest('DeleteIdentityProvider', { UserPoolId: userPoolId, ProviderName: providerName });
+}
+
+// Custom Attributes
+
+export async function addCustomAttributes(
+    userPoolId: string,
+    attrs: { Name: string; AttributeDataType: string }[]
+): Promise<void> {
+    await cognitoRequest('AddCustomAttributes', {
+        UserPoolId: userPoolId,
+        CustomAttributes: attrs.map((a) => ({ Name: a.Name, AttributeDataType: a.AttributeDataType })),
+    });
+}
+
 // User Pool Clients
 
 export interface CognitoUserPoolClient {
