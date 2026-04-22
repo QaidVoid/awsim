@@ -14,6 +14,7 @@
         adminAddUserToGroup, adminRemoveUserFromGroup, listUsersInGroup, adminListGroupsForUser,
         cognitoSignUp, cognitoInitiateAuth, cognitoGetUser,
         listIdentityPools, createIdentityPool, deleteIdentityPool, describeIdentityPool,
+        setIdentityPoolRoles, getIdentityPoolRoles, cognitoGetId, cognitoGetCredentials,
         type CognitoUserPool, type CognitoUser, type CognitoUserPoolClient,
         type CognitoUserPoolClientDetail, type CognitoGroup, type CognitoUserDetail,
         type CognitoIdentityPool, type CognitoResourceServer, type CognitoIdentityProvider,
@@ -75,6 +76,7 @@
     let newGroupName = $state('');
     let newGroupDescription = $state('');
     let newGroupRoleArn = $state('');
+    let newGroupPrecedence = $state<number | null>(null);
     let creatingGroup = $state(false);
     let createGroupError = $state<string | null>(null);
     let confirmDeleteGroup = $state<string | null>(null);
@@ -197,6 +199,10 @@
     let creatingIdentityPool = $state(false);
     let createIdentityPoolError = $state<string | null>(null);
     let confirmDeleteIdentityPool = $state<string | null>(null);
+    let authRoleArn = $state('');
+    let unauthRoleArn = $state('');
+    let savingRoles = $state(false);
+    let rolesSaved = $state(false);
 
     // ---- Auth Tester ----
     let authPoolId = $state('');
@@ -226,6 +232,13 @@
     let getUserResult = $state<unknown>(null);
     let getUserError = $state<string | null>(null);
     let gettingUser = $state(false);
+
+    // Get AWS Credentials
+    let credPoolId = $state('');
+    let gettingCreds = $state(false);
+    let awsCreds = $state<{ AccessKeyId: string; SecretKey: string; SessionToken: string; Expiration?: string } | null>(null);
+    let credsError = $state<string | null>(null);
+    let showSecret = $state(false);
 
     // ---- Helpers ----
     function formatDate(iso: string): string {
@@ -494,10 +507,12 @@
             await createCognitoGroup(selectedPool.id, newGroupName.trim(), {
                 description: newGroupDescription || undefined,
                 roleArn: newGroupRoleArn || undefined,
+                precedence: newGroupPrecedence != null ? newGroupPrecedence : undefined,
             });
             newGroupName = '';
             newGroupDescription = '';
             newGroupRoleArn = '';
+            newGroupPrecedence = null;
             showCreateGroup = false;
             await loadGroups();
         } catch (e) {
@@ -945,12 +960,69 @@
         selectedIdentityPool = pool;
         identityPoolDetailLoading = true;
         identityPoolDetail = null;
+        authRoleArn = '';
+        unauthRoleArn = '';
+        rolesSaved = false;
         try {
             identityPoolDetail = await describeIdentityPool(pool.id);
+            // Load existing roles
+            try {
+                const rolesData = await getIdentityPoolRoles(pool.id) as Record<string, unknown>;
+                const roles = (rolesData['Roles'] ?? {}) as Record<string, string>;
+                authRoleArn = roles['authenticated'] ?? '';
+                unauthRoleArn = roles['unauthenticated'] ?? '';
+            } catch { /* roles not available */ }
         } catch {
             identityPoolDetail = null;
         } finally {
             identityPoolDetailLoading = false;
+        }
+    }
+
+    async function saveRoles() {
+        if (!selectedIdentityPool) return;
+        savingRoles = true;
+        rolesSaved = false;
+        try {
+            const roles: Record<string, string> = {};
+            if (authRoleArn.trim()) roles['authenticated'] = authRoleArn.trim();
+            if (unauthRoleArn.trim()) roles['unauthenticated'] = unauthRoleArn.trim();
+            await setIdentityPoolRoles(selectedIdentityPool.id, roles);
+            rolesSaved = true;
+            setTimeout(() => { rolesSaved = false; }, 2500);
+        } catch { /* ignore */ } finally {
+            savingRoles = false;
+        }
+    }
+
+    async function handleGetCredentials() {
+        if (!credPoolId || !authTokens?.idToken) return;
+        gettingCreds = true;
+        credsError = null;
+        awsCreds = null;
+        try {
+            // Find the issuer from the ID token to build the login key
+            const decoded = decodeJwt(authTokens.idToken);
+            const iss = decoded?.payload ? String((decoded.payload as Record<string, unknown>)['iss'] ?? '') : '';
+            const loginKey = iss.replace('https://', '');
+            const logins = loginKey ? { [loginKey]: authTokens.idToken } : undefined;
+
+            const idData = await cognitoGetId(credPoolId, logins) as Record<string, unknown>;
+            const identityId = String(idData['IdentityId'] ?? '');
+            if (!identityId) throw new Error('No IdentityId returned');
+
+            const credData = await cognitoGetCredentials(identityId, logins) as Record<string, unknown>;
+            const creds = (credData['Credentials'] ?? {}) as Record<string, unknown>;
+            awsCreds = {
+                AccessKeyId: String(creds['AccessKeyId'] ?? ''),
+                SecretKey: String(creds['SecretKey'] ?? ''),
+                SessionToken: String(creds['SessionToken'] ?? ''),
+                Expiration: creds['Expiration'] ? String(creds['Expiration']) : undefined,
+            };
+        } catch (e) {
+            credsError = e instanceof Error ? e.message : 'Failed to get credentials';
+        } finally {
+            gettingCreds = false;
         }
     }
 
@@ -1429,10 +1501,16 @@
                                                             </div>
                                                         {/if}
                                                         <div class="bg-zinc-800 rounded overflow-hidden">
-                                                            {#each userGroups as g}
-                                                                <div class="flex items-center justify-between px-3 py-2 border-b border-zinc-700/50 last:border-0">
-                                                                    <span class="text-xs font-mono text-zinc-200">{g.name}</span>
-                                                                    <button onclick={() => handleRemoveFromGroup(g.name)} class="text-xs text-red-400 hover:text-red-300 transition-colors">Remove</button>
+                                                            {#each userGroups.slice().sort((a, b) => (a.precedence ?? 999) - (b.precedence ?? 999)) as g}
+                                                                <div class="flex items-center gap-2 px-3 py-2 border-b border-zinc-700/50 last:border-0">
+                                                                    <span class="text-xs font-mono text-zinc-200 shrink-0">{g.name}</span>
+                                                                    {#if g.precedence != null}
+                                                                        <span class="text-xs px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400 shrink-0">P:{g.precedence}</span>
+                                                                    {/if}
+                                                                    {#if g.roleArn}
+                                                                        <span class="text-xs font-mono text-blue-400 truncate flex-1" title={g.roleArn}>{g.roleArn.split('/').pop() ?? g.roleArn}</span>
+                                                                    {/if}
+                                                                    <button onclick={() => handleRemoveFromGroup(g.name)} class="text-xs text-red-400 hover:text-red-300 transition-colors shrink-0 ml-auto">Remove</button>
                                                                 </div>
                                                             {:else}
                                                                 <div class="px-3 py-2 text-xs text-zinc-500">Not in any groups</div>
@@ -1471,10 +1549,17 @@
                                                     <input bind:value={newGroupName} class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Group name *" />
                                                     <input bind:value={newGroupDescription} class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Description (optional)" />
                                                     <input bind:value={newGroupRoleArn} class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Role ARN (optional)" />
+                                                    <input
+                                                        type="number"
+                                                        bind:value={newGroupPrecedence}
+                                                        class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200"
+                                                        placeholder="Precedence (lower = higher priority, optional)"
+                                                        min="0"
+                                                    />
                                                 </div>
                                                 <div class="flex gap-2">
                                                     <button onclick={handleCreateGroup} disabled={creatingGroup || !newGroupName.trim()} class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-xs font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">{creatingGroup ? 'Creating...' : 'Create'}</button>
-                                                    <button onclick={() => { showCreateGroup = false; createGroupError = null; newGroupName = ''; newGroupDescription = ''; newGroupRoleArn = ''; }} class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">Cancel</button>
+                                                    <button onclick={() => { showCreateGroup = false; createGroupError = null; newGroupName = ''; newGroupDescription = ''; newGroupRoleArn = ''; newGroupPrecedence = null; }} class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50">Cancel</button>
                                                 </div>
                                             </div>
                                         {/if}
@@ -1490,7 +1575,8 @@
                                                 <thead>
                                                     <tr class="border-b border-zinc-800 text-left text-zinc-500">
                                                         <th class="px-4 py-2 text-xs">Group Name</th>
-                                                        <th class="px-4 py-2 text-xs">Description</th>
+                                                        <th class="px-4 py-2 text-xs">Role ARN</th>
+                                                        <th class="px-4 py-2 text-xs">Precedence</th>
                                                         <th class="px-4 py-2 text-xs"></th>
                                                     </tr>
                                                 </thead>
@@ -1498,7 +1584,20 @@
                                                     {#each groups as group}
                                                         <tr class="border-b border-zinc-800/50 cursor-pointer {selectedGroup?.name === group.name ? 'bg-zinc-800' : 'hover:bg-zinc-800/30'}" onclick={() => selectGroup(group)}>
                                                             <td class="px-4 py-2.5 font-mono text-orange-400 text-xs">{group.name}</td>
-                                                            <td class="px-4 py-2.5 text-zinc-400 text-xs">{group.description || '—'}</td>
+                                                            <td class="px-4 py-2.5 text-xs max-w-[140px]">
+                                                                {#if group.roleArn}
+                                                                    <span class="font-mono text-blue-400 truncate block" title={group.roleArn}>{group.roleArn.split('/').pop() ?? group.roleArn}</span>
+                                                                {:else}
+                                                                    <span class="text-zinc-600">—</span>
+                                                                {/if}
+                                                            </td>
+                                                            <td class="px-4 py-2.5 text-xs">
+                                                                {#if group.precedence != null}
+                                                                    <span class="px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300">{group.precedence}</span>
+                                                                {:else}
+                                                                    <span class="text-zinc-600">—</span>
+                                                                {/if}
+                                                            </td>
                                                             <td class="px-4 py-2.5" onclick={(e) => e.stopPropagation()}>
                                                                 {#if confirmDeleteGroup === group.name}
                                                                     <div class="flex gap-1">
@@ -1525,12 +1624,20 @@
                                             {#if selectedGroup.description}
                                                 <p class="text-sm text-zinc-400 mb-3">{selectedGroup.description}</p>
                                             {/if}
-                                            {#if selectedGroup.roleArn}
-                                                <div class="mb-3">
-                                                    <span class="text-xs text-zinc-500">Role ARN: </span>
-                                                    <span class="text-xs font-mono text-zinc-300">{selectedGroup.roleArn}</span>
-                                                </div>
-                                            {/if}
+                                            <div class="space-y-2 mb-3">
+                                                {#if selectedGroup.precedence != null}
+                                                    <div class="flex items-center gap-2">
+                                                        <span class="text-xs text-zinc-500">Precedence:</span>
+                                                        <span class="text-xs px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300">{selectedGroup.precedence}</span>
+                                                    </div>
+                                                {/if}
+                                                {#if selectedGroup.roleArn}
+                                                    <div>
+                                                        <span class="text-xs text-zinc-500 block mb-0.5">Role ARN</span>
+                                                        <span class="text-xs font-mono text-blue-400 break-all">{selectedGroup.roleArn}</span>
+                                                    </div>
+                                                {/if}
+                                            </div>
                                             <h4 class="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2">Members</h4>
                                             {#if groupMembersLoading}
                                                 <div class="text-zinc-500 text-sm">Loading...</div>
@@ -2337,7 +2444,7 @@
                                     {/if}
                                     {#if d['Roles']}
                                         <div>
-                                            <h4 class="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2">Roles</h4>
+                                            <h4 class="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2">Current Roles</h4>
                                             <div class="bg-zinc-800 rounded overflow-hidden">
                                                 {#each Object.entries(d['Roles'] as Record<string, string>) as [role, arn]}
                                                     <div class="flex px-3 py-2 border-b border-zinc-700/50 last:border-0">
@@ -2348,6 +2455,46 @@
                                             </div>
                                         </div>
                                     {/if}
+
+                                    <!-- Role Mapping Editor -->
+                                    <div class="mt-4">
+                                        <h4 class="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                            <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                                            Role Mapping
+                                        </h4>
+                                        <div class="bg-zinc-800/50 rounded p-3 space-y-3">
+                                            <div>
+                                                <label class="text-xs text-zinc-500 block mb-1">Authenticated Role ARN</label>
+                                                <input
+                                                    type="text"
+                                                    bind:value={authRoleArn}
+                                                    class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-xs font-mono focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 text-zinc-200"
+                                                    placeholder="arn:aws:iam::000000000000:role/AuthenticatedRole"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label class="text-xs text-zinc-500 block mb-1">Unauthenticated Role ARN</label>
+                                                <input
+                                                    type="text"
+                                                    bind:value={unauthRoleArn}
+                                                    class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-xs font-mono focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 text-zinc-200"
+                                                    placeholder="arn:aws:iam::000000000000:role/UnauthenticatedRole"
+                                                />
+                                            </div>
+                                            <div class="flex items-center gap-2">
+                                                <button
+                                                    onclick={saveRoles}
+                                                    disabled={savingRoles}
+                                                    class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-xs font-medium transition-all active:scale-[0.98]"
+                                                >
+                                                    {savingRoles ? 'Saving...' : 'Save Roles'}
+                                                </button>
+                                                {#if rolesSaved}
+                                                    <span class="text-xs text-green-400">Saved</span>
+                                                {/if}
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             {/if}
                         </div>
@@ -2500,6 +2647,63 @@
                         {/if}
                     </div>
                 {/if}
+
+                <!-- Get AWS Credentials -->
+                {#if authTokens?.idToken}
+                    <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4 shadow-lg shadow-black/20">
+                        <h3 class="font-semibold mb-3 flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                            Get AWS Credentials
+                        </h3>
+                        <div class="space-y-3">
+                            <div>
+                                <label class="block text-xs text-zinc-400 mb-1">Identity Pool</label>
+                                <select
+                                    bind:value={credPoolId}
+                                    class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200 [&>option]:bg-zinc-800 [&>option]:text-zinc-200"
+                                >
+                                    <option value="">Select identity pool...</option>
+                                    {#each identityPools as pool}
+                                        <option value={pool.id}>{pool.name} ({pool.id})</option>
+                                    {/each}
+                                </select>
+                            </div>
+                            <button
+                                onclick={handleGetCredentials}
+                                disabled={!credPoolId || gettingCreds}
+                                class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                            >
+                                {gettingCreds ? 'Getting Credentials...' : 'Get AWS Credentials'}
+                            </button>
+                            {#if credsError}
+                                <div class="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-xs">{credsError}</div>
+                            {/if}
+                            {#if awsCreds}
+                                <div class="bg-zinc-800 rounded p-3 space-y-2">
+                                    <div class="flex justify-between text-xs">
+                                        <span class="text-zinc-500">AccessKeyId</span>
+                                        <span class="font-mono text-green-400">{awsCreds.AccessKeyId}</span>
+                                    </div>
+                                    <div class="flex items-center justify-between text-xs gap-2">
+                                        <span class="text-zinc-500 shrink-0">SecretKey</span>
+                                        <span class="font-mono text-zinc-400 flex-1 text-right">{showSecret ? awsCreds.SecretKey : '••••••••••••••'}</span>
+                                        <button onclick={() => showSecret = !showSecret} class="text-xs text-orange-400 hover:text-orange-300 shrink-0">{showSecret ? 'Hide' : 'Show'}</button>
+                                    </div>
+                                    <div class="text-xs">
+                                        <span class="text-zinc-500">SessionToken</span>
+                                        <div class="font-mono text-zinc-400 text-xs truncate mt-0.5">{awsCreds.SessionToken}</div>
+                                    </div>
+                                    {#if awsCreds.Expiration}
+                                        <div class="flex justify-between text-xs">
+                                            <span class="text-zinc-500">Expiration</span>
+                                            <span class="text-zinc-300">{new Date(awsCreds.Expiration).toLocaleString()}</span>
+                                        </div>
+                                    {/if}
+                                </div>
+                            {/if}
+                        </div>
+                    </div>
+                {/if}
             </div>
 
             <!-- Right: Token Inspector -->
@@ -2539,6 +2743,42 @@
                                                     {#if p['cognito:username']}<span class="text-zinc-500">Username</span><span class="text-zinc-200">{String(p['cognito:username'])}</span>{/if}
                                                     {#if p.email}<span class="text-zinc-500">Email</span><span class="text-zinc-200">{String(p.email)}</span>{/if}
                                                 </div>
+
+                                                {#if p['cognito:groups'] || p['cognito:roles']}
+                                                    <div class="mt-3 border-t border-zinc-700 pt-3">
+                                                        <h5 class="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                                            <span class="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
+                                                            Cognito Claims
+                                                        </h5>
+
+                                                        {#if p['cognito:groups']}
+                                                            <div class="mb-2">
+                                                                <span class="text-xs text-zinc-500">Groups</span>
+                                                                <div class="flex flex-wrap gap-1 mt-1">
+                                                                    {#each (p['cognito:groups'] as string[]) as group}
+                                                                        <span class="px-2 py-0.5 bg-purple-900/30 text-purple-400 rounded text-xs">{group}</span>
+                                                                    {/each}
+                                                                </div>
+                                                            </div>
+                                                        {/if}
+
+                                                        {#if p['cognito:roles']}
+                                                            <div class="mb-2">
+                                                                <span class="text-xs text-zinc-500">IAM Roles</span>
+                                                                {#each (p['cognito:roles'] as string[]) as role}
+                                                                    <div class="font-mono text-xs text-blue-400 mt-0.5 truncate">{role}</div>
+                                                                {/each}
+                                                            </div>
+                                                        {/if}
+
+                                                        {#if p['cognito:preferred_role']}
+                                                            <div>
+                                                                <span class="text-xs text-zinc-500">Preferred Role</span>
+                                                                <div class="font-mono text-xs text-green-400 mt-0.5 bg-green-900/20 rounded px-2 py-1 inline-block">{p['cognito:preferred_role']}</div>
+                                                            </div>
+                                                        {/if}
+                                                    </div>
+                                                {/if}
                                             {/if}
                                             <div>
                                                 <span class="text-xs text-zinc-500 font-medium">Header</span>

@@ -1365,17 +1365,19 @@ export interface CognitoGroup {
     name: string;
     description: string;
     roleArn: string;
+    precedence?: number;
 }
 
 export async function listCognitoGroups(userPoolId: string): Promise<{ groups: CognitoGroup[] }> {
     const data = await cognitoRequest('ListGroups', { UserPoolId: userPoolId }) as {
-        Groups?: { GroupName: string; Description?: string; RoleArn?: string }[]
+        Groups?: { GroupName: string; Description?: string; RoleArn?: string; Precedence?: number }[]
     };
     return {
         groups: (data.Groups ?? []).map((g) => ({
             name: g.GroupName,
             description: g.Description ?? '',
             roleArn: g.RoleArn ?? '',
+            precedence: g.Precedence,
         })),
     };
 }
@@ -1383,11 +1385,12 @@ export async function listCognitoGroups(userPoolId: string): Promise<{ groups: C
 export async function createCognitoGroup(
     userPoolId: string,
     name: string,
-    opts?: { description?: string; roleArn?: string }
+    opts?: { description?: string; roleArn?: string; precedence?: number }
 ): Promise<void> {
     const body: Record<string, unknown> = { UserPoolId: userPoolId, GroupName: name };
     if (opts?.description) body['Description'] = opts.description;
     if (opts?.roleArn) body['RoleArn'] = opts.roleArn;
+    if (opts?.precedence != null) body['Precedence'] = opts.precedence;
     await cognitoRequest('CreateGroup', body);
 }
 
@@ -1418,13 +1421,14 @@ export async function listUsersInGroup(userPoolId: string, groupName: string): P
 
 export async function adminListGroupsForUser(userPoolId: string, username: string): Promise<{ groups: CognitoGroup[] }> {
     const data = await cognitoRequest('AdminListGroupsForUser', { UserPoolId: userPoolId, Username: username }) as {
-        Groups?: { GroupName: string; Description?: string; RoleArn?: string }[]
+        Groups?: { GroupName: string; Description?: string; RoleArn?: string; Precedence?: number }[]
     };
     return {
         groups: (data.Groups ?? []).map((g) => ({
             name: g.GroupName,
             description: g.Description ?? '',
             roleArn: g.RoleArn ?? '',
+            precedence: g.Precedence,
         })),
     };
 }
@@ -1525,6 +1529,33 @@ export async function deleteIdentityPool(id: string): Promise<void> {
 
 export async function describeIdentityPool(id: string): Promise<unknown> {
     return cognitoIdentityRequest('DescribeIdentityPool', { IdentityPoolId: id });
+}
+
+export async function setIdentityPoolRoles(poolId: string, roles: Record<string, string>): Promise<void> {
+    await cognitoIdentityRequest('SetIdentityPoolRoles', {
+        IdentityPoolId: poolId,
+        Roles: roles,
+    });
+}
+
+export async function getIdentityPoolRoles(poolId: string): Promise<unknown> {
+    return cognitoIdentityRequest('GetIdentityPoolRoles', {
+        IdentityPoolId: poolId,
+    });
+}
+
+export async function cognitoGetId(identityPoolId: string, logins?: Record<string, string>): Promise<unknown> {
+    return cognitoIdentityRequest('GetId', {
+        IdentityPoolId: identityPoolId,
+        ...(logins ? { Logins: logins } : {}),
+    });
+}
+
+export async function cognitoGetCredentials(identityId: string, logins?: Record<string, string>): Promise<unknown> {
+    return cognitoIdentityRequest('GetCredentialsForIdentity', {
+        IdentityId: identityId,
+        ...(logins ? { Logins: logins } : {}),
+    });
 }
 
 // ---- Secrets Manager ----
