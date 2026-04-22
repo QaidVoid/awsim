@@ -1,7 +1,16 @@
+pub mod account;
+pub mod certificates;
+pub mod credential_report;
 pub mod groups;
 pub mod instance_profiles;
+pub mod mfa;
+pub mod oidc;
 pub mod policies;
 pub mod roles;
+pub mod saml;
+pub mod service_linked_roles;
+pub mod ssh_keys;
+pub mod tags;
 pub mod users;
 
 use serde_json::Value;

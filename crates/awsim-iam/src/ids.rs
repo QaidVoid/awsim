@@ -52,6 +52,27 @@ pub fn new_secret_access_key() -> String {
     random_chars(MIXED_CHARS, 40)
 }
 
+/// ASCA + 16 uppercase alphanumeric chars (total 20) for server certificates.
+pub fn new_server_certificate_id() -> String {
+    format!("ASCA{}", random_chars(UPPER_ALPHANUM, 16))
+}
+
+/// APKA + 16 uppercase alphanumeric chars (total 20) for SSH public keys.
+pub fn new_ssh_public_key_id() -> String {
+    format!("APKA{}", random_chars(UPPER_ALPHANUM, 16))
+}
+
+/// Generate a random base32 seed (40 chars) for MFA devices.
+pub fn new_base32_seed() -> String {
+    const BASE32: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    random_chars(BASE32, 40)
+}
+
+/// Generate a new UUID string.
+pub fn new_uuid() -> String {
+    Uuid::new_v4().to_string()
+}
+
 /// Current UTC timestamp in ISO 8601 format.
 pub fn now_iso8601() -> String {
     // Use a fixed-format timestamp. Since we don't pull in chrono, we read

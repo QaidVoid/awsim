@@ -546,8 +546,10 @@ export async function listRoles(): Promise<{ roles: IamRole[] }> {
     };
 }
 
-export async function createRole(roleName: string, assumeRolePolicy: string): Promise<void> {
-    await iamRequest('CreateRole', { RoleName: roleName, AssumeRolePolicyDocument: assumeRolePolicy });
+export async function createRole(roleName: string, assumeRolePolicy: string, description?: string): Promise<void> {
+    const params: Record<string, string> = { RoleName: roleName, AssumeRolePolicyDocument: assumeRolePolicy };
+    if (description) params['Description'] = description;
+    await iamRequest('CreateRole', params);
 }
 
 export async function deleteRole(roleName: string): Promise<void> {
@@ -576,6 +578,390 @@ export async function listGroups(): Promise<{ groups: IamGroup[] }> {
             arn: g['Arn'] ?? '',
         })),
     };
+}
+
+// Extended IAM functions
+
+export async function iamGetUser(userName: string): Promise<IamUser> {
+    const xml = await iamRequest('GetUser', { UserName: userName });
+    return {
+        userName: xmlValue(xml, 'UserName'),
+        userId: xmlValue(xml, 'UserId'),
+        arn: xmlValue(xml, 'Arn'),
+        createDate: xmlValue(xml, 'CreateDate'),
+    };
+}
+
+export async function iamListGroupsForUser(userName: string): Promise<{ groups: IamGroup[] }> {
+    const xml = await iamRequest('ListGroupsForUser', { UserName: userName });
+    const raw = xmlArray(xml, 'member', ['GroupName', 'GroupId', 'Arn']);
+    return {
+        groups: raw.map((g) => ({
+            groupName: g['GroupName'] ?? '',
+            groupId: g['GroupId'] ?? '',
+            arn: g['Arn'] ?? '',
+        })),
+    };
+}
+
+export async function iamListUserPolicies(userName: string): Promise<{ policyNames: string[] }> {
+    const xml = await iamRequest('ListUserPolicies', { UserName: userName });
+    const names: string[] = [];
+    const regex = /<member>([^<]+)<\/member>/g;
+    let m;
+    while ((m = regex.exec(xml)) !== null) names.push(m[1]);
+    return { policyNames: names };
+}
+
+export interface IamAttachedPolicy {
+    policyName: string;
+    policyArn: string;
+}
+
+export async function iamListAttachedUserPolicies(userName: string): Promise<{ policies: IamAttachedPolicy[] }> {
+    const xml = await iamRequest('ListAttachedUserPolicies', { UserName: userName });
+    const raw = xmlArray(xml, 'member', ['PolicyName', 'PolicyArn']);
+    return {
+        policies: raw.map((p) => ({
+            policyName: p['PolicyName'] ?? '',
+            policyArn: p['PolicyArn'] ?? '',
+        })),
+    };
+}
+
+export interface IamAccessKey {
+    accessKeyId: string;
+    status: string;
+    createDate: string;
+}
+
+export async function iamListAccessKeys(userName: string): Promise<{ accessKeys: IamAccessKey[] }> {
+    const xml = await iamRequest('ListAccessKeys', { UserName: userName });
+    const raw = xmlArray(xml, 'member', ['AccessKeyId', 'Status', 'CreateDate']);
+    return {
+        accessKeys: raw.map((k) => ({
+            accessKeyId: k['AccessKeyId'] ?? '',
+            status: k['Status'] ?? '',
+            createDate: k['CreateDate'] ?? '',
+        })),
+    };
+}
+
+export async function iamCreateAccessKey(userName: string): Promise<{ accessKeyId: string; secretAccessKey: string }> {
+    const xml = await iamRequest('CreateAccessKey', { UserName: userName });
+    return {
+        accessKeyId: xmlValue(xml, 'AccessKeyId'),
+        secretAccessKey: xmlValue(xml, 'SecretAccessKey'),
+    };
+}
+
+export async function iamDeleteAccessKey(userName: string, accessKeyId: string): Promise<void> {
+    await iamRequest('DeleteAccessKey', { UserName: userName, AccessKeyId: accessKeyId });
+}
+
+export interface IamTag {
+    key: string;
+    value: string;
+}
+
+export async function iamListUserTags(userName: string): Promise<{ tags: IamTag[] }> {
+    const xml = await iamRequest('ListUserTags', { UserName: userName });
+    const raw = xmlArray(xml, 'member', ['Key', 'Value']);
+    return {
+        tags: raw.map((t) => ({
+            key: t['Key'] ?? '',
+            value: t['Value'] ?? '',
+        })),
+    };
+}
+
+export async function iamTagUser(userName: string, tags: IamTag[]): Promise<void> {
+    const params: Record<string, string> = { UserName: userName };
+    tags.forEach((tag, i) => {
+        params[`Tags.member.${i + 1}.Key`] = tag.key;
+        params[`Tags.member.${i + 1}.Value`] = tag.value;
+    });
+    await iamRequest('TagUser', params);
+}
+
+export async function iamUntagUser(userName: string, tagKeys: string[]): Promise<void> {
+    const params: Record<string, string> = { UserName: userName };
+    tagKeys.forEach((key, i) => {
+        params[`TagKeys.member.${i + 1}`] = key;
+    });
+    await iamRequest('UntagUser', params);
+}
+
+export async function iamGetRole(roleName: string): Promise<IamRole & { assumeRolePolicyDocument: string; description?: string; createDate?: string }> {
+    const xml = await iamRequest('GetRole', { RoleName: roleName });
+    const doc = xmlValue(xml, 'AssumeRolePolicyDocument');
+    return {
+        roleName: xmlValue(xml, 'RoleName'),
+        roleId: xmlValue(xml, 'RoleId'),
+        arn: xmlValue(xml, 'Arn'),
+        assumeRolePolicyDocument: doc ? decodeURIComponent(doc) : '',
+        description: xmlValue(xml, 'Description') || undefined,
+        createDate: xmlValue(xml, 'CreateDate') || undefined,
+    };
+}
+
+export async function iamListRolePolicies(roleName: string): Promise<{ policyNames: string[] }> {
+    const xml = await iamRequest('ListRolePolicies', { RoleName: roleName });
+    const names: string[] = [];
+    const regex = /<member>([^<]+)<\/member>/g;
+    let m;
+    while ((m = regex.exec(xml)) !== null) names.push(m[1]);
+    return { policyNames: names };
+}
+
+export async function iamListAttachedRolePolicies(roleName: string): Promise<{ policies: IamAttachedPolicy[] }> {
+    const xml = await iamRequest('ListAttachedRolePolicies', { RoleName: roleName });
+    const raw = xmlArray(xml, 'member', ['PolicyName', 'PolicyArn']);
+    return {
+        policies: raw.map((p) => ({
+            policyName: p['PolicyName'] ?? '',
+            policyArn: p['PolicyArn'] ?? '',
+        })),
+    };
+}
+
+export async function iamListRoleTags(roleName: string): Promise<{ tags: IamTag[] }> {
+    const xml = await iamRequest('ListRoleTags', { RoleName: roleName });
+    const raw = xmlArray(xml, 'member', ['Key', 'Value']);
+    return {
+        tags: raw.map((t) => ({
+            key: t['Key'] ?? '',
+            value: t['Value'] ?? '',
+        })),
+    };
+}
+
+export async function iamUpdateAssumeRolePolicy(roleName: string, policyDocument: string): Promise<void> {
+    await iamRequest('UpdateAssumeRolePolicy', { RoleName: roleName, PolicyDocument: policyDocument });
+}
+
+export async function iamGetPolicy(arn: string): Promise<IamPolicy & { defaultVersionId: string; description?: string; createDate?: string }> {
+    const xml = await iamRequest('GetPolicy', { PolicyArn: arn });
+    return {
+        policyName: xmlValue(xml, 'PolicyName'),
+        arn: xmlValue(xml, 'Arn'),
+        attachmentCount: xmlValue(xml, 'AttachmentCount'),
+        defaultVersionId: xmlValue(xml, 'DefaultVersionId'),
+        description: xmlValue(xml, 'Description') || undefined,
+        createDate: xmlValue(xml, 'CreateDate') || undefined,
+    };
+}
+
+export interface IamPolicyVersion {
+    versionId: string;
+    isDefaultVersion: boolean;
+    createDate: string;
+}
+
+export async function iamListPolicyVersions(arn: string): Promise<{ versions: IamPolicyVersion[] }> {
+    const xml = await iamRequest('ListPolicyVersions', { PolicyArn: arn });
+    const raw = xmlArray(xml, 'member', ['VersionId', 'IsDefaultVersion', 'CreateDate']);
+    return {
+        versions: raw.map((v) => ({
+            versionId: v['VersionId'] ?? '',
+            isDefaultVersion: v['IsDefaultVersion'] === 'true',
+            createDate: v['CreateDate'] ?? '',
+        })),
+    };
+}
+
+export async function iamGetPolicyVersion(arn: string, versionId: string): Promise<{ document: string; isDefaultVersion: boolean }> {
+    const xml = await iamRequest('GetPolicyVersion', { PolicyArn: arn, VersionId: versionId });
+    const doc = xmlValue(xml, 'Document');
+    return {
+        document: doc ? decodeURIComponent(doc) : '',
+        isDefaultVersion: xmlValue(xml, 'IsDefaultVersion') === 'true',
+    };
+}
+
+export async function iamCreatePolicyVersion(arn: string, document: string, setAsDefault = true): Promise<void> {
+    await iamRequest('CreatePolicyVersion', {
+        PolicyArn: arn,
+        PolicyDocument: document,
+        SetAsDefault: String(setAsDefault),
+    });
+}
+
+export async function iamDeletePolicyVersion(arn: string, versionId: string): Promise<void> {
+    await iamRequest('DeletePolicyVersion', { PolicyArn: arn, VersionId: versionId });
+}
+
+export async function iamCreatePolicy(name: string, document: string, description?: string): Promise<void> {
+    const params: Record<string, string> = { PolicyName: name, PolicyDocument: document };
+    if (description) params['Description'] = description;
+    await iamRequest('CreatePolicy', params);
+}
+
+export async function iamDeletePolicy(arn: string): Promise<void> {
+    await iamRequest('DeletePolicy', { PolicyArn: arn });
+}
+
+export async function iamCreateGroup(name: string): Promise<void> {
+    await iamRequest('CreateGroup', { GroupName: name });
+}
+
+export async function iamDeleteGroup(name: string): Promise<void> {
+    await iamRequest('DeleteGroup', { GroupName: name });
+}
+
+export async function iamGetGroup(name: string): Promise<{ group: IamGroup; users: IamUser[] }> {
+    const xml = await iamRequest('GetGroup', { GroupName: name });
+    const group: IamGroup = {
+        groupName: xmlValue(xml, 'GroupName'),
+        groupId: xmlValue(xml, 'GroupId'),
+        arn: xmlValue(xml, 'Arn'),
+    };
+    const raw = xmlArray(xml, 'member', ['UserName', 'UserId', 'Arn', 'CreateDate']);
+    const users: IamUser[] = raw
+        .filter((u) => u['UserName'])
+        .map((u) => ({
+            userName: u['UserName'] ?? '',
+            userId: u['UserId'] ?? '',
+            arn: u['Arn'] ?? '',
+            createDate: u['CreateDate'] ?? '',
+        }));
+    return { group, users };
+}
+
+export async function iamListAttachedGroupPolicies(groupName: string): Promise<{ policies: IamAttachedPolicy[] }> {
+    const xml = await iamRequest('ListAttachedGroupPolicies', { GroupName: groupName });
+    const raw = xmlArray(xml, 'member', ['PolicyName', 'PolicyArn']);
+    return {
+        policies: raw.map((p) => ({
+            policyName: p['PolicyName'] ?? '',
+            policyArn: p['PolicyArn'] ?? '',
+        })),
+    };
+}
+
+export async function iamAddUserToGroup(userName: string, groupName: string): Promise<void> {
+    await iamRequest('AddUserToGroup', { UserName: userName, GroupName: groupName });
+}
+
+export async function iamRemoveUserFromGroup(userName: string, groupName: string): Promise<void> {
+    await iamRequest('RemoveUserFromGroup', { UserName: userName, GroupName: groupName });
+}
+
+export async function iamAttachRolePolicy(roleName: string, policyArn: string): Promise<void> {
+    await iamRequest('AttachRolePolicy', { RoleName: roleName, PolicyArn: policyArn });
+}
+
+export async function iamDetachRolePolicy(roleName: string, policyArn: string): Promise<void> {
+    await iamRequest('DetachRolePolicy', { RoleName: roleName, PolicyArn: policyArn });
+}
+
+export async function iamAttachUserPolicy(userName: string, policyArn: string): Promise<void> {
+    await iamRequest('AttachUserPolicy', { UserName: userName, PolicyArn: policyArn });
+}
+
+export async function iamDetachUserPolicy(userName: string, policyArn: string): Promise<void> {
+    await iamRequest('DetachUserPolicy', { UserName: userName, PolicyArn: policyArn });
+}
+
+export async function iamAttachGroupPolicy(groupName: string, policyArn: string): Promise<void> {
+    await iamRequest('AttachGroupPolicy', { GroupName: groupName, PolicyArn: policyArn });
+}
+
+export async function iamDetachGroupPolicy(groupName: string, policyArn: string): Promise<void> {
+    await iamRequest('DetachGroupPolicy', { GroupName: groupName, PolicyArn: policyArn });
+}
+
+export interface IamAccountSummary {
+    users: number;
+    usersQuota: number;
+    roles: number;
+    rolesQuota: number;
+    groups: number;
+    groupsQuota: number;
+    policies: number;
+    policiesQuota: number;
+    accessKeysPerUserQuota: number;
+    accountAccessKeysPresent: number;
+}
+
+export async function iamGetAccountSummary(): Promise<IamAccountSummary> {
+    const xml = await iamRequest('GetAccountSummary');
+    function sumVal(key: string): number {
+        const regex = new RegExp(`<key>${key}</key>\\s*<value>(\\d+)</value>`);
+        const m = xml.match(regex);
+        return m ? parseInt(m[1], 10) : 0;
+    }
+    return {
+        users: sumVal('Users'),
+        usersQuota: sumVal('UsersQuota'),
+        roles: sumVal('Roles'),
+        rolesQuota: sumVal('RolesQuota'),
+        groups: sumVal('Groups'),
+        groupsQuota: sumVal('GroupsQuota'),
+        policies: sumVal('Policies'),
+        policiesQuota: sumVal('PoliciesQuota'),
+        accessKeysPerUserQuota: sumVal('AccessKeysPerUserQuota'),
+        accountAccessKeysPresent: sumVal('AccountAccessKeysPresent'),
+    };
+}
+
+export async function iamListAccountAliases(): Promise<{ aliases: string[] }> {
+    const xml = await iamRequest('ListAccountAliases');
+    const aliases: string[] = [];
+    const regex = /<member>([^<]+)<\/member>/g;
+    let m;
+    while ((m = regex.exec(xml)) !== null) aliases.push(m[1]);
+    return { aliases };
+}
+
+export async function iamCreateAccountAlias(alias: string): Promise<void> {
+    await iamRequest('CreateAccountAlias', { AccountAlias: alias });
+}
+
+export async function iamDeleteAccountAlias(alias: string): Promise<void> {
+    await iamRequest('DeleteAccountAlias', { AccountAlias: alias });
+}
+
+export interface IamPasswordPolicy {
+    minimumPasswordLength: number;
+    requireSymbols: boolean;
+    requireNumbers: boolean;
+    requireUppercaseCharacters: boolean;
+    requireLowercaseCharacters: boolean;
+    allowUsersToChangePassword: boolean;
+    expirePasswords: boolean;
+    maxPasswordAge: number;
+    passwordReusePrevention: number;
+    hardExpiry: boolean;
+}
+
+export async function iamGetAccountPasswordPolicy(): Promise<IamPasswordPolicy> {
+    const xml = await iamRequest('GetAccountPasswordPolicy');
+    return {
+        minimumPasswordLength: parseInt(xmlValue(xml, 'MinimumPasswordLength') || '8', 10),
+        requireSymbols: xmlValue(xml, 'RequireSymbols') === 'true',
+        requireNumbers: xmlValue(xml, 'RequireNumbers') === 'true',
+        requireUppercaseCharacters: xmlValue(xml, 'RequireUppercaseCharacters') === 'true',
+        requireLowercaseCharacters: xmlValue(xml, 'RequireLowercaseCharacters') === 'true',
+        allowUsersToChangePassword: xmlValue(xml, 'AllowUsersToChangePassword') === 'true',
+        expirePasswords: xmlValue(xml, 'ExpirePasswords') === 'true',
+        maxPasswordAge: parseInt(xmlValue(xml, 'MaxPasswordAge') || '0', 10),
+        passwordReusePrevention: parseInt(xmlValue(xml, 'PasswordReusePrevention') || '0', 10),
+        hardExpiry: xmlValue(xml, 'HardExpiry') === 'true',
+    };
+}
+
+export async function iamUpdateAccountPasswordPolicy(policy: Partial<IamPasswordPolicy>): Promise<void> {
+    const params: Record<string, string> = {};
+    if (policy.minimumPasswordLength !== undefined) params['MinimumPasswordLength'] = String(policy.minimumPasswordLength);
+    if (policy.requireSymbols !== undefined) params['RequireSymbols'] = String(policy.requireSymbols);
+    if (policy.requireNumbers !== undefined) params['RequireNumbers'] = String(policy.requireNumbers);
+    if (policy.requireUppercaseCharacters !== undefined) params['RequireUppercaseCharacters'] = String(policy.requireUppercaseCharacters);
+    if (policy.requireLowercaseCharacters !== undefined) params['RequireLowercaseCharacters'] = String(policy.requireLowercaseCharacters);
+    if (policy.allowUsersToChangePassword !== undefined) params['AllowUsersToChangePassword'] = String(policy.allowUsersToChangePassword);
+    if (policy.maxPasswordAge !== undefined) params['MaxPasswordAge'] = String(policy.maxPasswordAge);
+    if (policy.passwordReusePrevention !== undefined) params['PasswordReusePrevention'] = String(policy.passwordReusePrevention);
+    await iamRequest('UpdateAccountPasswordPolicy', params);
 }
 
 // ---- Lambda ----

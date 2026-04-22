@@ -180,6 +180,150 @@ impl ServiceHandler for IamService {
                 operations::instance_profiles::remove_role_from_instance_profile(&state, &input)
             }
 
+            // ── User Tags ─────────────────────────────────────────────────────
+            "TagUser" => operations::tags::tag_user(&state, &input),
+            "UntagUser" => operations::tags::untag_user(&state, &input),
+            "ListUserTags" => operations::tags::list_user_tags(&state, &input),
+
+            // ── Role Tags ─────────────────────────────────────────────────────
+            "TagRole" => operations::tags::tag_role(&state, &input),
+            "UntagRole" => operations::tags::untag_role(&state, &input),
+            "ListRoleTags" => operations::tags::list_role_tags(&state, &input),
+
+            // ── Instance Profile Tags ─────────────────────────────────────────
+            "TagInstanceProfile" => operations::tags::tag_instance_profile(&state, &input),
+            "UntagInstanceProfile" => operations::tags::untag_instance_profile(&state, &input),
+            "ListInstanceProfileTags" => {
+                operations::tags::list_instance_profile_tags(&state, &input)
+            }
+
+            // ── Account Aliases ───────────────────────────────────────────────
+            "CreateAccountAlias" => operations::account::create_account_alias(&state, &input),
+            "DeleteAccountAlias" => operations::account::delete_account_alias(&state, &input),
+            "ListAccountAliases" => operations::account::list_account_aliases(&state, &input),
+
+            // ── Password Policy ───────────────────────────────────────────────
+            "GetAccountPasswordPolicy" => {
+                operations::account::get_account_password_policy(&state, &input)
+            }
+            "UpdateAccountPasswordPolicy" => {
+                operations::account::update_account_password_policy(&state, &input)
+            }
+            "DeleteAccountPasswordPolicy" => {
+                operations::account::delete_account_password_policy(&state, &input)
+            }
+
+            // ── Account Summary / Auth Details ────────────────────────────────
+            "GetAccountSummary" => operations::account::get_account_summary(&state, &input),
+            "GetAccountAuthorizationDetails" => {
+                operations::account::get_account_authorization_details(&state, &input)
+            }
+
+            // ── OIDC Providers ────────────────────────────────────────────────
+            "CreateOpenIDConnectProvider" => {
+                operations::oidc::create_open_id_connect_provider(&state, &input, ctx)
+            }
+            "GetOpenIDConnectProvider" => {
+                operations::oidc::get_open_id_connect_provider(&state, &input)
+            }
+            "ListOpenIDConnectProviders" => {
+                operations::oidc::list_open_id_connect_providers(&state, &input)
+            }
+            "DeleteOpenIDConnectProvider" => {
+                operations::oidc::delete_open_id_connect_provider(&state, &input)
+            }
+            "AddClientIDToOpenIDConnectProvider" => {
+                operations::oidc::add_client_id_to_open_id_connect_provider(&state, &input)
+            }
+            "RemoveClientIDFromOpenIDConnectProvider" => {
+                operations::oidc::remove_client_id_from_open_id_connect_provider(&state, &input)
+            }
+            "UpdateOpenIDConnectProviderThumbprint" => {
+                operations::oidc::update_open_id_connect_provider_thumbprint(&state, &input)
+            }
+
+            // ── SAML Providers ────────────────────────────────────────────────
+            "CreateSAMLProvider" => {
+                operations::saml::create_saml_provider(&state, &input, ctx)
+            }
+            "GetSAMLProvider" => operations::saml::get_saml_provider(&state, &input),
+            "ListSAMLProviders" => operations::saml::list_saml_providers(&state, &input),
+            "DeleteSAMLProvider" => operations::saml::delete_saml_provider(&state, &input),
+            "UpdateSAMLProvider" => operations::saml::update_saml_provider(&state, &input),
+
+            // ── Server Certificates ───────────────────────────────────────────
+            "UploadServerCertificate" => {
+                operations::certificates::upload_server_certificate(&state, &input, ctx)
+            }
+            "GetServerCertificate" => {
+                operations::certificates::get_server_certificate(&state, &input)
+            }
+            "ListServerCertificates" => {
+                operations::certificates::list_server_certificates(&state, &input)
+            }
+            "DeleteServerCertificate" => {
+                operations::certificates::delete_server_certificate(&state, &input)
+            }
+            "TagServerCertificate" => {
+                operations::certificates::tag_server_certificate(&state, &input)
+            }
+            "UntagServerCertificate" => {
+                operations::certificates::untag_server_certificate(&state, &input)
+            }
+            "ListServerCertificateTags" => {
+                operations::certificates::list_server_certificate_tags(&state, &input)
+            }
+
+            // ── Virtual MFA Devices ───────────────────────────────────────────
+            "CreateVirtualMFADevice" => {
+                operations::mfa::create_virtual_mfa_device(&state, &input, ctx)
+            }
+            "ListVirtualMFADevices" => operations::mfa::list_virtual_mfa_devices(&state, &input),
+            "DeleteVirtualMFADevice" => {
+                operations::mfa::delete_virtual_mfa_device(&state, &input)
+            }
+            "EnableMFADevice" => operations::mfa::enable_mfa_device(&state, &input),
+            "DeactivateMFADevice" => operations::mfa::deactivate_mfa_device(&state, &input),
+            "ListMFADevices" => operations::mfa::list_mfa_devices(&state, &input),
+
+            // ── SSH Public Keys ───────────────────────────────────────────────
+            "UploadSSHPublicKey" => operations::ssh_keys::upload_ssh_public_key(&state, &input),
+            "GetSSHPublicKey" => operations::ssh_keys::get_ssh_public_key(&state, &input),
+            "ListSSHPublicKeys" => operations::ssh_keys::list_ssh_public_keys(&state, &input),
+            "DeleteSSHPublicKey" => operations::ssh_keys::delete_ssh_public_key(&state, &input),
+            "UpdateSSHPublicKey" => operations::ssh_keys::update_ssh_public_key(&state, &input),
+
+            // ── Service-Linked Roles ──────────────────────────────────────────
+            "CreateServiceLinkedRole" => {
+                operations::service_linked_roles::create_service_linked_role(&state, &input, ctx)
+            }
+            "DeleteServiceLinkedRole" => {
+                operations::service_linked_roles::delete_service_linked_role(&state, &input)
+            }
+            "GetServiceLinkedRoleDeletionStatus" => {
+                operations::service_linked_roles::get_service_linked_role_deletion_status(
+                    &state, &input,
+                )
+            }
+
+            // ── Credential Report ─────────────────────────────────────────────
+            "GenerateCredentialReport" => {
+                operations::credential_report::generate_credential_report(&state, &input)
+            }
+            "GetCredentialReport" => {
+                operations::credential_report::get_credential_report(&state, &input)
+            }
+
+            // ── Service Last Accessed Details ─────────────────────────────────
+            "GenerateServiceLastAccessedDetails" => {
+                operations::credential_report::generate_service_last_accessed_details(
+                    &state, &input,
+                )
+            }
+            "GetServiceLastAccessedDetails" => {
+                operations::credential_report::get_service_last_accessed_details(&state, &input)
+            }
+
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
@@ -260,6 +404,26 @@ impl ServiceHandler for IamService {
         }
         for ip in snapshot.instance_profiles {
             state.instance_profiles.insert(ip.instance_profile_name.clone(), ip);
+        }
+        if !snapshot.account_aliases.is_empty() {
+            if let Ok(mut aliases) = state.account_aliases.lock() {
+                *aliases = snapshot.account_aliases;
+            }
+        }
+        if let Ok(mut policy) = state.account_password_policy.lock() {
+            *policy = snapshot.account_password_policy;
+        }
+        for provider in snapshot.oidc_providers {
+            state.oidc_providers.insert(provider.arn.clone(), provider);
+        }
+        for provider in snapshot.saml_providers {
+            state.saml_providers.insert(provider.arn.clone(), provider);
+        }
+        for cert in snapshot.server_certificates {
+            state.server_certificates.insert(cert.server_certificate_name.clone(), cert);
+        }
+        for device in snapshot.virtual_mfa_devices {
+            state.virtual_mfa_devices.insert(device.serial_number.clone(), device);
         }
 
         Ok(())
