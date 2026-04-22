@@ -297,9 +297,5 @@ Before submitting work on any service:
 - Multi-region replication (cross-region state sync)
 - IAM policy evaluation (we store policies but don't enforce them in bypass mode)
 - Real EC2 instance launching
-- CloudWatch Metrics (alarms, dashboards)
-- Route 53 DNS resolution
-- CloudFront CDN behavior
-- ElasticSearch/OpenSearch
-- Redshift, Athena, Glue
-- AppSync, CodeBuild, CodePipeline
+- Redshift
+- CodeBuild, CodePipeline
