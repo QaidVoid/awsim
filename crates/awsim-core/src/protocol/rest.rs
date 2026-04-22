@@ -120,12 +120,18 @@ fn match_route<'a>(
     query_string: &str,
     routes: &'a [RouteDefinition],
 ) -> Result<(&'a str, Vec<(String, String)>), AwsError> {
-    // Strip a trailing slash so `PUT /bucket/` matches `/{Bucket}` just like
-    // `PUT /bucket`. The AWS SDK (v1+) appends a trailing slash for S3
-    // path-style bucket operations.
-    let path = path.strip_suffix('/').unwrap_or(path);
-    // But preserve a lone "/" (root path → ListBuckets).
-    let path = if path.is_empty() { "/" } else { path };
+    // Strip a trailing slash ONLY for bucket-level operations (paths like `/bucket/`).
+    // Don't strip for object keys like `/bucket/folder/` — the trailing slash is
+    // significant (it marks S3 "folder" objects).
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let path = if segments.len() <= 1 {
+        // Bucket-level: `/bucket/` → `/bucket`
+        let stripped = path.strip_suffix('/').unwrap_or(path);
+        if stripped.is_empty() { "/" } else { stripped }
+    } else {
+        // Object-level: preserve trailing slash for folder markers
+        path
+    };
 
     let query_params: Vec<(String, String)> = parse_query_string(query_string);
 
