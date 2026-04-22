@@ -5,7 +5,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
 
-use crate::state::{CognitoState, IdentityProvider};
+use crate::state::{CognitoState, IdentityProvider, LinkedProvider};
 
 fn now_epoch() -> u64 {
     SystemTime::now()
@@ -306,4 +306,102 @@ pub fn get_identity_provider_by_identifier(
         })?;
 
     Ok(json!({ "IdentityProvider": idp_to_value(idp) }))
+}
+
+// ---------------------------------------------------------------------------
+// AdminLinkProviderForUser
+// ---------------------------------------------------------------------------
+
+pub fn admin_link_provider_for_user(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let dest = &input["DestinationUser"];
+    let src = &input["SourceUser"];
+
+    let dest_value = dest["ProviderAttributeValue"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DestinationUser.ProviderAttributeValue is required"))?;
+    let src_provider = src["ProviderName"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SourceUser.ProviderName is required"))?;
+    let src_attr_name = src["ProviderAttributeName"].as_str().unwrap_or("Cognito_Subject");
+    let src_attr_value = src["ProviderAttributeValue"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SourceUser.ProviderAttributeValue is required"))?;
+
+    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+    })?;
+
+    // Find destination user (by username or sub)
+    let username = pool.users.keys()
+        .find(|k| k.as_str() == dest_value || pool.users.get(*k).map_or(false, |u| u.sub == dest_value))
+        .cloned()
+        .ok_or_else(|| AwsError::not_found("UserNotFoundException", format!("Destination user not found: {dest_value}")))?;
+
+    let user = pool.users.get_mut(&username).unwrap();
+
+    // Remove any existing link for this provider
+    user.linked_providers.retain(|lp| lp.provider_name != src_provider);
+    user.linked_providers.push(LinkedProvider {
+        provider_name: src_provider.to_string(),
+        provider_attribute_name: src_attr_name.to_string(),
+        provider_attribute_value: src_attr_value.to_string(),
+    });
+
+    info!(username = %username, pool_id = %pool_id, provider = %src_provider, "Cognito: linked provider for user");
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// AdminDisableProviderForUser
+// ---------------------------------------------------------------------------
+
+pub fn admin_disable_provider_for_user(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let user_input = &input["User"];
+    let provider_name = user_input["ProviderName"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "User.ProviderName is required"))?;
+    let provider_attr_value = user_input["ProviderAttributeValue"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "User.ProviderAttributeValue is required"))?;
+
+    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+    })?;
+
+    // Find user that has this provider link
+    let mut found = false;
+    for user in pool.users.values_mut() {
+        let len_before = user.linked_providers.len();
+        user.linked_providers.retain(|lp| {
+            !(lp.provider_name == provider_name && lp.provider_attribute_value == provider_attr_value)
+        });
+        if user.linked_providers.len() < len_before {
+            found = true;
+            break;
+        }
+    }
+
+    if !found {
+        return Err(AwsError::not_found(
+            "UserNotFoundException",
+            format!("No user found with provider {provider_name} value {provider_attr_value}"),
+        ));
+    }
+
+    info!(pool_id = %pool_id, provider = %provider_name, "Cognito: disabled provider for user");
+    Ok(json!({}))
 }

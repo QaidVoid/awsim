@@ -257,6 +257,106 @@ impl ServiceHandler for CognitoService {
             "UntagResource" => operations::tags::untag_resource(&state, &input, ctx),
             "ListTagsForResource" => operations::tags::list_tags_for_resource(&state, &input, ctx),
 
+            // Device tracking (user-level)
+            "ConfirmDevice" => operations::devices::confirm_device(&state, &input, ctx),
+            "GetDevice" => operations::devices::get_device(&state, &input, ctx),
+            "ListDevices" => operations::devices::list_devices(&state, &input, ctx),
+            "UpdateDeviceStatus" => operations::devices::update_device_status(&state, &input, ctx),
+            "ForgetDevice" => operations::devices::forget_device(&state, &input, ctx),
+
+            // Device tracking (admin)
+            "AdminGetDevice" => operations::devices::admin_get_device(&state, &input, ctx),
+            "AdminListDevices" => operations::devices::admin_list_devices(&state, &input, ctx),
+            "AdminUpdateDeviceStatus" => {
+                operations::devices::admin_update_device_status(&state, &input, ctx)
+            }
+            "AdminForgetDevice" => {
+                operations::devices::admin_forget_device(&state, &input, ctx)
+            }
+
+            // UI Customization & Branding
+            "SetUICustomization" => operations::branding::set_ui_customization(&state, &input, ctx),
+            "GetUICustomization" => operations::branding::get_ui_customization(&state, &input, ctx),
+            "CreateManagedLoginBranding" => {
+                operations::branding::create_managed_login_branding(&state, &input, ctx)
+            }
+            "DescribeManagedLoginBranding" => {
+                operations::branding::describe_managed_login_branding(&state, &input, ctx)
+            }
+            "DescribeManagedLoginBrandingByClient" => {
+                operations::branding::describe_managed_login_branding_by_client(&state, &input, ctx)
+            }
+            "UpdateManagedLoginBranding" => {
+                operations::branding::update_managed_login_branding(&state, &input, ctx)
+            }
+            "DeleteManagedLoginBranding" => {
+                operations::branding::delete_managed_login_branding(&state, &input, ctx)
+            }
+
+            // Risk Configuration
+            "SetRiskConfiguration" => {
+                operations::risk::set_risk_configuration(&state, &input, ctx)
+            }
+            "DescribeRiskConfiguration" => {
+                operations::risk::describe_risk_configuration(&state, &input, ctx)
+            }
+            "UpdateAuthEventFeedback" => {
+                operations::risk::update_auth_event_feedback(&state, &input, ctx)
+            }
+            "AdminUpdateAuthEventFeedback" => {
+                operations::risk::admin_update_auth_event_feedback(&state, &input, ctx)
+            }
+
+            // Provider linking
+            "AdminLinkProviderForUser" => {
+                operations::identity_providers::admin_link_provider_for_user(&state, &input, ctx)
+            }
+            "AdminDisableProviderForUser" => {
+                operations::identity_providers::admin_disable_provider_for_user(&state, &input, ctx)
+            }
+
+            // User import jobs
+            "CreateUserImportJob" => {
+                operations::import::create_user_import_job(&state, &input, ctx)
+            }
+            "DescribeUserImportJob" => {
+                operations::import::describe_user_import_job(&state, &input, ctx)
+            }
+            "StartUserImportJob" => {
+                operations::import::start_user_import_job(&state, &input, ctx)
+            }
+            "StopUserImportJob" => {
+                operations::import::stop_user_import_job(&state, &input, ctx)
+            }
+            "ListUserImportJobs" => {
+                operations::import::list_user_import_jobs(&state, &input, ctx)
+            }
+            "GetCSVHeader" => operations::import::get_csv_header(&state, &input, ctx),
+
+            // Domain management (additional)
+            "UpdateUserPoolDomain" => {
+                operations::domain::update_user_pool_domain(&state, &input, ctx)
+            }
+
+            // Pool-level misc
+            "GetSigningCertificate" => {
+                operations::pools::get_signing_certificate(&state, &input, ctx)
+            }
+            "GetLogDeliveryConfiguration" => {
+                operations::pools::get_log_delivery_configuration(&state, &input, ctx)
+            }
+            "SetLogDeliveryConfiguration" => {
+                operations::pools::set_log_delivery_configuration(&state, &input, ctx)
+            }
+
+            // Auth misc
+            "GetTokensFromRefreshToken" => {
+                operations::auth::get_tokens_from_refresh_token(&state, &input, ctx)
+            }
+            "GetUserAuthFactors" => {
+                operations::auth::get_user_auth_factors(&state, &input, ctx)
+            }
+
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

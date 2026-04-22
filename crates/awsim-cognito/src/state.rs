@@ -73,6 +73,60 @@ pub struct IdentityProvider {
     pub user_pool_id: String,
 }
 
+/// UI customization for a user pool (or specific client).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiCustomization {
+    pub css: Option<String>,
+    pub image_url: Option<String>,
+    pub creation_date: u64,
+    pub last_modified_date: u64,
+}
+
+/// Managed login branding entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManagedLoginBranding {
+    pub branding_id: String,
+    pub user_pool_id: String,
+    pub client_id: Option<String>,
+    pub settings: serde_json::Value,
+    pub assets: Vec<serde_json::Value>,
+    pub creation_date: u64,
+    pub last_modified_date: u64,
+}
+
+/// Advanced Security risk configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RiskConfiguration {
+    pub client_id: Option<String>,
+    pub compromised_credentials_config: Option<serde_json::Value>,
+    pub account_takeover_config: Option<serde_json::Value>,
+    pub risk_exception_config: Option<serde_json::Value>,
+}
+
+/// A user import job.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserImportJob {
+    pub job_id: String,
+    pub user_pool_id: String,
+    pub job_name: String,
+    /// Created | Pending | InProgress | Stopping | Stopped | Succeeded | Failed | Expired
+    pub status: String,
+    pub cloud_watch_logs_role_arn: Option<String>,
+    pub pre_signed_url: Option<String>,
+    pub creation_date: u64,
+    pub start_date: Option<u64>,
+    pub completion_date: Option<u64>,
+    pub imported_users: u64,
+    pub skipped_users: u64,
+    pub failed_users: u64,
+}
+
+/// Log delivery configuration entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogDeliveryConfiguration {
+    pub log_configurations: Vec<serde_json::Value>,
+}
+
 /// A Cognito User Pool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserPool {
@@ -95,6 +149,16 @@ pub struct UserPool {
     pub resource_servers: Vec<ResourceServer>,
     pub identity_providers: Vec<IdentityProvider>,
     pub tags: HashMap<String, String>,
+    /// UI customization keyed by "pool" or client_id.
+    pub ui_customizations: HashMap<String, UiCustomization>,
+    /// Managed login branding entries.
+    pub managed_login_brandings: Vec<ManagedLoginBranding>,
+    /// Risk configurations keyed by client_id (or "pool" for pool-level).
+    pub risk_configurations: Vec<RiskConfiguration>,
+    /// User import jobs.
+    pub import_jobs: Vec<UserImportJob>,
+    /// Log delivery configuration.
+    pub log_delivery_configuration: Option<LogDeliveryConfiguration>,
 }
 
 /// A Cognito User Pool App Client.
@@ -116,6 +180,26 @@ pub struct UserPoolClient {
     pub access_token_validity: u64,  // seconds
     pub id_token_validity: u64,      // seconds
     pub refresh_token_validity: u64, // seconds
+}
+
+/// Device info tracked per user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    pub device_key: String,
+    pub device_group_key: String,
+    pub device_name: Option<String>,
+    pub remembered: bool,
+    pub created_date: u64,
+    pub last_authenticated_date: u64,
+    pub last_modified_date: u64,
+}
+
+/// An external identity provider linked to a user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkedProvider {
+    pub provider_name: String,
+    pub provider_attribute_name: String,
+    pub provider_attribute_value: String,
 }
 
 /// A Cognito user.
@@ -143,6 +227,10 @@ pub struct CognitoUser {
     pub totp_secret: Option<String>,
     /// Whether TOTP has been verified by the user.
     pub totp_verified: bool,
+    /// Registered devices for this user.
+    pub devices: Vec<DeviceInfo>,
+    /// Externally linked identity providers.
+    pub linked_providers: Vec<LinkedProvider>,
 }
 
 /// A Cognito User Pool group.

@@ -116,3 +116,48 @@ pub fn delete_user_pool_domain(
     info!(domain = %domain, pool_id = %pool_id, "Cognito: deleted user pool domain");
     Ok(json!({}))
 }
+
+// ---------------------------------------------------------------------------
+// UpdateUserPoolDomain
+// ---------------------------------------------------------------------------
+
+pub fn update_user_pool_domain(
+    state: &CognitoState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let domain = input["Domain"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Domain is required"))?;
+
+    // Verify pool exists
+    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
+    drop(pool);
+
+    // Update domain_pool_map — remove old mapping if any
+    let old_domain = state.user_pools.get(pool_id).and_then(|p| p.domain.clone());
+    if let Some(old) = old_domain {
+        if old != domain {
+            state.domain_pool_map.remove(&old);
+        }
+    }
+
+    let mut pool_mut = state.user_pools.get_mut(pool_id).unwrap();
+    pool_mut.domain = Some(domain.to_string());
+    drop(pool_mut);
+
+    state.domain_pool_map.insert(domain.to_string(), pool_id.to_string());
+
+    info!(domain = %domain, pool_id = %pool_id, "Cognito: updated user pool domain");
+    Ok(json!({
+        "CloudFrontDomain": format!("{domain}.auth.{}.amazoncognito.com", ctx.region)
+    }))
+}

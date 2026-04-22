@@ -118,6 +118,11 @@ pub fn create_user_pool(
         resource_servers: Vec::new(),
         identity_providers: Vec::new(),
         tags: HashMap::new(),
+        ui_customizations: HashMap::new(),
+        managed_login_brandings: Vec::new(),
+        risk_configurations: Vec::new(),
+        import_jobs: Vec::new(),
+        log_delivery_configuration: None,
     };
 
     info!(pool_id = %pool_id, "Cognito: created user pool");
@@ -647,4 +652,108 @@ fn parse_lambda_config(v: &Value) -> HashMap<String, String> {
         }
     }
     map
+}
+
+// ---------------------------------------------------------------------------
+// GetSigningCertificate
+// ---------------------------------------------------------------------------
+
+pub fn get_signing_certificate(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+
+    let _pool = state.user_pools.get(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
+
+    // Return a stub PEM certificate
+    let fake_pem = "-----BEGIN CERTIFICATE-----\n\
+        MIICpDCCAYwCCQDU+pQ4pHgSpDANBgkqhkiG9w0BAQsFADAUMRIwEAYDVQQDDAls\n\
+        b2NhbGhvc3QwHhcNMjQwMTAxMDAwMDAwWhcNMjUwMTAxMDAwMDAwWjAUMRIwEAYD\n\
+        VQQDDAlsb2NhbGhvc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC7\n\
+        o4qne60TB3pNjMEm9+MnEL4skPmNgBsixiPEOThqxhV2IVNkMcPGEMaFOfFsaXHf\n\
+        awsim-fake-cognito-signing-certificate-for-local-development-only\n\
+        -----END CERTIFICATE-----";
+
+    Ok(json!({ "Certificate": fake_pem }))
+}
+
+// ---------------------------------------------------------------------------
+// GetLogDeliveryConfiguration
+// ---------------------------------------------------------------------------
+
+pub fn get_log_delivery_configuration(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+
+    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
+
+    let log_configs: Vec<serde_json::Value> = pool.log_delivery_configuration
+        .as_ref()
+        .map(|ldc| ldc.log_configurations.clone())
+        .unwrap_or_default();
+
+    Ok(json!({
+        "LogDeliveryConfiguration": {
+            "UserPoolId": pool_id,
+            "LogConfigurations": log_configs
+        }
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// SetLogDeliveryConfiguration
+// ---------------------------------------------------------------------------
+
+pub fn set_log_delivery_configuration(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    use crate::state::LogDeliveryConfiguration;
+
+    let pool_id = input["UserPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let log_configs: Vec<serde_json::Value> = input["LogConfigurations"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
+
+    pool.log_delivery_configuration = Some(LogDeliveryConfiguration {
+        log_configurations: log_configs.clone(),
+    });
+
+    info!(pool_id = %pool_id, "Cognito: set log delivery configuration");
+    Ok(json!({
+        "LogDeliveryConfiguration": {
+            "UserPoolId": pool_id,
+            "LogConfigurations": log_configs
+        }
+    }))
 }

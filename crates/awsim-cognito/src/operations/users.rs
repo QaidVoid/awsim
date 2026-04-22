@@ -68,6 +68,8 @@ fn make_user(username: &str, password: &str, attributes: HashMap<String, String>
         mfa_preferred: None,
         totp_secret: None,
         totp_verified: false,
+        devices: Vec::new(),
+        linked_providers: Vec::new(),
     }
 }
 

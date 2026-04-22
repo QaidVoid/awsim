@@ -565,3 +565,93 @@ pub fn admin_respond_to_auth_challenge(
         )),
     }
 }
+
+// ---------------------------------------------------------------------------
+// GetTokensFromRefreshToken
+// ---------------------------------------------------------------------------
+
+pub fn get_tokens_from_refresh_token(
+    state: &CognitoState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let refresh_tok = input["RefreshToken"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "RefreshToken is required"))?;
+    let client_id = input["ClientId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
+
+    let pool_entry = state
+        .user_pools
+        .iter()
+        .find(|e| e.clients.contains_key(client_id));
+
+    let pool_id = pool_entry
+        .map(|e| e.id.clone())
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("No pool found for client: {client_id}"),
+            )
+        })?;
+
+    // Extract sub from our opaque refresh token format: "refresh-{sub}-{uuid}"
+    let sub = refresh_tok
+        .strip_prefix("refresh-")
+        .and_then(|s| s.split('-').next())
+        .unwrap_or("unknown");
+
+    let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
+        AwsError::not_found("ResourceNotFoundException", format!("Pool not found: {pool_id}"))
+    })?;
+    let user = pool
+        .users
+        .values()
+        .find(|u| u.sub == sub || refresh_tok.contains(&u.sub))
+        .ok_or_else(|| {
+            AwsError::not_found("UserNotFoundException", "User not found for refresh token")
+        })?;
+
+    Ok(build_auth_result_pub(
+        &user.sub,
+        &user.username,
+        &ctx.region,
+        &pool_id,
+        client_id,
+        &user.attributes,
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// GetUserAuthFactors
+// ---------------------------------------------------------------------------
+
+pub fn get_user_auth_factors(
+    state: &CognitoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let token = input["AccessToken"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+
+    let username = crate::jwt::extract_username_from_access_token(token)
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+
+    // Find pool containing this user
+    for pool_ref in state.user_pools.iter() {
+        if let Some(user) = pool_ref.users.get(&username) {
+            let mut factors = vec!["PASSWORD".to_string()];
+            if user.totp_verified {
+                factors.push("SOFTWARE_TOKEN_MFA".to_string());
+            }
+            return Ok(json!({
+                "Username": username,
+                "ConfiguredUserAuthFactors": factors
+            }));
+        }
+    }
+
+    Err(AwsError::not_found("UserNotFoundException", format!("User not found: {username}")))
+}
