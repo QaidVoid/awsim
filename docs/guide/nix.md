@@ -17,7 +17,7 @@ The binary is at `./result/bin/awsim`.
 ## Run without Cloning
 
 ```bash
-nix run github:qaidvoid/awsim
+nix run github:QaidVoid/awsim
 ```
 
 ## Development Shell
@@ -56,7 +56,7 @@ A NixOS module is not yet included. You can run AWSim as a systemd service using
 # configuration.nix
 { config, pkgs, ... }:
 let
-  awsim = (builtins.getFlake "github:qaidvoid/awsim").packages.${pkgs.system}.default;
+  awsim = (builtins.getFlake "github:QaidVoid/awsim").packages.${pkgs.system}.default;
 in {
   systemd.services.awsim = {
     description = "AWSim local AWS emulator";

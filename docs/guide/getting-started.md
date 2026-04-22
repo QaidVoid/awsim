@@ -8,7 +8,7 @@
 ## Build from Source
 
 ```bash
-git clone https://github.com/qaidvoid/awsim
+git clone https://github.com/QaidVoid/awsim
 cd awsim
 cargo build --release
 ```

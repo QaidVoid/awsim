@@ -10,7 +10,7 @@ hero:
       link: /guide/getting-started
     - theme: alt
       text: View on GitHub
-      link: https://github.com/qaidvoid/awsim
+      link: https://github.com/QaidVoid/awsim
 
 features:
   - title: Fully Offline

@@ -7,7 +7,7 @@ export default defineConfig({
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Services', link: '/services/' },
-      { text: 'GitHub', link: 'https://github.com/qaidvoid/awsim' }
+      { text: 'GitHub', link: 'https://github.com/QaidVoid/awsim' }
     ],
     sidebar: {
       '/guide/': [
@@ -56,7 +56,7 @@ export default defineConfig({
       ]
     },
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/qaidvoid/awsim' }
+      { icon: 'github', link: 'https://github.com/QaidVoid/awsim' }
     ],
     footer: {
       message: 'Released under MIT / Apache-2.0 License',
