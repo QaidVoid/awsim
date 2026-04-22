@@ -4,6 +4,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 
+/// Group membership with IAM role info for JWT claim generation.
+pub struct GroupRolePair {
+    pub group_name: String,
+    pub role_arn: Option<String>,
+    pub precedence: Option<u32>,
+}
+
 fn now_epoch() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -44,6 +51,7 @@ pub fn id_token(
     attributes: &HashMap<String, String>,
     scopes: &[String],
     nonce: Option<&str>,
+    groups: &[GroupRolePair],
 ) -> String {
     let now = now_epoch();
     let header = json!({
@@ -73,6 +81,41 @@ pub fn id_token(
     }
 
     let obj = payload.as_object_mut().unwrap();
+
+    // Inject group/role claims if the user belongs to any groups.
+    if !groups.is_empty() {
+        let group_names: Vec<Value> = groups
+            .iter()
+            .map(|g| Value::String(g.group_name.clone()))
+            .collect();
+        obj.insert("cognito:groups".to_string(), Value::Array(group_names));
+
+        let roles: Vec<Value> = groups
+            .iter()
+            .filter_map(|g| g.role_arn.as_ref())
+            .map(|arn| Value::String(arn.clone()))
+            .collect();
+        if !roles.is_empty() {
+            // preferred_role = role from group with lowest precedence (None treated as infinity).
+            let preferred = groups
+                .iter()
+                .filter(|g| g.role_arn.is_some())
+                .min_by(|a, b| {
+                    match (a.precedence, b.precedence) {
+                        (Some(pa), Some(pb)) => pa.cmp(&pb).then_with(|| a.group_name.cmp(&b.group_name)),
+                        (Some(_), None) => std::cmp::Ordering::Less,
+                        (None, Some(_)) => std::cmp::Ordering::Greater,
+                        (None, None) => a.group_name.cmp(&b.group_name),
+                    }
+                })
+                .and_then(|g| g.role_arn.as_ref());
+
+            obj.insert("cognito:roles".to_string(), Value::Array(roles));
+            if let Some(pref) = preferred {
+                obj.insert("cognito:preferred_role".to_string(), Value::String(pref.clone()));
+            }
+        }
+    }
 
     // email scope: include email claims.
     if scopes.iter().any(|s| s == "email") {
@@ -129,6 +172,7 @@ pub fn id_token(
 /// Generate an access token for a user.
 ///
 /// The `scopes` list is included as a space-separated `scope` claim.
+/// `groups` is used to include `cognito:groups` in the access token (no roles — those are ID-token only per AWS spec).
 pub fn access_token(
     sub: &str,
     region: &str,
@@ -136,6 +180,7 @@ pub fn access_token(
     client_id: &str,
     username: &str,
     scopes: &[String],
+    groups: &[GroupRolePair],
 ) -> String {
     let now = now_epoch();
     let header = json!({
@@ -150,7 +195,7 @@ pub fn access_token(
         scopes.join(" ")
     };
 
-    let payload = json!({
+    let mut payload = json!({
         "sub": sub,
         "iss": format!("https://cognito-idp.{region}.amazonaws.com/{pool_id}"),
         "client_id": client_id,
@@ -162,6 +207,16 @@ pub fn access_token(
         "exp": now + 3600,
         "jti": uuid::Uuid::new_v4().to_string()
     });
+
+    // Include cognito:groups in access token (but NOT roles — those are ID-token only).
+    if !groups.is_empty() {
+        let group_names: Vec<Value> = groups
+            .iter()
+            .map(|g| Value::String(g.group_name.clone()))
+            .collect();
+        payload.as_object_mut().unwrap()
+            .insert("cognito:groups".to_string(), Value::Array(group_names));
+    }
 
     build_jwt(&header, &payload)
 }

@@ -2,10 +2,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::state::{CognitoGroup, CognitoState};
 use crate::operations::users::user_to_value;
+
+/// Warn if a role ARN doesn't match the expected format.
+/// Does NOT call IAM — just a format check to catch obvious mistakes.
+fn warn_if_invalid_role_arn(arn: &str) {
+    // Expected format: arn:aws:iam::<account-id>:role/<role-name>
+    if !arn.starts_with("arn:") || !arn.contains(":iam:") || !arn.contains(":role/") {
+        warn!(role_arn = %arn, "CreateGroup/UpdateGroup: RoleArn does not appear to be a valid IAM role ARN");
+    }
+}
 
 fn now_epoch() -> u64 {
     SystemTime::now()
@@ -57,6 +66,10 @@ pub fn create_group(
             "GroupExistsException",
             format!("Group already exists: {group_name}"),
         ));
+    }
+
+    if let Some(ref arn) = role_arn {
+        warn_if_invalid_role_arn(arn);
     }
 
     let now = now_epoch();
@@ -152,6 +165,7 @@ pub fn update_group(
         group.description = Some(desc.to_string());
     }
     if let Some(arn) = input["RoleArn"].as_str() {
+        warn_if_invalid_role_arn(arn);
         group.role_arn = Some(arn.to_string());
     }
     if let Some(p) = input["Precedence"].as_u64() {

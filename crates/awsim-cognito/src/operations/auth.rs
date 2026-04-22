@@ -3,8 +3,22 @@ use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::state::{CognitoState, MfaSession};
-use crate::jwt;
+use crate::state::{CognitoState, UserPool, MfaSession};
+use crate::jwt::{self, GroupRolePair};
+
+/// Build the list of GroupRolePair for a user from pool group data.
+fn group_role_pairs(pool: &UserPool, user_groups: &[String]) -> Vec<GroupRolePair> {
+    user_groups
+        .iter()
+        .filter_map(|gname| {
+            pool.groups.get(gname).map(|g| GroupRolePair {
+                group_name: g.group_name.clone(),
+                role_arn: g.role_arn.clone(),
+                precedence: g.precedence,
+            })
+        })
+        .collect()
+}
 
 pub fn build_auth_result_pub(
     user_sub: &str,
@@ -13,11 +27,12 @@ pub fn build_auth_result_pub(
     pool_id: &str,
     client_id: &str,
     attributes: &std::collections::HashMap<String, String>,
+    groups: &[GroupRolePair],
 ) -> Value {
     // Use default openid scope for direct auth flows (InitiateAuth, etc.)
     let default_scopes: Vec<String> = vec!["openid".to_string(), "email".to_string(), "profile".to_string()];
-    let id_tok = jwt::id_token(user_sub, region, pool_id, client_id, username, attributes, &default_scopes, None);
-    let access_tok = jwt::access_token(user_sub, region, pool_id, client_id, username, &default_scopes);
+    let id_tok = jwt::id_token(user_sub, region, pool_id, client_id, username, attributes, &default_scopes, None, groups);
+    let access_tok = jwt::access_token(user_sub, region, pool_id, client_id, username, &default_scopes, groups);
     let refresh_tok = jwt::refresh_token(user_sub);
 
     json!({
@@ -38,8 +53,9 @@ fn build_auth_result(
     pool_id: &str,
     client_id: &str,
     attributes: &std::collections::HashMap<String, String>,
+    groups: &[GroupRolePair],
 ) -> Value {
-    build_auth_result_pub(user_sub, username, region, pool_id, client_id, attributes)
+    build_auth_result_pub(user_sub, username, region, pool_id, client_id, attributes, groups)
 }
 
 /// Publish a fire-and-forget Lambda trigger event onto the event bus.
@@ -184,6 +200,7 @@ pub fn initiate_auth(
                 invoke_trigger(ctx, "PostAuthentication_Authentication", arn, &trigger_event);
             }
 
+            let pairs = group_role_pairs(&pool, &user.groups);
             let result = build_auth_result(
                 &user.sub,
                 username,
@@ -191,6 +208,7 @@ pub fn initiate_auth(
                 &pool_id,
                 client_id,
                 &user.attributes,
+                &pairs,
             );
 
             info!(username = %username, "Cognito: InitiateAuth success");
@@ -218,6 +236,7 @@ pub fn initiate_auth(
                     AwsError::not_found("UserNotFoundException", "User not found for refresh token")
                 })?;
 
+            let pairs = group_role_pairs(&pool, &user.groups);
             Ok(build_auth_result(
                 &user.sub,
                 &user.username,
@@ -225,6 +244,7 @@ pub fn initiate_auth(
                 &pool_id,
                 client_id,
                 &user.attributes,
+                &pairs,
             ))
         }
         flow => Err(AwsError::bad_request(
@@ -358,6 +378,7 @@ pub fn admin_initiate_auth(
                 invoke_trigger(ctx, "PostAuthentication_Authentication", arn, &trigger_event);
             }
 
+            let pairs = group_role_pairs(&pool, &user.groups);
             let result = build_auth_result(
                 &user.sub,
                 username,
@@ -365,6 +386,7 @@ pub fn admin_initiate_auth(
                 pool_id,
                 client_id,
                 &user.attributes,
+                &pairs,
             );
 
             info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth success");
@@ -425,13 +447,20 @@ pub fn respond_to_auth_challenge(
             user.password = new_password.to_string();
             user.status = "CONFIRMED".to_string();
 
+            // Collect needed values before releasing the mutable borrow on users.
+            let user_sub = user.sub.clone();
+            let user_attributes = user.attributes.clone();
+            let user_groups = user.groups.clone();
+
+            let pairs = group_role_pairs(&pool, &user_groups);
             let result = build_auth_result(
-                &user.sub,
+                &user_sub,
                 username,
                 &ctx.region,
                 &pool_id,
                 client_id,
-                &user.attributes,
+                &user_attributes,
+                &pairs,
             );
 
             info!(username = %username, "Cognito: RespondToAuthChallenge NEW_PASSWORD_REQUIRED success");
@@ -446,6 +475,7 @@ pub fn respond_to_auth_challenge(
                 let user = pool.users.get(&session.1.username).ok_or_else(|| {
                     AwsError::not_found("UserNotFoundException", "User not found")
                 })?;
+                let pairs = group_role_pairs(&pool, &user.groups);
                 let result = build_auth_result(
                     &user.sub,
                     &user.username,
@@ -453,6 +483,7 @@ pub fn respond_to_auth_challenge(
                     &session.1.pool_id,
                     client_id,
                     &user.attributes,
+                    &pairs,
                 );
                 info!(username = %session.1.username, "Cognito: RespondToAuthChallenge SOFTWARE_TOKEN_MFA success");
                 Ok(result)
@@ -524,13 +555,20 @@ pub fn admin_respond_to_auth_challenge(
             user.password = new_password.to_string();
             user.status = "CONFIRMED".to_string();
 
+            // Collect needed values before releasing the mutable borrow on users.
+            let user_sub = user.sub.clone();
+            let user_attributes = user.attributes.clone();
+            let user_groups = user.groups.clone();
+
+            let pairs = group_role_pairs(&pool, &user_groups);
             let result = build_auth_result(
-                &user.sub,
+                &user_sub,
                 username,
                 &ctx.region,
                 pool_id,
                 client_id,
-                &user.attributes,
+                &user_attributes,
+                &pairs,
             );
 
             info!(username = %username, pool_id = %pool_id, "Cognito: AdminRespondToAuthChallenge NEW_PASSWORD_REQUIRED success");
@@ -545,6 +583,7 @@ pub fn admin_respond_to_auth_challenge(
                 let user = pool.users.get(&session.1.username).ok_or_else(|| {
                     AwsError::not_found("UserNotFoundException", "User not found")
                 })?;
+                let pairs = group_role_pairs(&pool, &user.groups);
                 let result = build_auth_result(
                     &user.sub,
                     &user.username,
@@ -552,6 +591,7 @@ pub fn admin_respond_to_auth_challenge(
                     &session.1.pool_id,
                     client_id,
                     &user.attributes,
+                    &pairs,
                 );
                 info!(username = %session.1.username, pool_id = %pool_id, "Cognito: AdminRespondToAuthChallenge SOFTWARE_TOKEN_MFA success");
                 Ok(result)
@@ -613,6 +653,7 @@ pub fn get_tokens_from_refresh_token(
             AwsError::not_found("UserNotFoundException", "User not found for refresh token")
         })?;
 
+    let pairs = group_role_pairs(&pool, &user.groups);
     Ok(build_auth_result_pub(
         &user.sub,
         &user.username,
@@ -620,6 +661,7 @@ pub fn get_tokens_from_refresh_token(
         &pool_id,
         client_id,
         &user.attributes,
+        &pairs,
     ))
 }
 

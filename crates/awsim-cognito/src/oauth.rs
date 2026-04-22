@@ -24,7 +24,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
-use crate::jwt;
+use crate::jwt::{self, GroupRolePair};
 use crate::state::CognitoState;
 
 // ---------------------------------------------------------------------------
@@ -133,6 +133,20 @@ fn parse_scopes(scope_str: &str) -> Vec<String> {
     scope_str
         .split_whitespace()
         .map(String::from)
+        .collect()
+}
+
+/// Build GroupRolePair list for a user from pool group data.
+fn user_group_role_pairs(pool: &crate::state::UserPool, user_groups: &[String]) -> Vec<GroupRolePair> {
+    user_groups
+        .iter()
+        .filter_map(|gname| {
+            pool.groups.get(gname).map(|g| GroupRolePair {
+                group_name: g.group_name.clone(),
+                role_arn: g.role_arn.clone(),
+                precedence: g.precedence,
+            })
+        })
         .collect()
 }
 
@@ -542,6 +556,9 @@ async fn authorize_post(
         requested_scopes.clone()
     };
 
+    // Collect group role pairs before dropping pool_ref.
+    let group_pairs = user_group_role_pairs(&pool_ref, &user.groups);
+
     drop(pool_ref);
 
     match response_type.as_str() {
@@ -586,6 +603,7 @@ async fn authorize_post(
                 &client_id,
                 &user.username,
                 &effective_scopes,
+                &group_pairs,
             );
             let id_tok = jwt::id_token(
                 &user.sub,
@@ -596,6 +614,7 @@ async fn authorize_post(
                 &attributes,
                 &effective_scopes,
                 nonce.as_deref(),
+                &group_pairs,
             );
 
             info!(
@@ -782,9 +801,12 @@ async fn token(
                 .find(|u| u.sub == entry.user_sub)
                 .cloned();
 
-            let (sub, username, attributes) = match user {
-                Some(u) => (u.sub.clone(), u.username.clone(), u.attributes.clone()),
-                None => (entry.user_sub.clone(), entry.username.clone(), HashMap::new()),
+            let (sub, username, attributes, group_pairs) = match user {
+                Some(ref u) => {
+                    let pairs = user_group_role_pairs(&pool, &u.groups);
+                    (u.sub.clone(), u.username.clone(), u.attributes.clone(), pairs)
+                }
+                None => (entry.user_sub.clone(), entry.username.clone(), HashMap::new(), vec![]),
             };
 
             let scopes = entry.scopes.clone();
@@ -797,6 +819,7 @@ async fn token(
                 &effective_client_id,
                 &username,
                 &scopes,
+                &group_pairs,
             );
             let id_tok = jwt::id_token(
                 &sub,
@@ -807,6 +830,7 @@ async fn token(
                 &attributes,
                 &scopes,
                 nonce.as_deref(),
+                &group_pairs,
             );
             let refresh_tok = jwt::refresh_token(&sub);
 
@@ -899,6 +923,7 @@ async fn token(
                 requested_scopes
             };
 
+            // client_credentials is machine-to-machine — no user groups.
             let access_tok = jwt::access_token(
                 &effective_client_id,
                 &oauth_state.default_region,
@@ -906,6 +931,7 @@ async fn token(
                 &effective_client_id,
                 &effective_client_id,
                 &effective_scopes,
+                &[],
             );
 
             info!(
@@ -970,9 +996,12 @@ async fn token(
                 .find(|u| u.sub == sub || refresh_tok.contains(&u.sub))
                 .cloned();
 
-            let (user_sub, username, attributes) = match user {
-                Some(u) => (u.sub.clone(), u.username.clone(), u.attributes.clone()),
-                None => (sub.clone(), sub.clone(), HashMap::new()),
+            let (user_sub, username, attributes, group_pairs) = match user {
+                Some(ref u) => {
+                    let pairs = user_group_role_pairs(&pool, &u.groups);
+                    (u.sub.clone(), u.username.clone(), u.attributes.clone(), pairs)
+                }
+                None => (sub.clone(), sub.clone(), HashMap::new(), vec![]),
             };
 
             let effective_client_id = if client_id.is_empty() {
@@ -990,6 +1019,7 @@ async fn token(
                 &effective_client_id,
                 &username,
                 &scopes,
+                &group_pairs,
             );
             let id_tok = jwt::id_token(
                 &user_sub,
@@ -1000,6 +1030,7 @@ async fn token(
                 &attributes,
                 &scopes,
                 None,
+                &group_pairs,
             );
             let new_refresh = jwt::refresh_token(&user_sub);
 
