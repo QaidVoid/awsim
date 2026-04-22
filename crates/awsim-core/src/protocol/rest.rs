@@ -393,6 +393,30 @@ pub fn serialize_xml_response(
         return (StatusCode::OK, headers, Bytes::from(data));
     }
 
+    // --- Promote well-known fields to HTTP headers (S3 convention) ---
+    if let Some(map) = output.as_object() {
+        let header_fields = [
+            "ETag", "ContentType", "ContentLength", "LastModified",
+            "VersionId", "ServerSideEncryption", "StorageClass",
+        ];
+        for field in &header_fields {
+            if let Some(val) = map.get(*field) {
+                let header_name = pascal_to_header(field);
+                let header_value = match val {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    _ => continue,
+                };
+                if let (Ok(k), Ok(v)) = (
+                    axum::http::header::HeaderName::from_bytes(header_name.as_bytes()),
+                    axum::http::HeaderValue::from_str(&header_value),
+                ) {
+                    headers.insert(k, v);
+                }
+            }
+        }
+    }
+
     // --- Normal XML response ---
     // If `__xml_root` is present, wrap fields in that root element (with S3 namespace).
     let xml_root = output
