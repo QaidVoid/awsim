@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use awsim_core::AwsError;
 use serde_json::{json, Value};
 
-use crate::state::KendraState;
+use crate::state::{DocumentAttribute, DocumentAttributeValue, IndexedDocument, KendraState};
 
 /// Query — full-text search across indexed documents.
 ///
@@ -24,7 +26,13 @@ pub fn query(state: &KendraState, input: &Value) -> Result<Value, AwsError> {
     let query_lower = query_text.to_lowercase();
     let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
 
-    let mut results: Vec<Value> = Vec::new();
+    // Collect matching documents (with scores) before pagination
+    struct ScoredDoc<'a> {
+        doc: &'a IndexedDocument,
+        score: f64,
+    }
+
+    let mut scored: Vec<ScoredDoc<'_>> = Vec::new();
 
     for doc in &index.documents {
         let content_lower = doc.content.to_lowercase();
@@ -41,46 +49,229 @@ pub fn query(state: &KendraState, input: &Value) -> Result<Value, AwsError> {
             }
         }
 
-        if score > 0.0 {
-            // Extract a relevant snippet
-            let snippet = extract_snippet(&doc.content, &query_terms, 200);
+        // When QueryText is empty or blank, include all documents with a neutral score
+        if query_terms.is_empty() {
+            score = 0.1;
+        }
 
-            results.push(json!({
-                "Id": doc.id,
-                "Type": "DOCUMENT",
-                "DocumentId": doc.id,
-                "DocumentTitle": {
-                    "Text": doc.title.as_deref().unwrap_or(""),
-                    "Highlights": [],
-                },
-                "DocumentExcerpt": {
-                    "Text": snippet,
-                    "Highlights": [],
-                },
-                "DocumentURI": null,
-                "ScoreAttributes": {
-                    "ScoreConfidence": if score > 0.5 { "VERY_HIGH" } else { "MEDIUM" },
-                },
-                "RelevanceScore": score.min(1.0),
-            }));
+        if score > 0.0 {
+            // Apply AttributeFilter if present
+            if let Some(filter) = input.get("AttributeFilter") {
+                if !evaluate_attribute_filter(filter, &doc.attributes) {
+                    continue;
+                }
+            }
+            scored.push(ScoredDoc { doc, score });
         }
     }
 
-    // Sort by score descending
-    results.sort_by(|a, b| {
-        let sa = a["RelevanceScore"].as_f64().unwrap_or(0.0);
-        let sb = b["RelevanceScore"].as_f64().unwrap_or(0.0);
-        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    // Sort by SortingConfiguration if provided, otherwise by score descending
+    if let Some(sorting) = input.get("SortingConfiguration") {
+        let attr_key = sorting["DocumentAttributeKey"].as_str().unwrap_or("");
+        let order = sorting["SortOrder"].as_str().unwrap_or("DESC");
+        scored.sort_by(|a, b| {
+            let va = attribute_sort_key(a.doc.attributes.get(attr_key));
+            let vb = attribute_sort_key(b.doc.attributes.get(attr_key));
+            let cmp = va.cmp(&vb);
+            if order == "ASC" { cmp } else { cmp.reverse() }
+        });
+    } else {
+        scored.sort_by(|a, b| {
+            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
 
-    results.truncate(page_size);
+    // Build facet results before truncating (use all matching docs)
+    let facet_results: Vec<Value> = if let Some(facets) = input.get("Facets").and_then(|f| f.as_array()) {
+        facets.iter().map(|facet| {
+            let key = facet["DocumentAttributeKey"].as_str().unwrap_or("");
+            let mut value_counts: HashMap<String, u32> = HashMap::new();
+            for sd in &scored {
+                if let Some(attr) = sd.doc.attributes.get(key) {
+                    let val_str = attribute_value_to_string(&attr.value);
+                    *value_counts.entry(val_str).or_default() += 1;
+                }
+            }
+            json!({
+                "DocumentAttributeKey": key,
+                "DocumentAttributeValueCountPairs": value_counts.iter().map(|(v, c)| json!({
+                    "DocumentAttributeValue": {"StringValue": v},
+                    "Count": c,
+                })).collect::<Vec<_>>(),
+            })
+        }).collect()
+    } else {
+        Vec::new()
+    };
+
+    let total = scored.len();
+    scored.truncate(page_size);
+
+    let results: Vec<Value> = scored.iter().map(|sd| {
+        let doc = sd.doc;
+        let snippet = extract_snippet(&doc.content, &query_terms, 200);
+        json!({
+            "Id": doc.id,
+            "Type": "DOCUMENT",
+            "DocumentId": doc.id,
+            "DocumentTitle": {
+                "Text": doc.title.as_deref().unwrap_or(""),
+                "Highlights": [],
+            },
+            "DocumentExcerpt": {
+                "Text": snippet,
+                "Highlights": [],
+            },
+            "DocumentURI": null,
+            "ScoreAttributes": {
+                "ScoreConfidence": if sd.score > 0.5 { "VERY_HIGH" } else { "MEDIUM" },
+            },
+            "RelevanceScore": sd.score.min(1.0),
+        })
+    }).collect();
 
     Ok(json!({
         "QueryId": uuid::Uuid::new_v4().to_string(),
         "ResultItems": results,
-        "TotalNumberOfResults": results.len(),
-        "FacetResults": [],
+        "TotalNumberOfResults": total,
+        "FacetResults": facet_results,
     }))
+}
+
+/// Evaluate an AttributeFilter against a document's attribute map.
+fn evaluate_attribute_filter(
+    filter: &Value,
+    attrs: &HashMap<String, DocumentAttribute>,
+) -> bool {
+    let Some(obj) = filter.as_object() else {
+        return true;
+    };
+
+    // EqualsTo
+    if let Some(eq) = obj.get("EqualsTo") {
+        let key = eq["Key"].as_str().unwrap_or("");
+        return match_attribute_value(attrs.get(key), &eq["Value"]);
+    }
+    // ContainsAll
+    if let Some(ca) = obj.get("ContainsAll") {
+        let key = ca["Key"].as_str().unwrap_or("");
+        return match_contains_all(attrs.get(key), &ca["Value"]);
+    }
+    // ContainsAny
+    if let Some(ca) = obj.get("ContainsAny") {
+        let key = ca["Key"].as_str().unwrap_or("");
+        return match_contains_any(attrs.get(key), &ca["Value"]);
+    }
+    // AndAllFilters
+    if let Some(filters) = obj.get("AndAllFilters").and_then(|f| f.as_array()) {
+        return filters.iter().all(|f| evaluate_attribute_filter(f, attrs));
+    }
+    // OrAllFilters
+    if let Some(filters) = obj.get("OrAllFilters").and_then(|f| f.as_array()) {
+        return filters.iter().any(|f| evaluate_attribute_filter(f, attrs));
+    }
+    // NotFilter
+    if let Some(not_filter) = obj.get("NotFilter") {
+        return !evaluate_attribute_filter(not_filter, attrs);
+    }
+    // GreaterThan
+    if let Some(gt) = obj.get("GreaterThan") {
+        let key = gt["Key"].as_str().unwrap_or("");
+        let val = gt["Value"]["LongValue"].as_i64().unwrap_or(0);
+        return attrs.get(key).map_or(false, |a| match &a.value {
+            DocumentAttributeValue::LongValue(v) => *v > val,
+            _ => false,
+        });
+    }
+    // LessThan
+    if let Some(lt) = obj.get("LessThan") {
+        let key = lt["Key"].as_str().unwrap_or("");
+        let val = lt["Value"]["LongValue"].as_i64().unwrap_or(0);
+        return attrs.get(key).map_or(false, |a| match &a.value {
+            DocumentAttributeValue::LongValue(v) => *v < val,
+            _ => false,
+        });
+    }
+
+    true // Unknown filter clause = pass
+}
+
+/// Check whether a document attribute equals an expected JSON value.
+fn match_attribute_value(attr: Option<&DocumentAttribute>, expected: &Value) -> bool {
+    let Some(attr) = attr else { return false; };
+    match &attr.value {
+        DocumentAttributeValue::StringValue(s) => {
+            expected["StringValue"].as_str().map_or(false, |e| e == s)
+        }
+        DocumentAttributeValue::LongValue(n) => {
+            expected["LongValue"].as_i64().map_or(false, |e| e == *n)
+        }
+        DocumentAttributeValue::DateValue(d) => {
+            expected["DateValue"].as_str().map_or(false, |e| e == d)
+        }
+        DocumentAttributeValue::StringListValue(list) => {
+            if let Some(arr) = expected["StringListValue"].as_array() {
+                let expected_strings: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
+                list.iter().any(|s| expected_strings.contains(&s.as_str()))
+            } else {
+                false
+            }
+        }
+    }
+}
+
+/// ContainsAll — all expected list values must be present in the attribute.
+fn match_contains_all(attr: Option<&DocumentAttribute>, expected: &Value) -> bool {
+    let Some(attr) = attr else { return false; };
+    if let Some(arr) = expected["StringListValue"].as_array() {
+        let expected_strings: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
+        match &attr.value {
+            DocumentAttributeValue::StringListValue(list) => {
+                expected_strings.iter().all(|e| list.iter().any(|s| s == e))
+            }
+            DocumentAttributeValue::StringValue(s) => {
+                expected_strings.iter().all(|e| s == e)
+            }
+            _ => false,
+        }
+    } else {
+        match_attribute_value(Some(attr), expected)
+    }
+}
+
+/// ContainsAny — at least one expected value must be present in the attribute.
+fn match_contains_any(attr: Option<&DocumentAttribute>, expected: &Value) -> bool {
+    let Some(attr) = attr else { return false; };
+    if let Some(arr) = expected["StringListValue"].as_array() {
+        let expected_strings: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
+        match &attr.value {
+            DocumentAttributeValue::StringListValue(list) => {
+                expected_strings.iter().any(|e| list.iter().any(|s| s == e))
+            }
+            DocumentAttributeValue::StringValue(s) => {
+                expected_strings.iter().any(|e| s == e)
+            }
+            _ => false,
+        }
+    } else {
+        match_attribute_value(Some(attr), expected)
+    }
+}
+
+/// Convert a DocumentAttributeValue to a string for facet counting and sort keys.
+fn attribute_value_to_string(value: &DocumentAttributeValue) -> String {
+    match value {
+        DocumentAttributeValue::StringValue(s) => s.clone(),
+        DocumentAttributeValue::LongValue(n) => n.to_string(),
+        DocumentAttributeValue::DateValue(d) => d.clone(),
+        DocumentAttributeValue::StringListValue(list) => list.join(","),
+    }
+}
+
+/// Produce a sort key string from an optional attribute (missing attrs sort last).
+fn attribute_sort_key(attr: Option<&DocumentAttribute>) -> String {
+    attr.map(|a| attribute_value_to_string(&a.value))
+        .unwrap_or_else(|| "\u{FFFF}".to_string()) // sort missing values last
 }
 
 /// Retrieve — passage-level retrieval from indexed documents.

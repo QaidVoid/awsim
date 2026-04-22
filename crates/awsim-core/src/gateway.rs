@@ -235,6 +235,29 @@ fn extract_service_info(
         }
     }
 
+    // Check for pre-signed URL query parameters (SigV4 in query string)
+    if let Some(query) = uri.query() {
+        if query.contains("X-Amz-Credential") {
+            // Extract service from X-Amz-Credential parameter
+            // Format: X-Amz-Credential=AKID/date/region/service/aws4_request
+            if let Some(cred_start) = query.find("X-Amz-Credential=") {
+                let cred_val = &query[cred_start + 17..];
+                let cred_end = cred_val.find('&').unwrap_or(cred_val.len());
+                let cred = &cred_val[..cred_end];
+                // URL-decode the credential (/ may be encoded as %2F)
+                let cred_decoded = cred.replace("%2F", "/");
+                let parts: Vec<&str> = cred_decoded.split('/').collect();
+                if parts.len() >= 4 {
+                    return (
+                        parts[3].to_string(), // service name
+                        parts[2].to_string(), // region
+                        state.default_account_id.clone(),
+                    );
+                }
+            }
+        }
+    }
+
     // Try path-based detection as last resort (for REST services called without auth)
     let path = uri.path();
     if let Some(service) = resolve_service_from_path(path) {

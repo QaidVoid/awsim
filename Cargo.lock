@@ -854,6 +854,7 @@ dependencies = [
  "awsim-cloudwatch-logs",
  "awsim-cloudwatch-metrics",
  "awsim-cognito",
+ "awsim-comprehend",
  "awsim-core",
  "awsim-dynamodb",
  "awsim-ec2",
@@ -863,9 +864,11 @@ dependencies = [
  "awsim-eventbridge",
  "awsim-glue",
  "awsim-iam",
+ "awsim-kendra",
  "awsim-kinesis",
  "awsim-kms",
  "awsim-lambda",
+ "awsim-opensearch",
  "awsim-rds",
  "awsim-route53",
  "awsim-s3",
@@ -1031,6 +1034,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "awsim-comprehend"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "awsim-core"
 version = "0.1.0"
 dependencies = [
@@ -1159,6 +1173,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "awsim-kendra"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "awsim-kinesis"
 version = "0.1.0"
 dependencies = [
@@ -1201,6 +1228,20 @@ dependencies = [
  "tracing",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "awsim-opensearch"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "axum",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

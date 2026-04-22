@@ -442,9 +442,71 @@ pub fn list_users(
         )
     })?;
 
-    let users: Vec<Value> = pool.users.values().map(user_to_value).collect();
+    // Collect and sort users for deterministic pagination
+    let mut users: Vec<&CognitoUser> = pool.users.values().collect();
+    users.sort_by(|a, b| a.username.cmp(&b.username));
 
-    Ok(json!({ "Users": users }))
+    // Apply Filter if provided
+    if let Some(filter_str) = input["Filter"].as_str() {
+        users = users.into_iter().filter(|u| evaluate_cognito_filter(u, filter_str)).collect();
+    }
+
+    // Apply PaginationToken — skip users up to and including the token username
+    if let Some(token) = input["PaginationToken"].as_str() {
+        if let Some(pos) = users.iter().position(|u| u.username == token) {
+            users = users.into_iter().skip(pos + 1).collect();
+        }
+    }
+
+    // Apply Limit
+    let limit = input["Limit"].as_u64().unwrap_or(60) as usize;
+    let has_more = users.len() > limit;
+    let next_token = if has_more {
+        users.get(limit - 1).map(|u| u.username.clone())
+    } else {
+        None
+    };
+    users.truncate(limit);
+
+    let user_values: Vec<Value> = users.iter().map(|u| user_to_value(u)).collect();
+
+    let mut resp = json!({ "Users": user_values });
+    if let Some(token) = next_token {
+        resp["PaginationToken"] = json!(token);
+    }
+    Ok(resp)
+}
+
+/// Evaluate a Cognito ListUsers filter expression against a user.
+///
+/// Cognito filter format: `attribute operator "value"`
+/// Operators: `=` (exact match), `^=` (starts with)
+fn evaluate_cognito_filter(user: &CognitoUser, filter: &str) -> bool {
+    // Determine operator and split
+    let (attr_name, operator, value) = if let Some(idx) = filter.find("^=") {
+        (filter[..idx].trim(), "^=", filter[idx + 2..].trim())
+    } else if let Some(idx) = filter.find('=') {
+        (filter[..idx].trim(), "=", filter[idx + 1..].trim())
+    } else {
+        return true; // Unrecognised filter — pass all
+    };
+
+    // Strip surrounding quotes from value
+    let value = value.trim_matches('"');
+
+    let user_value: Option<&str> = match attr_name {
+        "cognito:user_status" | "status" => Some(user.status.as_str()),
+        "username" => Some(user.username.as_str()),
+        "sub" => Some(user.sub.as_str()),
+        "enabled" => Some(if user.enabled { "true" } else { "false" }),
+        attr => user.attributes.get(attr).map(|s| s.as_str()),
+    };
+
+    match (user_value, operator) {
+        (Some(v), "=") => v == value,
+        (Some(v), "^=") => v.starts_with(value),
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
