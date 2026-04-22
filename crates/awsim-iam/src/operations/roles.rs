@@ -18,6 +18,7 @@ fn role_to_value(r: &Role) -> Value {
         "Path": r.path,
         "AssumeRolePolicyDocument": r.assume_role_policy_document,
         "CreateDate": r.create_date,
+        "MaxSessionDuration": r.max_session_duration,
     });
     if let Some(desc) = &r.description {
         v["Description"] = Value::String(desc.clone());
@@ -45,6 +46,12 @@ pub fn create_role(
         ctx.account_id, path, role_name
     );
 
+    let max_session_duration = input
+        .get("MaxSessionDuration")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(3600);
+
     let role = Role {
         role_name: role_name.to_string(),
         role_id,
@@ -53,8 +60,10 @@ pub fn create_role(
         assume_role_policy_document: assume_role_policy.to_string(),
         description,
         create_date: now_iso8601(),
+        max_session_duration,
         attached_policies: Vec::new(),
         inline_policies: HashMap::new(),
+        tags: HashMap::new(),
     };
 
     let result = role_to_value(&role);
@@ -129,4 +138,96 @@ pub fn update_assume_role_policy(state: &IamState, input: &Value) -> Result<Valu
 
     role.assume_role_policy_document = policy_document.to_string();
     Ok(json!({}))
+}
+
+pub fn update_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let role_name = require_str(input, "RoleName")?;
+
+    let mut role = state
+        .roles
+        .get_mut(role_name)
+        .ok_or_else(|| no_such_entity("Role", role_name))?;
+
+    if let Some(desc) = opt_str(input, "Description") {
+        role.description = Some(desc.to_string());
+    }
+    if let Some(dur) = input.get("MaxSessionDuration").and_then(|v| v.as_u64()) {
+        role.max_session_duration = dur as u32;
+    }
+
+    Ok(json!({ "Role": role_to_value(&role) }))
+}
+
+pub fn update_role_description(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let role_name = require_str(input, "RoleName")?;
+    let description = require_str(input, "Description")?;
+
+    let mut role = state
+        .roles
+        .get_mut(role_name)
+        .ok_or_else(|| no_such_entity("Role", role_name))?;
+
+    role.description = Some(description.to_string());
+
+    Ok(json!({ "Role": role_to_value(&role) }))
+}
+
+// ── Inline policy read/delete ────────────────────────────────────────────────
+
+pub fn get_role_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let role_name = require_str(input, "RoleName")?;
+    let policy_name = require_str(input, "PolicyName")?;
+
+    let role = state
+        .roles
+        .get(role_name)
+        .ok_or_else(|| no_such_entity("Role", role_name))?;
+
+    let doc = role
+        .inline_policies
+        .get(policy_name)
+        .ok_or_else(|| no_such_entity("InlinePolicy", policy_name))?
+        .clone();
+
+    Ok(json!({
+        "RoleName": role_name,
+        "PolicyName": policy_name,
+        "PolicyDocument": doc,
+    }))
+}
+
+pub fn delete_role_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let role_name = require_str(input, "RoleName")?;
+    let policy_name = require_str(input, "PolicyName")?;
+
+    let mut role = state
+        .roles
+        .get_mut(role_name)
+        .ok_or_else(|| no_such_entity("Role", role_name))?;
+
+    if role.inline_policies.remove(policy_name).is_none() {
+        return Err(no_such_entity("InlinePolicy", policy_name));
+    }
+
+    Ok(json!({}))
+}
+
+pub fn list_role_policies(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let role_name = require_str(input, "RoleName")?;
+
+    let role = state
+        .roles
+        .get(role_name)
+        .ok_or_else(|| no_such_entity("Role", role_name))?;
+
+    let names: Vec<Value> = role
+        .inline_policies
+        .keys()
+        .map(|k| Value::String(k.clone()))
+        .collect();
+
+    Ok(json!({
+        "PolicyNames": { "member": names },
+        "IsTruncated": false,
+    }))
 }

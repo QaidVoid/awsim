@@ -59,6 +59,7 @@ pub fn create_instance_profile(
         path,
         create_date: now_iso8601(),
         roles: Vec::new(),
+        tags: std::collections::HashMap::new(),
     };
 
     let result = ip_to_value(&ip, state);

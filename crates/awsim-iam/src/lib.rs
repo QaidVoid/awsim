@@ -91,12 +91,27 @@ impl ServiceHandler for IamService {
             "UpdateAssumeRolePolicy" => {
                 operations::roles::update_assume_role_policy(&state, &input)
             }
+            "UpdateRole" => operations::roles::update_role(&state, &input),
+            "UpdateRoleDescription" => operations::roles::update_role_description(&state, &input),
 
             // Policies (managed)
             "CreatePolicy" => operations::policies::create_policy(&state, &input, ctx),
             "GetPolicy" => operations::policies::get_policy(&state, &input),
             "DeletePolicy" => operations::policies::delete_policy(&state, &input),
             "ListPolicies" => operations::policies::list_policies(&state, &input),
+
+            // Policy versions
+            "CreatePolicyVersion" => {
+                operations::policies::create_policy_version(&state, &input)
+            }
+            "DeletePolicyVersion" => {
+                operations::policies::delete_policy_version(&state, &input)
+            }
+            "GetPolicyVersion" => operations::policies::get_policy_version(&state, &input),
+            "ListPolicyVersions" => operations::policies::list_policy_versions(&state, &input),
+            "SetDefaultPolicyVersion" => {
+                operations::policies::set_default_policy_version(&state, &input)
+            }
 
             // Attach/detach managed policies
             "AttachUserPolicy" => operations::policies::attach_user_policy(&state, &input),
@@ -106,10 +121,47 @@ impl ServiceHandler for IamService {
             "AttachGroupPolicy" => operations::policies::attach_group_policy(&state, &input),
             "DetachGroupPolicy" => operations::policies::detach_group_policy(&state, &input),
 
-            // Inline policies
+            // List attached managed policies
+            "ListAttachedUserPolicies" => {
+                operations::policies::list_attached_user_policies(&state, &input)
+            }
+            "ListAttachedRolePolicies" => {
+                operations::policies::list_attached_role_policies(&state, &input)
+            }
+            "ListAttachedGroupPolicies" => {
+                operations::policies::list_attached_group_policies(&state, &input)
+            }
+
+            // Inline policies — put
             "PutUserPolicy" => operations::policies::put_user_policy(&state, &input),
             "PutRolePolicy" => operations::policies::put_role_policy(&state, &input),
             "PutGroupPolicy" => operations::policies::put_group_policy(&state, &input),
+
+            // Inline policies — user
+            "GetUserPolicy" => operations::users::get_user_policy(&state, &input),
+            "DeleteUserPolicy" => operations::users::delete_user_policy(&state, &input),
+            "ListUserPolicies" => operations::users::list_user_policies(&state, &input),
+
+            // Inline policies — role
+            "GetRolePolicy" => operations::roles::get_role_policy(&state, &input),
+            "DeleteRolePolicy" => operations::roles::delete_role_policy(&state, &input),
+            "ListRolePolicies" => operations::roles::list_role_policies(&state, &input),
+
+            // Inline policies — group
+            "GetGroupPolicy" => operations::groups::get_group_policy(&state, &input),
+            "DeleteGroupPolicy" => operations::groups::delete_group_policy(&state, &input),
+            "ListGroupPolicies" => operations::groups::list_group_policies(&state, &input),
+
+            // Entity queries
+            "ListGroupsForUser" => operations::users::list_groups_for_user(&state, &input),
+            "ListEntitiesForPolicy" => {
+                operations::policies::list_entities_for_policy(&state, &input)
+            }
+
+            // Policy tags
+            "TagPolicy" => operations::policies::tag_policy(&state, &input),
+            "UntagPolicy" => operations::policies::untag_policy(&state, &input),
+            "ListPolicyTags" => operations::policies::list_policy_tags(&state, &input),
 
             // Instance Profiles
             "CreateInstanceProfile" => {
@@ -139,6 +191,12 @@ impl ServiceHandler for IamService {
             roles: vec![],
             policies: vec![],
             instance_profiles: vec![],
+            account_aliases: vec![],
+            account_password_policy: None,
+            oidc_providers: vec![],
+            saml_providers: vec![],
+            server_certificates: vec![],
+            virtual_mfa_devices: vec![],
         };
 
         for (_, state) in self.store.iter_all() {
@@ -147,6 +205,18 @@ impl ServiceHandler for IamService {
             snapshot.roles.extend(state.roles.iter().map(|e| e.value().clone()));
             snapshot.policies.extend(state.policies.iter().map(|e| e.value().clone()));
             snapshot.instance_profiles.extend(state.instance_profiles.iter().map(|e| e.value().clone()));
+            if let Ok(aliases) = state.account_aliases.lock() {
+                snapshot.account_aliases.extend(aliases.clone());
+            }
+            if let Ok(policy) = state.account_password_policy.lock() {
+                if snapshot.account_password_policy.is_none() {
+                    snapshot.account_password_policy = policy.clone();
+                }
+            }
+            snapshot.oidc_providers.extend(state.oidc_providers.iter().map(|e| e.value().clone()));
+            snapshot.saml_providers.extend(state.saml_providers.iter().map(|e| e.value().clone()));
+            snapshot.server_certificates.extend(state.server_certificates.iter().map(|e| e.value().clone()));
+            snapshot.virtual_mfa_devices.extend(state.virtual_mfa_devices.iter().map(|e| e.value().clone()));
         }
 
         serde_json::to_vec(&snapshot).ok()

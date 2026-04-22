@@ -47,6 +47,7 @@ pub fn create_group(
         members: Vec::new(),
         attached_policies: Vec::new(),
         inline_policies: HashMap::new(),
+        tags: HashMap::new(),
     };
 
     let result = group_to_value(&group);
@@ -178,4 +179,64 @@ pub fn remove_user_from_group(state: &IamState, input: &Value) -> Result<Value, 
     }
 
     Ok(json!({}))
+}
+
+// ── Inline policy read/delete ────────────────────────────────────────────────
+
+pub fn get_group_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let group_name = require_str(input, "GroupName")?;
+    let policy_name = require_str(input, "PolicyName")?;
+
+    let group = state
+        .groups
+        .get(group_name)
+        .ok_or_else(|| no_such_entity("Group", group_name))?;
+
+    let doc = group
+        .inline_policies
+        .get(policy_name)
+        .ok_or_else(|| no_such_entity("InlinePolicy", policy_name))?
+        .clone();
+
+    Ok(json!({
+        "GroupName": group_name,
+        "PolicyName": policy_name,
+        "PolicyDocument": doc,
+    }))
+}
+
+pub fn delete_group_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let group_name = require_str(input, "GroupName")?;
+    let policy_name = require_str(input, "PolicyName")?;
+
+    let mut group = state
+        .groups
+        .get_mut(group_name)
+        .ok_or_else(|| no_such_entity("Group", group_name))?;
+
+    if group.inline_policies.remove(policy_name).is_none() {
+        return Err(no_such_entity("InlinePolicy", policy_name));
+    }
+
+    Ok(json!({}))
+}
+
+pub fn list_group_policies(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let group_name = require_str(input, "GroupName")?;
+
+    let group = state
+        .groups
+        .get(group_name)
+        .ok_or_else(|| no_such_entity("Group", group_name))?;
+
+    let names: Vec<Value> = group
+        .inline_policies
+        .keys()
+        .map(|k| Value::String(k.clone()))
+        .collect();
+
+    Ok(json!({
+        "PolicyNames": { "member": names },
+        "IsTruncated": false,
+    }))
 }

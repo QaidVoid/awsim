@@ -11,6 +11,19 @@ pub struct IamState {
     /// Keyed by ARN
     pub policies: DashMap<String, Policy>,
     pub instance_profiles: DashMap<String, InstanceProfile>,
+    // Account-level
+    pub account_aliases: std::sync::Mutex<Vec<String>>,
+    pub account_password_policy: std::sync::Mutex<Option<AccountPasswordPolicy>>,
+    // OIDC providers, keyed by ARN
+    pub oidc_providers: DashMap<String, OidcProvider>,
+    // SAML providers, keyed by ARN
+    pub saml_providers: DashMap<String, SamlProvider>,
+    // Server certificates, keyed by name
+    pub server_certificates: DashMap<String, ServerCertificate>,
+    // Virtual MFA devices, keyed by serial number (ARN)
+    pub virtual_mfa_devices: DashMap<String, VirtualMfaDevice>,
+    // Deletion task IDs (for service-linked roles)
+    pub deletion_tasks: DashMap<String, String>,
 }
 
 /// Serializable snapshot of `IamState`.
@@ -21,6 +34,18 @@ pub struct IamStateSnapshot {
     pub roles: Vec<Role>,
     pub policies: Vec<Policy>,
     pub instance_profiles: Vec<InstanceProfile>,
+    #[serde(default)]
+    pub account_aliases: Vec<String>,
+    #[serde(default)]
+    pub account_password_policy: Option<AccountPasswordPolicy>,
+    #[serde(default)]
+    pub oidc_providers: Vec<OidcProvider>,
+    #[serde(default)]
+    pub saml_providers: Vec<SamlProvider>,
+    #[serde(default)]
+    pub server_certificates: Vec<ServerCertificate>,
+    #[serde(default)]
+    pub virtual_mfa_devices: Vec<VirtualMfaDevice>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +63,13 @@ pub struct User {
     pub inline_policies: HashMap<String, String>,
     /// group names this user belongs to
     pub groups: Vec<String>,
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
+    #[serde(default)]
+    pub mfa_devices: Vec<String>,
+    #[serde(default)]
+    pub ssh_public_keys: Vec<SshPublicKey>,
+    pub password_last_used: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +78,15 @@ pub struct AccessKey {
     pub secret_access_key: String,
     pub status: String,
     pub create_date: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshPublicKey {
+    pub ssh_public_key_id: String,
+    pub user_name: String,
+    pub ssh_public_key_body: String,
+    pub status: String,
+    pub upload_date: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +103,8 @@ pub struct Group {
     pub attached_policies: Vec<String>,
     /// name → document
     pub inline_policies: HashMap<String, String>,
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,10 +117,27 @@ pub struct Role {
     pub assume_role_policy_document: String,
     pub description: Option<String>,
     pub create_date: String,
+    /// Max session duration in seconds (default 3600)
+    #[serde(default = "default_max_session_duration")]
+    pub max_session_duration: u32,
     /// ARNs of attached managed policies
     pub attached_policies: Vec<String>,
     /// name → document
     pub inline_policies: HashMap<String, String>,
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
+}
+
+fn default_max_session_duration() -> u32 {
+    3600
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyVersion {
+    pub version_id: String,
+    pub document: String,
+    pub is_default_version: bool,
+    pub create_date: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +153,19 @@ pub struct Policy {
     pub update_date: String,
     /// How many entities are attached
     pub attachment_count: u32,
+    /// Policy versions (max 5)
+    #[serde(default)]
+    pub versions: Vec<PolicyVersion>,
+    /// Current default version ID e.g. "v1"
+    #[serde(default = "default_version_id")]
+    pub default_version_id: String,
+    /// Tags on this policy
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
+}
+
+fn default_version_id() -> String {
+    "v1".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,4 +178,78 @@ pub struct InstanceProfile {
     pub create_date: String,
     /// Role names associated
     pub roles: Vec<String>,
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountPasswordPolicy {
+    pub minimum_password_length: u32,
+    pub require_symbols: bool,
+    pub require_numbers: bool,
+    pub require_uppercase_characters: bool,
+    pub require_lowercase_characters: bool,
+    pub allow_users_to_change_password: bool,
+    pub max_password_age: u32,
+    pub password_reuse_prevention: u32,
+    pub hard_expiry: bool,
+}
+
+impl Default for AccountPasswordPolicy {
+    fn default() -> Self {
+        Self {
+            minimum_password_length: 8,
+            require_symbols: false,
+            require_numbers: false,
+            require_uppercase_characters: false,
+            require_lowercase_characters: false,
+            allow_users_to_change_password: false,
+            max_password_age: 0,
+            password_reuse_prevention: 0,
+            hard_expiry: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OidcProvider {
+    pub arn: String,
+    pub url: String,
+    pub client_id_list: Vec<String>,
+    pub thumbprint_list: Vec<String>,
+    pub tags: HashMap<String, String>,
+    pub create_date: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamlProvider {
+    pub arn: String,
+    pub name: String,
+    pub saml_metadata_document: String,
+    pub tags: HashMap<String, String>,
+    pub create_date: String,
+    pub valid_until: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerCertificate {
+    pub server_certificate_name: String,
+    pub server_certificate_id: String,
+    pub arn: String,
+    pub path: String,
+    pub certificate_body: String,
+    pub certificate_chain: Option<String>,
+    pub upload_date: String,
+    pub expiration: Option<String>,
+    pub tags: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VirtualMfaDevice {
+    pub serial_number: String,
+    pub base32_string_seed: Option<String>,
+    pub qr_code_png: Option<String>,
+    pub user: Option<String>,
+    pub enable_date: Option<String>,
+    pub tags: HashMap<String, String>,
 }

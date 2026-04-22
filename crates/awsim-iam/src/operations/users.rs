@@ -48,6 +48,10 @@ pub fn create_user(
         attached_policies: Vec::new(),
         inline_policies: HashMap::new(),
         groups: Vec::new(),
+        tags: HashMap::new(),
+        mfa_devices: Vec::new(),
+        ssh_public_keys: Vec::new(),
+        password_last_used: None,
     };
 
     let result = user_to_value(&user);
@@ -223,6 +227,96 @@ pub fn list_access_keys(state: &IamState, input: &Value) -> Result<Value, AwsErr
 
     Ok(json!({
         "AccessKeyMetadata": { "member": keys },
+        "IsTruncated": false,
+    }))
+}
+
+// ── Inline policy read/delete ────────────────────────────────────────────────
+
+pub fn get_user_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let user_name = require_str(input, "UserName")?;
+    let policy_name = require_str(input, "PolicyName")?;
+
+    let user = state
+        .users
+        .get(user_name)
+        .ok_or_else(|| no_such_entity("User", user_name))?;
+
+    let doc = user
+        .inline_policies
+        .get(policy_name)
+        .ok_or_else(|| no_such_entity("InlinePolicy", policy_name))?
+        .clone();
+
+    Ok(json!({
+        "UserName": user_name,
+        "PolicyName": policy_name,
+        "PolicyDocument": doc,
+    }))
+}
+
+pub fn delete_user_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let user_name = require_str(input, "UserName")?;
+    let policy_name = require_str(input, "PolicyName")?;
+
+    let mut user = state
+        .users
+        .get_mut(user_name)
+        .ok_or_else(|| no_such_entity("User", user_name))?;
+
+    if user.inline_policies.remove(policy_name).is_none() {
+        return Err(no_such_entity("InlinePolicy", policy_name));
+    }
+
+    Ok(json!({}))
+}
+
+pub fn list_user_policies(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let user_name = require_str(input, "UserName")?;
+
+    let user = state
+        .users
+        .get(user_name)
+        .ok_or_else(|| no_such_entity("User", user_name))?;
+
+    let names: Vec<Value> = user
+        .inline_policies
+        .keys()
+        .map(|k| Value::String(k.clone()))
+        .collect();
+
+    Ok(json!({
+        "PolicyNames": { "member": names },
+        "IsTruncated": false,
+    }))
+}
+
+// ── ListGroupsForUser ────────────────────────────────────────────────────────
+
+pub fn list_groups_for_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let user_name = require_str(input, "UserName")?;
+
+    if !state.users.contains_key(user_name) {
+        return Err(no_such_entity("User", user_name));
+    }
+
+    let groups: Vec<Value> = state
+        .groups
+        .iter()
+        .filter(|g| g.members.contains(&user_name.to_string()))
+        .map(|g| {
+            json!({
+                "GroupName": g.group_name,
+                "GroupId": g.group_id,
+                "Arn": g.arn,
+                "Path": g.path,
+                "CreateDate": g.create_date,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "Groups": { "member": groups },
         "IsTruncated": false,
     }))
 }
