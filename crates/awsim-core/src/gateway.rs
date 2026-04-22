@@ -288,6 +288,7 @@ fn resolve_service_from_target(target: &str) -> Option<String> {
         p if p.starts_with("CertificateManager") => "acm",
         p if p.starts_with("AWSWAF") => "wafv2",
         p if p.starts_with("Comprehend") => "comprehend",
+        p if p.starts_with("kendra") => "kendra",
         _ => return None,
     };
     Some(service.to_string())

@@ -493,6 +493,9 @@ fn register_services(
     let comprehend = Arc::new(awsim_comprehend::ComprehendService::new());
     state.register(comprehend, vec![]);
 
+    let kendra = Arc::new(awsim_kendra::KendraService::new());
+    state.register(kendra, vec![]);
+
     // API Gateway — registered last so we can return a clone of the Arc.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
     let apigw_routes = {
