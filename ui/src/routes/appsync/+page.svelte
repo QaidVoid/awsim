@@ -43,8 +43,12 @@
 
     async function apiFetch(path: string, opts?: RequestInit) {
         const res = await fetch(`${BASE}${path}`, {
-            headers: { 'Content-Type': 'application/json', 'X-Amz-Target': '' },
             ...opts,
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/appsync/aws4_request, SignedHeaders=host, Signature=fake',
+                ...(opts?.headers || {}),
+            },
         });
         if (!res.ok) {
             const text = await res.text();

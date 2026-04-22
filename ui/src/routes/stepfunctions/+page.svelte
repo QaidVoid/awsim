@@ -2,9 +2,11 @@
     import { onMount } from 'svelte';
     import {
         listStateMachines, createStateMachine, deleteStateMachine,
-        listExecutions, startExecution,
-        type StateMachine, type SfnExecution,
+        listExecutions, startExecution, describeStateMachine,
+        getExecutionHistory, describeExecution,
+        type StateMachine, type SfnExecution, type SfnHistoryEvent,
     } from '$lib/aws';
+    import AslViewer from '$lib/components/AslViewer.svelte';
 
     let stateMachines = $state<StateMachine[]>([]);
     let loading = $state(true);
@@ -28,12 +30,21 @@
     let confirmDeleteMachine = $state<string | null>(null);
 
     let selectedMachine = $state<StateMachine | null>(null);
+    let machineDefinition = $state<string | null>(null);
+    let machineDefLoading = $state(false);
+    let showRawJson = $state(false);
+
     let executions = $state<SfnExecution[]>([]);
     let executionsLoading = $state(false);
     let showStartExecution = $state(false);
     let executionInput = $state('{}');
     let startingExecution = $state(false);
     let startExecutionError = $state<string | null>(null);
+
+    let selectedExecution = $state<SfnExecution | null>(null);
+    let executionDetail = $state<{ status: string; input?: string; output?: string; startDate: number; stopDate?: number; name: string } | null>(null);
+    let executionHistory = $state<SfnHistoryEvent[]>([]);
+    let executionDetailLoading = $state(false);
 
     async function loadStateMachines() {
         loading = true;
@@ -70,7 +81,11 @@
             confirmDeleteMachine = null;
             if (selectedMachine?.arn === arn) {
                 selectedMachine = null;
+                machineDefinition = null;
                 executions = [];
+                selectedExecution = null;
+                executionDetail = null;
+                executionHistory = [];
             }
             await loadStateMachines();
         } catch (e) {
@@ -81,7 +96,27 @@
     async function selectMachine(machine: StateMachine) {
         selectedMachine = machine;
         showStartExecution = false;
-        await loadExecutions(machine.arn);
+        selectedExecution = null;
+        executionDetail = null;
+        executionHistory = [];
+        machineDefinition = null;
+        showRawJson = false;
+        await Promise.all([
+            loadExecutions(machine.arn),
+            loadMachineDefinition(machine.arn),
+        ]);
+    }
+
+    async function loadMachineDefinition(arn: string) {
+        machineDefLoading = true;
+        try {
+            const data = await describeStateMachine(arn);
+            machineDefinition = data.definition;
+        } catch {
+            machineDefinition = null;
+        } finally {
+            machineDefLoading = false;
+        }
     }
 
     async function loadExecutions(arn: string) {
@@ -113,6 +148,25 @@
         }
     }
 
+    async function selectExecution(exec: SfnExecution) {
+        selectedExecution = exec;
+        executionDetail = null;
+        executionHistory = [];
+        executionDetailLoading = true;
+        try {
+            const [detail, history] = await Promise.all([
+                describeExecution(exec.arn),
+                getExecutionHistory(exec.arn),
+            ]);
+            executionDetail = detail;
+            executionHistory = history.events;
+        } catch {
+            // silently fail
+        } finally {
+            executionDetailLoading = false;
+        }
+    }
+
     function executionStatusColor(status: string): string {
         if (status === 'SUCCEEDED') return 'bg-green-900/40 text-green-400';
         if (status === 'FAILED' || status === 'TIMED_OUT' || status === 'ABORTED') return 'bg-red-900/40 text-red-400';
@@ -120,8 +174,25 @@
         return 'bg-zinc-800 text-zinc-400';
     }
 
+    function historyEventColor(type: string): string {
+        if (type.includes('Succeeded') || type === 'ExecutionSucceeded') return 'text-green-400';
+        if (type.includes('Failed') || type.includes('Aborted') || type === 'ExecutionFailed') return 'text-red-400';
+        if (type.includes('Started') || type.includes('Entered')) return 'text-blue-400';
+        if (type.includes('Exited')) return 'text-orange-400';
+        return 'text-zinc-400';
+    }
+
     function formatDate(iso: string): string {
         try { return new Date(iso).toLocaleString(); } catch { return iso; }
+    }
+
+    function formatTimestamp(ts: number): string {
+        try { return new Date(ts).toLocaleString(); } catch { return String(ts); }
+    }
+
+    function prettyJson(str?: string): string {
+        if (!str) return '';
+        try { return JSON.stringify(JSON.parse(str), null, 2); } catch { return str; }
     }
 
     onMount(() => loadStateMachines());
@@ -227,9 +298,10 @@
                 </div>
             </div>
 
-            <!-- Executions panel -->
-            <div class="flex-1 min-w-0">
+            <!-- Detail panel -->
+            <div class="flex-1 min-w-0 flex flex-col gap-4">
                 {#if selectedMachine}
+                    <!-- Workflow diagram + Start Execution -->
                     <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
                         <div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
                             <div>
@@ -275,8 +347,41 @@
                             </div>
                         {/if}
 
+                        <!-- Visual ASL diagram and raw JSON side by side -->
+                        <div class="p-4">
+                            {#if machineDefLoading}
+                                <div class="text-zinc-500 text-sm">Loading definition...</div>
+                            {:else if machineDefinition}
+                                <div class="flex gap-6 items-start">
+                                    <div class="shrink-0">
+                                        <div class="text-xs text-zinc-500 mb-2 font-medium uppercase tracking-wide">Workflow Diagram</div>
+                                        <AslViewer definition={machineDefinition} />
+                                    </div>
+                                    <div class="flex-1 min-w-0">
+                                        <button
+                                            class="text-xs text-zinc-500 hover:text-zinc-300 font-medium uppercase tracking-wide mb-2 flex items-center gap-1 transition-colors"
+                                            onclick={() => showRawJson = !showRawJson}
+                                        >
+                                            {showRawJson ? 'Hide' : 'Show'} ASL JSON
+                                            <span class="text-zinc-600">{showRawJson ? '▲' : '▼'}</span>
+                                        </button>
+                                        {#if showRawJson}
+                                            <pre class="bg-zinc-950 border border-zinc-800 rounded p-3 text-xs font-mono text-zinc-300 overflow-auto max-h-96">{prettyJson(machineDefinition)}</pre>
+                                        {/if}
+                                    </div>
+                                </div>
+                            {:else}
+                                <div class="text-zinc-600 text-sm">Could not load ASL definition.</div>
+                            {/if}
+                        </div>
+                    </div>
+
+                    <!-- Executions list -->
+                    <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
+                        <div class="px-4 py-3 border-b border-zinc-800">
+                            <h3 class="text-sm font-medium text-zinc-300">Executions</h3>
+                        </div>
                         <div class="px-4 py-3">
-                            <h3 class="text-sm font-medium text-zinc-400 mb-3">Executions</h3>
                             {#if executionsLoading}
                                 <div class="text-zinc-500 text-sm">Loading executions...</div>
                             {:else if executions.length === 0}
@@ -293,7 +398,10 @@
                                     </thead>
                                     <tbody>
                                         {#each executions as exec}
-                                            <tr class="border-b border-zinc-800/50 hover:bg-zinc-800/30">
+                                            <tr
+                                                class="border-b border-zinc-800/50 cursor-pointer {selectedExecution?.arn === exec.arn ? 'bg-zinc-800' : 'hover:bg-zinc-800/30'} transition-colors"
+                                                onclick={() => selectExecution(exec)}
+                                            >
                                                 <td class="py-2 pr-4 font-mono text-orange-400 text-xs truncate max-w-xs">{exec.name}</td>
                                                 <td class="py-2 pr-4">
                                                     <span class="px-1.5 py-0.5 rounded text-xs {executionStatusColor(exec.status)}">{exec.status}</span>
@@ -307,9 +415,79 @@
                             {/if}
                         </div>
                     </div>
+
+                    <!-- Execution history panel -->
+                    {#if selectedExecution}
+                        <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
+                            <div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+                                <div>
+                                    <span class="text-sm font-medium text-zinc-300">Execution Detail</span>
+                                    <span class="ml-2 font-mono text-xs text-orange-400">{selectedExecution.name}</span>
+                                </div>
+                                {#if executionDetail}
+                                    <span class="px-2 py-0.5 rounded text-xs {executionStatusColor(executionDetail.status)}">{executionDetail.status}</span>
+                                {/if}
+                            </div>
+
+                            {#if executionDetailLoading}
+                                <div class="px-4 py-3 text-zinc-500 text-sm">Loading execution details...</div>
+                            {:else}
+                                {#if executionDetail}
+                                    <!-- Input/Output summary -->
+                                    <div class="px-4 py-3 border-b border-zinc-800 grid grid-cols-2 gap-4">
+                                        <div>
+                                            <div class="text-xs text-zinc-500 mb-1 font-medium">Input</div>
+                                            <pre class="bg-zinc-950 border border-zinc-800 rounded p-2 text-xs font-mono text-zinc-300 overflow-auto max-h-32">{prettyJson(executionDetail.input) || '—'}</pre>
+                                        </div>
+                                        <div>
+                                            <div class="text-xs text-zinc-500 mb-1 font-medium">Output</div>
+                                            <pre class="bg-zinc-950 border border-zinc-800 rounded p-2 text-xs font-mono text-zinc-300 overflow-auto max-h-32">{prettyJson(executionDetail.output) || '—'}</pre>
+                                        </div>
+                                    </div>
+                                {/if}
+
+                                <!-- Event timeline -->
+                                {#if executionHistory.length > 0}
+                                    <div class="px-4 py-3">
+                                        <div class="text-xs text-zinc-500 mb-3 font-medium uppercase tracking-wide">State Transition Timeline</div>
+                                        <div class="space-y-1">
+                                            {#each executionHistory as event}
+                                                <div class="flex items-start gap-3 py-1.5 px-2 rounded hover:bg-zinc-800/40 transition-colors">
+                                                    <div class="w-2 h-2 rounded-full mt-1.5 shrink-0 {event.type.includes('Succeeded') || event.type === 'ExecutionSucceeded' ? 'bg-green-400' : event.type.includes('Failed') || event.type.includes('Aborted') ? 'bg-red-400' : event.type.includes('Entered') || event.type.includes('Started') ? 'bg-blue-400' : 'bg-zinc-500'}"></div>
+                                                    <div class="flex-1 min-w-0">
+                                                        <div class="flex items-center gap-2 flex-wrap">
+                                                            <span class="text-xs font-mono {historyEventColor(event.type)}">{event.type}</span>
+                                                            {#if event.stateEnteredEventDetails?.name || event.stateExitedEventDetails?.name}
+                                                                <span class="text-xs text-zinc-400 bg-zinc-800 px-1.5 py-0.5 rounded">
+                                                                    {event.stateEnteredEventDetails?.name ?? event.stateExitedEventDetails?.name}
+                                                                </span>
+                                                            {/if}
+                                                            <span class="text-xs text-zinc-600 ml-auto">{formatTimestamp(event.timestamp)}</span>
+                                                        </div>
+                                                        {#if event.stateEnteredEventDetails?.input}
+                                                            <pre class="mt-1 text-xs font-mono text-zinc-500 truncate">{prettyJson(event.stateEnteredEventDetails.input).slice(0, 120)}{prettyJson(event.stateEnteredEventDetails.input).length > 120 ? '...' : ''}</pre>
+                                                        {/if}
+                                                        {#if event.stateExitedEventDetails?.output}
+                                                            <pre class="mt-1 text-xs font-mono text-zinc-500 truncate">{prettyJson(event.stateExitedEventDetails.output).slice(0, 120)}{prettyJson(event.stateExitedEventDetails.output).length > 120 ? '...' : ''}</pre>
+                                                        {/if}
+                                                        {#if event.taskFailedEventDetails}
+                                                            <div class="mt-1 text-xs text-red-400">{event.taskFailedEventDetails.error}: {event.taskFailedEventDetails.cause}</div>
+                                                        {/if}
+                                                    </div>
+                                                </div>
+                                            {/each}
+                                        </div>
+                                    </div>
+                                {:else}
+                                    <div class="px-4 py-3 text-zinc-500 text-sm">No events found for this execution.</div>
+                                {/if}
+                            {/if}
+                        </div>
+                    {/if}
+
                 {:else}
                     <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-8 text-center text-zinc-500 text-sm">
-                        Select a state machine to view executions.
+                        Select a state machine to view its workflow and executions.
                     </div>
                 {/if}
             </div>

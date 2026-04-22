@@ -27,7 +27,10 @@
     async function fetchAlarms() {
         const res = await fetch(`${ENDPOINT}/`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Authorization': 'AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/monitoring/aws4_request, SignedHeaders=host, Signature=fake',
+            },
             body: 'Action=DescribeAlarms&Version=2010-08-01',
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -49,7 +52,10 @@
     async function fetchMetrics() {
         const res = await fetch(`${ENDPOINT}/`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Authorization': 'AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/monitoring/aws4_request, SignedHeaders=host, Signature=fake',
+            },
             body: 'Action=ListMetrics&Version=2010-08-01',
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
