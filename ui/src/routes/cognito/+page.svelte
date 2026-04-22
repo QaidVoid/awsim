@@ -41,7 +41,6 @@
     let showCreateUser = $state(false);
     let newUsername = $state('');
     let newUserTempPassword = $state('');
-    let newUserEmail = $state('');
     let creatingUser = $state(false);
     let createUserError = $state<string | null>(null);
     let confirmDeleteUser = $state<string | null>(null);
@@ -124,7 +123,6 @@
     // Sign Up
     let signUpUsername = $state('');
     let signUpPassword = $state('');
-    let signUpEmail = $state('');
     let signUpResult = $state<unknown>(null);
     let signUpError = $state<string | null>(null);
     let signingUp = $state(false);
@@ -255,13 +253,14 @@
         creatingUser = true;
         createUserError = null;
         try {
-            await adminCreateUser(selectedPool.id, newUsername.trim(), {
+            const uname = newUsername.trim();
+            const isEmail = uname.includes('@');
+            await adminCreateUser(selectedPool.id, uname, {
                 tempPassword: newUserTempPassword || undefined,
-                email: newUserEmail || undefined,
+                email: isEmail ? uname : undefined,
             });
             newUsername = '';
             newUserTempPassword = '';
-            newUserEmail = '';
             showCreateUser = false;
             await loadPoolUsers(selectedPool.id);
         } catch (e) {
@@ -629,7 +628,8 @@
         signUpResult = null;
         signUpSuccess = false;
         try {
-            signUpResult = await cognitoSignUp(authClientId, signUpUsername, signUpPassword, signUpEmail || undefined);
+            const email = signUpUsername.includes('@') ? signUpUsername : undefined;
+            signUpResult = await cognitoSignUp(authClientId, signUpUsername, signUpPassword, email);
             signUpSuccess = true;
             setTimeout(() => { signUpSuccess = false; }, 3000);
         } catch (e) {
@@ -885,19 +885,13 @@
                                                         type="text"
                                                         bind:value={newUsername}
                                                         class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200"
-                                                        placeholder="Username *"
+                                                        placeholder="Username or email"
                                                     />
                                                     <input
                                                         type="password"
                                                         bind:value={newUserTempPassword}
                                                         class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200"
                                                         placeholder="Temporary password (optional)"
-                                                    />
-                                                    <input
-                                                        type="email"
-                                                        bind:value={newUserEmail}
-                                                        class="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200"
-                                                        placeholder="Email (optional)"
                                                     />
                                                 </div>
                                                 <div class="flex gap-2">
@@ -909,7 +903,7 @@
                                                         {creatingUser ? 'Creating...' : 'Create'}
                                                     </button>
                                                     <button
-                                                        onclick={() => { showCreateUser = false; createUserError = null; newUsername = ''; newUserTempPassword = ''; newUserEmail = ''; }}
+                                                        onclick={() => { showCreateUser = false; createUserError = null; newUsername = ''; newUserTempPassword = ''; }}
                                                         class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs transition-all active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-orange-500/50"
                                                     >
                                                         Cancel
@@ -1653,9 +1647,8 @@
                         </div>
                     {/if}
                     <div class="space-y-2 mb-3">
-                        <input bind:value={signUpUsername} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Username" />
+                        <input bind:value={signUpUsername} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Username or email" />
                         <input type="password" bind:value={signUpPassword} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Password" />
-                        <input type="email" bind:value={signUpEmail} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Email (optional)" />
                     </div>
                     {#if signUpError}
                         <div class="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-xs mb-3">{signUpError}</div>
@@ -1688,7 +1681,7 @@
                         </div>
                     {/if}
                     <div class="space-y-2 mb-3">
-                        <input bind:value={signInUsername} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Username" />
+                        <input bind:value={signInUsername} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Username or email" />
                         <input type="password" bind:value={signInPassword} class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/30 text-zinc-200" placeholder="Password" />
                     </div>
                     {#if signInError}
