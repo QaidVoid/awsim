@@ -468,6 +468,17 @@ pub fn serialize_xml_response(
 /// Convert a PascalCase field name to a lowercase HTTP header name.
 /// e.g., "ContentType" → "content-type", "ETag" → "etag"
 fn pascal_to_header(name: &str) -> String {
+    // Special cases where the generic PascalCase→kebab-case doesn't match HTTP conventions
+    match name {
+        "ETag" => return "etag".to_string(),
+        "ContentType" => return "content-type".to_string(),
+        "ContentLength" => return "content-length".to_string(),
+        "LastModified" => return "last-modified".to_string(),
+        "VersionId" => return "x-amz-version-id".to_string(),
+        "ServerSideEncryption" => return "x-amz-server-side-encryption".to_string(),
+        "StorageClass" => return "x-amz-storage-class".to_string(),
+        _ => {}
+    }
     let mut out = String::new();
     for (i, ch) in name.char_indices() {
         if ch.is_uppercase() && i > 0 {
