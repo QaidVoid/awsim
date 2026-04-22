@@ -52,6 +52,8 @@ pub struct IdentityPool {
 #[derive(Debug, Clone)]
 pub struct Identity {
     pub identity_id: String,
+    /// The identity pool this identity belongs to.
+    pub pool_id: String,
     /// Provider names the identity has logged in with.
     pub logins: Vec<String>,
     /// Provider name → token map (used by UnlinkIdentity).
@@ -500,6 +502,7 @@ fn get_id(
     let now = now_iso8601();
     let identity = Identity {
         identity_id: identity_id.clone(),
+        pool_id: pool_id.to_string(),
         logins: login_providers,
         login_tokens: logins
             .map(|m| {
@@ -528,19 +531,205 @@ fn get_credentials_for_identity(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityId is required"))?;
 
     // Validate the identity exists
-    if !state.identities.contains_key(identity_id) {
-        return Err(AwsError::not_found(
+    let identity = state.identities.get(identity_id).ok_or_else(|| {
+        AwsError::not_found(
             "ResourceNotFoundException",
             format!("Identity not found: {identity_id}"),
-        ));
-    }
+        )
+    })?;
 
-    let credentials = generate_credentials(3600);
+    // Look up the pool this identity belongs to
+    let pool = state.pools.get(&identity.pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Identity pool not found: {}", identity.pool_id),
+        )
+    })?;
+
+    // Determine the IAM role to assume
+    let role_arn = determine_role(&pool, &identity, input).ok_or_else(|| {
+        AwsError::bad_request(
+            "NotAuthorizedException",
+            "No role configured for this identity's authentication state",
+        )
+    })?;
+
+    // Drop the dashmap guards before generating credentials (avoids holding locks)
+    let role_arn = role_arn.clone();
+    drop(pool);
+    drop(identity);
+
+    let credentials = generate_credentials_for_role(&role_arn, identity_id);
 
     Ok(json!({
         "IdentityId":  identity_id,
         "Credentials": credentials,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Role determination
+// ---------------------------------------------------------------------------
+
+/// Evaluate a single rules-based mapping rule against a claim value.
+fn evaluate_rule(claim_value: &str, match_type: &str, expected: &str) -> bool {
+    match match_type {
+        "Equals" => claim_value == expected,
+        "Contains" => claim_value.contains(expected),
+        "StartsWith" => claim_value.starts_with(expected),
+        "NotEqual" => claim_value != expected,
+        _ => false,
+    }
+}
+
+/// Determine the IAM role ARN to use for credential vending.
+///
+/// Priority:
+/// 1. Provider-specific role mapping rules (Token or Rules type)
+/// 2. Default authenticated / unauthenticated role from pool config
+fn determine_role(
+    pool: &IdentityPool,
+    identity: &Identity,
+    input: &Value,
+) -> Option<String> {
+    // Merge logins from the stored identity and the request input.
+    let input_logins = input.get("Logins").and_then(|l| l.as_object());
+    let has_logins = !identity.logins.is_empty()
+        || input_logins.map_or(false, |m| !m.is_empty());
+
+    if has_logins {
+        // Check provider-specific role mappings first.
+        if let Some(logins_map) = input_logins {
+            for (provider, _token) in logins_map {
+                if let Some(mapping) = pool.role_mappings.get(provider.as_str()) {
+                    if let Some(mapping_obj) = mapping.as_object() {
+                        let mapping_type = mapping_obj
+                            .get("Type")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+
+                        match mapping_type {
+                            "Token" => {
+                                // Token-based: role comes from cognito:preferred_role claim
+                                // in the decoded ID token. We cannot decode the token here
+                                // without the JWKS, so fall through to the default role.
+                                // Real implementations would decode the JWT and extract the
+                                // cognito:preferred_role claim.
+                            }
+                            "Rules" => {
+                                // Rules-based: evaluate each rule against token claims.
+                                // Since we don't decode tokens, we evaluate rules against
+                                // the identity's stored login providers as a best-effort.
+                                if let Some(rules_config) = mapping_obj.get("RulesConfiguration") {
+                                    if let Some(rules) =
+                                        rules_config.get("Rules").and_then(|r| r.as_array())
+                                    {
+                                        for rule in rules {
+                                            let claim = rule
+                                                .get("Claim")
+                                                .and_then(|c| c.as_str())
+                                                .unwrap_or("");
+                                            let match_type = rule
+                                                .get("MatchType")
+                                                .and_then(|m| m.as_str())
+                                                .unwrap_or("");
+                                            let expected = rule
+                                                .get("Value")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+
+                                            // For the "iss" claim, match against the provider name.
+                                            // For other claims we use the provider name as a
+                                            // proxy since we don't decode tokens here.
+                                            let claim_value = if claim == "iss" {
+                                                provider.as_str()
+                                            } else {
+                                                // Best-effort: use provider as the claim value.
+                                                // Real implementations decode the JWT payload.
+                                                provider.as_str()
+                                            };
+
+                                            if evaluate_rule(claim_value, match_type, expected) {
+                                                if let Some(role) = rule
+                                                    .get("RoleARN")
+                                                    .and_then(|r| r.as_str())
+                                                {
+                                                    return Some(role.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fall back to default authenticated role.
+        pool.roles.get("authenticated").cloned()
+    } else {
+        // Unauthenticated path.
+        if !pool.allow_unauthenticated {
+            // Should have been caught during GetId, but guard here too.
+            return None;
+        }
+        pool.roles.get("unauthenticated").cloned()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Role-scoped credential generation
+// ---------------------------------------------------------------------------
+
+/// Generate temporary credentials scoped to the given IAM role ARN.
+///
+/// The credentials are structurally identical to what AWS returns from
+/// AssumeRoleWithWebIdentity — fake but realistic for local simulation.
+/// The `role_arn` is embedded in the session token prefix so callers can
+/// correlate credentials back to the assumed role.
+fn generate_credentials_for_role(role_arn: &str, _identity_id: &str) -> Value {
+    // Derive a short role identifier used as a token infix (truncated, URL-safe).
+    let role_name = role_arn
+        .split('/')
+        .last()
+        .unwrap_or("role")
+        .replace(|c: char| !c.is_alphanumeric(), "");
+    let role_infix = &role_name[..role_name.len().min(16)];
+
+    let access_key = {
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let suffix: String = id[..16].to_uppercase();
+        format!("ASIA{suffix}")
+    };
+
+    let secret_key = {
+        let u1 = uuid::Uuid::new_v4().simple().to_string();
+        let u2 = uuid::Uuid::new_v4().simple().to_string();
+        format!("{u1}{u2}")[..40].to_string()
+    };
+
+    let session_token = {
+        let parts: Vec<String> = (0..4)
+            .map(|_| uuid::Uuid::new_v4().simple().to_string())
+            .collect();
+        // Embed role_infix so the token is identifiably scoped to the assumed role.
+        format!(
+            "FwoGZXIvYXdzE{role_infix}{}//////////{}Aw{}Q{}",
+            parts[0], parts[1], parts[2], parts[3]
+        )
+    };
+
+    let expiration = expiration_iso8601(3600);
+
+    json!({
+        "AccessKeyId":  access_key,
+        "SecretKey":    secret_key,
+        "SessionToken": session_token,
+        "Expiration":   expiration,
+    })
 }
 
 /// GetOpenIdToken
@@ -602,6 +791,7 @@ fn get_open_id_token_for_developer_identity(
 
     // Upsert the identity with developer user identifiers
     {
+        let pool_id_owned = pool_id.to_string();
         let mut identity = state
             .identities
             .entry(identity_id.clone())
@@ -609,6 +799,7 @@ fn get_open_id_token_for_developer_identity(
                 let now = now_iso8601();
                 Identity {
                     identity_id: identity_id.clone(),
+                    pool_id: pool_id_owned,
                     logins: logins.keys().cloned().collect(),
                     login_tokens: logins
                         .iter()
@@ -897,11 +1088,13 @@ fn merge_developer_identities(
 
     {
         let now = now_iso8601();
+        let pool_id_owned = pool_id.to_string();
         let mut dest = state
             .identities
             .entry(dest_identity_id.clone())
             .or_insert_with(|| Identity {
                 identity_id: dest_identity_id.clone(),
+                pool_id: pool_id_owned,
                 logins: vec![dev_provider.to_string()],
                 login_tokens: HashMap::new(),
                 creation_date: now.clone(),
@@ -1336,6 +1529,18 @@ mod tests {
         .unwrap();
         let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
 
+        // Configure an unauthenticated role so credential vending can select it.
+        set_identity_pool_roles(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "Roles": {
+                    "unauthenticated": "arn:aws:iam::000000000000:role/UnauthRole",
+                }
+            }),
+        )
+        .unwrap();
+
         let id_result = get_id(&state, &json!({ "IdentityPoolId": pool_id }), &ctx).unwrap();
         let identity_id = id_result["IdentityId"].as_str().unwrap();
 
@@ -1350,6 +1555,166 @@ mod tests {
         assert_eq!(creds["SecretKey"].as_str().unwrap().len(), 40);
         assert!(!creds["SessionToken"].as_str().unwrap().is_empty());
         assert!(!creds["Expiration"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_get_credentials_no_role_configured() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create_result = create_identity_pool(
+            &state,
+            &json!({
+                "IdentityPoolName": "no-role-pool",
+                "AllowUnauthenticatedIdentities": true,
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
+
+        // No roles set — should fail with NotAuthorizedException
+        let id_result = get_id(&state, &json!({ "IdentityPoolId": pool_id }), &ctx).unwrap();
+        let identity_id = id_result["IdentityId"].as_str().unwrap();
+
+        let err = get_credentials_for_identity(
+            &state,
+            &json!({ "IdentityId": identity_id }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+    }
+
+    #[test]
+    fn test_get_credentials_authenticated_role() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create_result = create_identity_pool(
+            &state,
+            &json!({
+                "IdentityPoolName": "auth-creds-pool",
+                "AllowUnauthenticatedIdentities": false,
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
+
+        set_identity_pool_roles(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "Roles": {
+                    "authenticated": "arn:aws:iam::000000000000:role/AuthRole",
+                }
+            }),
+        )
+        .unwrap();
+
+        // Create an authenticated identity (with logins)
+        let id_result = get_id(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "Logins": { "accounts.google.com": "google-token-xyz" }
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let identity_id = id_result["IdentityId"].as_str().unwrap();
+
+        let creds_result = get_credentials_for_identity(
+            &state,
+            &json!({ "IdentityId": identity_id }),
+        )
+        .unwrap();
+
+        let creds = &creds_result["Credentials"];
+        assert!(creds["AccessKeyId"].as_str().unwrap().starts_with("ASIA"));
+        assert_eq!(creds["SecretKey"].as_str().unwrap().len(), 40);
+        assert!(!creds["SessionToken"].as_str().unwrap().is_empty());
+        assert!(!creds["Expiration"].as_str().unwrap().is_empty());
+        assert_eq!(creds_result["IdentityId"], identity_id);
+    }
+
+    #[test]
+    fn test_get_credentials_rules_based_role_mapping() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create_result = create_identity_pool(
+            &state,
+            &json!({
+                "IdentityPoolName": "rules-pool",
+                "AllowUnauthenticatedIdentities": false,
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
+
+        set_identity_pool_roles(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "Roles": {
+                    "authenticated": "arn:aws:iam::000000000000:role/DefaultAuthRole",
+                },
+                "RoleMappings": {
+                    "accounts.google.com": {
+                        "Type": "Rules",
+                        "AmbiguousRoleResolution": "Deny",
+                        "RulesConfiguration": {
+                            "Rules": [
+                                {
+                                    "Claim": "iss",
+                                    "MatchType": "StartsWith",
+                                    "Value": "accounts.google",
+                                    "RoleARN": "arn:aws:iam::000000000000:role/GoogleRole"
+                                }
+                            ]
+                        }
+                    }
+                }
+            }),
+        )
+        .unwrap();
+
+        let id_result = get_id(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "Logins": { "accounts.google.com": "google-token-xyz" }
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let identity_id = id_result["IdentityId"].as_str().unwrap();
+
+        // Pass logins so the rules mapping can evaluate the provider
+        let creds_result = get_credentials_for_identity(
+            &state,
+            &json!({
+                "IdentityId": identity_id,
+                "Logins": { "accounts.google.com": "google-token-xyz" }
+            }),
+        )
+        .unwrap();
+
+        let creds = &creds_result["Credentials"];
+        assert!(creds["AccessKeyId"].as_str().unwrap().starts_with("ASIA"));
+        assert_eq!(creds["SecretKey"].as_str().unwrap().len(), 40);
+    }
+
+    #[test]
+    fn test_evaluate_rule() {
+        assert!(evaluate_rule("accounts.google.com", "Equals", "accounts.google.com"));
+        assert!(!evaluate_rule("accounts.google.com", "Equals", "google.com"));
+        assert!(evaluate_rule("accounts.google.com", "Contains", "google"));
+        assert!(!evaluate_rule("accounts.google.com", "Contains", "facebook"));
+        assert!(evaluate_rule("accounts.google.com", "StartsWith", "accounts"));
+        assert!(!evaluate_rule("accounts.google.com", "StartsWith", "google"));
+        assert!(evaluate_rule("accounts.google.com", "NotEqual", "facebook.com"));
+        assert!(!evaluate_rule("accounts.google.com", "NotEqual", "accounts.google.com"));
+        assert!(!evaluate_rule("x", "Unknown", "x"));
     }
 
     #[test]
