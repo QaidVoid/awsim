@@ -165,6 +165,7 @@ async fn main() -> Result<()> {
         .merge(main_router)
         .merge(proxy_router)
         .merge(opensearch_nested)
+        .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB
         .layer(tower_http::cors::CorsLayer::permissive());
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], cli.port));
