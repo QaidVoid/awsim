@@ -25,3 +25,5 @@ ui/build/
 # Environment
 .env
 .env.*
+.playwright-mcp/
+*.png
