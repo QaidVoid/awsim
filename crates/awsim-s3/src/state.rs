@@ -87,6 +87,9 @@ pub struct S3Object {
     /// User-defined metadata from x-amz-meta-* headers.
     pub metadata: HashMap<String, String>,
     pub version_id: Option<String>,
+    /// Object tags (key → value).
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
 }
 
 /// A multipart upload in progress.

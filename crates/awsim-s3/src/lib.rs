@@ -252,6 +252,27 @@ impl ServiceHandler for S3Service {
                 operation: "ListParts",
                 required_query_param: Some("uploadId"),
             },
+            // PUT /{Bucket}/{Key+}?tagging — put object tagging
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "PutObjectTagging",
+                required_query_param: Some("tagging"),
+            },
+            // GET /{Bucket}/{Key+}?tagging — get object tagging
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "GetObjectTagging",
+                required_query_param: Some("tagging"),
+            },
+            // DELETE /{Bucket}/{Key+}?tagging — delete object tagging
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "DeleteObjectTagging",
+                required_query_param: Some("tagging"),
+            },
             // PUT /{Bucket}/{Key+}  — put object (or copy object via header)
             RouteDefinition {
                 method: "PUT",
@@ -304,6 +325,9 @@ impl ServiceHandler for S3Service {
             "PutBucketTagging" => operations::config::put_bucket_tagging(&state, &input),
             "GetBucketTagging" => operations::config::get_bucket_tagging(&state, &input),
             "DeleteBucketTagging" => operations::config::delete_bucket_tagging(&state, &input),
+            "PutObjectTagging" => operations::config::put_object_tagging(&state, &input),
+            "GetObjectTagging" => operations::config::get_object_tagging(&state, &input),
+            "DeleteObjectTagging" => operations::config::delete_object_tagging(&state, &input),
             "PutBucketVersioning" => operations::config::put_bucket_versioning(&state, &input),
             "GetBucketVersioning" => operations::config::get_bucket_versioning(&state, &input),
             "PutBucketPolicy" => operations::config::put_bucket_policy(&state, &input),
@@ -544,6 +568,7 @@ impl ServiceHandler for S3Service {
                                 last_modified: meta.last_modified,
                                 metadata: meta.metadata,
                                 version_id: meta.version_id,
+                                tags: Default::default(),
                             },
                         );
                     }

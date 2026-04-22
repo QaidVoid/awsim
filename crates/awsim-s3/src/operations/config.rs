@@ -385,3 +385,65 @@ fn parse_tags(input: &Value) -> HashMap<String, String> {
 
     tags
 }
+
+// ─── Object Tagging ─────────────────────────────────────────────────────────
+
+/// PUT /{Bucket}/{Key+}?tagging
+pub fn put_object_tagging(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = input["Bucket"].as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingBucket", "Bucket is required"))?;
+    let key = input["Key"].as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingKey", "Key is required"))?;
+
+    let bucket = state.buckets.get(bucket_name)
+        .ok_or_else(|| AwsError::not_found("NoSuchBucket", format!("Bucket '{bucket_name}' not found")))?;
+
+    let mut obj = bucket.objects.get_mut(key)
+        .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
+
+    let tags = parse_tags(input);
+    obj.tags = tags;
+
+    Ok(json!({}))
+}
+
+/// GET /{Bucket}/{Key+}?tagging
+pub fn get_object_tagging(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = input["Bucket"].as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingBucket", "Bucket is required"))?;
+    let key = input["Key"].as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingKey", "Key is required"))?;
+
+    let bucket = state.buckets.get(bucket_name)
+        .ok_or_else(|| AwsError::not_found("NoSuchBucket", format!("Bucket '{bucket_name}' not found")))?;
+
+    let obj = bucket.objects.get(key)
+        .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
+
+    let tag_set: Vec<Value> = obj.tags.iter()
+        .map(|(k, v)| json!({"Key": k, "Value": v}))
+        .collect();
+
+    Ok(json!({
+        "__xml_root": "Tagging",
+        "TagSet": { "Tag": tag_set }
+    }))
+}
+
+/// DELETE /{Bucket}/{Key+}?tagging
+pub fn delete_object_tagging(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = input["Bucket"].as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingBucket", "Bucket is required"))?;
+    let key = input["Key"].as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingKey", "Key is required"))?;
+
+    let bucket = state.buckets.get(bucket_name)
+        .ok_or_else(|| AwsError::not_found("NoSuchBucket", format!("Bucket '{bucket_name}' not found")))?;
+
+    let mut obj = bucket.objects.get_mut(key)
+        .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
+
+    obj.tags.clear();
+
+    Ok(json!({}))
+}

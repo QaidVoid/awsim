@@ -118,6 +118,7 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         last_modified,
         metadata: Default::default(),
         version_id: None,
+        tags: Default::default(),
     };
 
     bucket.objects.insert(key.to_string(), obj);

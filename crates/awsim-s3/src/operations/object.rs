@@ -76,6 +76,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
             last_modified,
             metadata,
             version_id: None,
+            tags: Default::default(),
         };
 
         bucket.objects.insert(key.to_string(), obj);
@@ -218,6 +219,7 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
         last_modified: last_modified_http,
         metadata,
         version_id: None,
+        tags: Default::default(),
     };
 
     dst_bucket_ref.objects.insert(dst_key.to_string(), new_obj);
