@@ -20,11 +20,18 @@ impl PersistenceManager {
     }
 
     /// Save a service's state snapshot to `{data_dir}/snapshots/{service_name}.json`.
+    ///
+    /// Uses atomic write (write to temp file, then rename) to prevent corruption
+    /// if the process is killed mid-write.
     pub fn save_snapshot(&self, service_name: &str, data: &[u8]) -> std::io::Result<()> {
         let dir = self.data_dir.join("snapshots");
         std::fs::create_dir_all(&dir)?;
         let path = dir.join(format!("{service_name}.json"));
-        std::fs::write(&path, data)?;
+        let tmp_path = dir.join(format!("{service_name}.json.tmp"));
+        // Write to temp file first
+        std::fs::write(&tmp_path, data)?;
+        // Atomic rename — either the old file remains or the new one replaces it
+        std::fs::rename(&tmp_path, &path)?;
         info!(service = service_name, path = %path.display(), "Saved snapshot");
         Ok(())
     }
