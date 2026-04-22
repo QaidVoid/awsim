@@ -155,10 +155,16 @@ async fn main() -> Result<()> {
         .fallback(awsim_core::gateway::handle_request)
         .with_state(state);
 
+    // Build the OpenSearch (Elasticsearch-compatible) sub-router.
+    // Nest OpenSearch under /opensearch prefix so it doesn't conflict with AWS routes.
+    let opensearch_nested: axum::Router<()> = axum::Router::new()
+        .nest("/opensearch", awsim_opensearch::router(Arc::new(awsim_opensearch::state::OpenSearchState::default())));
+
     // Merge all routers and add shared middleware.
     let app = cognito_oauth_router
         .merge(main_router)
         .merge(proxy_router)
+        .merge(opensearch_nested)
         .layer(tower_http::cors::CorsLayer::permissive());
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], cli.port));

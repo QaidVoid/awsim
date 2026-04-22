@@ -46,6 +46,7 @@ awsim-waf = { workspace = true }
 awsim-scheduler = { workspace = true }
 awsim-comprehend = { workspace = true }
 awsim-kendra = { workspace = true }
+awsim-opensearch = { workspace = true }
 axum = { workspace = true }
 dashmap = { workspace = true }
 tower-http = { workspace = true }
