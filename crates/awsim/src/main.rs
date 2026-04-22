@@ -490,6 +490,9 @@ fn register_services(
     };
     state.register(Arc::new(scheduler), scheduler_routes);
 
+    let comprehend = Arc::new(awsim_comprehend::ComprehendService::new());
+    state.register(comprehend, vec![]);
+
     // API Gateway — registered last so we can return a clone of the Arc.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
     let apigw_routes = {

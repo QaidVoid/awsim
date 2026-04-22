@@ -287,6 +287,7 @@ fn resolve_service_from_target(target: &str) -> Option<String> {
         // Security
         p if p.starts_with("CertificateManager") => "acm",
         p if p.starts_with("AWSWAF") => "wafv2",
+        p if p.starts_with("Comprehend") => "comprehend",
         _ => return None,
     };
     Some(service.to_string())

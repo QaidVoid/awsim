@@ -36,6 +36,7 @@ members = [
     "crates/awsim-acm",
     "crates/awsim-waf",
     "crates/awsim-scheduler",
+    "crates/awsim-comprehend",
 ]
 
 [workspace.package]
@@ -79,6 +80,7 @@ awsim-stepfunctions = { path = "crates/awsim-stepfunctions" }
 awsim-acm = { path = "crates/awsim-acm" }
 awsim-waf = { path = "crates/awsim-waf" }
 awsim-scheduler = { path = "crates/awsim-scheduler" }
+awsim-comprehend = { path = "crates/awsim-comprehend" }
 
 # Async
 tokio = { version = "1", features = ["full"] }

@@ -1,0 +1,13 @@
+[package]
+name = "awsim-comprehend"
+description = "AWS Comprehend NLP emulator for AWSim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+awsim-core = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
