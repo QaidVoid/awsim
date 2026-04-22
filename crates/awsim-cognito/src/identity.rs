@@ -169,6 +169,15 @@ fn now_iso8601() -> String {
     unix_to_iso8601(secs)
 }
 
+fn expiration_epoch(duration_secs: u64) -> f64 {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        + duration_secs;
+    secs as f64
+}
+
 fn expiration_iso8601(duration_secs: u64) -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -235,7 +244,7 @@ fn generate_credentials(duration_secs: u64) -> Value {
         "AccessKeyId":     fake_access_key_id(),
         "SecretKey":       fake_secret_access_key(),
         "SessionToken":    fake_session_token(),
-        "Expiration":      expiration_iso8601(duration_secs),
+        "Expiration":      expiration_epoch(duration_secs),
     })
 }
 
@@ -722,13 +731,11 @@ fn generate_credentials_for_role(role_arn: &str, _identity_id: &str) -> Value {
         )
     };
 
-    let expiration = expiration_iso8601(3600);
-
     json!({
         "AccessKeyId":  access_key,
         "SecretKey":    secret_key,
         "SessionToken": session_token,
-        "Expiration":   expiration,
+        "Expiration":   expiration_epoch(3600),
     })
 }
 
@@ -1554,7 +1561,7 @@ mod tests {
         assert!(creds["AccessKeyId"].as_str().unwrap().starts_with("ASIA"));
         assert_eq!(creds["SecretKey"].as_str().unwrap().len(), 40);
         assert!(!creds["SessionToken"].as_str().unwrap().is_empty());
-        assert!(!creds["Expiration"].as_str().unwrap().is_empty());
+        assert!(creds["Expiration"].as_f64().unwrap() > 0.0);
     }
 
     #[test]
@@ -1632,7 +1639,7 @@ mod tests {
         assert!(creds["AccessKeyId"].as_str().unwrap().starts_with("ASIA"));
         assert_eq!(creds["SecretKey"].as_str().unwrap().len(), 40);
         assert!(!creds["SessionToken"].as_str().unwrap().is_empty());
-        assert!(!creds["Expiration"].as_str().unwrap().is_empty());
+        assert!(creds["Expiration"].as_f64().unwrap() > 0.0);
         assert_eq!(creds_result["IdentityId"], identity_id);
     }
 

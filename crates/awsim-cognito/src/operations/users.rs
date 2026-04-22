@@ -45,7 +45,8 @@ pub fn user_to_value(user: &CognitoUser) -> Value {
         "Enabled": user.enabled,
         "UserCreateDate": user.created_date,
         "UserLastModifiedDate": user.created_date,
-        "Attributes": attributes
+        "Attributes": &attributes,
+        "UserAttributes": &attributes
     })
 }
 
