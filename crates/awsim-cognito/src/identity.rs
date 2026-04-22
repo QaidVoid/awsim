@@ -26,6 +26,12 @@ pub struct CognitoProvider {
 }
 
 #[derive(Debug, Clone)]
+pub struct PrincipalTagMapping {
+    pub use_defaults: bool,
+    pub principal_tags: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct IdentityPool {
     pub id: String,
     pub name: String,
@@ -37,6 +43,10 @@ pub struct IdentityPool {
     pub role_mappings: HashMap<String, Value>,
     pub developer_provider_name: Option<String>,
     pub created_date: String,
+    /// Resource tags for this identity pool.
+    pub tags: HashMap<String, String>,
+    /// provider_name → PrincipalTagMapping
+    pub principal_tag_maps: HashMap<String, PrincipalTagMapping>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,7 +54,10 @@ pub struct Identity {
     pub identity_id: String,
     /// Provider names the identity has logged in with.
     pub logins: Vec<String>,
+    /// Provider name → token map (used by UnlinkIdentity).
+    pub login_tokens: HashMap<String, String>,
     pub creation_date: String,
+    pub last_modified_date: String,
     /// For developer identities: developer user identifiers.
     pub developer_user_identifiers: Vec<String>,
 }
@@ -121,6 +134,22 @@ impl ServiceHandler for CognitoIdentityService {
             "SetIdentityPoolRoles" => set_identity_pool_roles(&state, &input),
             "GetIdentityPoolRoles" => get_identity_pool_roles(&state, &input),
             "LookupDeveloperIdentity" => lookup_developer_identity(&state, &input),
+            // Identity management
+            "DescribeIdentity" => describe_identity(&state, &input),
+            "ListIdentities" => list_identities(&state, &input),
+            "DeleteIdentities" => delete_identities(&state, &input),
+            // Developer identity
+            "MergeDeveloperIdentities" => merge_developer_identities(&state, &input, ctx),
+            "UnlinkDeveloperIdentity" => unlink_developer_identity(&state, &input),
+            // Federation
+            "UnlinkIdentity" => unlink_identity(&state, &input),
+            // Principal tags
+            "GetPrincipalTagAttributeMap" => get_principal_tag_attribute_map(&state, &input),
+            "SetPrincipalTagAttributeMap" => set_principal_tag_attribute_map(&state, &input),
+            // Tagging
+            "TagResource" => tag_resource(&state, &input),
+            "UntagResource" => untag_resource(&state, &input),
+            "ListTagsForResource" => list_tags_for_resource(&state, &input),
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
@@ -310,6 +339,8 @@ fn create_identity_pool(
         role_mappings: HashMap::new(),
         developer_provider_name: developer_provider_name.clone(),
         created_date: created_date.clone(),
+        tags: HashMap::new(),
+        principal_tag_maps: HashMap::new(),
     };
 
     state.pools.insert(pool_id.clone(), pool);
@@ -466,10 +497,19 @@ fn get_id(
     // For simplicity, always create a new identity (real Cognito deduplicates by token).
     let identity_id = format!("{}:{}", ctx.region, uuid::Uuid::new_v4());
 
+    let now = now_iso8601();
     let identity = Identity {
         identity_id: identity_id.clone(),
         logins: login_providers,
-        creation_date: now_iso8601(),
+        login_tokens: logins
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        creation_date: now.clone(),
+        last_modified_date: now,
         developer_user_identifiers: vec![],
     };
 
@@ -565,11 +605,19 @@ fn get_open_id_token_for_developer_identity(
         let mut identity = state
             .identities
             .entry(identity_id.clone())
-            .or_insert_with(|| Identity {
-                identity_id: identity_id.clone(),
-                logins: logins.keys().cloned().collect(),
-                creation_date: now_iso8601(),
-                developer_user_identifiers: vec![],
+            .or_insert_with(|| {
+                let now = now_iso8601();
+                Identity {
+                    identity_id: identity_id.clone(),
+                    logins: logins.keys().cloned().collect(),
+                    login_tokens: logins
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                        .collect(),
+                    creation_date: now.clone(),
+                    last_modified_date: now,
+                    developer_user_identifiers: vec![],
+                }
             });
 
         if !identity
@@ -700,6 +748,436 @@ fn lookup_developer_identity(
         "InvalidParameter",
         "Either IdentityId or DeveloperUserIdentifier is required",
     ))
+}
+
+// ---------------------------------------------------------------------------
+// New operations (identity management, developer identity, federation, tags)
+// ---------------------------------------------------------------------------
+
+/// DescribeIdentity
+fn describe_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
+    let identity_id = input["IdentityId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityId is required"))?;
+
+    let identity = state.identities.get(identity_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Identity not found: {identity_id}"),
+        )
+    })?;
+
+    Ok(json!({
+        "IdentityId":       identity.identity_id,
+        "Logins":           identity.logins,
+        "CreationDate":     identity.creation_date,
+        "LastModifiedDate": identity.last_modified_date,
+    }))
+}
+
+/// ListIdentities
+fn list_identities(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
+    let pool_id = input["IdentityPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+
+    get_pool(state, pool_id)?;
+
+    let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
+
+    // Filter identities that belong to this pool (identity_id starts with pool region prefix)
+    // In our simulator all identities share the same region store so we return all of them
+    // with a simple pagination stub.
+    let identities: Vec<Value> = state
+        .identities
+        .iter()
+        .take(max_results)
+        .map(|e| {
+            json!({
+                "IdentityId":       e.value().identity_id,
+                "Logins":           e.value().logins,
+                "CreationDate":     e.value().creation_date,
+                "LastModifiedDate": e.value().last_modified_date,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "IdentityPoolId": pool_id,
+        "Identities":     identities,
+    }))
+}
+
+/// DeleteIdentities
+fn delete_identities(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
+    let ids = input["IdentityIdsToDelete"]
+        .as_array()
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameter", "IdentityIdsToDelete is required")
+        })?;
+
+    for id_val in ids {
+        if let Some(id) = id_val.as_str() {
+            state.identities.remove(id);
+        }
+    }
+
+    Ok(json!({ "UnprocessedIdentityIds": [] }))
+}
+
+/// MergeDeveloperIdentities — merge source into destination, delete source.
+fn merge_developer_identities(
+    state: &IdentityPoolState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let pool_id = input["IdentityPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let source_id = input["SourceUserIdentifier"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameter", "SourceUserIdentifier is required")
+        })?;
+    let dest_id = input["DestinationUserIdentifier"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameter", "DestinationUserIdentifier is required")
+        })?;
+    let dev_provider = input["DeveloperProviderName"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameter", "DeveloperProviderName is required")
+        })?;
+
+    get_pool(state, pool_id)?;
+
+    // Find source identity by developer user identifier
+    let source_identity_id = {
+        let mut found = None;
+        for entry in state.identities.iter() {
+            if entry
+                .developer_user_identifiers
+                .iter()
+                .any(|d| d == source_id)
+            {
+                found = Some(entry.identity_id.clone());
+                break;
+            }
+        }
+        found
+    };
+
+    // Find or create destination identity
+    let dest_identity_id = {
+        let mut found = None;
+        for entry in state.identities.iter() {
+            if entry
+                .developer_user_identifiers
+                .iter()
+                .any(|d| d == dest_id)
+            {
+                found = Some(entry.identity_id.clone());
+                break;
+            }
+        }
+        found.unwrap_or_else(|| format!("{}:{}", ctx.region, uuid::Uuid::new_v4()))
+    };
+
+    // Transfer logins from source to destination
+    let source_logins: Vec<String> = if let Some(src_id) = &source_identity_id {
+        state
+            .identities
+            .get(src_id)
+            .map(|e| e.developer_user_identifiers.clone())
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
+
+    {
+        let now = now_iso8601();
+        let mut dest = state
+            .identities
+            .entry(dest_identity_id.clone())
+            .or_insert_with(|| Identity {
+                identity_id: dest_identity_id.clone(),
+                logins: vec![dev_provider.to_string()],
+                login_tokens: HashMap::new(),
+                creation_date: now.clone(),
+                last_modified_date: now.clone(),
+                developer_user_identifiers: vec![dest_id.to_string()],
+            });
+
+        for l in &source_logins {
+            if !dest.developer_user_identifiers.contains(l) {
+                dest.developer_user_identifiers.push(l.clone());
+            }
+        }
+        dest.last_modified_date = now;
+    }
+
+    // Remove source identity
+    if let Some(src_id) = &source_identity_id {
+        state.identities.remove(src_id);
+    }
+
+    Ok(json!({ "IdentityId": dest_identity_id }))
+}
+
+/// UnlinkDeveloperIdentity — remove a developer user identifier from an identity.
+fn unlink_developer_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
+    let identity_id = input["IdentityId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityId is required"))?;
+    let pool_id = input["IdentityPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let dev_user_identifier = input["DeveloperUserIdentifier"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameter", "DeveloperUserIdentifier is required")
+        })?;
+
+    get_pool(state, pool_id)?;
+
+    let mut identity = state.identities.get_mut(identity_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Identity not found: {identity_id}"),
+        )
+    })?;
+
+    identity
+        .developer_user_identifiers
+        .retain(|d| d != dev_user_identifier);
+    identity.last_modified_date = now_iso8601();
+
+    Ok(json!({}))
+}
+
+/// UnlinkIdentity — remove federated logins from an identity.
+fn unlink_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
+    let identity_id = input["IdentityId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityId is required"))?;
+    let logins_to_remove = input["LoginsToRemove"]
+        .as_array()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "LoginsToRemove is required"))?;
+
+    let mut identity = state.identities.get_mut(identity_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Identity not found: {identity_id}"),
+        )
+    })?;
+
+    let providers_to_remove: Vec<&str> = logins_to_remove
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+
+    identity
+        .logins
+        .retain(|l| !providers_to_remove.contains(&l.as_str()));
+    for p in &providers_to_remove {
+        identity.login_tokens.remove(*p);
+    }
+    identity.last_modified_date = now_iso8601();
+
+    Ok(json!({}))
+}
+
+/// GetPrincipalTagAttributeMap
+fn get_principal_tag_attribute_map(
+    state: &IdentityPoolState,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let pool_id = input["IdentityPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let provider_name = input["IdentityProviderName"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameter", "IdentityProviderName is required")
+        })?;
+
+    let pool = get_pool(state, pool_id)?;
+
+    let (use_defaults, principal_tags) = pool
+        .principal_tag_maps
+        .get(provider_name)
+        .map(|m| (m.use_defaults, m.principal_tags.clone()))
+        .unwrap_or((true, HashMap::new()));
+
+    let tags_json: Value = principal_tags
+        .iter()
+        .fold(json!({}), |mut acc, (k, v)| {
+            acc[k] = Value::String(v.clone());
+            acc
+        });
+
+    Ok(json!({
+        "IdentityPoolId":       pool_id,
+        "IdentityProviderName": provider_name,
+        "UseDefaults":          use_defaults,
+        "PrincipalTags":        tags_json,
+    }))
+}
+
+/// SetPrincipalTagAttributeMap
+fn set_principal_tag_attribute_map(
+    state: &IdentityPoolState,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let pool_id = input["IdentityPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let provider_name = input["IdentityProviderName"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameter", "IdentityProviderName is required")
+        })?;
+    let use_defaults = input["UseDefaults"].as_bool().unwrap_or(true);
+
+    let principal_tags: HashMap<String, String> = input["PrincipalTags"]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Identity pool not found: {pool_id}"),
+        )
+    })?;
+
+    pool.principal_tag_maps.insert(
+        provider_name.to_string(),
+        PrincipalTagMapping {
+            use_defaults,
+            principal_tags: principal_tags.clone(),
+        },
+    );
+
+    let tags_json: Value = principal_tags
+        .iter()
+        .fold(json!({}), |mut acc, (k, v)| {
+            acc[k] = Value::String(v.clone());
+            acc
+        });
+
+    Ok(json!({
+        "IdentityPoolId":       pool_id,
+        "IdentityProviderName": provider_name,
+        "UseDefaults":          use_defaults,
+        "PrincipalTags":        tags_json,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Helper: pool id from ARN
+// ---------------------------------------------------------------------------
+
+fn pool_id_from_arn<'a>(arn: &'a str) -> Option<&'a str> {
+    // arn:aws:cognito-identity:region:account:identitypool/pool_id
+    arn.split('/').nth(1)
+}
+
+/// TagResource
+fn tag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
+    let resource_arn = input["ResourceArn"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
+
+    let new_tags: HashMap<String, String> = input["Tags"]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Resolve the pool from ARN
+    let pool_id_raw = pool_id_from_arn(resource_arn).ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format")
+    })?;
+    // Pool ids use ':' but we stored them with '_' in the ARN; convert back
+    let pool_id = pool_id_raw.replace('_', ":");
+
+    let mut pool = state.pools.get_mut(&pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Identity pool not found: {pool_id}"),
+        )
+    })?;
+
+    for (k, v) in new_tags {
+        pool.tags.insert(k, v);
+    }
+
+    Ok(json!({}))
+}
+
+/// UntagResource
+fn untag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
+    let resource_arn = input["ResourceArn"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
+
+    let tag_keys: Vec<&str> = input["TagKeys"]
+        .as_array()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TagKeys is required"))?
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+
+    let pool_id_raw = pool_id_from_arn(resource_arn).ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format")
+    })?;
+    let pool_id = pool_id_raw.replace('_', ":");
+
+    let mut pool = state.pools.get_mut(&pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Identity pool not found: {pool_id}"),
+        )
+    })?;
+
+    for key in tag_keys {
+        pool.tags.remove(key);
+    }
+
+    Ok(json!({}))
+}
+
+/// ListTagsForResource
+fn list_tags_for_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
+    let resource_arn = input["ResourceArn"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
+
+    let pool_id_raw = pool_id_from_arn(resource_arn).ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format")
+    })?;
+    let pool_id = pool_id_raw.replace('_', ":");
+
+    let pool = get_pool(state, &pool_id)?;
+
+    let tags_json: Value = pool
+        .tags
+        .iter()
+        .fold(json!({}), |mut acc, (k, v)| {
+            acc[k] = Value::String(v.clone());
+            acc
+        });
+
+    Ok(json!({ "Tags": tags_json }))
 }
 
 // ---------------------------------------------------------------------------
@@ -979,5 +1457,269 @@ mod tests {
             .unwrap()
             .iter()
             .any(|v| v == "user-123"));
+    }
+
+    // ------------------------------------------------------------------
+    // Tests for new operations
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_describe_identity() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create_result = create_identity_pool(
+            &state,
+            &json!({
+                "IdentityPoolName": "desc-id-pool",
+                "AllowUnauthenticatedIdentities": true,
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
+        let id_result = get_id(&state, &json!({ "IdentityPoolId": pool_id }), &ctx).unwrap();
+        let identity_id = id_result["IdentityId"].as_str().unwrap();
+
+        let desc = describe_identity(&state, &json!({ "IdentityId": identity_id })).unwrap();
+        assert_eq!(desc["IdentityId"], identity_id);
+        assert!(desc["CreationDate"].as_str().is_some());
+        assert!(desc["LastModifiedDate"].as_str().is_some());
+    }
+
+    #[test]
+    fn test_list_identities() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create_result = create_identity_pool(
+            &state,
+            &json!({
+                "IdentityPoolName": "list-id-pool",
+                "AllowUnauthenticatedIdentities": true,
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
+
+        get_id(&state, &json!({ "IdentityPoolId": pool_id }), &ctx).unwrap();
+        get_id(&state, &json!({ "IdentityPoolId": pool_id }), &ctx).unwrap();
+
+        let result = list_identities(
+            &state,
+            &json!({ "IdentityPoolId": pool_id, "MaxResults": 60 }),
+        )
+        .unwrap();
+        assert_eq!(result["IdentityPoolId"], pool_id);
+        assert_eq!(result["Identities"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_delete_identities() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create_result = create_identity_pool(
+            &state,
+            &json!({
+                "IdentityPoolName": "del-id-pool",
+                "AllowUnauthenticatedIdentities": true,
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
+        let id_result = get_id(&state, &json!({ "IdentityPoolId": pool_id }), &ctx).unwrap();
+        let identity_id = id_result["IdentityId"].as_str().unwrap().to_string();
+
+        let result = delete_identities(
+            &state,
+            &json!({ "IdentityIdsToDelete": [identity_id.clone()] }),
+        )
+        .unwrap();
+        assert_eq!(result["UnprocessedIdentityIds"].as_array().unwrap().len(), 0);
+
+        let err =
+            describe_identity(&state, &json!({ "IdentityId": identity_id })).unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundException");
+    }
+
+    #[test]
+    fn test_unlink_developer_identity() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create_result = create_identity_pool(
+            &state,
+            &json!({
+                "IdentityPoolName": "unlink-dev-pool",
+                "AllowUnauthenticatedIdentities": false,
+                "DeveloperProviderName": "login.my.app",
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
+
+        let token_result = get_open_id_token_for_developer_identity(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "Logins": { "login.my.app": "user-abc" }
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let identity_id = token_result["IdentityId"].as_str().unwrap().to_string();
+
+        unlink_developer_identity(
+            &state,
+            &json!({
+                "IdentityId": identity_id,
+                "IdentityPoolId": pool_id,
+                "DeveloperProviderName": "login.my.app",
+                "DeveloperUserIdentifier": "user-abc",
+            }),
+        )
+        .unwrap();
+
+        let lookup = lookup_developer_identity(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "IdentityId": identity_id,
+            }),
+        )
+        .unwrap();
+        assert!(lookup["DeveloperUserIdentifierList"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_unlink_identity() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create_result = create_identity_pool(
+            &state,
+            &json!({
+                "IdentityPoolName": "unlink-fed-pool",
+                "AllowUnauthenticatedIdentities": true,
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
+        let id_result = get_id(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "Logins": { "accounts.google.com": "google-token-xyz" }
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let identity_id = id_result["IdentityId"].as_str().unwrap().to_string();
+
+        unlink_identity(
+            &state,
+            &json!({
+                "IdentityId": identity_id,
+                "Logins": { "accounts.google.com": "google-token-xyz" },
+                "LoginsToRemove": ["accounts.google.com"],
+            }),
+        )
+        .unwrap();
+
+        let desc = describe_identity(&state, &json!({ "IdentityId": identity_id })).unwrap();
+        assert!(desc["Logins"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_principal_tag_operations() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create_result = create_identity_pool(
+            &state,
+            &json!({
+                "IdentityPoolName": "ptag-pool",
+                "AllowUnauthenticatedIdentities": false,
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
+
+        // Set principal tags
+        set_principal_tag_attribute_map(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "IdentityProviderName": "accounts.google.com",
+                "UseDefaults": false,
+                "PrincipalTags": { "email": "email", "sub": "sub" },
+            }),
+        )
+        .unwrap();
+
+        // Get and verify
+        let result = get_principal_tag_attribute_map(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "IdentityProviderName": "accounts.google.com",
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["UseDefaults"], false);
+        assert_eq!(result["PrincipalTags"]["email"], "email");
+        assert_eq!(result["PrincipalTags"]["sub"], "sub");
+    }
+
+    #[test]
+    fn test_resource_tagging() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create_result = create_identity_pool(
+            &state,
+            &json!({
+                "IdentityPoolName": "tag-pool",
+                "AllowUnauthenticatedIdentities": false,
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
+        // Build the ARN the same way our tag_resource helper expects it
+        let arn = format!(
+            "arn:aws:cognito-identity:us-east-1:123456789012:identitypool/{}",
+            pool_id.replace(':', "_")
+        );
+
+        tag_resource(
+            &state,
+            &json!({
+                "ResourceArn": arn,
+                "Tags": { "env": "test", "team": "infra" },
+            }),
+        )
+        .unwrap();
+
+        let list_result =
+            list_tags_for_resource(&state, &json!({ "ResourceArn": arn })).unwrap();
+        assert_eq!(list_result["Tags"]["env"], "test");
+        assert_eq!(list_result["Tags"]["team"], "infra");
+
+        untag_resource(
+            &state,
+            &json!({
+                "ResourceArn": arn,
+                "TagKeys": ["team"],
+            }),
+        )
+        .unwrap();
+
+        let list_result2 =
+            list_tags_for_resource(&state, &json!({ "ResourceArn": arn })).unwrap();
+        assert!(list_result2["Tags"]["team"].is_null());
+        assert_eq!(list_result2["Tags"]["env"], "test");
     }
 }
