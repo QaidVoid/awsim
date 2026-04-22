@@ -7,6 +7,8 @@ use std::collections::HashMap;
 pub struct OpenSearchState {
     /// Index name → Index data
     pub indices: DashMap<String, OpenSearchIndex>,
+    /// Alias name → list of index names the alias points to
+    pub aliases: DashMap<String, Vec<String>>,
 }
 
 /// An OpenSearch/Elasticsearch index.

@@ -30,8 +30,19 @@ pub fn search(
             .map(|e| e.key().clone())
             .collect()
     } else {
-        // Could be comma-separated
-        index_pattern.split(',').map(|s| s.trim().to_string()).collect()
+        // Could be comma-separated; resolve aliases as well
+        index_pattern
+            .split(',')
+            .flat_map(|s| {
+                let name = s.trim().to_string();
+                // If the name matches an alias, expand to the aliased indices
+                if let Some(aliased) = state.aliases.get(&name) {
+                    aliased.clone()
+                } else {
+                    vec![name]
+                }
+            })
+            .collect()
     };
 
     let mut hits: Vec<Value> = Vec::new();
@@ -85,14 +96,23 @@ pub fn count(
 ) -> (u16, Value) {
     let query = body.get("query").cloned().unwrap_or(json!({"match_all": {}}));
 
-    let count = if let Some(idx) = state.indices.get(index_name) {
-        idx.documents
-            .values()
-            .filter(|doc| match_score(&query, doc) > 0.0)
-            .count()
+    // Resolve alias if needed
+    let resolved: Vec<String> = if let Some(aliased) = state.aliases.get(index_name) {
+        aliased.clone()
     } else {
-        0
+        vec![index_name.to_string()]
     };
+
+    let count: usize = resolved
+        .iter()
+        .filter_map(|name| state.indices.get(name))
+        .map(|idx| {
+            idx.documents
+                .values()
+                .filter(|doc| match_score(&query, doc) > 0.0)
+                .count()
+        })
+        .sum();
 
     (
         200,
@@ -104,7 +124,7 @@ pub fn count(
 }
 
 /// Score a document against a query. Returns 0.0 for no match.
-fn match_score(query: &Value, doc: &Value) -> f64 {
+pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
     if let Some(obj) = query.as_object() {
         if obj.contains_key("match_all") {
             return 1.0;
