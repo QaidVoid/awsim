@@ -558,6 +558,7 @@ async fn authorize_post(
 
     // Collect group role pairs before dropping pool_ref.
     let group_pairs = user_group_role_pairs(&pool_ref, &user.groups);
+    let issuer_url = oauth_state.issuer(&pool_id);
 
     drop(pool_ref);
 
@@ -604,6 +605,7 @@ async fn authorize_post(
                 &user.username,
                 &effective_scopes,
                 &group_pairs,
+                Some(&issuer_url),
             );
             let id_tok = jwt::id_token(
                 &user.sub,
@@ -615,6 +617,7 @@ async fn authorize_post(
                 &effective_scopes,
                 nonce.as_deref(),
                 &group_pairs,
+                Some(&issuer_url),
             );
 
             info!(
@@ -811,6 +814,7 @@ async fn token(
 
             let scopes = entry.scopes.clone();
             let nonce = entry.nonce.clone();
+            let issuer_url = oauth_state.issuer(&pool_id);
 
             let access_tok = jwt::access_token(
                 &sub,
@@ -820,6 +824,7 @@ async fn token(
                 &username,
                 &scopes,
                 &group_pairs,
+                Some(&issuer_url),
             );
             let id_tok = jwt::id_token(
                 &sub,
@@ -831,6 +836,7 @@ async fn token(
                 &scopes,
                 nonce.as_deref(),
                 &group_pairs,
+                Some(&issuer_url),
             );
             let refresh_tok = jwt::refresh_token(&sub);
 
@@ -924,6 +930,7 @@ async fn token(
             };
 
             // client_credentials is machine-to-machine — no user groups.
+            let issuer_url = oauth_state.issuer(&pool_id);
             let access_tok = jwt::access_token(
                 &effective_client_id,
                 &oauth_state.default_region,
@@ -932,6 +939,7 @@ async fn token(
                 &effective_client_id,
                 &effective_scopes,
                 &[],
+                Some(&issuer_url),
             );
 
             info!(
@@ -1011,6 +1019,7 @@ async fn token(
             };
 
             let scopes = parse_scopes(form.scope.as_deref().unwrap_or("openid"));
+            let issuer_url = oauth_state.issuer(&pool_id);
 
             let access_tok = jwt::access_token(
                 &user_sub,
@@ -1020,6 +1029,7 @@ async fn token(
                 &username,
                 &scopes,
                 &group_pairs,
+                Some(&issuer_url),
             );
             let id_tok = jwt::id_token(
                 &user_sub,
@@ -1031,6 +1041,7 @@ async fn token(
                 &scopes,
                 None,
                 &group_pairs,
+                Some(&issuer_url),
             );
             let new_refresh = jwt::refresh_token(&user_sub);
 

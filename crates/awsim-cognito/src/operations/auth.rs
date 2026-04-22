@@ -31,8 +31,8 @@ pub fn build_auth_result_pub(
 ) -> Value {
     // Use default openid scope for direct auth flows (InitiateAuth, etc.)
     let default_scopes: Vec<String> = vec!["openid".to_string(), "email".to_string(), "profile".to_string()];
-    let id_tok = jwt::id_token(user_sub, region, pool_id, client_id, username, attributes, &default_scopes, None, groups);
-    let access_tok = jwt::access_token(user_sub, region, pool_id, client_id, username, &default_scopes, groups);
+    let id_tok = jwt::id_token(user_sub, region, pool_id, client_id, username, attributes, &default_scopes, None, groups, None);
+    let access_tok = jwt::access_token(user_sub, region, pool_id, client_id, username, &default_scopes, groups, None);
     let refresh_tok = jwt::refresh_token(user_sub);
 
     json!({

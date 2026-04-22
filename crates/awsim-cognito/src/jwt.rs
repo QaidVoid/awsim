@@ -52,6 +52,7 @@ pub fn id_token(
     scopes: &[String],
     nonce: Option<&str>,
     groups: &[GroupRolePair],
+    issuer_override: Option<&str>,
 ) -> String {
     let now = now_epoch();
     let header = json!({
@@ -61,10 +62,13 @@ pub fn id_token(
     });
 
     let scope_str = scopes.join(" ");
+    let issuer = issuer_override
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("https://cognito-idp.{region}.amazonaws.com/{pool_id}"));
 
     let mut payload = json!({
         "sub": sub,
-        "iss": format!("https://cognito-idp.{region}.amazonaws.com/{pool_id}"),
+        "iss": issuer,
         "aud": client_id,
         "token_use": "id",
         "cognito:username": username,
@@ -181,6 +185,7 @@ pub fn access_token(
     username: &str,
     scopes: &[String],
     groups: &[GroupRolePair],
+    issuer_override: Option<&str>,
 ) -> String {
     let now = now_epoch();
     let header = json!({
@@ -195,9 +200,13 @@ pub fn access_token(
         scopes.join(" ")
     };
 
+    let issuer = issuer_override
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("https://cognito-idp.{region}.amazonaws.com/{pool_id}"));
+
     let mut payload = json!({
         "sub": sub,
-        "iss": format!("https://cognito-idp.{region}.amazonaws.com/{pool_id}"),
+        "iss": issuer,
         "client_id": client_id,
         "token_use": "access",
         "scope": scope_str,
