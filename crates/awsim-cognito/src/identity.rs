@@ -17,7 +17,7 @@ use tracing::debug;
 // State types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CognitoProvider {
     pub client_id: String,
     /// e.g. `cognito-idp.us-east-1.amazonaws.com/us-east-1_XXXXX`
@@ -25,13 +25,13 @@ pub struct CognitoProvider {
     pub server_side_token_check: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PrincipalTagMapping {
     pub use_defaults: bool,
     pub principal_tags: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IdentityPool {
     pub id: String,
     pub name: String,
@@ -49,7 +49,7 @@ pub struct IdentityPool {
     pub principal_tag_maps: HashMap<String, PrincipalTagMapping>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Identity {
     pub identity_id: String,
     /// The identity pool this identity belongs to.
@@ -155,6 +155,38 @@ impl ServiceHandler for CognitoIdentityService {
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let entries = self.state.iter_all();
+        let snap: Vec<(String, String, IdentityPoolSnapshot)> = entries
+            .into_iter()
+            .map(|((account, region), state)| {
+                let pools: std::collections::HashMap<String, IdentityPool> = state
+                    .pools.iter().map(|e| (e.key().clone(), e.value().clone())).collect();
+                let identities: std::collections::HashMap<String, Identity> = state
+                    .identities.iter().map(|e| (e.key().clone(), e.value().clone())).collect();
+                (account, region, IdentityPoolSnapshot { pools, identities })
+            })
+            .collect();
+        serde_json::to_vec(&snap).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let snap: Vec<(String, String, IdentityPoolSnapshot)> =
+            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        for (account, region, s) in snap {
+            let state = self.state.get(&account, &region);
+            for (id, pool) in s.pools { state.pools.insert(id, pool); }
+            for (id, identity) in s.identities { state.identities.insert(id, identity); }
+        }
+        Ok(())
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct IdentityPoolSnapshot {
+    pools: std::collections::HashMap<String, IdentityPool>,
+    identities: std::collections::HashMap<String, Identity>,
 }
 
 // ---------------------------------------------------------------------------
