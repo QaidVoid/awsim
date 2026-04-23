@@ -1087,8 +1087,13 @@ export async function listUserPools(): Promise<{ userPools: CognitoUserPool[] }>
     };
 }
 
-export async function createUserPool(poolName: string): Promise<void> {
-    await cognitoRequest('CreateUserPool', { PoolName: poolName });
+export async function createUserPool(
+    poolName: string,
+    options?: { mfaConfig?: string },
+): Promise<void> {
+    const body: Record<string, unknown> = { PoolName: poolName };
+    if (options?.mfaConfig) body.MfaConfiguration = options.mfaConfig;
+    await cognitoRequest('CreateUserPool', body);
 }
 
 export async function deleteUserPool(userPoolId: string): Promise<void> {
