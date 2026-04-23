@@ -63,6 +63,42 @@ curl -s http://localhost:4566 \
 | Operation | Description |
 |-----------|-------------|
 | `DescribeContinuousBackups` | Get the point-in-time recovery (PITR) status for a table. Returns `ContinuousBackupsDescription` |
+| `CreateBackup` | Create an on-demand backup (stub — returns a backup ARN but does not persist) |
+| `DeleteBackup` | Delete a backup (stub — always succeeds) |
+| `DescribeBackup` | Describe a backup (stub — always returns not-found) |
+| `ListBackups` | List on-demand backups (stub — returns empty list) |
+
+### Global Tables
+
+| Operation | Description |
+|-----------|-------------|
+| `DescribeGlobalTable` | Describe a global table (stub — returns not-found) |
+| `ListGlobalTables` | List global tables (stub — returns empty list) |
+
+### Export / Import
+
+| Operation | Description |
+|-----------|-------------|
+| `DescribeExport` | Describe an export (stub — returns not-found) |
+| `ExportTableToPointInTime` | Export to S3 (stub — returns not-supported error) |
+| `ListExports` | List exports (stub — returns empty list) |
+| `DescribeImport` | Describe an import (stub — returns not-found) |
+| `ImportTable` | Import from S3 (stub — returns not-supported error) |
+| `ListImports` | List imports (stub — returns empty list) |
+
+### Account Limits
+
+| Operation | Description |
+|-----------|-------------|
+| `DescribeLimits` | Return default account-level throughput limits (called by Terraform on every plan) |
+
+### Contributor Insights
+
+| Operation | Description |
+|-----------|-------------|
+| `DescribeContributorInsights` | Describe contributor insights for a table (stub — always returns DISABLED) |
+| `UpdateContributorInsights` | Enable/disable contributor insights (stub — acknowledges the change) |
+| `ListContributorInsights` | List contributor insights summaries (stub — returns empty list) |
 
 ### Tagging Operations
 
@@ -101,6 +137,14 @@ curl -s http://localhost:4566 \
 |-----------|-------------|
 | `TransactGetItems` | Atomic multi-table read of up to 25 items; all succeed or all fail |
 | `TransactWriteItems` | Atomic multi-table write of up to 25 items; mix of `Put`, `Update`, `Delete`, `ConditionCheck` |
+
+### PartiQL
+
+| Operation | Description |
+|-----------|-------------|
+| `ExecuteStatement` | Execute a single PartiQL statement. Supports basic `SELECT`, `INSERT INTO ... VALUE {...}`, `UPDATE ... SET`, `DELETE FROM` with simple `WHERE` equality conditions |
+| `BatchExecuteStatement` | Execute multiple PartiQL statements; returns per-statement results with partial failures |
+| `ExecuteTransaction` | Execute multiple PartiQL statements as an atomic transaction; any failure aborts all |
 
 ### Streams
 
@@ -222,5 +266,5 @@ aws --endpoint-url http://localhost:4566 dynamodb scan \
 - `DescribeContinuousBackups` returns a stub response indicating PITR is disabled — no actual backups are made.
 - `DescribeEndpoints` returns a single endpoint entry for SDK endpoint discovery compatibility.
 - Table tags (`TagResource`, `UntagResource`, `ListTagsOfResource`) are stored and returned correctly.
-- PartiQL (`ExecuteStatement`, `BatchExecuteStatement`) is not implemented.
+- PartiQL (`ExecuteStatement`, `BatchExecuteStatement`, `ExecuteTransaction`) supports basic `SELECT * FROM "Table" WHERE "key" = 'value'`, `INSERT INTO "Table" VALUE {...}`, `UPDATE "Table" SET attr = val WHERE "key" = 'val'`, and `DELETE FROM "Table" WHERE "key" = 'val'`. Full PartiQL expressions, nested paths, and `?` parameter binding (with `Parameters` list) are partially supported.
 - Streams store change records in memory; use `GetShardIterator` with `TRIM_HORIZON` to read from the beginning.

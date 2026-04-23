@@ -1,5 +1,6 @@
 pub mod batch;
 pub mod item;
+pub mod partiql;
 pub mod query;
 pub mod streams;
 pub mod table;

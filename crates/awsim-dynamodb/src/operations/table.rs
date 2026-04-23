@@ -713,3 +713,270 @@ pub fn list_tags_of_resource(
 
     Ok(json!({ "Tags": tags }))
 }
+
+// ─── DescribeLimits ───────────────────────────────────────────────────────────
+
+/// DescribeLimits — Return default account-level DynamoDB limits.
+/// Terraform calls this on every plan to check provisioned-throughput limits.
+pub fn describe_limits(
+    _state: &DynamoState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({
+        "AccountMaxReadCapacityUnits": 80000,
+        "AccountMaxWriteCapacityUnits": 80000,
+        "TableMaxReadCapacityUnits": 40000,
+        "TableMaxWriteCapacityUnits": 40000
+    }))
+}
+
+// ─── Backup stubs ─────────────────────────────────────────────────────────────
+
+/// CreateBackup — Stub that returns a minimal backup description.
+pub fn create_backup(
+    state: &DynamoState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let table_name = require_str(input, "TableName")?;
+    let backup_name = require_str(input, "BackupName")?;
+
+    if !state.tables.contains_key(table_name) {
+        return Err(AwsError::not_found(
+            "TableNotFoundException",
+            format!("Table '{table_name}' not found"),
+        ));
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+
+    let backup_arn = format!(
+        "arn:aws:dynamodb:{}:{}:table/{}/backup/{:016.0}",
+        ctx.region, ctx.account_id, table_name, now
+    );
+
+    Ok(json!({
+        "BackupDetails": {
+            "BackupArn": backup_arn,
+            "BackupName": backup_name,
+            "BackupStatus": "AVAILABLE",
+            "BackupType": "USER",
+            "BackupCreationDateTime": now
+        }
+    }))
+}
+
+/// DeleteBackup — Stub: always succeeds (returns minimal backup details).
+pub fn delete_backup(
+    _state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let backup_arn = require_str(input, "BackupArn")?;
+
+    Ok(json!({
+        "BackupDescription": {
+            "BackupDetails": {
+                "BackupArn": backup_arn,
+                "BackupName": "deleted-backup",
+                "BackupStatus": "DELETED",
+                "BackupType": "USER",
+                "BackupCreationDateTime": 0.0
+            }
+        }
+    }))
+}
+
+/// DescribeBackup — Stub: returns not-found for any backup ARN.
+pub fn describe_backup(
+    _state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let backup_arn = require_str(input, "BackupArn")?;
+    Err(AwsError::not_found(
+        "BackupNotFoundException",
+        format!("Backup not found: {backup_arn}"),
+    ))
+}
+
+/// ListBackups — Return an empty list. CDK calls this during bootstrapping.
+pub fn list_backups(
+    _state: &DynamoState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "BackupSummaries": [] }))
+}
+
+// ─── Global Table stubs ───────────────────────────────────────────────────────
+
+/// DescribeGlobalTable — Always returns not-found.
+/// Terraform checks for global table existence before creating.
+pub fn describe_global_table(
+    _state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = require_str(input, "GlobalTableName")?;
+    Err(AwsError::not_found(
+        "GlobalTableNotFoundException",
+        format!("Global table '{name}' not found"),
+    ))
+}
+
+/// ListGlobalTables — Return an empty list.
+pub fn list_global_tables(
+    _state: &DynamoState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "GlobalTables": [], "LastEvaluatedGlobalTableName": null }))
+}
+
+// ─── Export stubs ─────────────────────────────────────────────────────────────
+
+/// DescribeExport — Always returns not-found.
+pub fn describe_export(
+    _state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let export_arn = require_str(input, "ExportArn")?;
+    Err(AwsError::not_found(
+        "ExportNotFoundException",
+        format!("Export not found: {export_arn}"),
+    ))
+}
+
+/// ExportTableToPointInTime — Stub: returns not-found (no export support).
+pub fn export_table_to_point_in_time(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let table_arn = require_str(input, "TableArn")?;
+    // Verify the table exists by ARN.
+    let exists = state.tables.iter().any(|e| e.value().arn == table_arn);
+    if !exists {
+        return Err(AwsError::not_found(
+            "TableNotFoundException",
+            format!("Table not found: {table_arn}"),
+        ));
+    }
+    Err(AwsError::bad_request(
+        "ExportConflictException",
+        "Export to point-in-time is not supported in this emulator",
+    ))
+}
+
+/// ListExports — Return an empty list.
+pub fn list_exports(
+    _state: &DynamoState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "ExportSummaries": [] }))
+}
+
+// ─── Import stubs ─────────────────────────────────────────────────────────────
+
+/// DescribeImport — Always returns not-found.
+pub fn describe_import(
+    _state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let import_arn = require_str(input, "ImportArn")?;
+    Err(AwsError::not_found(
+        "ImportNotFoundException",
+        format!("Import not found: {import_arn}"),
+    ))
+}
+
+/// ImportTable — Stub: returns not-supported error.
+pub fn import_table(
+    _state: &DynamoState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Err(AwsError::bad_request(
+        "ImportConflictException",
+        "ImportTable is not supported in this emulator",
+    ))
+}
+
+/// ListImports — Return an empty list.
+pub fn list_imports(
+    _state: &DynamoState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "ImportSummaryList": [] }))
+}
+
+// ─── Contributor Insights stubs ───────────────────────────────────────────────
+
+/// DescribeContributorInsights — Return DISABLED status for any table.
+pub fn describe_contributor_insights(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let table_name = require_str(input, "TableName")?;
+
+    if !state.tables.contains_key(table_name) {
+        return Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Table '{table_name}' not found"),
+        ));
+    }
+
+    Ok(json!({
+        "TableName": table_name,
+        "ContributorInsightsStatus": "DISABLED",
+        "ContributorInsightsRuleList": [],
+        "FailureException": null
+    }))
+}
+
+/// UpdateContributorInsights — Stub: acknowledge and return DISABLED.
+pub fn update_contributor_insights(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let table_name = require_str(input, "TableName")?;
+
+    if !state.tables.contains_key(table_name) {
+        return Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Table '{table_name}' not found"),
+        ));
+    }
+
+    let status = input
+        .get("ContributorInsightsAction")
+        .and_then(|v| v.as_str())
+        .unwrap_or("DISABLE");
+
+    let new_status = if status == "ENABLE" { "ENABLING" } else { "DISABLING" };
+
+    Ok(json!({
+        "TableName": table_name,
+        "ContributorInsightsStatus": new_status
+    }))
+}
+
+/// ListContributorInsights — Return an empty list.
+pub fn list_contributor_insights(
+    _state: &DynamoState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "ContributorInsightsSummaries": [] }))
+}

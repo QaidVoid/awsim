@@ -106,6 +106,51 @@ impl ServiceHandler for DynamoDbService {
             "GetRecords" => operations::streams::get_records(&state, &input, ctx),
             "ListStreams" => operations::streams::list_streams(&state, &input, ctx),
 
+            // Limits
+            "DescribeLimits" => operations::table::describe_limits(&state, &input, ctx),
+
+            // Backup
+            "CreateBackup" => operations::table::create_backup(&state, &input, ctx),
+            "DeleteBackup" => operations::table::delete_backup(&state, &input, ctx),
+            "DescribeBackup" => operations::table::describe_backup(&state, &input, ctx),
+            "ListBackups" => operations::table::list_backups(&state, &input, ctx),
+
+            // Global Tables
+            "DescribeGlobalTable" => operations::table::describe_global_table(&state, &input, ctx),
+            "ListGlobalTables" => operations::table::list_global_tables(&state, &input, ctx),
+
+            // Exports
+            "DescribeExport" => operations::table::describe_export(&state, &input, ctx),
+            "ExportTableToPointInTime" => {
+                operations::table::export_table_to_point_in_time(&state, &input, ctx)
+            }
+            "ListExports" => operations::table::list_exports(&state, &input, ctx),
+
+            // Imports
+            "DescribeImport" => operations::table::describe_import(&state, &input, ctx),
+            "ImportTable" => operations::table::import_table(&state, &input, ctx),
+            "ListImports" => operations::table::list_imports(&state, &input, ctx),
+
+            // Contributor Insights
+            "DescribeContributorInsights" => {
+                operations::table::describe_contributor_insights(&state, &input, ctx)
+            }
+            "UpdateContributorInsights" => {
+                operations::table::update_contributor_insights(&state, &input, ctx)
+            }
+            "ListContributorInsights" => {
+                operations::table::list_contributor_insights(&state, &input, ctx)
+            }
+
+            // PartiQL
+            "ExecuteStatement" => operations::partiql::execute_statement(&state, &input, ctx),
+            "BatchExecuteStatement" => {
+                operations::partiql::batch_execute_statement(&state, &input, ctx)
+            }
+            "ExecuteTransaction" => {
+                operations::partiql::execute_transaction(&state, &input, ctx)
+            }
+
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
