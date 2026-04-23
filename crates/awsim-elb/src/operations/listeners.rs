@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use crate::{
     error::resource_not_found,
     ids::{arn_suffix, listener_arn},
-    state::{ElbState, Listener, ListenerAction},
+    state::{Certificate, ElbState, Listener, ListenerAction},
 };
 
 use super::{extract_string_list, opt_str, require_str};
@@ -128,6 +128,171 @@ pub fn describe_listeners(state: &ElbState, input: &Value) -> Result<Value, AwsE
             "NextMarker": null
         }
     }))
+}
+
+pub fn modify_listener(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
+    let arn = require_str(input, "ListenerArn")?;
+
+    let mut listener = state
+        .listeners
+        .get_mut(arn)
+        .ok_or_else(|| resource_not_found("listener", arn))?;
+
+    if let Some(port_val) = input.get("Port") {
+        if let Some(port) = match port_val {
+            Value::Number(n) => n.as_u64().map(|n| n as u16),
+            Value::String(s) => s.parse().ok(),
+            _ => None,
+        } {
+            listener.port = port;
+        }
+    }
+
+    if let Some(proto) = input.get("Protocol").and_then(|v| v.as_str()) {
+        listener.protocol = proto.to_string();
+    }
+
+    let new_actions = parse_actions(input, "DefaultActions");
+    if !new_actions.is_empty() {
+        listener.default_actions = new_actions;
+    }
+
+    let result = listener_to_value(&listener);
+
+    Ok(json!({
+        "ModifyListenerResult": {
+            "Listeners": {
+                "member": [result]
+            }
+        }
+    }))
+}
+
+pub fn describe_listener_certificates(
+    state: &ElbState,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let arn = require_str(input, "ListenerArn")?;
+
+    if !state.listeners.contains_key(arn) {
+        return Err(resource_not_found("listener", arn));
+    }
+
+    let certs: Vec<Value> = state
+        .listener_certificates
+        .get(arn)
+        .map(|list| {
+            list.iter()
+                .map(|c| {
+                    json!({
+                        "CertificateArn": c.certificate_arn,
+                        "IsDefault": c.is_default,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(json!({
+        "DescribeListenerCertificatesResult": {
+            "Certificates": { "member": certs },
+            "NextMarker": null
+        }
+    }))
+}
+
+fn parse_cert_list(input: &Value) -> Vec<Certificate> {
+    let mut result = Vec::new();
+    if let Some(certs) = input.get("Certificates") {
+        let items: Vec<&Value> = match certs {
+            Value::Array(arr) => arr.iter().collect(),
+            Value::Object(map) => {
+                if let Some(Value::Object(m)) = map.get("member") {
+                    m.values().collect()
+                } else {
+                    let mut pairs: Vec<_> = map.iter().collect();
+                    pairs.sort_by_key(|(k, _)| k.parse::<u64>().unwrap_or(u64::MAX));
+                    pairs.into_iter().map(|(_, v)| v).collect()
+                }
+            }
+            _ => vec![],
+        };
+        for item in items {
+            let arn = item
+                .get("CertificateArn")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let is_default = item
+                .get("IsDefault")
+                .and_then(|v| match v {
+                    Value::Bool(b) => Some(*b),
+                    Value::String(s) => Some(s == "true"),
+                    _ => None,
+                })
+                .unwrap_or(false);
+            result.push(Certificate {
+                certificate_arn: arn,
+                is_default,
+            });
+        }
+    }
+    result
+}
+
+pub fn add_listener_certificates(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
+    let arn = require_str(input, "ListenerArn")?;
+
+    if !state.listeners.contains_key(arn) {
+        return Err(resource_not_found("listener", arn));
+    }
+
+    let new_certs = parse_cert_list(input);
+
+    let mut existing = state
+        .listener_certificates
+        .entry(arn.to_string())
+        .or_default();
+
+    for cert in &new_certs {
+        if !existing
+            .iter()
+            .any(|c| c.certificate_arn == cert.certificate_arn)
+        {
+            existing.push(cert.clone());
+        }
+    }
+
+    let result: Vec<Value> = new_certs
+        .iter()
+        .map(|c| json!({ "CertificateArn": c.certificate_arn, "IsDefault": c.is_default }))
+        .collect();
+
+    Ok(json!({
+        "AddListenerCertificatesResult": {
+            "Certificates": { "member": result }
+        }
+    }))
+}
+
+pub fn remove_listener_certificates(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
+    let arn = require_str(input, "ListenerArn")?;
+
+    if !state.listeners.contains_key(arn) {
+        return Err(resource_not_found("listener", arn));
+    }
+
+    let remove_certs = parse_cert_list(input);
+    let remove_arns: Vec<String> = remove_certs
+        .into_iter()
+        .map(|c| c.certificate_arn)
+        .collect();
+
+    if let Some(mut existing) = state.listener_certificates.get_mut(arn) {
+        existing.retain(|c| !remove_arns.contains(&c.certificate_arn));
+    }
+
+    Ok(json!({ "RemoveListenerCertificatesResult": {} }))
 }
 
 pub fn parse_actions(input: &Value, key: &str) -> Vec<ListenerAction> {

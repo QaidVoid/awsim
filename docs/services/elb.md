@@ -57,8 +57,21 @@ aws --endpoint-url http://localhost:4566 \
 - `DescribeLoadBalancers` — list load balancers with optional ARN filter
   - Input: optional `LoadBalancerArns.member.N`, `Names.member.N`, `Marker`, `PageSize`
 
-- `ModifyLoadBalancerAttributes` — update attributes (deletion protection, idle timeout, access logs, etc.)
+- `DescribeLoadBalancerAttributes` — return current attributes for a load balancer
+  - Input: `LoadBalancerArn`
+  - Returns: `Attributes.member` list of `{Key, Value}` pairs; defaults include `access_logs.s3.enabled`, `deletion_protection.enabled`, `idle_timeout.timeout_seconds`
+
+- `ModifyLoadBalancerAttributes` — update and store attributes (deletion protection, idle timeout, access logs, etc.)
   - Input: `LoadBalancerArn`, `Attributes.member.N` (list of `{Key, Value}`)
+  - Returns: the updated attribute list
+
+- `SetSecurityGroups` — replace the security groups on a load balancer
+  - Input: `LoadBalancerArn`, `SecurityGroups.member.N`
+  - Returns: `SecurityGroupIds` list
+
+- `SetSubnets` — replace the subnets on a load balancer
+  - Input: `LoadBalancerArn`, `Subnets.member.N`
+  - Returns: `AvailabilityZones` list
 
 ### Target Groups
 - `CreateTargetGroup` — create a target group for load balancer routing
@@ -67,6 +80,13 @@ aws --endpoint-url http://localhost:4566 \
 
 - `DeleteTargetGroup` — delete a target group
 - `DescribeTargetGroups` — list target groups with optional filters
+
+- `DescribeTargetGroupAttributes` — return current attributes for a target group
+  - Input: `TargetGroupArn`
+  - Returns: `Attributes.member` list; defaults include `deregistration_delay.timeout_seconds`, `stickiness.enabled`, `stickiness.type`, `load_balancing.algorithm.type`
+
+- `ModifyTargetGroupAttributes` — update and store target group attributes
+  - Input: `TargetGroupArn`, `Attributes.member.N` (list of `{Key, Value}`)
 
 - `RegisterTargets` — register EC2 instances or IP addresses as targets
   - Input: `TargetGroupArn`, `Targets.member.N` (list of `{Id, Port}` where `Id` is an instance ID or IP)
@@ -86,6 +106,20 @@ aws --endpoint-url http://localhost:4566 \
 - `DeleteListener` — delete a listener
 - `DescribeListeners` — list listeners for a load balancer
 
+- `ModifyListener` — update listener configuration (port, protocol, default actions)
+  - Input: `ListenerArn`, optional `Port`, `Protocol`, `DefaultActions.member.N`
+  - Returns: updated `Listeners.member` list
+
+- `DescribeListenerCertificates` — list certificates attached to an HTTPS/TLS listener
+  - Input: `ListenerArn`
+  - Returns: `Certificates.member` list with `CertificateArn`, `IsDefault`
+
+- `AddListenerCertificates` — attach additional certificates to a listener
+  - Input: `ListenerArn`, `Certificates.member.N` (list of `{CertificateArn}`)
+
+- `RemoveListenerCertificates` — detach certificates from a listener
+  - Input: `ListenerArn`, `Certificates.member.N`
+
 ### Rules
 - `CreateRule` — create a routing rule with conditions and actions
   - Input: `ListenerArn`, `Conditions.member.N` (path patterns, host headers, etc.), `Actions.member.N`, `Priority` (integer)
@@ -93,6 +127,10 @@ aws --endpoint-url http://localhost:4566 \
 
 - `DeleteRule` — delete a routing rule
 - `DescribeRules` — list rules for a listener
+
+- `ModifyRule` — update rule conditions and actions
+  - Input: `RuleArn`, optional `Conditions.member.N`, `Actions.member.N`
+  - Returns: updated `Rules.member` list
 
 ### Tags
 - `AddTags` — add tags to a load balancer, target group, or listener

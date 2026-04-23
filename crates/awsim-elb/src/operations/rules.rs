@@ -101,6 +101,34 @@ pub fn delete_rule(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
     Ok(json!({ "DeleteRuleResult": {} }))
 }
 
+pub fn modify_rule(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
+    let arn = require_str(input, "RuleArn")?;
+
+    let mut rule = state
+        .rules
+        .get_mut(arn)
+        .ok_or_else(|| resource_not_found("rule", arn))?;
+
+    if let Some(conditions) = input.get("Conditions").and_then(|v| v.as_array()) {
+        rule.conditions = conditions.to_vec();
+    }
+
+    let new_actions = parse_actions(input, "Actions");
+    if !new_actions.is_empty() {
+        rule.actions = new_actions;
+    }
+
+    let result = rule_to_value(&rule);
+
+    Ok(json!({
+        "ModifyRuleResult": {
+            "Rules": {
+                "member": [result]
+            }
+        }
+    }))
+}
+
 pub fn describe_rules(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
     let listener_arn_filter = opt_str(input, "ListenerArn").map(|s| s.to_string());
     let rule_arns = extract_string_list(input, "RuleArns");

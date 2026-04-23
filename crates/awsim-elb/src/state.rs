@@ -8,6 +8,26 @@ pub struct ElbState {
     pub target_groups: DashMap<String, TargetGroup>,
     pub listeners: DashMap<String, Listener>,
     pub rules: DashMap<String, Rule>,
+    /// LB ARN → stored attributes (key-value pairs)
+    pub lb_attributes: DashMap<String, Vec<AttributeKeyValue>>,
+    /// Target group ARN → stored attributes
+    pub tg_attributes: DashMap<String, Vec<AttributeKeyValue>>,
+    /// Listener ARN → certificates
+    pub listener_certificates: DashMap<String, Vec<Certificate>>,
+}
+
+/// A generic key-value attribute pair used for LB and TG attributes.
+#[derive(Debug, Clone)]
+pub struct AttributeKeyValue {
+    pub key: String,
+    pub value: String,
+}
+
+/// A listener certificate.
+#[derive(Debug, Clone)]
+pub struct Certificate {
+    pub certificate_arn: String,
+    pub is_default: bool,
 }
 
 #[derive(Debug, Clone)]

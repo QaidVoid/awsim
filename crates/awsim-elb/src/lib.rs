@@ -69,8 +69,17 @@ impl ServiceHandler for ElbService {
             "DescribeLoadBalancers" => {
                 operations::load_balancers::describe_load_balancers(&state, &input)
             }
+            "DescribeLoadBalancerAttributes" => {
+                operations::load_balancers::describe_load_balancer_attributes(&state, &input)
+            }
             "ModifyLoadBalancerAttributes" => {
                 operations::load_balancers::modify_load_balancer_attributes(&state, &input)
+            }
+            "SetSecurityGroups" => {
+                operations::load_balancers::set_security_groups(&state, &input)
+            }
+            "SetSubnets" => {
+                operations::load_balancers::set_subnets(&state, &input)
             }
 
             // Target Groups
@@ -90,6 +99,12 @@ impl ServiceHandler for ElbService {
             "DescribeTargetHealth" => {
                 operations::target_groups::describe_target_health(&state, &input)
             }
+            "DescribeTargetGroupAttributes" => {
+                operations::target_groups::describe_target_group_attributes(&state, &input)
+            }
+            "ModifyTargetGroupAttributes" => {
+                operations::target_groups::modify_target_group_attributes(&state, &input)
+            }
 
             // Listeners
             "CreateListener" => {
@@ -97,11 +112,22 @@ impl ServiceHandler for ElbService {
             }
             "DeleteListener" => operations::listeners::delete_listener(&state, &input),
             "DescribeListeners" => operations::listeners::describe_listeners(&state, &input),
+            "ModifyListener" => operations::listeners::modify_listener(&state, &input),
+            "DescribeListenerCertificates" => {
+                operations::listeners::describe_listener_certificates(&state, &input)
+            }
+            "AddListenerCertificates" => {
+                operations::listeners::add_listener_certificates(&state, &input)
+            }
+            "RemoveListenerCertificates" => {
+                operations::listeners::remove_listener_certificates(&state, &input)
+            }
 
             // Rules
             "CreateRule" => operations::rules::create_rule(&state, &input, ctx),
             "DeleteRule" => operations::rules::delete_rule(&state, &input),
             "DescribeRules" => operations::rules::describe_rules(&state, &input),
+            "ModifyRule" => operations::rules::modify_rule(&state, &input),
 
             // Tags
             "AddTags" => operations::tags::add_tags(&state, &input),
