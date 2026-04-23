@@ -107,6 +107,24 @@ impl ServiceHandler for SchedulerService {
                 operation: "DeleteScheduleGroup",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/tags/{ResourceArn}",
+                operation: "TagResource",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/tags/{ResourceArn}",
+                operation: "UntagResource",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/tags/{ResourceArn}",
+                operation: "ListTagsForResource",
+                required_query_param: None,
+            },
         ]
     }
 
@@ -139,6 +157,11 @@ impl ServiceHandler for SchedulerService {
                 operations::groups::delete_schedule_group(&state, &input, ctx)
             }
 
+            // Tagging
+            "TagResource" => operations::tags::tag_resource(&state, &input, ctx),
+            "UntagResource" => operations::tags::untag_resource(&state, &input, ctx),
+            "ListTagsForResource" => operations::tags::list_tags_for_resource(&state, &input, ctx),
+
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
@@ -166,5 +189,101 @@ impl ServiceHandler for SchedulerService {
         state.restore_from_snapshot(snapshot);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use awsim_core::{RequestContext, ServiceHandler};
+    use serde_json::json;
+
+    use super::SchedulerService;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("scheduler", "us-east-1")
+    }
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+        fn noop_clone(_: *const ()) -> RawWaker {
+            noop_raw_waker()
+        }
+        fn noop(_: *const ()) {}
+        fn noop_raw_waker() -> RawWaker {
+            static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+        let waker = unsafe { Waker::from_raw(noop_raw_waker()) };
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = std::pin::pin!(f);
+        loop {
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(v) => return v,
+                Poll::Pending => {}
+            }
+        }
+    }
+
+    #[test]
+    fn test_tag_resource_and_list() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+
+        // Create a schedule first so we have an ARN to tag
+        let created = block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "my-schedule",
+                "ScheduleExpression": "rate(1 hour)",
+                "Target": { "Arn": "arn:aws:lambda:us-east-1:123:function:fn", "RoleArn": "arn:aws:iam::123:role/r" },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let schedule_arn = created["ScheduleArn"].as_str().unwrap().to_string();
+
+        // Tag it
+        block_on(svc.handle(
+            "TagResource",
+            json!({
+                "ResourceArn": schedule_arn,
+                "Tags": { "env": "prod", "team": "infra" }
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let tags = block_on(svc.handle(
+            "ListTagsForResource",
+            json!({ "ResourceArn": schedule_arn }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(tags["Tags"].as_object().unwrap().len(), 2);
+
+        // Untag one
+        block_on(svc.handle(
+            "UntagResource",
+            json!({ "ResourceArn": schedule_arn, "TagKeys": ["env"] }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let tags2 = block_on(svc.handle(
+            "ListTagsForResource",
+            json!({ "ResourceArn": schedule_arn }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(tags2["Tags"].as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_unknown_operation() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle("Bogus", json!({}), &ctx)).unwrap_err();
+        assert_eq!(err.code, "UnknownOperationException");
     }
 }

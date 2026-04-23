@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -39,6 +41,8 @@ pub struct SchedulerState {
     pub schedules: DashMap<String, Schedule>,
     /// name → ScheduleGroup
     pub schedule_groups: DashMap<String, ScheduleGroup>,
+    /// ARN → tags (key → value)
+    pub tags: DashMap<String, HashMap<String, String>>,
 }
 
 impl SchedulerState {
