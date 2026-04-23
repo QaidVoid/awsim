@@ -78,7 +78,11 @@ curl -s http://localhost:4566 \
 
 - `GetParameterHistory` — retrieve version history for a parameter
   - Input: `Name`, optional `WithDecryption`, `MaxResults`, `NextToken`
-  - Returns: paginated `Parameters` list with all historical versions
+  - Returns: paginated `Parameters` list with all historical versions including `Labels`
+
+- `LabelParameterVersion` — attach human-readable labels to a specific parameter version
+  - Input: `Name`, `Labels` (list of strings), optional `ParameterVersion` (defaults to current)
+  - Returns: `InvalidLabels` (always empty), `ParameterVersion`
 
 ### Tags
 - `AddTagsToResource` — add tags to a parameter
@@ -89,6 +93,24 @@ curl -s http://localhost:4566 \
 
 - `ListTagsForResource` — list tags on a parameter
   - Input: `ResourceType`, `ResourceId`
+
+### Inventory (Systems Manager Agent stubs)
+- `PutInventory` — accept inventory data from SSM agents; always returns success
+- `GetInventory` — returns `Entities: []`
+- `GetInventorySchema` — returns `Schemas: []`
+
+### Run Command
+- `SendCommand` — create a command record with a generated `CommandId`
+  - Input: `DocumentName` (required), optional `Targets`, `Parameters`, `TimeoutSeconds`
+  - Returns: `Command` object with `CommandId`, `Status: "Pending"`, `CreatedDate`
+
+- `ListCommands` — list stored commands
+  - Input: optional `CommandId` filter, `MaxResults`
+  - Returns: `Commands` list
+
+- `GetCommandInvocation` — retrieve the result of a command for a specific instance
+  - Input: `CommandId`, optional `InstanceId`
+  - Returns: stub with `Status: "Success"`, empty `StandardOutputContent`
 
 ## Curl Examples
 
@@ -204,4 +226,7 @@ await ssm.send(new DeleteParameterCommand({
 - Parameter versioning is tracked: each `PutParameter` with `Overwrite: true` increments the version number and creates a new history entry accessible via `GetParameterHistory`.
 - Path-based retrieval supports recursive listing under any `/prefix` using `GetParametersByPath` with `Recursive: true`.
 - `Overwrite: true` is required to update an existing parameter; omitting it returns a `ParameterAlreadyExists` error.
+- Labels attached via `LabelParameterVersion` are stored on each version and returned in `GetParameterHistory`.
+- `SendCommand` creates an in-memory command record but does not execute anything. `GetCommandInvocation` always returns `Status: "Success"`.
+- Inventory operations (`PutInventory`, `GetInventory`, `GetInventorySchema`) are stubs that always return empty results.
 - State is in-memory only and lost on restart.

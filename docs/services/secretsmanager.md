@@ -77,6 +77,32 @@ curl -s http://localhost:4566 \
 - `UntagResource` — remove tags from a secret
   - Input: `SecretId`, `TagKeys` (list of keys)
 
+- `RotateSecret` — configure rotation and simulate a version promotion
+  - Input: `SecretId`, optional `RotationLambdaARN`, `RotationRules` (`{AutomaticallyAfterDays: N}`)
+  - Stores rotation config, creates a new AWSCURRENT version (no real Lambda invocation)
+  - Returns: `ARN`, `Name`, `VersionId`
+
+- `CancelRotateSecret` — disable rotation for a secret
+  - Input: `SecretId`
+  - Returns: `ARN`, `Name`, `VersionId`
+
+- `ValidateResourcePolicy` — validate a resource-based policy (stub, always succeeds)
+  - Input: `ResourcePolicy` (JSON string)
+  - Returns: `ValidationErrors: []`
+
+- `GetRandomPassword` — generate a random password
+  - Input: optional `PasswordLength` (1–4096, default 32), `ExcludeUppercase`, `ExcludeLowercase`, `ExcludeNumbers`, `ExcludePunctuation` (all booleans)
+  - Returns: `RandomPassword`
+
+- `ReplicateSecretToRegions` — stub; returns success with empty replication status
+  - Input: `SecretId`, `AddReplicaRegions`
+
+- `RemoveRegionsFromReplication` — stub; returns success
+  - Input: `SecretId`, `RemoveReplicaRegions`
+
+- `StopReplicationToReplica` — stub; returns `ARN`
+  - Input: `SecretId`
+
 ## Curl Examples
 
 ```bash
@@ -187,7 +213,10 @@ await sm.send(new DeleteSecretCommand({
 - Version stages `AWSCURRENT` and `AWSPREVIOUS` are tracked automatically when `PutSecretValue` is called.
 - Deleted secrets with a recovery window remain accessible for restoration via their ARN but return `InvalidRequestException` on `GetSecretValue`.
 - `ForceDeleteWithoutRecovery: true` immediately and permanently removes the secret.
-- Automatic rotation (`RotateSecret`) is not implemented — rotation is a stub only.
+- `RotateSecret` stores rotation configuration and creates a new AWSCURRENT version but does not actually invoke a Lambda function.
+- `ValidateResourcePolicy` always succeeds (no actual IAM policy evaluation).
+- `GetRandomPassword` generates a random password from the allowed character classes. All four `Exclude*` flags reduce the character pool.
+- Replication operations (`ReplicateSecretToRegions`, `RemoveRegionsFromReplication`, `StopReplicationToReplica`) are stubs that always return success.
 - `SecretBinary` values are stored as base64-encoded strings and returned as base64 in `GetSecretValue`.
 - Secret ARNs include a 6-character random suffix: `arn:aws:secretsmanager:us-east-1:000000000000:secret:{name}-AbCdEf`.
 - State is in-memory only and lost on restart (no persistence even though real Secrets Manager persists).

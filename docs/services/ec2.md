@@ -138,6 +138,41 @@ aws --endpoint-url http://localhost:4566 ec2 authorize-security-group-ingress \
 - `DescribeAvailabilityZones` — list availability zones in the current region
   - Returns zones like `us-east-1a`, `us-east-1b`, `us-east-1c`
 
+### Tags (EC2 Tag API)
+- `CreateTags` — add or overwrite tags on any EC2 resource
+  - Input: `ResourceId.N` (list of resource IDs), `Tag.N.Key` / `Tag.N.Value`
+  - Applies to VPCs, subnets, security groups, internet gateways, route tables, instances
+
+- `DeleteTags` — remove tags from resources
+  - Input: `ResourceId.N`, `Tag.N.Key` (value is optional — only key is matched)
+
+- `DescribeTags` — list all tags across all tagged resources
+  - Returns: `tagSet` list with `key`, `value`, `resourceId`, `resourceType`
+
+### Instances
+- `RunInstances` — create stub EC2 instance(s) in running state
+  - Input: `ImageId` (optional, default `ami-00000000`), `InstanceType` (optional, default `t2.micro`), `MinCount`, `MaxCount`, optional `SubnetId`
+  - Returns: `instancesSet` with instance details (`instanceId`, `instanceType`, `imageId`, `instanceState`, `launchTime`)
+  - No actual compute resources are launched
+
+- `DescribeInstances` — list stored instances
+  - Input: optional `InstanceId.N` filter
+  - Returns: `reservationSet` with instances
+
+- `TerminateInstances` — remove stored instances
+  - Input: `InstanceId.N` (list)
+  - Returns: list of terminated instance state transitions
+
+- `DescribeInstanceStatus` — returns empty instance status set
+
+- `DescribeImages` — stub AMI listing, returns empty set
+
+### Network / VPC Stubs
+- `DescribeNetworkInterfaces` — returns empty `networkInterfaceSet`
+- `DescribeNatGateways` — returns empty `natGatewaySet`
+- `DescribeVpcEndpoints` — returns empty `vpcEndpointSet`
+- `DescribeAddresses` — list Elastic IPs (returns stored addresses, empty by default)
+
 ## Curl Examples
 
 ```bash
@@ -219,8 +254,11 @@ console.log('VPC:', vpcId, '| Subnet:', Subnet?.SubnetId, '| SG:', GroupId);
 
 ## Behavior Notes
 
-- AWSim implements EC2 networking primitives only. Compute resources (instances, AMIs, EBS volumes, Auto Scaling Groups) are not supported.
-- Resource IDs are generated with standard prefixes: `vpc-`, `subnet-`, `sg-`, `igw-`, `rtb-`, `keypair-`.
+- `RunInstances` creates in-memory instance records; no compute is allocated and the instance never actually runs.
+- Instance state is always `running` after `RunInstances`; `TerminateInstances` permanently removes the record.
+- Tags created with `CreateTags` are reflected on the underlying resource object (e.g., a tagged VPC shows tags in `DescribeVpcs`).
+- `DescribeNatGateways`, `DescribeVpcEndpoints`, `DescribeNetworkInterfaces`, and `DescribeImages` always return empty result sets.
+- Resource IDs are generated with standard prefixes: `vpc-`, `subnet-`, `sg-`, `igw-`, `rtb-`, `keypair-`, `i-`.
 - `DescribeRegions` returns a hardcoded list of AWS regions (same as real AWS, not dynamic).
 - Security group rules are stored but not enforced — no actual network traffic filtering occurs.
 - State is in-memory only and lost on restart.

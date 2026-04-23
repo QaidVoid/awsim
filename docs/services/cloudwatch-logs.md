@@ -58,7 +58,57 @@ curl -s http://localhost:4566 \
 - `DeleteRetentionPolicy` — remove the retention policy from a log group
   - Input: `logGroupName`
 
-- `TagLogGroup` / `UntagLogGroup` / `ListTagsLogGroup` — manage tags on log groups
+- `TagLogGroup` / `UntagLogGroup` / `ListTagsLogGroup` — manage tags (legacy API, uses `logGroupName`)
+
+- `TagResource` / `UntagResource` / `ListTagsForResource` — manage tags (newer resource-ARN API, uses `resourceArn`)
+  - Input for `TagResource`: `resourceArn` (log group ARN or name), `tags` (object)
+  - Input for `UntagResource`: `resourceArn`, `tagKeys` (list)
+  - Input for `ListTagsForResource`: `resourceArn`
+
+### Subscription Filters
+- `PutSubscriptionFilter` — stream matching log events to a destination (Lambda, Kinesis, Firehose)
+  - Input: `logGroupName`, `filterName`, `filterPattern`, `destinationArn`
+
+- `DescribeSubscriptionFilters` — list subscription filters for a log group
+  - Input: `logGroupName`, optional `filterNamePrefix`, `limit`
+  - Returns: `subscriptionFilters` list
+
+- `DeleteSubscriptionFilter` — delete a subscription filter
+  - Input: `logGroupName`, `filterName`
+
+### Metric Filters
+- `PutMetricFilter` — extract metric data from log events
+  - Input: `logGroupName`, `filterName`, `filterPattern`, `metricTransformations` (list)
+
+- `DescribeMetricFilters` — list metric filters
+  - Input: optional `logGroupName`, `filterNamePrefix`, `limit`
+  - Returns: `metricFilters` list
+
+- `DeleteMetricFilter` — delete a metric filter
+  - Input: `logGroupName`, `filterName`
+
+### Query Definitions (CloudWatch Insights)
+- `PutQueryDefinition` — save a CloudWatch Insights query
+  - Input: `name`, `queryString`, optional `queryDefinitionId` (for updates), `logGroupNames`
+  - Returns: `queryDefinitionId`
+
+- `DescribeQueryDefinitions` — list saved queries
+  - Input: optional `queryDefinitionNamePrefix`, `maxResults`
+  - Returns: `queryDefinitions` list
+
+- `DeleteQueryDefinition` — delete a saved query
+  - Input: `queryDefinitionId`
+
+### Insights Queries
+- `StartQuery` — start a CloudWatch Insights query (stub)
+  - Returns: `queryId`
+
+- `GetQueryResults` — get results for a running or completed query
+  - Input: `queryId`
+  - Returns: `status: "Complete"`, `results: []` (stub — no actual query execution)
+
+- `StopQuery` — cancel a running query
+  - Input: `queryId`
 
 ### Log Streams
 - `CreateLogStream` — create a log stream within a log group
@@ -157,6 +207,10 @@ console.log('Error events:', events?.map(e => e.message));
 - `PutLogEvents` accepts any `sequenceToken` (or none) on subsequent calls — sequence validation is not strictly enforced.
 - `FilterLogEvents` performs simple substring matching on the `filterPattern` — complex CloudWatch filter syntax (JSON matchers, metric filters, etc.) is not fully supported.
 - Retention policies are stored but not enforced: log events are not automatically deleted after the retention period.
+- Subscription filters are stored but no actual log event streaming occurs (no Lambda/Kinesis invocation).
+- Metric filters are stored but no metric data points are emitted to CloudWatch Metrics.
+- `StartQuery` / `GetQueryResults` are stubs: queries always complete immediately with empty results.
+- Both the legacy (`TagLogGroup`) and newer ARN-based (`TagResource`) tagging APIs operate on the same tag store.
 - Lambda functions in AWSim automatically write their stdout/stderr to `/aws/lambda/{function-name}` log groups.
 - Timestamps must be in milliseconds (not seconds) since Unix epoch.
 - State is in-memory only and lost on restart.
