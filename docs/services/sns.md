@@ -75,6 +75,15 @@ curl -s http://localhost:4566 \
 | `UntagResource` | Remove tags from a topic |
 | `ListTagsForResource` | List topic tags |
 
+### SMS
+
+| Operation | Description |
+|-----------|-------------|
+| `CheckIfPhoneNumberIsOptedOut` | Check whether a phone number is opted out of receiving SMS messages. Input: `phoneNumber`. Returns: `isOptedOut` (boolean) |
+| `ListPhoneNumbersOptedOut` | List phone numbers that are opted out of SMS. Returns paginated `phoneNumbers` list |
+| `GetSMSAttributes` | Get account-level SMS attributes (default sender ID, monthly spend limit, etc.). Returns: `attributes` map |
+| `SetSMSAttributes` | Set account-level SMS attributes. Input: `attributes` map |
+
 ## Supported Subscription Protocols
 
 | Protocol | Description |
@@ -196,3 +205,5 @@ See [Cross-Service Integrations](/guide/integrations#sns-to-sqs-fan-out).
 - Subscription filter policies are stored but not enforced — all messages are delivered to all subscribers regardless of attributes.
 - Message attributes are passed through to SQS/Lambda but attribute-based filtering is not applied.
 - FIFO topics (`Name.fifo`) are accepted but message ordering and deduplication are not strictly enforced.
+- SMS opt-out state (`CheckIfPhoneNumberIsOptedOut`, `ListPhoneNumbersOptedOut`) is stored in memory and always returns no opted-out numbers by default.
+- SMS attributes (`GetSMSAttributes`, `SetSMSAttributes`) are accepted and stored but no actual SMS messages are delivered in AWSim.

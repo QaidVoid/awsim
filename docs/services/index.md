@@ -6,45 +6,45 @@ The service is selected automatically from the `X-Amz-Target` header (for JSON/Q
 
 ## Service Table
 
-| Service | Signing Name | Protocol | Persistent | Description |
-|---------|-------------|----------|-----------|-------------|
-| S3 | `s3` | REST-XML | Yes* | Object storage |
-| DynamoDB | `dynamodb` | JSON | Yes | Key-value / document store |
-| SQS | `sqs` | Query | Yes | Simple Queue Service |
-| SNS | `sns` | Query | Yes | Simple Notification Service |
-| IAM | `iam` | Query | Yes | Identity and Access Management |
-| STS | `sts` | Query | No | Security Token Service |
-| Lambda | `lambda` | REST-JSON | No | Serverless function execution |
-| API Gateway | `execute-api` | REST-JSON | No | REST API management and proxy |
-| EventBridge | `events` | JSON | No | Event routing |
-| CloudWatch Logs | `logs` | JSON | No | Log groups and streams |
-| KMS | `kms` | JSON | No | Key Management Service |
-| Secrets Manager | `secretsmanager` | JSON | No | Secret storage |
-| SSM | `ssm` | JSON | No | Parameter Store and Systems Manager |
-| Step Functions | `states` | JSON | No | State machine orchestration |
-| Kinesis | `kinesis` | JSON | No | Data streaming |
-| SES | `ses` | Query | No | Simple Email Service |
-| Cognito User Pools | `cognito-idp` | JSON | Yes | User authentication |
-| Cognito Identity Pools | `cognito-identity` | JSON | Yes | Federated identity |
-| ECR | `ecr` | JSON | No | Container registry |
-| ECS | `ecs` | JSON | No | Container service |
-| EC2 | `ec2` | Query | No | Virtual machines (partial) |
-| RDS | `rds` | Query | Yes | Relational database metadata |
-| AppSync | `appsync` | REST-JSON | No | GraphQL API |
-| Bedrock | `bedrock` | REST-JSON | No | Foundation model management |
-| Bedrock Runtime | `bedrock-runtime` | REST-JSON | No | Foundation model invocation |
-| CloudFormation | `cloudformation` | Query | No | Infrastructure as code |
-| Route 53 | `route53` | REST-XML | No | DNS management |
-| CloudWatch Metrics | `monitoring` | Query | No | Metrics and alarms |
-| Athena | `athena` | JSON | No | SQL query service |
-| Glue | `glue` | JSON | No | Data catalog |
-| ELB | `elasticloadbalancing` | Query | No | Load balancers |
-| CloudFront | `cloudfront` | REST-XML | No | CDN distributions |
-| ACM | `acm` | JSON | Yes | Certificate Manager |
-| WAF | `wafv2` | JSON | Yes | Web Application Firewall |
-| EventBridge Scheduler | `scheduler` | REST-JSON | Yes | Scheduled tasks |
-| Comprehend | `comprehend` | JSON | No | Natural language processing |
-| Kendra | `kendra` | JSON | No | Enterprise search |
+| Service | Signing Name | Protocol | Persistent | Operations | Description |
+|---------|-------------|----------|-----------|-----------|-------------|
+| S3 | `s3` | REST-XML | Yes* | 44 | Object storage |
+| DynamoDB | `dynamodb` | JSON | Yes | 26 | Key-value / document store |
+| SQS | `sqs` | Query | Yes | 17 | Simple Queue Service |
+| SNS | `sns` | Query | Yes | 21 | Simple Notification Service |
+| IAM | `iam` | Query | Yes | — | Identity and Access Management |
+| STS | `sts` | Query | No | — | Security Token Service |
+| Lambda | `lambda` | REST-JSON | No | — | Serverless function execution |
+| API Gateway | `execute-api` | REST-JSON | No | — | REST API management and proxy |
+| EventBridge | `events` | JSON | No | — | Event routing |
+| CloudWatch Logs | `logs` | JSON | No | — | Log groups and streams |
+| KMS | `kms` | JSON | No | 28 | Key Management Service |
+| Secrets Manager | `secretsmanager` | JSON | No | — | Secret storage |
+| SSM | `ssm` | JSON | No | — | Parameter Store and Systems Manager |
+| Step Functions | `states` | JSON | No | — | State machine orchestration |
+| Kinesis | `kinesis` | JSON | No | — | Data streaming |
+| SES | `ses` | Query | No | — | Simple Email Service |
+| Cognito User Pools | `cognito-idp` | JSON | Yes | — | User authentication |
+| Cognito Identity Pools | `cognito-identity` | JSON | Yes | — | Federated identity |
+| ECR | `ecr` | JSON | No | — | Container registry |
+| ECS | `ecs` | JSON | No | — | Container service |
+| EC2 | `ec2` | Query | No | — | Virtual machines (partial) |
+| RDS | `rds` | Query | Yes | — | Relational database metadata |
+| AppSync | `appsync` | REST-JSON | No | — | GraphQL API |
+| Bedrock | `bedrock` | REST-JSON | No | — | Foundation model management |
+| Bedrock Runtime | `bedrock-runtime` | REST-JSON | No | — | Foundation model invocation |
+| CloudFormation | `cloudformation` | Query | No | — | Infrastructure as code |
+| Route 53 | `route53` | REST-XML | No | — | DNS management |
+| CloudWatch Metrics | `monitoring` | Query | No | — | Metrics and alarms |
+| Athena | `athena` | JSON | No | — | SQL query service |
+| Glue | `glue` | JSON | No | — | Data catalog |
+| ELB | `elasticloadbalancing` | Query | No | — | Load balancers |
+| CloudFront | `cloudfront` | REST-XML | No | — | CDN distributions |
+| ACM | `acm` | JSON | Yes | — | Certificate Manager |
+| WAF | `wafv2` | JSON | Yes | — | Web Application Firewall |
+| EventBridge Scheduler | `scheduler` | REST-JSON | Yes | — | Scheduled tasks |
+| Comprehend | `comprehend` | JSON | No | — | Natural language processing |
+| Kendra | `kendra` | JSON | No | — | Enterprise search |
 
 *S3 persists bucket and object metadata but not object data bytes.
 

@@ -89,6 +89,51 @@ curl -s http://localhost:4566 \
 - `UpdateAlias` — point an existing alias to a different key (useful for key rotation)
   - Input: `AliasName`, `TargetKeyId`
 
+- `UpdateKeyDescription` — update the description of a KMS key
+  - Input: `KeyId`, `Description`
+
+### Key Rotation
+- `GetKeyRotationStatus` — check whether automatic key rotation is enabled for a key
+  - Input: `KeyId`
+  - Returns: `KeyRotationEnabled` (boolean)
+
+- `EnableKeyRotation` — enable automatic annual key rotation for a symmetric key
+  - Input: `KeyId`
+
+- `DisableKeyRotation` — disable automatic key rotation for a key
+  - Input: `KeyId`
+
+### Grants
+- `CreateGrant` — create a grant that allows a grantee to use a key
+  - Input: `KeyId`, `GranteePrincipal`, `Operations` (list of allowed operations)
+  - Returns: `GrantId`, `GrantToken`
+
+- `ListGrants` — list grants on a key
+  - Input: `KeyId`, optional `Limit`, `Marker`
+  - Returns: paginated `Grants` list
+
+- `ListRetirableGrants` — list grants where the given principal is the retiring principal
+  - Input: `RetiringPrincipal`, optional `Limit`, `Marker`
+  - Returns: paginated `Grants` list
+
+- `RetireGrant` — retire a grant using the grant token or grant ID
+  - Input: `GrantToken` or (`KeyId` + `GrantId`)
+
+- `RevokeGrant` — revoke a grant immediately
+  - Input: `KeyId`, `GrantId`
+
+### Key Policies
+- `GetKeyPolicy` — get the key policy document for a KMS key
+  - Input: `KeyId`, `PolicyName` (must be `"default"`)
+  - Returns: `Policy` (JSON string)
+
+- `PutKeyPolicy` — set the key policy for a KMS key
+  - Input: `KeyId`, `PolicyName` (must be `"default"`), `Policy` (JSON string)
+
+- `ListKeyPolicies` — list policy names for a key (always returns `["default"]`)
+  - Input: `KeyId`, optional `Limit`, `Marker`
+  - Returns: `PolicyNames`
+
 ### Cryptographic Operations
 - `Encrypt` — encrypt plaintext using a KMS key
   - Input: `KeyId`, `Plaintext` (base64-encoded bytes, max 4096 bytes)
@@ -109,6 +154,10 @@ curl -s http://localhost:4566 \
 - `ReEncrypt` — decrypt ciphertext and re-encrypt under a different key
   - Input: `CiphertextBlob`, `DestinationKeyId`, optional `SourceKeyId`
   - Returns: new `CiphertextBlob` encrypted under `DestinationKeyId`
+
+- `GenerateRandom` — generate cryptographically random bytes
+  - Input: `NumberOfBytes` (1–1024)
+  - Returns: `Plaintext` (base64-encoded random bytes)
 
 ## Curl Examples
 
@@ -204,4 +253,8 @@ console.log('Data key length:', dataKey!.length); // 32 bytes for AES_256
 - Keys are created in `Enabled` state immediately — no provisioning delay.
 - `ScheduleKeyDeletion` sets state to `PendingDeletion` but does **not** actually delete the key after the window in AWSim.
 - `GenerateDataKey` returns both a plaintext key (for immediate use) and an encrypted copy (to store) — this enables envelope encryption without exposing the master key.
+- `GenerateRandom` returns cryptographically random bytes and does not require a key ID.
+- Key rotation (`EnableKeyRotation`, `DisableKeyRotation`) state is stored per key but no actual rotation occurs in AWSim.
+- Grants (`CreateGrant`, `ListGrants`, etc.) are stored and returned correctly but are not enforced for cryptographic operations.
+- Key policies (`GetKeyPolicy`, `PutKeyPolicy`) are stored and returned but are not enforced.
 - Key material is in-memory only and lost on restart (no persistence).

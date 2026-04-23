@@ -60,10 +60,12 @@ curl -s http://localhost:4566 \
 | `DeleteMessage` | Delete a processed message. Input: `QueueUrl`, `ReceiptHandle` (from ReceiveMessage). Must be called after processing to prevent re-delivery |
 | `DeleteMessageBatch` | Batch delete messages. Input: `QueueUrl`, `Entries` (list of `{Id, ReceiptHandle}`). Returns: `Successful`, `Failed` |
 | `ChangeMessageVisibility` | Extend or reset the visibility timeout of an in-flight message. Input: `QueueUrl`, `ReceiptHandle`, `VisibilityTimeout` (0 = make immediately visible; max 43200) |
+| `ChangeMessageVisibilityBatch` | Change the visibility timeout of up to 10 in-flight messages in one call. Input: `QueueUrl`, `Entries` (list of `{Id, ReceiptHandle, VisibilityTimeout}`). Returns: `Successful`, `Failed` |
 | `PurgeQueue` | Delete all messages from a queue instantly. Input: `QueueUrl`. Useful for test cleanup |
 | `TagQueue` | Add tags to a queue. Input: `QueueUrl`, `Tags` map |
 | `UntagQueue` | Remove tags from a queue |
 | `ListQueueTags` | List queue tags. Input: `QueueUrl` |
+| `ListDeadLetterSourceQueues` | List queues that have a given queue configured as their dead-letter queue. Input: `QueueUrl`. Returns: `queueUrls` list |
 
 ## Queue URL Format
 

@@ -49,6 +49,28 @@ curl -s http://localhost:4566 \
 | `DescribeTable` | Get table metadata: key schema, attribute definitions, item count, table size, stream ARN |
 | `ListTables` | List all tables; supports `ExclusiveStartTableName` and `Limit` for pagination |
 | `UpdateTable` | Update billing mode (`PAY_PER_REQUEST` or `PROVISIONED`) or stream specification |
+| `DescribeEndpoints` | Return the regional DynamoDB endpoint. Used by SDK endpoint discovery; returns a single endpoint entry |
+
+### TTL Operations
+
+| Operation | Description |
+|-----------|-------------|
+| `DescribeTimeToLive` | Get the TTL configuration for a table. Returns `TimeToLiveDescription` with `TimeToLiveStatus` and `AttributeName` |
+| `UpdateTimeToLive` | Enable or disable TTL on a table. Input: `TableName`, `TimeToLiveSpecification` (`{Enabled, AttributeName}`) |
+
+### Backup Operations
+
+| Operation | Description |
+|-----------|-------------|
+| `DescribeContinuousBackups` | Get the point-in-time recovery (PITR) status for a table. Returns `ContinuousBackupsDescription` |
+
+### Tagging Operations
+
+| Operation | Description |
+|-----------|-------------|
+| `TagResource` | Add tags to a table (by ARN). Input: `ResourceArn`, `Tags` list |
+| `UntagResource` | Remove tags from a table. Input: `ResourceArn`, `TagKeys` list |
+| `ListTagsOfResource` | List all tags for a table. Input: `ResourceArn`. Returns paginated `Tags` list |
 
 ### Item Operations
 
@@ -196,6 +218,9 @@ aws --endpoint-url http://localhost:4566 dynamodb scan \
 - DynamoDB is persistent: tables and items survive AWSim restarts.
 - Global Secondary Indexes (GSI) and Local Secondary Indexes (LSI) are accepted in `CreateTable` but queries with `IndexName` are not supported — they fall back to a full table scan.
 - Conditional expressions (`ConditionExpression` on `PutItem`, `UpdateItem`, `DeleteItem`) are stored but not enforced — operations always succeed.
-- TTL (Time to Live) configuration is accepted but items are not automatically expired.
+- TTL (Time to Live) configuration (`UpdateTimeToLive`) is accepted and stored but items are not automatically expired.
+- `DescribeContinuousBackups` returns a stub response indicating PITR is disabled — no actual backups are made.
+- `DescribeEndpoints` returns a single endpoint entry for SDK endpoint discovery compatibility.
+- Table tags (`TagResource`, `UntagResource`, `ListTagsOfResource`) are stored and returned correctly.
 - PartiQL (`ExecuteStatement`, `BatchExecuteStatement`) is not implemented.
 - Streams store change records in memory; use `GetShardIterator` with `TRIM_HORIZON` to read from the beginning.
