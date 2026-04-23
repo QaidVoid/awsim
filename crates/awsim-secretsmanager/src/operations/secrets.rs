@@ -6,7 +6,7 @@ use tracing::info;
 
 use crate::error;
 use crate::state::{Secret, SecretVersion, SecretsState};
-use crate::util::{new_version_id, now_epoch_f64, random_suffix};
+use crate::util::{new_version_id, now_epoch_f64, random_suffix, random_password};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -54,7 +54,15 @@ fn secret_metadata(secret: &Secret) -> Value {
         "CreatedDate": secret.created_date,
         "LastChangedDate": secret.last_changed_date,
         "VersionIdsToStages": versions_to_stages,
+        "RotationEnabled": secret.rotation_enabled,
     });
+
+    if let Some(ref arn) = secret.rotation_lambda_arn {
+        meta["RotationLambdaARN"] = json!(arn);
+    }
+    if let Some(days) = secret.rotation_automatically_after_days {
+        meta["RotationRules"] = json!({ "AutomaticallyAfterDays": days });
+    }
 
     if !secret.tags.is_empty() {
         let tags: Vec<Value> = secret
@@ -135,6 +143,9 @@ pub fn create_secret(
         created_date: now.clone(),
         last_changed_date: now,
         deleted_date: None,
+        rotation_enabled: false,
+        rotation_lambda_arn: None,
+        rotation_automatically_after_days: None,
     };
 
     info!(name = %name, arn = %arn, "Created secret");
@@ -554,4 +565,239 @@ pub fn untag_resource(
     }
 
     Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// RotateSecret
+// ---------------------------------------------------------------------------
+
+pub fn rotate_secret(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let mut secret = state
+        .secrets
+        .get_mut(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    if secret.deleted_date.is_some() {
+        return Err(error::invalid_request("Secret is marked for deletion"));
+    }
+
+    // Store rotation configuration if provided
+    if let Some(lambda_arn) = input["RotationLambdaARN"].as_str() {
+        secret.rotation_lambda_arn = Some(lambda_arn.to_string());
+    }
+    if let Some(rules) = input["RotationRules"].as_object() {
+        if let Some(days) = rules.get("AutomaticallyAfterDays").and_then(|v| v.as_u64()) {
+            secret.rotation_automatically_after_days = Some(days);
+        }
+    }
+    secret.rotation_enabled = true;
+
+    // Simulate rotation: create a new AWSPENDING version then immediately promote it to AWSCURRENT.
+    let now = now_epoch_f64();
+    let pending_vid = new_version_id();
+
+    // Clone the current value into the new version (no real Lambda invocation)
+    let current_value = secret.versions.get(&secret.current_version_id).map(|v| {
+        (v.secret_string.clone(), v.secret_binary.clone())
+    });
+    let (secret_string, secret_binary) = current_value.unwrap_or((None, None));
+
+    // Mark old AWSCURRENT as AWSPREVIOUS
+    let old_current_id = secret.current_version_id.clone();
+    if let Some(old_ver) = secret.versions.get_mut(&old_current_id) {
+        old_ver.stages.retain(|s| s != "AWSCURRENT");
+        if !old_ver.stages.contains(&"AWSPREVIOUS".to_string()) {
+            old_ver.stages.push("AWSPREVIOUS".to_string());
+        }
+    }
+
+    let new_version = SecretVersion {
+        version_id: pending_vid.clone(),
+        secret_string,
+        secret_binary,
+        stages: vec!["AWSCURRENT".to_string()],
+        created_date: now,
+    };
+    secret.versions.insert(pending_vid.clone(), new_version);
+    secret.current_version_id = pending_vid.clone();
+    secret.last_changed_date = now;
+
+    let arn = secret.arn.clone();
+    let sname = secret.name.clone();
+    drop(secret);
+
+    info!(name = %name, "RotateSecret (stub)");
+
+    Ok(json!({
+        "ARN": arn,
+        "Name": sname,
+        "VersionId": pending_vid,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// CancelRotateSecret
+// ---------------------------------------------------------------------------
+
+pub fn cancel_rotate_secret(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let mut secret = state
+        .secrets
+        .get_mut(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    secret.rotation_enabled = false;
+    secret.rotation_lambda_arn = None;
+
+    let arn = secret.arn.clone();
+    let sname = secret.name.clone();
+    let vid = secret.current_version_id.clone();
+    drop(secret);
+
+    Ok(json!({
+        "ARN": arn,
+        "Name": sname,
+        "VersionId": vid,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// ValidateResourcePolicy
+// ---------------------------------------------------------------------------
+
+pub fn validate_resource_policy(
+    _state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    // Ensure a policy was provided
+    if input["ResourcePolicy"].as_str().is_none() {
+        return Err(error::missing_parameter("ResourcePolicy"));
+    }
+    // Stub: always return success with no validation errors
+    Ok(json!({
+        "ValidationErrors": [],
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// GetRandomPassword
+// ---------------------------------------------------------------------------
+
+pub fn get_random_password(
+    _state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let length = input["PasswordLength"].as_u64().unwrap_or(32) as usize;
+    if length < 1 || length > 4096 {
+        return Err(error::invalid_parameter("PasswordLength must be between 1 and 4096"));
+    }
+
+    let exclude_uppercase = input["ExcludeUppercase"].as_bool().unwrap_or(false);
+    let exclude_lowercase = input["ExcludeLowercase"].as_bool().unwrap_or(false);
+    let exclude_numbers = input["ExcludeNumbers"].as_bool().unwrap_or(false);
+    let exclude_punctuation = input["ExcludePunctuation"].as_bool().unwrap_or(false);
+
+    let password = random_password(length, exclude_uppercase, exclude_lowercase, exclude_numbers, exclude_punctuation);
+
+    Ok(json!({ "RandomPassword": password }))
+}
+
+// ---------------------------------------------------------------------------
+// ReplicateSecretToRegions (stub)
+// ---------------------------------------------------------------------------
+
+pub fn replicate_secret_to_regions(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let secret = state
+        .secrets
+        .get(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    let arn = secret.arn.clone();
+    drop(secret);
+
+    Ok(json!({
+        "ARN": arn,
+        "ReplicationStatus": [],
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// RemoveRegionsFromReplication (stub)
+// ---------------------------------------------------------------------------
+
+pub fn remove_regions_from_replication(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let secret = state
+        .secrets
+        .get(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    let arn = secret.arn.clone();
+    drop(secret);
+
+    Ok(json!({
+        "ARN": arn,
+        "ReplicationStatus": [],
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// StopReplicationToReplica (stub)
+// ---------------------------------------------------------------------------
+
+pub fn stop_replication_to_replica(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let secret = state
+        .secrets
+        .get(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    let arn = secret.arn.clone();
+    drop(secret);
+
+    Ok(json!({ "ARN": arn }))
 }

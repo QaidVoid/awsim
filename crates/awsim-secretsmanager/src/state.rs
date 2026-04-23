@@ -30,6 +30,12 @@ pub struct Secret {
     pub last_changed_date: f64,
     /// Unix epoch seconds (f64), or None if not scheduled for deletion.
     pub deleted_date: Option<f64>,
+    /// Whether automatic rotation is enabled.
+    pub rotation_enabled: bool,
+    /// ARN of the Lambda function that performs rotation.
+    pub rotation_lambda_arn: Option<String>,
+    /// Days between automatic rotations.
+    pub rotation_automatically_after_days: Option<u64>,
 }
 
 /// Per-account/region Secrets Manager state.

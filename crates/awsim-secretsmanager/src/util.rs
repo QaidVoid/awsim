@@ -87,3 +87,37 @@ pub fn random_suffix(len: usize) -> String {
         .map(|b| CHARS[(*b as usize) % CHARS.len()] as char)
         .collect()
 }
+
+/// Generate a random password for `GetRandomPassword`.
+pub fn random_password(
+    length: usize,
+    exclude_uppercase: bool,
+    exclude_lowercase: bool,
+    exclude_numbers: bool,
+    exclude_punctuation: bool,
+) -> String {
+    let mut charset: Vec<u8> = Vec::new();
+    if !exclude_uppercase {
+        charset.extend_from_slice(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    }
+    if !exclude_lowercase {
+        charset.extend_from_slice(b"abcdefghijklmnopqrstuvwxyz");
+    }
+    if !exclude_numbers {
+        charset.extend_from_slice(b"0123456789");
+    }
+    if !exclude_punctuation {
+        charset.extend_from_slice(b"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~");
+    }
+    if charset.is_empty() {
+        charset.extend_from_slice(b"abcdefghijklmnopqrstuvwxyz");
+    }
+    let mut raw: Vec<u8> = Vec::new();
+    while raw.len() < length {
+        raw.extend_from_slice(Uuid::new_v4().as_bytes());
+    }
+    raw[..length]
+        .iter()
+        .map(|b| charset[(*b as usize) % charset.len()] as char)
+        .collect()
+}

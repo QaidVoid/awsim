@@ -63,6 +63,21 @@ impl ServiceHandler for SecretsManagerService {
             "RestoreSecret" => operations::secrets::restore_secret(&state, &input, ctx),
             "TagResource" => operations::secrets::tag_resource(&state, &input, ctx),
             "UntagResource" => operations::secrets::untag_resource(&state, &input, ctx),
+            "RotateSecret" => operations::secrets::rotate_secret(&state, &input, ctx),
+            "CancelRotateSecret" => operations::secrets::cancel_rotate_secret(&state, &input, ctx),
+            "ValidateResourcePolicy" => {
+                operations::secrets::validate_resource_policy(&state, &input, ctx)
+            }
+            "GetRandomPassword" => operations::secrets::get_random_password(&state, &input, ctx),
+            "ReplicateSecretToRegions" => {
+                operations::secrets::replicate_secret_to_regions(&state, &input, ctx)
+            }
+            "RemoveRegionsFromReplication" => {
+                operations::secrets::remove_regions_from_replication(&state, &input, ctx)
+            }
+            "StopReplicationToReplica" => {
+                operations::secrets::stop_replication_to_replica(&state, &input, ctx)
+            }
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
