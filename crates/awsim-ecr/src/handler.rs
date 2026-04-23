@@ -2,7 +2,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use crate::operations::{auth, images, repositories, tags};
+use crate::operations::{auth, extras, images, repositories, tags};
 use crate::state::EcrState;
 
 /// The ECR service handler.
@@ -68,6 +68,31 @@ impl ServiceHandler for EcrService {
             "ListTagsForResource" => tags::list_tags_for_resource(&state, &input, ctx),
             "TagResource" => tags::tag_resource(&state, &input, ctx),
             "UntagResource" => tags::untag_resource(&state, &input, ctx),
+
+            // Lifecycle Policies
+            "PutLifecyclePolicy" => extras::put_lifecycle_policy(&state, &input, ctx),
+            "GetLifecyclePolicy" => extras::get_lifecycle_policy(&state, &input, ctx),
+            "DeleteLifecyclePolicy" => extras::delete_lifecycle_policy(&state, &input, ctx),
+
+            // Repository Policies
+            "SetRepositoryPolicy" => extras::set_repository_policy(&state, &input, ctx),
+            "GetRepositoryPolicy" => extras::get_repository_policy(&state, &input, ctx),
+            "DeleteRepositoryPolicy" => extras::delete_repository_policy(&state, &input, ctx),
+
+            // Image Scanning
+            "StartImageScan" => extras::start_image_scan(&state, &input, ctx),
+            "DescribeImageScanFindings" => {
+                extras::describe_image_scan_findings(&state, &input, ctx)
+            }
+
+            // Layer Operations
+            "GetDownloadUrlForLayer" => extras::get_download_url_for_layer(&state, &input, ctx),
+            "BatchCheckLayerAvailability" => {
+                extras::batch_check_layer_availability(&state, &input, ctx)
+            }
+            "InitiateLayerUpload" => extras::initiate_layer_upload(&state, &input, ctx),
+            "UploadLayerPart" => extras::upload_layer_part(&state, &input, ctx),
+            "CompleteLayerUpload" => extras::complete_layer_upload(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

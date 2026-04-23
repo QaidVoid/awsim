@@ -83,6 +83,8 @@ pub fn create_repository(
         created_at: now_epoch_str(),
         image_tag_mutability,
         tags,
+        lifecycle_policy: None,
+        repository_policy: None,
     };
 
     info!(repository = %name, "Created ECR repository");

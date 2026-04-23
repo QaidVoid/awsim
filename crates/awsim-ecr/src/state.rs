@@ -12,6 +12,16 @@ pub struct ContainerImage {
     pub image_size_in_bytes: u64,
 }
 
+/// A layer upload session.
+#[derive(Debug, Clone)]
+pub struct LayerUpload {
+    #[allow(dead_code)]
+    pub upload_id: String,
+    #[allow(dead_code)]
+    pub repository_name: String,
+    pub part_data: Vec<u8>,
+}
+
 /// An ECR repository.
 #[derive(Debug)]
 pub struct Repository {
@@ -23,6 +33,8 @@ pub struct Repository {
     pub created_at: String,
     pub image_tag_mutability: String,
     pub tags: HashMap<String, String>,
+    pub lifecycle_policy: Option<String>,
+    pub repository_policy: Option<String>,
 }
 
 /// Per-account/region ECR state.
@@ -30,4 +42,6 @@ pub struct Repository {
 pub struct EcrState {
     /// repositoryName → Repository
     pub repositories: DashMap<String, Repository>,
+    /// uploadId → LayerUpload (in-progress layer uploads)
+    pub layer_uploads: DashMap<String, LayerUpload>,
 }
