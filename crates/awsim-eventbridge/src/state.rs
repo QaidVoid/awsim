@@ -59,6 +59,63 @@ pub struct StoredEvent {
     pub matched_rules: Vec<String>,
 }
 
+/// An EventBridge event archive.
+#[derive(Debug, Clone)]
+pub struct Archive {
+    pub name: String,
+    pub arn: String,
+    pub event_source_arn: String,
+    pub description: String,
+    pub event_pattern: Option<String>,
+    pub retention_days: u32,
+    pub state: String,
+    pub creation_time: String,
+}
+
+/// An API destination connection (auth config).
+#[derive(Debug, Clone)]
+pub struct Connection {
+    pub name: String,
+    pub arn: String,
+    pub description: String,
+    pub auth_type: String,
+    pub auth_parameters: serde_json::Value,
+    pub state: String,
+    pub creation_time: String,
+    pub last_modified_time: String,
+}
+
+/// An HTTP API destination.
+#[derive(Debug, Clone)]
+pub struct ApiDestination {
+    pub name: String,
+    pub arn: String,
+    pub description: String,
+    pub connection_arn: String,
+    pub invocation_endpoint: String,
+    pub http_method: String,
+    pub invocation_rate_limit_per_second: u32,
+    pub state: String,
+    pub creation_time: String,
+    pub last_modified_time: String,
+}
+
+/// An event replay.
+#[derive(Debug, Clone)]
+pub struct Replay {
+    pub name: String,
+    pub arn: String,
+    pub description: String,
+    pub event_source_arn: String,
+    pub destination: serde_json::Value,
+    pub event_start_time: String,
+    pub event_end_time: String,
+    pub state: String,
+    pub state_reason: Option<String>,
+    pub replay_start_time: Option<String>,
+    pub replay_end_time: Option<String>,
+}
+
 /// Per-account/region EventBridge state.
 #[derive(Debug, Default)]
 pub struct EventBridgeState {
@@ -66,4 +123,12 @@ pub struct EventBridgeState {
     pub event_buses: DashMap<String, EventBus>,
     /// Recent events for debugging
     pub recent_events: DashMap<String, StoredEvent>,
+    /// archive_name → Archive
+    pub archives: DashMap<String, Archive>,
+    /// connection_name → Connection
+    pub connections: DashMap<String, Connection>,
+    /// api_destination_name → ApiDestination
+    pub api_destinations: DashMap<String, ApiDestination>,
+    /// replay_name → Replay
+    pub replays: DashMap<String, Replay>,
 }

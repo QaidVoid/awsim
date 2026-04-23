@@ -96,6 +96,35 @@ curl -s http://localhost:4566 \
 ### Tags
 - `TagResource` / `UntagResource` / `ListTagsForResource` — manage tags on event buses and rules
 
+### Event Sources
+- `DescribeEventSource` — stub returning event source details. Input: `Name`
+- `ListEventSources` — returns empty list (partner event sources are not provisioned locally)
+- `PutPartnerEventSource` — stub that accepts and returns an ARN. Input: `Name`, `Account`
+
+### Archives
+- `CreateArchive` — create an event archive attached to an event bus. Input: `ArchiveName` (required), `EventSourceArn` (required), optional `Description`, `EventPattern`, `RetentionDays`
+- `DeleteArchive` — delete an archive. Input: `ArchiveName`
+- `DescribeArchive` — get archive details. Input: `ArchiveName`. Returns `ArchiveName`, `ArchiveArn`, `EventSourceArn`, `RetentionDays`, `State`
+- `ListArchives` — list all archives. Returns `Archives` list
+
+### Connections
+- `CreateConnection` — create an API destination connection (auth config). Input: `Name` (required), `AuthorizationType` (required, e.g. `API_KEY`, `OAUTH_CLIENT_CREDENTIALS`, `BASIC`), optional `Description`, `AuthParameters`
+- `DeleteConnection` — delete a connection. Input: `Name`
+- `DescribeConnection` — get connection details. Input: `Name`
+- `ListConnections` — list all connections. Returns `Connections` list
+
+### API Destinations
+- `CreateApiDestination` — create an HTTP API destination. Input: `Name` (required), `ConnectionArn` (required), `InvocationEndpoint` (required), `HttpMethod` (required), optional `Description`, `InvocationRateLimitPerSecond`
+- `DeleteApiDestination` — delete an API destination. Input: `Name`
+- `DescribeApiDestination` — get API destination details. Input: `Name`
+- `ListApiDestinations` — list all API destinations. Returns `ApiDestinations` list
+
+### Replays
+- `StartReplay` — start an event replay from an archive. Input: `ReplayName` (required), `EventSourceArn` (required), `Destination`, `EventStartTime`, `EventEndTime`, optional `Description`. Returns immediately as `COMPLETED` (dev stub)
+- `CancelReplay` — cancel a running replay. Input: `ReplayName`
+- `DescribeReplay` — get replay details. Input: `ReplayName`
+- `ListReplays` — list all replays. Returns `Replays` list
+
 ## Curl Examples
 
 ```bash

@@ -1,5 +1,10 @@
+pub mod api_destinations;
+pub mod archives;
 pub mod buses;
+pub mod connections;
+pub mod event_sources;
 pub mod events;
+pub mod replays;
 pub mod rules;
 pub mod tags;
 pub mod targets;
