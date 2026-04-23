@@ -150,10 +150,10 @@ curl -s -X POST http://localhost:4566 \
 
 | Operation | Description |
 |-----------|-------------|
-| `SimulateCustomPolicy` | Stub: simulates a policy document against actions; always returns `allowed` |
-| `SimulatePrincipalPolicy` | Stub: simulates a principal's effective policies; always returns `allowed` |
-| `GetContextKeysForCustomPolicy` | Stub: returns empty context key list for a policy document |
-| `GetContextKeysForPrincipalPolicy` | Stub: returns empty context key list for a principal |
+| `SimulateCustomPolicy` | Evaluates a policy document against a list of actions and resources using the real IAM engine. Returns per-(action, resource) `EvalDecision` of `allowed`, `explicitDeny`, or `implicitDeny` |
+| `SimulatePrincipalPolicy` | Evaluates a principal's effective policies (user/role inline + attached + group policies) against actions and resources. Same decision semantics |
+| `GetContextKeysForCustomPolicy` | Returns the context keys referenced in a policy document's `Condition` blocks |
+| `GetContextKeysForPrincipalPolicy` | Returns context keys referenced across all of a principal's attached and inline policies |
 
 ### Misc Stubs
 
@@ -306,10 +306,18 @@ aws --endpoint-url http://localhost:4566 sts assume-role \
   --role-session-name test-session
 ```
 
+## Policy Enforcement
+
+IAM policy evaluation is **opt-in** via the `AWSIM_IAM_ENFORCE=true` environment variable. When enabled, AWSim evaluates identity policies, resource policies, permissions boundaries, SCPs, and session policies using the real policy engine (all 26 AWS condition operators plus `ForAllValues`/`ForAnyValue`/`IfExists` qualifiers).
+
+Enforcement currently covers **S3, DynamoDB, KMS, SQS, SNS, Secrets Manager, Lambda, and IAM**; other services are silently bypassed. See the [IAM Enforcement guide](/guide/iam-enforcement) for enablement, supported operators, and examples.
+
+Policy **validation** is always on: `CreatePolicy`, `CreatePolicyVersion`, `CreateRole`, `UpdateAssumeRolePolicy`, and `Put{User,Role,Group}Policy` return `MalformedPolicyDocument` (HTTP 400) for syntactically invalid JSON or unknown condition operators.
+
 ## Behavior Notes
 
-- IAM policy evaluation is **not enforced** — all operations succeed regardless of attached policies. Use AWSim for structural testing of your IaC, not authorization logic.
-- Credentials issued by `AssumeRole` and `GetSessionToken` are accepted by all AWSim services but are not scoped to any role's permissions.
+- When `AWSIM_IAM_ENFORCE` is **not** set, requests are allowed regardless of attached policies — useful for rapid prototyping. Set it to `true` to evaluate policies.
+- Credentials issued by `AssumeRole` and `GetSessionToken` are accepted by all AWSim services. Under enforcement, they inherit the role's identity policies.
 - IAM is persistent: users, groups, roles, and policies survive AWSim restarts.
-- Permission boundaries, service control policies (SCPs), and resource-based policies are stored but not evaluated.
+- Permission boundaries, resource policies, and SCPs are parsed and stored. They are evaluated only under `AWSIM_IAM_ENFORCE=true`.
 - `GetCallerIdentity` always returns account ID `000000000000` regardless of credentials used.

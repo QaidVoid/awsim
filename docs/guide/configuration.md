@@ -11,6 +11,7 @@ AWSim is configured through CLI flags and environment variables. All flags have 
 | `--account-id` | | `000000000000` | `AWSIM_ACCOUNT_ID` | Simulated AWS account ID |
 | `--data-dir` | | _(none)_ | `AWSIM_DATA_DIR` | Directory for persistence snapshots |
 | `--log-level` | `-v` | `info` | `AWSIM_LOG_LEVEL` | Log verbosity |
+| _(env only)_ | | `false` | `AWSIM_IAM_ENFORCE` | Enable IAM policy evaluation (see [IAM Enforcement](/guide/iam-enforcement)) |
 
 ## Examples
 

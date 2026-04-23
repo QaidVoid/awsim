@@ -20,8 +20,12 @@ AWSim is built on [Axum](https://github.com/tokio-rs/axum), a Rust async web fra
 
 All state lives in memory. Snapshots are written atomically (write to a temp file, then rename).
 
+## IAM Policy Enforcement
+
+AWSim includes a real IAM policy evaluation engine that implements AWS authorization semantics — identity policies, resource policies, permissions boundaries, SCPs, and session policies with all 26 condition operators. Enforcement is **opt-in** via `AWSIM_IAM_ENFORCE=true` so existing tests remain unaffected. Enabling it lets you unit-test policy documents end-to-end against S3, DynamoDB, KMS, SQS, SNS, Secrets Manager, Lambda, and IAM. See the [IAM Enforcement guide](/guide/iam-enforcement).
+
 ## What AWSim is not
 
 - It does not make any network calls to AWS.
-- It does not implement IAM policy evaluation for authorization — credentials are accepted but not validated.
+- By default it does not enforce IAM policies — you must opt in with `AWSIM_IAM_ENFORCE=true`.
 - It is not 100% API-compatible with AWS. Edge cases and rarely-used parameters may behave differently or be unimplemented.

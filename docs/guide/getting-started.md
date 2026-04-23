@@ -56,10 +56,16 @@ endpoint_url = http://localhost:4566
 
 Then use `--profile awsim` or `AWS_PROFILE=awsim` instead of repeating `--endpoint-url`.
 
-Credentials can be any non-empty value — AWSim does not validate them:
+Credentials can be any non-empty value — AWSim does not validate them by default:
 
 ```bash
 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test aws --endpoint-url http://localhost:4566 s3 ls
+```
+
+To enable real IAM policy enforcement (so credentials must map to a real user or role and attached policies are evaluated), set `AWSIM_IAM_ENFORCE=true` before starting AWSim — see the [IAM Enforcement guide](/guide/iam-enforcement).
+
+```bash
+AWSIM_IAM_ENFORCE=true ./target/release/awsim
 ```
 
 ## SDK Configuration
