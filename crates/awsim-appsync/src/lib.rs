@@ -226,6 +226,84 @@ impl ServiceHandler for AppSyncService {
                 operation: "FlushApiCache",
                 required_query_param: None,
             },
+            // Data source extras
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v1/apis/{apiId}/datasources/{name}",
+                operation: "GetDataSource",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v1/apis/{apiId}/datasources/{name}",
+                operation: "UpdateDataSource",
+                required_query_param: None,
+            },
+            // Resolver get
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v1/apis/{apiId}/types/{typeName}/resolvers/{fieldName}",
+                operation: "GetResolver",
+                required_query_param: None,
+            },
+            // Type update
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v1/apis/{apiId}/types/{typeName}",
+                operation: "UpdateType",
+                required_query_param: None,
+            },
+            // Schema introspection
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v1/apis/{apiId}/schema",
+                operation: "GetIntrospectionSchema",
+                required_query_param: None,
+            },
+            // Tags
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v1/tags/{resourceArn}",
+                operation: "TagResource",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v1/tags/{resourceArn}",
+                operation: "UntagResource",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v1/tags/{resourceArn}",
+                operation: "ListTagsForResource",
+                required_query_param: None,
+            },
+            // Source API associations
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v1/mergedApis/{mergedApiIdentifier}/sourceApiAssociations",
+                operation: "AssociateMergedGraphqlApi",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v1/mergedApis/{mergedApiIdentifier}/sourceApiAssociations/{associationId}",
+                operation: "GetSourceApiAssociation",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v1/apis/{apiId}/sourceApiAssociations",
+                operation: "ListSourceApiAssociations",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v1/mergedApis/{mergedApiIdentifier}/sourceApiAssociations/{associationId}",
+                operation: "DisassociateMergedGraphqlApi",
+                required_query_param: None,
+            },
         ]
     }
 
@@ -275,6 +353,30 @@ impl ServiceHandler for AppSyncService {
             "UpdateFunction" => operations::update_function(&state, &input),
             // API Cache
             "FlushApiCache" => operations::flush_api_cache(&state, &input),
+            // Data source extras
+            "GetDataSource" => operations::get_data_source(&state, &input),
+            "UpdateDataSource" => operations::update_data_source(&state, &input),
+            // Resolver get
+            "GetResolver" => operations::get_resolver(&state, &input),
+            // Type update
+            "UpdateType" => operations::update_type(&state, &input),
+            // Schema introspection
+            "GetIntrospectionSchema" => operations::get_introspection_schema(&state, &input),
+            // Tags
+            "TagResource" => operations::tag_resource(&state, &input),
+            "UntagResource" => operations::untag_resource(&state, &input),
+            "ListTagsForResource" => operations::list_tags_for_resource(&state, &input),
+            // Source API associations
+            "AssociateMergedGraphqlApi" => {
+                operations::associate_merged_graphql_api(&state, &input, ctx)
+            }
+            "GetSourceApiAssociation" => operations::get_source_api_association(&state, &input),
+            "ListSourceApiAssociations" => {
+                operations::list_source_api_associations(&state, &input)
+            }
+            "DisassociateMergedGraphqlApi" => {
+                operations::disassociate_merged_graphql_api(&state, &input)
+            }
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

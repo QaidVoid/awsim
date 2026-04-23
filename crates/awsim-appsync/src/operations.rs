@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::state::{ApiKey, AppSyncFunction, AppSyncState, DataSource, GraphqlApi, GraphqlType, Resolver, now_iso};
+use crate::state::{ApiKey, AppSyncFunction, AppSyncState, DataSource, GraphqlApi, GraphqlType, Resolver, SourceApiAssociation, now_iso};
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -775,6 +775,305 @@ pub fn flush_api_cache(state: &AppSyncState, input: &Value) -> Result<Value, Aws
 
     // Stub: no actual cache to flush
     Ok(json!({}))
+}
+
+// ── Data Source extras ────────────────────────────────────────────────────────
+
+pub fn get_data_source(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
+    let api_id = input["apiId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "apiId is required"))?;
+    let name = input["name"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "name is required"))?;
+
+    let api = state.apis.get(api_id).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+    })?;
+
+    let ds = api.data_sources.iter().find(|d| d.name == name).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("Data source {} not found", name))
+    })?;
+
+    Ok(json!({ "dataSource": ds_to_json(ds) }))
+}
+
+pub fn update_data_source(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
+    let api_id = input["apiId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "apiId is required"))?;
+    let name = input["name"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "name is required"))?;
+
+    let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+    })?;
+
+    let ds = api.data_sources.iter_mut().find(|d| d.name == name).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("Data source {} not found", name))
+    })?;
+
+    if let Some(t) = input["type"].as_str() {
+        ds.data_source_type = t.to_string();
+    }
+    if let Some(d) = input["description"].as_str() {
+        ds.description = Some(d.to_string());
+    }
+
+    let result = ds_to_json(ds);
+    Ok(json!({ "dataSource": result }))
+}
+
+// ── Resolver extras ───────────────────────────────────────────────────────────
+
+pub fn get_resolver(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
+    let api_id = input["apiId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "apiId is required"))?;
+    let type_name = input["typeName"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "typeName is required"))?;
+    let field_name = input["fieldName"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "fieldName is required"))?;
+
+    let api = state.apis.get(api_id).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+    })?;
+
+    let r = api
+        .resolvers
+        .iter()
+        .find(|r| r.type_name == type_name && r.field_name == field_name)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Resolver {}.{} not found", type_name, field_name),
+            )
+        })?;
+
+    Ok(json!({ "resolver": resolver_to_json(r) }))
+}
+
+// ── Type extras ───────────────────────────────────────────────────────────────
+
+pub fn update_type(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
+    let api_id = input["apiId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "apiId is required"))?;
+    let type_name = input["typeName"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "typeName is required"))?;
+
+    let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+    })?;
+
+    let t = api.types.iter_mut().find(|t| t.name == type_name).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("Type {} not found", type_name))
+    })?;
+
+    if let Some(def) = input["definition"].as_str() {
+        t.definition = Some(def.to_string());
+    }
+    if let Some(format) = input["format"].as_str() {
+        t.format = format.to_string();
+    }
+
+    let result = type_to_json(t);
+    Ok(json!({ "type": result }))
+}
+
+// ── Schema introspection ──────────────────────────────────────────────────────
+
+pub fn get_introspection_schema(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
+    let api_id = input["apiId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "apiId is required"))?;
+    let format = input["format"].as_str().unwrap_or("SDL").to_string();
+
+    let api = state.apis.get(api_id).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+    })?;
+
+    let schema = api
+        .schema
+        .clone()
+        .unwrap_or_else(|| "type Query { hello: String }".to_string());
+
+    let bytes: Vec<u8> = if format == "JSON" {
+        serde_json::to_vec(&json!({ "data": { "__schema": { "types": [] } } }))
+            .unwrap_or_default()
+    } else {
+        schema.into_bytes()
+    };
+
+    Ok(json!({ "schema": bytes }))
+}
+
+// ── Tags ──────────────────────────────────────────────────────────────────────
+
+pub fn tag_resource(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
+    let resource_arn = input["resourceArn"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "resourceArn is required"))?;
+
+    let mut entry = state.tags.entry(resource_arn.to_string()).or_default();
+
+    if let Some(tags) = input["tags"].as_object() {
+        for (k, v) in tags {
+            if let Some(v_str) = v.as_str() {
+                entry.insert(k.clone(), v_str.to_string());
+            }
+        }
+    }
+
+    Ok(json!({}))
+}
+
+pub fn untag_resource(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
+    let resource_arn = input["resourceArn"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "resourceArn is required"))?;
+
+    if let Some(mut entry) = state.tags.get_mut(resource_arn) {
+        if let Some(keys) = input["tagKeys"].as_array() {
+            for k in keys {
+                if let Some(s) = k.as_str() {
+                    entry.remove(s);
+                }
+            }
+        }
+    }
+
+    Ok(json!({}))
+}
+
+pub fn list_tags_for_resource(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
+    let resource_arn = input["resourceArn"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "resourceArn is required"))?;
+
+    let tags = state
+        .tags
+        .get(resource_arn)
+        .map(|e| {
+            e.iter()
+                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                .collect::<serde_json::Map<_, _>>()
+        })
+        .unwrap_or_default();
+
+    Ok(json!({ "tags": Value::Object(tags) }))
+}
+
+// ── Source API Associations ───────────────────────────────────────────────────
+
+fn association_to_json(a: &SourceApiAssociation) -> Value {
+    json!({
+        "associationId": a.association_id,
+        "associationArn": a.association_arn,
+        "sourceApiId": a.source_api_id,
+        "mergedApiId": a.merged_api_id,
+        "description": a.description,
+        "sourceApiAssociationStatus": a.status,
+        "lastSuccessfulMergeDate": a.last_successful_merge_date,
+    })
+}
+
+pub fn associate_merged_graphql_api(
+    state: &AppSyncState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let merged_api_id = input["mergedApiIdentifier"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "mergedApiIdentifier is required"))?;
+    let source_api_id = input["sourceApiIdentifier"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request("MissingParameter", "sourceApiIdentifier is required")
+        })?;
+
+    let association_id = Uuid::new_v4().to_string().replace('-', "")[..20].to_string();
+    let association_arn = format!(
+        "arn:aws:appsync:{}:{}:apis/{}/sourceApiAssociations/{}",
+        ctx.region, ctx.account_id, merged_api_id, association_id
+    );
+
+    let assoc = SourceApiAssociation {
+        association_id: association_id.clone(),
+        association_arn,
+        source_api_id: source_api_id.to_string(),
+        merged_api_id: merged_api_id.to_string(),
+        description: input["description"].as_str().map(|s| s.to_string()),
+        status: "SUCCESS".to_string(),
+        last_successful_merge_date: now_iso(),
+    };
+
+    let result = association_to_json(&assoc);
+    state.source_api_associations.insert(association_id, assoc);
+
+    Ok(json!({ "sourceApiAssociation": result }))
+}
+
+pub fn get_source_api_association(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
+    let association_id = input["associationId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "associationId is required"))?;
+
+    let assoc = state.source_api_associations.get(association_id).ok_or_else(|| {
+        AwsError::not_found(
+            "NotFoundException",
+            format!("Source API association {} not found", association_id),
+        )
+    })?;
+
+    Ok(json!({ "sourceApiAssociation": association_to_json(&*assoc) }))
+}
+
+pub fn list_source_api_associations(
+    state: &AppSyncState,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let api_id = input["apiId"].as_str().unwrap_or("");
+
+    let summaries: Vec<Value> = state
+        .source_api_associations
+        .iter()
+        .filter(|e| api_id.is_empty() || e.value().merged_api_id == api_id)
+        .map(|e| {
+            let a = e.value();
+            json!({
+                "associationId": a.association_id,
+                "associationArn": a.association_arn,
+                "sourceApiId": a.source_api_id,
+                "mergedApiId": a.merged_api_id,
+                "description": a.description,
+            })
+        })
+        .collect();
+
+    Ok(json!({ "sourceApiAssociationSummaries": summaries }))
+}
+
+pub fn disassociate_merged_graphql_api(
+    state: &AppSyncState,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let association_id = input["associationId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "associationId is required"))?;
+
+    if state.source_api_associations.remove(association_id).is_none() {
+        return Err(AwsError::not_found(
+            "NotFoundException",
+            format!("Source API association {} not found", association_id),
+        ));
+    }
+
+    Ok(json!({ "sourceApiAssociationStatus": "DELETION_SUCCESS" }))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

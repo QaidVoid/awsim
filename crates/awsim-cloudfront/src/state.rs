@@ -13,6 +13,77 @@ pub struct CloudFrontState {
     pub invalidations: DashMap<String, Invalidation>,
     /// Cache policy ID → CachePolicy
     pub cache_policies: DashMap<String, CachePolicy>,
+    /// Origin request policy ID → OriginRequestPolicy
+    pub origin_request_policies: DashMap<String, OriginRequestPolicy>,
+    /// Key group ID → KeyGroup
+    pub key_groups: DashMap<String, KeyGroup>,
+    /// Public key ID → PublicKey
+    pub public_keys: DashMap<String, PublicKey>,
+    /// Field level encryption config ID → FieldLevelEncryptionConfig
+    pub field_level_encryption_configs: DashMap<String, FieldLevelEncryptionConfig>,
+    /// Real-time log config ARN → RealtimeLogConfig
+    pub realtime_log_configs: DashMap<String, RealtimeLogConfig>,
+    /// Function name → CloudFrontFunction
+    pub functions: DashMap<String, CloudFrontFunction>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OriginRequestPolicy {
+    pub id: String,
+    pub name: String,
+    pub comment: String,
+    pub created_at: String,
+    pub etag: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct KeyGroup {
+    pub id: String,
+    pub name: String,
+    pub items: Vec<String>,
+    pub comment: String,
+    pub created_at: String,
+    pub etag: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PublicKey {
+    pub id: String,
+    pub name: String,
+    pub encoded_key: String,
+    pub caller_reference: String,
+    pub comment: String,
+    pub created_at: String,
+    pub etag: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FieldLevelEncryptionConfig {
+    pub id: String,
+    pub comment: String,
+    pub caller_reference: String,
+    pub created_at: String,
+    pub etag: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RealtimeLogConfig {
+    pub arn: String,
+    pub name: String,
+    pub sampling_rate: i64,
+    pub fields: Vec<String>,
+    pub end_points: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct CloudFrontFunction {
+    pub name: String,
+    pub stage: String,
+    pub comment: String,
+    pub runtime: String,
+    pub function_code: String,
+    pub created_at: String,
+    pub etag: String,
 }
 
 #[derive(Debug, Clone)]

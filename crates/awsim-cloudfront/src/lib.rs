@@ -192,6 +192,175 @@ impl ServiceHandler for CloudFrontService {
                 operation: "ListTagsForResource",
                 required_query_param: None,
             },
+            // Origin Request Policies
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2020-05-31/origin-request-policy",
+                operation: "CreateOriginRequestPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/origin-request-policy",
+                operation: "ListOriginRequestPolicies",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/origin-request-policy/{Id}",
+                operation: "GetOriginRequestPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2020-05-31/origin-request-policy/{Id}",
+                operation: "DeleteOriginRequestPolicy",
+                required_query_param: None,
+            },
+            // Key Groups
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2020-05-31/key-group",
+                operation: "CreateKeyGroup",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/key-group",
+                operation: "ListKeyGroups",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/key-group/{Id}",
+                operation: "GetKeyGroup",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2020-05-31/key-group/{Id}",
+                operation: "DeleteKeyGroup",
+                required_query_param: None,
+            },
+            // Public Keys
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2020-05-31/public-key",
+                operation: "CreatePublicKey",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/public-key",
+                operation: "ListPublicKeys",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/public-key/{Id}",
+                operation: "GetPublicKey",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2020-05-31/public-key/{Id}",
+                operation: "DeletePublicKey",
+                required_query_param: None,
+            },
+            // Field Level Encryption
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2020-05-31/field-level-encryption",
+                operation: "CreateFieldLevelEncryptionConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/field-level-encryption",
+                operation: "ListFieldLevelEncryptionConfigs",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/field-level-encryption/{Id}",
+                operation: "GetFieldLevelEncryptionConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2020-05-31/field-level-encryption/{Id}",
+                operation: "DeleteFieldLevelEncryptionConfig",
+                required_query_param: None,
+            },
+            // Real-time Log Configs
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2020-05-31/realtime-log-config",
+                operation: "CreateRealtimeLogConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/realtime-log-config",
+                operation: "ListRealtimeLogConfigs",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/2020-05-31/realtime-log-config",
+                operation: "GetRealtimeLogConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2020-05-31/delete-realtime-log-config",
+                operation: "DeleteRealtimeLogConfig",
+                required_query_param: None,
+            },
+            // CloudFront Functions
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2020-05-31/function",
+                operation: "CreateFunction",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/function",
+                operation: "ListFunctions",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/function/{Name}/describe",
+                operation: "DescribeFunction",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2020-05-31/function/{Name}",
+                operation: "DeleteFunction",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2020-05-31/function/{Name}/publish",
+                operation: "PublishFunction",
+                required_query_param: None,
+            },
+            // List by web ACL / realtime log config
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/distributionsByWebACLId/{WebACLId}",
+                operation: "ListDistributionsByWebACLId",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2020-05-31/distributionsByRealtimeLogConfig",
+                operation: "ListDistributionsByRealtimeLogConfig",
+                required_query_param: None,
+            },
         ]
     }
 
@@ -323,6 +492,105 @@ impl ServiceHandler for CloudFrontService {
             // Tags
             "TagResource" => operations::tags::tag_resource(&state, &input),
             "ListTagsForResource" => operations::tags::list_tags_for_resource(&state, &input),
+
+            // Origin Request Policies
+            "CreateOriginRequestPolicy" => {
+                operations::origin_request_policies::create_origin_request_policy(&state, &input)
+            }
+            "GetOriginRequestPolicy" => {
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
+                operations::origin_request_policies::get_origin_request_policy(&state, id)
+            }
+            "DeleteOriginRequestPolicy" => {
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
+                operations::origin_request_policies::delete_origin_request_policy(&state, id)
+            }
+            "ListOriginRequestPolicies" => {
+                operations::origin_request_policies::list_origin_request_policies(&state)
+            }
+
+            // Key Groups
+            "CreateKeyGroup" => operations::key_groups::create_key_group(&state, &input),
+            "GetKeyGroup" => {
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
+                operations::key_groups::get_key_group(&state, id)
+            }
+            "DeleteKeyGroup" => {
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
+                operations::key_groups::delete_key_group(&state, id)
+            }
+            "ListKeyGroups" => operations::key_groups::list_key_groups(&state),
+
+            // Public Keys
+            "CreatePublicKey" => operations::public_keys::create_public_key(&state, &input),
+            "GetPublicKey" => {
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
+                operations::public_keys::get_public_key(&state, id)
+            }
+            "DeletePublicKey" => {
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
+                operations::public_keys::delete_public_key(&state, id)
+            }
+            "ListPublicKeys" => operations::public_keys::list_public_keys(&state),
+
+            // Field Level Encryption
+            "CreateFieldLevelEncryptionConfig" => {
+                operations::field_level_encryption::create_field_level_encryption_config(
+                    &state, &input,
+                )
+            }
+            "GetFieldLevelEncryptionConfig" => {
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
+                operations::field_level_encryption::get_field_level_encryption_config(&state, id)
+            }
+            "DeleteFieldLevelEncryptionConfig" => {
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
+                operations::field_level_encryption::delete_field_level_encryption_config(
+                    &state, id,
+                )
+            }
+            "ListFieldLevelEncryptionConfigs" => {
+                operations::field_level_encryption::list_field_level_encryption_configs(&state)
+            }
+
+            // Real-time Log Configs
+            "CreateRealtimeLogConfig" => {
+                operations::realtime_logs::create_realtime_log_config(&state, &input)
+            }
+            "GetRealtimeLogConfig" => {
+                operations::realtime_logs::get_realtime_log_config(&state, &input)
+            }
+            "DeleteRealtimeLogConfig" => {
+                operations::realtime_logs::delete_realtime_log_config(&state, &input)
+            }
+            "ListRealtimeLogConfigs" => {
+                operations::realtime_logs::list_realtime_log_configs(&state)
+            }
+
+            // CloudFront Functions
+            "CreateFunction" => operations::functions::create_function(&state, &input),
+            "DescribeFunction" => {
+                let name = input.get("Name").and_then(|v| v.as_str()).unwrap_or("");
+                operations::functions::describe_function(&state, name)
+            }
+            "DeleteFunction" => {
+                let name = input.get("Name").and_then(|v| v.as_str()).unwrap_or("");
+                operations::functions::delete_function(&state, name)
+            }
+            "ListFunctions" => operations::functions::list_functions(&state),
+            "PublishFunction" => {
+                let name = input.get("Name").and_then(|v| v.as_str()).unwrap_or("");
+                operations::functions::publish_function(&state, name)
+            }
+
+            // Distribution listings
+            "ListDistributionsByWebACLId" => {
+                let acl = input.get("WebACLId").and_then(|v| v.as_str()).unwrap_or("");
+                operations::extras::list_distributions_by_web_acl_id(&state, acl)
+            }
+            "ListDistributionsByRealtimeLogConfig" => {
+                operations::extras::list_distributions_by_realtime_log_config(&state, &input)
+            }
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

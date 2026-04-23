@@ -7,6 +7,10 @@ use dashmap::DashMap;
 pub struct AppSyncState {
     /// api_id → GraphqlApi
     pub apis: DashMap<String, GraphqlApi>,
+    /// resource_arn → tags
+    pub tags: DashMap<String, HashMap<String, String>>,
+    /// association_id → SourceApiAssociation
+    pub source_api_associations: DashMap<String, SourceApiAssociation>,
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +60,18 @@ pub struct GraphqlType {
     pub definition: Option<String>,
     pub format: String, // SDL | JSON
     pub arn: String,
+}
+
+/// A merged-source-API association.
+#[derive(Debug, Clone)]
+pub struct SourceApiAssociation {
+    pub association_id: String,
+    pub association_arn: String,
+    pub source_api_id: String,
+    pub merged_api_id: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub last_successful_merge_date: String,
 }
 
 /// An AppSync pipeline function (not Lambda).

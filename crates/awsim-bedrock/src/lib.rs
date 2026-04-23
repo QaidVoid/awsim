@@ -103,6 +103,84 @@ impl ServiceHandler for BedrockService {
                 required_query_param: None,
             },
             RouteDefinition {
+                method: "POST",
+                path_pattern: "/provisioned-model-throughputs",
+                operation: "CreateProvisionedModelThroughput",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/provisioned-model-throughputs/{provisionedModelId}",
+                operation: "GetProvisionedModelThroughput",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/provisioned-model-throughputs/{provisionedModelId}",
+                operation: "DeleteProvisionedModelThroughput",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/model-invocation-jobs",
+                operation: "CreateModelInvocationJob",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/model-invocation-jobs",
+                operation: "ListModelInvocationJobs",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/model-invocation-jobs/{jobIdentifier}",
+                operation: "GetModelInvocationJob",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/model-invocation-jobs/{jobIdentifier}/stop",
+                operation: "StopModelInvocationJob",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/custom-models/{modelIdentifier}",
+                operation: "GetCustomModel",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/custom-models/{modelIdentifier}",
+                operation: "DeleteCustomModel",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/knowledgebases",
+                operation: "CreateKnowledgeBase",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/knowledgebases",
+                operation: "ListKnowledgeBases",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/knowledgebases/{knowledgeBaseId}",
+                operation: "GetKnowledgeBase",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/knowledgebases/{knowledgeBaseId}",
+                operation: "DeleteKnowledgeBase",
+                required_query_param: None,
+            },
+            RouteDefinition {
                 method: "GET",
                 path_pattern: "/logging/modelinvocations",
                 operation: "GetModelInvocationLoggingConfiguration",
@@ -185,6 +263,27 @@ impl ServiceHandler for BedrockService {
             "ListProvisionedModelThroughputs" => {
                 management::list_provisioned_model_throughputs(&state, &input)
             }
+            "CreateProvisionedModelThroughput" => {
+                management::create_provisioned_model_throughput(&state, &input, ctx)
+            }
+            "GetProvisionedModelThroughput" => {
+                management::get_provisioned_model_throughput(&state, &input)
+            }
+            "DeleteProvisionedModelThroughput" => {
+                management::delete_provisioned_model_throughput(&state, &input)
+            }
+            "CreateModelInvocationJob" => {
+                management::create_model_invocation_job(&state, &input, ctx)
+            }
+            "ListModelInvocationJobs" => management::list_model_invocation_jobs(&state, &input),
+            "GetModelInvocationJob" => management::get_model_invocation_job(&state, &input),
+            "StopModelInvocationJob" => management::stop_model_invocation_job(&state, &input),
+            "GetCustomModel" => management::get_custom_model(&state, &input),
+            "DeleteCustomModel" => management::delete_custom_model(&state, &input),
+            "CreateKnowledgeBase" => management::create_knowledge_base(&state, &input, ctx),
+            "GetKnowledgeBase" => management::get_knowledge_base(&state, &input),
+            "ListKnowledgeBases" => management::list_knowledge_bases(&state, &input),
+            "DeleteKnowledgeBase" => management::delete_knowledge_base(&state, &input),
             "GetModelInvocationLoggingConfiguration" => {
                 management::get_model_invocation_logging_configuration(&state, &input)
             }

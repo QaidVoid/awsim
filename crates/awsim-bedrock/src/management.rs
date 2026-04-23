@@ -4,7 +4,10 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::models::{FOUNDATION_MODELS, model_to_json};
-use crate::state::{BedrockState, CustomizationJob, Guardrail, LoggingConfig, now_iso};
+use crate::state::{
+    BedrockState, CustomModel, CustomizationJob, Guardrail, InvocationJob, KnowledgeBase,
+    LoggingConfig, ProvisionedModel, now_iso,
+};
 
 // ── Foundation Models ─────────────────────────────────────────────────────────
 
@@ -200,11 +203,319 @@ pub fn delete_guardrail(state: &BedrockState, input: &Value) -> Result<Value, Aw
 
 // ── Provisioned Model Throughputs ─────────────────────────────────────────────
 
+fn pmt_to_json(p: &ProvisionedModel) -> Value {
+    json!({
+        "provisionedModelArn": p.provisioned_model_arn,
+        "provisionedModelName": p.provisioned_model_name,
+        "modelArn": p.model_arn,
+        "modelUnits": p.model_units,
+        "status": p.status,
+        "creationTime": p.creation_time,
+    })
+}
+
+pub fn create_provisioned_model_throughput(
+    state: &BedrockState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["provisionedModelName"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request("MissingParameter", "provisionedModelName is required")
+        })?;
+    let model_id = input["modelId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelId is required"))?;
+    let model_units = input["modelUnits"].as_i64().unwrap_or(1) as i32;
+
+    let id = Uuid::new_v4().to_string().replace('-', "")[..16].to_string();
+    let arn = format!(
+        "arn:aws:bedrock:{}:{}:provisioned-model/{}",
+        ctx.region, ctx.account_id, id
+    );
+    let model_arn = format!(
+        "arn:aws:bedrock:{}::foundation-model/{}",
+        ctx.region, model_id
+    );
+
+    let pmt = ProvisionedModel {
+        provisioned_model_id: id.clone(),
+        provisioned_model_arn: arn.clone(),
+        model_arn,
+        model_units,
+        provisioned_model_name: name.to_string(),
+        status: "InService".to_string(),
+        creation_time: now_iso(),
+    };
+
+    info!(provisioned_model_id = %id, "Created provisioned model throughput");
+    state.provisioned_models.insert(id, pmt);
+
+    Ok(json!({ "provisionedModelArn": arn }))
+}
+
+pub fn get_provisioned_model_throughput(
+    state: &BedrockState,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let identifier = input["provisionedModelId"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request("MissingParameter", "provisionedModelId is required")
+        })?;
+
+    let pmt = state
+        .provisioned_models
+        .iter()
+        .find(|e| e.key() == identifier || e.value().provisioned_model_arn == identifier);
+
+    match pmt {
+        Some(e) => Ok(pmt_to_json(e.value())),
+        None => Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Provisioned model not found: {identifier}"),
+        )),
+    }
+}
+
+pub fn delete_provisioned_model_throughput(
+    state: &BedrockState,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let identifier = input["provisionedModelId"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request("MissingParameter", "provisionedModelId is required")
+        })?;
+
+    let key = state
+        .provisioned_models
+        .iter()
+        .find(|e| e.key() == identifier || e.value().provisioned_model_arn == identifier)
+        .map(|e| e.key().clone());
+
+    match key {
+        Some(k) => {
+            state.provisioned_models.remove(&k);
+            Ok(json!({}))
+        }
+        None => Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Provisioned model not found: {identifier}"),
+        )),
+    }
+}
+
 pub fn list_provisioned_model_throughputs(
-    _state: &BedrockState,
+    state: &BedrockState,
     _input: &Value,
 ) -> Result<Value, AwsError> {
-    Ok(json!({ "provisionedModelSummaries": [] }))
+    let summaries: Vec<Value> = state
+        .provisioned_models
+        .iter()
+        .map(|e| pmt_to_json(e.value()))
+        .collect();
+    Ok(json!({ "provisionedModelSummaries": summaries }))
+}
+
+// ── Model Invocation Jobs ─────────────────────────────────────────────────────
+
+fn invocation_job_to_json(j: &InvocationJob) -> Value {
+    json!({
+        "jobArn": j.job_arn,
+        "jobName": j.job_name,
+        "modelId": j.model_id,
+        "status": j.status,
+        "submitTime": j.submit_time,
+        "roleArn": j.role_arn,
+    })
+}
+
+pub fn create_model_invocation_job(
+    state: &BedrockState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let job_name = input["jobName"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "jobName is required"))?;
+    let model_id = input["modelId"]
+        .as_str()
+        .unwrap_or("anthropic.claude-v2:1")
+        .to_string();
+    let role_arn = input["roleArn"].as_str().unwrap_or("").to_string();
+
+    let job_id = Uuid::new_v4().to_string();
+    let job_arn = format!(
+        "arn:aws:bedrock:{}:{}:model-invocation-job/{}",
+        ctx.region, ctx.account_id, job_id
+    );
+
+    let job = InvocationJob {
+        job_arn: job_arn.clone(),
+        job_name: job_name.to_string(),
+        model_id,
+        status: "Submitted".to_string(),
+        submit_time: now_iso(),
+        role_arn,
+    };
+
+    info!(job_id = %job_id, "Created model invocation job");
+    state.invocation_jobs.insert(job_id, job);
+
+    Ok(json!({ "jobArn": job_arn }))
+}
+
+pub fn get_model_invocation_job(state: &BedrockState, input: &Value) -> Result<Value, AwsError> {
+    let identifier = input["jobIdentifier"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "jobIdentifier is required"))?;
+
+    let job = state
+        .invocation_jobs
+        .iter()
+        .find(|e| e.key() == identifier || e.value().job_arn == identifier);
+
+    match job {
+        Some(e) => Ok(invocation_job_to_json(e.value())),
+        None => Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Invocation job not found: {identifier}"),
+        )),
+    }
+}
+
+pub fn list_model_invocation_jobs(
+    state: &BedrockState,
+    _input: &Value,
+) -> Result<Value, AwsError> {
+    let summaries: Vec<Value> = state
+        .invocation_jobs
+        .iter()
+        .map(|e| invocation_job_to_json(e.value()))
+        .collect();
+    Ok(json!({ "invocationJobSummaries": summaries }))
+}
+
+pub fn stop_model_invocation_job(state: &BedrockState, input: &Value) -> Result<Value, AwsError> {
+    let identifier = input["jobIdentifier"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "jobIdentifier is required"))?;
+
+    let key = state
+        .invocation_jobs
+        .iter()
+        .find(|e| e.key() == identifier || e.value().job_arn == identifier)
+        .map(|e| e.key().clone());
+
+    match key {
+        Some(k) => {
+            if let Some(mut job) = state.invocation_jobs.get_mut(&k) {
+                job.status = "Stopped".to_string();
+            }
+            Ok(json!({}))
+        }
+        None => Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Invocation job not found: {identifier}"),
+        )),
+    }
+}
+
+// ── Knowledge Bases ───────────────────────────────────────────────────────────
+
+fn kb_to_json(k: &KnowledgeBase) -> Value {
+    json!({
+        "knowledgeBaseId": k.knowledge_base_id,
+        "knowledgeBaseArn": k.knowledge_base_arn,
+        "name": k.name,
+        "description": k.description,
+        "roleArn": k.role_arn,
+        "status": k.status,
+        "createdAt": k.created_at,
+        "updatedAt": k.created_at,
+    })
+}
+
+pub fn create_knowledge_base(
+    state: &BedrockState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["name"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "name is required"))?;
+    let role_arn = input["roleArn"].as_str().unwrap_or("").to_string();
+
+    let kb_id = Uuid::new_v4().to_string().replace('-', "")[..10].to_string();
+    let kb_arn = format!(
+        "arn:aws:bedrock:{}:{}:knowledge-base/{}",
+        ctx.region, ctx.account_id, kb_id
+    );
+
+    let kb = KnowledgeBase {
+        knowledge_base_id: kb_id.clone(),
+        knowledge_base_arn: kb_arn,
+        name: name.to_string(),
+        description: input["description"].as_str().map(|s| s.to_string()),
+        role_arn,
+        status: "ACTIVE".to_string(),
+        created_at: now_iso(),
+    };
+
+    let result = kb_to_json(&kb);
+    state.knowledge_bases.insert(kb_id, kb);
+
+    Ok(json!({ "knowledgeBase": result }))
+}
+
+pub fn get_knowledge_base(state: &BedrockState, input: &Value) -> Result<Value, AwsError> {
+    let id = input["knowledgeBaseId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "knowledgeBaseId is required"))?;
+
+    let kb = state.knowledge_bases.get(id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Knowledge base {} not found", id),
+        )
+    })?;
+
+    Ok(json!({ "knowledgeBase": kb_to_json(&*kb) }))
+}
+
+pub fn list_knowledge_bases(state: &BedrockState, _input: &Value) -> Result<Value, AwsError> {
+    let summaries: Vec<Value> = state
+        .knowledge_bases
+        .iter()
+        .map(|e| {
+            let k = e.value();
+            json!({
+                "knowledgeBaseId": k.knowledge_base_id,
+                "name": k.name,
+                "description": k.description,
+                "status": k.status,
+                "updatedAt": k.created_at,
+            })
+        })
+        .collect();
+    Ok(json!({ "knowledgeBaseSummaries": summaries }))
+}
+
+pub fn delete_knowledge_base(state: &BedrockState, input: &Value) -> Result<Value, AwsError> {
+    let id = input["knowledgeBaseId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "knowledgeBaseId is required"))?;
+
+    if state.knowledge_bases.remove(id).is_none() {
+        return Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Knowledge base {} not found", id),
+        ));
+    }
+
+    Ok(json!({ "knowledgeBaseId": id, "status": "DELETING" }))
 }
 
 // ── Model Invocation Logging ──────────────────────────────────────────────────
@@ -266,8 +577,74 @@ pub fn put_model_invocation_logging_configuration(
 
 // ── Custom Models ─────────────────────────────────────────────────────────────
 
-pub fn list_custom_models(_state: &BedrockState, _input: &Value) -> Result<Value, AwsError> {
-    Ok(json!({ "modelSummaries": [] }))
+fn cm_to_json(c: &CustomModel) -> Value {
+    json!({
+        "modelName": c.model_name,
+        "modelArn": c.model_arn,
+        "baseModelArn": c.base_model_arn,
+        "creationTime": c.creation_time,
+    })
+}
+
+pub fn list_custom_models(state: &BedrockState, _input: &Value) -> Result<Value, AwsError> {
+    let summaries: Vec<Value> = state
+        .custom_models
+        .iter()
+        .map(|e| cm_to_json(e.value()))
+        .collect();
+    Ok(json!({ "modelSummaries": summaries }))
+}
+
+pub fn get_custom_model(state: &BedrockState, input: &Value) -> Result<Value, AwsError> {
+    let identifier = input["modelIdentifier"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelIdentifier is required"))?;
+
+    let model = state
+        .custom_models
+        .iter()
+        .find(|e| e.key() == identifier || e.value().model_arn == identifier);
+
+    match model {
+        Some(e) => {
+            let c = e.value();
+            Ok(json!({
+                "modelName": c.model_name,
+                "modelArn": c.model_arn,
+                "baseModelArn": c.base_model_arn,
+                "creationTime": c.creation_time,
+                "modelKmsKeyArn": null,
+                "trainingMetrics": { "trainingLoss": 0.0 },
+            }))
+        }
+        None => Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Custom model not found: {identifier}"),
+        )),
+    }
+}
+
+pub fn delete_custom_model(state: &BedrockState, input: &Value) -> Result<Value, AwsError> {
+    let identifier = input["modelIdentifier"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelIdentifier is required"))?;
+
+    let key = state
+        .custom_models
+        .iter()
+        .find(|e| e.key() == identifier || e.value().model_arn == identifier)
+        .map(|e| e.key().clone());
+
+    match key {
+        Some(k) => {
+            state.custom_models.remove(&k);
+            Ok(json!({}))
+        }
+        None => Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Custom model not found: {identifier}"),
+        )),
+    }
 }
 
 pub fn get_model_customization_job(

@@ -1,7 +1,14 @@
 pub mod cache_policies;
 pub mod distributions;
+pub mod extras;
+pub mod field_level_encryption;
+pub mod functions;
 pub mod invalidations;
+pub mod key_groups;
 pub mod oai;
 pub mod origin_access;
+pub mod origin_request_policies;
+pub mod public_keys;
+pub mod realtime_logs;
 pub mod response_headers_policies;
 pub mod tags;

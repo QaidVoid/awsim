@@ -12,6 +12,54 @@ pub struct BedrockState {
     pub tags: DashMap<String, HashMap<String, String>>,
     /// Stored logging configuration (one per state)
     pub logging_config: DashMap<String, LoggingConfig>,
+    /// provisioned model id → ProvisionedModel
+    pub provisioned_models: DashMap<String, ProvisionedModel>,
+    /// invocation job id → InvocationJob
+    pub invocation_jobs: DashMap<String, InvocationJob>,
+    /// custom model name → CustomModel
+    pub custom_models: DashMap<String, CustomModel>,
+    /// knowledge base id → KnowledgeBase
+    pub knowledge_bases: DashMap<String, KnowledgeBase>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProvisionedModel {
+    pub provisioned_model_id: String,
+    pub provisioned_model_arn: String,
+    pub model_arn: String,
+    pub model_units: i32,
+    pub provisioned_model_name: String,
+    pub status: String,
+    pub creation_time: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct InvocationJob {
+    pub job_arn: String,
+    pub job_name: String,
+    pub model_id: String,
+    pub status: String,
+    pub submit_time: String,
+    pub role_arn: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CustomModel {
+    pub model_name: String,
+    pub model_arn: String,
+    pub base_model_arn: String,
+    pub creation_time: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct KnowledgeBase {
+    pub knowledge_base_id: String,
+    pub knowledge_base_arn: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub role_arn: String,
+    pub status: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone)]
