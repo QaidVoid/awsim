@@ -81,7 +81,6 @@ pub struct CloudFrontFunction {
     pub stage: String,
     pub comment: String,
     pub runtime: String,
-    pub function_code: String,
     pub created_at: String,
     pub etag: String,
 }
@@ -135,7 +134,6 @@ pub struct OriginAccessIdentity {
     pub s3_canonical_user_id: String,
     pub comment: String,
     pub caller_reference: String,
-    pub created_at: String,
 }
 
 /// A CloudFront invalidation.

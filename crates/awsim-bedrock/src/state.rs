@@ -24,7 +24,6 @@ pub struct BedrockState {
 
 #[derive(Debug, Clone)]
 pub struct ProvisionedModel {
-    pub provisioned_model_id: String,
     pub provisioned_model_arn: String,
     pub model_arn: String,
     pub model_units: i32,

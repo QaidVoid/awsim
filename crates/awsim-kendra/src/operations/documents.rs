@@ -95,35 +95,6 @@ pub fn batch_delete_document(state: &KendraState, input: &Value) -> Result<Value
     }))
 }
 
-/// DescribeDocument — get a document's metadata (not full content).
-pub fn list_documents(state: &KendraState, input: &Value) -> Result<Value, AwsError> {
-    let index_id = input["IndexId"]
-        .as_str()
-        .ok_or_else(|| AwsError::validation("IndexId is required"))?;
-
-    let index = state
-        .indexes
-        .get(index_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Index {index_id} not found")))?;
-
-    let items: Vec<Value> = index
-        .documents
-        .iter()
-        .map(|doc| {
-            json!({
-                "Id": doc.id,
-                "Title": doc.title,
-                "ContentType": doc.content_type,
-                "CreatedAt": doc.created_at,
-            })
-        })
-        .collect();
-
-    Ok(json!({
-        "DocumentStatusList": items,
-    }))
-}
-
 fn base64_decode(input: &str) -> Option<Vec<u8>> {
     // Simple base64 decoder
     let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

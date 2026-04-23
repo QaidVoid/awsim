@@ -240,7 +240,6 @@ pub fn create_provisioned_model_throughput(
     );
 
     let pmt = ProvisionedModel {
-        provisioned_model_id: id.clone(),
         provisioned_model_arn: arn.clone(),
         model_arn,
         model_units,

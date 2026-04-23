@@ -213,15 +213,6 @@ fn expiration_epoch(duration_secs: u64) -> f64 {
     secs as f64
 }
 
-fn expiration_iso8601(duration_secs: u64) -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        + duration_secs;
-    unix_to_iso8601(secs)
-}
-
 fn unix_to_iso8601(secs: u64) -> String {
     let mut remaining = secs;
     let seconds = remaining % 60;
@@ -246,41 +237,6 @@ fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
-}
-
-// ---------------------------------------------------------------------------
-// Helper: fake temporary credentials (same pattern as STS)
-// ---------------------------------------------------------------------------
-
-fn fake_access_key_id() -> String {
-    let id = uuid::Uuid::new_v4().simple().to_string();
-    let suffix: String = id[..16].to_uppercase();
-    format!("ASIA{suffix}")
-}
-
-fn fake_secret_access_key() -> String {
-    let u1 = uuid::Uuid::new_v4().simple().to_string();
-    let u2 = uuid::Uuid::new_v4().simple().to_string();
-    format!("{u1}{u2}")[..40].to_string()
-}
-
-fn fake_session_token() -> String {
-    let parts: Vec<String> = (0..4)
-        .map(|_| uuid::Uuid::new_v4().simple().to_string())
-        .collect();
-    format!(
-        "FwoGZXIvYXdzEAwaDAwsim{}//////////wEaD{}Aw{}Q{}",
-        parts[0], parts[1], parts[2], parts[3]
-    )
-}
-
-fn generate_credentials(duration_secs: u64) -> Value {
-    json!({
-        "AccessKeyId":     fake_access_key_id(),
-        "SecretKey":       fake_secret_access_key(),
-        "SessionToken":    fake_session_token(),
-        "Expiration":      expiration_epoch(duration_secs),
-    })
 }
 
 // ---------------------------------------------------------------------------

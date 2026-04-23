@@ -103,8 +103,7 @@ fn parse_ip_ranges(input: &Value) -> Vec<IpRange> {
             Some(s) => s.to_string(),
             None => continue,
         };
-        let description = opt_str(&item, "Description").map(|s| s.to_string());
-        ranges.push(IpRange { cidr_ip, description });
+        ranges.push(IpRange { cidr_ip });
     }
 
     ranges
@@ -128,7 +127,6 @@ pub fn create_security_group(state: &Ec2State, input: &Value) -> Result<Value, A
         ip_protocol: "-1".to_string(),
         ip_ranges: vec![IpRange {
             cidr_ip: "0.0.0.0/0".to_string(),
-            description: None,
         }],
     };
 

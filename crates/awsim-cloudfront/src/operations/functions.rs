@@ -44,11 +44,6 @@ pub fn create_function(state: &CloudFrontState, input: &Value) -> Result<Value, 
         .and_then(|v| v.as_str())
         .unwrap_or("cloudfront-js-2.0")
         .to_string();
-    let function_code = input
-        .get("FunctionCode")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
 
     let etag = new_etag();
     let f = CloudFrontFunction {
@@ -56,7 +51,6 @@ pub fn create_function(state: &CloudFrontState, input: &Value) -> Result<Value, 
         stage: "DEVELOPMENT".to_string(),
         comment,
         runtime,
-        function_code,
         created_at: now_iso8601(),
         etag: etag.clone(),
     };

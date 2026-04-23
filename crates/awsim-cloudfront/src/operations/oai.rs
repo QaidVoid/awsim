@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
-    ids::{new_etag, now_iso8601},
+    ids::new_etag,
     state::{CloudFrontState, OriginAccessIdentity},
 };
 
@@ -52,7 +52,6 @@ pub fn create_oai(state: &CloudFrontState, input: &Value) -> Result<Value, AwsEr
         s3_canonical_user_id,
         comment,
         caller_reference,
-        created_at: now_iso8601(),
     };
 
     let result = oai_to_value(&oai);

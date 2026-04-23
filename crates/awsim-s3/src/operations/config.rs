@@ -652,16 +652,6 @@ fn default_sse_s3_config() -> Value {
 /// Returns `not_found_code` error if not set.
 /// `xml_root` is the expected XML root element name (used to wrap the response).
 /// `config_key` is the JSON key under which the config data was stored.
-pub fn get_bucket_config(
-    state: &S3State,
-    input: &Value,
-    config_name: &str,
-    not_found_code: &str,
-) -> Result<Value, AwsError> {
-    get_bucket_config_xml(state, input, config_name, not_found_code, None, None)
-}
-
-/// GET with XML root wrapping.
 pub fn get_bucket_config_xml(
     state: &S3State,
     input: &Value,
@@ -704,14 +694,6 @@ pub fn get_bucket_config_xml(
 
 /// PUT /{Bucket}?<param> — Store a JSON config on bucket.configs.
 /// Extracts `config_key` subfield if present, otherwise stores the input JSON (excluding path params).
-pub fn put_bucket_config(
-    state: &S3State,
-    input: &Value,
-    config_name: &str,
-) -> Result<Value, AwsError> {
-    put_bucket_config_key(state, input, config_name, None)
-}
-
 pub fn put_bucket_config_key(
     state: &S3State,
     input: &Value,

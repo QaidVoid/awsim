@@ -41,7 +41,6 @@ pub struct ConfigurationSet {
     pub tags: HashMap<String, String>,
     pub sending_enabled: bool,
     pub reputation_metrics_enabled: bool,
-    pub tracking_options: Option<String>,
     pub event_destinations: Vec<EventDestination>,
 }
 

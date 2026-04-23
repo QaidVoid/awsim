@@ -56,7 +56,6 @@ pub fn create_key_pair(state: &Ec2State, input: &Value) -> Result<Value, AwsErro
     let kp = KeyPair {
         key_name: key_name.clone(),
         key_fingerprint: key_fingerprint.clone(),
-        key_material: key_material.clone(),
         create_time: now_iso8601(),
     };
 

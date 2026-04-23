@@ -59,7 +59,6 @@ pub struct IpPermission {
 #[derive(Debug, Clone)]
 pub struct IpRange {
     pub cidr_ip: String,
-    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,7 +90,6 @@ pub struct Route {
 pub struct KeyPair {
     pub key_name: String,
     pub key_fingerprint: String,
-    pub key_material: String,
     pub create_time: String,
 }
 
@@ -113,5 +111,4 @@ pub struct Address {
     pub allocation_id: String,
     pub public_ip: String,
     pub instance_id: Option<String>,
-    pub tags: HashMap<String, String>,
 }

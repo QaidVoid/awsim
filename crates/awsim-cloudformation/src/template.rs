@@ -21,8 +21,6 @@ pub struct ParsedTemplate {
     pub conditions: HashMap<String, bool>,
     /// Parameter definitions from the template
     pub parameters: Vec<ParameterDef>,
-    /// Output definitions (pre-resolution)
-    pub outputs: HashMap<String, Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -136,23 +134,11 @@ pub fn validate_and_parse(
     let sorted = topological_sort(resource_defs)
         .map_err(|e| invalid_template(format!("Dependency error: {e}")))?;
 
-    // Parse outputs
-    let outputs = template
-        .get("Outputs")
-        .and_then(|v| v.as_object())
-        .map(|o| {
-            o.iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect::<HashMap<_, _>>()
-        })
-        .unwrap_or_default();
-
     Ok(ParsedTemplate {
         description,
         resources: sorted,
         conditions,
         parameters: parameter_defs,
-        outputs,
     })
 }
 

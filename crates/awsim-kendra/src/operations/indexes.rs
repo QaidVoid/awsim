@@ -127,7 +127,7 @@ pub fn update_index(state: &KendraState, input: &Value) -> Result<Value, AwsErro
 pub fn create_data_source(
     state: &KendraState,
     input: &Value,
-    ctx: &RequestContext,
+    _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let index_id = input["IndexId"]
         .as_str()
