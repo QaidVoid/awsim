@@ -87,6 +87,37 @@ aws --endpoint-url http://localhost:4566 lambda invoke \
 | `ListLayers` | List layers |
 | `ListLayerVersions` | List versions of a layer |
 
+### Function URL Configs
+
+| Operation | Description |
+|-----------|-------------|
+| `CreateFunctionUrlConfig` | Create a function URL for a function. Input: `FunctionName`, `AuthType` (`NONE` or `AWS_IAM`), optional `Cors`. Returns `FunctionUrl`, `FunctionArn`, `AuthType` |
+| `GetFunctionUrlConfig` | Get the URL configuration for a function. Returns `FunctionUrl`, `FunctionArn`, `AuthType`, `Cors` |
+| `DeleteFunctionUrlConfig` | Remove the URL config from a function |
+| `ListFunctionUrlConfigs` | List URL configs for a function (zero or one entry) |
+
+### Tags
+
+| Operation | Description |
+|-----------|-------------|
+| `TagResource` | Add or update tags on a function. Input: `Resource` (function ARN or name), `Tags` (object) |
+| `UntagResource` | Remove tags from a function. Input: `Resource`, `TagKeys` (list) |
+| `ListTags` | List tags on a function. Input: `Resource`. Returns `Tags` object |
+
+### Resource Policy / Permissions
+
+| Operation | Description |
+|-----------|-------------|
+| `GetPolicy` | Return the function's resource-based policy as a JSON string. Returns 404 if no permissions have been added |
+| `AddPermission` | Grant a principal (e.g., S3, SNS, EventBridge) permission to invoke the function. Input: `FunctionName`, `StatementId`, `Action`, `Principal`, optional `SourceArn`, `SourceAccount` |
+| `RemovePermission` | Remove a policy statement from the function. Input: `FunctionName`, `StatementId` |
+
+### Account Settings
+
+| Operation | Description |
+|-----------|-------------|
+| `GetAccountSettings` | Return account-level Lambda limits (total code size, concurrency limits, function count). Useful for SDK health checks |
+
 ## Curl Examples
 
 ```bash

@@ -7,6 +7,8 @@ pub struct LambdaState {
     pub functions: DashMap<String, LambdaFunction>,
     pub event_source_mappings: DashMap<String, EventSourceMapping>,
     pub layers: DashMap<String, Vec<LayerVersion>>,
+    /// function_name → FunctionUrlConfig
+    pub url_configs: DashMap<String, FunctionUrlConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +34,24 @@ pub struct LambdaFunction {
     pub state: String,
     /// Invocation records for debugging / admin console.
     pub invocations: Vec<InvocationRecord>,
+    /// Resource-based policy statements (for AddPermission / RemovePermission).
+    pub policy_statements: HashMap<String, serde_json::Value>,
+    /// Tags attached to this function.
+    pub tags: HashMap<String, String>,
+}
+
+/// A function URL configuration.
+#[derive(Debug, Clone)]
+pub struct FunctionUrlConfig {
+    /// Kept for potential admin console use.
+    #[allow(dead_code)]
+    pub function_name: String,
+    pub function_arn: String,
+    pub function_url: String,
+    pub auth_type: String,
+    pub cors: Option<serde_json::Value>,
+    pub creation_time: String,
+    pub last_modified_time: String,
 }
 
 #[derive(Debug, Clone)]

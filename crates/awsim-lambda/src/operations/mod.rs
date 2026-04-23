@@ -3,4 +3,7 @@ pub mod event_source_mappings;
 pub mod functions;
 pub mod invocations;
 pub mod layers;
+pub mod permissions;
+pub mod tags;
+pub mod url_configs;
 pub mod versions;

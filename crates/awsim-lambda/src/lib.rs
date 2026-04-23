@@ -190,6 +190,76 @@ impl ServiceHandler for LambdaService {
                 operation: "DeleteLayerVersion",
                 required_query_param: None,
             },
+            // Function URL Configs
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2021-10-31/functions/{FunctionName}/url",
+                operation: "CreateFunctionUrlConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2021-10-31/functions/{FunctionName}/url",
+                operation: "GetFunctionUrlConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2021-10-31/functions/{FunctionName}/url",
+                operation: "DeleteFunctionUrlConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2021-10-31/functions/{FunctionName}/urls",
+                operation: "ListFunctionUrlConfigs",
+                required_query_param: None,
+            },
+            // Tags
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2017-03-31/tags/{Resource}",
+                operation: "ListTags",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2017-03-31/tags/{Resource}",
+                operation: "TagResource",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2017-03-31/tags/{Resource}",
+                operation: "UntagResource",
+                required_query_param: None,
+            },
+            // Policy / Permissions
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2015-03-31/functions/{FunctionName}/policy",
+                operation: "GetPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2015-03-31/functions/{FunctionName}/policy",
+                operation: "AddPermission",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2015-03-31/functions/{FunctionName}/policy/{StatementId}",
+                operation: "RemovePermission",
+                required_query_param: None,
+            },
+            // Account Settings
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2016-08-19/account-settings",
+                operation: "GetAccountSettings",
+                required_query_param: None,
+            },
         ]
     }
 
@@ -271,6 +341,37 @@ impl ServiceHandler for LambdaService {
             }
             "DeleteLayerVersion" => {
                 operations::layers::delete_layer_version(&state, &input, ctx)
+            }
+
+            // Function URL Configs
+            "CreateFunctionUrlConfig" => {
+                operations::url_configs::create_function_url_config(&state, &input, ctx)
+            }
+            "GetFunctionUrlConfig" => {
+                operations::url_configs::get_function_url_config(&state, &input, ctx)
+            }
+            "DeleteFunctionUrlConfig" => {
+                operations::url_configs::delete_function_url_config(&state, &input, ctx)
+            }
+            "ListFunctionUrlConfigs" => {
+                operations::url_configs::list_function_url_configs(&state, &input, ctx)
+            }
+
+            // Tags
+            "TagResource" => operations::tags::tag_resource(&state, &input, ctx),
+            "UntagResource" => operations::tags::untag_resource(&state, &input, ctx),
+            "ListTags" => operations::tags::list_tags(&state, &input, ctx),
+
+            // Policy / Permissions
+            "GetPolicy" => operations::permissions::get_policy(&state, &input, ctx),
+            "AddPermission" => operations::permissions::add_permission(&state, &input, ctx),
+            "RemovePermission" => {
+                operations::permissions::remove_permission(&state, &input, ctx)
+            }
+
+            // Account Settings
+            "GetAccountSettings" => {
+                operations::permissions::get_account_settings(&state, &input, ctx)
             }
 
             _ => Err(AwsError::unknown_operation(operation)),

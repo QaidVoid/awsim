@@ -121,6 +121,17 @@ pub fn create_function(
     );
     let now = now_iso8601();
 
+    // Extract tags from CreateFunction input
+    let tags: HashMap<String, String> = input
+        .get("Tags")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let func = LambdaFunction {
         name: name.to_string(),
         arn: arn.clone(),
@@ -140,6 +151,8 @@ pub fn create_function(
         last_modified: now,
         state: "Active".to_string(),
         invocations: vec![],
+        policy_statements: HashMap::new(),
+        tags,
     };
 
     let config = function_configuration(&func);
