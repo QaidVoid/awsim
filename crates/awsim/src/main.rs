@@ -55,6 +55,7 @@ async fn main() -> Result<()> {
         sqs_store,
         secrets_store,
         lambda_store,
+        organizations_store,
     ) = register_services(&mut state, &cli.account_id, &cli.region);
 
     if let Some(authz) = Arc::get_mut(&mut state.authz) {
@@ -79,6 +80,9 @@ async fn main() -> Result<()> {
             "lambda".to_string(),
             Arc::new(awsim_lambda::LambdaResourcePolicyLookup::new(lambda_store)),
         );
+        authz.scp_lookup = Some(Arc::new(
+            awsim_organizations::OrganizationsScpLookup::new(organizations_store, &cli.account_id),
+        ));
     }
 
     // Persistence: restore snapshots if --data-dir was provided.
@@ -392,6 +396,7 @@ fn register_services(
     awsim_core::AccountRegionStore<awsim_sqs::state::SqsState>,
     awsim_core::AccountRegionStore<awsim_secretsmanager::state::SecretsState>,
     awsim_core::AccountRegionStore<awsim_lambda::state::LambdaState>,
+    awsim_core::AccountRegionStore<awsim_organizations::state::OrganizationsState>,
 ) {
     use std::sync::Arc;
 
@@ -548,6 +553,7 @@ fn register_services(
     state.register(kendra, vec![]);
 
     let organizations = Arc::new(awsim_organizations::OrganizationsService::new());
+    let organizations_store = organizations.store();
     state.register(organizations, vec![]);
 
     let cloudtrail = Arc::new(awsim_cloudtrail::CloudTrailService::new());
@@ -601,5 +607,6 @@ fn register_services(
         sqs_store,
         secrets_store,
         lambda_store,
+        organizations_store,
     )
 }

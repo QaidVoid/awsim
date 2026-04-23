@@ -1,5 +1,6 @@
+pub mod authz;
 mod operations;
-mod state;
+pub mod state;
 
 use async_trait::async_trait;
 use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
@@ -7,6 +8,8 @@ use serde_json::Value;
 use tracing::debug;
 
 use state::OrganizationsState;
+
+pub use authz::OrganizationsScpLookup;
 
 pub struct OrganizationsService {
     store: AccountRegionStore<OrganizationsState>,
@@ -17,6 +20,10 @@ impl OrganizationsService {
         Self {
             store: AccountRegionStore::new(),
         }
+    }
+
+    pub fn store(&self) -> AccountRegionStore<OrganizationsState> {
+        self.store.clone()
     }
 }
 

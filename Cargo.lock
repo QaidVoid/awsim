@@ -2053,6 +2053,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "awsim-iam-policy",
  "dashmap",
  "serde",
  "serde_json",
