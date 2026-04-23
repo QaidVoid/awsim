@@ -930,3 +930,162 @@ pub fn batch_get_secret_value(
         "Errors": errors,
     }))
 }
+
+// ---------------------------------------------------------------------------
+// UpdateSecretVersionStage
+// ---------------------------------------------------------------------------
+
+pub fn update_secret_version_stage(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+    let version_stage = input["VersionStage"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("VersionStage"))?;
+    let remove_from = input["RemoveFromVersionId"].as_str();
+    let move_to = input["MoveToVersionId"].as_str();
+
+    let name = resolve_name(state, secret_id)?;
+    let mut secret = state
+        .secrets
+        .get_mut(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+    let arn = secret.arn.clone();
+    let secret_name = secret.name.clone();
+
+    if let Some(remove_id) = remove_from {
+        if let Some(v) = secret.versions.get_mut(remove_id) {
+            v.stages.retain(|s| s != version_stage);
+        }
+    }
+
+    if let Some(move_id) = move_to {
+        if !secret.versions.contains_key(move_id) {
+            return Err(error::resource_not_found(move_id));
+        }
+        for (vid, v) in secret.versions.iter_mut() {
+            if vid != move_id {
+                v.stages.retain(|s| s != version_stage);
+            }
+        }
+        if let Some(v) = secret.versions.get_mut(move_id) {
+            if !v.stages.contains(&version_stage.to_string()) {
+                v.stages.push(version_stage.to_string());
+            }
+        }
+        if version_stage == "AWSCURRENT" {
+            secret.current_version_id = move_id.to_string();
+        }
+    }
+
+    secret.last_changed_date = now_epoch_f64();
+
+    Ok(json!({
+        "ARN": arn,
+        "Name": secret_name,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// PutResourcePolicy
+// ---------------------------------------------------------------------------
+
+pub fn put_resource_policy(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+    let policy = input["ResourcePolicy"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("ResourcePolicy"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let secret = state
+        .secrets
+        .get(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+    let arn = secret.arn.clone();
+    let secret_name = secret.name.clone();
+    drop(secret);
+
+    state.resource_policies.insert(name, policy.to_string());
+
+    Ok(json!({
+        "ARN": arn,
+        "Name": secret_name,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// GetResourcePolicy
+// ---------------------------------------------------------------------------
+
+pub fn get_resource_policy(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let secret = state
+        .secrets
+        .get(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+    let arn = secret.arn.clone();
+    let secret_name = secret.name.clone();
+    drop(secret);
+
+    let policy = state
+        .resource_policies
+        .get(&name)
+        .map(|e| e.value().clone());
+
+    let mut response = json!({
+        "ARN": arn,
+        "Name": secret_name,
+    });
+    if let Some(p) = policy {
+        response["ResourcePolicy"] = json!(p);
+    }
+    Ok(response)
+}
+
+// ---------------------------------------------------------------------------
+// DeleteResourcePolicy
+// ---------------------------------------------------------------------------
+
+pub fn delete_resource_policy(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let name = resolve_name(state, secret_id)?;
+    let secret = state
+        .secrets
+        .get(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+    let arn = secret.arn.clone();
+    let secret_name = secret.name.clone();
+    drop(secret);
+
+    state.resource_policies.remove(&name);
+
+    Ok(json!({
+        "ARN": arn,
+        "Name": secret_name,
+    }))
+}

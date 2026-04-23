@@ -84,6 +84,14 @@ impl ServiceHandler for SecretsManagerService {
             "BatchGetSecretValue" => {
                 operations::secrets::batch_get_secret_value(&state, &input, ctx)
             }
+            "UpdateSecretVersionStage" => {
+                operations::secrets::update_secret_version_stage(&state, &input, ctx)
+            }
+            "PutResourcePolicy" => operations::secrets::put_resource_policy(&state, &input, ctx),
+            "GetResourcePolicy" => operations::secrets::get_resource_policy(&state, &input, ctx),
+            "DeleteResourcePolicy" => {
+                operations::secrets::delete_resource_policy(&state, &input, ctx)
+            }
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

@@ -1,7 +1,7 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-use crate::state::SnsState;
+use crate::state::{SandboxPhoneNumber, SnsState};
 
 // ---------------------------------------------------------------------------
 // CheckIfPhoneNumberIsOptedOut
@@ -101,6 +101,167 @@ pub fn set_sms_attributes(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// CreateSMSSandboxPhoneNumber
+// ---------------------------------------------------------------------------
+
+pub fn create_sms_sandbox_phone_number(
+    state: &SnsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let phone_number = input["PhoneNumber"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PhoneNumber is required"))?;
+    let language_code = input["LanguageCode"]
+        .as_str()
+        .unwrap_or("en-US")
+        .to_string();
+
+    state.sandbox_numbers.insert(
+        phone_number.to_string(),
+        SandboxPhoneNumber {
+            phone_number: phone_number.to_string(),
+            status: "Pending".to_string(),
+            language_code,
+        },
+    );
+
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// DeleteSMSSandboxPhoneNumber
+// ---------------------------------------------------------------------------
+
+pub fn delete_sms_sandbox_phone_number(
+    state: &SnsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let phone_number = input["PhoneNumber"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PhoneNumber is required"))?;
+
+    state.sandbox_numbers.remove(phone_number);
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// VerifySMSSandboxPhoneNumber
+// ---------------------------------------------------------------------------
+
+pub fn verify_sms_sandbox_phone_number(
+    state: &SnsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let phone_number = input["PhoneNumber"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PhoneNumber is required"))?;
+    let _otp = input["OneTimePassword"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "OneTimePassword is required"))?;
+
+    if let Some(mut entry) = state.sandbox_numbers.get_mut(phone_number) {
+        entry.status = "Verified".to_string();
+        Ok(json!({}))
+    } else {
+        Err(AwsError::not_found(
+            "ResourceNotFound",
+            format!("Phone number not found: {phone_number}"),
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ListSMSSandboxPhoneNumbers
+// ---------------------------------------------------------------------------
+
+pub fn list_sms_sandbox_phone_numbers(
+    state: &SnsState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let numbers: Vec<Value> = state
+        .sandbox_numbers
+        .iter()
+        .map(|entry| {
+            let n = entry.value();
+            json!({
+                "PhoneNumber": n.phone_number,
+                "Status": n.status,
+            })
+        })
+        .collect();
+
+    Ok(json!({ "PhoneNumbers": numbers }))
+}
+
+// ---------------------------------------------------------------------------
+// GetSMSSandboxAccountStatus
+// ---------------------------------------------------------------------------
+
+pub fn get_sms_sandbox_account_status(
+    _state: &SnsState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "IsInSandbox": true }))
+}
+
+// ---------------------------------------------------------------------------
+// GetDataProtectionPolicy
+// ---------------------------------------------------------------------------
+
+pub fn get_data_protection_policy(
+    state: &SnsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let resource_arn = input["ResourceArn"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
+
+    let policy = state
+        .data_protection_policies
+        .get(resource_arn)
+        .map(|e| e.value().clone())
+        .unwrap_or_default();
+
+    Ok(json!({ "DataProtectionPolicy": policy }))
+}
+
+// ---------------------------------------------------------------------------
+// PutDataProtectionPolicy
+// ---------------------------------------------------------------------------
+
+pub fn put_data_protection_policy(
+    state: &SnsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let resource_arn = input["ResourceArn"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
+    let policy = input["DataProtectionPolicy"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DataProtectionPolicy is required"))?;
+
+    if !state.topics.contains_key(resource_arn) {
+        return Err(AwsError::not_found(
+            "NotFound",
+            format!("Topic not found: {resource_arn}"),
+        ));
+    }
+
+    state
+        .data_protection_policies
+        .insert(resource_arn.to_string(), policy.to_string());
+
+    Ok(json!({}))
+}
 
 fn default_sms_attributes() -> std::collections::HashMap<String, String> {
     let mut m = std::collections::HashMap::new();

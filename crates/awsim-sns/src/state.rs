@@ -141,6 +141,14 @@ pub struct PlatformEndpoint {
     pub attributes: HashMap<String, String>,
 }
 
+/// A phone number registered in the SMS sandbox.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxPhoneNumber {
+    pub phone_number: String,
+    pub status: String,
+    pub language_code: String,
+}
+
 /// Per-account/region SNS state.
 #[derive(Debug, Default)]
 pub struct SnsState {
@@ -156,6 +164,10 @@ pub struct SnsState {
     pub platform_endpoints: DashMap<String, PlatformEndpoint>,
     /// Opted-in phone numbers (account-level).
     pub opted_in_numbers: RwLock<Vec<String>>,
+    /// SMS sandbox phone numbers (PhoneNumber → SandboxPhoneNumber).
+    pub sandbox_numbers: DashMap<String, SandboxPhoneNumber>,
+    /// Topic ARN → JSON policy string for data protection.
+    pub data_protection_policies: DashMap<String, String>,
 }
 
 impl SnsState {

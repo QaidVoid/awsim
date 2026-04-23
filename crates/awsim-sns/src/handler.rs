@@ -85,6 +85,13 @@ impl ServiceHandler for SnsService {
             }
             "GetSMSAttributes" => sms::get_sms_attributes(&state, &input, ctx),
             "SetSMSAttributes" => sms::set_sms_attributes(&state, &input, ctx),
+            "CreateSMSSandboxPhoneNumber" => sms::create_sms_sandbox_phone_number(&state, &input, ctx),
+            "DeleteSMSSandboxPhoneNumber" => sms::delete_sms_sandbox_phone_number(&state, &input, ctx),
+            "VerifySMSSandboxPhoneNumber" => sms::verify_sms_sandbox_phone_number(&state, &input, ctx),
+            "ListSMSSandboxPhoneNumbers" => sms::list_sms_sandbox_phone_numbers(&state, &input, ctx),
+            "GetSMSSandboxAccountStatus" => sms::get_sms_sandbox_account_status(&state, &input, ctx),
+            "GetDataProtectionPolicy" => sms::get_data_protection_policy(&state, &input, ctx),
+            "PutDataProtectionPolicy" => sms::put_data_protection_policy(&state, &input, ctx),
 
             // Platform applications
             "CreatePlatformApplication" => platform::create_platform_application(&state, &input, ctx),

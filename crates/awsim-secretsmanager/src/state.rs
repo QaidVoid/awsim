@@ -43,4 +43,6 @@ pub struct Secret {
 pub struct SecretsState {
     /// name → Secret (primary index)
     pub secrets: DashMap<String, Secret>,
+    /// secret name → JSON resource policy string
+    pub resource_policies: DashMap<String, String>,
 }
