@@ -24,3 +24,7 @@ pub fn missing_parameter(param: &str) -> AwsError {
 pub fn delete_conflict(message: impl Into<String>) -> AwsError {
     AwsError::conflict("DeleteConflict", message)
 }
+
+pub fn malformed_policy_document(message: impl Into<String>) -> AwsError {
+    AwsError::bad_request("MalformedPolicyDocument", message)
+}

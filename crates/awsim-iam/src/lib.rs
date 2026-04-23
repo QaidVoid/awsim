@@ -457,6 +457,100 @@ impl ServiceHandler for IamService {
         }
     }
 
+    fn iam_action(&self, operation: &str) -> Option<String> {
+        Some(format!("iam:{operation}"))
+    }
+
+    fn iam_resource(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Option<String> {
+        let prefix = format!("arn:aws:iam::{}", ctx.account_id);
+        match operation {
+            "ListUsers" | "ListGroups" | "ListRoles" | "ListPolicies"
+            | "ListInstanceProfiles" | "ListAccountAliases"
+            | "ListOpenIDConnectProviders" | "ListSAMLProviders" | "ListServerCertificates"
+            | "ListVirtualMFADevices" | "GetAccountSummary" | "GetAccountPasswordPolicy"
+            | "UpdateAccountPasswordPolicy" | "DeleteAccountPasswordPolicy"
+            | "GetAccountAuthorizationDetails" | "GenerateCredentialReport"
+            | "GetCredentialReport" | "GenerateServiceLastAccessedDetails"
+            | "GetServiceLastAccessedDetails" | "GetServiceLastAccessedDetailsWithEntities"
+            | "SimulateCustomPolicy" | "SimulatePrincipalPolicy"
+            | "GetContextKeysForCustomPolicy" | "GetContextKeysForPrincipalPolicy"
+            | "ListServiceSpecificCredentials" | "ListSigningCertificates"
+            | "CreateAccountAlias" | "DeleteAccountAlias" => Some("*".to_string()),
+            op if op.contains("User") && !op.contains("LoginProfile") && !op.contains("AccessKey")
+                && !op.contains("SSHPublicKey") && !op.contains("MFADevice")
+                && !op.contains("ServiceSpecificCredential") => {
+                input.get("UserName").and_then(|v| v.as_str()).map(|n| format!("{prefix}:user/{n}"))
+            }
+            "CreateLoginProfile" | "GetLoginProfile" | "UpdateLoginProfile" | "DeleteLoginProfile"
+            | "CreateAccessKey" | "DeleteAccessKey" | "ListAccessKeys" | "UpdateAccessKey"
+            | "GetAccessKeyLastUsed" | "ChangePassword"
+            | "UploadSSHPublicKey" | "GetSSHPublicKey" | "ListSSHPublicKeys"
+            | "DeleteSSHPublicKey" | "UpdateSSHPublicKey"
+            | "EnableMFADevice" | "DeactivateMFADevice" | "ListMFADevices"
+            | "PutUserPermissionsBoundary" | "DeleteUserPermissionsBoundary"
+            | "ListGroupsForUser" => {
+                input.get("UserName").and_then(|v| v.as_str()).map(|n| format!("{prefix}:user/{n}"))
+            }
+            op if op.contains("Role") && !op.contains("InstanceProfile")
+                && !op.contains("ServiceLinkedRole") => {
+                input.get("RoleName").and_then(|v| v.as_str()).map(|n| format!("{prefix}:role/{n}"))
+            }
+            "PutRolePermissionsBoundary" | "DeleteRolePermissionsBoundary" => {
+                input.get("RoleName").and_then(|v| v.as_str()).map(|n| format!("{prefix}:role/{n}"))
+            }
+            "CreateServiceLinkedRole" | "DeleteServiceLinkedRole"
+            | "GetServiceLinkedRoleDeletionStatus" => {
+                input.get("RoleName").and_then(|v| v.as_str())
+                    .map(|n| format!("{prefix}:role/aws-service-role/{n}"))
+                    .or(Some("*".to_string()))
+            }
+            op if op.contains("Group") && !op.contains("ListGroupsForUser") => {
+                input.get("GroupName").and_then(|v| v.as_str()).map(|n| format!("{prefix}:group/{n}"))
+            }
+            op if op.contains("InstanceProfile") => {
+                input.get("InstanceProfileName").and_then(|v| v.as_str())
+                    .map(|n| format!("{prefix}:instance-profile/{n}"))
+            }
+            "CreatePolicy" => input.get("PolicyName").and_then(|v| v.as_str())
+                .map(|n| format!("{prefix}:policy/{n}")),
+            op if op.contains("Policy") => {
+                if let Some(arn) = input.get("PolicyArn").and_then(|v| v.as_str()) {
+                    Some(arn.to_string())
+                } else if let Some(name) = input.get("PolicyName").and_then(|v| v.as_str()) {
+                    Some(format!("{prefix}:policy/{name}"))
+                } else {
+                    Some("*".to_string())
+                }
+            }
+            op if op.contains("OpenIDConnectProvider") => input
+                .get("OpenIDConnectProviderArn")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| input.get("Url").and_then(|v| v.as_str()).map(|u| format!("{prefix}:oidc-provider/{u}"))),
+            op if op.contains("SAMLProvider") => input
+                .get("SAMLProviderArn")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| input.get("Name").and_then(|v| v.as_str()).map(|n| format!("{prefix}:saml-provider/{n}"))),
+            op if op.contains("ServerCertificate") => input
+                .get("ServerCertificateName")
+                .and_then(|v| v.as_str())
+                .map(|n| format!("{prefix}:server-certificate/{n}")),
+            op if op.contains("VirtualMFADevice") || op.contains("MFADevice") => input
+                .get("SerialNumber")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| input.get("VirtualMFADeviceName").and_then(|v| v.as_str())
+                    .map(|n| format!("{prefix}:mfa/{n}"))),
+            _ => Some("*".to_string()),
+        }
+    }
+
     fn snapshot(&self) -> Option<Vec<u8>> {
         let mut snapshot = IamStateSnapshot {
             users: vec![],

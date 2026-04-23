@@ -14,6 +14,62 @@ impl IamPrincipalLookup {
     pub fn new(store: AccountRegionStore<IamState>) -> Self {
         Self { store }
     }
+
+    pub fn resolve_arn(&self, arn: &str) -> Option<ResolvedPrincipal> {
+        for ((account_id, _region), state) in self.store.iter_all() {
+            if let Some(user) = state
+                .users
+                .iter()
+                .find(|entry| entry.value().arn == arn)
+                .map(|entry| entry.value().clone())
+            {
+                let identity_policies = collect_identity_policies(&state, &user);
+                let permissions_boundary = state
+                    .user_permissions_boundaries
+                    .get(&user.user_name)
+                    .and_then(|entry| {
+                        let boundary_arn = entry.value().clone();
+                        state
+                            .policies
+                            .get(&boundary_arn)
+                            .and_then(|p| parse_policy_document(&p.value().policy_document))
+                    });
+                return Some(ResolvedPrincipal {
+                    arn: user.arn.clone(),
+                    account: account_id.clone(),
+                    identity_policies,
+                    permissions_boundary,
+                    is_root: false,
+                });
+            }
+            if let Some(role) = state
+                .roles
+                .iter()
+                .find(|entry| entry.value().arn == arn)
+                .map(|entry| entry.value().clone())
+            {
+                let identity_policies = collect_role_identity_policies(&state, &role);
+                let permissions_boundary = state
+                    .role_permissions_boundaries
+                    .get(&role.role_name)
+                    .and_then(|entry| {
+                        let boundary_arn = entry.value().clone();
+                        state
+                            .policies
+                            .get(&boundary_arn)
+                            .and_then(|p| parse_policy_document(&p.value().policy_document))
+                    });
+                return Some(ResolvedPrincipal {
+                    arn: role.arn.clone(),
+                    account: account_id.clone(),
+                    identity_policies,
+                    permissions_boundary,
+                    is_root: false,
+                });
+            }
+        }
+        None
+    }
 }
 
 impl PrincipalLookup for IamPrincipalLookup {
@@ -97,6 +153,23 @@ fn collect_identity_policies(state: &IamState, user: &crate::state::User) -> Vec
         }
     }
 
+    docs
+}
+
+fn collect_role_identity_policies(state: &IamState, role: &crate::state::Role) -> Vec<PolicyDocument> {
+    let mut docs = Vec::new();
+    for raw in role.inline_policies.values() {
+        if let Some(doc) = parse_policy_document(raw) {
+            docs.push(doc);
+        }
+    }
+    for arn in &role.attached_policies {
+        if let Some(policy) = state.policies.get(arn) {
+            if let Some(doc) = parse_policy_document(&policy.value().policy_document) {
+                docs.push(doc);
+            }
+        }
+    }
     docs
 }
 

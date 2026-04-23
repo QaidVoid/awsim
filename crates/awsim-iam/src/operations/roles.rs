@@ -3,10 +3,16 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use crate::{
-    error::{delete_conflict, entity_already_exists, no_such_entity},
+    error::{delete_conflict, entity_already_exists, malformed_policy_document, no_such_entity},
     ids::{new_role_id, normalize_path, now_iso8601},
     state::{IamState, Role},
 };
+
+fn validate_policy_document(doc: &str) -> Result<(), AwsError> {
+    awsim_iam_policy::parse(doc).map(|_| ()).map_err(|e| {
+        malformed_policy_document(format!("Syntax errors in policy. {e}"))
+    })
+}
 
 use super::{opt_str, require_str};
 
@@ -35,6 +41,8 @@ pub fn create_role(
     let assume_role_policy = require_str(input, "AssumeRolePolicyDocument")?;
     let path = normalize_path(opt_str(input, "Path"));
     let description = opt_str(input, "Description").map(|s| s.to_string());
+
+    validate_policy_document(assume_role_policy)?;
 
     if state.roles.contains_key(role_name) {
         return Err(entity_already_exists("Role", role_name));
@@ -130,6 +138,8 @@ pub fn list_roles(state: &IamState, input: &Value) -> Result<Value, AwsError> {
 pub fn update_assume_role_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let role_name = require_str(input, "RoleName")?;
     let policy_document = require_str(input, "PolicyDocument")?;
+
+    validate_policy_document(policy_document)?;
 
     let mut role = state
         .roles

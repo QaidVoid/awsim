@@ -2,12 +2,18 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::{
-    error::{delete_conflict, entity_already_exists, no_such_entity},
+    error::{delete_conflict, entity_already_exists, malformed_policy_document, no_such_entity},
     ids::{new_policy_id, normalize_path, now_iso8601},
     state::{IamState, Policy, PolicyVersion},
 };
 
 use super::{opt_str, require_str};
+
+fn validate_policy_document(doc: &str) -> Result<(), AwsError> {
+    awsim_iam_policy::parse(doc).map(|_| ()).map_err(|e| {
+        malformed_policy_document(format!("Syntax errors in policy. {e}"))
+    })
+}
 
 fn policy_to_value(p: &Policy) -> Value {
     let mut v = json!({
@@ -41,6 +47,8 @@ pub fn create_policy(
     let policy_document = require_str(input, "PolicyDocument")?;
     let path = normalize_path(opt_str(input, "Path"));
     let description = opt_str(input, "Description").map(|s| s.to_string());
+
+    validate_policy_document(policy_document)?;
 
     let arn = build_policy_arn(&ctx.account_id, &path, policy_name);
 
@@ -297,6 +305,8 @@ pub fn create_policy_version(state: &IamState, input: &Value) -> Result<Value, A
         .get("SetAsDefault")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+
+    validate_policy_document(policy_document)?;
 
     let mut policy = state
         .policies
@@ -666,6 +676,8 @@ pub fn put_user_policy(state: &IamState, input: &Value) -> Result<Value, AwsErro
     let policy_name = require_str(input, "PolicyName")?;
     let policy_document = require_str(input, "PolicyDocument")?;
 
+    validate_policy_document(policy_document)?;
+
     let mut user = state
         .users
         .get_mut(user_name)
@@ -681,6 +693,8 @@ pub fn put_role_policy(state: &IamState, input: &Value) -> Result<Value, AwsErro
     let policy_name = require_str(input, "PolicyName")?;
     let policy_document = require_str(input, "PolicyDocument")?;
 
+    validate_policy_document(policy_document)?;
+
     let mut role = state
         .roles
         .get_mut(role_name)
@@ -695,6 +709,8 @@ pub fn put_group_policy(state: &IamState, input: &Value) -> Result<Value, AwsErr
     let group_name = require_str(input, "GroupName")?;
     let policy_name = require_str(input, "PolicyName")?;
     let policy_document = require_str(input, "PolicyDocument")?;
+
+    validate_policy_document(policy_document)?;
 
     let mut group = state
         .groups

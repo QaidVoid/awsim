@@ -1,9 +1,14 @@
 /// Miscellaneous IAM operations that are stubs or return empty data.
+use std::collections::HashMap;
+
 use awsim_core::AwsError;
+use awsim_iam_policy::{
+    AuthzRequest, ContextValue, Decision, EvalContext, PolicyDocument, evaluate,
+};
 use serde_json::{Value, json};
 
 use crate::{
-    error::no_such_entity,
+    error::{malformed_policy_document, no_such_entity},
     ids::{new_access_key_id, new_secret_access_key, now_iso8601},
     state::{IamState, ServiceSpecificCredential, SigningCertificate},
 };
@@ -295,32 +300,149 @@ pub fn generate_organizations_access_report(
     Ok(json!({ "JobId": crate::ids::new_uuid() }))
 }
 
-// ── Policy Simulator stubs ────────────────────────────────────────────────────
+// ── Policy Simulator ─────────────────────────────────────────────────────────
 
-/// SimulateCustomPolicy — Stub that returns "allowed" for all actions.
+fn extract_string_list(input: &Value, key: &str) -> Vec<String> {
+    let v = match input.get(key) {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+    if let Some(arr) = v.as_array() {
+        return arr.iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
+    }
+    if let Some(members) = v.get("member").and_then(|m| m.as_array()) {
+        return members
+            .iter()
+            .filter_map(|x| x.as_str().map(str::to_string))
+            .collect();
+    }
+    if let Some(s) = v.as_str() {
+        return vec![s.to_string()];
+    }
+    Vec::new()
+}
+
+fn parse_policy_input_list(input: &Value, key: &str) -> Result<Vec<PolicyDocument>, AwsError> {
+    extract_string_list(input, key)
+        .iter()
+        .map(|raw| {
+            awsim_iam_policy::parse(raw).map_err(|e| {
+                malformed_policy_document(format!("Syntax errors in policy. {e}"))
+            })
+        })
+        .collect()
+}
+
+fn extract_context_entries(input: &Value) -> HashMap<String, ContextValue> {
+    let mut ctx = HashMap::new();
+    let raw = match input.get("ContextEntries") {
+        Some(v) => v,
+        None => return ctx,
+    };
+    let entries = raw
+        .as_array()
+        .cloned()
+        .or_else(|| {
+            raw.get("member")
+                .and_then(|m| m.as_array())
+                .cloned()
+        })
+        .unwrap_or_default();
+    for entry in entries {
+        let key = match entry.get("ContextKeyName").and_then(|v| v.as_str()) {
+            Some(k) => k.to_string(),
+            None => continue,
+        };
+        let typ = entry
+            .get("ContextKeyType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("string");
+        let values = extract_string_list(&entry, "ContextKeyValues");
+        let value = match typ {
+            "string" => ContextValue::String(values.into_iter().next().unwrap_or_default()),
+            "stringList" => ContextValue::StringList(values),
+            "numeric" => values
+                .into_iter()
+                .next()
+                .and_then(|v| v.parse::<f64>().ok())
+                .map(ContextValue::Number)
+                .unwrap_or(ContextValue::Number(0.0)),
+            "boolean" => values
+                .into_iter()
+                .next()
+                .map(|v| ContextValue::Bool(v == "true"))
+                .unwrap_or(ContextValue::Bool(false)),
+            "ip" => ContextValue::Ip(values.into_iter().next().unwrap_or_default()),
+            _ => ContextValue::StringList(values),
+        };
+        ctx.insert(key, value);
+    }
+    ctx
+}
+
+fn decision_to_str(d: Decision) -> &'static str {
+    match d {
+        Decision::Allow => "allowed",
+        Decision::ExplicitDeny => "explicitDeny",
+        Decision::ImplicitDeny => "implicitDeny",
+    }
+}
+
+fn build_evaluation_results(
+    identity_policies: &[PolicyDocument],
+    actions: &[String],
+    resources: &[String],
+    principal_arn: &str,
+    principal_account: &str,
+    context: &HashMap<String, ContextValue>,
+) -> Vec<Value> {
+    let mut out = Vec::new();
+    for action in actions {
+        for resource in resources {
+            let req = AuthzRequest {
+                principal_arn,
+                principal_account,
+                action,
+                resource_arn: resource,
+                context,
+            };
+            let ctx = EvalContext {
+                identity_policies,
+                ..Default::default()
+            };
+            let decision = evaluate(&req, &ctx);
+            out.push(json!({
+                "EvalActionName": action,
+                "EvalResourceName": resource,
+                "EvalDecision": decision_to_str(decision),
+                "MatchedStatements": { "member": [] },
+                "MissingContextValues": { "member": [] }
+            }));
+        }
+    }
+    out
+}
+
 pub fn simulate_custom_policy(
     _state: &IamState,
     input: &Value,
 ) -> Result<Value, AwsError> {
-    let action_names = input
-        .get("ActionNames")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let actions = extract_string_list(input, "ActionNames");
+    let mut resources = extract_string_list(input, "ResourceArns");
+    if resources.is_empty() {
+        resources.push("*".to_string());
+    }
+    let identity_policies = parse_policy_input_list(input, "PolicyInputList")?;
+    let context = extract_context_entries(input);
 
-    let results: Vec<Value> = action_names
-        .iter()
-        .filter_map(|a| a.as_str())
-        .map(|action| {
-            json!({
-                "EvalActionName": action,
-                "EvalDecision": "allowed",
-                "EvalResourceName": "*",
-                "MatchedStatements": { "member": [] },
-                "MissingContextValues": { "member": [] }
-            })
-        })
-        .collect();
+    let results = build_evaluation_results(
+        &identity_policies,
+        &actions,
+        &resources,
+        "arn:aws:iam::000000000000:user/simulated",
+        "000000000000",
+        &context,
+    );
 
     Ok(json!({
         "EvaluationResults": { "member": results },
@@ -328,35 +450,94 @@ pub fn simulate_custom_policy(
     }))
 }
 
-/// SimulatePrincipalPolicy — Stub that returns "allowed" for all actions.
 pub fn simulate_principal_policy(
-    _state: &IamState,
+    state: &IamState,
     input: &Value,
 ) -> Result<Value, AwsError> {
-    let action_names = input
-        .get("ActionNames")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let principal_arn = require_str(input, "PolicySourceArn")?.to_string();
+    let actions = extract_string_list(input, "ActionNames");
+    let mut resources = extract_string_list(input, "ResourceArns");
+    if resources.is_empty() {
+        resources.push("*".to_string());
+    }
+    let mut identity_policies = parse_policy_input_list(input, "PolicyInputList")?;
+    let context = extract_context_entries(input);
 
-    let results: Vec<Value> = action_names
-        .iter()
-        .filter_map(|a| a.as_str())
-        .map(|action| {
-            json!({
-                "EvalActionName": action,
-                "EvalDecision": "allowed",
-                "EvalResourceName": "*",
-                "MatchedStatements": { "member": [] },
-                "MissingContextValues": { "member": [] }
-            })
-        })
-        .collect();
+    let (principal_policies, principal_account) = collect_principal_policies(state, &principal_arn)?;
+    identity_policies.extend(principal_policies);
+
+    let results = build_evaluation_results(
+        &identity_policies,
+        &actions,
+        &resources,
+        &principal_arn,
+        &principal_account,
+        &context,
+    );
 
     Ok(json!({
         "EvaluationResults": { "member": results },
         "IsTruncated": false
     }))
+}
+
+fn collect_principal_policies(
+    state: &IamState,
+    arn: &str,
+) -> Result<(Vec<PolicyDocument>, String), AwsError> {
+    let account = arn
+        .split(':')
+        .nth(4)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "000000000000".to_string());
+
+    if let Some(user_entry) = state.users.iter().find(|e| e.value().arn == arn) {
+        let user = user_entry.value().clone();
+        let mut docs = Vec::new();
+        for raw in user.inline_policies.values() {
+            docs.push(parse_required(raw)?);
+        }
+        for arn in &user.attached_policies {
+            if let Some(p) = state.policies.get(arn) {
+                docs.push(parse_required(&p.value().policy_document)?);
+            }
+        }
+        for group_name in &user.groups {
+            if let Some(group) = state.groups.get(group_name) {
+                let group = group.value();
+                for raw in group.inline_policies.values() {
+                    docs.push(parse_required(raw)?);
+                }
+                for arn in &group.attached_policies {
+                    if let Some(p) = state.policies.get(arn) {
+                        docs.push(parse_required(&p.value().policy_document)?);
+                    }
+                }
+            }
+        }
+        return Ok((docs, account));
+    }
+
+    if let Some(role_entry) = state.roles.iter().find(|e| e.value().arn == arn) {
+        let role = role_entry.value().clone();
+        let mut docs = Vec::new();
+        for raw in role.inline_policies.values() {
+            docs.push(parse_required(raw)?);
+        }
+        for arn in &role.attached_policies {
+            if let Some(p) = state.policies.get(arn) {
+                docs.push(parse_required(&p.value().policy_document)?);
+            }
+        }
+        return Ok((docs, account));
+    }
+
+    Err(no_such_entity("Principal", arn))
+}
+
+fn parse_required(raw: &str) -> Result<PolicyDocument, AwsError> {
+    awsim_iam_policy::parse(raw)
+        .map_err(|e| malformed_policy_document(format!("Syntax errors in policy. {e}")))
 }
 
 // ── GetContextKeys stubs ──────────────────────────────────────────────────────
