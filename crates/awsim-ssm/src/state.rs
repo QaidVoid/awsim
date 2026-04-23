@@ -10,6 +10,8 @@ pub struct ParameterVersion {
     /// Unix epoch seconds (stored as u64, serialised as a JSON number).
     pub date: u64,
     pub description: String,
+    /// Labels attached to this version.
+    pub labels: Vec<String>,
 }
 
 /// A stored SSM parameter.
@@ -26,6 +28,18 @@ pub struct Parameter {
     pub tags: HashMap<String, String>,
     pub history: Vec<ParameterVersion>,
     pub tier: String,
+    /// Labels on the current version.
+    pub labels: Vec<String>,
+}
+
+/// A stored SSM Run Command record (stub).
+#[derive(Debug, Clone)]
+pub struct Command {
+    pub command_id: String,
+    pub document_name: String,
+    pub targets: Vec<serde_json::Value>,
+    pub status: String,
+    pub created_time: u64,
 }
 
 /// Per-account/region SSM state.
@@ -33,4 +47,6 @@ pub struct Parameter {
 pub struct SsmState {
     /// Parameter name → Parameter
     pub parameters: DashMap<String, Parameter>,
+    /// CommandId → Command
+    pub commands: DashMap<String, Command>,
 }

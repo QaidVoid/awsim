@@ -2,7 +2,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use crate::operations::{parameters, tags};
+use crate::operations::{commands, parameters, tags};
 use crate::state::SsmState;
 
 /// The SSM Parameter Store service handler.
@@ -53,9 +53,16 @@ impl ServiceHandler for SsmService {
             "DeleteParameters" => parameters::delete_parameters(&state, &input, ctx),
             "DescribeParameters" => parameters::describe_parameters(&state, &input, ctx),
             "GetParameterHistory" => parameters::get_parameter_history(&state, &input, ctx),
+            "LabelParameterVersion" => parameters::label_parameter_version(&state, &input, ctx),
             "AddTagsToResource" => tags::add_tags_to_resource(&state, &input, ctx),
             "RemoveTagsFromResource" => tags::remove_tags_from_resource(&state, &input, ctx),
             "ListTagsForResource" => tags::list_tags_for_resource(&state, &input, ctx),
+            "PutInventory" => commands::put_inventory(&state, &input, ctx),
+            "GetInventory" => commands::get_inventory(&state, &input, ctx),
+            "GetInventorySchema" => commands::get_inventory_schema(&state, &input, ctx),
+            "SendCommand" => commands::send_command(&state, &input, ctx),
+            "ListCommands" => commands::list_commands(&state, &input, ctx),
+            "GetCommandInvocation" => commands::get_command_invocation(&state, &input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

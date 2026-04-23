@@ -115,8 +115,9 @@ pub fn put_parameter(
         let prev_version = ParameterVersion {
             value: existing.value.clone(),
             version: existing.version,
-            date: existing.last_modified_date.clone(),
+            date: existing.last_modified_date,
             description: existing.description.clone(),
+            labels: existing.labels.clone(),
         };
         existing.history.push(prev_version);
 
@@ -125,6 +126,7 @@ pub fn put_parameter(
         existing.param_type = param_type.to_string();
         existing.description = description;
         existing.last_modified_date = now;
+        existing.labels.clear();
         // Merge tags if provided
         if !tags.is_empty() {
             existing.tags.extend(tags);
@@ -146,6 +148,7 @@ pub fn put_parameter(
         tags,
         history: Vec::new(),
         tier: "Standard".to_string(),
+        labels: Vec::new(),
     };
 
     info!(name, "Created parameter");
@@ -401,6 +404,7 @@ pub fn get_parameter_history(
                 "Version": h.version,
                 "LastModifiedDate": h.date,
                 "Description": h.description,
+                "Labels": h.labels,
             })
         })
         .collect();
@@ -413,7 +417,72 @@ pub fn get_parameter_history(
         "Version": param.version,
         "LastModifiedDate": param.last_modified_date,
         "Description": param.description,
+        "Labels": param.labels,
     }));
 
     Ok(json!({ "Parameters": history }))
+}
+
+// ---------------------------------------------------------------------------
+// LabelParameterVersion
+// ---------------------------------------------------------------------------
+
+pub fn label_parameter_version(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["Name"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
+
+    let labels: Vec<String> = input["Labels"]
+        .as_array()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Labels is required"))?
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+
+    let requested_version = input["ParameterVersion"].as_u64();
+
+    let mut param = state.parameters.get_mut(name).ok_or_else(|| {
+        AwsError::not_found("ParameterNotFound", format!("Parameter {name} not found"))
+    })?;
+
+    // If a specific version is given, apply to history; otherwise apply to current
+    if let Some(ver) = requested_version {
+        if ver == param.version {
+            for label in &labels {
+                if !param.labels.contains(label) {
+                    param.labels.push(label.clone());
+                }
+            }
+        } else {
+            let found = param.history.iter_mut().find(|h| h.version == ver);
+            if let Some(h) = found {
+                for label in &labels {
+                    if !h.labels.contains(label) {
+                        h.labels.push(label.clone());
+                    }
+                }
+            } else {
+                return Err(AwsError::not_found(
+                    "ParameterVersionNotFound",
+                    format!("Version {ver} of parameter {name} not found"),
+                ));
+            }
+        }
+    } else {
+        // Apply to current version
+        for label in &labels {
+            if !param.labels.contains(label) {
+                param.labels.push(label.clone());
+            }
+        }
+    }
+
+    Ok(json!({
+        "InvalidLabels": [],
+        "ParameterVersion": param.version,
+    }))
 }
