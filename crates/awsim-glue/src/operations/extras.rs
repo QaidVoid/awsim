@@ -2,7 +2,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::operations::tables::{table_key, table_to_value};
-use crate::state::{GlueState, Trigger, Workflow};
+use crate::state::{GlueState, TableVersion, Trigger, Workflow};
 
 fn now_str() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -445,4 +445,151 @@ fn workflow_to_value(w: &Workflow) -> Value {
         "DefaultRunProperties": w.default_run_properties,
         "CreatedOn": w.created_at,
     })
+}
+
+fn tv_key(db: &str, table: &str, version_id: &str) -> String {
+    format!("{db}.{table}.{version_id}")
+}
+
+fn version_to_value(v: &TableVersion) -> Value {
+    json!({
+        "Table": v.table,
+        "VersionId": v.version_id,
+    })
+}
+
+pub fn get_table_version(
+    state: &GlueState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let db_name = input["DatabaseName"].as_str().unwrap_or("");
+    let table_name = input["TableName"].as_str().unwrap_or("");
+    let version_id = input["VersionId"].as_str().unwrap_or("1");
+
+    let key = tv_key(db_name, table_name, version_id);
+    if let Some(v) = state.table_versions.get(&key) {
+        return Ok(json!({ "TableVersion": version_to_value(&v) }));
+    }
+
+    let table_k = table_key(db_name, table_name);
+    let table = state.tables.get(&table_k).ok_or_else(|| {
+        AwsError::not_found(
+            "EntityNotFoundException",
+            format!("Table not found: {db_name}.{table_name}"),
+        )
+    })?;
+
+    Ok(json!({
+        "TableVersion": {
+            "Table": table_to_value(&table),
+            "VersionId": version_id,
+        }
+    }))
+}
+
+pub fn get_table_versions(
+    state: &GlueState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let db_name = input["DatabaseName"].as_str().unwrap_or("");
+    let table_name = input["Name"].as_str().or_else(|| input["TableName"].as_str()).unwrap_or("");
+
+    let prefix = format!("{db_name}.{table_name}.");
+    let mut versions: Vec<Value> = state
+        .table_versions
+        .iter()
+        .filter(|e| e.key().starts_with(&prefix))
+        .map(|e| version_to_value(e.value()))
+        .collect();
+
+    if versions.is_empty() {
+        let table_k = table_key(db_name, table_name);
+        if let Some(t) = state.tables.get(&table_k) {
+            versions.push(json!({
+                "Table": table_to_value(&t),
+                "VersionId": "1",
+            }));
+        }
+    }
+
+    Ok(json!({ "TableVersions": versions }))
+}
+
+pub fn delete_table_version(
+    state: &GlueState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let db_name = input["DatabaseName"].as_str().unwrap_or("");
+    let table_name = input["TableName"].as_str().unwrap_or("");
+    let version_id = input["VersionId"].as_str().unwrap_or("");
+
+    let key = tv_key(db_name, table_name, version_id);
+    state.table_versions.remove(&key);
+    Ok(json!({}))
+}
+
+pub fn batch_delete_table_version(
+    state: &GlueState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let db_name = input["DatabaseName"].as_str().unwrap_or("");
+    let table_name = input["TableName"].as_str().unwrap_or("");
+
+    let ids: Vec<String> = input["VersionIds"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    let mut errors: Vec<Value> = Vec::new();
+    for vid in ids {
+        let key = tv_key(db_name, table_name, &vid);
+        if state.table_versions.remove(&key).is_none() {
+            errors.push(json!({
+                "TableName": table_name,
+                "VersionId": vid,
+                "ErrorDetail": {
+                    "ErrorCode": "EntityNotFoundException",
+                    "ErrorMessage": "TableVersion not found",
+                }
+            }));
+        }
+    }
+
+    Ok(json!({ "Errors": errors }))
+}
+
+pub fn create_script(
+    _state: &GlueState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let language = input["Language"].as_str().unwrap_or("PYTHON");
+    let python = language.eq_ignore_ascii_case("PYTHON");
+    let script = if python {
+        "import sys\n# Generated script\n"
+    } else {
+        "// Generated script\n"
+    };
+    Ok(json!({
+        "PythonScript": if python { script } else { "" },
+        "ScalaCode": if !python { script } else { "" },
+    }))
+}
+
+pub fn get_catalog_import_status(
+    _state: &GlueState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({
+        "ImportStatus": {
+            "ImportCompleted": true,
+            "ImportTime": "2024-01-01T00:00:00Z",
+            "ImportedBy": "awsim",
+        }
+    }))
 }

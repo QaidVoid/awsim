@@ -127,6 +127,16 @@ impl ServiceHandler for GlueService {
             "ListWorkflows" => extras::list_workflows(&state, &input, ctx),
             "DeleteWorkflow" => extras::delete_workflow(&state, &input, ctx),
 
+            // Table Versions
+            "GetTableVersion" => extras::get_table_version(&state, &input, ctx),
+            "GetTableVersions" => extras::get_table_versions(&state, &input, ctx),
+            "DeleteTableVersion" => extras::delete_table_version(&state, &input, ctx),
+            "BatchDeleteTableVersion" => extras::batch_delete_table_version(&state, &input, ctx),
+
+            // Scripts & Catalog
+            "CreateScript" => extras::create_script(&state, &input, ctx),
+            "GetCatalogImportStatus" => extras::get_catalog_import_status(&state, &input, ctx),
+
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

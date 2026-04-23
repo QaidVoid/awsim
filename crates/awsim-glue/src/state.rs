@@ -99,6 +99,16 @@ pub struct Workflow {
     pub created_at: String,
 }
 
+/// A Glue table version snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableVersion {
+    pub version_id: String,
+    pub database_name: String,
+    pub table_name: String,
+    pub table: Value,
+    pub created_at: String,
+}
+
 /// Per-account/region Glue state.
 #[derive(Debug, Default)]
 pub struct GlueState {
@@ -120,4 +130,6 @@ pub struct GlueState {
     pub triggers: DashMap<String, Trigger>,
     /// workflow name → Workflow
     pub workflows: DashMap<String, Workflow>,
+    /// "{db}.{table}.{version_id}" → TableVersion
+    pub table_versions: DashMap<String, TableVersion>,
 }
