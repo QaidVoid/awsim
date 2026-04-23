@@ -49,6 +49,14 @@ pub struct Bucket {
     pub cors: Option<String>,
     /// Notification configuration (PutBucketNotificationConfiguration).
     pub notification_config: NotificationConfiguration,
+    /// ACL configuration (stored as raw XML string).
+    pub acl: Option<String>,
+    /// Lifecycle configuration (stored as raw JSON-serialized value).
+    pub lifecycle: Option<String>,
+    /// Server-side encryption configuration (stored as raw JSON-serialized value).
+    pub encryption: Option<String>,
+    /// Logging configuration (stored as raw JSON-serialized value).
+    pub logging: Option<String>,
     /// Objects keyed by object key.
     pub objects: DashMap<String, S3Object>,
     /// Multipart uploads keyed by upload ID.
@@ -66,6 +74,10 @@ impl Bucket {
             policy: None,
             cors: None,
             notification_config: NotificationConfiguration::default(),
+            acl: None,
+            lifecycle: None,
+            encryption: None,
+            logging: None,
             objects: DashMap::new(),
             multipart_uploads: DashMap::new(),
         }
@@ -122,6 +134,14 @@ pub struct BucketSnapshot {
     pub cors: Option<String>,
     #[serde(default)]
     pub notification_config: NotificationConfiguration,
+    #[serde(default)]
+    pub acl: Option<String>,
+    #[serde(default)]
+    pub lifecycle: Option<String>,
+    #[serde(default)]
+    pub encryption: Option<String>,
+    #[serde(default)]
+    pub logging: Option<String>,
     /// Object metadata only — `data` field is intentionally empty to avoid huge snapshots.
     pub objects: Vec<S3ObjectMetadata>,
 }

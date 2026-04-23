@@ -180,6 +180,76 @@ impl ServiceHandler for S3Service {
                 operation: "GetBucketNotificationConfiguration",
                 required_query_param: Some("notification"),
             },
+            // GET /{Bucket}?acl
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketAcl",
+                required_query_param: Some("acl"),
+            },
+            // PUT /{Bucket}?acl
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketAcl",
+                required_query_param: Some("acl"),
+            },
+            // GET /{Bucket}?lifecycle
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketLifecycleConfiguration",
+                required_query_param: Some("lifecycle"),
+            },
+            // PUT /{Bucket}?lifecycle
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketLifecycleConfiguration",
+                required_query_param: Some("lifecycle"),
+            },
+            // DELETE /{Bucket}?lifecycle
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/{Bucket}",
+                operation: "DeleteBucketLifecycleConfiguration",
+                required_query_param: Some("lifecycle"),
+            },
+            // GET /{Bucket}?encryption
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketEncryption",
+                required_query_param: Some("encryption"),
+            },
+            // PUT /{Bucket}?encryption
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketEncryption",
+                required_query_param: Some("encryption"),
+            },
+            // DELETE /{Bucket}?encryption
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/{Bucket}",
+                operation: "DeleteBucketEncryption",
+                required_query_param: Some("encryption"),
+            },
+            // GET /{Bucket}?logging
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketLogging",
+                required_query_param: Some("logging"),
+            },
+            // PUT /{Bucket}?logging
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketLogging",
+                required_query_param: Some("logging"),
+            },
             // GET /{Bucket}?list-type=2
             RouteDefinition {
                 method: "GET",
@@ -273,6 +343,13 @@ impl ServiceHandler for S3Service {
                 operation: "DeleteObjectTagging",
                 required_query_param: Some("tagging"),
             },
+            // GET /{Bucket}/{Key+}?acl — get object ACL
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "GetObjectAcl",
+                required_query_param: Some("acl"),
+            },
             // PUT /{Bucket}/{Key+}  — put object (or copy object via header)
             RouteDefinition {
                 method: "PUT",
@@ -342,6 +419,25 @@ impl ServiceHandler for S3Service {
             "GetBucketNotificationConfiguration" => {
                 operations::config::get_bucket_notification_configuration(&state, &input)
             }
+            "GetBucketAcl" => operations::config::get_bucket_acl(&state, &input),
+            "PutBucketAcl" => operations::config::put_bucket_acl(&state, &input),
+            "GetObjectAcl" => operations::config::get_object_acl(&state, &input),
+            "GetBucketLifecycleConfiguration" => {
+                operations::config::get_bucket_lifecycle_configuration(&state, &input)
+            }
+            "PutBucketLifecycleConfiguration" => {
+                operations::config::put_bucket_lifecycle_configuration(&state, &input)
+            }
+            "DeleteBucketLifecycleConfiguration" => {
+                operations::config::delete_bucket_lifecycle_configuration(&state, &input)
+            }
+            "GetBucketEncryption" => operations::config::get_bucket_encryption(&state, &input),
+            "PutBucketEncryption" => operations::config::put_bucket_encryption(&state, &input),
+            "DeleteBucketEncryption" => {
+                operations::config::delete_bucket_encryption(&state, &input)
+            }
+            "GetBucketLogging" => operations::config::get_bucket_logging(&state, &input),
+            "PutBucketLogging" => operations::config::put_bucket_logging(&state, &input),
 
             // Object operations
             "PutObject" => {
@@ -518,6 +614,10 @@ impl ServiceHandler for S3Service {
                             policy: b.policy.clone(),
                             cors: b.cors.clone(),
                             notification_config: b.notification_config.clone(),
+                            acl: b.acl.clone(),
+                            lifecycle: b.lifecycle.clone(),
+                            encryption: b.encryption.clone(),
+                            logging: b.logging.clone(),
                             // Persist object metadata only — no data bytes
                             objects: b
                                 .objects
@@ -553,6 +653,10 @@ impl ServiceHandler for S3Service {
                 policy: bs.policy,
                 cors: bs.cors,
                 notification_config: bs.notification_config,
+                acl: bs.acl,
+                lifecycle: bs.lifecycle,
+                encryption: bs.encryption,
+                logging: bs.logging,
                 objects: {
                     let dm = DashMap::new();
                     for meta in bs.objects {

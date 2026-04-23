@@ -447,3 +447,216 @@ pub fn delete_object_tagging(state: &S3State, input: &Value) -> Result<Value, Aw
 
     Ok(json!({}))
 }
+
+// ─── ACL ──────────────────────────────────────────────────────────────────────
+
+/// GET /{Bucket}?acl — Return default owner-full-control ACL for a bucket.
+pub fn get_bucket_acl(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    if let Some(acl_str) = &bucket.acl {
+        let parsed: Value = serde_json::from_str(acl_str).unwrap_or(default_bucket_acl());
+        return Ok(parsed);
+    }
+
+    Ok(default_bucket_acl())
+}
+
+/// PUT /{Bucket}?acl — Store ACL for a bucket (accept and store).
+pub fn put_bucket_acl(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.acl = Some(input.to_string());
+    Ok(json!({}))
+}
+
+/// GET /{Bucket}/{Key+}?acl — Return default ACL for an object.
+pub fn get_object_acl(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = input["Bucket"].as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingBucket", "Bucket is required"))?;
+    let key = input["Key"].as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingKey", "Key is required"))?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    if !bucket.objects.contains_key(key) {
+        return Err(AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")));
+    }
+
+    Ok(default_bucket_acl())
+}
+
+fn default_bucket_acl() -> Value {
+    json!({
+        "AccessControlPolicy": {
+            "Owner": {
+                "ID": "owner-id",
+                "DisplayName": "owner"
+            },
+            "AccessControlList": {
+                "Grant": [{
+                    "Grantee": {
+                        "ID": "owner-id",
+                        "DisplayName": "owner",
+                        "xsi:type": "CanonicalUser"
+                    },
+                    "Permission": "FULL_CONTROL"
+                }]
+            }
+        }
+    })
+}
+
+// ─── Lifecycle Configuration ─────────────────────────────────────────────────
+
+/// GET /{Bucket}?lifecycle — Return stored lifecycle configuration.
+pub fn get_bucket_lifecycle_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    match &bucket.lifecycle {
+        Some(lc) => {
+            let parsed: Value = serde_json::from_str(lc).unwrap_or(json!({}));
+            Ok(parsed)
+        }
+        None => Err(AwsError::not_found(
+            "NoSuchLifecycleConfiguration",
+            format!("The lifecycle configuration does not exist for bucket '{bucket_name}'"),
+        )),
+    }
+}
+
+/// PUT /{Bucket}?lifecycle — Store lifecycle configuration.
+pub fn put_bucket_lifecycle_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.lifecycle = Some(input.to_string());
+    Ok(json!({}))
+}
+
+/// DELETE /{Bucket}?lifecycle — Remove lifecycle configuration.
+pub fn delete_bucket_lifecycle_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.lifecycle = None;
+    Ok(json!({}))
+}
+
+// ─── Encryption ──────────────────────────────────────────────────────────────
+
+/// GET /{Bucket}?encryption — Return stored encryption configuration or default SSE-S3.
+pub fn get_bucket_encryption(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    match &bucket.encryption {
+        Some(enc) => {
+            let parsed: Value = serde_json::from_str(enc).unwrap_or(default_sse_s3_config());
+            Ok(parsed)
+        }
+        None => Ok(default_sse_s3_config()),
+    }
+}
+
+/// PUT /{Bucket}?encryption — Store encryption configuration.
+pub fn put_bucket_encryption(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.encryption = Some(input.to_string());
+    Ok(json!({}))
+}
+
+/// DELETE /{Bucket}?encryption — Remove encryption configuration.
+pub fn delete_bucket_encryption(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.encryption = None;
+    Ok(json!({}))
+}
+
+fn default_sse_s3_config() -> Value {
+    json!({
+        "ServerSideEncryptionConfiguration": {
+            "Rules": [{
+                "ApplyServerSideEncryptionByDefault": {
+                    "SSEAlgorithm": "AES256"
+                },
+                "BucketKeyEnabled": false
+            }]
+        }
+    })
+}
+
+// ─── Logging ─────────────────────────────────────────────────────────────────
+
+/// GET /{Bucket}?logging — Return empty logging configuration.
+pub fn get_bucket_logging(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    match &bucket.logging {
+        Some(log) => {
+            let parsed: Value = serde_json::from_str(log).unwrap_or(json!({ "BucketLoggingStatus": {} }));
+            Ok(parsed)
+        }
+        None => Ok(json!({ "BucketLoggingStatus": {} })),
+    }
+}
+
+/// PUT /{Bucket}?logging — Store logging configuration.
+pub fn put_bucket_logging(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.logging = Some(input.to_string());
+    Ok(json!({}))
+}
