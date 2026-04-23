@@ -146,6 +146,31 @@ curl -s http://localhost:4566 \
 | `CreateResourceServer` | Create an OAuth resource server with custom scopes |
 | `DescribeResourceServer` | Get resource server |
 | `UpdateResourceServer` | Update resource server |
+| `DeleteResourceServer` | Delete resource server |
+| `ListResourceServers` | List resource servers for a pool |
+| `CreateIdentityProvider` | Register a federated identity provider (SAML, OIDC, social) |
+| `DescribeIdentityProvider` | Get identity provider details |
+| `UpdateIdentityProvider` | Update provider details |
+| `DeleteIdentityProvider` | Remove an identity provider |
+| `ListIdentityProviders` | List identity providers for a pool |
+| `GetIdentityProviderByIdentifier` | Find provider by identifier |
+
+### Tags
+
+| Operation | Description |
+|-----------|-------------|
+| `TagResource` | Add tags to a user pool by ARN |
+| `UntagResource` | Remove tags from a user pool |
+| `ListTagsForResource` | List tags for a user pool |
+
+### Domains
+
+| Operation | Description |
+|-----------|-------------|
+| `CreateUserPoolDomain` | Create a hosted-UI domain for the pool |
+| `DescribeUserPoolDomain` | Describe a user pool domain; returns empty if not found |
+| `DeleteUserPoolDomain` | Delete the hosted-UI domain |
+| `UpdateUserPoolDomain` | Update the domain custom certificate |
 
 ---
 

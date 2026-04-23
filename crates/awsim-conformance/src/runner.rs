@@ -462,6 +462,140 @@ async fn test_dynamodb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
+    // DescribeLimits
+    results.push(chk!(
+        "DescribeLimits",
+        client.describe_limits().send().await,
+        verbose
+    ));
+
+    // ListBackups
+    results.push(chk!(
+        "ListBackups",
+        client.list_backups().send().await,
+        verbose
+    ));
+
+    // ListGlobalTables
+    results.push(chk!(
+        "ListGlobalTables",
+        client.list_global_tables().send().await,
+        verbose
+    ));
+
+    // DescribeGlobalTable (expect not-found — treated as pass)
+    results.push(chk!(
+        "DescribeGlobalTable",
+        client
+            .describe_global_table()
+            .global_table_name("nonexistent-global-table")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListExports
+    results.push(chk!(
+        "ListExports",
+        client.list_exports().send().await,
+        verbose
+    ));
+
+    // ListImports
+    results.push(chk!(
+        "ListImports",
+        client.list_imports().send().await,
+        verbose
+    ));
+
+    // ListContributorInsights
+    results.push(chk!(
+        "ListContributorInsights",
+        client.list_contributor_insights().send().await,
+        verbose
+    ));
+
+    // DescribeContributorInsights (needs a real table — recreate briefly)
+    let _ = client
+        .create_table()
+        .table_name("contrib-insights-test")
+        .key_schema(
+            KeySchemaElement::builder()
+                .attribute_name("id")
+                .key_type(KeyType::Hash)
+                .build()
+                .unwrap(),
+        )
+        .attribute_definitions(
+            AttributeDefinition::builder()
+                .attribute_name("id")
+                .attribute_type(ScalarAttributeType::S)
+                .build()
+                .unwrap(),
+        )
+        .billing_mode(BillingMode::PayPerRequest)
+        .send()
+        .await;
+
+    results.push(chk!(
+        "DescribeContributorInsights",
+        client
+            .describe_contributor_insights()
+            .table_name("contrib-insights-test")
+            .send()
+            .await,
+        verbose
+    ));
+
+    let _ = client
+        .delete_table()
+        .table_name("contrib-insights-test")
+        .send()
+        .await;
+
+    // ExecuteStatement (PartiQL SELECT on already-deleted table — expect service error = pass)
+    results.push(chk!(
+        "ExecuteStatement",
+        client
+            .execute_statement()
+            .statement(r#"SELECT * FROM "conformance-test""#)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // BatchExecuteStatement
+    results.push(chk!(
+        "BatchExecuteStatement",
+        client
+            .batch_execute_statement()
+            .statements(
+                aws_sdk_dynamodb::types::BatchStatementRequest::builder()
+                    .statement(r#"SELECT * FROM "conformance-test""#)
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ExecuteTransaction
+    results.push(chk!(
+        "ExecuteTransaction",
+        client
+            .execute_transaction()
+            .transact_statements(
+                aws_sdk_dynamodb::types::ParameterizedStatement::builder()
+                    .statement(r#"SELECT * FROM "conformance-test""#)
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
     // DeleteTable (cleanup)
     results.push(chk!(
         "DeleteTable",
@@ -1809,6 +1943,189 @@ async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     results.push(chk!(
         "ListAccountAliases",
         client.list_account_aliases().send().await,
+        verbose
+    ));
+
+    // ListInstanceProfiles
+    results.push(chk!(
+        "ListInstanceProfiles",
+        client.list_instance_profiles().send().await,
+        verbose
+    ));
+
+    // CreateInstanceProfile + ListInstanceProfilesForRole
+    let _ = client
+        .create_instance_profile()
+        .instance_profile_name("conformance-profile2")
+        .send()
+        .await;
+
+    // Create a role to associate
+    let tr_doc2 = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}"#;
+    let _ = client
+        .create_role()
+        .role_name("conformance-role3")
+        .assume_role_policy_document(tr_doc2)
+        .send()
+        .await;
+
+    let _ = client
+        .add_role_to_instance_profile()
+        .instance_profile_name("conformance-profile2")
+        .role_name("conformance-role3")
+        .send()
+        .await;
+
+    results.push(chk!(
+        "ListInstanceProfilesForRole",
+        client
+            .list_instance_profiles_for_role()
+            .role_name("conformance-role3")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // Cleanup
+    let _ = client
+        .remove_role_from_instance_profile()
+        .instance_profile_name("conformance-profile2")
+        .role_name("conformance-role3")
+        .send()
+        .await;
+    let _ = client
+        .delete_instance_profile()
+        .instance_profile_name("conformance-profile2")
+        .send()
+        .await;
+    let _ = client
+        .delete_role()
+        .role_name("conformance-role3")
+        .send()
+        .await;
+
+    // CreateLoginProfile / GetLoginProfile / UpdateLoginProfile / DeleteLoginProfile
+    // Use conformance-user which still exists at this point.
+    results.push(chk!(
+        "CreateLoginProfile",
+        client
+            .create_login_profile()
+            .user_name("conformance-user")
+            .password("Pass@word1!")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "GetLoginProfile",
+        client
+            .get_login_profile()
+            .user_name("conformance-user")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "UpdateLoginProfile",
+        client
+            .update_login_profile()
+            .user_name("conformance-user")
+            .password("NewPass@word2!")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "DeleteLoginProfile",
+        client
+            .delete_login_profile()
+            .user_name("conformance-user")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListSigningCertificates
+    results.push(chk!(
+        "ListSigningCertificates",
+        client
+            .list_signing_certificates()
+            .user_name("conformance-user")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetAccountPasswordPolicy
+    results.push(chk!(
+        "GetAccountPasswordPolicy",
+        client.get_account_password_policy().send().await,
+        verbose
+    ));
+
+    // SimulateCustomPolicy
+    results.push(chk!(
+        "SimulateCustomPolicy",
+        client
+            .simulate_custom_policy()
+            .policy_input_list(
+                r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}"#,
+            )
+            .action_names("s3:GetObject")
+            .resource_arns("*")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // SimulatePrincipalPolicy
+    results.push(chk!(
+        "SimulatePrincipalPolicy",
+        client
+            .simulate_principal_policy()
+            .policy_source_arn(format!("arn:aws:iam::000000000000:user/conformance-user"))
+            .action_names("s3:GetObject")
+            .resource_arns("*")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetContextKeysForCustomPolicy
+    results.push(chk!(
+        "GetContextKeysForCustomPolicy",
+        client
+            .get_context_keys_for_custom_policy()
+            .policy_input_list(
+                r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}"#,
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetContextKeysForPrincipalPolicy
+    results.push(chk!(
+        "GetContextKeysForPrincipalPolicy",
+        client
+            .get_context_keys_for_principal_policy()
+            .policy_source_arn(format!("arn:aws:iam::000000000000:user/conformance-user"))
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListGroupsForUser
+    results.push(chk!(
+        "ListGroupsForUser",
+        client
+            .list_groups_for_user()
+            .user_name("conformance-user")
+            .send()
+            .await,
         verbose
     ));
 
@@ -3218,6 +3535,299 @@ async fn test_cognito_idp(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             results.push(OpResult::Skipped("ForgotPassword".to_string()));
         }
 
+        // UpdateUserPool
+        results.push(chk!(
+            "UpdateUserPool",
+            client.update_user_pool().user_pool_id(pool_id).send().await,
+            verbose
+        ));
+
+        // AdminEnableUser / AdminDisableUser
+        // Re-create the user for enable/disable tests (was deleted above)
+        let _ = client
+            .admin_create_user()
+            .user_pool_id(pool_id)
+            .username("enable-test-user")
+            .send()
+            .await;
+
+        results.push(chk!(
+            "AdminDisableUser",
+            client
+                .admin_disable_user()
+                .user_pool_id(pool_id)
+                .username("enable-test-user")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "AdminEnableUser",
+            client
+                .admin_enable_user()
+                .user_pool_id(pool_id)
+                .username("enable-test-user")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "AdminResetUserPassword",
+            client
+                .admin_reset_user_password()
+                .user_pool_id(pool_id)
+                .username("enable-test-user")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "AdminSetUserMFAPreference",
+            client
+                .admin_set_user_mfa_preference()
+                .user_pool_id(pool_id)
+                .username("enable-test-user")
+                .send()
+                .await,
+            verbose
+        ));
+
+        // Cleanup enable-test-user
+        let _ = client
+            .admin_delete_user()
+            .user_pool_id(pool_id)
+            .username("enable-test-user")
+            .send()
+            .await;
+
+        // SetUserPoolMfaConfig / GetUserPoolMfaConfig
+        results.push(chk!(
+            "SetUserPoolMfaConfig",
+            client
+                .set_user_pool_mfa_config()
+                .user_pool_id(pool_id)
+                .mfa_configuration(
+                    aws_sdk_cognitoidentityprovider::types::UserPoolMfaType::Optional,
+                )
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "GetUserPoolMfaConfig",
+            client
+                .get_user_pool_mfa_config()
+                .user_pool_id(pool_id)
+                .send()
+                .await,
+            verbose
+        ));
+
+        // Group management
+        results.push(chk!(
+            "GetGroup",
+            client
+                .get_group()
+                .user_pool_id(pool_id)
+                .group_name("conformance-group")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "UpdateGroup",
+            client
+                .update_group()
+                .user_pool_id(pool_id)
+                .group_name("conformance-group")
+                .description("updated description")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "ListUsersInGroup",
+            client
+                .list_users_in_group()
+                .user_pool_id(pool_id)
+                .group_name("conformance-group")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "AdminRemoveUserFromGroup",
+            client
+                .admin_remove_user_from_group()
+                .user_pool_id(pool_id)
+                .username("signup-user")
+                .group_name("conformance-group")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "DeleteGroup",
+            client
+                .delete_group()
+                .user_pool_id(pool_id)
+                .group_name("conformance-group")
+                .send()
+                .await,
+            verbose
+        ));
+
+        // Identity Providers
+        results.push(chk!(
+            "CreateIdentityProvider",
+            client
+                .create_identity_provider()
+                .user_pool_id(pool_id)
+                .provider_name("conformance-oidc")
+                .provider_type(
+                    aws_sdk_cognitoidentityprovider::types::IdentityProviderTypeType::Oidc,
+                )
+                .provider_details("client_id", "test-client")
+                .provider_details("client_secret", "test-secret")
+                .provider_details("attributes_request_method", "GET")
+                .provider_details(
+                    "oidc_issuer",
+                    "https://accounts.example.com",
+                )
+                .provider_details("authorize_scopes", "openid")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "ListIdentityProviders",
+            client
+                .list_identity_providers()
+                .user_pool_id(pool_id)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "DeleteIdentityProvider",
+            client
+                .delete_identity_provider()
+                .user_pool_id(pool_id)
+                .provider_name("conformance-oidc")
+                .send()
+                .await,
+            verbose
+        ));
+
+        // Resource Servers
+        results.push(chk!(
+            "CreateResourceServer",
+            client
+                .create_resource_server()
+                .user_pool_id(pool_id)
+                .identifier("https://api.conformance.test")
+                .name("conformance-resource-server")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "ListResourceServers",
+            client
+                .list_resource_servers()
+                .user_pool_id(pool_id)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "DeleteResourceServer",
+            client
+                .delete_resource_server()
+                .user_pool_id(pool_id)
+                .identifier("https://api.conformance.test")
+                .send()
+                .await,
+            verbose
+        ));
+
+        // UpdateUserPoolClient
+        if let Some(ref cid) = app_client_id {
+            results.push(chk!(
+                "UpdateUserPoolClient",
+                client
+                    .update_user_pool_client()
+                    .user_pool_id(pool_id)
+                    .client_id(cid)
+                    .client_name("conformance-client-updated")
+                    .send()
+                    .await,
+                verbose
+            ));
+        } else {
+            results.push(OpResult::Skipped("UpdateUserPoolClient".to_string()));
+        }
+
+        // Tags
+        let pool_arn = format!(
+            "arn:aws:cognito-idp:us-east-1:000000000000:userpool/{}",
+            pool_id
+        );
+        results.push(chk!(
+            "TagResource",
+            client
+                .tag_resource()
+                .resource_arn(&pool_arn)
+                .tags("env", "conformance")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "ListTagsForResource",
+            client
+                .list_tags_for_resource()
+                .resource_arn(&pool_arn)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "UntagResource",
+            client
+                .untag_resource()
+                .resource_arn(&pool_arn)
+                .tag_keys("env")
+                .send()
+                .await,
+            verbose
+        ));
+
+        // DescribeUserPoolDomain (for a domain that doesn't exist — should return empty)
+        results.push(chk!(
+            "DescribeUserPoolDomain",
+            client
+                .describe_user_pool_domain()
+                .domain("nonexistent-conformance-domain")
+                .send()
+                .await,
+            verbose
+        ));
+
         // DeleteUserPoolClient
         if let Some(ref cid) = app_client_id {
             results.push(chk!(
@@ -3258,6 +3868,29 @@ async fn test_cognito_idp(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             "ConfirmSignUp",
             "InitiateAuth",
             "ForgotPassword",
+            "UpdateUserPool",
+            "AdminDisableUser",
+            "AdminEnableUser",
+            "AdminResetUserPassword",
+            "AdminSetUserMFAPreference",
+            "SetUserPoolMfaConfig",
+            "GetUserPoolMfaConfig",
+            "GetGroup",
+            "UpdateGroup",
+            "ListUsersInGroup",
+            "AdminRemoveUserFromGroup",
+            "DeleteGroup",
+            "CreateIdentityProvider",
+            "ListIdentityProviders",
+            "DeleteIdentityProvider",
+            "CreateResourceServer",
+            "ListResourceServers",
+            "DeleteResourceServer",
+            "UpdateUserPoolClient",
+            "TagResource",
+            "ListTagsForResource",
+            "UntagResource",
+            "DescribeUserPoolDomain",
             "DeleteUserPoolClient",
             "DeleteUserPool",
         ] {
