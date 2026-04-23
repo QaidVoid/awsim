@@ -121,6 +121,7 @@ pub fn get_hosted_zone(
         .ok_or_else(|| AwsError::not_found("NoSuchHostedZone", format!("No hosted zone found with ID: {id}")))?;
 
     Ok(json!({
+        "__xml_root": "GetHostedZoneResponse",
         "HostedZone": {
             "Id": zone.id,
             "Name": zone.name,
@@ -193,6 +194,7 @@ pub fn delete_hosted_zone(
     }
 
     Ok(json!({
+        "__xml_root": "DeleteHostedZoneResponse",
         "ChangeInfo": {
             "Id": format!("/change/{}", Uuid::new_v4()),
             "Status": "INSYNC",

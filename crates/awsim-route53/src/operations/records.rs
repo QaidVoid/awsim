@@ -170,6 +170,7 @@ pub fn change_resource_record_sets(
     }
 
     Ok(json!({
+        "__xml_root": "ChangeResourceRecordSetsResponse",
         "ChangeInfo": {
             "Id": format!("/change/{}", Uuid::new_v4()),
             "Status": "INSYNC",
@@ -224,6 +225,7 @@ pub fn list_resource_record_sets(
         .collect();
 
     Ok(json!({
+        "__xml_root": "ListResourceRecordSetsResponse",
         "ResourceRecordSets": record_sets,
         "IsTruncated": false,
         "MaxItems": "300",
