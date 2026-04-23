@@ -6,8 +6,8 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::operations::{
-    attributes, change_visibility, create_queue, delete_message, delete_queue, get_queue_url,
-    list_queues, purge_queue, receive_message, send_message, tags,
+    attributes, change_visibility, create_queue, dead_letter, delete_message, delete_queue,
+    get_queue_url, list_queues, purge_queue, receive_message, send_message, tags,
 };
 use crate::state::{InflightMessage, Queue, QueueSnapshot, SqsState, SqsStateSnapshot, parse_redrive_policy_from_attrs};
 
@@ -63,6 +63,12 @@ impl ServiceHandler for SqsService {
             "DeleteMessage" => delete_message::handle(&state, &input, ctx),
             "DeleteMessageBatch" => delete_message::handle_batch(&state, &input, ctx),
             "ChangeMessageVisibility" => change_visibility::handle(&state, &input, ctx),
+            "ChangeMessageVisibilityBatch" => {
+                change_visibility::handle_batch(&state, &input, ctx)
+            }
+            "ListDeadLetterSourceQueues" => {
+                dead_letter::list_dead_letter_source_queues(&state, &input, ctx)
+            }
             "PurgeQueue" => purge_queue::handle(&state, &input, ctx),
             "TagQueue" => tags::tag_queue(&state, &input, ctx),
             "UntagQueue" => tags::untag_queue(&state, &input, ctx),

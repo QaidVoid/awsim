@@ -1,6 +1,7 @@
 pub mod attributes;
 pub mod change_visibility;
 pub mod create_queue;
+pub mod dead_letter;
 pub mod delete_message;
 pub mod delete_queue;
 pub mod get_queue_url;
