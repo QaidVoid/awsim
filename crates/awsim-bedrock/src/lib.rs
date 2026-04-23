@@ -79,6 +79,42 @@ impl ServiceHandler for BedrockService {
                 required_query_param: None,
             },
             RouteDefinition {
+                method: "GET",
+                path_pattern: "/model-customization-jobs/{jobIdentifier}",
+                operation: "GetModelCustomizationJob",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/model-customization-jobs/{jobIdentifier}/stop",
+                operation: "StopModelCustomizationJob",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/custom-models",
+                operation: "ListCustomModels",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/provisioned-model-throughputs",
+                operation: "ListProvisionedModelThroughputs",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/logging/modelinvocations",
+                operation: "GetModelInvocationLoggingConfiguration",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/logging/modelinvocations",
+                operation: "PutModelInvocationLoggingConfiguration",
+                required_query_param: None,
+            },
+            RouteDefinition {
                 method: "POST",
                 path_pattern: "/guardrails",
                 operation: "CreateGuardrail",
@@ -102,6 +138,24 @@ impl ServiceHandler for BedrockService {
                 operation: "DeleteGuardrail",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/tags/{resourceARN}",
+                operation: "TagResource",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/tags/{resourceARN}",
+                operation: "UntagResource",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/tags/{resourceARN}",
+                operation: "ListTagsForResource",
+                required_query_param: None,
+            },
         ]
     }
 
@@ -123,10 +177,27 @@ impl ServiceHandler for BedrockService {
             "ListModelCustomizationJobs" => {
                 management::list_model_customization_jobs(&state, &input)
             }
+            "GetModelCustomizationJob" => management::get_model_customization_job(&state, &input),
+            "StopModelCustomizationJob" => {
+                management::stop_model_customization_job(&state, &input)
+            }
+            "ListCustomModels" => management::list_custom_models(&state, &input),
+            "ListProvisionedModelThroughputs" => {
+                management::list_provisioned_model_throughputs(&state, &input)
+            }
+            "GetModelInvocationLoggingConfiguration" => {
+                management::get_model_invocation_logging_configuration(&state, &input)
+            }
+            "PutModelInvocationLoggingConfiguration" => {
+                management::put_model_invocation_logging_configuration(&state, &input)
+            }
             "CreateGuardrail" => management::create_guardrail(&state, &input, ctx),
             "GetGuardrail" => management::get_guardrail(&state, &input),
             "ListGuardrails" => management::list_guardrails(&state, &input),
             "DeleteGuardrail" => management::delete_guardrail(&state, &input),
+            "TagResource" => management::tag_resource(&state, &input),
+            "UntagResource" => management::untag_resource(&state, &input),
+            "ListTagsForResource" => management::list_tags_for_resource(&state, &input),
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
@@ -172,8 +243,20 @@ impl ServiceHandler for BedrockRuntimeService {
             },
             RouteDefinition {
                 method: "POST",
+                path_pattern: "/model/{modelId}/invoke-with-response-stream",
+                operation: "InvokeModelWithResponseStream",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
                 path_pattern: "/model/{modelId}/converse",
                 operation: "Converse",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/model/{modelId}/converse-stream",
+                operation: "ConverseStream",
                 required_query_param: None,
             },
         ]
@@ -189,7 +272,11 @@ impl ServiceHandler for BedrockRuntimeService {
 
         match operation {
             "InvokeModel" => runtime::invoke_model(&input),
+            "InvokeModelWithResponseStream" => {
+                runtime::invoke_model_with_response_stream(&input)
+            }
             "Converse" => runtime::converse(&input),
+            "ConverseStream" => runtime::converse_stream(&input),
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

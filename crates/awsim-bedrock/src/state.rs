@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use std::collections::HashMap;
 
 /// Per-account/region Bedrock state.
 #[derive(Debug, Default)]
@@ -7,6 +8,10 @@ pub struct BedrockState {
     pub guardrails: DashMap<String, Guardrail>,
     /// job_id → CustomizationJob
     pub customization_jobs: DashMap<String, CustomizationJob>,
+    /// resource_arn → tags
+    pub tags: DashMap<String, HashMap<String, String>>,
+    /// Stored logging configuration (one per state)
+    pub logging_config: DashMap<String, LoggingConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +33,28 @@ pub struct CustomizationJob {
     pub custom_model_name: String,
     pub status: String,
     pub creation_time: String,
+}
+
+/// Model invocation logging configuration.
+#[derive(Debug, Clone)]
+pub struct LoggingConfig {
+    pub cloud_watch_config: Option<serde_json::Value>,
+    pub s3_config: Option<serde_json::Value>,
+    pub embedding_data_delivery_enabled: bool,
+    pub image_data_delivery_enabled: bool,
+    pub text_data_delivery_enabled: bool,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            cloud_watch_config: None,
+            s3_config: None,
+            embedding_data_delivery_enabled: false,
+            image_data_delivery_enabled: false,
+            text_data_delivery_enabled: false,
+        }
+    }
 }
 
 pub fn now_iso() -> String {
