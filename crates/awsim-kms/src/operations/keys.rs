@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -53,6 +55,8 @@ pub fn create_key(
         creation_date: creation_date.clone(),
         secret,
         deletion_date: None,
+        rotation_enabled: false,
+        policies: HashMap::new(),
     };
 
     state.keys.insert(key_id.clone(), key);
@@ -213,6 +217,34 @@ pub fn schedule_key_deletion(
 }
 
 // ---------------------------------------------------------------------------
+// UpdateKeyDescription
+// ---------------------------------------------------------------------------
+
+pub fn update_key_description(
+    state: &KmsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let key_id_input = input["KeyId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("KeyId"))?;
+
+    let description = input["Description"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("Description"))?;
+
+    let resolved_id = resolve_key_id(state, key_id_input)?;
+    let mut key = state.keys.get_mut(&resolved_id).ok_or_else(|| error::not_found("Key"))?;
+
+    if key.key_state == "PendingDeletion" {
+        return Err(error::key_pending_deletion(&resolved_id));
+    }
+
+    key.description = description.to_string();
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -291,6 +323,7 @@ pub fn key_metadata(key: &KmsKey) -> Value {
     meta
 }
 
+#[allow(dead_code)]
 fn format_iso8601(secs: u64) -> String {
     // reuse the util function logic inline for now
     crate::util::secs_to_iso8601(secs)

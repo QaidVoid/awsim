@@ -1,4 +1,17 @@
+use std::collections::HashMap;
+
 use dashmap::DashMap;
+
+/// A KMS grant (simplified).
+#[derive(Debug, Clone)]
+pub struct KmsGrant {
+    pub grant_id: String,
+    pub grant_token: String,
+    pub key_id: String,
+    pub name: Option<String>,
+    pub grantee_principal: String,
+    pub operations: Vec<String>,
+}
 
 /// A KMS key.
 #[derive(Debug, Clone)]
@@ -18,6 +31,10 @@ pub struct KmsKey {
     pub secret: Vec<u8>,
     /// Unix epoch seconds at which this key is scheduled for deletion.
     pub deletion_date: Option<f64>,
+    /// Whether automatic key rotation is enabled.
+    pub rotation_enabled: bool,
+    /// Key policy document (JSON string), keyed by policy name.
+    pub policies: HashMap<String, String>,
 }
 
 /// Per-account/region KMS state.
@@ -27,4 +44,6 @@ pub struct KmsState {
     pub keys: DashMap<String, KmsKey>,
     /// alias_name (e.g. "alias/my-key") → key_id
     pub aliases: DashMap<String, String>,
+    /// GrantId → KmsGrant
+    pub grants: DashMap<String, KmsGrant>,
 }

@@ -60,6 +60,9 @@ impl ServiceHandler for KmsService {
             "EnableKey" => operations::keys::enable_key(&state, &input, ctx),
             "DisableKey" => operations::keys::disable_key(&state, &input, ctx),
             "ScheduleKeyDeletion" => operations::keys::schedule_key_deletion(&state, &input, ctx),
+            "UpdateKeyDescription" => {
+                operations::keys::update_key_description(&state, &input, ctx)
+            }
 
             // Aliases
             "CreateAlias" => operations::aliases::create_alias(&state, &input, ctx),
@@ -74,6 +77,32 @@ impl ServiceHandler for KmsService {
                 operations::crypto::generate_data_key_without_plaintext(&state, &input, ctx)
             }
             "ReEncrypt" => operations::crypto::re_encrypt(&state, &input, ctx),
+            "GenerateRandom" => operations::crypto::generate_random(&state, &input, ctx),
+
+            // Key rotation
+            "GetKeyRotationStatus" => {
+                operations::rotation::get_key_rotation_status(&state, &input, ctx)
+            }
+            "EnableKeyRotation" => {
+                operations::rotation::enable_key_rotation(&state, &input, ctx)
+            }
+            "DisableKeyRotation" => {
+                operations::rotation::disable_key_rotation(&state, &input, ctx)
+            }
+
+            // Grants
+            "CreateGrant" => operations::grants::create_grant(&state, &input, ctx),
+            "ListGrants" => operations::grants::list_grants(&state, &input, ctx),
+            "ListRetirableGrants" => {
+                operations::grants::list_retirable_grants(&state, &input, ctx)
+            }
+            "RetireGrant" => operations::grants::retire_grant(&state, &input, ctx),
+            "RevokeGrant" => operations::grants::revoke_grant(&state, &input, ctx),
+
+            // Key policies
+            "GetKeyPolicy" => operations::policies::get_key_policy(&state, &input, ctx),
+            "PutKeyPolicy" => operations::policies::put_key_policy(&state, &input, ctx),
+            "ListKeyPolicies" => operations::policies::list_key_policies(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

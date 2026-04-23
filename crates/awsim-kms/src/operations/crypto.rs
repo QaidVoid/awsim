@@ -188,6 +188,31 @@ pub fn generate_data_key_without_plaintext(
 }
 
 // ---------------------------------------------------------------------------
+// GenerateRandom
+// ---------------------------------------------------------------------------
+
+pub fn generate_random(
+    _state: &KmsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let number_of_bytes = input["NumberOfBytes"]
+        .as_u64()
+        .unwrap_or(32) as usize;
+
+    if number_of_bytes < 1 || number_of_bytes > 1024 {
+        return Err(error::invalid_parameter(
+            "NumberOfBytes must be between 1 and 1024",
+        ));
+    }
+
+    let random_bytes = crate::util::random_secret(number_of_bytes);
+    let plaintext = BASE64.encode(&random_bytes);
+
+    Ok(json!({ "Plaintext": plaintext }))
+}
+
+// ---------------------------------------------------------------------------
 // ReEncrypt
 // ---------------------------------------------------------------------------
 
