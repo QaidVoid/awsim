@@ -57,8 +57,45 @@ curl -s -X POST "http://localhost:4566/model/anthropic.claude-3-haiku-20240307-v
   - Input: `jobName`, `customModelName`, `baseModelIdentifier`, `trainingDataConfig`, `outputDataConfig`
   - Returns: `jobArn`
 
+- `GetModelCustomizationJob` — get a specific customization job by ARN or ID
+  - Path: `GET /model-customization-jobs/{jobIdentifier}`
+  - Returns: `jobArn`, `status`, `baseModelArn`, `customModelName`, `creationTime`
+
+- `StopModelCustomizationJob` — stop a running customization job
+  - Path: `POST /model-customization-jobs/{jobIdentifier}/stop`
+  - Sets status to `Stopped`
+
 - `ListModelCustomizationJobs` — list all model customization jobs
   - Returns: paginated `modelCustomizationJobSummaries`
+
+- `ListCustomModels` — list custom models (returns empty list)
+  - Path: `GET /custom-models`
+
+#### Provisioned Model Throughputs
+- `ListProvisionedModelThroughputs` — list provisioned throughputs (returns empty list)
+  - Path: `GET /provisioned-model-throughputs`
+
+#### Model Invocation Logging
+- `GetModelInvocationLoggingConfiguration` — get current logging config
+  - Path: `GET /logging/modelinvocations`
+  - Returns: `loggingConfig` with CloudWatch/S3 destinations and data delivery flags
+
+- `PutModelInvocationLoggingConfiguration` — store logging config
+  - Path: `PUT /logging/modelinvocations`
+  - Input: `loggingConfig` with `cloudWatchConfig`, `s3Config`, `textDataDeliveryEnabled`, etc.
+
+#### Tags
+- `TagResource` — add tags to a Bedrock resource
+  - Path: `POST /tags/{resourceARN}`
+  - Input: `tags` array of `{key, value}` objects
+
+- `UntagResource` — remove tags from a resource
+  - Path: `DELETE /tags/{resourceARN}`
+  - Input: `tagKeys` array of keys to remove
+
+- `ListTagsForResource` — list tags on a resource
+  - Path: `GET /tags/{resourceARN}`
+  - Returns: `tags` array
 
 #### Guardrails
 - `CreateGuardrail` — create a content safety guardrail
@@ -78,10 +115,18 @@ curl -s -X POST "http://localhost:4566/model/anthropic.claude-3-haiku-20240307-v
   - Input: body format depends on model provider (Anthropic, Amazon Titan, Meta Llama, etc.)
   - Returns: model-specific JSON response; for Anthropic Claude it includes `content[].text`
 
+- `InvokeModelWithResponseStream` — streaming variant of InvokeModel (single-chunk mock)
+  - Path: `POST /model/{modelId}/invoke-with-response-stream`
+  - Returns: same body as `InvokeModel` wrapped in a `{contentType, body}` envelope
+
 - `Converse` — send a multi-turn conversation using the unified Converse API
   - Path: `POST /model/{modelId}/converse`
   - Input: `messages` list with `role` and `content`, optional `system`, `inferenceConfig`
   - Returns: `output.message` with assistant response, `usage` (token counts), `stopReason`
+
+- `ConverseStream` — streaming variant of Converse (single-chunk mock)
+  - Path: `POST /model/{modelId}/converse-stream`
+  - Returns: `stream` array with `messageStart`, `contentBlockDelta`, `messageStop`, and `metadata` events
 
 ## Curl Examples
 

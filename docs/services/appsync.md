@@ -83,12 +83,64 @@ curl -s -X POST http://localhost:4566/v1/apis/$API_ID/ApiKeys \
 - `ListDataSources` — list data sources for a GraphQL API
 - `DeleteDataSource` — remove a data source
 
+### API Keys (extended)
+- `UpdateApiKey` — update API key description or expiry
+  - Input: `apiId`, `id`, optional `description`, `expires` (Unix timestamp)
+  - Returns: updated `apiKey`
+
 ### Resolvers
 - `CreateResolver` — map a GraphQL type/field to a data source
   - Input: `apiId`, `typeName` (e.g., `Query`), `fieldName` (e.g., `getUser`), `dataSourceName`, `requestMappingTemplate`, `responseMappingTemplate`
-  - Returns: `resolver` object
+  - Returns: `resolver` object including mapping templates
 
 - `ListResolvers` — list resolvers for a type in a GraphQL API
+  - Input: `apiId`, `typeName`
+
+- `UpdateResolver` — update a resolver's data source or mapping templates
+  - Input: `apiId`, `typeName`, `fieldName`, plus any of: `dataSourceName`, `requestMappingTemplate`, `responseMappingTemplate`
+  - Returns: updated `resolver`
+
+- `DeleteResolver` — remove a resolver
+  - Input: `apiId`, `typeName`, `fieldName`
+
+### GraphQL Types
+- `CreateType` — define a GraphQL type (SDL or JSON format)
+  - Input: `apiId`, `definition` (SDL string, e.g., `type User { id: ID! name: String }`), `format` (`SDL` | `JSON`)
+  - Type name is automatically extracted from the SDL definition
+  - Returns: `type` with `name`, `arn`, `definition`, `format`
+
+- `GetType` — get a specific type by name
+  - Input: `apiId`, `typeName`
+  - Returns: `type`
+
+- `ListTypes` — list all types for a GraphQL API
+  - Input: `apiId`
+  - Returns: `types` list
+
+- `DeleteType` — delete a type
+  - Input: `apiId`, `typeName`
+
+### AppSync Functions (Pipeline Resolvers)
+- `CreateFunction` — create an AppSync pipeline function (not Lambda)
+  - Input: `apiId`, `name`, `dataSourceName` (required), optional `description`, `requestMappingTemplate`, `responseMappingTemplate`, `functionVersion`
+  - Returns: `functionConfiguration` with `functionId`, `functionArn`, `name`
+
+- `GetFunction` — get a specific function by ID
+  - Input: `apiId`, `functionId`
+
+- `ListFunctions` — list all functions for a GraphQL API
+  - Input: `apiId`
+  - Returns: `functions` list
+
+- `UpdateFunction` — update a function's configuration
+  - Input: `apiId`, `functionId`, plus any of: `name`, `description`, `dataSourceName`, `requestMappingTemplate`, `responseMappingTemplate`
+
+- `DeleteFunction` — delete a function
+  - Input: `apiId`, `functionId`
+
+### API Cache
+- `FlushApiCache` — flush the API cache for a GraphQL API (stub: always succeeds)
+  - Input: `apiId`
 
 ## Curl Examples
 

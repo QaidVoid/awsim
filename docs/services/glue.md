@@ -91,6 +91,38 @@ curl -s http://localhost:4566 \
 
 - `DeleteCrawler` — delete a crawler
 
+### Tables (extended)
+- `SearchTables` — search tables by substring match on name or database name
+  - Input: `SearchText` (substring), optional `Filters` array
+  - Returns: `TableList`
+
+### Partitions
+- `GetPartitions` — list partitions for a table
+  - Input: `DatabaseName`, `TableName`
+  - Returns: `Partitions` list with `Values`, `StorageDescriptor`, `CreationTime`
+
+- `CreatePartition` — create a partition
+  - Input: `DatabaseName`, `TableName`, `PartitionInput` with `Values` array and optional `StorageDescriptor`
+
+- `DeletePartition` — delete a partition by values
+  - Input: `DatabaseName`, `TableName`, `PartitionValues` array
+
+- `BatchCreatePartition` — create multiple partitions in one call
+  - Input: `DatabaseName`, `TableName`, `PartitionInputList`
+  - Returns: `Errors` list for any failed partitions
+
+- `BatchDeletePartition` — delete multiple partitions in one call
+  - Input: `DatabaseName`, `TableName`, `PartitionsToDelete`
+  - Returns: `Errors` list for any not-found partitions
+
+### Crawlers (extended)
+- `UpdateCrawler` — update crawler configuration (role, targets, schedule, description)
+  - Input: `Name`, plus any of: `Role`, `DatabaseName`, `Targets`, `Schedule`, `Description`
+
+- `GetCrawlerMetrics` — returns empty metrics list (stub)
+
+- `GetClassifier` / `GetClassifiers` — returns not-found / empty list (no classifier storage)
+
 ### Jobs
 - `CreateJob` — create an ETL job definition
   - Input: `Name` (required), `Role` (IAM role ARN), `Command` (`{Name: "glueetl", ScriptLocation: "s3://..."}`)
@@ -103,6 +135,48 @@ curl -s http://localhost:4566 \
 - `GetJobs` — list all ETL jobs
 
 - `DeleteJob` — delete a job definition
+
+- `BatchGetJobs` — get multiple jobs by name list
+  - Input: `JobNames` array
+  - Returns: `Jobs` (found) and `JobsNotFound` arrays
+
+### Job Runs
+- `StartJobRun` — start a job run; immediately marked `SUCCEEDED` in the emulator
+  - Input: `JobName`, optional `Arguments`
+  - Returns: `JobRunId`
+
+- `GetJobRun` — get status of a specific run
+  - Input: `JobName`, `RunId`
+  - Returns: `JobRun` with `Id`, `JobRunState`, `StartedOn`, `CompletedOn`
+
+- `GetJobRuns` — list all runs for a job
+  - Input: `JobName`
+  - Returns: `JobRuns` list
+
+- `BatchStopJobRun` — stop multiple job runs
+  - Input: `JobName`, `JobRunIds` array
+  - Returns: `SuccessfulSubmissions` and `Errors`
+
+### Connections
+- `CreateConnection` — create a Glue connection (JDBC, S3, etc.)
+  - Input: `ConnectionInput` with `Name`, `ConnectionType`, `ConnectionProperties`
+
+- `GetConnections` — list all connections
+  - Returns: `ConnectionList`
+
+- `DeleteConnection` — delete a connection by name
+  - Input: `ConnectionName`
+
+### Tags
+- `GetTags` — get tags for a resource ARN
+  - Input: `ResourceArn`
+  - Returns: `Tags` map
+
+- `TagResource` — add tags to a resource
+  - Input: `ResourceArn`, `TagsToAdd` map
+
+- `UntagResource` — remove tags from a resource
+  - Input: `ResourceArn`, `TagsToRemove` array of keys
 
 ## Curl Examples
 
@@ -196,8 +270,9 @@ await glue.send(new CreateCrawlerCommand({
 
 ## Behavior Notes
 
-- Glue in AWSim manages catalog metadata (databases, tables, crawlers, jobs) but does **not** execute ETL code or run actual crawl jobs.
+- Glue in AWSim manages catalog metadata (databases, tables, crawlers, jobs, connections) but does **not** execute ETL code or run actual crawl jobs.
 - `StartCrawler` transitions the crawler state `READY` → `RUNNING` → `READY` quickly (simulated) but does not discover or catalog any data from S3 or other sources.
-- Job runs (`StartJobRun`) are not implemented — Glue jobs are for metadata/IaC testing only.
+- `StartJobRun` immediately creates a run with status `SUCCEEDED` — no actual code executes.
+- Partitions are stored on the parent table; all partition operations are in-memory.
 - The Glue Data Catalog is shared across services — Athena references the same catalog when listing databases.
 - State is in-memory only and lost on restart.

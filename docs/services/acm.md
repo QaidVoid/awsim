@@ -62,6 +62,29 @@ curl -s http://localhost:4566 \
   - Input: `CertificateArn`, `Passphrase` (base64-encoded, used to encrypt the private key)
   - Returns: `Certificate`, `CertificateChain`, `PrivateKey` all as PEM strings
 
+- `ImportCertificate` — import an externally issued certificate
+  - Input: `Certificate` (PEM), `PrivateKey` (PEM, required), optional `CertificateChain`, `CertificateArn` (to re-import), `DomainName`, `Tags`
+  - If `CertificateArn` is provided, re-imports the existing certificate; otherwise creates new
+  - Returns: `CertificateArn`
+
+- `RenewCertificate` — trigger managed renewal for a certificate (stub: always succeeds)
+  - Input: `CertificateArn`
+
+- `UpdateCertificateOptions` — update certificate options such as transparency logging
+  - Input: `CertificateArn`, `Options` (e.g., `{CertificateTransparencyLoggingPreference: "ENABLED"}`)
+  - Validates certificate exists; options accepted but not enforced in the emulator
+
+- `ResendValidationEmail` — resend email validation for a certificate domain (stub)
+  - Input: `CertificateArn`, `Domain`, `ValidationDomain`
+  - Always succeeds; no email is sent
+
+### Account Configuration
+- `PutAccountConfiguration` — store account-level ACM configuration
+  - Input: `ExpiryEvents` (e.g., `{DaysBeforeExpiry: 45}`), `IdempotencyToken`
+
+- `GetAccountConfiguration` — get stored account configuration
+  - Returns: `ExpiryEvents` object
+
 ### Tags
 - `AddTagsToCertificate` — add key-value tags to a certificate
   - Input: `CertificateArn`, `Tags` (list of `{Key, Value}`)
@@ -145,5 +168,8 @@ console.log('Total certs:', CertificateSummaryList?.length);
 - Certificates are issued with status `ISSUED` immediately — no DNS or email validation is performed.
 - `GetCertificate` returns a locally generated self-signed certificate PEM, not a real CA-signed cert.
 - `ExportCertificate` returns a certificate, chain, and passphrase-encrypted private key in PEM format.
+- `ImportCertificate` accepts any PEM strings — no cryptographic validation is performed. Use it to register external certs in the emulator.
+- `RenewCertificate` and `ResendValidationEmail` are stubs that succeed without side effects.
+- `DescribeCertificate` includes `DomainValidationOptions` with DNS CNAME records for DNS-validated certificates.
 - Persistence is enabled: certificates survive AWSim restarts.
 - Certificate ARNs follow the real AWS format: `arn:aws:acm:{region}:{account}:certificate/{uuid}`.
