@@ -2,7 +2,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use crate::operations::{commands, parameters, tags};
+use crate::operations::{commands, documents, parameters, tags};
 use crate::state::SsmState;
 
 /// The SSM Parameter Store service handler.
@@ -63,6 +63,34 @@ impl ServiceHandler for SsmService {
             "SendCommand" => commands::send_command(&state, &input, ctx),
             "ListCommands" => commands::list_commands(&state, &input, ctx),
             "GetCommandInvocation" => commands::get_command_invocation(&state, &input, ctx),
+
+            // Documents
+            "CreateDocument" => documents::create_document(&state, &input, ctx),
+            "GetDocument" => documents::get_document(&state, &input, ctx),
+            "DescribeDocument" => documents::describe_document(&state, &input, ctx),
+            "UpdateDocument" => documents::update_document(&state, &input, ctx),
+            "DeleteDocument" => documents::delete_document(&state, &input, ctx),
+            "ListDocuments" => documents::list_documents(&state, &input, ctx),
+
+            // Associations
+            "CreateAssociation" => documents::create_association(&state, &input, ctx),
+            "DescribeAssociation" => documents::describe_association(&state, &input, ctx),
+            "DeleteAssociation" => documents::delete_association(&state, &input, ctx),
+            "ListAssociations" => documents::list_associations(&state, &input, ctx),
+
+            // Maintenance Windows
+            "CreateMaintenanceWindow" => documents::create_maintenance_window(&state, &input, ctx),
+            "DescribeMaintenanceWindows" => {
+                documents::describe_maintenance_windows(&state, &input, ctx)
+            }
+            "DeleteMaintenanceWindow" => documents::delete_maintenance_window(&state, &input, ctx),
+
+            // OpsCenter
+            "CreateOpsItem" => documents::create_ops_item(&state, &input, ctx),
+            "GetOpsItem" => documents::get_ops_item(&state, &input, ctx),
+            "UpdateOpsItem" => documents::update_ops_item(&state, &input, ctx),
+            "DescribeOpsItems" => documents::describe_ops_items(&state, &input, ctx),
+
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

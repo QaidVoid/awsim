@@ -42,6 +42,57 @@ pub struct Command {
     pub created_time: u64,
 }
 
+/// An SSM Document.
+#[derive(Debug, Clone)]
+pub struct SsmDocument {
+    pub name: String,
+    #[allow(dead_code)]
+    pub arn: String,
+    pub document_type: String,
+    pub document_format: String,
+    pub content: String,
+    pub status: String,
+    pub document_version: String,
+    pub created_date: u64,
+}
+
+/// An SSM State Manager Association.
+#[derive(Debug, Clone)]
+pub struct SsmAssociation {
+    pub association_id: String,
+    #[allow(dead_code)]
+    pub name: String,
+    pub document_name: String,
+    pub targets: Vec<serde_json::Value>,
+    pub status: String,
+    pub created_date: u64,
+}
+
+/// An SSM Maintenance Window stub.
+#[derive(Debug, Clone)]
+pub struct SsmMaintenanceWindow {
+    pub window_id: String,
+    pub name: String,
+    pub schedule: String,
+    pub duration: u64,
+    pub cutoff: u64,
+    pub enabled: bool,
+    #[allow(dead_code)]
+    pub created_date: u64,
+}
+
+/// An SSM OpsCenter OpsItem.
+#[derive(Debug, Clone)]
+pub struct SsmOpsItem {
+    pub ops_item_id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub severity: String,
+    pub created_time: u64,
+    pub last_modified_time: u64,
+}
+
 /// Per-account/region SSM state.
 #[derive(Debug, Default)]
 pub struct SsmState {
@@ -49,4 +100,12 @@ pub struct SsmState {
     pub parameters: DashMap<String, Parameter>,
     /// CommandId → Command
     pub commands: DashMap<String, Command>,
+    /// Document name → SsmDocument
+    pub documents: DashMap<String, SsmDocument>,
+    /// AssociationId → SsmAssociation
+    pub associations: DashMap<String, SsmAssociation>,
+    /// WindowId → SsmMaintenanceWindow
+    pub maintenance_windows: DashMap<String, SsmMaintenanceWindow>,
+    /// OpsItemId → SsmOpsItem
+    pub ops_items: DashMap<String, SsmOpsItem>,
 }

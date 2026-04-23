@@ -418,4 +418,216 @@ mod tests {
         let err = block_on(svc.handle("BogusOp", json!({}), &ctx)).unwrap_err();
         assert_eq!(err.code, "UnknownOperationException");
     }
+
+    // -----------------------------------------------------------------------
+    // Documents
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_create_get_delete_document() {
+        let svc = SsmService::new();
+        let ctx = ctx();
+
+        block_on(svc.handle(
+            "CreateDocument",
+            json!({
+                "Name": "MyDoc",
+                "Content": "{\"schemaVersion\":\"2.2\"}",
+                "DocumentType": "Command",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let got = block_on(svc.handle("GetDocument", json!({ "Name": "MyDoc" }), &ctx)).unwrap();
+        assert_eq!(got["Name"].as_str().unwrap(), "MyDoc");
+        assert_eq!(got["DocumentType"].as_str().unwrap(), "Command");
+
+        let listed = block_on(svc.handle("ListDocuments", json!({}), &ctx)).unwrap();
+        assert_eq!(listed["DocumentIdentifiers"].as_array().unwrap().len(), 1);
+
+        block_on(svc.handle("DeleteDocument", json!({ "Name": "MyDoc" }), &ctx)).unwrap();
+
+        let listed2 = block_on(svc.handle("ListDocuments", json!({}), &ctx)).unwrap();
+        assert_eq!(listed2["DocumentIdentifiers"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_create_document_duplicate_fails() {
+        let svc = SsmService::new();
+        let ctx = ctx();
+
+        block_on(svc.handle(
+            "CreateDocument",
+            json!({ "Name": "Dup", "Content": "{}", "DocumentType": "Command" }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let err = block_on(svc.handle(
+            "CreateDocument",
+            json!({ "Name": "Dup", "Content": "{}", "DocumentType": "Command" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "DocumentAlreadyExists");
+    }
+
+    #[test]
+    fn test_describe_and_update_document() {
+        let svc = SsmService::new();
+        let ctx = ctx();
+
+        block_on(svc.handle(
+            "CreateDocument",
+            json!({ "Name": "UpdDoc", "Content": "v1", "DocumentType": "Automation" }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let desc = block_on(svc.handle("DescribeDocument", json!({ "Name": "UpdDoc" }), &ctx))
+            .unwrap();
+        assert_eq!(desc["Document"]["DocumentVersion"].as_str().unwrap(), "1");
+
+        block_on(svc.handle(
+            "UpdateDocument",
+            json!({ "Name": "UpdDoc", "Content": "v2" }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let got = block_on(svc.handle("GetDocument", json!({ "Name": "UpdDoc" }), &ctx)).unwrap();
+        assert_eq!(got["Content"].as_str().unwrap(), "v2");
+        assert_eq!(got["DocumentVersion"].as_str().unwrap(), "2");
+    }
+
+    // -----------------------------------------------------------------------
+    // Associations
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_create_describe_delete_association() {
+        let svc = SsmService::new();
+        let ctx = ctx();
+
+        let created = block_on(svc.handle(
+            "CreateAssociation",
+            json!({
+                "Name": "AWS-RunShellScript",
+                "Targets": [{ "Key": "instanceids", "Values": ["i-12345678"] }]
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let assoc_id = created["AssociationDescription"]["AssociationId"]
+            .as_str()
+            .unwrap();
+
+        let described = block_on(svc.handle(
+            "DescribeAssociation",
+            json!({ "AssociationId": assoc_id }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(
+            described["AssociationDescription"]["Name"].as_str().unwrap(),
+            "AWS-RunShellScript"
+        );
+
+        let listed = block_on(svc.handle("ListAssociations", json!({}), &ctx)).unwrap();
+        assert_eq!(listed["Associations"].as_array().unwrap().len(), 1);
+
+        block_on(svc.handle(
+            "DeleteAssociation",
+            json!({ "AssociationId": assoc_id }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let listed2 = block_on(svc.handle("ListAssociations", json!({}), &ctx)).unwrap();
+        assert_eq!(listed2["Associations"].as_array().unwrap().len(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Maintenance Windows
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_create_describe_delete_maintenance_window() {
+        let svc = SsmService::new();
+        let ctx = ctx();
+
+        let created = block_on(svc.handle(
+            "CreateMaintenanceWindow",
+            json!({
+                "Name": "MyWindow",
+                "Schedule": "cron(0 2 ? * SUN *)",
+                "Duration": 2,
+                "Cutoff": 1,
+                "AllowUnassociatedTargets": false
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let window_id = created["WindowId"].as_str().unwrap();
+        assert!(window_id.starts_with("mw-"));
+
+        let windows = block_on(svc.handle("DescribeMaintenanceWindows", json!({}), &ctx)).unwrap();
+        assert_eq!(windows["WindowIdentities"].as_array().unwrap().len(), 1);
+
+        block_on(svc.handle(
+            "DeleteMaintenanceWindow",
+            json!({ "WindowId": window_id }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let windows2 = block_on(svc.handle("DescribeMaintenanceWindows", json!({}), &ctx)).unwrap();
+        assert_eq!(windows2["WindowIdentities"].as_array().unwrap().len(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // OpsCenter
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_ops_item_lifecycle() {
+        let svc = SsmService::new();
+        let ctx = ctx();
+
+        let created = block_on(svc.handle(
+            "CreateOpsItem",
+            json!({
+                "Title": "DB connection failure",
+                "Description": "Cannot reach prod DB",
+                "Severity": "1",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let item_id = created["OpsItemId"].as_str().unwrap();
+        assert!(item_id.starts_with("oi-"));
+
+        let got = block_on(svc.handle("GetOpsItem", json!({ "OpsItemId": item_id }), &ctx))
+            .unwrap();
+        assert_eq!(got["OpsItem"]["Title"].as_str().unwrap(), "DB connection failure");
+        assert_eq!(got["OpsItem"]["Status"].as_str().unwrap(), "Open");
+
+        block_on(svc.handle(
+            "UpdateOpsItem",
+            json!({ "OpsItemId": item_id, "Status": "Resolved" }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let got2 = block_on(svc.handle("GetOpsItem", json!({ "OpsItemId": item_id }), &ctx))
+            .unwrap();
+        assert_eq!(got2["OpsItem"]["Status"].as_str().unwrap(), "Resolved");
+
+        let items = block_on(svc.handle("DescribeOpsItems", json!({}), &ctx)).unwrap();
+        assert_eq!(items["OpsItemSummaries"].as_array().unwrap().len(), 1);
+    }
 }
