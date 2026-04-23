@@ -3204,6 +3204,381 @@ async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         .send()
         .await;
 
+    // PutUserPermissionsBoundary / DeleteUserPermissionsBoundary
+    let boundary_doc = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}"#;
+    let boundary_r = client
+        .create_policy()
+        .policy_name("conformance-boundary")
+        .policy_document(boundary_doc)
+        .send()
+        .await;
+    let boundary_arn = boundary_r
+        .as_ref()
+        .ok()
+        .and_then(|r| r.policy.as_ref())
+        .and_then(|p| p.arn.clone());
+
+    if let Some(ref barn) = boundary_arn {
+        results.push(chk!(
+            "PutUserPermissionsBoundary",
+            client
+                .put_user_permissions_boundary()
+                .user_name("conformance-user2")
+                .permissions_boundary(barn)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "DeleteUserPermissionsBoundary",
+            client
+                .delete_user_permissions_boundary()
+                .user_name("conformance-user2")
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("PutUserPermissionsBoundary".to_string()));
+        results.push(OpResult::Skipped("DeleteUserPermissionsBoundary".to_string()));
+    }
+
+    // PutRolePermissionsBoundary / DeleteRolePermissionsBoundary
+    let role_doc = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}"#;
+    let _ = client
+        .create_role()
+        .role_name("conformance-boundary-role")
+        .assume_role_policy_document(role_doc)
+        .send()
+        .await;
+
+    if let Some(ref barn) = boundary_arn {
+        results.push(chk!(
+            "PutRolePermissionsBoundary",
+            client
+                .put_role_permissions_boundary()
+                .role_name("conformance-boundary-role")
+                .permissions_boundary(barn)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "DeleteRolePermissionsBoundary",
+            client
+                .delete_role_permissions_boundary()
+                .role_name("conformance-boundary-role")
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("PutRolePermissionsBoundary".to_string()));
+        results.push(OpResult::Skipped("DeleteRolePermissionsBoundary".to_string()));
+    }
+
+    let _ = client
+        .delete_role()
+        .role_name("conformance-boundary-role")
+        .send()
+        .await;
+    if let Some(ref barn) = boundary_arn {
+        let _ = client.delete_policy().policy_arn(barn).send().await;
+    }
+
+    // GetAccessKeyLastUsed / UpdateAccessKey
+    let ak2_r = client
+        .create_access_key()
+        .user_name("conformance-user2")
+        .send()
+        .await;
+    let ak2_id = ak2_r
+        .as_ref()
+        .ok()
+        .and_then(|r| r.access_key.as_ref())
+        .map(|k| k.access_key_id.clone());
+
+    if let Some(ref akid) = ak2_id {
+        results.push(chk!(
+            "GetAccessKeyLastUsed",
+            client
+                .get_access_key_last_used()
+                .access_key_id(akid)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "UpdateAccessKey",
+            client
+                .update_access_key()
+                .user_name("conformance-user2")
+                .access_key_id(akid)
+                .status(aws_sdk_iam::types::StatusType::Inactive)
+                .send()
+                .await,
+            verbose
+        ));
+
+        let _ = client
+            .delete_access_key()
+            .user_name("conformance-user2")
+            .access_key_id(akid)
+            .send()
+            .await;
+    } else {
+        results.push(OpResult::Skipped("GetAccessKeyLastUsed".to_string()));
+        results.push(OpResult::Skipped("UpdateAccessKey".to_string()));
+    }
+
+    // UpdateGroup
+    results.push(chk!(
+        "UpdateGroup",
+        client
+            .update_group()
+            .group_name("conformance-group")
+            .new_path("/conformance/")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // UploadSigningCertificate / UpdateSigningCertificate
+    let sign_cert_body = "-----BEGIN CERTIFICATE-----\nMIICONFORMANCE\n-----END CERTIFICATE-----";
+    let usc_r = client
+        .upload_signing_certificate()
+        .user_name("conformance-user")
+        .certificate_body(sign_cert_body)
+        .send()
+        .await;
+    let signing_cert_id = usc_r
+        .as_ref()
+        .ok()
+        .and_then(|r| r.certificate.as_ref())
+        .map(|c| c.certificate_id.clone());
+    results.push(chk!("UploadSigningCertificate", usc_r, verbose));
+
+    if let Some(ref cid) = signing_cert_id {
+        results.push(chk!(
+            "UpdateSigningCertificate",
+            client
+                .update_signing_certificate()
+                .user_name("conformance-user")
+                .certificate_id(cid)
+                .status(aws_sdk_iam::types::StatusType::Inactive)
+                .send()
+                .await,
+            verbose
+        ));
+
+        let _ = client
+            .delete_signing_certificate()
+            .user_name("conformance-user")
+            .certificate_id(cid)
+            .send()
+            .await;
+    } else {
+        results.push(OpResult::Skipped("UpdateSigningCertificate".to_string()));
+    }
+
+    // UpdateServiceSpecificCredential / ResetServiceSpecificCredential
+    let ssc2_r = client
+        .create_service_specific_credential()
+        .user_name("conformance-user")
+        .service_name("codecommit.amazonaws.com")
+        .send()
+        .await;
+    let ssc2_id = ssc2_r
+        .as_ref()
+        .ok()
+        .and_then(|r| r.service_specific_credential.as_ref())
+        .map(|c| c.service_specific_credential_id.clone());
+
+    if let Some(ref id) = ssc2_id {
+        results.push(chk!(
+            "UpdateServiceSpecificCredential",
+            client
+                .update_service_specific_credential()
+                .user_name("conformance-user")
+                .service_specific_credential_id(id)
+                .status(aws_sdk_iam::types::StatusType::Inactive)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "ResetServiceSpecificCredential",
+            client
+                .reset_service_specific_credential()
+                .user_name("conformance-user")
+                .service_specific_credential_id(id)
+                .send()
+                .await,
+            verbose
+        ));
+
+        let _ = client
+            .delete_service_specific_credential()
+            .user_name("conformance-user")
+            .service_specific_credential_id(id)
+            .send()
+            .await;
+    } else {
+        results.push(OpResult::Skipped("UpdateServiceSpecificCredential".to_string()));
+        results.push(OpResult::Skipped("ResetServiceSpecificCredential".to_string()));
+    }
+
+    // GenerateCredentialReport / GetCredentialReport
+    results.push(chk!(
+        "GenerateCredentialReport",
+        client.generate_credential_report().send().await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "GetCredentialReport",
+        client.get_credential_report().send().await,
+        verbose
+    ));
+
+    // GetServiceLastAccessedDetails
+    let glsad_r = client
+        .generate_service_last_accessed_details()
+        .arn(format!("arn:aws:iam::000000000000:user/conformance-user"))
+        .send()
+        .await;
+    let job_id = glsad_r.as_ref().ok().and_then(|r| r.job_id.clone());
+
+    if let Some(jid) = job_id {
+        results.push(chk!(
+            "GetServiceLastAccessedDetails",
+            client
+                .get_service_last_accessed_details()
+                .job_id(jid)
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("GetServiceLastAccessedDetails".to_string()));
+    }
+
+    // ListSAMLProviders / ListVirtualMFADevices / ListServerCertificates / ListMFADevices / ListOpenIDConnectProviders
+    results.push(chk!(
+        "ListSAMLProviders",
+        client.list_saml_providers().send().await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "ListVirtualMFADevices",
+        client.list_virtual_mfa_devices().send().await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "ListServerCertificates",
+        client.list_server_certificates().send().await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "ListMFADevices",
+        client
+            .list_mfa_devices()
+            .user_name("conformance-user")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "ListOpenIDConnectProviders",
+        client.list_open_id_connect_providers().send().await,
+        verbose
+    ));
+
+    // ListPoliciesGrantingServiceAccess / GetAccountAuthorizationDetails
+    results.push(chk!(
+        "ListPoliciesGrantingServiceAccess",
+        client
+            .list_policies_granting_service_access()
+            .arn(format!("arn:aws:iam::000000000000:user/conformance-user"))
+            .service_namespaces("s3")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "GetAccountAuthorizationDetails",
+        client.get_account_authorization_details().send().await,
+        verbose
+    ));
+
+    // CreateAccountAlias / DeleteAccountAlias
+    results.push(chk!(
+        "CreateAccountAlias",
+        client
+            .create_account_alias()
+            .account_alias("conformance-alias")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "DeleteAccountAlias",
+        client
+            .delete_account_alias()
+            .account_alias("conformance-alias")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // UpdateRole / UpdateRoleDescription
+    let _ = client
+        .create_role()
+        .role_name("conformance-update-role")
+        .assume_role_policy_document(
+            r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}"#,
+        )
+        .send()
+        .await;
+
+    results.push(chk!(
+        "UpdateRole",
+        client
+            .update_role()
+            .role_name("conformance-update-role")
+            .description("updated description")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "UpdateRoleDescription",
+        client
+            .update_role_description()
+            .role_name("conformance-update-role")
+            .description("another description")
+            .send()
+            .await,
+        verbose
+    ));
+
+    let _ = client
+        .delete_role()
+        .role_name("conformance-update-role")
+        .send()
+        .await;
+
     // DeleteUser (cleanup user2)
     let _ = client
         .delete_user()
@@ -4511,6 +4886,220 @@ async fn test_ssm(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
+    // CreateActivation / DescribeActivations / DeleteActivation
+    let act_r = client
+        .create_activation()
+        .iam_role("SSMServiceRole")
+        .description("conformance activation")
+        .registration_limit(5)
+        .send()
+        .await;
+    let activation_id = act_r.as_ref().ok().and_then(|r| r.activation_id.clone());
+    results.push(chk!("CreateActivation", act_r, verbose));
+
+    results.push(chk!(
+        "DescribeActivations",
+        client.describe_activations().send().await,
+        verbose
+    ));
+
+    if let Some(ref aid) = activation_id {
+        results.push(chk!(
+            "DeleteActivation",
+            client.delete_activation().activation_id(aid).send().await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("DeleteActivation".to_string()));
+    }
+
+    // PutComplianceItems / ListComplianceItems
+    results.push(chk!(
+        "PutComplianceItems",
+        client
+            .put_compliance_items()
+            .resource_id("i-conformance")
+            .resource_type("ManagedInstance")
+            .compliance_type("Custom:Conformance")
+            .execution_summary(
+                aws_sdk_ssm::types::ComplianceExecutionSummary::builder()
+                    .execution_time(aws_sdk_ssm::primitives::DateTime::from_secs(0))
+                    .build()
+                    .unwrap(),
+            )
+            .items(
+                aws_sdk_ssm::types::ComplianceItemEntry::builder()
+                    .id("Conformance:1")
+                    .title("Conformance Check")
+                    .severity(aws_sdk_ssm::types::ComplianceSeverity::Informational)
+                    .status(aws_sdk_ssm::types::ComplianceStatus::Compliant)
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "ListComplianceItems",
+        client.list_compliance_items().send().await,
+        verbose
+    ));
+
+    // CreateOpsMetadata / GetOpsMetadata / UpdateOpsMetadata / ListOpsMetadata / DeleteOpsMetadata
+    let opsm_r = client
+        .create_ops_metadata()
+        .resource_id("/conformance/ops-meta")
+        .send()
+        .await;
+    let opsm_arn = opsm_r.as_ref().ok().and_then(|r| r.ops_metadata_arn.clone());
+    results.push(chk!("CreateOpsMetadata", opsm_r, verbose));
+
+    if let Some(ref arn) = opsm_arn {
+        results.push(chk!(
+            "GetOpsMetadata",
+            client.get_ops_metadata().ops_metadata_arn(arn).send().await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "UpdateOpsMetadata",
+            client
+                .update_ops_metadata()
+                .ops_metadata_arn(arn)
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("GetOpsMetadata".to_string()));
+        results.push(OpResult::Skipped("UpdateOpsMetadata".to_string()));
+    }
+
+    results.push(chk!(
+        "ListOpsMetadata",
+        client.list_ops_metadata().send().await,
+        verbose
+    ));
+
+    if let Some(ref arn) = opsm_arn {
+        results.push(chk!(
+            "DeleteOpsMetadata",
+            client
+                .delete_ops_metadata()
+                .ops_metadata_arn(arn)
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("DeleteOpsMetadata".to_string()));
+    }
+
+    // PutResourcePolicy / GetResourcePolicies / DeleteResourcePolicy
+    let res_arn = "arn:aws:ssm:us-east-1:000000000000:parameter/conformance";
+    let policy_doc = r#"{"Version":"2012-10-17","Statement":[{"Sid":"x","Effect":"Allow","Principal":"*","Action":"ssm:GetParameter","Resource":"*"}]}"#;
+    let prp_r = client
+        .put_resource_policy()
+        .resource_arn(res_arn)
+        .policy(policy_doc)
+        .send()
+        .await;
+    let resource_policy_id = prp_r.as_ref().ok().and_then(|r| r.policy_id.clone());
+    results.push(chk!("PutResourcePolicy", prp_r, verbose));
+
+    results.push(chk!(
+        "GetResourcePolicies",
+        client
+            .get_resource_policies()
+            .resource_arn(res_arn)
+            .send()
+            .await,
+        verbose
+    ));
+
+    if let Some(ref pid) = resource_policy_id {
+        results.push(chk!(
+            "DeleteResourcePolicy",
+            client
+                .delete_resource_policy()
+                .resource_arn(res_arn)
+                .policy_id(pid)
+                .policy_hash("dummyhash")
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("DeleteResourcePolicy".to_string()));
+    }
+
+    // CreateResourceDataSync / ListResourceDataSync
+    results.push(chk!(
+        "CreateResourceDataSync",
+        client
+            .create_resource_data_sync()
+            .sync_name("conformance-sync")
+            .s3_destination(
+                aws_sdk_ssm::types::ResourceDataSyncS3Destination::builder()
+                    .bucket_name("conformance-bucket")
+                    .region("us-east-1")
+                    .sync_format(aws_sdk_ssm::types::ResourceDataSyncS3Format::JsonSerde)
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "ListResourceDataSync",
+        client.list_resource_data_sync().send().await,
+        verbose
+    ));
+
+    let _ = client
+        .delete_resource_data_sync()
+        .sync_name("conformance-sync")
+        .send()
+        .await;
+
+    // DescribeInstanceInformation / DescribeInstanceProperties
+    results.push(chk!(
+        "DescribeInstanceInformation",
+        client.describe_instance_information().send().await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "DescribeInstanceProperties",
+        client.describe_instance_properties().send().await,
+        verbose
+    ));
+
+    // GetInventorySchema
+    results.push(chk!(
+        "GetInventorySchema",
+        client.get_inventory_schema().send().await,
+        verbose
+    ));
+
+    // ListResourceComplianceSummaries
+    results.push(chk!(
+        "ListResourceComplianceSummaries",
+        client.list_resource_compliance_summaries().send().await,
+        verbose
+    ));
+
+    // ListComplianceSummaries
+    results.push(chk!(
+        "ListComplianceSummaries",
+        client.list_compliance_summaries().send().await,
+        verbose
+    ));
+
     results
 }
 
@@ -4883,7 +5472,59 @@ async fn test_lambda(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    // DeleteFunction
+    results.push(chk!(
+        "PutFunctionEventInvokeConfig",
+        client
+            .put_function_event_invoke_config()
+            .function_name("conformance-fn")
+            .maximum_retry_attempts(2)
+            .maximum_event_age_in_seconds(3600)
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "GetFunctionEventInvokeConfig",
+        client
+            .get_function_event_invoke_config()
+            .function_name("conformance-fn")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "UpdateFunctionEventInvokeConfig",
+        client
+            .update_function_event_invoke_config()
+            .function_name("conformance-fn")
+            .maximum_retry_attempts(1)
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "ListFunctionEventInvokeConfigs",
+        client
+            .list_function_event_invoke_configs()
+            .function_name("conformance-fn")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "DeleteFunctionEventInvokeConfig",
+        client
+            .delete_function_event_invoke_config()
+            .function_name("conformance-fn")
+            .send()
+            .await,
+        verbose
+    ));
+
     results.push(chk!(
         "DeleteFunction",
         client
@@ -7947,6 +8588,189 @@ async fn test_cloudfront(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
+    // CreateOriginRequestPolicy
+    let create_orp_r = client
+        .create_origin_request_policy()
+        .origin_request_policy_config(
+            aws_sdk_cloudfront::types::OriginRequestPolicyConfig::builder()
+                .name("conformance-orp")
+                .comment("conformance")
+                .headers_config(
+                    aws_sdk_cloudfront::types::OriginRequestPolicyHeadersConfig::builder()
+                        .header_behavior(
+                            aws_sdk_cloudfront::types::OriginRequestPolicyHeaderBehavior::None,
+                        )
+                        .build()
+                        .unwrap(),
+                )
+                .cookies_config(
+                    aws_sdk_cloudfront::types::OriginRequestPolicyCookiesConfig::builder()
+                        .cookie_behavior(
+                            aws_sdk_cloudfront::types::OriginRequestPolicyCookieBehavior::None,
+                        )
+                        .build()
+                        .unwrap(),
+                )
+                .query_strings_config(
+                    aws_sdk_cloudfront::types::OriginRequestPolicyQueryStringsConfig::builder()
+                        .query_string_behavior(
+                            aws_sdk_cloudfront::types::OriginRequestPolicyQueryStringBehavior::None,
+                        )
+                        .build()
+                        .unwrap(),
+                )
+                .build()
+                .unwrap(),
+        )
+        .send()
+        .await;
+    let orp_id = create_orp_r
+        .as_ref()
+        .ok()
+        .and_then(|r| r.origin_request_policy.as_ref())
+        .map(|p| p.id.clone());
+    results.push(chk!("CreateOriginRequestPolicy", create_orp_r, verbose));
+
+    // GetOriginRequestPolicy
+    if let Some(ref id) = orp_id {
+        results.push(chk!(
+            "GetOriginRequestPolicy",
+            client.get_origin_request_policy().id(id).send().await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("GetOriginRequestPolicy".to_string()));
+    }
+
+    // CreateKeyGroup
+    let create_kg_r = client
+        .create_key_group()
+        .key_group_config(
+            aws_sdk_cloudfront::types::KeyGroupConfig::builder()
+                .name("conformance-kg")
+                .items("K1ABCDEFGHIJ")
+                .comment("conformance")
+                .build()
+                .unwrap(),
+        )
+        .send()
+        .await;
+    let kg_id = create_kg_r
+        .as_ref()
+        .ok()
+        .and_then(|r| r.key_group.as_ref())
+        .map(|k| k.id.clone());
+    results.push(chk!("CreateKeyGroup", create_kg_r, verbose));
+
+    // GetKeyGroup
+    if let Some(ref id) = kg_id {
+        results.push(chk!(
+            "GetKeyGroup",
+            client.get_key_group().id(id).send().await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("GetKeyGroup".to_string()));
+    }
+
+    // CreatePublicKey
+    let create_pk_r = client
+        .create_public_key()
+        .public_key_config(
+            aws_sdk_cloudfront::types::PublicKeyConfig::builder()
+                .caller_reference("conformance-pk-ref")
+                .name("conformance-pk")
+                .encoded_key("-----BEGIN PUBLIC KEY-----\nMIIB\n-----END PUBLIC KEY-----")
+                .comment("conformance")
+                .build()
+                .unwrap(),
+        )
+        .send()
+        .await;
+    let pk_id = create_pk_r
+        .as_ref()
+        .ok()
+        .and_then(|r| r.public_key.as_ref())
+        .map(|p| p.id.clone());
+    results.push(chk!("CreatePublicKey", create_pk_r, verbose));
+
+    // GetPublicKey
+    if let Some(ref id) = pk_id {
+        results.push(chk!(
+            "GetPublicKey",
+            client.get_public_key().id(id).send().await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("GetPublicKey".to_string()));
+    }
+
+    // CreateFunction
+    let create_fn_r = client
+        .create_function()
+        .name("conformance-fn")
+        .function_config(
+            aws_sdk_cloudfront::types::FunctionConfig::builder()
+                .comment("conformance")
+                .runtime(aws_sdk_cloudfront::types::FunctionRuntime::CloudfrontJs20)
+                .build()
+                .unwrap(),
+        )
+        .function_code(aws_sdk_cloudfront::primitives::Blob::new(
+            "function handler(event){return event.request;}".as_bytes(),
+        ))
+        .send()
+        .await;
+    results.push(chk!("CreateFunction", create_fn_r, verbose));
+
+    // PublishFunction
+    results.push(chk!(
+        "PublishFunction",
+        client
+            .publish_function()
+            .name("conformance-fn")
+            .if_match("etag")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListDistributionsByWebACLId
+    results.push(chk!(
+        "ListDistributionsByWebACLId",
+        client
+            .list_distributions_by_web_acl_id()
+            .web_acl_id("conformance-acl")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListDistributionsByRealtimeLogConfig
+    results.push(chk!(
+        "ListDistributionsByRealtimeLogConfig",
+        client
+            .list_distributions_by_realtime_log_config()
+            .realtime_log_config_name("conformance-rt")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListFieldLevelEncryptionConfigs
+    results.push(chk!(
+        "ListFieldLevelEncryptionConfigs",
+        client.list_field_level_encryption_configs().send().await,
+        verbose
+    ));
+
+    // ListRealtimeLogConfigs
+    results.push(chk!(
+        "ListRealtimeLogConfigs",
+        client.list_realtime_log_configs().send().await,
+        verbose
+    ));
+
     results
 }
 
@@ -8077,6 +8901,284 @@ async fn test_elb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         client.describe_listeners().send().await,
         verbose
     ));
+
+    // ModifyLoadBalancerAttributes
+    if let Some(ref arn) = lb_arn {
+        results.push(chk!(
+            "ModifyLoadBalancerAttributes",
+            client
+                .modify_load_balancer_attributes()
+                .load_balancer_arn(arn)
+                .attributes(
+                    aws_sdk_elasticloadbalancingv2::types::LoadBalancerAttribute::builder()
+                        .key("idle_timeout.timeout_seconds")
+                        .value("120")
+                        .build(),
+                )
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped(
+            "ModifyLoadBalancerAttributes".to_string(),
+        ));
+    }
+
+    // SetSecurityGroups
+    if let Some(ref arn) = lb_arn {
+        results.push(chk!(
+            "SetSecurityGroups",
+            client
+                .set_security_groups()
+                .load_balancer_arn(arn)
+                .security_groups("sg-00000000")
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("SetSecurityGroups".to_string()));
+    }
+
+    // SetSubnets
+    if let Some(ref arn) = lb_arn {
+        results.push(chk!(
+            "SetSubnets",
+            client
+                .set_subnets()
+                .load_balancer_arn(arn)
+                .subnets("subnet-00000000")
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("SetSubnets".to_string()));
+    }
+
+    // DescribeTargetHealth
+    if let Some(ref arn) = tg_arn {
+        results.push(chk!(
+            "DescribeTargetHealth",
+            client
+                .describe_target_health()
+                .target_group_arn(arn)
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("DescribeTargetHealth".to_string()));
+    }
+
+    // AddTags
+    if let Some(ref arn) = lb_arn {
+        results.push(chk!(
+            "AddTags",
+            client
+                .add_tags()
+                .resource_arns(arn)
+                .tags(
+                    aws_sdk_elasticloadbalancingv2::types::Tag::builder()
+                        .key("env")
+                        .value("conformance")
+                        .build(),
+                )
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("AddTags".to_string()));
+    }
+
+    // DescribeTags
+    if let Some(ref arn) = lb_arn {
+        results.push(chk!(
+            "DescribeTags",
+            client.describe_tags().resource_arns(arn).send().await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("DescribeTags".to_string()));
+    }
+
+    // RemoveTags
+    if let Some(ref arn) = lb_arn {
+        results.push(chk!(
+            "RemoveTags",
+            client
+                .remove_tags()
+                .resource_arns(arn)
+                .tag_keys("env")
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("RemoveTags".to_string()));
+    }
+
+    // DescribeListenerCertificates
+    if let Some(ref l_arn) = listener_arn {
+        results.push(chk!(
+            "DescribeListenerCertificates",
+            client
+                .describe_listener_certificates()
+                .listener_arn(l_arn)
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped(
+            "DescribeListenerCertificates".to_string(),
+        ));
+    }
+
+    // AddListenerCertificates
+    if let Some(ref l_arn) = listener_arn {
+        results.push(chk!(
+            "AddListenerCertificates",
+            client
+                .add_listener_certificates()
+                .listener_arn(l_arn)
+                .certificates(
+                    aws_sdk_elasticloadbalancingv2::types::Certificate::builder()
+                        .certificate_arn(
+                            "arn:aws:acm:us-east-1:000000000000:certificate/conformance",
+                        )
+                        .is_default(true)
+                        .build(),
+                )
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("AddListenerCertificates".to_string()));
+    }
+
+    // RemoveListenerCertificates
+    if let Some(ref l_arn) = listener_arn {
+        results.push(chk!(
+            "RemoveListenerCertificates",
+            client
+                .remove_listener_certificates()
+                .listener_arn(l_arn)
+                .certificates(
+                    aws_sdk_elasticloadbalancingv2::types::Certificate::builder()
+                        .certificate_arn(
+                            "arn:aws:acm:us-east-1:000000000000:certificate/conformance",
+                        )
+                        .build(),
+                )
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped(
+            "RemoveListenerCertificates".to_string(),
+        ));
+    }
+
+    // CreateRule
+    let rule_arn = if let (Some(l_arn), Some(t_arn)) = (&listener_arn, &tg_arn) {
+        let create_rule_r = client
+            .create_rule()
+            .listener_arn(l_arn)
+            .priority(10)
+            .conditions(
+                aws_sdk_elasticloadbalancingv2::types::RuleCondition::builder()
+                    .field("path-pattern")
+                    .values("/api/*")
+                    .build(),
+            )
+            .actions(
+                aws_sdk_elasticloadbalancingv2::types::Action::builder()
+                    .r#type(aws_sdk_elasticloadbalancingv2::types::ActionTypeEnum::Forward)
+                    .target_group_arn(t_arn)
+                    .build(),
+            )
+            .send()
+            .await;
+        let arn = create_rule_r
+            .as_ref()
+            .ok()
+            .and_then(|r| r.rules.as_ref())
+            .and_then(|rs| rs.first())
+            .and_then(|rule| rule.rule_arn.clone());
+        results.push(chk!("CreateRule", create_rule_r, verbose));
+        arn
+    } else {
+        results.push(OpResult::Skipped("CreateRule".to_string()));
+        None
+    };
+
+    // DescribeRules
+    if let Some(ref l_arn) = listener_arn {
+        results.push(chk!(
+            "DescribeRules",
+            client.describe_rules().listener_arn(l_arn).send().await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("DescribeRules".to_string()));
+    }
+
+    // ModifyRule
+    if let (Some(r_arn), Some(t_arn)) = (&rule_arn, &tg_arn) {
+        results.push(chk!(
+            "ModifyRule",
+            client
+                .modify_rule()
+                .rule_arn(r_arn)
+                .actions(
+                    aws_sdk_elasticloadbalancingv2::types::Action::builder()
+                        .r#type(aws_sdk_elasticloadbalancingv2::types::ActionTypeEnum::Forward)
+                        .target_group_arn(t_arn)
+                        .build(),
+                )
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("ModifyRule".to_string()));
+    }
+
+    // SetRulePriorities
+    if let Some(ref r_arn) = rule_arn {
+        results.push(chk!(
+            "SetRulePriorities",
+            client
+                .set_rule_priorities()
+                .rule_priorities(
+                    aws_sdk_elasticloadbalancingv2::types::RulePriorityPair::builder()
+                        .rule_arn(r_arn)
+                        .priority(20)
+                        .build(),
+                )
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("SetRulePriorities".to_string()));
+    }
+
+    // DeleteRule
+    if let Some(ref r_arn) = rule_arn {
+        results.push(chk!(
+            "DeleteRule",
+            client.delete_rule().rule_arn(r_arn).send().await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("DeleteRule".to_string()));
+    }
 
     // DeleteListener
     if let Some(ref l_arn) = listener_arn {
@@ -8642,14 +9744,26 @@ async fn test_appsync(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     ));
 
     if let Some(ref aid) = api_id {
-        // GetGraphqlApi
         results.push(chk!(
             "GetGraphqlApi",
             client.get_graphql_api().api_id(aid).send().await,
             verbose
         ));
 
-        // CreateApiKey
+        results.push(chk!(
+            "UpdateGraphqlApi",
+            client
+                .update_graphql_api()
+                .api_id(aid)
+                .name("conformance-api-renamed")
+                .authentication_type(aws_sdk_appsync::types::AuthenticationType::ApiKey)
+                .send()
+                .await,
+            verbose
+        ));
+
+        let api_arn = format!("arn:aws:appsync:us-east-1:000000000000:apis/{}", aid);
+
         results.push(chk!(
             "CreateApiKey",
             client
@@ -8661,14 +9775,12 @@ async fn test_appsync(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             verbose
         ));
 
-        // ListApiKeys
         results.push(chk!(
             "ListApiKeys",
             client.list_api_keys().api_id(aid).send().await,
             verbose
         ));
 
-        // CreateDataSource
         results.push(chk!(
             "CreateDataSource",
             client
@@ -8681,21 +9793,305 @@ async fn test_appsync(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             verbose
         ));
 
-        // GetDataSource
         results.push(chk!(
             "GetDataSource",
             client.get_data_source().api_id(aid).name("noneds").send().await,
             verbose
         ));
 
-        // ListSourceApiAssociations
+        results.push(chk!(
+            "ListDataSources",
+            client.list_data_sources().api_id(aid).send().await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "UpdateDataSource",
+            client
+                .update_data_source()
+                .api_id(aid)
+                .name("noneds")
+                .r#type(aws_sdk_appsync::types::DataSourceType::None)
+                .description("updated")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "CreateType",
+            client
+                .create_type()
+                .api_id(aid)
+                .definition("type Query { hello: String }")
+                .format(aws_sdk_appsync::types::TypeDefinitionFormat::Sdl)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "UpdateType",
+            client
+                .update_type()
+                .api_id(aid)
+                .type_name("Query")
+                .definition("type Query { hello: String world: Int }")
+                .format(aws_sdk_appsync::types::TypeDefinitionFormat::Sdl)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "CreateResolver",
+            client
+                .create_resolver()
+                .api_id(aid)
+                .type_name("Query")
+                .field_name("hello")
+                .data_source_name("noneds")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "GetResolver",
+            client
+                .get_resolver()
+                .api_id(aid)
+                .type_name("Query")
+                .field_name("hello")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "ListResolvers",
+            client
+                .list_resolvers()
+                .api_id(aid)
+                .type_name("Query")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "UpdateResolver",
+            client
+                .update_resolver()
+                .api_id(aid)
+                .type_name("Query")
+                .field_name("hello")
+                .data_source_name("noneds")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "GetType",
+            client
+                .get_type()
+                .api_id(aid)
+                .type_name("Query")
+                .format(aws_sdk_appsync::types::TypeDefinitionFormat::Sdl)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "ListTypes",
+            client
+                .list_types()
+                .api_id(aid)
+                .format(aws_sdk_appsync::types::TypeDefinitionFormat::Sdl)
+                .send()
+                .await,
+            verbose
+        ));
+
+        let create_fn_r = client
+            .create_function()
+            .api_id(aid)
+            .name("conformance-fn")
+            .data_source_name("noneds")
+            .function_version("2018-05-29")
+            .send()
+            .await;
+        let function_id = create_fn_r
+            .as_ref()
+            .ok()
+            .and_then(|r| r.function_configuration.as_ref())
+            .and_then(|f| f.function_id.clone());
+        results.push(chk!("CreateFunction", create_fn_r, verbose));
+
+        results.push(chk!(
+            "ListFunctions",
+            client.list_functions().api_id(aid).send().await,
+            verbose
+        ));
+
+        if let Some(ref fid) = function_id {
+            results.push(chk!(
+                "GetFunction",
+                client.get_function().api_id(aid).function_id(fid).send().await,
+                verbose
+            ));
+
+            results.push(chk!(
+                "UpdateFunction",
+                client
+                    .update_function()
+                    .api_id(aid)
+                    .function_id(fid)
+                    .name("conformance-fn")
+                    .data_source_name("noneds")
+                    .function_version("2018-05-29")
+                    .send()
+                    .await,
+                verbose
+            ));
+
+            results.push(chk!(
+                "DeleteFunction",
+                client.delete_function().api_id(aid).function_id(fid).send().await,
+                verbose
+            ));
+        } else {
+            results.push(OpResult::Skipped("GetFunction".to_string()));
+            results.push(OpResult::Skipped("UpdateFunction".to_string()));
+            results.push(OpResult::Skipped("DeleteFunction".to_string()));
+        }
+
+        let api_key_id = client
+            .list_api_keys()
+            .api_id(aid)
+            .send()
+            .await
+            .ok()
+            .and_then(|r| r.api_keys.and_then(|k| k.into_iter().next()))
+            .and_then(|k| k.id);
+
+        if let Some(ref kid) = api_key_id {
+            results.push(chk!(
+                "UpdateApiKey",
+                client
+                    .update_api_key()
+                    .api_id(aid)
+                    .id(kid)
+                    .description("updated-key")
+                    .send()
+                    .await,
+                verbose
+            ));
+
+            results.push(chk!(
+                "DeleteApiKey",
+                client.delete_api_key().api_id(aid).id(kid).send().await,
+                verbose
+            ));
+        } else {
+            results.push(OpResult::Skipped("UpdateApiKey".to_string()));
+            results.push(OpResult::Skipped("DeleteApiKey".to_string()));
+        }
+
+        results.push(chk!(
+            "StartSchemaCreation",
+            client
+                .start_schema_creation()
+                .api_id(aid)
+                .definition(aws_sdk_appsync::primitives::Blob::new(
+                    b"type Query { hello: String }".to_vec(),
+                ))
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "GetSchemaCreationStatus",
+            client.get_schema_creation_status().api_id(aid).send().await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "DeleteResolver",
+            client
+                .delete_resolver()
+                .api_id(aid)
+                .type_name("Query")
+                .field_name("hello")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "DeleteType",
+            client.delete_type().api_id(aid).type_name("Query").send().await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "DeleteDataSource",
+            client.delete_data_source().api_id(aid).name("noneds").send().await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "GetIntrospectionSchema",
+            client
+                .get_introspection_schema()
+                .api_id(aid)
+                .format(aws_sdk_appsync::types::OutputType::Sdl)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "TagResource",
+            client
+                .tag_resource()
+                .resource_arn(&api_arn)
+                .tags("env", "conformance")
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "ListTagsForResource",
+            client
+                .list_tags_for_resource()
+                .resource_arn(&api_arn)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "UntagResource",
+            client
+                .untag_resource()
+                .resource_arn(&api_arn)
+                .tag_keys("env")
+                .send()
+                .await,
+            verbose
+        ));
+
         results.push(chk!(
             "ListSourceApiAssociations",
             client.list_source_api_associations().api_id(aid).send().await,
             verbose
         ));
 
-        // DeleteGraphqlApi
         results.push(chk!(
             "DeleteGraphqlApi",
             client.delete_graphql_api().api_id(aid).send().await,
@@ -8940,6 +10336,199 @@ async fn test_glue(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
+    // GetTrigger
+    results.push(chk!(
+        "GetTrigger",
+        client
+            .get_trigger()
+            .name("conformance-trigger")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListWorkflows
+    let _ = client
+        .create_workflow()
+        .name("conformance-workflow2")
+        .send()
+        .await;
+    results.push(chk!(
+        "ListWorkflows",
+        client.list_workflows().send().await,
+        verbose
+    ));
+    let _ = client
+        .delete_workflow()
+        .name("conformance-workflow2")
+        .send()
+        .await;
+
+    // UpdateJob
+    results.push(chk!(
+        "UpdateJob",
+        client
+            .update_job()
+            .job_name("conformance-job")
+            .job_update(
+                aws_sdk_glue::types::JobUpdate::builder()
+                    .role("arn:aws:iam::000000000000:role/glue-job-role-updated")
+                    .build(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    // CreateConnection / GetConnection / UpdateConnection
+    results.push(chk!(
+        "CreateConnection",
+        client
+            .create_connection()
+            .connection_input(
+                aws_sdk_glue::types::ConnectionInput::builder()
+                    .name("conformance-connection")
+                    .connection_type(aws_sdk_glue::types::ConnectionType::Jdbc)
+                    .connection_properties(
+                        aws_sdk_glue::types::ConnectionPropertyKey::JdbcConnectionUrl,
+                        "jdbc:postgresql://host:5432/db",
+                    )
+                    .connection_properties(
+                        aws_sdk_glue::types::ConnectionPropertyKey::UserName,
+                        "admin",
+                    )
+                    .connection_properties(
+                        aws_sdk_glue::types::ConnectionPropertyKey::Password,
+                        "secret",
+                    )
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "GetConnection",
+        client
+            .get_connection()
+            .name("conformance-connection")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "UpdateConnection",
+        client
+            .update_connection()
+            .name("conformance-connection")
+            .connection_input(
+                aws_sdk_glue::types::ConnectionInput::builder()
+                    .name("conformance-connection")
+                    .connection_type(aws_sdk_glue::types::ConnectionType::Jdbc)
+                    .description("updated")
+                    .connection_properties(
+                        aws_sdk_glue::types::ConnectionPropertyKey::JdbcConnectionUrl,
+                        "jdbc:postgresql://host2:5432/db",
+                    )
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    let _ = client
+        .delete_connection()
+        .connection_name("conformance-connection")
+        .send()
+        .await;
+
+    // GetTableVersion
+    results.push(chk!(
+        "GetTableVersion",
+        client
+            .get_table_version()
+            .database_name("conformance_db")
+            .table_name("conformance_table")
+            .version_id("1")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // CreatePartition (so we have something for GetPartition / BatchGetPartition)
+    let _ = client
+        .create_partition()
+        .database_name("conformance_db")
+        .table_name("conformance_table")
+        .partition_input(
+            aws_sdk_glue::types::PartitionInput::builder()
+                .values("2024")
+                .values("01")
+                .build(),
+        )
+        .send()
+        .await;
+
+    results.push(chk!(
+        "GetPartition",
+        client
+            .get_partition()
+            .database_name("conformance_db")
+            .table_name("conformance_table")
+            .partition_values("2024")
+            .partition_values("01")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "BatchGetPartition",
+        client
+            .batch_get_partition()
+            .database_name("conformance_db")
+            .table_name("conformance_table")
+            .partitions_to_get(
+                aws_sdk_glue::types::PartitionValueList::builder()
+                    .values("2024")
+                    .values("01")
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    // BatchDeleteTable (create extra table to delete)
+    let _ = client
+        .create_table()
+        .database_name("conformance_db")
+        .table_input(
+            aws_sdk_glue::types::TableInput::builder()
+                .name("conformance_table_extra")
+                .build()
+                .unwrap(),
+        )
+        .send()
+        .await;
+
+    results.push(chk!(
+        "BatchDeleteTable",
+        client
+            .batch_delete_table()
+            .database_name("conformance_db")
+            .tables_to_delete("conformance_table_extra")
+            .send()
+            .await,
+        verbose
+    ));
+
     // DeleteTrigger
     results.push(chk!(
         "DeleteTrigger",
@@ -9152,6 +10741,103 @@ async fn test_athena(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
+    // UpdateWorkGroup
+    results.push(chk!(
+        "UpdateWorkGroup",
+        client
+            .update_work_group()
+            .work_group("conformance-workgroup")
+            .description("updated")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // CreateDataCatalog
+    results.push(chk!(
+        "CreateDataCatalog",
+        client
+            .create_data_catalog()
+            .name("conformance-catalog")
+            .r#type(aws_sdk_athena::types::DataCatalogType::Hive)
+            .description("conformance")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetDataCatalog
+    results.push(chk!(
+        "GetDataCatalog",
+        client
+            .get_data_catalog()
+            .name("conformance-catalog")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetNamedQuery
+    if let Some(ref nqid) = named_query_id {
+        results.push(chk!(
+            "GetNamedQuery",
+            client
+                .get_named_query()
+                .named_query_id(nqid)
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("GetNamedQuery".to_string()));
+    }
+
+    // ListApplicationDPUSizes
+    results.push(chk!(
+        "ListApplicationDPUSizes",
+        client.list_application_dpu_sizes().send().await,
+        verbose
+    ));
+
+    // GetQueryRuntimeStatistics
+    if let Some(ref qid) = query_execution_id {
+        results.push(chk!(
+            "GetQueryRuntimeStatistics",
+            client
+                .get_query_runtime_statistics()
+                .query_execution_id(qid)
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("GetQueryRuntimeStatistics".to_string()));
+    }
+
+    // BatchGetPreparedStatement
+    results.push(chk!(
+        "BatchGetPreparedStatement",
+        client
+            .batch_get_prepared_statement()
+            .work_group("conformance-workgroup")
+            .prepared_statement_names("conformance-stmt")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // UntagResource
+    results.push(chk!(
+        "UntagResource",
+        client
+            .untag_resource()
+            .resource_arn("arn:aws:athena:us-east-1:000000000000:workgroup/conformance-workgroup")
+            .tag_keys("env")
+            .send()
+            .await,
+        verbose
+    ));
+
     // DeleteWorkGroup (cleanup)
     results.push(chk!(
         "DeleteWorkGroup",
@@ -9176,14 +10862,12 @@ async fn test_bedrock(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     let client = aws_sdk_bedrock::Client::new(&config);
     let mut results = Vec::new();
 
-    // ListFoundationModels
     results.push(chk!(
         "ListFoundationModels",
         client.list_foundation_models().send().await,
         verbose
     ));
 
-    // GetFoundationModel (use a known stub model id)
     results.push(chk!(
         "GetFoundationModel",
         client
@@ -9194,31 +10878,230 @@ async fn test_bedrock(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    // ListGuardrails
     results.push(chk!(
         "ListGuardrails",
         client.list_guardrails().send().await,
         verbose
     ));
 
-    // ListProvisionedModelThroughputs
     results.push(chk!(
         "ListProvisionedModelThroughputs",
         client.list_provisioned_model_throughputs().send().await,
         verbose
     ));
 
-    // ListCustomModels
     results.push(chk!(
         "ListCustomModels",
         client.list_custom_models().send().await,
         verbose
     ));
 
-    // ListModelCustomizationJobs
     results.push(chk!(
         "ListModelCustomizationJobs",
         client.list_model_customization_jobs().send().await,
+        verbose
+    ));
+
+    let create_guard_r = client
+        .create_guardrail()
+        .name("conformance-guardrail")
+        .blocked_input_messaging("Blocked input.")
+        .blocked_outputs_messaging("Blocked output.")
+        .send()
+        .await;
+    let guardrail_id = create_guard_r.as_ref().ok().map(|r| r.guardrail_id.clone());
+    results.push(chk!("CreateGuardrail", create_guard_r, verbose));
+
+    if let Some(ref gid) = guardrail_id {
+        results.push(chk!(
+            "GetGuardrail",
+            client
+                .get_guardrail()
+                .guardrail_identifier(gid)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "DeleteGuardrail",
+            client
+                .delete_guardrail()
+                .guardrail_identifier(gid)
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("GetGuardrail".to_string()));
+        results.push(OpResult::Skipped("DeleteGuardrail".to_string()));
+    }
+
+    let create_pmt_r = client
+        .create_provisioned_model_throughput()
+        .provisioned_model_name("conformance-pmt")
+        .model_id("anthropic.claude-v2:1")
+        .model_units(1)
+        .send()
+        .await;
+    let pmt_arn = create_pmt_r
+        .as_ref()
+        .ok()
+        .map(|r| r.provisioned_model_arn.clone());
+    results.push(chk!("CreateProvisionedModelThroughput", create_pmt_r, verbose));
+
+    if let Some(ref arn) = pmt_arn {
+        let pmt_id = arn.rsplit('/').next().unwrap_or(arn);
+        results.push(chk!(
+            "GetProvisionedModelThroughput",
+            client
+                .get_provisioned_model_throughput()
+                .provisioned_model_id(pmt_id)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "DeleteProvisionedModelThroughput",
+            client
+                .delete_provisioned_model_throughput()
+                .provisioned_model_id(pmt_id)
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("GetProvisionedModelThroughput".to_string()));
+        results.push(OpResult::Skipped("DeleteProvisionedModelThroughput".to_string()));
+    }
+
+    let create_job_r = client
+        .create_model_customization_job()
+        .job_name("conformance-job")
+        .custom_model_name("conformance-custom-model")
+        .role_arn("arn:aws:iam::000000000000:role/bedrock-role")
+        .base_model_identifier("anthropic.claude-v2:1")
+        .training_data_config(
+            aws_sdk_bedrock::types::TrainingDataConfig::builder()
+                .s3_uri("s3://conformance-bucket/training.jsonl")
+                .build(),
+        )
+        .output_data_config(
+            aws_sdk_bedrock::types::OutputDataConfig::builder()
+                .s3_uri("s3://conformance-bucket/output/")
+                .build()
+                .unwrap_or_else(|_| panic!("output data config")),
+        )
+        .send()
+        .await;
+    let job_arn = create_job_r.as_ref().ok().map(|r| r.job_arn.clone());
+    results.push(chk!("CreateModelCustomizationJob", create_job_r, verbose));
+
+    if let Some(ref jarn) = job_arn {
+        results.push(chk!(
+            "GetModelCustomizationJob",
+            client
+                .get_model_customization_job()
+                .job_identifier(jarn)
+                .send()
+                .await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "StopModelCustomizationJob",
+            client
+                .stop_model_customization_job()
+                .job_identifier(jarn)
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("GetModelCustomizationJob".to_string()));
+        results.push(OpResult::Skipped("StopModelCustomizationJob".to_string()));
+    }
+
+    results.push(chk!(
+        "PutModelInvocationLoggingConfiguration",
+        client
+            .put_model_invocation_logging_configuration()
+            .logging_config(
+                aws_sdk_bedrock::types::LoggingConfig::builder()
+                    .text_data_delivery_enabled(true)
+                    .image_data_delivery_enabled(false)
+                    .embedding_data_delivery_enabled(false)
+                    .build(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "GetModelInvocationLoggingConfiguration",
+        client.get_model_invocation_logging_configuration().send().await,
+        verbose
+    ));
+
+    let tag_arn = "arn:aws:bedrock:us-east-1:000000000000:custom-model/conformance";
+
+    results.push(chk!(
+        "TagResource",
+        client
+            .tag_resource()
+            .resource_arn(tag_arn)
+            .tags(
+                aws_sdk_bedrock::types::Tag::builder()
+                    .key("env")
+                    .value("conformance")
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "ListTagsForResource",
+        client
+            .list_tags_for_resource()
+            .resource_arn(tag_arn)
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "UntagResource",
+        client
+            .untag_resource()
+            .resource_arn(tag_arn)
+            .tag_keys("env")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "GetCustomModel",
+        client
+            .get_custom_model()
+            .model_identifier("nonexistent-custom-model")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results.push(chk!(
+        "DeleteCustomModel",
+        client
+            .delete_custom_model()
+            .model_identifier("nonexistent-custom-model")
+            .send()
+            .await,
         verbose
     ));
 
