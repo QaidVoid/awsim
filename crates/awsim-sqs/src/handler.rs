@@ -7,7 +7,8 @@ use tracing::debug;
 
 use crate::operations::{
     attributes, change_visibility, create_queue, dead_letter, delete_message, delete_queue,
-    get_queue_url, list_queues, purge_queue, receive_message, send_message, tags,
+    get_queue_url, list_queues, message_move, permissions, purge_queue, receive_message,
+    send_message, tags,
 };
 use crate::state::{InflightMessage, Queue, QueueSnapshot, SqsState, SqsStateSnapshot, parse_redrive_policy_from_attrs};
 
@@ -73,6 +74,11 @@ impl ServiceHandler for SqsService {
             "TagQueue" => tags::tag_queue(&state, &input, ctx),
             "UntagQueue" => tags::untag_queue(&state, &input, ctx),
             "ListQueueTags" => tags::list_queue_tags(&state, &input, ctx),
+            "AddPermission" => permissions::add_permission(&state, &input, ctx),
+            "RemovePermission" => permissions::remove_permission(&state, &input, ctx),
+            "StartMessageMoveTask" => message_move::start_message_move_task(&state, &input, ctx),
+            "CancelMessageMoveTask" => message_move::cancel_message_move_task(&state, &input, ctx),
+            "ListMessageMoveTasks" => message_move::list_message_move_tasks(&state, &input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

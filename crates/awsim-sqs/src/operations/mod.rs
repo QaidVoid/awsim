@@ -6,6 +6,8 @@ pub mod delete_message;
 pub mod delete_queue;
 pub mod get_queue_url;
 pub mod list_queues;
+pub mod message_move;
+pub mod permissions;
 pub mod purge_queue;
 pub mod receive_message;
 pub mod send_message;

@@ -103,11 +103,25 @@ impl InflightMessage {
     }
 }
 
+/// A message-move task (DLQ redrive).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageMoveTask {
+    pub task_handle: String,
+    pub source_arn: String,
+    pub destination_arn: Option<String>,
+    pub status: String,
+    pub started_timestamp: u64,
+    pub approximate_number_of_messages_moved: u64,
+    pub approximate_number_of_messages_to_move: u64,
+}
+
 /// Per-account/region SQS state.
 #[derive(Debug, Default)]
 pub struct SqsState {
     /// Queue name → Queue (DashMap for concurrent access)
     pub queues: DashMap<String, Queue>,
+    /// Task handle → MessageMoveTask
+    pub move_tasks: DashMap<String, MessageMoveTask>,
 }
 
 impl SqsState {
