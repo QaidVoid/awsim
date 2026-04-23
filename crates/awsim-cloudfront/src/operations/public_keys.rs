@@ -57,14 +57,26 @@ pub fn create_public_key(state: &CloudFrontState, input: &Value) -> Result<Value
     let result = pk_to_value(&pk);
     state.public_keys.insert(id, pk);
 
-    Ok(json!({ "PublicKey": result, "ETag": etag }))
+    Ok(json!({
+        "__xml_root": "PublicKey",
+        "ETag": etag,
+        "Id": result["Id"].clone(),
+        "CreatedTime": result["CreatedTime"].clone(),
+        "PublicKeyConfig": result["PublicKeyConfig"].clone(),
+    }))
 }
 
 pub fn get_public_key(state: &CloudFrontState, id: &str) -> Result<Value, AwsError> {
     let pk = state.public_keys.get(id).ok_or_else(|| not_found(id))?;
     let etag = pk.etag.clone();
     let result = pk_to_value(&pk);
-    Ok(json!({ "PublicKey": result, "ETag": etag }))
+    Ok(json!({
+        "__xml_root": "PublicKey",
+        "ETag": etag,
+        "Id": result["Id"].clone(),
+        "CreatedTime": result["CreatedTime"].clone(),
+        "PublicKeyConfig": result["PublicKeyConfig"].clone(),
+    }))
 }
 
 pub fn delete_public_key(state: &CloudFrontState, id: &str) -> Result<Value, AwsError> {

@@ -59,9 +59,12 @@ pub fn create_function(state: &CloudFrontState, input: &Value) -> Result<Value, 
     state.functions.insert(name, f);
 
     Ok(json!({
-        "FunctionSummary": result,
-        "Location": "",
+        "__xml_root": "FunctionSummary",
         "ETag": etag,
+        "Name": result["Name"].clone(),
+        "Status": result["Status"].clone(),
+        "FunctionConfig": result["FunctionConfig"].clone(),
+        "FunctionMetadata": result["FunctionMetadata"].clone(),
     }))
 }
 
@@ -69,7 +72,14 @@ pub fn describe_function(state: &CloudFrontState, name: &str) -> Result<Value, A
     let f = state.functions.get(name).ok_or_else(|| not_found(name))?;
     let etag = f.etag.clone();
     let result = function_to_value(&f);
-    Ok(json!({ "FunctionSummary": result, "ETag": etag }))
+    Ok(json!({
+        "__xml_root": "FunctionSummary",
+        "ETag": etag,
+        "Name": result["Name"].clone(),
+        "Status": result["Status"].clone(),
+        "FunctionConfig": result["FunctionConfig"].clone(),
+        "FunctionMetadata": result["FunctionMetadata"].clone(),
+    }))
 }
 
 pub fn delete_function(state: &CloudFrontState, name: &str) -> Result<Value, AwsError> {
@@ -99,5 +109,11 @@ pub fn publish_function(state: &CloudFrontState, name: &str) -> Result<Value, Aw
     let mut f = state.functions.get_mut(name).ok_or_else(|| not_found(name))?;
     f.stage = "LIVE".to_string();
     let result = function_to_value(&f);
-    Ok(json!({ "FunctionSummary": result }))
+    Ok(json!({
+        "__xml_root": "FunctionSummary",
+        "Name": result["Name"].clone(),
+        "Status": result["Status"].clone(),
+        "FunctionConfig": result["FunctionConfig"].clone(),
+        "FunctionMetadata": result["FunctionMetadata"].clone(),
+    }))
 }

@@ -59,14 +59,26 @@ pub fn create_key_group(state: &CloudFrontState, input: &Value) -> Result<Value,
     let result = kg_to_value(&kg);
     state.key_groups.insert(id, kg);
 
-    Ok(json!({ "KeyGroup": result, "ETag": etag }))
+    Ok(json!({
+        "__xml_root": "KeyGroup",
+        "ETag": etag,
+        "Id": result["Id"].clone(),
+        "LastModifiedTime": result["LastModifiedTime"].clone(),
+        "KeyGroupConfig": result["KeyGroupConfig"].clone(),
+    }))
 }
 
 pub fn get_key_group(state: &CloudFrontState, id: &str) -> Result<Value, AwsError> {
     let kg = state.key_groups.get(id).ok_or_else(|| not_found(id))?;
     let etag = kg.etag.clone();
     let result = kg_to_value(&kg);
-    Ok(json!({ "KeyGroup": result, "ETag": etag }))
+    Ok(json!({
+        "__xml_root": "KeyGroup",
+        "ETag": etag,
+        "Id": result["Id"].clone(),
+        "LastModifiedTime": result["LastModifiedTime"].clone(),
+        "KeyGroupConfig": result["KeyGroupConfig"].clone(),
+    }))
 }
 
 pub fn delete_key_group(state: &CloudFrontState, id: &str) -> Result<Value, AwsError> {

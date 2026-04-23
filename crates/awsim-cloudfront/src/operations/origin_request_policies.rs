@@ -59,8 +59,11 @@ pub fn create_origin_request_policy(
     state.origin_request_policies.insert(id, policy);
 
     Ok(json!({
-        "OriginRequestPolicy": result,
+        "__xml_root": "OriginRequestPolicy",
         "ETag": etag,
+        "Id": result["Id"].clone(),
+        "LastModifiedTime": result["LastModifiedTime"].clone(),
+        "OriginRequestPolicyConfig": result["OriginRequestPolicyConfig"].clone(),
     }))
 }
 
@@ -69,8 +72,11 @@ pub fn get_origin_request_policy(state: &CloudFrontState, id: &str) -> Result<Va
     let etag = p.etag.clone();
     let result = policy_to_value(&p);
     Ok(json!({
-        "OriginRequestPolicy": result,
+        "__xml_root": "OriginRequestPolicy",
         "ETag": etag,
+        "Id": result["Id"].clone(),
+        "LastModifiedTime": result["LastModifiedTime"].clone(),
+        "OriginRequestPolicyConfig": result["OriginRequestPolicyConfig"].clone(),
     }))
 }
 
