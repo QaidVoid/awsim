@@ -38,6 +38,8 @@ pub struct Cluster {
     pub tasks: HashMap<String, Task>,
     #[allow(dead_code)]
     pub created_at: String,
+    pub capacity_providers: Vec<String>,
+    pub default_capacity_provider_strategy: Vec<Value>,
 }
 
 /// A task definition revision.
@@ -52,6 +54,14 @@ pub struct TaskDefinition {
     pub requires_compatibilities: Vec<String>,
 }
 
+/// A capacity provider.
+#[derive(Debug, Clone)]
+pub struct CapacityProvider {
+    pub name: String,
+    pub arn: String,
+    pub status: String,
+}
+
 /// Per-account/region ECS state.
 #[derive(Debug, Default)]
 pub struct EcsState {
@@ -59,4 +69,10 @@ pub struct EcsState {
     pub clusters: DashMap<String, Cluster>,
     /// family → ordered Vec of TaskDefinition (index 0 = revision 1)
     pub task_definitions: DashMap<String, Vec<TaskDefinition>>,
+    /// resource ARN → HashMap<tag key, tag value>
+    pub resource_tags: DashMap<String, HashMap<String, String>>,
+    /// capacity provider name → CapacityProvider
+    pub capacity_providers: DashMap<String, CapacityProvider>,
+    /// account setting name → value (e.g. "containerInstanceLongArnFormat" → "enabled")
+    pub account_settings: DashMap<String, String>,
 }

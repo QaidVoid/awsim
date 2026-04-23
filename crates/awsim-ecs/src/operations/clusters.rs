@@ -26,6 +26,8 @@ fn cluster_to_json(cluster: &Cluster) -> Value {
         "activeServicesCount": cluster.services.len(),
         "statistics": [],
         "tags": [],
+        "capacityProviders": cluster.capacity_providers,
+        "defaultCapacityProviderStrategy": cluster.default_capacity_provider_strategy,
     })
 }
 
@@ -65,6 +67,8 @@ pub fn create_cluster(
         services: HashMap::new(),
         tasks: HashMap::new(),
         created_at: now_epoch_str(),
+        capacity_providers: Vec::new(),
+        default_capacity_provider_strategy: Vec::new(),
     };
 
     info!(cluster = %name, "Created ECS cluster");
