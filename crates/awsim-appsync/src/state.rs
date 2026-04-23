@@ -21,6 +21,8 @@ pub struct GraphqlApi {
     pub api_keys: Vec<ApiKey>,
     pub data_sources: Vec<DataSource>,
     pub resolvers: Vec<Resolver>,
+    pub types: Vec<GraphqlType>,
+    pub functions: Vec<AppSyncFunction>,
     pub created_at: String,
 }
 
@@ -43,6 +45,31 @@ pub struct Resolver {
     pub type_name: String,
     pub field_name: String,
     pub data_source_name: String,
+    pub request_mapping_template: Option<String>,
+    pub response_mapping_template: Option<String>,
+}
+
+/// A GraphQL type (SDL or JSON).
+#[derive(Debug, Clone)]
+pub struct GraphqlType {
+    pub name: String,
+    pub definition: Option<String>,
+    pub format: String, // SDL | JSON
+    pub arn: String,
+}
+
+/// An AppSync pipeline function (not Lambda).
+#[derive(Debug, Clone)]
+pub struct AppSyncFunction {
+    pub function_id: String,
+    pub function_arn: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub data_source_name: String,
+    pub request_mapping_template: Option<String>,
+    pub response_mapping_template: Option<String>,
+    pub function_version: String,
+    pub created_at: String,
 }
 
 pub fn now_iso() -> String {

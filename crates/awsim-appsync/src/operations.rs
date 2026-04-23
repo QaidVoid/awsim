@@ -66,6 +66,7 @@ fn function_to_json(f: &AppSyncFunction) -> Value {
         "requestMappingTemplate": f.request_mapping_template,
         "responseMappingTemplate": f.response_mapping_template,
         "functionVersion": f.function_version,
+        "createdAt": f.created_at,
     })
 }
 

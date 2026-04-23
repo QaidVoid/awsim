@@ -50,6 +50,7 @@ impl ServiceHandler for AppSyncService {
 
     fn routes(&self) -> Vec<RouteDefinition> {
         vec![
+            // GraphQL APIs
             RouteDefinition {
                 method: "POST",
                 path_pattern: "/v1/apis",
@@ -80,6 +81,7 @@ impl ServiceHandler for AppSyncService {
                 operation: "UpdateGraphqlApi",
                 required_query_param: None,
             },
+            // Schema
             RouteDefinition {
                 method: "POST",
                 path_pattern: "/v1/apis/{apiId}/schemacreation",
@@ -92,6 +94,7 @@ impl ServiceHandler for AppSyncService {
                 operation: "GetSchemaCreationStatus",
                 required_query_param: None,
             },
+            // API Keys
             RouteDefinition {
                 method: "POST",
                 path_pattern: "/v1/apis/{apiId}/apikeys",
@@ -112,6 +115,13 @@ impl ServiceHandler for AppSyncService {
             },
             RouteDefinition {
                 method: "POST",
+                path_pattern: "/v1/apis/{apiId}/apikeys/{id}",
+                operation: "UpdateApiKey",
+                required_query_param: None,
+            },
+            // Data Sources
+            RouteDefinition {
+                method: "POST",
                 path_pattern: "/v1/apis/{apiId}/datasources",
                 operation: "CreateDataSource",
                 required_query_param: None,
@@ -128,6 +138,7 @@ impl ServiceHandler for AppSyncService {
                 operation: "DeleteDataSource",
                 required_query_param: None,
             },
+            // Resolvers
             RouteDefinition {
                 method: "POST",
                 path_pattern: "/v1/apis/{apiId}/types/{typeName}/resolvers",
@@ -138,6 +149,81 @@ impl ServiceHandler for AppSyncService {
                 method: "GET",
                 path_pattern: "/v1/apis/{apiId}/types/{typeName}/resolvers",
                 operation: "ListResolvers",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v1/apis/{apiId}/types/{typeName}/resolvers/{fieldName}",
+                operation: "UpdateResolver",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v1/apis/{apiId}/types/{typeName}/resolvers/{fieldName}",
+                operation: "DeleteResolver",
+                required_query_param: None,
+            },
+            // GraphQL Types
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v1/apis/{apiId}/types",
+                operation: "CreateType",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v1/apis/{apiId}/types/{typeName}",
+                operation: "GetType",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v1/apis/{apiId}/types",
+                operation: "ListTypes",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v1/apis/{apiId}/types/{typeName}",
+                operation: "DeleteType",
+                required_query_param: None,
+            },
+            // AppSync Functions
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v1/apis/{apiId}/functions",
+                operation: "CreateFunction",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v1/apis/{apiId}/functions/{functionId}",
+                operation: "GetFunction",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v1/apis/{apiId}/functions",
+                operation: "ListFunctions",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v1/apis/{apiId}/functions/{functionId}",
+                operation: "DeleteFunction",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v1/apis/{apiId}/functions/{functionId}",
+                operation: "UpdateFunction",
+                required_query_param: None,
+            },
+            // API Cache
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v1/apis/{apiId}/FlushCache",
+                operation: "FlushApiCache",
                 required_query_param: None,
             },
         ]
@@ -153,21 +239,42 @@ impl ServiceHandler for AppSyncService {
         let state = self.get_state(ctx);
 
         match operation {
+            // GraphQL APIs
             "CreateGraphqlApi" => operations::create_graphql_api(&state, &input, ctx),
             "GetGraphqlApi" => operations::get_graphql_api(&state, &input),
             "ListGraphqlApis" => operations::list_graphql_apis(&state),
             "DeleteGraphqlApi" => operations::delete_graphql_api(&state, &input),
             "UpdateGraphqlApi" => operations::update_graphql_api(&state, &input),
+            // Schema
             "StartSchemaCreation" => operations::start_schema_creation(&state, &input),
             "GetSchemaCreationStatus" => operations::get_schema_creation_status(&state, &input),
+            // API Keys
             "CreateApiKey" => operations::create_api_key(&state, &input),
             "ListApiKeys" => operations::list_api_keys(&state, &input),
             "DeleteApiKey" => operations::delete_api_key(&state, &input),
+            "UpdateApiKey" => operations::update_api_key(&state, &input),
+            // Data Sources
             "CreateDataSource" => operations::create_data_source(&state, &input),
             "ListDataSources" => operations::list_data_sources(&state, &input),
             "DeleteDataSource" => operations::delete_data_source(&state, &input),
+            // Resolvers
             "CreateResolver" => operations::create_resolver(&state, &input),
             "ListResolvers" => operations::list_resolvers(&state, &input),
+            "UpdateResolver" => operations::update_resolver(&state, &input),
+            "DeleteResolver" => operations::delete_resolver(&state, &input),
+            // GraphQL Types
+            "CreateType" => operations::create_type(&state, &input, ctx),
+            "GetType" => operations::get_type(&state, &input),
+            "ListTypes" => operations::list_types(&state, &input),
+            "DeleteType" => operations::delete_type(&state, &input),
+            // AppSync Functions
+            "CreateFunction" => operations::create_function(&state, &input, ctx),
+            "GetFunction" => operations::get_function(&state, &input),
+            "ListFunctions" => operations::list_functions(&state, &input),
+            "DeleteFunction" => operations::delete_function(&state, &input),
+            "UpdateFunction" => operations::update_function(&state, &input),
+            // API Cache
+            "FlushApiCache" => operations::flush_api_cache(&state, &input),
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
