@@ -14,10 +14,8 @@ pub fn describe_account_limits(_state: &ElbState, _input: &Value) -> Result<Valu
     ];
 
     Ok(json!({
-        "DescribeAccountLimitsResult": {
-            "Limits": { "member": limits },
-            "NextMarker": null
-        }
+        "Limits": { "member": limits },
+        "NextMarker": null
     }))
 }
 
@@ -41,9 +39,7 @@ pub fn describe_ssl_policies(_state: &ElbState, _input: &Value) -> Result<Value,
     ];
 
     Ok(json!({
-        "DescribeSSLPoliciesResult": {
-            "SslPolicies": { "member": policies },
-            "NextMarker": null
-        }
+        "SslPolicies": { "member": policies },
+        "NextMarker": null
     }))
 }

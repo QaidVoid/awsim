@@ -83,10 +83,8 @@ pub fn create_rule(
     state.rules.insert(arn, rule);
 
     Ok(json!({
-        "CreateRuleResult": {
-            "Rules": {
-                "member": [result]
-            }
+        "Rules": {
+            "member": [result]
         }
     }))
 }
@@ -98,7 +96,7 @@ pub fn delete_rule(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
         return Err(resource_not_found("rule", arn));
     }
 
-    Ok(json!({ "DeleteRuleResult": {} }))
+    Ok(json!({}))
 }
 
 pub fn modify_rule(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
@@ -121,10 +119,8 @@ pub fn modify_rule(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
     let result = rule_to_value(&rule);
 
     Ok(json!({
-        "ModifyRuleResult": {
-            "Rules": {
-                "member": [result]
-            }
+        "Rules": {
+            "member": [result]
         }
     }))
 }
@@ -171,10 +167,8 @@ pub fn set_rule_priorities(state: &ElbState, input: &Value) -> Result<Value, Aws
     }
 
     Ok(json!({
-        "SetRulePrioritiesResult": {
-            "Rules": {
-                "member": updated
-            }
+        "Rules": {
+            "member": updated
         }
     }))
 }
@@ -198,11 +192,9 @@ pub fn describe_rules(state: &ElbState, input: &Value) -> Result<Value, AwsError
         .collect();
 
     Ok(json!({
-        "DescribeRulesResult": {
-            "Rules": {
-                "member": rules
-            },
-            "NextMarker": null
-        }
+        "Rules": {
+            "member": rules
+        },
+        "NextMarker": null
     }))
 }

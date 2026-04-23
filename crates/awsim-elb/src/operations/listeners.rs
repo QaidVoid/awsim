@@ -80,10 +80,8 @@ pub fn create_listener(
     state.listeners.insert(arn, listener);
 
     Ok(json!({
-        "CreateListenerResult": {
-            "Listeners": {
-                "member": [result]
-            }
+        "Listeners": {
+            "member": [result]
         }
     }))
 }
@@ -98,7 +96,7 @@ pub fn delete_listener(state: &ElbState, input: &Value) -> Result<Value, AwsErro
     // Also remove rules that belong to this listener
     state.rules.retain(|_, v| v.listener_arn != arn);
 
-    Ok(json!({ "DeleteListenerResult": {} }))
+    Ok(json!({}))
 }
 
 pub fn describe_listeners(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
@@ -121,12 +119,10 @@ pub fn describe_listeners(state: &ElbState, input: &Value) -> Result<Value, AwsE
         .collect();
 
     Ok(json!({
-        "DescribeListenersResult": {
-            "Listeners": {
-                "member": listeners
-            },
-            "NextMarker": null
-        }
+        "Listeners": {
+            "member": listeners
+        },
+        "NextMarker": null
     }))
 }
 
@@ -160,10 +156,8 @@ pub fn modify_listener(state: &ElbState, input: &Value) -> Result<Value, AwsErro
     let result = listener_to_value(&listener);
 
     Ok(json!({
-        "ModifyListenerResult": {
-            "Listeners": {
-                "member": [result]
-            }
+        "Listeners": {
+            "member": [result]
         }
     }))
 }
@@ -194,10 +188,8 @@ pub fn describe_listener_certificates(
         .unwrap_or_default();
 
     Ok(json!({
-        "DescribeListenerCertificatesResult": {
-            "Certificates": { "member": certs },
-            "NextMarker": null
-        }
+        "Certificates": { "member": certs },
+        "NextMarker": null
     }))
 }
 
@@ -269,9 +261,7 @@ pub fn add_listener_certificates(state: &ElbState, input: &Value) -> Result<Valu
         .collect();
 
     Ok(json!({
-        "AddListenerCertificatesResult": {
-            "Certificates": { "member": result }
-        }
+        "Certificates": { "member": result }
     }))
 }
 
@@ -292,7 +282,7 @@ pub fn remove_listener_certificates(state: &ElbState, input: &Value) -> Result<V
         existing.retain(|c| !remove_arns.contains(&c.certificate_arn));
     }
 
-    Ok(json!({ "RemoveListenerCertificatesResult": {} }))
+    Ok(json!({}))
 }
 
 pub fn parse_actions(input: &Value, key: &str) -> Vec<ListenerAction> {

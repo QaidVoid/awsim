@@ -73,10 +73,8 @@ pub fn create_target_group(
     state.target_groups.insert(arn, tg);
 
     Ok(json!({
-        "CreateTargetGroupResult": {
-            "TargetGroups": {
-                "member": [result]
-            }
+        "TargetGroups": {
+            "member": [result]
         }
     }))
 }
@@ -88,7 +86,7 @@ pub fn delete_target_group(state: &ElbState, input: &Value) -> Result<Value, Aws
         return Err(resource_not_found("target group", arn));
     }
 
-    Ok(json!({ "DeleteTargetGroupResult": {} }))
+    Ok(json!({}))
 }
 
 pub fn describe_target_groups(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
@@ -108,12 +106,10 @@ pub fn describe_target_groups(state: &ElbState, input: &Value) -> Result<Value, 
         .collect();
 
     Ok(json!({
-        "DescribeTargetGroupsResult": {
-            "TargetGroups": {
-                "member": tgs
-            },
-            "NextMarker": null
-        }
+        "TargetGroups": {
+            "member": tgs
+        },
+        "NextMarker": null
     }))
 }
 
@@ -135,7 +131,7 @@ pub fn register_targets(state: &ElbState, input: &Value) -> Result<Value, AwsErr
         }
     }
 
-    Ok(json!({ "RegisterTargetsResult": {} }))
+    Ok(json!({}))
 }
 
 pub fn deregister_targets(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
@@ -150,7 +146,7 @@ pub fn deregister_targets(state: &ElbState, input: &Value) -> Result<Value, AwsE
     let remove_ids: Vec<String> = remove_targets.into_iter().map(|t| t.id).collect();
     entry.targets.retain(|t| !remove_ids.contains(&t.id));
 
-    Ok(json!({ "DeregisterTargetsResult": {} }))
+    Ok(json!({}))
 }
 
 pub fn describe_target_health(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
@@ -181,10 +177,8 @@ pub fn describe_target_health(state: &ElbState, input: &Value) -> Result<Value, 
         .collect();
 
     Ok(json!({
-        "DescribeTargetHealthResult": {
-            "TargetHealthDescriptions": {
-                "member": descriptions
-            }
+        "TargetHealthDescriptions": {
+            "member": descriptions
         }
     }))
 }
@@ -210,9 +204,7 @@ pub fn describe_target_group_attributes(
     };
 
     Ok(json!({
-        "DescribeTargetGroupAttributesResult": {
-            "Attributes": { "member": attrs }
-        }
+        "Attributes": { "member": attrs }
     }))
 }
 
@@ -278,9 +270,7 @@ pub fn modify_target_group_attributes(
     state.tg_attributes.insert(arn.to_string(), kv_list);
 
     Ok(json!({
-        "ModifyTargetGroupAttributesResult": {
-            "Attributes": { "member": attrs }
-        }
+        "Attributes": { "member": attrs }
     }))
 }
 

@@ -75,10 +75,8 @@ pub fn create_load_balancer(
     state.load_balancers.insert(arn, lb);
 
     Ok(json!({
-        "CreateLoadBalancerResult": {
-            "LoadBalancers": {
-                "member": [result]
-            }
+        "LoadBalancers": {
+            "member": [result]
         }
     }))
 }
@@ -98,7 +96,7 @@ pub fn delete_load_balancer(state: &ElbState, input: &Value) -> Result<Value, Aw
         state.listeners.contains_key(&v.listener_arn)
     });
 
-    Ok(json!({ "DeleteLoadBalancerResult": {} }))
+    Ok(json!({}))
 }
 
 pub fn describe_load_balancers(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
@@ -118,12 +116,10 @@ pub fn describe_load_balancers(state: &ElbState, input: &Value) -> Result<Value,
         .collect();
 
     Ok(json!({
-        "DescribeLoadBalancersResult": {
-            "LoadBalancers": {
-                "member": lbs
-            },
-            "NextMarker": null
-        }
+        "LoadBalancers": {
+            "member": lbs
+        },
+        "NextMarker": null
     }))
 }
 
@@ -149,9 +145,7 @@ pub fn describe_load_balancer_attributes(
     };
 
     Ok(json!({
-        "DescribeLoadBalancerAttributesResult": {
-            "Attributes": { "member": attrs }
-        }
+        "Attributes": { "member": attrs }
     }))
 }
 
@@ -216,9 +210,7 @@ pub fn modify_load_balancer_attributes(
     state.lb_attributes.insert(arn.to_string(), kv_list);
 
     Ok(json!({
-        "ModifyLoadBalancerAttributesResult": {
-            "Attributes": { "member": attrs }
-        }
+        "Attributes": { "member": attrs }
     }))
 }
 
@@ -234,9 +226,7 @@ pub fn set_security_groups(state: &ElbState, input: &Value) -> Result<Value, Aws
     let sgs = lb.security_groups.clone();
 
     Ok(json!({
-        "SetSecurityGroupsResult": {
-            "SecurityGroupIds": { "member": sgs }
-        }
+        "SecurityGroupIds": { "member": sgs }
     }))
 }
 
@@ -256,8 +246,6 @@ pub fn set_subnets(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
         .collect();
 
     Ok(json!({
-        "SetSubnetsResult": {
-            "AvailabilityZones": { "member": subnets }
-        }
+        "AvailabilityZones": { "member": subnets }
     }))
 }

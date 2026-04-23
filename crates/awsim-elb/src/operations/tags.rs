@@ -56,7 +56,7 @@ pub fn add_tags(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
         // Silently skip unknown ARNs (real ELB does the same)
     }
 
-    Ok(json!({ "AddTagsResult": {} }))
+    Ok(json!({}))
 }
 
 pub fn remove_tags(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
@@ -78,7 +78,7 @@ pub fn remove_tags(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
         }
     }
 
-    Ok(json!({ "RemoveTagsResult": {} }))
+    Ok(json!({}))
 }
 
 pub fn describe_tags(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
@@ -107,10 +107,8 @@ pub fn describe_tags(state: &ElbState, input: &Value) -> Result<Value, AwsError>
     }
 
     Ok(json!({
-        "DescribeTagsResult": {
-            "TagDescriptions": {
-                "member": descriptions
-            }
+        "TagDescriptions": {
+            "member": descriptions
         }
     }))
 }
