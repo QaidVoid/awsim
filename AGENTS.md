@@ -295,7 +295,30 @@ Before submitting work on any service:
 ## Out of Scope (For Now)
 
 - Multi-region replication (cross-region state sync)
-- IAM policy evaluation (we store policies but don't enforce them in bypass mode)
 - Real EC2 instance launching
 - Redshift
 - CodeBuild, CodePipeline
+
+## IAM Policy Enforcement
+
+AWSim ships a real AWS IAM policy engine (`crates/awsim-iam-policy`) and wires
+it into the gateway. Enforcement is **opt-in** — default off so dev loops stay
+fast. Enable with `AWSIM_IAM_ENFORCE=true`.
+
+When enforced, every request is evaluated against:
+1. Identity-based policies on the caller (inline + attached + group-inherited)
+2. The caller's permissions boundary (if set)
+3. Resource-based policies on the target resource (S3 bucket policy, KMS key
+   policy, SQS queue policy, Secrets Manager resource policy, Lambda function
+   policy)
+4. Service Control Policies (SCPs) from `awsim-organizations` (if wired)
+
+The engine supports all 26 IAM condition operators (String*, Numeric*, Date*,
+Bool, Binary, IpAddress with CIDR, Arn*, Null) plus `ForAllValues:` /
+`ForAnyValue:` qualifiers and `IfExists` suffix. Wildcard matching for Action
+and Resource follows AWS semantics (`*`, `?`).
+
+Services that want enforcement override `ServiceHandler::iam_action(op)` and
+`ServiceHandler::iam_resource(op, input, ctx)` to return the action string
+(`s3:GetObject`) and resource ARN. Services that don't override these are
+silently bypassed (backwards compatible).
