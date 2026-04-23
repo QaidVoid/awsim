@@ -43,6 +43,21 @@ pub fn serialize_response(
     output: &Value,
     request_id: &str,
 ) -> (StatusCode, HeaderMap, Bytes) {
+    if let Some(raw_b64) = output.get("__raw_body").and_then(Value::as_str) {
+        use base64::Engine;
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(raw_b64)
+            .unwrap_or_default();
+        let content_type = output
+            .get("__content_type")
+            .and_then(Value::as_str)
+            .unwrap_or("application/octet-stream");
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", content_type.parse().unwrap());
+        headers.insert("x-amzn-requestid", request_id.parse().unwrap());
+        return (StatusCode::OK, headers, Bytes::from(data));
+    }
+
     let body = serde_json::to_vec(output).unwrap_or_default();
     let mut headers = HeaderMap::new();
     headers.insert("content-type", "application/x-amz-json-1.0".parse().unwrap());
