@@ -123,6 +123,7 @@ pub fn create_user_pool(
         risk_configurations: Vec::new(),
         import_jobs: Vec::new(),
         log_delivery_configuration: None,
+        terms: Vec::new(),
     };
 
     info!(pool_id = %pool_id, "Cognito: created user pool");
@@ -353,6 +354,7 @@ pub fn create_user_pool_client(
         access_token_validity,
         id_token_validity,
         refresh_token_validity,
+        additional_client_secrets: Vec::new(),
     };
 
     pool.clients.insert(client_id.clone(), client);

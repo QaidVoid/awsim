@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod branding;
+pub mod client_secrets;
 pub mod devices;
 pub mod domain;
 pub mod groups;
@@ -10,4 +11,7 @@ pub mod pools;
 pub mod resource_servers;
 pub mod risk;
 pub mod tags;
+pub mod terms;
+pub mod user_settings;
 pub mod users;
+pub mod webauthn;

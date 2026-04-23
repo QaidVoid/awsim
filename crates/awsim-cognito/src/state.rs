@@ -127,6 +127,39 @@ pub struct LogDeliveryConfiguration {
     pub log_configurations: Vec<serde_json::Value>,
 }
 
+/// A secondary client secret descriptor for a user pool client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientSecretDescriptor {
+    pub client_secret_id: String,
+    pub client_secret_value: String,
+    pub create_date: u64,
+}
+
+/// A user pool terms entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TermsEntry {
+    pub terms_id: String,
+    pub user_pool_id: String,
+    pub client_id: Option<String>,
+    pub terms_name: String,
+    pub terms_source: String,
+    pub enforcement: String,
+    pub links: HashMap<String, String>,
+    pub creation_date: u64,
+    pub last_modified_date: u64,
+}
+
+/// A WebAuthn credential registered for a user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebAuthnCredential {
+    pub credential_id: String,
+    pub friendly_credential_name: Option<String>,
+    pub relying_party_id: String,
+    pub authenticator_attachment: Option<String>,
+    pub authenticator_transports: Vec<String>,
+    pub created_at: u64,
+}
+
 /// A Cognito User Pool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserPool {
@@ -159,6 +192,8 @@ pub struct UserPool {
     pub import_jobs: Vec<UserImportJob>,
     /// Log delivery configuration.
     pub log_delivery_configuration: Option<LogDeliveryConfiguration>,
+    /// Terms entries.
+    pub terms: Vec<TermsEntry>,
 }
 
 /// A Cognito User Pool App Client.
@@ -180,6 +215,7 @@ pub struct UserPoolClient {
     pub access_token_validity: u64,  // seconds
     pub id_token_validity: u64,      // seconds
     pub refresh_token_validity: u64, // seconds
+    pub additional_client_secrets: Vec<ClientSecretDescriptor>,
 }
 
 /// Device info tracked per user.
@@ -231,6 +267,12 @@ pub struct CognitoUser {
     pub devices: Vec<DeviceInfo>,
     /// Externally linked identity providers.
     pub linked_providers: Vec<LinkedProvider>,
+    /// MFA options (legacy SetUserSettings/AdminSetUserSettings).
+    pub mfa_options: Vec<HashMap<String, String>>,
+    /// WebAuthn credentials registered for this user.
+    pub webauthn_credentials: Vec<WebAuthnCredential>,
+    /// In-flight WebAuthn registration challenges keyed by credential id placeholder.
+    pub webauthn_pending_challenge: Option<String>,
 }
 
 /// A Cognito User Pool group.

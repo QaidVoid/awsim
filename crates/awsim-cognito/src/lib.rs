@@ -359,6 +359,46 @@ impl ServiceHandler for CognitoService {
                 operations::auth::get_user_auth_factors(&state, &input, ctx)
             }
 
+            // Additional client secrets
+            "AddUserPoolClientSecret" => {
+                operations::client_secrets::add_user_pool_client_secret(&state, &input, ctx)
+            }
+            "DeleteUserPoolClientSecret" => {
+                operations::client_secrets::delete_user_pool_client_secret(&state, &input, ctx)
+            }
+            "ListUserPoolClientSecrets" => {
+                operations::client_secrets::list_user_pool_client_secrets(&state, &input, ctx)
+            }
+
+            // Legacy MFA settings
+            "AdminSetUserSettings" => {
+                operations::user_settings::admin_set_user_settings(&state, &input, ctx)
+            }
+            "SetUserSettings" => {
+                operations::user_settings::set_user_settings(&state, &input, ctx)
+            }
+
+            // WebAuthn
+            "StartWebAuthnRegistration" => {
+                operations::webauthn::start_webauthn_registration(&state, &input, ctx)
+            }
+            "CompleteWebAuthnRegistration" => {
+                operations::webauthn::complete_webauthn_registration(&state, &input, ctx)
+            }
+            "DeleteWebAuthnCredential" => {
+                operations::webauthn::delete_webauthn_credential(&state, &input, ctx)
+            }
+            "ListWebAuthnCredentials" => {
+                operations::webauthn::list_webauthn_credentials(&state, &input, ctx)
+            }
+
+            // Terms
+            "CreateTerms" => operations::terms::create_terms(&state, &input, ctx),
+            "UpdateTerms" => operations::terms::update_terms(&state, &input, ctx),
+            "DeleteTerms" => operations::terms::delete_terms(&state, &input, ctx),
+            "DescribeTerms" => operations::terms::describe_terms(&state, &input, ctx),
+            "ListTerms" => operations::terms::list_terms(&state, &input, ctx),
+
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

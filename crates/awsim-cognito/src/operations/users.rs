@@ -71,6 +71,9 @@ fn make_user(username: &str, password: &str, attributes: HashMap<String, String>
         totp_verified: false,
         devices: Vec::new(),
         linked_providers: Vec::new(),
+        mfa_options: Vec::new(),
+        webauthn_credentials: Vec::new(),
+        webauthn_pending_challenge: None,
     }
 }
 
