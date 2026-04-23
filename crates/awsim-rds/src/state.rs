@@ -11,6 +11,10 @@ pub struct RdsState {
     pub parameter_groups: DashMap<String, DbParameterGroup>,
     /// ARN → tags
     pub tags: DashMap<String, HashMap<String, String>>,
+    /// snapshot identifier → DbSnapshot
+    pub snapshots: DashMap<String, DbSnapshot>,
+    /// cluster identifier → Vec<DbClusterEndpoint>
+    pub cluster_endpoints: DashMap<String, Vec<DbClusterEndpoint>>,
 }
 
 /// Serializable snapshot of `RdsState`.
@@ -21,6 +25,8 @@ pub struct RdsStateSnapshot {
     pub subnet_groups: Vec<DbSubnetGroup>,
     pub parameter_groups: Vec<DbParameterGroup>,
     pub tags: Vec<(String, HashMap<String, String>)>,
+    pub snapshots: Vec<DbSnapshot>,
+    pub cluster_endpoints: Vec<DbClusterEndpoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,4 +86,27 @@ pub struct DbParameterGroup {
     pub arn: String,
     pub family: String,
     pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbSnapshot {
+    pub snapshot_identifier: String,
+    pub arn: String,
+    pub db_instance_identifier: String,
+    pub engine: String,
+    pub engine_version: String,
+    pub allocated_storage: u32,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbClusterEndpoint {
+    pub endpoint_identifier: String,
+    pub arn: String,
+    pub cluster_identifier: String,
+    pub endpoint_type: String,
+    pub endpoint: String,
+    pub status: String,
+    pub custom_endpoint_type: Option<String>,
 }

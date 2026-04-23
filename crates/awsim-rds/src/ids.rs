@@ -51,6 +51,21 @@ pub fn parameter_group_arn(region: &str, account: &str, name: &str) -> String {
     format!("arn:aws:rds:{region}:{account}:pg:{name}")
 }
 
+/// Build a DB snapshot ARN.
+pub fn snapshot_arn(region: &str, account: &str, identifier: &str) -> String {
+    format!("arn:aws:rds:{region}:{account}:snapshot:{identifier}")
+}
+
+/// Build a DB cluster endpoint ARN.
+pub fn cluster_endpoint_arn(region: &str, account: &str, endpoint_identifier: &str) -> String {
+    format!("arn:aws:rds:{region}:{account}:cluster-endpoint:{endpoint_identifier}")
+}
+
+/// Build a cluster custom endpoint address.
+pub fn cluster_custom_endpoint(endpoint_identifier: &str, region: &str) -> String {
+    format!("{endpoint_identifier}.cluster-custom.awsim.{region}.rds.localhost")
+}
+
 /// Current UTC timestamp in ISO 8601 format (same impl as awsim-iam).
 pub fn now_iso8601() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};

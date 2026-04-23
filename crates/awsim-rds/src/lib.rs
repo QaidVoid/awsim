@@ -122,6 +122,49 @@ impl ServiceHandler for RdsService {
             }
             "ListTagsForResource" => operations::tags::list_tags_for_resource(&state, &input),
 
+            // Engine versions / orderable options
+            "DescribeDBEngineVersions" => {
+                operations::engine_versions::describe_db_engine_versions(&input)
+            }
+            "DescribeOrderableDBInstanceOptions" => {
+                operations::engine_versions::describe_orderable_db_instance_options(&input)
+            }
+
+            // Snapshots
+            "CreateDBSnapshot" => {
+                operations::snapshots::create_db_snapshot(&state, &input, ctx)
+            }
+            "DeleteDBSnapshot" => {
+                operations::snapshots::delete_db_snapshot(&state, &input, ctx)
+            }
+            "DescribeDBSnapshots" => {
+                operations::snapshots::describe_db_snapshots(&state, &input, ctx)
+            }
+            "CopyDBSnapshot" => {
+                operations::snapshots::copy_db_snapshot(&state, &input, ctx)
+            }
+
+            // Event subscriptions (stub)
+            "DescribeEventSubscriptions" => {
+                operations::snapshots::describe_event_subscriptions(&input)
+            }
+
+            // Log files (stub)
+            "DescribeDBLogFiles" => {
+                operations::snapshots::describe_db_log_files(&input)
+            }
+
+            // Cluster endpoints
+            "DescribeDBClusterEndpoints" => {
+                operations::cluster_endpoints::describe_db_cluster_endpoints(&state, &input, ctx)
+            }
+            "CreateDBClusterEndpoint" => {
+                operations::cluster_endpoints::create_db_cluster_endpoint(&state, &input, ctx)
+            }
+            "DeleteDBClusterEndpoint" => {
+                operations::cluster_endpoints::delete_db_cluster_endpoint(&state, &input, ctx)
+            }
+
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
@@ -147,6 +190,15 @@ impl ServiceHandler for RdsService {
                     .tags
                     .iter()
                     .map(|e| (e.key().clone(), e.value().clone())),
+            );
+            snapshot
+                .snapshots
+                .extend(state.snapshots.iter().map(|e| e.value().clone()));
+            snapshot.cluster_endpoints.extend(
+                state
+                    .cluster_endpoints
+                    .iter()
+                    .flat_map(|e| e.value().clone()),
             );
         }
 
@@ -187,6 +239,18 @@ impl ServiceHandler for RdsService {
         }
         for (arn, tags) in snapshot.tags {
             state.tags.insert(arn, tags);
+        }
+        for snap in snapshot.snapshots {
+            state
+                .snapshots
+                .insert(snap.snapshot_identifier.clone(), snap);
+        }
+        for ep in snapshot.cluster_endpoints {
+            state
+                .cluster_endpoints
+                .entry(ep.cluster_identifier.clone())
+                .or_default()
+                .push(ep);
         }
 
         Ok(())

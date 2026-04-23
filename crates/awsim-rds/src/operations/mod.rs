@@ -1,6 +1,9 @@
+pub mod cluster_endpoints;
 pub mod clusters;
+pub mod engine_versions;
 pub mod instances;
 pub mod parameter_groups;
+pub mod snapshots;
 pub mod subnet_groups;
 pub mod tags;
 

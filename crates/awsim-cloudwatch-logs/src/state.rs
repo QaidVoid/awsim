@@ -4,6 +4,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
+use serde_json::Value;
 
 pub fn now_millis() -> u64 {
     SystemTime::now()
@@ -78,9 +79,53 @@ impl LogGroup {
     }
 }
 
+/// A subscription filter on a log group.
+#[derive(Debug, Clone)]
+pub struct SubscriptionFilter {
+    pub filter_name: String,
+    pub log_group_name: String,
+    pub filter_pattern: String,
+    pub destination_arn: String,
+    pub creation_time: u64,
+}
+
+/// A metric filter on a log group.
+#[derive(Debug, Clone)]
+pub struct MetricFilter {
+    pub filter_name: String,
+    pub log_group_name: String,
+    pub filter_pattern: String,
+    pub metric_transformations: Vec<Value>,
+    pub creation_time: u64,
+}
+
+/// A saved CloudWatch Insights query definition.
+#[derive(Debug, Clone)]
+pub struct QueryDefinition {
+    pub query_definition_id: String,
+    pub name: String,
+    pub query_string: String,
+    pub log_group_names: Vec<String>,
+}
+
+/// A running or completed Insights query.
+#[derive(Debug, Clone)]
+pub struct InsightsQuery {
+    pub query_id: String,
+    pub status: String,
+}
+
 /// Per-account/region CloudWatch Logs state.
 #[derive(Debug, Default)]
 pub struct LogsState {
     /// logGroupName → LogGroup
     pub log_groups: DashMap<String, LogGroup>,
+    /// (logGroupName, filterName) → SubscriptionFilter
+    pub subscription_filters: DashMap<(String, String), SubscriptionFilter>,
+    /// (logGroupName, filterName) → MetricFilter
+    pub metric_filters: DashMap<(String, String), MetricFilter>,
+    /// queryDefinitionId → QueryDefinition
+    pub query_definitions: DashMap<String, QueryDefinition>,
+    /// queryId → InsightsQuery
+    pub insights_queries: DashMap<String, InsightsQuery>,
 }
