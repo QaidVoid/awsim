@@ -216,6 +216,26 @@ fn register_services(
     let firehose = Arc::new(awsim_firehose::FirehoseService::new());
     state.register(firehose, vec![]);
 
+    let batch = awsim_batch::BatchService::new();
+    let batch_routes = {
+        use awsim_core::ServiceHandler;
+        batch.routes()
+    };
+    state.register(Arc::new(batch), batch_routes);
+
+    let datasync = Arc::new(awsim_datasync::DataSyncService::new());
+    state.register(datasync, vec![]);
+
+    let polly = awsim_polly::PollyService::new();
+    let polly_routes = {
+        use awsim_core::ServiceHandler;
+        polly.routes()
+    };
+    state.register(Arc::new(polly), polly_routes);
+
+    let sso_admin = Arc::new(awsim_sso_admin::SsoAdminService::new());
+    state.register(sso_admin, vec![]);
+
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
     let apigw_routes = {
         use awsim_core::ServiceHandler;

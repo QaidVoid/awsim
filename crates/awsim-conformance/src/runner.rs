@@ -102,6 +102,10 @@ pub async fn test_service(
         "cloudtrail" => test_cloudtrail(endpoint, verbose).await,
         "eks" => test_eks(endpoint, verbose).await,
         "firehose" => test_firehose(endpoint, verbose).await,
+        "batch" => test_batch(endpoint, verbose).await,
+        "datasync" => test_datasync(endpoint, verbose).await,
+        "polly" => test_polly(endpoint, verbose).await,
+        "sso-admin" => test_sso_admin(endpoint, verbose).await,
         _ => {
             // Unknown service — report nothing tested.
             return ServiceResult {
@@ -9612,6 +9616,163 @@ async fn test_firehose(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     results.push(chk!(
         "DeleteDeliveryStream",
         client.delete_delivery_stream().delivery_stream_name("conf-stream").send().await,
+        verbose
+    ));
+
+    results
+}
+
+async fn test_batch(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_batch::Client::new(&config);
+    let mut results = Vec::new();
+
+    results.push(chk!(
+        "CreateComputeEnvironment",
+        client
+            .create_compute_environment()
+            .compute_environment_name("conf-ce")
+            .r#type(aws_sdk_batch::types::CeType::Managed)
+            .service_role("arn:aws:iam::000000000000:role/BatchRole")
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "DescribeComputeEnvironments",
+        client.describe_compute_environments().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "CreateJobQueue",
+        client
+            .create_job_queue()
+            .job_queue_name("conf-queue")
+            .priority(1)
+            .compute_environment_order(
+                aws_sdk_batch::types::ComputeEnvironmentOrder::builder()
+                    .order(1)
+                    .compute_environment("conf-ce")
+                    .build(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "DescribeJobQueues",
+        client.describe_job_queues().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "RegisterJobDefinition",
+        client
+            .register_job_definition()
+            .job_definition_name("conf-jobdef")
+            .r#type(aws_sdk_batch::types::JobDefinitionType::Container)
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "DescribeJobDefinitions",
+        client.describe_job_definitions().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListJobs",
+        client.list_jobs().job_queue("conf-queue").send().await,
+        verbose
+    ));
+
+    results
+}
+
+async fn test_datasync(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_datasync::Client::new(&config);
+    let mut results = Vec::new();
+
+    results.push(chk!(
+        "CreateLocationS3",
+        client
+            .create_location_s3()
+            .s3_bucket_arn("arn:aws:s3:::conf-bucket")
+            .s3_config(
+                aws_sdk_datasync::types::S3Config::builder()
+                    .bucket_access_role_arn("arn:aws:iam::000000000000:role/S3Role")
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListLocations",
+        client.list_locations().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListTasks",
+        client.list_tasks().send().await,
+        verbose
+    ));
+
+    results
+}
+
+async fn test_polly(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_polly::Client::new(&config);
+    let mut results = Vec::new();
+
+    results.push(chk!(
+        "DescribeVoices",
+        client.describe_voices().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListLexicons",
+        client.list_lexicons().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListSpeechSynthesisTasks",
+        client.list_speech_synthesis_tasks().send().await,
+        verbose
+    ));
+
+    results
+}
+
+async fn test_sso_admin(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_ssoadmin::Client::new(&config);
+    let mut results = Vec::new();
+
+    results.push(chk!(
+        "ListInstances",
+        client.list_instances().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "CreatePermissionSet",
+        client
+            .create_permission_set()
+            .instance_arn("arn:aws:sso:::instance/ssoins-0000000000000000")
+            .name("conf-permset")
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListPermissionSets",
+        client
+            .list_permission_sets()
+            .instance_arn("arn:aws:sso:::instance/ssoins-0000000000000000")
+            .send()
+            .await,
         verbose
     ));
 
