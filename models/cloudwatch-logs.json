@@ -1,0 +1,35 @@
+{
+  "smithy": "2.0",
+  "shapes": {
+    "com.amazonaws.logs#CloudWatchLogs": {
+      "type": "service",
+      "version": "2014-03-28",
+      "operations": [
+        {"target": "com.amazonaws.logs#CreateLogGroup"},
+        {"target": "com.amazonaws.logs#DescribeLogGroups"},
+        {"target": "com.amazonaws.logs#CreateLogStream"},
+        {"target": "com.amazonaws.logs#DescribeLogStreams"},
+        {"target": "com.amazonaws.logs#PutLogEvents"},
+        {"target": "com.amazonaws.logs#GetLogEvents"},
+        {"target": "com.amazonaws.logs#FilterLogEvents"},
+        {"target": "com.amazonaws.logs#PutSubscriptionFilter"},
+        {"target": "com.amazonaws.logs#DescribeSubscriptionFilters"},
+        {"target": "com.amazonaws.logs#DeleteSubscriptionFilter"},
+        {"target": "com.amazonaws.logs#DeleteLogStream"},
+        {"target": "com.amazonaws.logs#DeleteLogGroup"}
+      ]
+    },
+    "com.amazonaws.logs#CreateLogGroup": {"type": "operation"},
+    "com.amazonaws.logs#DescribeLogGroups": {"type": "operation"},
+    "com.amazonaws.logs#CreateLogStream": {"type": "operation"},
+    "com.amazonaws.logs#DescribeLogStreams": {"type": "operation"},
+    "com.amazonaws.logs#PutLogEvents": {"type": "operation"},
+    "com.amazonaws.logs#GetLogEvents": {"type": "operation"},
+    "com.amazonaws.logs#FilterLogEvents": {"type": "operation"},
+    "com.amazonaws.logs#PutSubscriptionFilter": {"type": "operation"},
+    "com.amazonaws.logs#DescribeSubscriptionFilters": {"type": "operation"},
+    "com.amazonaws.logs#DeleteSubscriptionFilter": {"type": "operation"},
+    "com.amazonaws.logs#DeleteLogStream": {"type": "operation"},
+    "com.amazonaws.logs#DeleteLogGroup": {"type": "operation"}
+  }
+}

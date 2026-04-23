@@ -1,0 +1,49 @@
+{
+  "smithy": "2.0",
+  "shapes": {
+    "com.amazonaws.eventbridge#AmazonEventBridge": {
+      "type": "service",
+      "version": "2015-10-07",
+      "operations": [
+        {"target": "com.amazonaws.eventbridge#CreateEventBus"},
+        {"target": "com.amazonaws.eventbridge#ListEventBuses"},
+        {"target": "com.amazonaws.eventbridge#DescribeEventBus"},
+        {"target": "com.amazonaws.eventbridge#PutRule"},
+        {"target": "com.amazonaws.eventbridge#ListRules"},
+        {"target": "com.amazonaws.eventbridge#DescribeRule"},
+        {"target": "com.amazonaws.eventbridge#PutTargets"},
+        {"target": "com.amazonaws.eventbridge#ListTargetsByRule"},
+        {"target": "com.amazonaws.eventbridge#RemoveTargets"},
+        {"target": "com.amazonaws.eventbridge#PutEvents"},
+        {"target": "com.amazonaws.eventbridge#CreateArchive"},
+        {"target": "com.amazonaws.eventbridge#ListArchives"},
+        {"target": "com.amazonaws.eventbridge#DescribeArchive"},
+        {"target": "com.amazonaws.eventbridge#DeleteArchive"},
+        {"target": "com.amazonaws.eventbridge#DeleteRule"},
+        {"target": "com.amazonaws.eventbridge#DeleteEventBus"},
+        {"target": "com.amazonaws.eventbridge#TagResource"},
+        {"target": "com.amazonaws.eventbridge#ListTagsForResource"},
+        {"target": "com.amazonaws.eventbridge#UntagResource"}
+      ]
+    },
+    "com.amazonaws.eventbridge#CreateEventBus": {"type": "operation"},
+    "com.amazonaws.eventbridge#ListEventBuses": {"type": "operation"},
+    "com.amazonaws.eventbridge#DescribeEventBus": {"type": "operation"},
+    "com.amazonaws.eventbridge#PutRule": {"type": "operation"},
+    "com.amazonaws.eventbridge#ListRules": {"type": "operation"},
+    "com.amazonaws.eventbridge#DescribeRule": {"type": "operation"},
+    "com.amazonaws.eventbridge#PutTargets": {"type": "operation"},
+    "com.amazonaws.eventbridge#ListTargetsByRule": {"type": "operation"},
+    "com.amazonaws.eventbridge#RemoveTargets": {"type": "operation"},
+    "com.amazonaws.eventbridge#PutEvents": {"type": "operation"},
+    "com.amazonaws.eventbridge#CreateArchive": {"type": "operation"},
+    "com.amazonaws.eventbridge#ListArchives": {"type": "operation"},
+    "com.amazonaws.eventbridge#DescribeArchive": {"type": "operation"},
+    "com.amazonaws.eventbridge#DeleteArchive": {"type": "operation"},
+    "com.amazonaws.eventbridge#DeleteRule": {"type": "operation"},
+    "com.amazonaws.eventbridge#DeleteEventBus": {"type": "operation"},
+    "com.amazonaws.eventbridge#TagResource": {"type": "operation"},
+    "com.amazonaws.eventbridge#ListTagsForResource": {"type": "operation"},
+    "com.amazonaws.eventbridge#UntagResource": {"type": "operation"}
+  }
+}

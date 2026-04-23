@@ -82,6 +82,12 @@ pub async fn test_service(
         "cognito-identity" => test_cognito_identity(endpoint, verbose).await,
         "ecs" => test_ecs(endpoint, verbose).await,
         "ecr" => test_ecr(endpoint, verbose).await,
+        "eventbridge" => test_eventbridge(endpoint, verbose).await,
+        "stepfunctions" => test_stepfunctions(endpoint, verbose).await,
+        "cloudwatch-logs" => test_cloudwatch_logs(endpoint, verbose).await,
+        "ec2" => test_ec2(endpoint, verbose).await,
+        "cloudformation" => test_cloudformation(endpoint, verbose).await,
+        "rds" => test_rds(endpoint, verbose).await,
         _ => {
             // Unknown service — report nothing tested.
             return ServiceResult {
@@ -2128,6 +2134,35 @@ async fn test_secretsmanager(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             verbose
         ));
 
+        // RotateSecret
+        results.push(chk!(
+            "RotateSecret",
+            client
+                .rotate_secret()
+                .secret_id(arn)
+                .rotation_rules(
+                    aws_sdk_secretsmanager::types::RotationRulesType::builder()
+                        .automatically_after_days(30)
+                        .build(),
+                )
+                .send()
+                .await,
+            verbose
+        ));
+
+        // ValidateResourcePolicy
+        let policy = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000000:root"},"Action":"secretsmanager:GetSecretValue","Resource":"*"}]}"#;
+        results.push(chk!(
+            "ValidateResourcePolicy",
+            client
+                .validate_resource_policy()
+                .secret_id(arn)
+                .resource_policy(policy)
+                .send()
+                .await,
+            verbose
+        ));
+
         // Final hard delete for cleanup
         let _ = client
             .delete_secret()
@@ -2145,10 +2180,19 @@ async fn test_secretsmanager(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             "UntagResource",
             "DeleteSecret",
             "RestoreSecret",
+            "RotateSecret",
+            "ValidateResourcePolicy",
         ] {
             results.push(OpResult::Skipped(op.to_string()));
         }
     }
+
+    // GetRandomPassword (no secret needed)
+    results.push(chk!(
+        "GetRandomPassword",
+        client.get_random_password().send().await,
+        verbose
+    ));
 
     results
 }
@@ -2278,6 +2322,42 @@ async fn test_ssm(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             .await,
         verbose
     ));
+
+    // LabelParameterVersion
+    results.push(chk!(
+        "LabelParameterVersion",
+        client
+            .label_parameter_version()
+            .name("/conformance/param")
+            .labels("conformance-label")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // SendCommand
+    let send_cmd_r = client
+        .send_command()
+        .document_name("AWS-RunShellScript")
+        .instance_ids("i-0000000000000000")
+        .parameters("commands", vec!["echo hello".to_string()])
+        .send()
+        .await;
+    let command_id = send_cmd_r
+        .as_ref()
+        .ok()
+        .and_then(|r| r.command.as_ref())
+        .and_then(|c| c.command_id.clone());
+    results.push(chk!("SendCommand", send_cmd_r, verbose));
+
+    // ListCommands
+    results.push(chk!(
+        "ListCommands",
+        client.list_commands().send().await,
+        verbose
+    ));
+
+    let _ = command_id; // used above
 
     // DeleteParameters (batch delete)
     results.push(chk!(
@@ -2515,6 +2595,127 @@ async fn test_lambda(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     results.push(chk!(
         "ListLayers",
         client.list_layers().send().await,
+        verbose
+    ));
+
+    // TagResource (Lambda)
+    let fn_arn = format!("arn:aws:lambda:us-east-1:000000000000:function:conformance-fn");
+    results.push(chk!(
+        "TagResource",
+        client
+            .tag_resource()
+            .resource(fn_arn.clone())
+            .tags("env", "conformance")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListTags
+    results.push(chk!(
+        "ListTags",
+        client.list_tags().resource(fn_arn.clone()).send().await,
+        verbose
+    ));
+
+    // UntagResource (Lambda)
+    results.push(chk!(
+        "UntagResource",
+        client
+            .untag_resource()
+            .resource(fn_arn.clone())
+            .tag_keys("env")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // AddPermission
+    results.push(chk!(
+        "AddPermission",
+        client
+            .add_permission()
+            .function_name("conformance-fn")
+            .statement_id("conformance-stmt")
+            .action("lambda:InvokeFunction")
+            .principal("apigateway.amazonaws.com")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetPolicy
+    results.push(chk!(
+        "GetPolicy",
+        client
+            .get_policy()
+            .function_name("conformance-fn")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // RemovePermission
+    results.push(chk!(
+        "RemovePermission",
+        client
+            .remove_permission()
+            .function_name("conformance-fn")
+            .statement_id("conformance-stmt")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetAccountSettings
+    results.push(chk!(
+        "GetAccountSettings",
+        client.get_account_settings().send().await,
+        verbose
+    ));
+
+    // CreateFunctionUrlConfig
+    results.push(chk!(
+        "CreateFunctionUrlConfig",
+        client
+            .create_function_url_config()
+            .function_name("conformance-fn")
+            .auth_type(aws_sdk_lambda::types::FunctionUrlAuthType::None)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetFunctionUrlConfig
+    results.push(chk!(
+        "GetFunctionUrlConfig",
+        client
+            .get_function_url_config()
+            .function_name("conformance-fn")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListFunctionUrlConfigs
+    results.push(chk!(
+        "ListFunctionUrlConfigs",
+        client
+            .list_function_url_configs()
+            .function_name("conformance-fn")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DeleteFunctionUrlConfig
+    results.push(chk!(
+        "DeleteFunctionUrlConfig",
+        client
+            .delete_function_url_config()
+            .function_name("conformance-fn")
+            .send()
+            .await,
         verbose
     ));
 
@@ -3573,6 +3774,866 @@ async fn test_ecr(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         client
             .delete_repository()
             .repository_name("conformance-repo")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results
+}
+
+// ---------------------------------------------------------------------------
+// EventBridge
+// ---------------------------------------------------------------------------
+
+async fn test_eventbridge(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_eventbridge::Client::new(&config);
+    let mut results = Vec::new();
+
+    // CreateEventBus
+    let bus_r = client
+        .create_event_bus()
+        .name("conformance-bus")
+        .send()
+        .await;
+    let bus_arn = bus_r
+        .as_ref()
+        .ok()
+        .and_then(|r| r.event_bus_arn.clone())
+        .unwrap_or_else(|| {
+            "arn:aws:events:us-east-1:000000000000:event-bus/conformance-bus".to_string()
+        });
+    results.push(chk!("CreateEventBus", bus_r, verbose));
+
+    // ListEventBuses
+    results.push(chk!(
+        "ListEventBuses",
+        client.list_event_buses().send().await,
+        verbose
+    ));
+
+    // DescribeEventBus
+    results.push(chk!(
+        "DescribeEventBus",
+        client
+            .describe_event_bus()
+            .name("conformance-bus")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // PutRule
+    let rule_r = client
+        .put_rule()
+        .name("conformance-rule")
+        .event_bus_name("conformance-bus")
+        .schedule_expression("rate(5 minutes)")
+        .state(aws_sdk_eventbridge::types::RuleState::Enabled)
+        .send()
+        .await;
+    results.push(chk!("PutRule", rule_r, verbose));
+
+    // ListRules
+    results.push(chk!(
+        "ListRules",
+        client
+            .list_rules()
+            .event_bus_name("conformance-bus")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DescribeRule
+    results.push(chk!(
+        "DescribeRule",
+        client
+            .describe_rule()
+            .name("conformance-rule")
+            .event_bus_name("conformance-bus")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // PutTargets
+    results.push(chk!(
+        "PutTargets",
+        client
+            .put_targets()
+            .rule("conformance-rule")
+            .event_bus_name("conformance-bus")
+            .targets(
+                aws_sdk_eventbridge::types::Target::builder()
+                    .id("conformance-target")
+                    .arn("arn:aws:lambda:us-east-1:000000000000:function:conformance-fn")
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListTargetsByRule
+    results.push(chk!(
+        "ListTargetsByRule",
+        client
+            .list_targets_by_rule()
+            .rule("conformance-rule")
+            .event_bus_name("conformance-bus")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // PutEvents
+    results.push(chk!(
+        "PutEvents",
+        client
+            .put_events()
+            .entries(
+                aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
+                    .source("conformance.test")
+                    .detail_type("ConformanceEvent")
+                    .detail(r#"{"key":"value"}"#)
+                    .event_bus_name("conformance-bus")
+                    .build(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    // CreateArchive
+    results.push(chk!(
+        "CreateArchive",
+        client
+            .create_archive()
+            .archive_name("conformance-archive")
+            .event_source_arn(&bus_arn)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListArchives
+    results.push(chk!(
+        "ListArchives",
+        client.list_archives().send().await,
+        verbose
+    ));
+
+    // DescribeArchive
+    results.push(chk!(
+        "DescribeArchive",
+        client
+            .describe_archive()
+            .archive_name("conformance-archive")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // TagResource (EventBridge) — tag the event bus ARN
+    results.push(chk!(
+        "TagResource",
+        client
+            .tag_resource()
+            .resource_arn(&bus_arn)
+            .tags(
+                aws_sdk_eventbridge::types::Tag::builder()
+                    .key("env")
+                    .value("conformance")
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListTagsForResource (EventBridge)
+    results.push(chk!(
+        "ListTagsForResource",
+        client
+            .list_tags_for_resource()
+            .resource_arn(&bus_arn)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // UntagResource (EventBridge)
+    results.push(chk!(
+        "UntagResource",
+        client
+            .untag_resource()
+            .resource_arn(&bus_arn)
+            .tag_keys("env")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // RemoveTargets
+    results.push(chk!(
+        "RemoveTargets",
+        client
+            .remove_targets()
+            .rule("conformance-rule")
+            .event_bus_name("conformance-bus")
+            .ids("conformance-target")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DeleteArchive
+    results.push(chk!(
+        "DeleteArchive",
+        client
+            .delete_archive()
+            .archive_name("conformance-archive")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DeleteRule
+    results.push(chk!(
+        "DeleteRule",
+        client
+            .delete_rule()
+            .name("conformance-rule")
+            .event_bus_name("conformance-bus")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DeleteEventBus
+    results.push(chk!(
+        "DeleteEventBus",
+        client
+            .delete_event_bus()
+            .name("conformance-bus")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results
+}
+
+// ---------------------------------------------------------------------------
+// Step Functions
+// ---------------------------------------------------------------------------
+
+async fn test_stepfunctions(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_sfn::Client::new(&config);
+    let mut results = Vec::new();
+
+    let asl = r#"{"Comment":"Conformance test","StartAt":"Pass","States":{"Pass":{"Type":"Pass","End":true}}}"#;
+
+    // CreateStateMachine
+    let sm_r = client
+        .create_state_machine()
+        .name("conformance-sm")
+        .definition(asl)
+        .role_arn("arn:aws:iam::000000000000:role/conformance-role")
+        .send()
+        .await;
+    let sm_arn = sm_r
+        .as_ref()
+        .ok()
+        .map(|r| r.state_machine_arn.clone())
+        .unwrap_or_else(|| {
+            "arn:aws:states:us-east-1:000000000000:stateMachine:conformance-sm".to_string()
+        });
+    results.push(chk!("CreateStateMachine", sm_r, verbose));
+
+    // ListStateMachines
+    results.push(chk!(
+        "ListStateMachines",
+        client.list_state_machines().send().await,
+        verbose
+    ));
+
+    // DescribeStateMachine
+    results.push(chk!(
+        "DescribeStateMachine",
+        client
+            .describe_state_machine()
+            .state_machine_arn(&sm_arn)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // StartExecution
+    let exec_r = client
+        .start_execution()
+        .state_machine_arn(&sm_arn)
+        .name("conformance-exec")
+        .input(r#"{"key":"value"}"#)
+        .send()
+        .await;
+    let exec_arn = exec_r
+        .as_ref()
+        .ok()
+        .map(|r| r.execution_arn.clone());
+    results.push(chk!("StartExecution", exec_r, verbose));
+
+    // ListExecutions
+    results.push(chk!(
+        "ListExecutions",
+        client
+            .list_executions()
+            .state_machine_arn(&sm_arn)
+            .send()
+            .await,
+        verbose
+    ));
+
+    if let Some(ref earn) = exec_arn {
+        // DescribeExecution
+        results.push(chk!(
+            "DescribeExecution",
+            client.describe_execution().execution_arn(earn).send().await,
+            verbose
+        ));
+
+        // GetExecutionHistory
+        results.push(chk!(
+            "GetExecutionHistory",
+            client
+                .get_execution_history()
+                .execution_arn(earn)
+                .send()
+                .await,
+            verbose
+        ));
+
+        // StopExecution
+        results.push(chk!(
+            "StopExecution",
+            client.stop_execution().execution_arn(earn).send().await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("DescribeExecution".to_string()));
+        results.push(OpResult::Skipped("GetExecutionHistory".to_string()));
+        results.push(OpResult::Skipped("StopExecution".to_string()));
+    }
+
+    // CreateActivity
+    let act_r = client
+        .create_activity()
+        .name("conformance-activity")
+        .send()
+        .await;
+    let act_arn = act_r
+        .as_ref()
+        .ok()
+        .map(|r| r.activity_arn.clone());
+    results.push(chk!("CreateActivity", act_r, verbose));
+
+    // ListActivities
+    results.push(chk!(
+        "ListActivities",
+        client.list_activities().send().await,
+        verbose
+    ));
+
+    if let Some(ref aarn) = act_arn {
+        // DescribeActivity
+        results.push(chk!(
+            "DescribeActivity",
+            client.describe_activity().activity_arn(aarn).send().await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("DescribeActivity".to_string()));
+    }
+
+    // TagResource (SFN)
+    results.push(chk!(
+        "TagResource",
+        client
+            .tag_resource()
+            .resource_arn(&sm_arn)
+            .tags(
+                aws_sdk_sfn::types::Tag::builder()
+                    .key("env")
+                    .value("conformance")
+                    .build(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListTagsForResource (SFN)
+    results.push(chk!(
+        "ListTagsForResource",
+        client
+            .list_tags_for_resource()
+            .resource_arn(&sm_arn)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // UntagResource (SFN)
+    results.push(chk!(
+        "UntagResource",
+        client
+            .untag_resource()
+            .resource_arn(&sm_arn)
+            .tag_keys("env")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DeleteActivity
+    if let Some(ref aarn) = act_arn {
+        results.push(chk!(
+            "DeleteActivity",
+            client.delete_activity().activity_arn(aarn).send().await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("DeleteActivity".to_string()));
+    }
+
+    // DeleteStateMachine
+    results.push(chk!(
+        "DeleteStateMachine",
+        client
+            .delete_state_machine()
+            .state_machine_arn(&sm_arn)
+            .send()
+            .await,
+        verbose
+    ));
+
+    results
+}
+
+// ---------------------------------------------------------------------------
+// CloudWatch Logs
+// ---------------------------------------------------------------------------
+
+async fn test_cloudwatch_logs(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_cloudwatchlogs::Client::new(&config);
+    let mut results = Vec::new();
+
+    // CreateLogGroup
+    results.push(chk!(
+        "CreateLogGroup",
+        client
+            .create_log_group()
+            .log_group_name("/conformance/logs")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DescribeLogGroups
+    results.push(chk!(
+        "DescribeLogGroups",
+        client
+            .describe_log_groups()
+            .log_group_name_prefix("/conformance")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // CreateLogStream
+    results.push(chk!(
+        "CreateLogStream",
+        client
+            .create_log_stream()
+            .log_group_name("/conformance/logs")
+            .log_stream_name("conformance-stream")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DescribeLogStreams
+    results.push(chk!(
+        "DescribeLogStreams",
+        client
+            .describe_log_streams()
+            .log_group_name("/conformance/logs")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // PutLogEvents
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    results.push(chk!(
+        "PutLogEvents",
+        client
+            .put_log_events()
+            .log_group_name("/conformance/logs")
+            .log_stream_name("conformance-stream")
+            .log_events(
+                aws_sdk_cloudwatchlogs::types::InputLogEvent::builder()
+                    .timestamp(now_ms)
+                    .message("conformance test log event")
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetLogEvents
+    results.push(chk!(
+        "GetLogEvents",
+        client
+            .get_log_events()
+            .log_group_name("/conformance/logs")
+            .log_stream_name("conformance-stream")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // FilterLogEvents
+    results.push(chk!(
+        "FilterLogEvents",
+        client
+            .filter_log_events()
+            .log_group_name("/conformance/logs")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // PutSubscriptionFilter
+    results.push(chk!(
+        "PutSubscriptionFilter",
+        client
+            .put_subscription_filter()
+            .log_group_name("/conformance/logs")
+            .filter_name("conformance-filter")
+            .filter_pattern("")
+            .destination_arn(
+                "arn:aws:lambda:us-east-1:000000000000:function:conformance-fn",
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DescribeSubscriptionFilters
+    results.push(chk!(
+        "DescribeSubscriptionFilters",
+        client
+            .describe_subscription_filters()
+            .log_group_name("/conformance/logs")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DeleteSubscriptionFilter
+    results.push(chk!(
+        "DeleteSubscriptionFilter",
+        client
+            .delete_subscription_filter()
+            .log_group_name("/conformance/logs")
+            .filter_name("conformance-filter")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DeleteLogStream
+    results.push(chk!(
+        "DeleteLogStream",
+        client
+            .delete_log_stream()
+            .log_group_name("/conformance/logs")
+            .log_stream_name("conformance-stream")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DeleteLogGroup
+    results.push(chk!(
+        "DeleteLogGroup",
+        client
+            .delete_log_group()
+            .log_group_name("/conformance/logs")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results
+}
+
+// ---------------------------------------------------------------------------
+// EC2
+// ---------------------------------------------------------------------------
+
+async fn test_ec2(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_ec2::Client::new(&config);
+    let mut results = Vec::new();
+
+    // RunInstances
+    let run_r = client
+        .run_instances()
+        .image_id("ami-00000000conformance")
+        .instance_type(aws_sdk_ec2::types::InstanceType::T2Micro)
+        .min_count(1)
+        .max_count(1)
+        .send()
+        .await;
+    let instance_id = run_r
+        .as_ref()
+        .ok()
+        .and_then(|r| r.instances.as_ref())
+        .and_then(|i| i.first())
+        .and_then(|i| i.instance_id.clone());
+    results.push(chk!("RunInstances", run_r, verbose));
+
+    // DescribeInstances
+    results.push(chk!(
+        "DescribeInstances",
+        client.describe_instances().send().await,
+        verbose
+    ));
+
+    if let Some(ref iid) = instance_id {
+        // CreateTags
+        results.push(chk!(
+            "CreateTags",
+            client
+                .create_tags()
+                .resources(iid)
+                .tags(
+                    aws_sdk_ec2::types::Tag::builder()
+                        .key("env")
+                        .value("conformance")
+                        .build(),
+                )
+                .send()
+                .await,
+            verbose
+        ));
+
+        // DescribeTags
+        results.push(chk!(
+            "DescribeTags",
+            client
+                .describe_tags()
+                .filters(
+                    aws_sdk_ec2::types::Filter::builder()
+                        .name("resource-id")
+                        .values(iid)
+                        .build(),
+                )
+                .send()
+                .await,
+            verbose
+        ));
+
+        // TerminateInstances
+        results.push(chk!(
+            "TerminateInstances",
+            client
+                .terminate_instances()
+                .instance_ids(iid)
+                .send()
+                .await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("CreateTags".to_string()));
+        results.push(OpResult::Skipped("DescribeTags".to_string()));
+        results.push(OpResult::Skipped("TerminateInstances".to_string()));
+    }
+
+    results
+}
+
+// ---------------------------------------------------------------------------
+// CloudFormation
+// ---------------------------------------------------------------------------
+
+async fn test_cloudformation(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_cloudformation::Client::new(&config);
+    let mut results = Vec::new();
+
+    let template = r#"{"AWSTemplateFormatVersion":"2010-09-09","Description":"Conformance test stack","Resources":{"ConformanceBucket":{"Type":"AWS::S3::Bucket","Properties":{"BucketName":"conformance-cfn-bucket"}}}}"#;
+
+    // CreateStack
+    results.push(chk!(
+        "CreateStack",
+        client
+            .create_stack()
+            .stack_name("conformance-stack")
+            .template_body(template)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DescribeStacks
+    results.push(chk!(
+        "DescribeStacks",
+        client
+            .describe_stacks()
+            .stack_name("conformance-stack")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DescribeStackResources
+    results.push(chk!(
+        "DescribeStackResources",
+        client
+            .describe_stack_resources()
+            .stack_name("conformance-stack")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListStacks
+    results.push(chk!(
+        "ListStacks",
+        client.list_stacks().send().await,
+        verbose
+    ));
+
+    // GetTemplate
+    results.push(chk!(
+        "GetTemplate",
+        client
+            .get_template()
+            .stack_name("conformance-stack")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetTemplateSummary
+    results.push(chk!(
+        "GetTemplateSummary",
+        client
+            .get_template_summary()
+            .template_body(template)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DeleteStack
+    results.push(chk!(
+        "DeleteStack",
+        client
+            .delete_stack()
+            .stack_name("conformance-stack")
+            .send()
+            .await,
+        verbose
+    ));
+
+    results
+}
+
+// ---------------------------------------------------------------------------
+// RDS
+// ---------------------------------------------------------------------------
+
+async fn test_rds(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_rds::Client::new(&config);
+    let mut results = Vec::new();
+
+    // DescribeDBEngineVersions
+    results.push(chk!(
+        "DescribeDBEngineVersions",
+        client.describe_db_engine_versions().send().await,
+        verbose
+    ));
+
+    // CreateDBInstance
+    let db_r = client
+        .create_db_instance()
+        .db_instance_identifier("conformance-db")
+        .db_instance_class("db.t3.micro")
+        .engine("mysql")
+        .master_username("admin")
+        .master_user_password("Password123!")
+        .allocated_storage(20)
+        .send()
+        .await;
+    results.push(chk!("CreateDBInstance", db_r, verbose));
+
+    // DescribeDBInstances
+    results.push(chk!(
+        "DescribeDBInstances",
+        client.describe_db_instances().send().await,
+        verbose
+    ));
+
+    // CreateDBSnapshot
+    let snap_r = client
+        .create_db_snapshot()
+        .db_instance_identifier("conformance-db")
+        .db_snapshot_identifier("conformance-snapshot")
+        .send()
+        .await;
+    results.push(chk!("CreateDBSnapshot", snap_r, verbose));
+
+    // DescribeDBSnapshots
+    results.push(chk!(
+        "DescribeDBSnapshots",
+        client.describe_db_snapshots().send().await,
+        verbose
+    ));
+
+    // DeleteDBSnapshot
+    results.push(chk!(
+        "DeleteDBSnapshot",
+        client
+            .delete_db_snapshot()
+            .db_snapshot_identifier("conformance-snapshot")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DeleteDBInstance
+    results.push(chk!(
+        "DeleteDBInstance",
+        client
+            .delete_db_instance()
+            .db_instance_identifier("conformance-db")
+            .skip_final_snapshot(true)
             .send()
             .await,
         verbose

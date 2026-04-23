@@ -1,0 +1,25 @@
+{
+  "smithy": "2.0",
+  "shapes": {
+    "com.amazonaws.rds#AmazonRDSv19": {
+      "type": "service",
+      "version": "2014-10-31",
+      "operations": [
+        {"target": "com.amazonaws.rds#CreateDBInstance"},
+        {"target": "com.amazonaws.rds#DescribeDBInstances"},
+        {"target": "com.amazonaws.rds#CreateDBSnapshot"},
+        {"target": "com.amazonaws.rds#DescribeDBSnapshots"},
+        {"target": "com.amazonaws.rds#DeleteDBSnapshot"},
+        {"target": "com.amazonaws.rds#DescribeDBEngineVersions"},
+        {"target": "com.amazonaws.rds#DeleteDBInstance"}
+      ]
+    },
+    "com.amazonaws.rds#CreateDBInstance": {"type": "operation"},
+    "com.amazonaws.rds#DescribeDBInstances": {"type": "operation"},
+    "com.amazonaws.rds#CreateDBSnapshot": {"type": "operation"},
+    "com.amazonaws.rds#DescribeDBSnapshots": {"type": "operation"},
+    "com.amazonaws.rds#DeleteDBSnapshot": {"type": "operation"},
+    "com.amazonaws.rds#DescribeDBEngineVersions": {"type": "operation"},
+    "com.amazonaws.rds#DeleteDBInstance": {"type": "operation"}
+  }
+}

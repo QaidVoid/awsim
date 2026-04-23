@@ -1,0 +1,43 @@
+{
+  "smithy": "2.0",
+  "shapes": {
+    "com.amazonaws.sfn#AmazonStepFunctions": {
+      "type": "service",
+      "version": "2016-11-23",
+      "operations": [
+        {"target": "com.amazonaws.sfn#CreateStateMachine"},
+        {"target": "com.amazonaws.sfn#ListStateMachines"},
+        {"target": "com.amazonaws.sfn#DescribeStateMachine"},
+        {"target": "com.amazonaws.sfn#StartExecution"},
+        {"target": "com.amazonaws.sfn#ListExecutions"},
+        {"target": "com.amazonaws.sfn#DescribeExecution"},
+        {"target": "com.amazonaws.sfn#GetExecutionHistory"},
+        {"target": "com.amazonaws.sfn#CreateActivity"},
+        {"target": "com.amazonaws.sfn#ListActivities"},
+        {"target": "com.amazonaws.sfn#DescribeActivity"},
+        {"target": "com.amazonaws.sfn#TagResource"},
+        {"target": "com.amazonaws.sfn#ListTagsForResource"},
+        {"target": "com.amazonaws.sfn#UntagResource"},
+        {"target": "com.amazonaws.sfn#DeleteActivity"},
+        {"target": "com.amazonaws.sfn#StopExecution"},
+        {"target": "com.amazonaws.sfn#DeleteStateMachine"}
+      ]
+    },
+    "com.amazonaws.sfn#CreateStateMachine": {"type": "operation"},
+    "com.amazonaws.sfn#ListStateMachines": {"type": "operation"},
+    "com.amazonaws.sfn#DescribeStateMachine": {"type": "operation"},
+    "com.amazonaws.sfn#StartExecution": {"type": "operation"},
+    "com.amazonaws.sfn#ListExecutions": {"type": "operation"},
+    "com.amazonaws.sfn#DescribeExecution": {"type": "operation"},
+    "com.amazonaws.sfn#GetExecutionHistory": {"type": "operation"},
+    "com.amazonaws.sfn#CreateActivity": {"type": "operation"},
+    "com.amazonaws.sfn#ListActivities": {"type": "operation"},
+    "com.amazonaws.sfn#DescribeActivity": {"type": "operation"},
+    "com.amazonaws.sfn#TagResource": {"type": "operation"},
+    "com.amazonaws.sfn#ListTagsForResource": {"type": "operation"},
+    "com.amazonaws.sfn#UntagResource": {"type": "operation"},
+    "com.amazonaws.sfn#DeleteActivity": {"type": "operation"},
+    "com.amazonaws.sfn#StopExecution": {"type": "operation"},
+    "com.amazonaws.sfn#DeleteStateMachine": {"type": "operation"}
+  }
+}

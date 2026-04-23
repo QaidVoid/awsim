@@ -1,0 +1,25 @@
+{
+  "smithy": "2.0",
+  "shapes": {
+    "com.amazonaws.cloudformation#CloudFormation": {
+      "type": "service",
+      "version": "2010-05-15",
+      "operations": [
+        {"target": "com.amazonaws.cloudformation#CreateStack"},
+        {"target": "com.amazonaws.cloudformation#DescribeStacks"},
+        {"target": "com.amazonaws.cloudformation#DescribeStackResources"},
+        {"target": "com.amazonaws.cloudformation#ListStacks"},
+        {"target": "com.amazonaws.cloudformation#GetTemplate"},
+        {"target": "com.amazonaws.cloudformation#GetTemplateSummary"},
+        {"target": "com.amazonaws.cloudformation#DeleteStack"}
+      ]
+    },
+    "com.amazonaws.cloudformation#CreateStack": {"type": "operation"},
+    "com.amazonaws.cloudformation#DescribeStacks": {"type": "operation"},
+    "com.amazonaws.cloudformation#DescribeStackResources": {"type": "operation"},
+    "com.amazonaws.cloudformation#ListStacks": {"type": "operation"},
+    "com.amazonaws.cloudformation#GetTemplate": {"type": "operation"},
+    "com.amazonaws.cloudformation#GetTemplateSummary": {"type": "operation"},
+    "com.amazonaws.cloudformation#DeleteStack": {"type": "operation"}
+  }
+}

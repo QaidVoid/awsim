@@ -215,6 +215,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-cloudformation"
+version = "1.111.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "deb1059f0895e6069c727b597b38d65142369526d4b4f20c3abe15b5afa71b1e"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-query",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "aws-types",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-cloudwatchlogs"
 version = "1.127.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -312,6 +337,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-ec2"
+version = "1.223.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c051cf4af033cea16c4eeb73b9c3c07f61fe747ae0d4119aabd45fa0288c19b"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-query",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "aws-types",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-ecr"
 version = "1.115.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -340,6 +390,30 @@ name = "aws-sdk-ecs"
 version = "1.124.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e28ffb1fa2097067108e6a0a6dd92cf9075391b50c709b268ef5f42ae0642a0"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-eventbridge"
+version = "1.105.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81ebb2c0d32a59da971040ae5a472d6b975fac96d1a73b39ba42a84ddb479108"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -459,6 +533,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-rds"
+version = "1.132.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa1e30b6464d7af541056ede9ed0acca3202bbdbb7df8c2983cf6e78ac9ee2dc"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-sigv4",
+ "aws-smithy-async",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-query",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "aws-types",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "aws-sdk-s3"
 version = "1.119.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -497,6 +598,30 @@ name = "aws-sdk-secretsmanager"
 version = "1.104.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "811bcb3da8bf26e571da7a248c0a93152bba9642aa4c8c907c58d949fa5f1d5c"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-sfn"
+version = "1.103.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46bc825a06186c0ea8181cc4e06e1f1e458b7eebe83fd0e1c374679b1e396a9f"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -1171,17 +1296,23 @@ version = "0.1.0"
 dependencies = [
  "aws-config",
  "aws-credential-types",
+ "aws-sdk-cloudformation",
+ "aws-sdk-cloudwatchlogs",
  "aws-sdk-cognitoidentity",
  "aws-sdk-cognitoidentityprovider",
  "aws-sdk-dynamodb",
+ "aws-sdk-ec2",
  "aws-sdk-ecr",
  "aws-sdk-ecs",
+ "aws-sdk-eventbridge",
  "aws-sdk-iam",
  "aws-sdk-kinesis",
  "aws-sdk-kms",
  "aws-sdk-lambda",
+ "aws-sdk-rds",
  "aws-sdk-s3",
  "aws-sdk-secretsmanager",
+ "aws-sdk-sfn",
  "aws-sdk-sns",
  "aws-sdk-sqs",
  "aws-sdk-ssm",
