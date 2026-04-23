@@ -369,6 +369,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-cloudtrail"
+version = "1.107.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd81ebaf83622705249d1e935a6d37f275e6ab27cf78e595fa94300297abefb9"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-cloudwatchlogs"
 version = "1.127.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -539,6 +563,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-eks"
+version = "1.129.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "212c020e8c7a8367bd4536e6872614c87816a7dcf61875fd3d1a25290aae2f76"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-elasticloadbalancingv2"
 version = "1.111.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -568,6 +616,30 @@ name = "aws-sdk-eventbridge"
 version = "1.105.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81ebb2c0d32a59da971040ae5a472d6b975fac96d1a73b39ba42a84ddb479108"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-firehose"
+version = "1.106.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15754b9be3a85bd05b9f6dab1420a5f9d00d62d3b9d8e15ee0238001249594ec"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -695,6 +767,30 @@ dependencies = [
  "aws-runtime",
  "aws-smithy-async",
  "aws-smithy-eventstream",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-organizations"
+version = "1.114.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2efc2c55ade577db97575bab0f4e4bed6ef130133eb616274eb6f6bc51e07844"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
  "aws-smithy-http 0.63.6",
  "aws-smithy-json 0.62.5",
  "aws-smithy-observability",
@@ -1344,20 +1440,25 @@ dependencies = [
  "awsim-apigateway",
  "awsim-appsync",
  "awsim-athena",
+ "awsim-batch",
  "awsim-bedrock",
  "awsim-cloudformation",
  "awsim-cloudfront",
+ "awsim-cloudtrail",
  "awsim-cloudwatch-logs",
  "awsim-cloudwatch-metrics",
  "awsim-cognito",
  "awsim-comprehend",
  "awsim-core",
+ "awsim-datasync",
  "awsim-dynamodb",
  "awsim-ec2",
  "awsim-ecr",
  "awsim-ecs",
+ "awsim-eks",
  "awsim-elb",
  "awsim-eventbridge",
+ "awsim-firehose",
  "awsim-glue",
  "awsim-iam",
  "awsim-kendra",
@@ -1365,6 +1466,8 @@ dependencies = [
  "awsim-kms",
  "awsim-lambda",
  "awsim-opensearch",
+ "awsim-organizations",
+ "awsim-polly",
  "awsim-rds",
  "awsim-route53",
  "awsim-s3",
@@ -1374,6 +1477,7 @@ dependencies = [
  "awsim-sns",
  "awsim-sqs",
  "awsim-ssm",
+ "awsim-sso-admin",
  "awsim-stepfunctions",
  "awsim-sts",
  "awsim-waf",
@@ -1447,6 +1551,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "awsim-batch"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "awsim-bedrock"
 version = "0.1.0"
 dependencies = [
@@ -1475,6 +1592,19 @@ dependencies = [
 
 [[package]]
 name = "awsim-cloudfront"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-cloudtrail"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -1552,6 +1682,7 @@ dependencies = [
  "aws-sdk-bedrock",
  "aws-sdk-cloudformation",
  "aws-sdk-cloudfront",
+ "aws-sdk-cloudtrail",
  "aws-sdk-cloudwatchlogs",
  "aws-sdk-cognitoidentity",
  "aws-sdk-cognitoidentityprovider",
@@ -1559,13 +1690,16 @@ dependencies = [
  "aws-sdk-ec2",
  "aws-sdk-ecr",
  "aws-sdk-ecs",
+ "aws-sdk-eks",
  "aws-sdk-elasticloadbalancingv2",
  "aws-sdk-eventbridge",
+ "aws-sdk-firehose",
  "aws-sdk-glue",
  "aws-sdk-iam",
  "aws-sdk-kinesis",
  "aws-sdk-kms",
  "aws-sdk-lambda",
+ "aws-sdk-organizations",
  "aws-sdk-rds",
  "aws-sdk-route53",
  "aws-sdk-s3",
@@ -1585,6 +1719,7 @@ dependencies = [
  "awsim-bedrock",
  "awsim-cloudformation",
  "awsim-cloudfront",
+ "awsim-cloudtrail",
  "awsim-cloudwatch-logs",
  "awsim-cloudwatch-metrics",
  "awsim-cognito",
@@ -1594,8 +1729,10 @@ dependencies = [
  "awsim-ec2",
  "awsim-ecr",
  "awsim-ecs",
+ "awsim-eks",
  "awsim-elb",
  "awsim-eventbridge",
+ "awsim-firehose",
  "awsim-glue",
  "awsim-iam",
  "awsim-kendra",
@@ -1603,6 +1740,7 @@ dependencies = [
  "awsim-kms",
  "awsim-lambda",
  "awsim-opensearch",
+ "awsim-organizations",
  "awsim-rds",
  "awsim-route53",
  "awsim-s3",
@@ -1648,6 +1786,19 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-datasync"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
  "tracing",
  "uuid",
 ]
@@ -1707,6 +1858,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "awsim-eks"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "awsim-elb"
 version = "0.1.0"
 dependencies = [
@@ -1749,6 +1913,20 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-firehose"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "base64",
  "dashmap",
  "serde",
  "serde_json",
@@ -1870,6 +2048,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "awsim-organizations"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-polly"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "base64",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "awsim-rds"
 version = "0.1.0"
 dependencies = [
@@ -1982,6 +2187,19 @@ dependencies = [
 
 [[package]]
 name = "awsim-ssm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-sso-admin"
 version = "0.1.0"
 dependencies = [
  "async-trait",

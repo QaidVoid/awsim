@@ -547,6 +547,42 @@ fn register_services(
     let kendra = Arc::new(awsim_kendra::KendraService::new());
     state.register(kendra, vec![]);
 
+    let organizations = Arc::new(awsim_organizations::OrganizationsService::new());
+    state.register(organizations, vec![]);
+
+    let cloudtrail = Arc::new(awsim_cloudtrail::CloudTrailService::new());
+    state.register(cloudtrail, vec![]);
+
+    let eks = awsim_eks::EksService::new();
+    let eks_routes = {
+        use awsim_core::ServiceHandler;
+        eks.routes()
+    };
+    state.register(Arc::new(eks), eks_routes);
+
+    let firehose = Arc::new(awsim_firehose::FirehoseService::new());
+    state.register(firehose, vec![]);
+
+    let batch = awsim_batch::BatchService::new();
+    let batch_routes = {
+        use awsim_core::ServiceHandler;
+        batch.routes()
+    };
+    state.register(Arc::new(batch), batch_routes);
+
+    let sso_admin = Arc::new(awsim_sso_admin::SsoAdminService::new());
+    state.register(sso_admin, vec![]);
+
+    let datasync = Arc::new(awsim_datasync::DataSyncService::new());
+    state.register(datasync, vec![]);
+
+    let polly = awsim_polly::PollyService::new();
+    let polly_routes = {
+        use awsim_core::ServiceHandler;
+        polly.routes()
+    };
+    state.register(Arc::new(polly), polly_routes);
+
     // API Gateway — registered last so we can return a clone of the Arc.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
     let apigw_routes = {

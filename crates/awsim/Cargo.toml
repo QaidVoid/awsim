@@ -47,6 +47,14 @@ awsim-scheduler = { workspace = true }
 awsim-comprehend = { workspace = true }
 awsim-kendra = { workspace = true }
 awsim-opensearch = { workspace = true }
+awsim-organizations = { workspace = true }
+awsim-cloudtrail = { workspace = true }
+awsim-eks = { workspace = true }
+awsim-firehose = { workspace = true }
+awsim-batch = { workspace = true }
+awsim-sso-admin = { workspace = true }
+awsim-datasync = { workspace = true }
+awsim-polly = { workspace = true }
 axum = { workspace = true }
 dashmap = { workspace = true }
 tower-http = { workspace = true }

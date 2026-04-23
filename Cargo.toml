@@ -40,6 +40,14 @@ members = [
     "crates/awsim-kendra",
     "crates/awsim-opensearch",
     "crates/awsim-iam-policy",
+    "crates/awsim-organizations",
+    "crates/awsim-cloudtrail",
+    "crates/awsim-eks",
+    "crates/awsim-firehose",
+    "crates/awsim-batch",
+    "crates/awsim-sso-admin",
+    "crates/awsim-datasync",
+    "crates/awsim-polly",
     "crates/awsim-conformance",
     "crates/awsim-enforcement-tests",
 ]
@@ -89,6 +97,14 @@ awsim-scheduler = { path = "crates/awsim-scheduler" }
 awsim-comprehend = { path = "crates/awsim-comprehend" }
 awsim-kendra = { path = "crates/awsim-kendra" }
 awsim-opensearch = { path = "crates/awsim-opensearch" }
+awsim-organizations = { path = "crates/awsim-organizations" }
+awsim-cloudtrail = { path = "crates/awsim-cloudtrail" }
+awsim-eks = { path = "crates/awsim-eks" }
+awsim-firehose = { path = "crates/awsim-firehose" }
+awsim-batch = { path = "crates/awsim-batch" }
+awsim-sso-admin = { path = "crates/awsim-sso-admin" }
+awsim-datasync = { path = "crates/awsim-datasync" }
+awsim-polly = { path = "crates/awsim-polly" }
 
 # Async
 tokio = { version = "1", features = ["full"] }

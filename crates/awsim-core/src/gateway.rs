@@ -337,6 +337,11 @@ fn resolve_service_from_target(target: &str) -> Option<String> {
         p if p.starts_with("AWSWAF") => "wafv2",
         p if p.starts_with("Comprehend") => "comprehend",
         p if p.starts_with("kendra") => "kendra",
+        // Management & audit
+        p if p.starts_with("AWSOrganizationsV") => "organizations",
+        p if p.starts_with("CloudTrail_") => "cloudtrail",
+        // Streaming
+        p if p.starts_with("Firehose_") => "firehose",
         _ => return None,
     };
     Some(service.to_string())
@@ -382,6 +387,8 @@ fn resolve_service_from_path(path: &str) -> Option<String> {
         p if p.starts_with("/model/") => "bedrock-runtime",
         // EventBridge Scheduler
         p if p.starts_with("/schedules") || p.starts_with("/schedule-groups") => "scheduler",
+        // EKS
+        p if p.starts_with("/clusters") || p == "/tags" || p.starts_with("/tags/") => "eks",
         // S3 (catch-all — any path starting with / that doesn't match above could be S3)
         // Don't add S3 here as it would catch everything
         _ => return None,
