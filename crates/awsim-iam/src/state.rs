@@ -26,6 +26,16 @@ pub struct IamState {
     pub deletion_tasks: DashMap<String, String>,
     /// Login profiles (console passwords), keyed by user name.
     pub login_profiles: DashMap<String, LoginProfile>,
+    /// Signing certificates keyed by certificate ID. Value: (UserName, body, status, upload_date).
+    pub signing_certificates: DashMap<String, SigningCertificate>,
+    /// Service-specific credentials keyed by id. Value tracks owner, service, status, etc.
+    pub service_specific_credentials: DashMap<String, ServiceSpecificCredential>,
+    /// Permissions boundary policy ARN per user (by user name).
+    pub user_permissions_boundaries: DashMap<String, String>,
+    /// Permissions boundary policy ARN per role (by role name).
+    pub role_permissions_boundaries: DashMap<String, String>,
+    /// Tracks last-used metadata for access keys keyed by access key id.
+    pub access_key_last_used: DashMap<String, AccessKeyLastUsed>,
 }
 
 /// Serializable snapshot of `IamState`.
@@ -263,4 +273,31 @@ pub struct LoginProfile {
     pub create_date: String,
     /// Whether the user must reset their password on next sign-in.
     pub password_reset_required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SigningCertificate {
+    pub user_name: String,
+    pub certificate_id: String,
+    pub certificate_body: String,
+    pub status: String,
+    pub upload_date: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceSpecificCredential {
+    pub user_name: String,
+    pub service_name: String,
+    pub service_user_name: String,
+    pub service_specific_credential_id: String,
+    pub service_password: String,
+    pub status: String,
+    pub create_date: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AccessKeyLastUsed {
+    pub last_used_date: Option<String>,
+    pub service_name: String,
+    pub region: String,
 }

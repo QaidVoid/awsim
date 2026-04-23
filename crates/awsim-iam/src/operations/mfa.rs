@@ -8,7 +8,7 @@ use crate::{
 };
 
 use super::{opt_str, require_str};
-use super::super::operations::tags::parse_tags;
+use super::super::operations::tags::{parse_tag_keys, parse_tags, tags_to_value};
 
 fn device_to_value(d: &VirtualMfaDevice) -> Value {
     let mut v = json!({
@@ -145,6 +145,79 @@ pub fn deactivate_mfa_device(state: &IamState, input: &Value) -> Result<Value, A
     }
 
     Ok(json!({}))
+}
+
+pub fn get_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let serial_number = require_str(input, "SerialNumber")?;
+    let device = state
+        .virtual_mfa_devices
+        .get(serial_number)
+        .ok_or_else(|| no_such_entity("VirtualMFADevice", serial_number))?;
+
+    let mut v = json!({
+        "SerialNumber": device.serial_number,
+        "Certifications": { "entry": [] },
+    });
+    if let Some(user) = &device.user {
+        v["UserName"] = Value::String(user.clone());
+    }
+    if let Some(ed) = &device.enable_date {
+        v["EnableDate"] = Value::String(ed.clone());
+    }
+    Ok(v)
+}
+
+pub fn resync_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let _user_name = require_str(input, "UserName")?;
+    let serial_number = require_str(input, "SerialNumber")?;
+    let _code1 = require_str(input, "AuthenticationCode1")?;
+    let _code2 = require_str(input, "AuthenticationCode2")?;
+
+    if !state.virtual_mfa_devices.contains_key(serial_number) {
+        return Err(no_such_entity("VirtualMFADevice", serial_number));
+    }
+    Ok(json!({}))
+}
+
+pub fn tag_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let serial_number = require_str(input, "SerialNumber")?;
+    let new_tags = parse_tags(input);
+
+    let mut device = state
+        .virtual_mfa_devices
+        .get_mut(serial_number)
+        .ok_or_else(|| no_such_entity("VirtualMFADevice", serial_number))?;
+    for (k, v) in new_tags {
+        device.tags.insert(k, v);
+    }
+    Ok(json!({}))
+}
+
+pub fn untag_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let serial_number = require_str(input, "SerialNumber")?;
+    let keys = parse_tag_keys(input);
+
+    let mut device = state
+        .virtual_mfa_devices
+        .get_mut(serial_number)
+        .ok_or_else(|| no_such_entity("VirtualMFADevice", serial_number))?;
+    for k in &keys {
+        device.tags.remove(k);
+    }
+    Ok(json!({}))
+}
+
+pub fn list_mfa_device_tags(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let serial_number = require_str(input, "SerialNumber")?;
+    let device = state
+        .virtual_mfa_devices
+        .get(serial_number)
+        .ok_or_else(|| no_such_entity("VirtualMFADevice", serial_number))?;
+
+    Ok(json!({
+        "Tags": tags_to_value(&device.tags),
+        "IsTruncated": false,
+    }))
 }
 
 pub fn list_mfa_devices(state: &IamState, input: &Value) -> Result<Value, AwsError> {

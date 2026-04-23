@@ -355,6 +355,96 @@ impl ServiceHandler for IamService {
             "GetServiceLastAccessedDetails" => {
                 operations::credential_report::get_service_last_accessed_details(&state, &input)
             }
+            "GetServiceLastAccessedDetailsWithEntities" => {
+                operations::misc::get_service_last_accessed_details_with_entities(&state, &input)
+            }
+
+            // ── Permissions Boundaries ────────────────────────────────────────
+            "PutUserPermissionsBoundary" => {
+                operations::users::put_user_permissions_boundary(&state, &input)
+            }
+            "DeleteUserPermissionsBoundary" => {
+                operations::users::delete_user_permissions_boundary(&state, &input)
+            }
+            "PutRolePermissionsBoundary" => {
+                operations::roles::put_role_permissions_boundary(&state, &input)
+            }
+            "DeleteRolePermissionsBoundary" => {
+                operations::roles::delete_role_permissions_boundary(&state, &input)
+            }
+
+            // ── Access Keys (extended) ────────────────────────────────────────
+            "GetAccessKeyLastUsed" => {
+                operations::users::get_access_key_last_used(&state, &input)
+            }
+            "UpdateAccessKey" => operations::users::update_access_key(&state, &input),
+            "ChangePassword" => operations::users::change_password(&state, &input),
+
+            // ── Group / Server Certificate updates ────────────────────────────
+            "UpdateGroup" => operations::groups::update_group(&state, &input),
+            "UpdateServerCertificate" => {
+                operations::certificates::update_server_certificate(&state, &input)
+            }
+
+            // ── MFA Device extras ─────────────────────────────────────────────
+            "GetMFADevice" => operations::mfa::get_mfa_device(&state, &input),
+            "ResyncMFADevice" => operations::mfa::resync_mfa_device(&state, &input),
+            "TagMFADevice" => operations::mfa::tag_mfa_device(&state, &input),
+            "UntagMFADevice" => operations::mfa::untag_mfa_device(&state, &input),
+            "ListMFADeviceTags" => operations::mfa::list_mfa_device_tags(&state, &input),
+
+            // ── Signing Certificates ──────────────────────────────────────────
+            "UploadSigningCertificate" => {
+                operations::misc::upload_signing_certificate(&state, &input)
+            }
+            "UpdateSigningCertificate" => {
+                operations::misc::update_signing_certificate(&state, &input)
+            }
+            "DeleteSigningCertificate" => {
+                operations::misc::delete_signing_certificate(&state, &input)
+            }
+
+            // ── Service-Specific Credentials ──────────────────────────────────
+            "CreateServiceSpecificCredential" => {
+                operations::misc::create_service_specific_credential(&state, &input)
+            }
+            "DeleteServiceSpecificCredential" => {
+                operations::misc::delete_service_specific_credential(&state, &input)
+            }
+            "ResetServiceSpecificCredential" => {
+                operations::misc::reset_service_specific_credential(&state, &input)
+            }
+            "UpdateServiceSpecificCredential" => {
+                operations::misc::update_service_specific_credential(&state, &input)
+            }
+
+            // ── Policy lookup helpers ─────────────────────────────────────────
+            "ListPoliciesGrantingServiceAccess" => {
+                operations::misc::list_policies_granting_service_access(&state, &input)
+            }
+            "SetSecurityTokenServicePreferences" => {
+                operations::misc::set_security_token_service_preferences(&state, &input)
+            }
+            "GenerateOrganizationsAccessReport" => {
+                operations::misc::generate_organizations_access_report(&state, &input)
+            }
+            "GetOrganizationsAccessReport" => {
+                operations::misc::get_organizations_access_report(&state, &input)
+            }
+
+            // ── OIDC / SAML provider tags ─────────────────────────────────────
+            "TagOpenIDConnectProvider" => {
+                operations::tags::tag_open_id_connect_provider(&state, &input)
+            }
+            "UntagOpenIDConnectProvider" => {
+                operations::tags::untag_open_id_connect_provider(&state, &input)
+            }
+            "ListOpenIDConnectProviderTags" => {
+                operations::tags::list_open_id_connect_provider_tags(&state, &input)
+            }
+            "TagSAMLProvider" => operations::tags::tag_saml_provider(&state, &input),
+            "UntagSAMLProvider" => operations::tags::untag_saml_provider(&state, &input),
+            "ListSAMLProviderTags" => operations::tags::list_saml_provider_tags(&state, &input),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

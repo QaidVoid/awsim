@@ -137,6 +137,36 @@ pub fn untag_server_certificate(state: &IamState, input: &Value) -> Result<Value
     Ok(json!({}))
 }
 
+pub fn update_server_certificate(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let name = require_str(input, "ServerCertificateName")?;
+    let new_name = opt_str(input, "NewServerCertificateName");
+    let new_path = opt_str(input, "NewPath");
+
+    if !state.server_certificates.contains_key(name) {
+        return Err(no_such_entity("ServerCertificate", name));
+    }
+    if let Some(nn) = new_name {
+        if nn != name && state.server_certificates.contains_key(nn) {
+            return Err(entity_already_exists("ServerCertificate", nn));
+        }
+    }
+    if new_name.is_none() && new_path.is_none() {
+        return Ok(json!({}));
+    }
+    let (_, mut cert) = state.server_certificates.remove(name).unwrap();
+    if let Some(np) = new_path {
+        cert.path = normalize_path(Some(np));
+    }
+    let final_name = if let Some(nn) = new_name {
+        cert.server_certificate_name = nn.to_string();
+        nn.to_string()
+    } else {
+        name.to_string()
+    };
+    state.server_certificates.insert(final_name, cert);
+    Ok(json!({}))
+}
+
 pub fn list_server_certificate_tags(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let name = require_str(input, "ServerCertificateName")?;
     let cert = state

@@ -185,3 +185,92 @@ pub fn list_instance_profile_tags(state: &IamState, input: &Value) -> Result<Val
         "IsTruncated": false,
     }))
 }
+
+// ── OIDC Provider Tags ───────────────────────────────────────────────────────
+
+pub fn tag_open_id_connect_provider(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let arn = require_str(input, "OpenIDConnectProviderArn")?;
+    let new_tags = parse_tags(input);
+
+    let mut p = state
+        .oidc_providers
+        .get_mut(arn)
+        .ok_or_else(|| no_such_entity("OpenIDConnectProvider", arn))?;
+    for (k, v) in new_tags {
+        p.tags.insert(k, v);
+    }
+    Ok(json!({}))
+}
+
+pub fn untag_open_id_connect_provider(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let arn = require_str(input, "OpenIDConnectProviderArn")?;
+    let keys = parse_tag_keys(input);
+
+    let mut p = state
+        .oidc_providers
+        .get_mut(arn)
+        .ok_or_else(|| no_such_entity("OpenIDConnectProvider", arn))?;
+    for k in &keys {
+        p.tags.remove(k);
+    }
+    Ok(json!({}))
+}
+
+pub fn list_open_id_connect_provider_tags(
+    state: &IamState,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let arn = require_str(input, "OpenIDConnectProviderArn")?;
+    let p = state
+        .oidc_providers
+        .get(arn)
+        .ok_or_else(|| no_such_entity("OpenIDConnectProvider", arn))?;
+
+    Ok(json!({
+        "Tags": tags_to_value(&p.tags),
+        "IsTruncated": false,
+    }))
+}
+
+// ── SAML Provider Tags ───────────────────────────────────────────────────────
+
+pub fn tag_saml_provider(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let arn = require_str(input, "SAMLProviderArn")?;
+    let new_tags = parse_tags(input);
+
+    let mut p = state
+        .saml_providers
+        .get_mut(arn)
+        .ok_or_else(|| no_such_entity("SAMLProvider", arn))?;
+    for (k, v) in new_tags {
+        p.tags.insert(k, v);
+    }
+    Ok(json!({}))
+}
+
+pub fn untag_saml_provider(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let arn = require_str(input, "SAMLProviderArn")?;
+    let keys = parse_tag_keys(input);
+
+    let mut p = state
+        .saml_providers
+        .get_mut(arn)
+        .ok_or_else(|| no_such_entity("SAMLProvider", arn))?;
+    for k in &keys {
+        p.tags.remove(k);
+    }
+    Ok(json!({}))
+}
+
+pub fn list_saml_provider_tags(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let arn = require_str(input, "SAMLProviderArn")?;
+    let p = state
+        .saml_providers
+        .get(arn)
+        .ok_or_else(|| no_such_entity("SAMLProvider", arn))?;
+
+    Ok(json!({
+        "Tags": tags_to_value(&p.tags),
+        "IsTruncated": false,
+    }))
+}

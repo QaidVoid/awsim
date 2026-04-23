@@ -399,6 +399,87 @@ pub fn update_login_profile(state: &IamState, input: &Value) -> Result<Value, Aw
     Ok(json!({}))
 }
 
+pub fn get_access_key_last_used(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let key_id = require_str(input, "AccessKeyId")?;
+
+    let mut user_name = String::new();
+    for entry in state.users.iter() {
+        if entry.value().access_keys.iter().any(|k| k.access_key_id == key_id) {
+            user_name = entry.value().user_name.clone();
+            break;
+        }
+    }
+    if user_name.is_empty() {
+        return Err(no_such_entity("AccessKey", key_id));
+    }
+
+    let last_used = state
+        .access_key_last_used
+        .get(key_id)
+        .map(|e| e.value().clone())
+        .unwrap_or_default();
+
+    let mut last_used_value = json!({
+        "ServiceName": if last_used.service_name.is_empty() { "N/A".to_string() } else { last_used.service_name.clone() },
+        "Region": if last_used.region.is_empty() { "N/A".to_string() } else { last_used.region.clone() },
+    });
+    if let Some(d) = last_used.last_used_date {
+        last_used_value["LastUsedDate"] = Value::String(d);
+    }
+
+    Ok(json!({
+        "UserName": user_name,
+        "AccessKeyLastUsed": last_used_value,
+    }))
+}
+
+pub fn update_access_key(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let user_name = require_str(input, "UserName")?;
+    let key_id = require_str(input, "AccessKeyId")?;
+    let status = require_str(input, "Status")?;
+
+    let mut user = state
+        .users
+        .get_mut(user_name)
+        .ok_or_else(|| no_such_entity("User", user_name))?;
+
+    let key = user
+        .access_keys
+        .iter_mut()
+        .find(|k| k.access_key_id == key_id)
+        .ok_or_else(|| no_such_entity("AccessKey", key_id))?;
+    key.status = status.to_string();
+    Ok(json!({}))
+}
+
+pub fn change_password(_state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let _old = require_str(input, "OldPassword")?;
+    let _new = require_str(input, "NewPassword")?;
+    Ok(json!({}))
+}
+
+pub fn put_user_permissions_boundary(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let user_name = require_str(input, "UserName")?;
+    let boundary_arn = require_str(input, "PermissionsBoundary")?;
+
+    if !state.users.contains_key(user_name) {
+        return Err(no_such_entity("User", user_name));
+    }
+    state
+        .user_permissions_boundaries
+        .insert(user_name.to_string(), boundary_arn.to_string());
+    Ok(json!({}))
+}
+
+pub fn delete_user_permissions_boundary(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let user_name = require_str(input, "UserName")?;
+    if !state.users.contains_key(user_name) {
+        return Err(no_such_entity("User", user_name));
+    }
+    state.user_permissions_boundaries.remove(user_name);
+    Ok(json!({}))
+}
+
 pub fn delete_login_profile(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
 

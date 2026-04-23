@@ -240,3 +240,36 @@ pub fn list_group_policies(state: &IamState, input: &Value) -> Result<Value, Aws
         "IsTruncated": false,
     }))
 }
+
+pub fn update_group(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let group_name = require_str(input, "GroupName")?;
+    let new_group_name = opt_str(input, "NewGroupName");
+    let new_path = opt_str(input, "NewPath");
+
+    if !state.groups.contains_key(group_name) {
+        return Err(no_such_entity("Group", group_name));
+    }
+
+    if let Some(new_name) = new_group_name {
+        if new_name != group_name && state.groups.contains_key(new_name) {
+            return Err(entity_already_exists("Group", new_name));
+        }
+    }
+
+    if new_group_name.is_none() && new_path.is_none() {
+        return Ok(json!({}));
+    }
+
+    let (_, mut group) = state.groups.remove(group_name).unwrap();
+    if let Some(np) = new_path {
+        group.path = normalize_path(Some(np));
+    }
+    let final_name = if let Some(nn) = new_group_name {
+        group.group_name = nn.to_string();
+        nn.to_string()
+    } else {
+        group_name.to_string()
+    };
+    state.groups.insert(final_name, group);
+    Ok(json!({}))
+}

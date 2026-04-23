@@ -172,6 +172,28 @@ pub fn update_role_description(state: &IamState, input: &Value) -> Result<Value,
     Ok(json!({ "Role": role_to_value(&role) }))
 }
 
+pub fn put_role_permissions_boundary(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let role_name = require_str(input, "RoleName")?;
+    let boundary_arn = require_str(input, "PermissionsBoundary")?;
+
+    if !state.roles.contains_key(role_name) {
+        return Err(no_such_entity("Role", role_name));
+    }
+    state
+        .role_permissions_boundaries
+        .insert(role_name.to_string(), boundary_arn.to_string());
+    Ok(json!({}))
+}
+
+pub fn delete_role_permissions_boundary(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let role_name = require_str(input, "RoleName")?;
+    if !state.roles.contains_key(role_name) {
+        return Err(no_such_entity("Role", role_name));
+    }
+    state.role_permissions_boundaries.remove(role_name);
+    Ok(json!({}))
+}
+
 // ── Inline policy read/delete ────────────────────────────────────────────────
 
 pub fn get_role_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
