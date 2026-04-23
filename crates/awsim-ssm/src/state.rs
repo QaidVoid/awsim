@@ -93,6 +93,74 @@ pub struct SsmOpsItem {
     pub last_modified_time: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct SsmPatchBaseline {
+    pub baseline_id: String,
+    pub name: String,
+    pub operating_system: String,
+    pub description: String,
+    pub approved_patches: Vec<String>,
+    pub rejected_patches: Vec<String>,
+    pub created_date: u64,
+    pub modified_date: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SsmAutomationExecution {
+    pub execution_id: String,
+    pub document_name: String,
+    pub document_version: String,
+    pub status: String,
+    pub mode: String,
+    pub parameters: serde_json::Value,
+    pub started_time: u64,
+    pub end_time: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SsmSession {
+    pub session_id: String,
+    pub target: String,
+    pub status: String,
+    pub document_name: String,
+    pub start_date: u64,
+    pub end_date: Option<u64>,
+    pub owner: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SsmMaintenanceWindowTarget {
+    pub window_target_id: String,
+    pub window_id: String,
+    pub resource_type: String,
+    pub targets: Vec<serde_json::Value>,
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SsmMaintenanceWindowTask {
+    pub window_task_id: String,
+    pub window_id: String,
+    pub task_arn: String,
+    pub task_type: String,
+    pub targets: Vec<serde_json::Value>,
+    pub priority: u64,
+    pub max_concurrency: String,
+    pub max_errors: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SsmResourceDataSync {
+    pub sync_name: String,
+    pub sync_type: String,
+    pub s3_bucket_name: String,
+    pub s3_region: String,
+    pub s3_prefix: String,
+    pub last_sync_time: u64,
+    pub sync_created_time: u64,
+}
+
 /// Per-account/region SSM state.
 #[derive(Debug, Default)]
 pub struct SsmState {
@@ -108,4 +176,11 @@ pub struct SsmState {
     pub maintenance_windows: DashMap<String, SsmMaintenanceWindow>,
     /// OpsItemId → SsmOpsItem
     pub ops_items: DashMap<String, SsmOpsItem>,
+    pub patch_baselines: DashMap<String, SsmPatchBaseline>,
+    pub default_patch_baselines: DashMap<String, String>,
+    pub automation_executions: DashMap<String, SsmAutomationExecution>,
+    pub sessions: DashMap<String, SsmSession>,
+    pub maintenance_window_targets: DashMap<String, SsmMaintenanceWindowTarget>,
+    pub maintenance_window_tasks: DashMap<String, SsmMaintenanceWindowTask>,
+    pub resource_data_syncs: DashMap<String, SsmResourceDataSync>,
 }
