@@ -1220,6 +1220,270 @@ pub fn select_object_content(_state: &S3State, _input: &Value) -> Result<Value, 
     Ok(json!({ "Payload": [] }))
 }
 
+// ─── Bucket Policy Status ────────────────────────────────────────────────────
+
+pub fn get_bucket_policy_status(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let is_public = bucket.policy.as_deref().map(|p| p.contains("\"Principal\":\"*\"") || p.contains("\"AWS\":\"*\"")).unwrap_or(false);
+
+    Ok(json!({
+        "__xml_root": "PolicyStatus",
+        "IsPublic": is_public,
+    }))
+}
+
+// ─── Object Lock Configuration ───────────────────────────────────────────────
+
+pub fn get_object_lock_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    match bucket.configs.get("object-lock") {
+        Some(raw) => {
+            let parsed: Value = serde_json::from_str(raw).unwrap_or(json!({}));
+            let cfg = parsed.get("ObjectLockConfiguration").cloned().unwrap_or_else(|| parsed.clone());
+            let mut result = serde_json::Map::new();
+            result.insert("__xml_root".to_string(), Value::String("ObjectLockConfiguration".to_string()));
+            if let Some(obj) = cfg.as_object() {
+                for (k, v) in obj {
+                    result.insert(k.clone(), v.clone());
+                }
+            }
+            Ok(Value::Object(result))
+        }
+        None => Ok(json!({
+            "__xml_root": "ObjectLockConfiguration",
+            "ObjectLockEnabled": "Disabled",
+        })),
+    }
+}
+
+pub fn put_object_lock_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    put_bucket_config_key(state, input, "object-lock", Some("ObjectLockConfiguration"))
+}
+
+// ─── Object Legal Hold ───────────────────────────────────────────────────────
+
+pub fn get_object_legal_hold(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let key = require_str(input, "Key")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    if !bucket.objects.contains_key(key) {
+        return Err(AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")));
+    }
+
+    let cfg_key = format!("legal-hold:{}", key);
+    let status = match bucket.configs.get(&cfg_key) {
+        Some(raw) => {
+            let parsed: Value = serde_json::from_str(raw).unwrap_or(json!({}));
+            parsed.get("Status").and_then(Value::as_str).unwrap_or("OFF").to_string()
+        }
+        None => "OFF".to_string(),
+    };
+
+    Ok(json!({
+        "__xml_root": "LegalHold",
+        "Status": status,
+    }))
+}
+
+pub fn put_object_legal_hold(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let key = require_str(input, "Key")?;
+
+    let status = input
+        .get("LegalHold")
+        .and_then(|v| v.get("Status"))
+        .and_then(Value::as_str)
+        .or_else(|| input.get("Status").and_then(Value::as_str))
+        .unwrap_or("OFF");
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    if !bucket.objects.contains_key(key) {
+        return Err(AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")));
+    }
+
+    bucket.configs.insert(format!("legal-hold:{}", key), json!({"Status": status}).to_string());
+    Ok(json!({}))
+}
+
+// ─── Object Retention ────────────────────────────────────────────────────────
+
+pub fn get_object_retention(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let key = require_str(input, "Key")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    if !bucket.objects.contains_key(key) {
+        return Err(AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")));
+    }
+
+    let cfg_key = format!("retention:{}", key);
+    match bucket.configs.get(&cfg_key) {
+        Some(raw) => {
+            let parsed: Value = serde_json::from_str(raw).unwrap_or(json!({}));
+            let mode = parsed.get("Mode").and_then(Value::as_str).unwrap_or("GOVERNANCE").to_string();
+            let until = parsed.get("RetainUntilDate").and_then(Value::as_str).unwrap_or("").to_string();
+            Ok(json!({
+                "__xml_root": "Retention",
+                "Mode": mode,
+                "RetainUntilDate": until,
+            }))
+        }
+        None => Err(AwsError::not_found("NoSuchObjectLockConfiguration", format!("No retention for key '{key}'"))),
+    }
+}
+
+pub fn put_object_retention(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let key = require_str(input, "Key")?;
+
+    let retention = input.get("Retention").cloned().unwrap_or_else(|| input.clone());
+    let mode = retention.get("Mode").and_then(Value::as_str).unwrap_or("GOVERNANCE");
+    let until = retention.get("RetainUntilDate").and_then(Value::as_str).unwrap_or("");
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    if !bucket.objects.contains_key(key) {
+        return Err(AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")));
+    }
+
+    bucket.configs.insert(
+        format!("retention:{}", key),
+        json!({"Mode": mode, "RetainUntilDate": until}).to_string(),
+    );
+    Ok(json!({}))
+}
+
+// ─── Put Object ACL ──────────────────────────────────────────────────────────
+
+pub fn put_object_acl(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let key = require_str(input, "Key")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    if !bucket.objects.contains_key(key) {
+        return Err(AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")));
+    }
+
+    Ok(json!({}))
+}
+
+// ─── Get Object Attributes ───────────────────────────────────────────────────
+
+pub fn get_object_attributes(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let key = require_str(input, "Key")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let obj = bucket
+        .objects
+        .get(key)
+        .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
+
+    Ok(json!({
+        "__xml_root": "GetObjectAttributesOutput",
+        "ETag": obj.etag.trim_matches('"'),
+        "ObjectSize": obj.content_length,
+        "StorageClass": "STANDARD",
+    }))
+}
+
+// ─── Restore Object ──────────────────────────────────────────────────────────
+
+pub fn restore_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let key = require_str(input, "Key")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    if !bucket.objects.contains_key(key) {
+        return Err(AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")));
+    }
+
+    Ok(json!({}))
+}
+
+// ─── Rename Object ───────────────────────────────────────────────────────────
+
+pub fn rename_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let dst_key = require_str(input, "Key")?;
+    let rename_source = require_str(input, "RenameSource")?;
+
+    let src_key = rename_source.trim_start_matches('/');
+    let src_key = src_key.split_once('/').map(|(_, k)| k).unwrap_or(src_key);
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let (_, obj) = bucket
+        .objects
+        .remove(src_key)
+        .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{src_key}' not found")))?;
+
+    let mut new_obj = obj;
+    new_obj.key = dst_key.to_string();
+    bucket.objects.insert(dst_key.to_string(), new_obj);
+
+    Ok(json!({}))
+}
+
+// ─── Create Session ──────────────────────────────────────────────────────────
+
+pub fn create_session(_state: &S3State, _input: &Value) -> Result<Value, AwsError> {
+    use crate::util::now_iso8601;
+    Ok(json!({
+        "__xml_root": "CreateSessionOutput",
+        "Credentials": {
+            "AccessKeyId": "ASIAAWSIMSESSION",
+            "SecretAccessKey": "secretkey",
+            "SessionToken": "sessiontoken",
+            "Expiration": now_iso8601(),
+        }
+    }))
+}
+
+
 // ─── Logging ─────────────────────────────────────────────────────────────────
 
 /// GET /{Bucket}?logging — Return empty logging configuration.

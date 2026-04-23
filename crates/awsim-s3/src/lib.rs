@@ -313,6 +313,41 @@ impl ServiceHandler for S3Service {
                 operation: "ListObjectsV2",
                 required_query_param: Some("list-type"),
             },
+            // GET /{Bucket}?versions
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "ListObjectVersions",
+                required_query_param: Some("versions"),
+            },
+            // GET /{Bucket}?policyStatus
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketPolicyStatus",
+                required_query_param: Some("policyStatus"),
+            },
+            // GET /{Bucket}?object-lock
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetObjectLockConfiguration",
+                required_query_param: Some("object-lock"),
+            },
+            // PUT /{Bucket}?object-lock
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutObjectLockConfiguration",
+                required_query_param: Some("object-lock"),
+            },
+            // GET /{Bucket}?session
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "CreateSession",
+                required_query_param: Some("session"),
+            },
             // GET /{Bucket}?uploads  (list multipart uploads)
             RouteDefinition {
                 method: "GET",
@@ -333,6 +368,69 @@ impl ServiceHandler for S3Service {
                 path_pattern: "/{Bucket}/{Key+}",
                 operation: "SelectObjectContent",
                 required_query_param: Some("select"),
+            },
+            // POST /{Bucket}/{Key+}?restore
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "RestoreObject",
+                required_query_param: Some("restore"),
+            },
+            // GET /{Bucket}/{Key+}?legal-hold
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "GetObjectLegalHold",
+                required_query_param: Some("legal-hold"),
+            },
+            // PUT /{Bucket}/{Key+}?legal-hold
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "PutObjectLegalHold",
+                required_query_param: Some("legal-hold"),
+            },
+            // GET /{Bucket}/{Key+}?retention
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "GetObjectRetention",
+                required_query_param: Some("retention"),
+            },
+            // PUT /{Bucket}/{Key+}?retention
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "PutObjectRetention",
+                required_query_param: Some("retention"),
+            },
+            // GET /{Bucket}/{Key+}?attributes
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "GetObjectAttributes",
+                required_query_param: Some("attributes"),
+            },
+            // PUT /{Bucket}/{Key+}?acl
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "PutObjectAcl",
+                required_query_param: Some("acl"),
+            },
+            // PUT /{Bucket}/{Key+}?renameObject
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "RenameObject",
+                required_query_param: Some("renameObject"),
+            },
+            // GET /{Bucket} — list objects v1 (no query param; must come after all specific ones)
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "ListObjects",
+                required_query_param: None,
             },
             // PUT /{Bucket} — create bucket (no query param; must come after all specific ones)
             RouteDefinition {
@@ -561,6 +659,36 @@ impl ServiceHandler for S3Service {
             // SelectObjectContent (stub)
             "SelectObjectContent" => operations::config::select_object_content(&state, &input),
 
+            // Bucket Policy Status
+            "GetBucketPolicyStatus" => operations::config::get_bucket_policy_status(&state, &input),
+
+            // Object Lock
+            "GetObjectLockConfiguration" => operations::config::get_object_lock_configuration(&state, &input),
+            "PutObjectLockConfiguration" => operations::config::put_object_lock_configuration(&state, &input),
+
+            // Object Legal Hold
+            "GetObjectLegalHold" => operations::config::get_object_legal_hold(&state, &input),
+            "PutObjectLegalHold" => operations::config::put_object_legal_hold(&state, &input),
+
+            // Object Retention
+            "GetObjectRetention" => operations::config::get_object_retention(&state, &input),
+            "PutObjectRetention" => operations::config::put_object_retention(&state, &input),
+
+            // Object Attributes
+            "GetObjectAttributes" => operations::config::get_object_attributes(&state, &input),
+
+            // Put Object ACL
+            "PutObjectAcl" => operations::config::put_object_acl(&state, &input),
+
+            // Restore Object
+            "RestoreObject" => operations::config::restore_object(&state, &input),
+
+            // Rename Object
+            "RenameObject" => operations::config::rename_object(&state, &input),
+
+            // Create Session
+            "CreateSession" => operations::config::create_session(&state, &input),
+
             // Object operations
             "PutObject" => {
                 let result = operations::object::put_object(&state, &input, ctx)?;
@@ -692,6 +820,8 @@ impl ServiceHandler for S3Service {
 
             // Listing / batch
             "ListObjectsV2" => operations::list::list_objects_v2(&state, &input),
+            "ListObjects" => operations::list::list_objects(&state, &input),
+            "ListObjectVersions" => operations::list::list_object_versions(&state, &input),
             "DeleteObjects" => operations::list::delete_objects(&state, &input),
 
             // Multipart
