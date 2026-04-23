@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use awsim_enforcement_tests::{
     bootstrap_user, iam_client, make_sdk_config, s3_client, sdk_err_is_access_denied,
-    start_server_enforced, start_server_unenforced, ALLOW_ALL_S3, ALLOW_GETOBJECT, DENY_PUTOBJECT,
+    start_server_enforced, start_server_enforced_with_scp, start_server_unenforced, with_scp,
+    ALLOW_ALL_S3, ALLOW_GETOBJECT, DENY_PUTOBJECT,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -106,6 +107,47 @@ async fn enforced_explicit_deny_overrides_allow() {
         .await
         .expect_err("PutObject must fail due to explicit Deny");
     assert!(sdk_err_is_access_denied(&err), "explicit Deny must yield AccessDenied");
+
+    srv.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scp_explicit_deny_blocks_identity_allow() {
+    let iam = Arc::new(awsim_iam::IamService::new());
+    let (admin, admin_port) = start_server_unenforced(iam.clone()).await;
+    let admin_cfg = make_sdk_config(admin_port, "admin", "admin");
+    let (ak, sk) = bootstrap_user(
+        &iam_client(&admin_cfg),
+        "dana",
+        &[("DanaAllowAll".into(), ALLOW_ALL_S3.into())],
+    )
+    .await;
+    admin.shutdown().await;
+
+    let scp_deny_s3 = r#"{
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Deny",
+            "Action": "s3:GetObject",
+            "Resource": "*"
+        }]
+    }"#;
+    let scp = with_scp(scp_deny_s3);
+    let (srv, port) = start_server_enforced_with_scp(iam, scp).await;
+    let cfg = make_sdk_config(port, &ak, &sk);
+    let s3 = s3_client(&cfg);
+
+    let err = s3
+        .get_object()
+        .bucket("test-bucket")
+        .key("foo.txt")
+        .send()
+        .await
+        .expect_err("GetObject must fail under SCP Deny");
+    assert!(
+        sdk_err_is_access_denied(&err),
+        "SCP explicit Deny must yield AccessDenied"
+    );
 
     srv.shutdown().await;
 }

@@ -24,6 +24,10 @@ pub trait ResourcePolicyLookup: Send + Sync {
     fn lookup(&self, resource_arn: &str) -> Option<PolicyDocument>;
 }
 
+pub trait ScpLookup: Send + Sync {
+    fn lookup(&self, principal_arn: &str) -> Vec<PolicyDocument>;
+}
+
 pub struct NoopPrincipalLookup;
 
 impl PrincipalLookup for NoopPrincipalLookup {
@@ -35,6 +39,7 @@ impl PrincipalLookup for NoopPrincipalLookup {
 pub struct AuthzEngine {
     pub principal_lookup: Arc<dyn PrincipalLookup>,
     pub resource_policy_lookups: HashMap<String, Arc<dyn ResourcePolicyLookup>>,
+    pub scp_lookup: Option<Arc<dyn ScpLookup>>,
     pub enabled: bool,
 }
 
@@ -43,6 +48,7 @@ impl AuthzEngine {
         Self {
             principal_lookup: Arc::new(NoopPrincipalLookup),
             resource_policy_lookups: HashMap::new(),
+            scp_lookup: None,
             enabled,
         }
     }
@@ -106,11 +112,17 @@ impl AuthzEngine {
             context: &context,
         };
 
+        let scps: Vec<PolicyDocument> = self
+            .scp_lookup
+            .as_ref()
+            .map(|l| l.lookup(&principal.arn))
+            .unwrap_or_default();
+
         let eval_ctx = EvalContext {
             identity_policies: &principal.identity_policies,
             permissions_boundary: principal.permissions_boundary.as_ref(),
             resource_policy: resource_policy.as_ref(),
-            scps: &[],
+            scps: &scps,
             session_policy: None,
         };
 

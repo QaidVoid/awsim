@@ -3,7 +3,8 @@ use std::sync::Arc;
 use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_credential_types::Credentials;
 use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
-use awsim_core::{AppState, AuthzEngine, ServiceHandler};
+use awsim_core::{AppState, AuthzEngine, ScpLookup, ServiceHandler};
+use awsim_iam_policy::PolicyDocument;
 
 pub struct ServerHandle {
     shutdown: tokio::sync::oneshot::Sender<()>,
@@ -17,9 +18,27 @@ impl ServerHandle {
     }
 }
 
+pub struct StaticScpLookup {
+    pub policies: Vec<PolicyDocument>,
+}
+
+impl ScpLookup for StaticScpLookup {
+    fn lookup(&self, _principal_arn: &str) -> Vec<PolicyDocument> {
+        self.policies.clone()
+    }
+}
+
 pub async fn start_server(
     enforce: bool,
     iam: Arc<awsim_iam::IamService>,
+) -> (ServerHandle, u16) {
+    start_server_with_scp(enforce, iam, None).await
+}
+
+pub async fn start_server_with_scp(
+    enforce: bool,
+    iam: Arc<awsim_iam::IamService>,
+    scp: Option<Arc<dyn ScpLookup>>,
 ) -> (ServerHandle, u16) {
     unsafe {
         if enforce {
@@ -53,6 +72,7 @@ pub async fn start_server(
             );
             m
         },
+        scp_lookup: scp,
     };
     state.authz = Arc::new(authz);
 
@@ -81,6 +101,20 @@ pub async fn start_server_enforced(
     iam: Arc<awsim_iam::IamService>,
 ) -> (ServerHandle, u16) {
     start_server(true, iam).await
+}
+
+pub fn with_scp(scp_doc: &str) -> Arc<dyn ScpLookup> {
+    let policy = awsim_iam_policy::parse(scp_doc).expect("SCP parses");
+    Arc::new(StaticScpLookup {
+        policies: vec![policy],
+    })
+}
+
+pub async fn start_server_enforced_with_scp(
+    iam: Arc<awsim_iam::IamService>,
+    scp: Arc<dyn ScpLookup>,
+) -> (ServerHandle, u16) {
+    start_server_with_scp(true, iam, Some(scp)).await
 }
 
 pub async fn start_server_unenforced(
