@@ -98,6 +98,10 @@ pub async fn test_service(
         "glue" => test_glue(endpoint, verbose).await,
         "athena" => test_athena(endpoint, verbose).await,
         "bedrock" => test_bedrock(endpoint, verbose).await,
+        "organizations" => test_organizations(endpoint, verbose).await,
+        "cloudtrail" => test_cloudtrail(endpoint, verbose).await,
+        "eks" => test_eks(endpoint, verbose).await,
+        "firehose" => test_firehose(endpoint, verbose).await,
         _ => {
             // Unknown service — report nothing tested.
             return ServiceResult {
@@ -9211,6 +9215,403 @@ async fn test_bedrock(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     results.push(chk!(
         "ListModelCustomizationJobs",
         client.list_model_customization_jobs().send().await,
+        verbose
+    ));
+
+    results
+}
+
+// ---------------------------------------------------------------------------
+// Organizations
+// ---------------------------------------------------------------------------
+
+async fn test_organizations(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_organizations::Client::new(&config);
+    let mut results = Vec::new();
+
+    results.push(chk!(
+        "CreateOrganization",
+        client.create_organization().feature_set(aws_sdk_organizations::types::OrganizationFeatureSet::All).send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "DescribeOrganization",
+        client.describe_organization().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "CreateAccount",
+        client.create_account().email("conf@example.com").account_name("conf-acct").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListAccounts",
+        client.list_accounts().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListRoots",
+        client.list_roots().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "CreateOrganizationalUnit",
+        client.create_organizational_unit().parent_id("r-0000").name("conf-ou").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListOrganizationalUnitsForParent",
+        client.list_organizational_units_for_parent().parent_id("r-0000").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "CreatePolicy",
+        client
+            .create_policy()
+            .name("conf-policy")
+            .description("conformance")
+            .content("{\"Version\":\"2012-10-17\",\"Statement\":[]}")
+            .r#type(aws_sdk_organizations::types::PolicyType::ServiceControlPolicy)
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListPolicies",
+        client.list_policies().filter(aws_sdk_organizations::types::PolicyType::ServiceControlPolicy).send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListChildren",
+        client
+            .list_children()
+            .parent_id("r-0000")
+            .child_type(aws_sdk_organizations::types::ChildType::OrganizationalUnit)
+            .send()
+            .await,
+        verbose
+    ));
+
+    results
+}
+
+// ---------------------------------------------------------------------------
+// CloudTrail
+// ---------------------------------------------------------------------------
+
+async fn test_cloudtrail(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_cloudtrail::Client::new(&config);
+    let mut results = Vec::new();
+
+    results.push(chk!(
+        "CreateTrail",
+        client.create_trail().name("conf-trail").s3_bucket_name("conf-bucket").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "DescribeTrails",
+        client.describe_trails().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListTrails",
+        client.list_trails().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "GetTrailStatus",
+        client.get_trail_status().name("conf-trail").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "StartLogging",
+        client.start_logging().name("conf-trail").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "StopLogging",
+        client.stop_logging().name("conf-trail").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "UpdateTrail",
+        client.update_trail().name("conf-trail").s3_bucket_name("conf-bucket-2").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "PutEventSelectors",
+        client
+            .put_event_selectors()
+            .trail_name("conf-trail")
+            .event_selectors(
+                aws_sdk_cloudtrail::types::EventSelector::builder()
+                    .read_write_type(aws_sdk_cloudtrail::types::ReadWriteType::All)
+                    .include_management_events(true)
+                    .build(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "GetEventSelectors",
+        client.get_event_selectors().trail_name("conf-trail").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "LookupEvents",
+        client.lookup_events().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "DeleteTrail",
+        client.delete_trail().name("conf-trail").send().await,
+        verbose
+    ));
+
+    results
+}
+
+// ---------------------------------------------------------------------------
+// EKS
+// ---------------------------------------------------------------------------
+
+async fn test_eks(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_eks::Client::new(&config);
+    let mut results = Vec::new();
+
+    results.push(chk!(
+        "CreateCluster",
+        client
+            .create_cluster()
+            .name("conf-cluster")
+            .role_arn("arn:aws:iam::000000000000:role/conf")
+            .resources_vpc_config(
+                aws_sdk_eks::types::VpcConfigRequest::builder()
+                    .subnet_ids("subnet-123")
+                    .build(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "DescribeCluster",
+        client.describe_cluster().name("conf-cluster").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListClusters",
+        client.list_clusters().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "CreateNodegroup",
+        client
+            .create_nodegroup()
+            .cluster_name("conf-cluster")
+            .nodegroup_name("conf-ng")
+            .node_role("arn:aws:iam::000000000000:role/ng")
+            .subnets("subnet-123")
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "DescribeNodegroup",
+        client
+            .describe_nodegroup()
+            .cluster_name("conf-cluster")
+            .nodegroup_name("conf-ng")
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListNodegroups",
+        client.list_nodegroups().cluster_name("conf-cluster").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "CreateFargateProfile",
+        client
+            .create_fargate_profile()
+            .cluster_name("conf-cluster")
+            .fargate_profile_name("conf-fp")
+            .pod_execution_role_arn("arn:aws:iam::000000000000:role/fp")
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "DescribeFargateProfile",
+        client
+            .describe_fargate_profile()
+            .cluster_name("conf-cluster")
+            .fargate_profile_name("conf-fp")
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListFargateProfiles",
+        client.list_fargate_profiles().cluster_name("conf-cluster").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "TagResource",
+        client
+            .tag_resource()
+            .resource_arn("arn:aws:eks:us-east-1:000000000000:cluster/conf-cluster")
+            .tags("env", "conformance")
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListTagsForResource",
+        client
+            .list_tags_for_resource()
+            .resource_arn("arn:aws:eks:us-east-1:000000000000:cluster/conf-cluster")
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "DeleteFargateProfile",
+        client
+            .delete_fargate_profile()
+            .cluster_name("conf-cluster")
+            .fargate_profile_name("conf-fp")
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "DeleteNodegroup",
+        client
+            .delete_nodegroup()
+            .cluster_name("conf-cluster")
+            .nodegroup_name("conf-ng")
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "DeleteCluster",
+        client.delete_cluster().name("conf-cluster").send().await,
+        verbose
+    ));
+
+    results
+}
+
+// ---------------------------------------------------------------------------
+// Firehose
+// ---------------------------------------------------------------------------
+
+async fn test_firehose(endpoint: &str, verbose: bool) -> Vec<OpResult> {
+    let config = make_config(endpoint).await;
+    let client = aws_sdk_firehose::Client::new(&config);
+    let mut results = Vec::new();
+
+    results.push(chk!(
+        "CreateDeliveryStream",
+        client
+            .create_delivery_stream()
+            .delivery_stream_name("conf-stream")
+            .delivery_stream_type(aws_sdk_firehose::types::DeliveryStreamType::DirectPut)
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "DescribeDeliveryStream",
+        client.describe_delivery_stream().delivery_stream_name("conf-stream").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListDeliveryStreams",
+        client.list_delivery_streams().send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "PutRecord",
+        client
+            .put_record()
+            .delivery_stream_name("conf-stream")
+            .record(
+                aws_sdk_firehose::types::Record::builder()
+                    .data(aws_sdk_firehose::primitives::Blob::new(b"hello".to_vec()))
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "PutRecordBatch",
+        client
+            .put_record_batch()
+            .delivery_stream_name("conf-stream")
+            .records(
+                aws_sdk_firehose::types::Record::builder()
+                    .data(aws_sdk_firehose::primitives::Blob::new(b"a".to_vec()))
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "TagDeliveryStream",
+        client
+            .tag_delivery_stream()
+            .delivery_stream_name("conf-stream")
+            .tags(
+                aws_sdk_firehose::types::Tag::builder()
+                    .key("env")
+                    .value("conf")
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "ListTagsForDeliveryStream",
+        client.list_tags_for_delivery_stream().delivery_stream_name("conf-stream").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "UntagDeliveryStream",
+        client
+            .untag_delivery_stream()
+            .delivery_stream_name("conf-stream")
+            .tag_keys("env")
+            .send()
+            .await,
+        verbose
+    ));
+    results.push(chk!(
+        "StartDeliveryStreamEncryption",
+        client.start_delivery_stream_encryption().delivery_stream_name("conf-stream").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "StopDeliveryStreamEncryption",
+        client.stop_delivery_stream_encryption().delivery_stream_name("conf-stream").send().await,
+        verbose
+    ));
+    results.push(chk!(
+        "DeleteDeliveryStream",
+        client.delete_delivery_stream().delivery_stream_name("conf-stream").send().await,
         verbose
     ));
 

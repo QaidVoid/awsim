@@ -45,6 +45,10 @@ awsim-scheduler = { path = "../awsim-scheduler" }
 awsim-comprehend = { path = "../awsim-comprehend" }
 awsim-kendra = { path = "../awsim-kendra" }
 awsim-opensearch = { path = "../awsim-opensearch" }
+awsim-organizations = { path = "../awsim-organizations" }
+awsim-cloudtrail = { path = "../awsim-cloudtrail" }
+awsim-eks = { path = "../awsim-eks" }
+awsim-firehose = { path = "../awsim-firehose" }
 
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
@@ -92,5 +96,9 @@ aws-sdk-appsync = "1"
 aws-sdk-glue = "1"
 aws-sdk-athena = "1"
 aws-sdk-bedrock = "1"
+aws-sdk-organizations = "1"
+aws-sdk-cloudtrail = "1"
+aws-sdk-eks = "1"
+aws-sdk-firehose = "1"
 aws-credential-types = "1"
 aws-types = "1"

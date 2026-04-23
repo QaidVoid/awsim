@@ -200,6 +200,22 @@ fn register_services(
     let kendra = Arc::new(awsim_kendra::KendraService::new());
     state.register(kendra, vec![]);
 
+    let organizations = Arc::new(awsim_organizations::OrganizationsService::new());
+    state.register(organizations, vec![]);
+
+    let cloudtrail = Arc::new(awsim_cloudtrail::CloudTrailService::new());
+    state.register(cloudtrail, vec![]);
+
+    let eks = awsim_eks::EksService::new();
+    let eks_routes = {
+        use awsim_core::ServiceHandler;
+        eks.routes()
+    };
+    state.register(Arc::new(eks), eks_routes);
+
+    let firehose = Arc::new(awsim_firehose::FirehoseService::new());
+    state.register(firehose, vec![]);
+
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
     let apigw_routes = {
         use awsim_core::ServiceHandler;
