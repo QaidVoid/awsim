@@ -24,6 +24,8 @@ pub struct IamState {
     pub virtual_mfa_devices: DashMap<String, VirtualMfaDevice>,
     // Deletion task IDs (for service-linked roles)
     pub deletion_tasks: DashMap<String, String>,
+    /// Login profiles (console passwords), keyed by user name.
+    pub login_profiles: DashMap<String, LoginProfile>,
 }
 
 /// Serializable snapshot of `IamState`.
@@ -252,4 +254,13 @@ pub struct VirtualMfaDevice {
     pub user: Option<String>,
     pub enable_date: Option<String>,
     pub tags: HashMap<String, String>,
+}
+
+/// IAM login profile (console password) for a user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginProfile {
+    pub user_name: String,
+    pub create_date: String,
+    /// Whether the user must reset their password on next sign-in.
+    pub password_reset_required: bool,
 }

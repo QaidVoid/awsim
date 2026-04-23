@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::{
     error::{delete_conflict, entity_already_exists, no_such_entity},
     ids::{new_access_key_id, new_secret_access_key, new_user_id, normalize_path, now_iso8601},
-    state::{AccessKey, IamState, User},
+    state::{AccessKey, IamState, LoginProfile, User},
 };
 
 use super::{opt_str, require_str};
@@ -320,3 +320,97 @@ pub fn list_groups_for_user(state: &IamState, input: &Value) -> Result<Value, Aw
         "IsTruncated": false,
     }))
 }
+
+// ── Login Profile ─────────────────────────────────────────────────────────────
+
+pub fn create_login_profile(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let user_name = require_str(input, "UserName")?;
+    let password_reset_required = input
+        .get("PasswordResetRequired")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // Verify user exists.
+    if !state.users.contains_key(user_name) {
+        return Err(no_such_entity("User", user_name));
+    }
+
+    if state.login_profiles.contains_key(user_name) {
+        return Err(entity_already_exists("LoginProfile", user_name));
+    }
+
+    let profile = LoginProfile {
+        user_name: user_name.to_string(),
+        create_date: now_iso8601(),
+        password_reset_required,
+    };
+
+    let result = json!({
+        "LoginProfile": {
+            "UserName": profile.user_name,
+            "CreateDate": profile.create_date,
+            "PasswordResetRequired": profile.password_reset_required,
+        }
+    });
+
+    state.login_profiles.insert(user_name.to_string(), profile);
+
+    Ok(result)
+}
+
+pub fn get_login_profile(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let user_name = require_str(input, "UserName")?;
+
+    if !state.users.contains_key(user_name) {
+        return Err(no_such_entity("User", user_name));
+    }
+
+    let profile = state
+        .login_profiles
+        .get(user_name)
+        .ok_or_else(|| no_such_entity("LoginProfile", user_name))?;
+
+    Ok(json!({
+        "LoginProfile": {
+            "UserName": profile.user_name,
+            "CreateDate": profile.create_date,
+            "PasswordResetRequired": profile.password_reset_required,
+        }
+    }))
+}
+
+pub fn update_login_profile(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let user_name = require_str(input, "UserName")?;
+
+    if !state.users.contains_key(user_name) {
+        return Err(no_such_entity("User", user_name));
+    }
+
+    let mut profile = state
+        .login_profiles
+        .get_mut(user_name)
+        .ok_or_else(|| no_such_entity("LoginProfile", user_name))?;
+
+    if let Some(reset) = input.get("PasswordResetRequired").and_then(|v| v.as_bool()) {
+        profile.password_reset_required = reset;
+    }
+    // Password itself is not stored (emulator doesn't validate passwords).
+
+    Ok(json!({}))
+}
+
+pub fn delete_login_profile(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let user_name = require_str(input, "UserName")?;
+
+    if !state.users.contains_key(user_name) {
+        return Err(no_such_entity("User", user_name));
+    }
+
+    state
+        .login_profiles
+        .remove(user_name)
+        .ok_or_else(|| no_such_entity("LoginProfile", user_name))?;
+
+    Ok(json!({}))
+}
+

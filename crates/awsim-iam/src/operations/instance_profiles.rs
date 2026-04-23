@@ -149,3 +149,64 @@ pub fn remove_role_from_instance_profile(
 
     Ok(json!({}))
 }
+
+/// ListInstanceProfiles — Return all instance profiles for the account.
+pub fn list_instance_profiles(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let path_prefix = opt_str(input, "PathPrefix").unwrap_or("/");
+
+    let mut profiles: Vec<Value> = state
+        .instance_profiles
+        .iter()
+        .filter(|e| e.value().path.starts_with(path_prefix))
+        .map(|e| ip_to_value(e.value(), state))
+        .collect();
+
+    profiles.sort_by(|a, b| {
+        a.get("InstanceProfileName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .cmp(
+                b.get("InstanceProfileName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            )
+    });
+
+    Ok(json!({
+        "InstanceProfiles": { "member": profiles },
+        "IsTruncated": false
+    }))
+}
+
+/// ListInstanceProfilesForRole — Return all instance profiles referencing the given role.
+pub fn list_instance_profiles_for_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let role_name = require_str(input, "RoleName")?;
+
+    // Verify the role exists.
+    if !state.roles.contains_key(role_name) {
+        return Err(no_such_entity("Role", role_name));
+    }
+
+    let mut profiles: Vec<Value> = state
+        .instance_profiles
+        .iter()
+        .filter(|e| e.value().roles.iter().any(|r| r == role_name))
+        .map(|e| ip_to_value(e.value(), state))
+        .collect();
+
+    profiles.sort_by(|a, b| {
+        a.get("InstanceProfileName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .cmp(
+                b.get("InstanceProfileName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            )
+    });
+
+    Ok(json!({
+        "InstanceProfiles": { "member": profiles },
+        "IsTruncated": false
+    }))
+}

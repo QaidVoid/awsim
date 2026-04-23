@@ -173,6 +173,12 @@ impl ServiceHandler for IamService {
             "GetInstanceProfile" => {
                 operations::instance_profiles::get_instance_profile(&state, &input)
             }
+            "ListInstanceProfiles" => {
+                operations::instance_profiles::list_instance_profiles(&state, &input)
+            }
+            "ListInstanceProfilesForRole" => {
+                operations::instance_profiles::list_instance_profiles_for_role(&state, &input)
+            }
             "AddRoleToInstanceProfile" => {
                 operations::instance_profiles::add_role_to_instance_profile(&state, &input)
             }
@@ -292,6 +298,32 @@ impl ServiceHandler for IamService {
             "ListSSHPublicKeys" => operations::ssh_keys::list_ssh_public_keys(&state, &input),
             "DeleteSSHPublicKey" => operations::ssh_keys::delete_ssh_public_key(&state, &input),
             "UpdateSSHPublicKey" => operations::ssh_keys::update_ssh_public_key(&state, &input),
+
+            // ── Login Profiles ────────────────────────────────────────────────
+            "CreateLoginProfile" => operations::users::create_login_profile(&state, &input),
+            "GetLoginProfile" => operations::users::get_login_profile(&state, &input),
+            "UpdateLoginProfile" => operations::users::update_login_profile(&state, &input),
+            "DeleteLoginProfile" => operations::users::delete_login_profile(&state, &input),
+
+            // ── Misc stubs ────────────────────────────────────────────────────
+            "ListServiceSpecificCredentials" => {
+                operations::misc::list_service_specific_credentials(&state, &input)
+            }
+            "ListSigningCertificates" => {
+                operations::misc::list_signing_certificates(&state, &input)
+            }
+            "SimulateCustomPolicy" => {
+                operations::misc::simulate_custom_policy(&state, &input)
+            }
+            "SimulatePrincipalPolicy" => {
+                operations::misc::simulate_principal_policy(&state, &input)
+            }
+            "GetContextKeysForCustomPolicy" => {
+                operations::misc::get_context_keys_for_custom_policy(&state, &input)
+            }
+            "GetContextKeysForPrincipalPolicy" => {
+                operations::misc::get_context_keys_for_principal_policy(&state, &input)
+            }
 
             // ── Service-Linked Roles ──────────────────────────────────────────
             "CreateServiceLinkedRole" => {

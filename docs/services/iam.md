@@ -131,9 +131,36 @@ curl -s -X POST http://localhost:4566 \
 | `CreateInstanceProfile` | Create an instance profile |
 | `DeleteInstanceProfile` | Delete an instance profile |
 | `GetInstanceProfile` | Get instance profile details |
+| `ListInstanceProfiles` | List all instance profiles; supports `PathPrefix` filter |
+| `ListInstanceProfilesForRole` | List instance profiles associated with a role |
 | `AddRoleToInstanceProfile` | Attach a role to an instance profile |
 | `RemoveRoleFromInstanceProfile` | Detach a role |
 | `TagInstanceProfile` / `UntagInstanceProfile` / `ListInstanceProfileTags` | Tag management |
+
+### Login Profiles (Console Passwords)
+
+| Operation | Description |
+|-----------|-------------|
+| `CreateLoginProfile` | Create a console password for a user. Input: `UserName`, `Password`, optional `PasswordResetRequired` |
+| `GetLoginProfile` | Get login profile metadata (not the password itself) |
+| `UpdateLoginProfile` | Update the password or reset flag |
+| `DeleteLoginProfile` | Remove the console password from a user |
+
+### Policy Simulation
+
+| Operation | Description |
+|-----------|-------------|
+| `SimulateCustomPolicy` | Stub: simulates a policy document against actions; always returns `allowed` |
+| `SimulatePrincipalPolicy` | Stub: simulates a principal's effective policies; always returns `allowed` |
+| `GetContextKeysForCustomPolicy` | Stub: returns empty context key list for a policy document |
+| `GetContextKeysForPrincipalPolicy` | Stub: returns empty context key list for a principal |
+
+### Misc Stubs
+
+| Operation | Description |
+|-----------|-------------|
+| `ListServiceSpecificCredentials` | Returns empty list (CodeCommit / Keyspaces credentials not tracked) |
+| `ListSigningCertificates` | Returns empty list (X.509 signing certificates not tracked) |
 
 ### Account
 

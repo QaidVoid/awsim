@@ -3,6 +3,7 @@ pub mod certificates;
 pub mod credential_report;
 pub mod groups;
 pub mod instance_profiles;
+pub mod misc;
 pub mod mfa;
 pub mod oidc;
 pub mod policies;
