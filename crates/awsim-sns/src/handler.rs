@@ -2,7 +2,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use crate::operations::{publish, subscriptions, tags, topics};
+use crate::operations::{publish, sms, subscriptions, tags, topics};
 use crate::state::{SnsState, SnsStateSnapshot};
 
 /// The SNS service handler.
@@ -75,6 +75,16 @@ impl ServiceHandler for SnsService {
             // Publishing
             "Publish" => publish::publish(&state, &input, ctx),
             "PublishBatch" => publish::publish_batch(&state, &input, ctx),
+
+            // SMS
+            "CheckIfPhoneNumberIsOptedOut" => {
+                sms::check_if_phone_number_is_opted_out(&state, &input, ctx)
+            }
+            "ListPhoneNumbersOptedOut" => {
+                sms::list_phone_numbers_opted_out(&state, &input, ctx)
+            }
+            "GetSMSAttributes" => sms::get_sms_attributes(&state, &input, ctx),
+            "SetSMSAttributes" => sms::set_sms_attributes(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

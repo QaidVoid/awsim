@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::RwLock;
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -130,6 +131,8 @@ pub struct SnsState {
     pub topics: DashMap<String, Topic>,
     /// SubscriptionArn → Subscription
     pub subscriptions: DashMap<String, Subscription>,
+    /// SMS attributes (account-level), protected by an RwLock.
+    pub sms_attributes: RwLock<HashMap<String, String>>,
 }
 
 impl SnsState {
