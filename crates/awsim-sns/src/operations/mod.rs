@@ -1,3 +1,5 @@
+pub mod permissions;
+pub mod platform;
 pub mod publish;
 pub mod sms;
 pub mod subscriptions;

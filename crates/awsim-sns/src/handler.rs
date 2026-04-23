@@ -2,7 +2,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use crate::operations::{publish, sms, subscriptions, tags, topics};
+use crate::operations::{permissions, platform, publish, sms, subscriptions, tags, topics};
 use crate::state::{SnsState, SnsStateSnapshot};
 
 /// The SNS service handler.
@@ -85,6 +85,28 @@ impl ServiceHandler for SnsService {
             }
             "GetSMSAttributes" => sms::get_sms_attributes(&state, &input, ctx),
             "SetSMSAttributes" => sms::set_sms_attributes(&state, &input, ctx),
+
+            // Platform applications
+            "CreatePlatformApplication" => platform::create_platform_application(&state, &input, ctx),
+            "DeletePlatformApplication" => platform::delete_platform_application(&state, &input, ctx),
+            "ListPlatformApplications" => platform::list_platform_applications(&state, &input, ctx),
+            "GetPlatformApplicationAttributes" => platform::get_platform_application_attributes(&state, &input, ctx),
+            "SetPlatformApplicationAttributes" => platform::set_platform_application_attributes(&state, &input, ctx),
+
+            // Push endpoints
+            "CreatePlatformEndpoint" => platform::create_platform_endpoint(&state, &input, ctx),
+            "DeleteEndpoint" => platform::delete_endpoint(&state, &input, ctx),
+            "ListEndpointsByPlatformApplication" => platform::list_endpoints_by_platform_application(&state, &input, ctx),
+            "GetEndpointAttributes" => platform::get_endpoint_attributes(&state, &input, ctx),
+            "SetEndpointAttributes" => platform::set_endpoint_attributes(&state, &input, ctx),
+
+            // Phone numbers
+            "OptInPhoneNumber" => platform::opt_in_phone_number(&state, &input, ctx),
+            "ListOriginationNumbers" => platform::list_origination_numbers(&state, &input, ctx),
+
+            // Topic permissions
+            "AddPermission" => permissions::add_permission(&state, &input, ctx),
+            "RemovePermission" => permissions::remove_permission(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

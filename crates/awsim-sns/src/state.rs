@@ -124,6 +124,23 @@ fn default_topic_attributes(is_fifo: bool, arn: &str) -> HashMap<String, String>
     m
 }
 
+/// A mobile push platform application.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformApplication {
+    pub arn: String,
+    pub platform: String,
+    pub attributes: HashMap<String, String>,
+}
+
+/// A push endpoint (device token) registered to a platform application.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformEndpoint {
+    pub arn: String,
+    pub platform_application_arn: String,
+    pub token: String,
+    pub attributes: HashMap<String, String>,
+}
+
 /// Per-account/region SNS state.
 #[derive(Debug, Default)]
 pub struct SnsState {
@@ -133,6 +150,12 @@ pub struct SnsState {
     pub subscriptions: DashMap<String, Subscription>,
     /// SMS attributes (account-level), protected by an RwLock.
     pub sms_attributes: RwLock<HashMap<String, String>>,
+    /// PlatformApplicationArn → PlatformApplication
+    pub platform_applications: DashMap<String, PlatformApplication>,
+    /// EndpointArn → PlatformEndpoint
+    pub platform_endpoints: DashMap<String, PlatformEndpoint>,
+    /// Opted-in phone numbers (account-level).
+    pub opted_in_numbers: RwLock<Vec<String>>,
 }
 
 impl SnsState {
