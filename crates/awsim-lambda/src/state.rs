@@ -9,6 +9,18 @@ pub struct LambdaState {
     pub layers: DashMap<String, Vec<LayerVersion>>,
     /// function_name → FunctionUrlConfig
     pub url_configs: DashMap<String, FunctionUrlConfig>,
+    /// function_name[:qualifier] → EventInvokeConfig
+    pub event_invoke_configs: DashMap<String, EventInvokeConfig>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EventInvokeConfig {
+    pub function_arn: String,
+    pub maximum_retry_attempts: Option<i32>,
+    pub maximum_event_age_in_seconds: Option<i32>,
+    pub destination_on_success: Option<String>,
+    pub destination_on_failure: Option<String>,
+    pub last_modified: f64,
 }
 
 #[derive(Debug, Clone)]

@@ -267,6 +267,37 @@ impl ServiceHandler for LambdaService {
                 operation: "GetAccountSettings",
                 required_query_param: None,
             },
+            // Event Invoke Configs
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/2019-09-25/functions/{FunctionName}/event-invoke-config",
+                operation: "PutFunctionEventInvokeConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2019-09-25/functions/{FunctionName}/event-invoke-config",
+                operation: "GetFunctionEventInvokeConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2019-09-25/functions/{FunctionName}/event-invoke-config",
+                operation: "DeleteFunctionEventInvokeConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2019-09-25/functions/{FunctionName}/event-invoke-config",
+                operation: "UpdateFunctionEventInvokeConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2019-09-25/functions/{FunctionName}/event-invoke-config/list",
+                operation: "ListFunctionEventInvokeConfigs",
+                required_query_param: None,
+            },
         ]
     }
 
@@ -381,6 +412,33 @@ impl ServiceHandler for LambdaService {
                 operations::permissions::get_account_settings(&state, &input, ctx)
             }
 
+            // Event Invoke Configs
+            "PutFunctionEventInvokeConfig" => {
+                operations::event_invoke_configs::put_function_event_invoke_config(
+                    &state, &input, ctx,
+                )
+            }
+            "GetFunctionEventInvokeConfig" => {
+                operations::event_invoke_configs::get_function_event_invoke_config(
+                    &state, &input, ctx,
+                )
+            }
+            "UpdateFunctionEventInvokeConfig" => {
+                operations::event_invoke_configs::update_function_event_invoke_config(
+                    &state, &input, ctx,
+                )
+            }
+            "DeleteFunctionEventInvokeConfig" => {
+                operations::event_invoke_configs::delete_function_event_invoke_config(
+                    &state, &input, ctx,
+                )
+            }
+            "ListFunctionEventInvokeConfigs" => {
+                operations::event_invoke_configs::list_function_event_invoke_configs(
+                    &state, &input, ctx,
+                )
+            }
+
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
@@ -400,7 +458,10 @@ impl ServiceHandler for LambdaService {
             | "DeleteFunctionUrlConfig" | "ListFunctionUrlConfigs" | "UpdateFunctionUrlConfig"
             | "TagResource" | "UntagResource" | "ListTags"
             | "GetPolicy" | "AddPermission" | "RemovePermission"
-            | "GetAccountSettings" => Some(format!("lambda:{operation}")),
+            | "GetAccountSettings"
+            | "PutFunctionEventInvokeConfig" | "GetFunctionEventInvokeConfig"
+            | "UpdateFunctionEventInvokeConfig" | "DeleteFunctionEventInvokeConfig"
+            | "ListFunctionEventInvokeConfigs" => Some(format!("lambda:{operation}")),
             _ => None,
         }
     }

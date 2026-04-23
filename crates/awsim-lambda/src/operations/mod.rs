@@ -1,4 +1,5 @@
 pub mod aliases;
+pub mod event_invoke_configs;
 pub mod event_source_mappings;
 pub mod functions;
 pub mod invocations;
