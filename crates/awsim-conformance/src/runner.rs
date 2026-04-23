@@ -636,6 +636,96 @@ async fn test_dynamodb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
+    // UpdateContinuousBackups
+    results.push(chk!(
+        "UpdateContinuousBackups",
+        client
+            .update_continuous_backups()
+            .table_name("conformance-test")
+            .point_in_time_recovery_specification(
+                aws_sdk_dynamodb::types::PointInTimeRecoverySpecification::builder()
+                    .point_in_time_recovery_enabled(true)
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    // CreateBackup + DescribeBackup + RestoreTableFromBackup
+    let backup_resp = client
+        .create_backup()
+        .table_name("conformance-test")
+        .backup_name("conformance-backup-1")
+        .send()
+        .await;
+    let backup_arn = backup_resp
+        .as_ref()
+        .ok()
+        .and_then(|r| r.backup_details().map(|d| d.backup_arn().to_string()));
+    results.push(chk!("CreateBackup", backup_resp, verbose));
+
+    if let Some(arn) = backup_arn {
+        results.push(chk!(
+            "DescribeBackup",
+            client.describe_backup().backup_arn(&arn).send().await,
+            verbose
+        ));
+
+        results.push(chk!(
+            "RestoreTableFromBackup",
+            client
+                .restore_table_from_backup()
+                .target_table_name("conformance-restored")
+                .backup_arn(&arn)
+                .send()
+                .await,
+            verbose
+        ));
+
+        let _ = client
+            .delete_table()
+            .table_name("conformance-restored")
+            .send()
+            .await;
+    }
+
+    // EnableKinesisStreamingDestination
+    results.push(chk!(
+        "EnableKinesisStreamingDestination",
+        client
+            .enable_kinesis_streaming_destination()
+            .table_name("conformance-test")
+            .stream_arn("arn:aws:kinesis:us-east-1:000000000000:stream/conformance-stream")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DescribeKinesisStreamingDestination
+    results.push(chk!(
+        "DescribeKinesisStreamingDestination",
+        client
+            .describe_kinesis_streaming_destination()
+            .table_name("conformance-test")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DisableKinesisStreamingDestination
+    results.push(chk!(
+        "DisableKinesisStreamingDestination",
+        client
+            .disable_kinesis_streaming_destination()
+            .table_name("conformance-test")
+            .stream_arn("arn:aws:kinesis:us-east-1:000000000000:stream/conformance-stream")
+            .send()
+            .await,
+        verbose
+    ));
+
     // DeleteTable (cleanup)
     results.push(chk!(
         "DeleteTable",
@@ -1488,6 +1578,42 @@ async fn test_s3(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         }
     }
 
+    // ListObjects (v1)
+    results.push(chk!(
+        "ListObjects",
+        client
+            .list_objects()
+            .bucket("conformance-bucket")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListObjectVersions
+    results.push(chk!(
+        "ListObjectVersions",
+        client
+            .list_object_versions()
+            .bucket("conformance-bucket")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetObjectAttributes
+    results.push(chk!(
+        "GetObjectAttributes",
+        client
+            .get_object_attributes()
+            .bucket("conformance-bucket")
+            .key("test-object.txt")
+            .object_attributes(aws_sdk_s3::types::ObjectAttributes::Etag)
+            .object_attributes(aws_sdk_s3::types::ObjectAttributes::ObjectSize)
+            .send()
+            .await,
+        verbose
+    ));
+
     // DeleteObject
     results.push(chk!(
         "DeleteObject",
@@ -1755,6 +1881,58 @@ async fn test_sqs(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             .untag_queue()
             .queue_url(&queue_url)
             .tag_keys("env")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListDeadLetterSourceQueues
+    results.push(chk!(
+        "ListDeadLetterSourceQueues",
+        client
+            .list_dead_letter_source_queues()
+            .queue_url(&queue_url)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListMessageMoveTasks
+    let dlq_arn = format!(
+        "arn:aws:sqs:us-east-1:000000000000:{}",
+        "conformance-queue"
+    );
+    results.push(chk!(
+        "ListMessageMoveTasks",
+        client
+            .list_message_move_tasks()
+            .source_arn(&dlq_arn)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // AddPermission
+    results.push(chk!(
+        "AddPermission",
+        client
+            .add_permission()
+            .queue_url(&queue_url)
+            .label("conformance-perm")
+            .aws_account_ids("000000000000")
+            .actions("SendMessage")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // RemovePermission
+    results.push(chk!(
+        "RemovePermission",
+        client
+            .remove_permission()
+            .queue_url(&queue_url)
+            .label("conformance-perm")
             .send()
             .await,
         verbose
@@ -2173,6 +2351,44 @@ async fn test_sns(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             results.push(OpResult::Skipped(op.to_string()));
         }
     }
+
+    // GetSMSSandboxAccountStatus
+    results.push(chk!(
+        "GetSMSSandboxAccountStatus",
+        client.get_sms_sandbox_account_status().send().await,
+        verbose
+    ));
+
+    // ListSMSSandboxPhoneNumbers
+    results.push(chk!(
+        "ListSMSSandboxPhoneNumbers",
+        client.list_sms_sandbox_phone_numbers().send().await,
+        verbose
+    ));
+
+    // PutDataProtectionPolicy
+    let dp_policy = r#"{"Name":"conformance","Version":"2021-06-01","Statement":[]}"#;
+    results.push(chk!(
+        "PutDataProtectionPolicy",
+        client
+            .put_data_protection_policy()
+            .resource_arn(&topic_arn)
+            .data_protection_policy(dp_policy)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetDataProtectionPolicy
+    results.push(chk!(
+        "GetDataProtectionPolicy",
+        client
+            .get_data_protection_policy()
+            .resource_arn(&topic_arn)
+            .send()
+            .await,
+        verbose
+    ));
 
     // DeleteTopic
     results.push(chk!(
@@ -3478,6 +3694,49 @@ async fn test_kms(endpoint: &str, verbose: bool) -> Vec<OpResult> {
                 .await,
             verbose
         ));
+
+        // RotateKeyOnDemand
+        results.push(chk!(
+            "RotateKeyOnDemand",
+            client.rotate_key_on_demand().key_id(skid).send().await,
+            verbose
+        ));
+
+        // ListKeyRotations
+        results.push(chk!(
+            "ListKeyRotations",
+            client.list_key_rotations().key_id(skid).send().await,
+            verbose
+        ));
+
+        // GenerateMac
+        let mac_r = client
+            .generate_mac()
+            .key_id(skid)
+            .message(aws_sdk_kms::primitives::Blob::new(b"mac me".to_vec()))
+            .mac_algorithm(aws_sdk_kms::types::MacAlgorithmSpec::HmacSha256)
+            .send()
+            .await;
+        let mac_value = mac_r.as_ref().ok().and_then(|r| r.mac.clone());
+        results.push(chk!("GenerateMac", mac_r, verbose));
+
+        // VerifyMac
+        if let Some(mac) = mac_value {
+            results.push(chk!(
+                "VerifyMac",
+                client
+                    .verify_mac()
+                    .key_id(skid)
+                    .message(aws_sdk_kms::primitives::Blob::new(b"mac me".to_vec()))
+                    .mac_algorithm(aws_sdk_kms::types::MacAlgorithmSpec::HmacSha256)
+                    .mac(mac)
+                    .send()
+                    .await,
+                verbose
+            ));
+        } else {
+            results.push(OpResult::Skipped("VerifyMac".to_string()));
+        }
     } else {
         for op in &[
             "GenerateDataKeyPair",
@@ -3667,6 +3926,33 @@ async fn test_secretsmanager(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             verbose
         ));
 
+        // PutResourcePolicy
+        let res_policy = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000000:root"},"Action":"secretsmanager:GetSecretValue","Resource":"*"}]}"#;
+        results.push(chk!(
+            "PutResourcePolicy",
+            client
+                .put_resource_policy()
+                .secret_id(arn)
+                .resource_policy(res_policy)
+                .send()
+                .await,
+            verbose
+        ));
+
+        // GetResourcePolicy
+        results.push(chk!(
+            "GetResourcePolicy",
+            client.get_resource_policy().secret_id(arn).send().await,
+            verbose
+        ));
+
+        // DeleteResourcePolicy
+        results.push(chk!(
+            "DeleteResourcePolicy",
+            client.delete_resource_policy().secret_id(arn).send().await,
+            verbose
+        ));
+
         // Final hard delete for cleanup
         let _ = client
             .delete_secret()
@@ -3688,6 +3974,9 @@ async fn test_secretsmanager(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             "ValidateResourcePolicy",
             "ListSecretVersionIds",
             "BatchGetSecretValue",
+            "PutResourcePolicy",
+            "GetResourcePolicy",
+            "DeleteResourcePolicy",
         ] {
             results.push(OpResult::Skipped(op.to_string()));
         }
@@ -4970,6 +5259,53 @@ async fn test_kinesis(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
+    // DescribeLimits
+    results.push(chk!(
+        "DescribeLimits",
+        client.describe_limits().send().await,
+        verbose
+    ));
+
+    // PutResourcePolicy
+    results.push(chk!(
+        "PutResourcePolicy",
+        client
+            .put_resource_policy()
+            .resource_arn(&stream_arn)
+            .policy(r#"{"Version":"2012-10-17","Statement":[]}"#)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetResourcePolicy
+    results.push(chk!(
+        "GetResourcePolicy",
+        client
+            .get_resource_policy()
+            .resource_arn(&stream_arn)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // UpdateStreamMode
+    results.push(chk!(
+        "UpdateStreamMode",
+        client
+            .update_stream_mode()
+            .stream_arn(&stream_arn)
+            .stream_mode_details(
+                aws_sdk_kinesis::types::StreamModeDetails::builder()
+                    .stream_mode(aws_sdk_kinesis::types::StreamMode::OnDemand)
+                    .build()
+                    .unwrap()
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
     // DeleteStream
     results.push(chk!(
         "DeleteStream",
@@ -5716,6 +6052,43 @@ async fn test_cognito_identity(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             verbose
         ));
 
+        // ListIdentities
+        results.push(chk!(
+            "ListIdentities",
+            client
+                .list_identities()
+                .identity_pool_id(pid)
+                .max_results(10)
+                .send()
+                .await,
+            verbose
+        ));
+
+        // SetPrincipalTagAttributeMap
+        results.push(chk!(
+            "SetPrincipalTagAttributeMap",
+            client
+                .set_principal_tag_attribute_map()
+                .identity_pool_id(pid)
+                .identity_provider_name("graph.facebook.com")
+                .use_defaults(true)
+                .send()
+                .await,
+            verbose
+        ));
+
+        // GetPrincipalTagAttributeMap
+        results.push(chk!(
+            "GetPrincipalTagAttributeMap",
+            client
+                .get_principal_tag_attribute_map()
+                .identity_pool_id(pid)
+                .identity_provider_name("graph.facebook.com")
+                .send()
+                .await,
+            verbose
+        ));
+
         // DeleteIdentityPool
         results.push(chk!(
             "DeleteIdentityPool",
@@ -6407,6 +6780,44 @@ async fn test_ecr(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             .layer_digest("sha256:b5b2b2c507a0944348e0303114d8d93aaaa081732b86451d9bce1f432a537bc7")
             .send()
             .await,
+        verbose
+    ));
+
+    // PutImageTagMutability
+    results.push(chk!(
+        "PutImageTagMutability",
+        client
+            .put_image_tag_mutability()
+            .repository_name("conformance-repo")
+            .image_tag_mutability(aws_sdk_ecr::types::ImageTagMutability::Immutable)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DescribeRegistry
+    results.push(chk!(
+        "DescribeRegistry",
+        client.describe_registry().send().await,
+        verbose
+    ));
+
+    // CreatePullThroughCacheRule
+    results.push(chk!(
+        "CreatePullThroughCacheRule",
+        client
+            .create_pull_through_cache_rule()
+            .ecr_repository_prefix("dockerhub")
+            .upstream_registry_url("registry-1.docker.io")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // DescribePullThroughCacheRules
+    results.push(chk!(
+        "DescribePullThroughCacheRules",
+        client.describe_pull_through_cache_rules().send().await,
         verbose
     ));
 
@@ -7424,6 +7835,31 @@ async fn test_route53(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
+    // GetHealthCheck
+    if let Some(ref hcid) = health_check_id {
+        results.push(chk!(
+            "GetHealthCheck",
+            client.get_health_check().health_check_id(hcid).send().await,
+            verbose
+        ));
+    } else {
+        results.push(OpResult::Skipped("GetHealthCheck".to_string()));
+    }
+
+    // ListGeoLocations
+    results.push(chk!(
+        "ListGeoLocations",
+        client.list_geo_locations().send().await,
+        verbose
+    ));
+
+    // ListReusableDelegationSets
+    results.push(chk!(
+        "ListReusableDelegationSets",
+        client.list_reusable_delegation_sets().send().await,
+        verbose
+    ));
+
     // DeleteHealthCheck
     if let Some(ref hcid) = health_check_id {
         results.push(chk!(
@@ -8057,6 +8493,86 @@ async fn test_scheduler(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         client
             .get_schedule()
             .name("conformance-schedule")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // UpdateSchedule
+    results.push(chk!(
+        "UpdateSchedule",
+        client
+            .update_schedule()
+            .name("conformance-schedule")
+            .schedule_expression("rate(5 minutes)")
+            .flexible_time_window(
+                aws_sdk_scheduler::types::FlexibleTimeWindow::builder()
+                    .mode(aws_sdk_scheduler::types::FlexibleTimeWindowMode::Off)
+                    .build()
+                    .unwrap(),
+            )
+            .target(
+                aws_sdk_scheduler::types::Target::builder()
+                    .arn("arn:aws:lambda:us-east-1:000000000000:function:conformance")
+                    .role_arn("arn:aws:iam::000000000000:role/scheduler-role")
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    // GetScheduleGroup
+    results.push(chk!(
+        "GetScheduleGroup",
+        client
+            .get_schedule_group()
+            .name("conformance-group")
+            .send()
+            .await,
+        verbose
+    ));
+
+    // TagResource (on schedule)
+    let sched_arn = format!(
+        "arn:aws:scheduler:us-east-1:000000000000:schedule/default/conformance-schedule"
+    );
+    results.push(chk!(
+        "TagResource",
+        client
+            .tag_resource()
+            .resource_arn(&sched_arn)
+            .tags(
+                aws_sdk_scheduler::types::Tag::builder()
+                    .key("env")
+                    .value("conformance")
+                    .build()
+                    .unwrap(),
+            )
+            .send()
+            .await,
+        verbose
+    ));
+
+    // ListTagsForResource
+    results.push(chk!(
+        "ListTagsForResource",
+        client
+            .list_tags_for_resource()
+            .resource_arn(&sched_arn)
+            .send()
+            .await,
+        verbose
+    ));
+
+    // UntagResource
+    results.push(chk!(
+        "UntagResource",
+        client
+            .untag_resource()
+            .resource_arn(&sched_arn)
+            .tag_keys("env")
             .send()
             .await,
         verbose
