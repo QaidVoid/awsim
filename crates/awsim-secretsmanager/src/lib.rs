@@ -78,6 +78,12 @@ impl ServiceHandler for SecretsManagerService {
             "StopReplicationToReplica" => {
                 operations::secrets::stop_replication_to_replica(&state, &input, ctx)
             }
+            "ListSecretVersionIds" => {
+                operations::secrets::list_secret_version_ids(&state, &input, ctx)
+            }
+            "BatchGetSecretValue" => {
+                operations::secrets::batch_get_secret_value(&state, &input, ctx)
+            }
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
@@ -441,5 +447,64 @@ mod tests {
         let ctx = ctx();
         let err = block_on(svc.handle("FooBar", json!({}), &ctx)).unwrap_err();
         assert_eq!(err.code, "UnknownOperationException");
+    }
+
+    #[test]
+    fn test_list_secret_version_ids() {
+        let svc = SecretsManagerService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateSecret",
+            json!({ "Name": "versioned", "SecretString": "v1" }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "PutSecretValue",
+            json!({ "SecretId": "versioned", "SecretString": "v2" }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let result = block_on(svc.handle(
+            "ListSecretVersionIds",
+            json!({ "SecretId": "versioned" }),
+            &ctx,
+        ))
+        .unwrap();
+        let versions = result["Versions"].as_array().unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(result["Name"].as_str().unwrap(), "versioned");
+    }
+
+    #[test]
+    fn test_batch_get_secret_value() {
+        let svc = SecretsManagerService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateSecret",
+            json!({ "Name": "s1", "SecretString": "val1" }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "CreateSecret",
+            json!({ "Name": "s2", "SecretString": "val2" }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let result = block_on(svc.handle(
+            "BatchGetSecretValue",
+            json!({ "SecretIdList": ["s1", "s2", "nonexistent"] }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let values = result["SecretValues"].as_array().unwrap();
+        let errors = result["Errors"].as_array().unwrap();
+        assert_eq!(values.len(), 2);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0]["ErrorCode"].as_str().unwrap(), "ResourceNotFoundException");
     }
 }

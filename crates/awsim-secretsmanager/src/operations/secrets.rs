@@ -801,3 +801,132 @@ pub fn stop_replication_to_replica(
 
     Ok(json!({ "ARN": arn }))
 }
+
+// ---------------------------------------------------------------------------
+// ListSecretVersionIds
+// ---------------------------------------------------------------------------
+
+pub fn list_secret_version_ids(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id = input["SecretId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    let include_deprecated = input["IncludeDeprecated"].as_bool().unwrap_or(false);
+
+    let name = resolve_name(state, secret_id)?;
+    let secret = state
+        .secrets
+        .get(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
+
+    let versions: Vec<Value> = secret
+        .versions
+        .iter()
+        .filter(|(_, v)| include_deprecated || !v.stages.is_empty())
+        .map(|(vid, v)| {
+            let stages: Vec<Value> = v.stages.iter().map(|s| json!(s)).collect();
+            json!({
+                "VersionId": vid,
+                "VersionStages": stages,
+                "CreatedDate": v.created_date,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "ARN": secret.arn,
+        "Name": secret.name,
+        "Versions": versions,
+        "Truncated": false,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// BatchGetSecretValue
+// ---------------------------------------------------------------------------
+
+pub fn batch_get_secret_value(
+    state: &SecretsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let secret_id_list = input["SecretIdList"].as_array().cloned().unwrap_or_default();
+
+    let mut secret_values: Vec<Value> = Vec::new();
+    let mut errors: Vec<Value> = Vec::new();
+
+    for id_val in &secret_id_list {
+        let secret_id = match id_val.as_str() {
+            Some(s) => s,
+            None => continue,
+        };
+
+        match resolve_name(state, secret_id) {
+            Ok(name) => {
+                let secret = match state.secrets.get(&name) {
+                    Some(s) => s,
+                    None => {
+                        errors.push(json!({
+                            "SecretId": secret_id,
+                            "ErrorCode": "ResourceNotFoundException",
+                            "Message": format!("Secrets Manager can't find the specified secret: {secret_id}"),
+                        }));
+                        continue;
+                    }
+                };
+
+                if secret.deleted_date.is_some() {
+                    errors.push(json!({
+                        "SecretId": secret_id,
+                        "ErrorCode": "InvalidRequestException",
+                        "Message": "Secret is marked for deletion",
+                    }));
+                    continue;
+                }
+
+                let version = match secret.versions.get(&secret.current_version_id) {
+                    Some(v) => v,
+                    None => {
+                        errors.push(json!({
+                            "SecretId": secret_id,
+                            "ErrorCode": "ResourceNotFoundException",
+                            "Message": "No current version found",
+                        }));
+                        continue;
+                    }
+                };
+
+                let mut entry = json!({
+                    "ARN": secret.arn,
+                    "Name": secret.name,
+                    "VersionId": version.version_id,
+                    "VersionStages": version.stages,
+                    "CreatedDate": version.created_date,
+                });
+                if let Some(ref ss) = version.secret_string {
+                    entry["SecretString"] = json!(ss);
+                }
+                if let Some(ref sb) = version.secret_binary {
+                    entry["SecretBinary"] = json!(sb);
+                }
+                secret_values.push(entry);
+            }
+            Err(_) => {
+                errors.push(json!({
+                    "SecretId": secret_id,
+                    "ErrorCode": "ResourceNotFoundException",
+                    "Message": format!("Secrets Manager can't find the specified secret: {secret_id}"),
+                }));
+            }
+        }
+    }
+
+    Ok(json!({
+        "SecretValues": secret_values,
+        "Errors": errors,
+    }))
+}
