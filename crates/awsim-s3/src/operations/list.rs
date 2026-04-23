@@ -162,6 +162,7 @@ pub fn delete_objects(state: &S3State, input: &Value) -> Result<Value, AwsError>
     }
 
     Ok(json!({
+        "__xml_root": "DeleteResult",
         "Deleted": deleted,
         "Error": errors,
     }))

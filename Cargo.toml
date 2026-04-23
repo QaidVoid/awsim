@@ -39,6 +39,7 @@ members = [
     "crates/awsim-comprehend",
     "crates/awsim-kendra",
     "crates/awsim-opensearch",
+    "crates/awsim-conformance",
 ]
 
 [workspace.package]

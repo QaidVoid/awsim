@@ -1,0 +1,80 @@
+[package]
+name = "awsim-conformance"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "awsim-conformance"
+path = "src/main.rs"
+
+[dependencies]
+awsim-core = { path = "../awsim-core" }
+awsim-apigateway = { path = "../awsim-apigateway" }
+awsim-appsync = { path = "../awsim-appsync" }
+awsim-athena = { path = "../awsim-athena" }
+awsim-bedrock = { path = "../awsim-bedrock" }
+awsim-cloudformation = { path = "../awsim-cloudformation" }
+awsim-cloudfront = { path = "../awsim-cloudfront" }
+awsim-cloudwatch-logs = { path = "../awsim-cloudwatch-logs" }
+awsim-cloudwatch-metrics = { path = "../awsim-cloudwatch-metrics" }
+awsim-cognito = { path = "../awsim-cognito" }
+awsim-dynamodb = { path = "../awsim-dynamodb" }
+awsim-ec2 = { path = "../awsim-ec2" }
+awsim-ecr = { path = "../awsim-ecr" }
+awsim-ecs = { path = "../awsim-ecs" }
+awsim-elb = { path = "../awsim-elb" }
+awsim-eventbridge = { path = "../awsim-eventbridge" }
+awsim-glue = { path = "../awsim-glue" }
+awsim-iam = { path = "../awsim-iam" }
+awsim-kinesis = { path = "../awsim-kinesis" }
+awsim-kms = { path = "../awsim-kms" }
+awsim-lambda = { path = "../awsim-lambda" }
+awsim-rds = { path = "../awsim-rds" }
+awsim-route53 = { path = "../awsim-route53" }
+awsim-s3 = { path = "../awsim-s3" }
+awsim-secretsmanager = { path = "../awsim-secretsmanager" }
+awsim-ses = { path = "../awsim-ses" }
+awsim-sns = { path = "../awsim-sns" }
+awsim-sqs = { path = "../awsim-sqs" }
+awsim-ssm = { path = "../awsim-ssm" }
+awsim-sts = { path = "../awsim-sts" }
+awsim-stepfunctions = { path = "../awsim-stepfunctions" }
+awsim-acm = { path = "../awsim-acm" }
+awsim-waf = { path = "../awsim-waf" }
+awsim-scheduler = { path = "../awsim-scheduler" }
+awsim-comprehend = { path = "../awsim-comprehend" }
+awsim-kendra = { path = "../awsim-kendra" }
+awsim-opensearch = { path = "../awsim-opensearch" }
+
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+dashmap = "6"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+bytes = "1"
+zip = "2"
+
+# AWS SDK crates for conformance testing
+aws-config = "1"
+aws-sdk-s3 = "1"
+aws-sdk-sqs = "1"
+aws-sdk-dynamodb = "1"
+aws-sdk-sns = "1"
+aws-sdk-iam = "1"
+aws-sdk-sts = "1"
+aws-sdk-lambda = "1"
+aws-sdk-kms = "1"
+aws-sdk-secretsmanager = "1"
+aws-sdk-ssm = "1"
+aws-sdk-kinesis = "1"
+aws-sdk-cognitoidentityprovider = "1"
+aws-sdk-cognitoidentity = "1"
+aws-sdk-ecs = "1"
+aws-sdk-ecr = "1"
+aws-credential-types = "1"
+aws-types = "1"

@@ -240,10 +240,106 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-cognitoidentity"
+version = "1.99.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "585f767e62a87d0c98d7e895b96e469413291ce57c45a0053d68a53318cb7e0c"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-cognitoidentityprovider"
+version = "1.116.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "899b3d6db855b2ef0180aec775ae4d234bd5c0d8774a8695ba4894c7c00ed2f8"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-dynamodb"
 version = "1.111.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc418346e3cb248c7d59e642acbcb06488b7c7cd2ba6ebc79e8003f618c60099"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-ecr"
+version = "1.115.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b97059a7e76b122096f333cf06cf109bfe8e763ee04ced2315f68ee2a6e0ed0"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-ecs"
+version = "1.124.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e28ffb1fa2097067108e6a0a6dd92cf9075391b50c709b268ef5f42ae0642a0"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -281,6 +377,31 @@ dependencies = [
  "aws-smithy-types",
  "aws-smithy-xml",
  "aws-types",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-kinesis"
+version = "1.104.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77dde56b538e97f5d4a17db0dd401a560c148535bc35e56fa8252723b211caaf"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-eventstream",
+ "aws-smithy-http 0.63.6",
+ "aws-smithy-json 0.62.5",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
  "fastrand",
  "http 0.2.12",
  "http 1.4.0",
@@ -1042,6 +1163,79 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+]
+
+[[package]]
+name = "awsim-conformance"
+version = "0.1.0"
+dependencies = [
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-cognitoidentity",
+ "aws-sdk-cognitoidentityprovider",
+ "aws-sdk-dynamodb",
+ "aws-sdk-ecr",
+ "aws-sdk-ecs",
+ "aws-sdk-iam",
+ "aws-sdk-kinesis",
+ "aws-sdk-kms",
+ "aws-sdk-lambda",
+ "aws-sdk-s3",
+ "aws-sdk-secretsmanager",
+ "aws-sdk-sns",
+ "aws-sdk-sqs",
+ "aws-sdk-ssm",
+ "aws-sdk-sts",
+ "aws-types",
+ "awsim-acm",
+ "awsim-apigateway",
+ "awsim-appsync",
+ "awsim-athena",
+ "awsim-bedrock",
+ "awsim-cloudformation",
+ "awsim-cloudfront",
+ "awsim-cloudwatch-logs",
+ "awsim-cloudwatch-metrics",
+ "awsim-cognito",
+ "awsim-comprehend",
+ "awsim-core",
+ "awsim-dynamodb",
+ "awsim-ec2",
+ "awsim-ecr",
+ "awsim-ecs",
+ "awsim-elb",
+ "awsim-eventbridge",
+ "awsim-glue",
+ "awsim-iam",
+ "awsim-kendra",
+ "awsim-kinesis",
+ "awsim-kms",
+ "awsim-lambda",
+ "awsim-opensearch",
+ "awsim-rds",
+ "awsim-route53",
+ "awsim-s3",
+ "awsim-scheduler",
+ "awsim-secretsmanager",
+ "awsim-ses",
+ "awsim-sns",
+ "awsim-sqs",
+ "awsim-ssm",
+ "awsim-stepfunctions",
+ "awsim-sts",
+ "awsim-waf",
+ "axum",
+ "bytes",
+ "clap",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zip",
 ]
 
 [[package]]
