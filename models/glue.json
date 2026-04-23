@@ -47,7 +47,13 @@
         {"target": "com.amazonaws.glue#DeleteConnection"},
         {"target": "com.amazonaws.glue#GetTags"},
         {"target": "com.amazonaws.glue#TagResource"},
-        {"target": "com.amazonaws.glue#UntagResource"}
+        {"target": "com.amazonaws.glue#UntagResource"},
+        {"target": "com.amazonaws.glue#GetTableVersion"},
+        {"target": "com.amazonaws.glue#GetTableVersions"},
+        {"target": "com.amazonaws.glue#DeleteTableVersion"},
+        {"target": "com.amazonaws.glue#BatchDeleteTableVersion"},
+        {"target": "com.amazonaws.glue#CreateScript"},
+        {"target": "com.amazonaws.glue#GetCatalogImportStatus"}
       ]
     },
     "com.amazonaws.glue#CreateDatabase": {"type": "operation"},
@@ -92,6 +98,12 @@
     "com.amazonaws.glue#DeleteConnection": {"type": "operation"},
     "com.amazonaws.glue#GetTags": {"type": "operation"},
     "com.amazonaws.glue#TagResource": {"type": "operation"},
-    "com.amazonaws.glue#UntagResource": {"type": "operation"}
+    "com.amazonaws.glue#UntagResource": {"type": "operation"},
+    "com.amazonaws.glue#GetTableVersion": {"type": "operation"},
+    "com.amazonaws.glue#GetTableVersions": {"type": "operation"},
+    "com.amazonaws.glue#DeleteTableVersion": {"type": "operation"},
+    "com.amazonaws.glue#BatchDeleteTableVersion": {"type": "operation"},
+    "com.amazonaws.glue#CreateScript": {"type": "operation"},
+    "com.amazonaws.glue#GetCatalogImportStatus": {"type": "operation"}
   }
 }
