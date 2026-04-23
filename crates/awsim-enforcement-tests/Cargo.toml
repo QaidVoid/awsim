@@ -1,0 +1,35 @@
+[package]
+name = "awsim-enforcement-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "awsim_enforcement_tests"
+path = "src/lib.rs"
+
+[[bin]]
+name = "awsim-enforcement-tests"
+path = "src/main.rs"
+
+[dependencies]
+awsim-core = { workspace = true }
+awsim-iam = { workspace = true }
+awsim-iam-policy = { workspace = true }
+awsim-s3 = { workspace = true }
+awsim-sts = { workspace = true }
+
+tokio = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+aws-config = "1"
+aws-sdk-s3 = "1"
+aws-sdk-iam = "1"
+aws-credential-types = "1"
+aws-types = "1"
+aws-smithy-runtime-api = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

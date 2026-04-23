@@ -41,6 +41,7 @@ members = [
     "crates/awsim-opensearch",
     "crates/awsim-iam-policy",
     "crates/awsim-conformance",
+    "crates/awsim-enforcement-tests",
 ]
 
 [workspace.package]
