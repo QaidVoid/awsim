@@ -83,6 +83,47 @@ curl -s http://localhost:4566 \
   - Input: `executionArn`, optional `maxResults`, `reverseOrder`, `nextToken`
   - Returns: paginated `events` list with `timestamp`, `type` (e.g., `ExecutionStarted`, `StateEntered`, `StateExited`, `ExecutionSucceeded`), event-specific details
 
+- `DescribeStateMachineForExecution` — given an execution ARN, return the state machine definition that was used
+  - Input: `executionArn`
+  - Returns: same shape as `DescribeStateMachine`
+
+### Tags
+
+- `TagResource` — add or update tags on a state machine or activity
+  - Input: `resourceArn`, `tags` (list of `{key, value}`)
+
+- `UntagResource` — remove tags from a state machine or activity
+  - Input: `resourceArn`, `tagKeys` (list of strings)
+
+- `ListTagsForResource` — list tags on a state machine or activity
+  - Input: `resourceArn`
+  - Returns: `tags` list of `{key, value}`
+
+### Activities
+
+- `CreateActivity` — create an activity (idempotent — returns existing ARN if already present)
+  - Input: `name` (required), optional `tags` list
+  - Returns: `activityArn`, `creationDate`
+
+- `DeleteActivity` — delete an activity
+  - Input: `activityArn`
+
+- `DescribeActivity` — get activity details
+  - Input: `activityArn`
+  - Returns: `activityArn`, `name`, `creationDate`
+
+- `ListActivities` — list all activities sorted by name
+  - Input: optional `maxResults`, `nextToken`
+  - Returns: `activities` list
+
+### Task Token Callbacks
+
+For `Task` states using `.waitForTaskToken`, these endpoints accept the callback and succeed silently (useful for dev/testing workflows without implementing the worker side):
+
+- `SendTaskSuccess` — mark a task token as succeeded. Input: `taskToken` (required), `output` (JSON string, required)
+- `SendTaskFailure` — mark a task token as failed. Input: `taskToken` (required), optional `error`, `cause`
+- `SendTaskHeartbeat` — send a heartbeat for a running task. Input: `taskToken` (required)
+
 ## Curl Examples
 
 ```bash

@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use std::collections::HashMap;
 
 /// An execution history event.
 #[derive(Debug, Clone)]
@@ -35,6 +36,17 @@ pub struct StateMachine {
     pub machine_type: String, // STANDARD or EXPRESS
     pub status: String,
     pub creation_date: String,
+    /// Tags attached to this state machine.
+    pub tags: HashMap<String, String>,
+}
+
+/// A Step Functions activity.
+#[derive(Debug, Clone)]
+pub struct Activity {
+    pub name: String,
+    pub arn: String,
+    pub creation_date: String,
+    pub tags: HashMap<String, String>,
 }
 
 /// Per-account/region Step Functions state.
@@ -44,4 +56,6 @@ pub struct StepFunctionsState {
     pub state_machines: DashMap<String, StateMachine>,
     /// executionArn → Execution
     pub executions: DashMap<String, Execution>,
+    /// activityArn → Activity
+    pub activities: DashMap<String, Activity>,
 }

@@ -2,7 +2,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use crate::operations::{executions, state_machines};
+use crate::operations::{activities, executions, state_machines, tags, task_callbacks};
 use crate::state::StepFunctionsState;
 
 /// The Step Functions service handler.
@@ -62,6 +62,25 @@ impl ServiceHandler for StepFunctionsService {
             "DescribeExecution" => executions::describe_execution(&state, &input, ctx),
             "ListExecutions" => executions::list_executions(&state, &input, ctx),
             "GetExecutionHistory" => executions::get_execution_history(&state, &input, ctx),
+            "DescribeStateMachineForExecution" => {
+                task_callbacks::describe_state_machine_for_execution(&state, &input, ctx)
+            }
+
+            // Tags
+            "TagResource" => tags::tag_resource(&state, &input, ctx),
+            "UntagResource" => tags::untag_resource(&state, &input, ctx),
+            "ListTagsForResource" => tags::list_tags_for_resource(&state, &input, ctx),
+
+            // Activities
+            "CreateActivity" => activities::create_activity(&state, &input, ctx),
+            "DeleteActivity" => activities::delete_activity(&state, &input, ctx),
+            "DescribeActivity" => activities::describe_activity(&state, &input, ctx),
+            "ListActivities" => activities::list_activities(&state, &input, ctx),
+
+            // Task token callbacks
+            "SendTaskSuccess" => task_callbacks::send_task_success(&state, &input, ctx),
+            "SendTaskFailure" => task_callbacks::send_task_failure(&state, &input, ctx),
+            "SendTaskHeartbeat" => task_callbacks::send_task_heartbeat(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

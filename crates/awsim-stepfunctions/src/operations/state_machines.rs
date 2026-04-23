@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use awsim_core::{AwsError, RequestContext};
@@ -84,6 +85,20 @@ pub fn create_state_machine(
         ));
     }
 
+    // Extract tags from CreateStateMachine input
+    let tags: HashMap<String, String> = input["tags"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| {
+                    let k = t["key"].as_str()?;
+                    let v = t["value"].as_str()?;
+                    Some((k.to_string(), v.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let creation_date = now_iso8601();
     let sm = StateMachine {
         name: name.to_string(),
@@ -93,6 +108,7 @@ pub fn create_state_machine(
         machine_type,
         status: "ACTIVE".to_string(),
         creation_date: creation_date.clone(),
+        tags,
     };
 
     info!(name, arn = %arn, "Created state machine");
