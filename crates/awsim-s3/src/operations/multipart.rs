@@ -168,12 +168,13 @@ pub fn list_multipart_uploads(state: &S3State, input: &Value) -> Result<Value, A
             json!({
                 "Key": u.key,
                 "UploadId": u.upload_id,
-                "Initiated": u.created_at,
+                "Initiated": crate::util::rfc7231_to_iso8601(&u.created_at),
             })
         })
         .collect();
 
     Ok(json!({
+        "__xml_root": "ListMultipartUploadsResult",
         "Bucket": bucket_name,
         "Upload": uploads,
         "IsTruncated": false,
@@ -209,6 +210,7 @@ pub fn list_parts(state: &S3State, input: &Value) -> Result<Value, AwsError> {
         .collect();
 
     Ok(json!({
+        "__xml_root": "ListPartsResult",
         "Bucket": bucket_name,
         "Key": key,
         "UploadId": upload_id,

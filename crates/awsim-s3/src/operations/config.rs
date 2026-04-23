@@ -39,7 +39,7 @@ pub fn get_bucket_tagging(state: &S3State, input: &Value) -> Result<Value, AwsEr
         .map(|(k, v)| json!({ "Key": k, "Value": v }))
         .collect();
 
-    Ok(json!({ "TagSet": { "Tag": tags } }))
+    Ok(json!({ "__xml_root": "Tagging", "TagSet": { "Tag": tags } }))
 }
 
 /// DELETE /{Bucket}?tagging
