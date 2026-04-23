@@ -10,64 +10,188 @@ Amazon Relational Database Service for managing relational database instances an
 | Signing Name | `rds` |
 | Persistence | Yes |
 
-## Operations
+RDS uses the `AwsQuery` protocol: `POST` requests with `Content-Type: application/x-www-form-urlencoded` and an `Action=` parameter.
 
-### DB Instances
-- `CreateDBInstance` — create a new database instance
-- `DeleteDBInstance` — delete a database instance
-- `DescribeDBInstances` — list database instances with optional filters
-- `ModifyDBInstance` — update instance configuration (class, storage, etc.)
-- `StartDBInstance` — start a stopped database instance
-- `StopDBInstance` — stop a running database instance
-- `RebootDBInstance` — reboot a database instance
+## Quick Start
 
-### DB Clusters
-- `CreateDBCluster` — create an Aurora database cluster
-- `DeleteDBCluster` — delete a database cluster
-- `DescribeDBClusters` — list database clusters with optional filters
-
-### DB Subnet Groups
-- `CreateDBSubnetGroup` — create a subnet group for database placement
-- `DeleteDBSubnetGroup` — delete a subnet group
-- `DescribeDBSubnetGroups` — list subnet groups
-
-### DB Parameter Groups
-- `CreateDBParameterGroup` — create a parameter group for database configuration
-- `DeleteDBParameterGroup` — delete a parameter group
-- `DescribeDBParameterGroups` — list parameter groups
-
-### Tags
-- `AddTagsToResource` — add tags to an RDS resource
-- `RemoveTagsFromResource` — remove tags from an RDS resource
-- `ListTagsForResource` — list tags on an RDS resource
-
-## Example
+Create a database instance, describe it, and stop it:
 
 ```bash
 # Create a DB instance
-aws --endpoint-url http://localhost:4567 \
+aws --endpoint-url http://localhost:4566 \
   rds create-db-instance \
   --db-instance-identifier mydb \
   --db-instance-class db.t3.micro \
   --engine mysql \
   --master-username admin \
   --master-user-password password123 \
-  --allocated-storage 20
+  --allocated-storage 20 \
+  --db-name myappdb
 
 # Describe the instance
-aws --endpoint-url http://localhost:4567 \
+aws --endpoint-url http://localhost:4566 \
   rds describe-db-instances \
   --db-instance-identifier mydb
 
 # Stop the instance
-aws --endpoint-url http://localhost:4567 \
+aws --endpoint-url http://localhost:4566 \
   rds stop-db-instance \
   --db-instance-identifier mydb
 ```
 
-## Notes
+## Operations
 
-- RDS in AWSim tracks instance metadata and state only — no actual database engine is started.
-- Persistence is enabled: instances, clusters, subnet groups, and parameter groups survive restarts.
-- RDS uses the `AwsQuery` protocol (form-encoded POST with `Action=` parameter).
-- Engine types (`mysql`, `postgres`, `aurora`, etc.) are accepted but not validated against a supported list.
+### DB Instances
+- `CreateDBInstance` — create a new database instance
+  - Input: `DBInstanceIdentifier` (required, unique name), `DBInstanceClass` (e.g., `db.t3.micro`, `db.r5.large`), `Engine` (`mysql`, `postgres`, `mariadb`, `oracle-se2`, `sqlserver-se`), `MasterUsername`, `MasterUserPassword`, `AllocatedStorage` (GB), `DBName`, `VpcSecurityGroupIds`, `DBSubnetGroupName`, `PubliclyAccessible`, `MultiAZ`, `EngineVersion`, `StorageType` (`gp2`, `io1`, `standard`)
+  - Returns: `DBInstance` with `DBInstanceIdentifier`, `DBInstanceStatus` (`creating` → `available`), `Endpoint` (`{Address, Port}`), `DBInstanceArn`
+
+- `DeleteDBInstance` — delete a database instance
+  - Input: `DBInstanceIdentifier`, optional `SkipFinalSnapshot`, `FinalDBSnapshotIdentifier`
+
+- `DescribeDBInstances` — list database instances with optional filter
+  - Input: optional `DBInstanceIdentifier`, `Filters`, `MaxRecords`, `Marker`
+  - Returns: paginated `DBInstances` list
+
+- `ModifyDBInstance` — update instance configuration (class, storage, multi-AZ, etc.)
+  - Input: `DBInstanceIdentifier`, optional `DBInstanceClass`, `AllocatedStorage`, `ApplyImmediately`, `BackupRetentionPeriod`, `PreferredMaintenanceWindow`
+
+- `StartDBInstance` — start a stopped database instance
+  - Input: `DBInstanceIdentifier`
+  - Status transitions: `stopped` → `starting` → `available`
+
+- `StopDBInstance` — stop a running database instance
+  - Input: `DBInstanceIdentifier`
+  - Status transitions: `available` → `stopping` → `stopped`
+
+- `RebootDBInstance` — reboot a database instance (useful after parameter group changes)
+  - Input: `DBInstanceIdentifier`, optional `ForceFailover`
+
+### DB Clusters (Aurora)
+- `CreateDBCluster` — create an Aurora database cluster
+  - Input: `DBClusterIdentifier`, `Engine` (`aurora`, `aurora-mysql`, `aurora-postgresql`), `MasterUsername`, `MasterUserPassword`, `DatabaseName`, `VpcSecurityGroupIds`
+  - Returns: `DBCluster` with `DBClusterIdentifier`, `Status`, `Endpoint`, `ReaderEndpoint`
+
+- `DeleteDBCluster` — delete a database cluster
+  - Input: `DBClusterIdentifier`, optional `SkipFinalSnapshot`
+
+- `DescribeDBClusters` — list database clusters with optional filter
+  - Input: optional `DBClusterIdentifier`, `Filters`, `MaxRecords`, `Marker`
+
+### DB Subnet Groups
+- `CreateDBSubnetGroup` — create a subnet group for database placement
+  - Input: `DBSubnetGroupName`, `DBSubnetGroupDescription`, `SubnetIds` (list)
+
+- `DeleteDBSubnetGroup` — delete a subnet group
+
+- `DescribeDBSubnetGroups` — list subnet groups
+  - Input: optional `DBSubnetGroupName`, `Filters`
+
+### DB Parameter Groups
+- `CreateDBParameterGroup` — create a parameter group for database configuration
+  - Input: `DBParameterGroupName`, `DBParameterGroupFamily` (e.g., `mysql8.0`, `postgres15`), `Description`
+
+- `DeleteDBParameterGroup` — delete a parameter group
+
+- `DescribeDBParameterGroups` — list parameter groups
+
+### Tags
+- `AddTagsToResource` — add tags to any RDS resource (instance, cluster, subnet group, etc.) by ARN
+- `RemoveTagsFromResource` — remove tags from an RDS resource
+- `ListTagsForResource` — list tags on an RDS resource
+
+## Curl Examples
+
+```bash
+# 1. Create a PostgreSQL instance
+curl -s -X POST http://localhost:4566 \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -H "Authorization: AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/rds/aws4_request, SignedHeaders=host, Signature=fake" \
+  --data-urlencode 'Action=CreateDBInstance' \
+  --data-urlencode 'DBInstanceIdentifier=mypostgres' \
+  --data-urlencode 'DBInstanceClass=db.t3.small' \
+  --data-urlencode 'Engine=postgres' \
+  --data-urlencode 'MasterUsername=dbadmin' \
+  --data-urlencode 'MasterUserPassword=SuperSecret123!' \
+  --data-urlencode 'AllocatedStorage=20' \
+  --data-urlencode 'DBName=appdb' \
+  --data-urlencode 'EngineVersion=15.4'
+
+# 2. Describe all instances
+curl -s -X POST http://localhost:4566 \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -H "Authorization: AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/rds/aws4_request, SignedHeaders=host, Signature=fake" \
+  --data-urlencode 'Action=DescribeDBInstances'
+
+# 3. Tag an instance
+curl -s -X POST http://localhost:4566 \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -H "Authorization: AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/rds/aws4_request, SignedHeaders=host, Signature=fake" \
+  --data-urlencode 'Action=AddTagsToResource' \
+  --data-urlencode 'ResourceName=arn:aws:rds:us-east-1:000000000000:db:mydb' \
+  --data-urlencode 'Tags.member.1.Key=environment' \
+  --data-urlencode 'Tags.member.1.Value=staging'
+```
+
+## SDK Example
+
+```typescript
+import {
+  RDSClient,
+  CreateDBInstanceCommand,
+  DescribeDBInstancesCommand,
+  ModifyDBInstanceCommand,
+  StopDBInstanceCommand,
+} from '@aws-sdk/client-rds';
+
+const rds = new RDSClient({
+  region: 'us-east-1',
+  endpoint: 'http://localhost:4566',
+  credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+});
+
+// Create DB instance
+const { DBInstance } = await rds.send(new CreateDBInstanceCommand({
+  DBInstanceIdentifier: 'mydb',
+  DBInstanceClass: 'db.t3.micro',
+  Engine: 'mysql',
+  MasterUsername: 'admin',
+  MasterUserPassword: 'password123',
+  AllocatedStorage: 20,
+  DBName: 'myapp',
+  Tags: [{ Key: 'environment', Value: 'staging' }],
+}));
+
+console.log('Instance ID:', DBInstance?.DBInstanceIdentifier);
+console.log('Status:', DBInstance?.DBInstanceStatus); // creating
+console.log('ARN:', DBInstance?.DBInstanceArn);
+
+// Describe instances
+const { DBInstances } = await rds.send(new DescribeDBInstancesCommand({
+  DBInstanceIdentifier: 'mydb',
+}));
+
+const instance = DBInstances?.[0];
+console.log('Endpoint:', instance?.Endpoint?.Address, ':', instance?.Endpoint?.Port);
+
+// Modify instance
+await rds.send(new ModifyDBInstanceCommand({
+  DBInstanceIdentifier: 'mydb',
+  AllocatedStorage: 50,
+  ApplyImmediately: true,
+}));
+
+// Stop instance
+await rds.send(new StopDBInstanceCommand({
+  DBInstanceIdentifier: 'mydb',
+}));
+```
+
+## Behavior Notes
+
+- RDS in AWSim tracks instance metadata and state transitions only — **no actual database engine is started**.
+- Connecting to the `Endpoint.Address` returned by RDS will fail — it is a placeholder address, not a real database server.
+- Persistence is enabled: instances, clusters, subnet groups, and parameter groups survive AWSim restarts.
+- Engine types (`mysql`, `postgres`, `aurora`, etc.) and engine versions are accepted without validation.
+- Status transitions (`creating` → `available`) happen quickly (simulated); real AWS may take several minutes.
+- `MultiAZ` instances are tracked but no actual failover or replication occurs.

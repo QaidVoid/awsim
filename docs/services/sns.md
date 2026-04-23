@@ -1,45 +1,77 @@
 # SNS
 
-**Protocol:** JSON (`X-Amz-Target: AmazonSimpleNotificationService.*`)  
-**Signing name:** `sns`  
+Amazon Simple Notification Service for pub/sub messaging, fan-out to queues and Lambda, and mobile push notifications.
+
+**Protocol:** AwsJson1_0 (`X-Amz-Target: AmazonSimpleNotificationService.*`)
+**Signing name:** `sns`
 **Persistent:** Yes
 
-## Implemented Operations
+## Quick Start
+
+Create a topic, subscribe an SQS queue, and publish a message:
+
+```bash
+# Create a topic
+TOPIC_ARN=$(curl -s http://localhost:4566 \
+  -H "Content-Type: application/x-amz-json-1.0" \
+  -H "X-Amz-Target: AmazonSimpleNotificationService.CreateTopic" \
+  -H "Authorization: AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/sns/aws4_request, SignedHeaders=host, Signature=fake" \
+  -d '{"Name":"my-topic"}' \
+  | jq -r '.TopicArn')
+
+echo "Topic ARN: $TOPIC_ARN"
+
+# Subscribe an SQS queue to the topic
+curl -s http://localhost:4566 \
+  -H "Content-Type: application/x-amz-json-1.0" \
+  -H "X-Amz-Target: AmazonSimpleNotificationService.Subscribe" \
+  -H "Authorization: AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/sns/aws4_request, SignedHeaders=host, Signature=fake" \
+  -d "{\"TopicArn\":\"$TOPIC_ARN\",\"Protocol\":\"sqs\",\"Endpoint\":\"arn:aws:sqs:us-east-1:000000000000:my-queue\"}"
+
+# Publish a message
+curl -s http://localhost:4566 \
+  -H "Content-Type: application/x-amz-json-1.0" \
+  -H "X-Amz-Target: AmazonSimpleNotificationService.Publish" \
+  -H "Authorization: AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/sns/aws4_request, SignedHeaders=host, Signature=fake" \
+  -d "{\"TopicArn\":\"$TOPIC_ARN\",\"Message\":\"Hello subscribers!\",\"Subject\":\"Test message\"}"
+```
+
+## Operations
 
 ### Topics
 
 | Operation | Description |
 |-----------|-------------|
-| `CreateTopic` | Create a topic (standard or FIFO) |
-| `DeleteTopic` | Delete a topic and all its subscriptions |
-| `ListTopics` | List all topics |
-| `GetTopicAttributes` | Get topic attributes |
-| `SetTopicAttributes` | Set topic attributes |
+| `CreateTopic` | Create a topic (standard or FIFO). Input: `Name`, optional `Attributes` (`{FifoTopic: "true", ContentBasedDeduplication: "true"}`), `Tags`. Returns: `TopicArn` |
+| `DeleteTopic` | Delete a topic and all its subscriptions. Input: `TopicArn` |
+| `ListTopics` | List all topics with pagination. Returns: `Topics` list with `TopicArn` |
+| `GetTopicAttributes` | Get topic configuration. Input: `TopicArn`. Returns: map of attribute names to values (policy, subscriptions count, etc.) |
+| `SetTopicAttributes` | Set a specific topic attribute. Input: `TopicArn`, `AttributeName`, `AttributeValue` |
 
 ### Subscriptions
 
 | Operation | Description |
 |-----------|-------------|
-| `Subscribe` | Subscribe an endpoint to a topic |
-| `Unsubscribe` | Remove a subscription |
-| `ListSubscriptions` | List all subscriptions |
-| `ListSubscriptionsByTopic` | List subscriptions for a specific topic |
-| `GetSubscriptionAttributes` | Get subscription attributes |
-| `SetSubscriptionAttributes` | Set subscription attributes |
-| `ConfirmSubscription` | Confirm a pending subscription |
+| `Subscribe` | Subscribe an endpoint to a topic. Input: `TopicArn`, `Protocol` (see below), `Endpoint` (ARN or URL), optional `Attributes` (filter policy, raw message delivery). Returns: `SubscriptionArn` |
+| `Unsubscribe` | Remove a subscription. Input: `SubscriptionArn` |
+| `ListSubscriptions` | List all subscriptions across all topics. Returns paginated `Subscriptions` |
+| `ListSubscriptionsByTopic` | List subscriptions for a specific topic. Input: `TopicArn` |
+| `GetSubscriptionAttributes` | Get subscription attributes. Input: `SubscriptionArn` |
+| `SetSubscriptionAttributes` | Update subscription attributes (filter policy, raw delivery). Input: `SubscriptionArn`, `AttributeName`, `AttributeValue` |
+| `ConfirmSubscription` | Confirm a pending subscription (used for HTTP/HTTPS). In AWSim subscriptions are auto-confirmed |
 
 ### Publishing
 
 | Operation | Description |
 |-----------|-------------|
-| `Publish` | Publish a message to a topic |
-| `PublishBatch` | Publish up to 10 messages in one call |
+| `Publish` | Publish a message to a topic. Input: `TopicArn`, `Message` (required), `Subject`, `MessageAttributes` (`{key: {DataType, StringValue}}`), `MessageStructure` (`json` for per-protocol messages). Returns: `MessageId` |
+| `PublishBatch` | Publish up to 10 messages in one call. Input: `TopicArn`, `PublishBatchRequestEntries` (list of `{Id, Message, Subject}`). Returns: `Successful`, `Failed` |
 
 ### Tags
 
 | Operation | Description |
 |-----------|-------------|
-| `TagResource` | Add tags to a topic |
+| `TagResource` | Add tags to a topic (by ARN) |
 | `UntagResource` | Remove tags from a topic |
 | `ListTagsForResource` | List topic tags |
 
@@ -47,37 +79,80 @@
 
 | Protocol | Description |
 |----------|-------------|
-| `sqs` | Delivers to an SQS queue |
-| `lambda` | Invokes a Lambda function |
-| `http` / `https` | Delivers to an HTTP endpoint (not enforced in local mode) |
+| `sqs` | Delivers to an SQS queue (by queue ARN). AWSim immediately fans out to the queue |
+| `lambda` | Invokes a Lambda function (by function ARN). AWSim calls the Lambda synchronously |
+| `http` / `https` | Delivers to an HTTP endpoint. Not enforced in local mode (no HTTP call is made) |
+| `email` | Sends email (no email is delivered in AWSim) |
+| `email-json` | Sends JSON-formatted email |
 
 ## SDK Example
 
 ```typescript
-import { SNSClient, CreateTopicCommand, SubscribeCommand, PublishCommand } from "@aws-sdk/client-sns";
+import {
+  SNSClient,
+  CreateTopicCommand,
+  SubscribeCommand,
+  PublishCommand,
+  PublishBatchCommand,
+  SetSubscriptionAttributesCommand,
+} from '@aws-sdk/client-sns';
 
 const sns = new SNSClient({
-  region: "us-east-1",
-  endpoint: "http://localhost:4566",
-  credentials: { accessKeyId: "test", secretAccessKey: "test" },
+  region: 'us-east-1',
+  endpoint: 'http://localhost:4566',
+  credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
 });
 
-// Create topic
-const { TopicArn } = await sns.send(new CreateTopicCommand({ Name: "my-topic" }));
+// Create a standard topic
+const { TopicArn } = await sns.send(new CreateTopicCommand({
+  Name: 'user-events',
+  Attributes: {},
+}));
 
-// Subscribe an SQS queue
+// Subscribe SQS queue for fan-out
+const { SubscriptionArn } = await sns.send(new SubscribeCommand({
+  TopicArn,
+  Protocol: 'sqs',
+  Endpoint: 'arn:aws:sqs:us-east-1:000000000000:user-events-queue',
+}));
+
+// Subscribe Lambda for processing
 await sns.send(new SubscribeCommand({
   TopicArn,
-  Protocol: "sqs",
-  Endpoint: "arn:aws:sqs:us-east-1:000000000000:my-queue",
+  Protocol: 'lambda',
+  Endpoint: 'arn:aws:lambda:us-east-1:000000000000:function:process-user-event',
 }));
 
-// Publish
-await sns.send(new PublishCommand({
-  TopicArn,
-  Message: JSON.stringify({ event: "user_created", userId: "123" }),
-  Subject: "UserEvent",
+// Add a filter policy (stored but not enforced in AWSim)
+await sns.send(new SetSubscriptionAttributesCommand({
+  SubscriptionArn: SubscriptionArn!,
+  AttributeName: 'FilterPolicy',
+  AttributeValue: JSON.stringify({ eventType: ['signup', 'login'] }),
 }));
+
+// Publish with message attributes
+const { MessageId } = await sns.send(new PublishCommand({
+  TopicArn,
+  Message: JSON.stringify({ userId: '123', action: 'signup', timestamp: Date.now() }),
+  Subject: 'UserEvent',
+  MessageAttributes: {
+    eventType: { DataType: 'String', StringValue: 'signup' },
+    userId: { DataType: 'String', StringValue: '123' },
+  },
+}));
+
+console.log('Published message ID:', MessageId);
+
+// Publish batch (up to 10 messages)
+const { Successful, Failed } = await sns.send(new PublishBatchCommand({
+  TopicArn,
+  PublishBatchRequestEntries: [
+    { Id: '1', Message: JSON.stringify({ userId: '1', action: 'view' }) },
+    { Id: '2', Message: JSON.stringify({ userId: '2', action: 'purchase' }) },
+    { Id: '3', Message: JSON.stringify({ userId: '3', action: 'logout' }) },
+  ],
+}));
+console.log('Published:', Successful?.length, 'Failed:', Failed?.length);
 ```
 
 ## CLI Example
@@ -95,15 +170,29 @@ aws --endpoint-url http://localhost:4566 sns subscribe \
 # Publish message
 aws --endpoint-url http://localhost:4566 sns publish \
   --topic-arn arn:aws:sns:us-east-1:000000000000:my-topic \
-  --message "hello world"
+  --message '{"event":"order_placed","orderId":"abc123"}' \
+  --subject "OrderEvent" \
+  --message-attributes '{"eventType":{"DataType":"String","StringValue":"order_placed"}}'
+
+# List subscriptions by topic
+aws --endpoint-url http://localhost:4566 sns list-subscriptions-by-topic \
+  --topic-arn arn:aws:sns:us-east-1:000000000000:my-topic
 ```
 
 ## Fan-out
 
-When a message is published, AWSim immediately delivers it to all subscribed SQS queues and Lambda functions. See [Cross-Service Integrations](/guide/integrations#sns-to-sqs-fan-out).
+When a message is published, AWSim **immediately delivers** it to:
+- All subscribed SQS queues (message appears in the queue)
+- All subscribed Lambda functions (function is invoked synchronously)
 
-## Known Limitations
+HTTP/HTTPS and email endpoints are registered but not called.
 
-- HTTP/HTTPS subscription confirmation handshake is not performed — subscriptions are auto-confirmed.
-- Subscription filter policies are stored but not enforced.
-- Message attributes are passed through but attribute-based filtering is not applied.
+See [Cross-Service Integrations](/guide/integrations#sns-to-sqs-fan-out).
+
+## Behavior Notes
+
+- SNS is persistent: topics and subscriptions survive AWSim restarts.
+- HTTP/HTTPS subscription confirmation handshake is not performed — subscriptions are auto-confirmed immediately.
+- Subscription filter policies are stored but not enforced — all messages are delivered to all subscribers regardless of attributes.
+- Message attributes are passed through to SQS/Lambda but attribute-based filtering is not applied.
+- FIFO topics (`Name.fifo`) are accepted but message ordering and deduplication are not strictly enforced.
