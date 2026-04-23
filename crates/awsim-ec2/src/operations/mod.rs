@@ -1,9 +1,12 @@
 pub mod gateways;
+pub mod instances;
 pub mod key_pairs;
 pub mod metadata;
 pub mod route_tables;
 pub mod security_groups;
+pub mod stubs;
 pub mod subnets;
+pub mod tags;
 pub mod vpcs;
 
 use serde_json::Value;

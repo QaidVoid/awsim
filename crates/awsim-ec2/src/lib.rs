@@ -131,6 +131,28 @@ impl ServiceHandler for Ec2Service {
                 operations::metadata::describe_availability_zones(ctx)
             }
 
+            // Instances
+            "RunInstances" => operations::instances::run_instances(&state, &input),
+            "DescribeInstances" => operations::instances::describe_instances(&state, &input),
+            "TerminateInstances" => operations::instances::terminate_instances(&state, &input),
+            "DescribeInstanceStatus" => {
+                operations::instances::describe_instance_status(&state, &input)
+            }
+            "DescribeImages" => operations::instances::describe_images(&state, &input),
+
+            // Tags
+            "CreateTags" => operations::tags::create_tags(&state, &input),
+            "DeleteTags" => operations::tags::delete_tags(&state, &input),
+            "DescribeTags" => operations::tags::describe_tags(&state, &input),
+
+            // Stubs (empty-list responses)
+            "DescribeNetworkInterfaces" => {
+                operations::stubs::describe_network_interfaces(&state, &input)
+            }
+            "DescribeNatGateways" => operations::stubs::describe_nat_gateways(&state, &input),
+            "DescribeVpcEndpoints" => operations::stubs::describe_vpc_endpoints(&state, &input),
+            "DescribeAddresses" => operations::stubs::describe_addresses(&state, &input),
+
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

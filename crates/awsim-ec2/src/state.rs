@@ -10,6 +10,12 @@ pub struct Ec2State {
     pub internet_gateways: DashMap<String, InternetGateway>,
     pub route_tables: DashMap<String, RouteTable>,
     pub key_pairs: DashMap<String, KeyPair>,
+    /// instanceId → Instance
+    pub instances: DashMap<String, Instance>,
+    /// Elastic IP allocation id → Address
+    pub addresses: DashMap<String, Address>,
+    /// resource-specific tags: resource_id → (key → value)
+    pub resource_tags: DashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,4 +93,25 @@ pub struct KeyPair {
     pub key_fingerprint: String,
     pub key_material: String,
     pub create_time: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct Instance {
+    pub instance_id: String,
+    pub instance_type: String,
+    pub image_id: String,
+    pub state: String,
+    pub subnet_id: Option<String>,
+    pub vpc_id: Option<String>,
+    pub private_ip_address: Option<String>,
+    pub launch_time: String,
+    pub tags: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Address {
+    pub allocation_id: String,
+    pub public_ip: String,
+    pub instance_id: Option<String>,
+    pub tags: HashMap<String, String>,
 }
