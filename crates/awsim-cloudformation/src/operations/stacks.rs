@@ -457,6 +457,186 @@ pub fn get_template(state: &CloudFormationState, input: &Value) -> Result<Value,
     Ok(json!({ "TemplateBody": stack.template_body }))
 }
 
+/// DescribeStackResource — get a single resource from a stack by logical ID.
+pub fn describe_stack_resource(
+    state: &CloudFormationState,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let stack_name = require_str(input, "StackName")?;
+    let logical_id = require_str(input, "LogicalResourceId")?;
+
+    let stack = state
+        .stacks
+        .get(stack_name)
+        .ok_or_else(|| stack_not_found(stack_name))?;
+
+    let resource = stack
+        .resources
+        .iter()
+        .find(|r| r.logical_resource_id == logical_id)
+        .ok_or_else(|| {
+            crate::error::missing_parameter(&format!(
+                "Resource {logical_id} does not exist for stack {stack_name}"
+            ))
+        })?;
+
+    let detail = resource_to_value(resource, &stack);
+
+    Ok(json!({ "StackResourceDetail": detail }))
+}
+
+/// GetTemplateSummary — parse template and return metadata without creating a stack.
+pub fn get_template_summary(_state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
+    let template_body = opt_str(input, "TemplateBody")
+        .ok_or_else(|| missing_parameter("TemplateBody"))?;
+
+    let parsed = template::validate_and_parse(template_body, &HashMap::new())?;
+
+    let params: Vec<Value> = parsed
+        .parameters
+        .iter()
+        .map(|p| {
+            let mut obj = json!({
+                "ParameterKey": p.name,
+                "ParameterType": p.param_type,
+                "NoEcho": false,
+            });
+            if let Some(desc) = &p.description {
+                obj["Description"] = Value::String(desc.clone());
+            }
+            if let Some(default) = &p.default {
+                obj["DefaultValue"] = Value::String(default.clone());
+            }
+            obj
+        })
+        .collect();
+
+    let resource_types: Vec<Value> = parsed
+        .resources
+        .iter()
+        .map(|r| Value::String(r.resource_type.clone()))
+        .collect();
+
+    let mut result = json!({
+        "Parameters": params,
+        "ResourceTypes": { "member": resource_types },
+        "Version": "2010-09-09",
+        "Capabilities": { "member": [] },
+        "CapabilitiesReason": null,
+    });
+
+    if let Some(desc) = parsed.description {
+        result["Description"] = Value::String(desc);
+    }
+
+    Ok(result)
+}
+
+/// ListStackResources — paginated list of resources in a stack.
+pub fn list_stack_resources(
+    state: &CloudFormationState,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let stack_name = require_str(input, "StackName")?;
+
+    let stack = state
+        .stacks
+        .get(stack_name)
+        .ok_or_else(|| stack_not_found(stack_name))?;
+
+    let summaries: Vec<Value> = stack
+        .resources
+        .iter()
+        .map(|r| {
+            let mut obj = json!({
+                "LogicalResourceId": r.logical_resource_id,
+                "ResourceType": r.resource_type,
+                "ResourceStatus": r.resource_status,
+                "LastUpdatedTimestamp": r.timestamp,
+            });
+            if let Some(phys) = &r.physical_resource_id {
+                obj["PhysicalResourceId"] = Value::String(phys.clone());
+            }
+            obj
+        })
+        .collect();
+
+    Ok(json!({
+        "StackResourceSummaries": { "member": summaries },
+        "NextToken": null,
+    }))
+}
+
+/// ListExports — stub returning empty list.
+pub fn list_exports(_state: &CloudFormationState, _input: &Value) -> Result<Value, AwsError> {
+    Ok(json!({ "Exports": { "member": [] }, "NextToken": null }))
+}
+
+/// ListImports — stub returning empty list.
+pub fn list_imports(_state: &CloudFormationState, _input: &Value) -> Result<Value, AwsError> {
+    Ok(json!({ "Imports": { "member": [] }, "NextToken": null }))
+}
+
+/// TagResource — add or update tags on a stack.
+pub fn tag_resource(state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
+    let resource_arn = require_str(input, "ResourceArn")?;
+    // Extract the stack name from the ARN (last segment after the final '/')
+    let stack_name = resource_arn.split('/').nth(1).unwrap_or(resource_arn);
+
+    let new_tags = parse_tags(input);
+
+    let mut entry = state
+        .stack_tags
+        .entry(stack_name.to_string())
+        .or_default();
+    for (k, v) in new_tags {
+        entry.insert(k, v);
+    }
+
+    Ok(json!({}))
+}
+
+/// UntagResource — remove tags from a stack.
+pub fn untag_resource(state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
+    let resource_arn = require_str(input, "ResourceArn")?;
+    let stack_name = resource_arn.split('/').nth(1).unwrap_or(resource_arn);
+
+    let tag_keys: Vec<&str> = match input.get("TagKeys") {
+        Some(Value::Array(arr)) => arr.iter().filter_map(|v| v.as_str()).collect(),
+        Some(Value::Object(obj)) => {
+            if let Some(Value::Array(arr)) = obj.get("member") {
+                arr.iter().filter_map(|v| v.as_str()).collect()
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
+    };
+
+    if let Some(mut tags) = state.stack_tags.get_mut(stack_name) {
+        for key in &tag_keys {
+            tags.remove(*key);
+        }
+    }
+
+    Ok(json!({}))
+}
+
+/// SignalResource — accept and succeed silently.
+pub fn signal_resource(_state: &CloudFormationState, _input: &Value) -> Result<Value, AwsError> {
+    Ok(json!({}))
+}
+
+/// EstimateTemplateCost — stub returning a cost estimate URL.
+pub fn estimate_template_cost(
+    _state: &CloudFormationState,
+    _input: &Value,
+) -> Result<Value, AwsError> {
+    Ok(json!({
+        "Url": "http://calculator.s3.amazonaws.com/calc5.html?key=awsim-stub-estimate"
+    }))
+}
+
 pub fn validate_template(_state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
     let template_body = opt_str(input, "TemplateBody")
         .ok_or_else(|| missing_parameter("TemplateBody"))?;

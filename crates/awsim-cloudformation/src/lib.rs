@@ -69,9 +69,28 @@ impl ServiceHandler for CloudFormationService {
             "DescribeStackResources" => {
                 operations::stacks::describe_stack_resources(&state, &input)
             }
+            "DescribeStackResource" => {
+                operations::stacks::describe_stack_resource(&state, &input)
+            }
             "ListStacks" => operations::stacks::list_stacks(&state, &input),
+            "ListStackResources" => operations::stacks::list_stack_resources(&state, &input),
             "GetTemplate" => operations::stacks::get_template(&state, &input),
+            "GetTemplateSummary" => operations::stacks::get_template_summary(&state, &input),
             "ValidateTemplate" => operations::stacks::validate_template(&state, &input),
+
+            // Exports / Imports
+            "ListExports" => operations::stacks::list_exports(&state, &input),
+            "ListImports" => operations::stacks::list_imports(&state, &input),
+
+            // Tagging
+            "TagResource" => operations::stacks::tag_resource(&state, &input),
+            "UntagResource" => operations::stacks::untag_resource(&state, &input),
+
+            // Signals / Cost
+            "SignalResource" => operations::stacks::signal_resource(&state, &input),
+            "EstimateTemplateCost" => {
+                operations::stacks::estimate_template_cost(&state, &input)
+            }
 
             // Change Sets
             "CreateChangeSet" => {

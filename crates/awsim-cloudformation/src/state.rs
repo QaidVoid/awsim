@@ -5,6 +5,8 @@ use std::collections::HashMap;
 #[derive(Debug, Default)]
 pub struct CloudFormationState {
     pub stacks: DashMap<String, Stack>,
+    /// stack name → HashMap<tag key, tag value> (for TagResource/UntagResource)
+    pub stack_tags: DashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone)]
