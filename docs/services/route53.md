@@ -81,6 +81,29 @@ aws --endpoint-url http://localhost:4566 \
   - Input: `HostedZoneId`, optional `StartRecordName`, `StartRecordType`, `MaxItems`
   - Returns: paginated `ResourceRecordSets` list
 
+- `GetHostedZoneCount` — return the total number of hosted zones in the account
+  - Path: `GET /2013-04-01/hostedzonecount`
+  - Returns: `HostedZoneCount` (integer)
+
+- `ListHostedZonesByVPC` — list private hosted zones associated with a VPC (stub returning empty list)
+  - Path: `GET /2013-04-01/hostedzonesbyvpc`
+
+### DNSSEC
+- `GetDNSSEC` — get DNSSEC status for a hosted zone (stub returns disabled)
+  - Path: `GET /2013-04-01/hostedzone/{Id}/dnssec`
+  - Returns: `Status.ServeSignature: "NOT_SIGNING"`, empty `KeySigningKeys`
+
+### DNS Testing
+- `TestDNSAnswer` — test how Route 53 would answer a DNS query (stub returns mock answer)
+  - Path: `GET /2013-04-01/testdnsanswer`
+  - Input query params: `RecordName`, `RecordType`, `HostedZoneId`
+  - Returns: `Nameserver`, `RecordData`, `ResponseCode: "NOERROR"`, `Protocol: "UDP"`
+
+### Checker IP Ranges
+- `GetCheckerIpRanges` — return the IP ranges that Route 53 health checkers use
+  - Path: `GET /2013-04-01/checkeripranges`
+  - Returns: `CheckerIpRanges` (list of CIDR blocks)
+
 ### Health Checks
 - `CreateHealthCheck` — create an endpoint health check
   - Input: `CallerReference`, `HealthCheckConfig` (`{IPAddress, Type: "HTTP"/"HTTPS"/"TCP", Port, ResourcePath}`)
@@ -91,6 +114,32 @@ aws --endpoint-url http://localhost:4566 \
 
 - `DeleteHealthCheck` — delete a health check
   - Input: `HealthCheckId`
+
+- `GetHealthCheckCount` — return the total number of health checks
+  - Path: `GET /2013-04-01/healthcheckcount`
+  - Returns: `HealthCheckCount` (integer)
+
+- `GetHealthCheckStatus` — return the status of a health check from all checkers (always healthy)
+  - Path: `GET /2013-04-01/healthcheck/{Id}/status`
+  - Returns: `HealthCheckObservations` list with per-region status
+
+- `UpdateHealthCheck` — update health check configuration
+  - Path: `POST /2013-04-01/healthcheck/{Id}`
+  - Input: `HealthCheckConfig` fields to update (merged into existing config)
+  - Returns: updated `HealthCheck`
+
+### Query Logging
+- `CreateQueryLoggingConfig` — configure DNS query logging to a CloudWatch Logs group
+  - Path: `POST /2013-04-01/queryloggingconfig`
+  - Input: `HostedZoneId`, `CloudWatchLogsLogGroupArn`
+  - Returns: `QueryLoggingConfig` with `Id`
+
+- `DeleteQueryLoggingConfig` — delete a query logging configuration
+  - Path: `DELETE /2013-04-01/queryloggingconfig/{Id}`
+
+- `ListQueryLoggingConfigs` — list query logging configurations
+  - Path: `GET /2013-04-01/queryloggingconfig`
+  - Input: optional `HostedZoneId` filter
 
 ### Tags
 - `ChangeTagsForResource` — add or remove tags on a hosted zone or health check

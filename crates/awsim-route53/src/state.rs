@@ -42,6 +42,14 @@ pub struct HealthCheck {
     pub health_check_version: u64,
 }
 
+/// A Route53 query logging configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryLoggingConfig {
+    pub id: String,
+    pub hosted_zone_id: String,
+    pub cloud_watch_logs_log_group_arn: String,
+}
+
 /// Per-account Route53 state (global — Route53 is not region-scoped).
 #[derive(Debug, Default)]
 pub struct Route53State {
@@ -49,4 +57,6 @@ pub struct Route53State {
     pub hosted_zones: DashMap<String, HostedZone>,
     /// Health check ID → HealthCheck
     pub health_checks: DashMap<String, HealthCheck>,
+    /// Query logging config ID → QueryLoggingConfig
+    pub query_logging_configs: DashMap<String, QueryLoggingConfig>,
 }

@@ -54,6 +54,7 @@ impl ServiceHandler for Route53Service {
 
     fn routes(&self) -> Vec<RouteDefinition> {
         vec![
+            // Hosted Zones
             RouteDefinition {
                 method: "POST",
                 path_pattern: "/2013-04-01/hostedzone",
@@ -85,6 +86,26 @@ impl ServiceHandler for Route53Service {
                 required_query_param: None,
             },
             RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/hostedzonecount",
+                operation: "GetHostedZoneCount",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/hostedzonesbyvpc",
+                operation: "ListHostedZonesByVPC",
+                required_query_param: None,
+            },
+            // DNSSEC
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/hostedzone/{Id}/dnssec",
+                operation: "GetDNSSEC",
+                required_query_param: None,
+            },
+            // Record Sets
+            RouteDefinition {
                 method: "POST",
                 path_pattern: "/2013-04-01/hostedzone/{Id}/rrset",
                 operation: "ChangeResourceRecordSets",
@@ -96,6 +117,7 @@ impl ServiceHandler for Route53Service {
                 operation: "ListResourceRecordSets",
                 required_query_param: None,
             },
+            // Health Checks
             RouteDefinition {
                 method: "POST",
                 path_pattern: "/2013-04-01/healthcheck",
@@ -114,6 +136,58 @@ impl ServiceHandler for Route53Service {
                 operation: "DeleteHealthCheck",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2013-04-01/healthcheck/{Id}",
+                operation: "UpdateHealthCheck",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/healthcheckcount",
+                operation: "GetHealthCheckCount",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/healthcheck/{Id}/status",
+                operation: "GetHealthCheckStatus",
+                required_query_param: None,
+            },
+            // DNS testing
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/testdnsanswer",
+                operation: "TestDNSAnswer",
+                required_query_param: None,
+            },
+            // Checker IP ranges
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/checkeripranges",
+                operation: "GetCheckerIpRanges",
+                required_query_param: None,
+            },
+            // Query Logging
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2013-04-01/queryloggingconfig",
+                operation: "CreateQueryLoggingConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/queryloggingconfig",
+                operation: "ListQueryLoggingConfigs",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2013-04-01/queryloggingconfig/{Id}",
+                operation: "DeleteQueryLoggingConfig",
+                required_query_param: None,
+            },
+            // Tags
             RouteDefinition {
                 method: "POST",
                 path_pattern: "/2013-04-01/tags/{ResourceType}/{ResourceId}",
@@ -147,6 +221,13 @@ impl ServiceHandler for Route53Service {
             "ListHostedZonesByName" => {
                 operations::zones::list_hosted_zones_by_name(&state, &input, ctx)
             }
+            "GetHostedZoneCount" => {
+                operations::extra::get_hosted_zone_count(&state, &input, ctx)
+            }
+            "ListHostedZonesByVPC" => {
+                operations::extra::list_hosted_zones_by_vpc(&state, &input, ctx)
+            }
+            "GetDNSSEC" => operations::extra::get_dnssec(&state, &input, ctx),
 
             // Record Sets
             "ChangeResourceRecordSets" => {
@@ -165,6 +246,34 @@ impl ServiceHandler for Route53Service {
             }
             "DeleteHealthCheck" => {
                 operations::health_checks::delete_health_check(&state, &input, ctx)
+            }
+            "GetHealthCheckCount" => {
+                operations::health_checks::get_health_check_count(&state, &input, ctx)
+            }
+            "GetHealthCheckStatus" => {
+                operations::health_checks::get_health_check_status(&state, &input, ctx)
+            }
+            "UpdateHealthCheck" => {
+                operations::health_checks::update_health_check(&state, &input, ctx)
+            }
+
+            // DNS testing
+            "TestDNSAnswer" => operations::extra::test_dns_answer(&state, &input, ctx),
+
+            // Checker IP ranges
+            "GetCheckerIpRanges" => {
+                operations::extra::get_checker_ip_ranges(&state, &input, ctx)
+            }
+
+            // Query Logging
+            "CreateQueryLoggingConfig" => {
+                operations::extra::create_query_logging_config(&state, &input, ctx)
+            }
+            "DeleteQueryLoggingConfig" => {
+                operations::extra::delete_query_logging_config(&state, &input, ctx)
+            }
+            "ListQueryLoggingConfigs" => {
+                operations::extra::list_query_logging_configs(&state, &input, ctx)
             }
 
             // Tags
