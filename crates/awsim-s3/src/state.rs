@@ -57,6 +57,9 @@ pub struct Bucket {
     pub encryption: Option<String>,
     /// Logging configuration (stored as raw JSON-serialized value).
     pub logging: Option<String>,
+    /// Generic named configs (website, replication, requestpayment, accelerate, etc.)
+    /// keyed by config name → JSON string.
+    pub configs: HashMap<String, String>,
     /// Objects keyed by object key.
     pub objects: DashMap<String, S3Object>,
     /// Multipart uploads keyed by upload ID.
@@ -78,6 +81,7 @@ impl Bucket {
             lifecycle: None,
             encryption: None,
             logging: None,
+            configs: HashMap::new(),
             objects: DashMap::new(),
             multipart_uploads: DashMap::new(),
         }
@@ -142,6 +146,8 @@ pub struct BucketSnapshot {
     pub encryption: Option<String>,
     #[serde(default)]
     pub logging: Option<String>,
+    #[serde(default)]
+    pub configs: HashMap<String, String>,
     /// Object metadata only — `data` field is intentionally empty to avoid huge snapshots.
     pub objects: Vec<S3ObjectMetadata>,
 }

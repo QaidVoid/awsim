@@ -628,6 +628,533 @@ fn default_sse_s3_config() -> Value {
     })
 }
 
+// ─── Generic config helpers ──────────────────────────────────────────────────
+
+/// GET /{Bucket}?<param> — Retrieve a stored JSON config from bucket.configs.
+/// Returns `not_found_code` error if not set.
+pub fn get_bucket_config(
+    state: &S3State,
+    input: &Value,
+    config_name: &str,
+    not_found_code: &str,
+) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    match bucket.configs.get(config_name) {
+        Some(raw) => {
+            let parsed: Value = serde_json::from_str(raw).unwrap_or(serde_json::Value::Object(Default::default()));
+            Ok(parsed)
+        }
+        None => Err(AwsError::not_found(
+            not_found_code,
+            format!("The {} configuration does not exist for bucket '{}'", config_name, bucket_name),
+        )),
+    }
+}
+
+/// PUT /{Bucket}?<param> — Store a JSON config on bucket.configs.
+pub fn put_bucket_config(
+    state: &S3State,
+    input: &Value,
+    config_name: &str,
+) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.configs.insert(config_name.to_string(), input.to_string());
+    Ok(json!({}))
+}
+
+/// DELETE /{Bucket}?<param> — Remove a stored config from bucket.configs.
+pub fn delete_bucket_config(
+    state: &S3State,
+    input: &Value,
+    config_name: &str,
+) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.configs.remove(config_name);
+    Ok(json!({}))
+}
+
+// ─── Website ─────────────────────────────────────────────────────────────────
+
+pub fn get_bucket_website(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    get_bucket_config(state, input, "website", "NoSuchWebsiteConfiguration")
+}
+
+pub fn put_bucket_website(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    put_bucket_config(state, input, "website")
+}
+
+pub fn delete_bucket_website(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    delete_bucket_config(state, input, "website")
+}
+
+// ─── Replication ─────────────────────────────────────────────────────────────
+
+pub fn get_bucket_replication(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    get_bucket_config(state, input, "replication", "ReplicationConfigurationNotFoundError")
+}
+
+pub fn put_bucket_replication(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    put_bucket_config(state, input, "replication")
+}
+
+pub fn delete_bucket_replication(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    delete_bucket_config(state, input, "replication")
+}
+
+// ─── Request Payment ─────────────────────────────────────────────────────────
+
+pub fn get_bucket_request_payment(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let payer = match bucket.configs.get("requestpayment") {
+        Some(raw) => {
+            let parsed: Value = serde_json::from_str(raw).unwrap_or(json!({}));
+            parsed.get("Payer").and_then(Value::as_str).unwrap_or("BucketOwner").to_string()
+        }
+        None => "BucketOwner".to_string(),
+    };
+
+    Ok(json!({ "RequestPaymentConfiguration": { "Payer": payer } }))
+}
+
+pub fn put_bucket_request_payment(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let payer = input
+        .get("RequestPaymentConfiguration")
+        .and_then(|v| v.get("Payer"))
+        .and_then(Value::as_str)
+        .or_else(|| input.get("Payer").and_then(Value::as_str))
+        .unwrap_or("BucketOwner");
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.configs.insert("requestpayment".to_string(), json!({ "Payer": payer }).to_string());
+    Ok(json!({}))
+}
+
+// ─── Accelerate Configuration ─────────────────────────────────────────────────
+
+pub fn get_bucket_accelerate_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let status = match bucket.configs.get("accelerate") {
+        Some(raw) => {
+            let parsed: Value = serde_json::from_str(raw).unwrap_or(json!({}));
+            parsed.get("Status").and_then(Value::as_str).unwrap_or("").to_string()
+        }
+        None => String::new(),
+    };
+
+    if status.is_empty() {
+        Ok(json!({ "AccelerateConfiguration": {} }))
+    } else {
+        Ok(json!({ "AccelerateConfiguration": { "Status": status } }))
+    }
+}
+
+pub fn put_bucket_accelerate_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let status = input
+        .get("AccelerateConfiguration")
+        .and_then(|v| v.get("Status"))
+        .and_then(Value::as_str)
+        .or_else(|| input.get("Status").and_then(Value::as_str))
+        .unwrap_or("");
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.configs.insert("accelerate".to_string(), json!({ "Status": status }).to_string());
+    Ok(json!({}))
+}
+
+// ─── Analytics Configurations (keyed by Id) ───────────────────────────────────
+
+pub fn get_bucket_analytics_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    // If no Id is present, this is actually a ListBucketAnalyticsConfigurations request.
+    if input.get("Id").and_then(Value::as_str).is_none() {
+        return list_bucket_analytics_configurations(state, input);
+    }
+    let bucket_name = require_str(input, "Bucket")?;
+    let id = require_str(input, "Id")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let key = format!("analytics:{}", id);
+    match bucket.configs.get(&key) {
+        Some(raw) => {
+            let parsed: Value = serde_json::from_str(raw).unwrap_or(json!({}));
+            Ok(json!({ "AnalyticsConfiguration": parsed }))
+        }
+        None => Err(AwsError::not_found(
+            "NoSuchConfiguration",
+            format!("The analytics configuration with ID '{}' does not exist", id),
+        )),
+    }
+}
+
+pub fn put_bucket_analytics_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let id = require_str(input, "Id")?;
+
+    let config = input.get("AnalyticsConfiguration").unwrap_or(input);
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.configs.insert(format!("analytics:{}", id), config.to_string());
+    Ok(json!({}))
+}
+
+pub fn delete_bucket_analytics_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let id = require_str(input, "Id")?;
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.configs.remove(&format!("analytics:{}", id));
+    Ok(json!({}))
+}
+
+pub fn list_bucket_analytics_configurations(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let configs: Vec<Value> = bucket
+        .configs
+        .iter()
+        .filter(|(k, _)| k.starts_with("analytics:"))
+        .map(|(_, v)| serde_json::from_str(v).unwrap_or(json!({})))
+        .collect();
+
+    Ok(json!({ "AnalyticsConfigurationList": configs, "IsTruncated": false }))
+}
+
+// ─── Metrics Configurations (keyed by Id) ────────────────────────────────────
+
+pub fn get_bucket_metrics_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    if input.get("Id").and_then(Value::as_str).is_none() {
+        return list_bucket_metrics_configurations(state, input);
+    }
+    let bucket_name = require_str(input, "Bucket")?;
+    let id = require_str(input, "Id")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let key = format!("metrics:{}", id);
+    match bucket.configs.get(&key) {
+        Some(raw) => {
+            let parsed: Value = serde_json::from_str(raw).unwrap_or(json!({}));
+            Ok(json!({ "MetricsConfiguration": parsed }))
+        }
+        None => Err(AwsError::not_found(
+            "NoSuchConfiguration",
+            format!("The metrics configuration with ID '{}' does not exist", id),
+        )),
+    }
+}
+
+pub fn put_bucket_metrics_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let id = require_str(input, "Id")?;
+
+    let config = input.get("MetricsConfiguration").unwrap_or(input);
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.configs.insert(format!("metrics:{}", id), config.to_string());
+    Ok(json!({}))
+}
+
+pub fn delete_bucket_metrics_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let id = require_str(input, "Id")?;
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.configs.remove(&format!("metrics:{}", id));
+    Ok(json!({}))
+}
+
+pub fn list_bucket_metrics_configurations(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let configs: Vec<Value> = bucket
+        .configs
+        .iter()
+        .filter(|(k, _)| k.starts_with("metrics:"))
+        .map(|(_, v)| serde_json::from_str(v).unwrap_or(json!({})))
+        .collect();
+
+    Ok(json!({ "MetricsConfigurationList": configs, "IsTruncated": false }))
+}
+
+// ─── Intelligent Tiering Configurations (keyed by Id) ────────────────────────
+
+pub fn get_bucket_intelligent_tiering_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    if input.get("Id").and_then(Value::as_str).is_none() {
+        return list_bucket_intelligent_tiering_configurations(state, input);
+    }
+    let bucket_name = require_str(input, "Bucket")?;
+    let id = require_str(input, "Id")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let key = format!("intelligent-tiering:{}", id);
+    match bucket.configs.get(&key) {
+        Some(raw) => {
+            let parsed: Value = serde_json::from_str(raw).unwrap_or(json!({}));
+            Ok(json!({ "IntelligentTieringConfiguration": parsed }))
+        }
+        None => Err(AwsError::not_found(
+            "NoSuchConfiguration",
+            format!("The intelligent tiering configuration with ID '{}' does not exist", id),
+        )),
+    }
+}
+
+pub fn put_bucket_intelligent_tiering_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let id = require_str(input, "Id")?;
+
+    let config = input.get("IntelligentTieringConfiguration").unwrap_or(input);
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.configs.insert(format!("intelligent-tiering:{}", id), config.to_string());
+    Ok(json!({}))
+}
+
+pub fn delete_bucket_intelligent_tiering_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let id = require_str(input, "Id")?;
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.configs.remove(&format!("intelligent-tiering:{}", id));
+    Ok(json!({}))
+}
+
+pub fn list_bucket_intelligent_tiering_configurations(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let configs: Vec<Value> = bucket
+        .configs
+        .iter()
+        .filter(|(k, _)| k.starts_with("intelligent-tiering:"))
+        .map(|(_, v)| serde_json::from_str(v).unwrap_or(json!({})))
+        .collect();
+
+    Ok(json!({ "IntelligentTieringConfigurationList": configs, "IsTruncated": false }))
+}
+
+// ─── Inventory Configurations (keyed by Id) ───────────────────────────────────
+
+pub fn get_bucket_inventory_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    if input.get("Id").and_then(Value::as_str).is_none() {
+        return list_bucket_inventory_configurations(state, input);
+    }
+    let bucket_name = require_str(input, "Bucket")?;
+    let id = require_str(input, "Id")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let key = format!("inventory:{}", id);
+    match bucket.configs.get(&key) {
+        Some(raw) => {
+            let parsed: Value = serde_json::from_str(raw).unwrap_or(json!({}));
+            Ok(json!({ "InventoryConfiguration": parsed }))
+        }
+        None => Err(AwsError::not_found(
+            "NoSuchConfiguration",
+            format!("The inventory configuration with ID '{}' does not exist", id),
+        )),
+    }
+}
+
+pub fn put_bucket_inventory_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let id = require_str(input, "Id")?;
+
+    let config = input.get("InventoryConfiguration").unwrap_or(input);
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.configs.insert(format!("inventory:{}", id), config.to_string());
+    Ok(json!({}))
+}
+
+pub fn delete_bucket_inventory_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let id = require_str(input, "Id")?;
+
+    let mut bucket = state
+        .buckets
+        .get_mut(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    bucket.configs.remove(&format!("inventory:{}", id));
+    Ok(json!({}))
+}
+
+pub fn list_bucket_inventory_configurations(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let configs: Vec<Value> = bucket
+        .configs
+        .iter()
+        .filter(|(k, _)| k.starts_with("inventory:"))
+        .map(|(_, v)| serde_json::from_str(v).unwrap_or(json!({})))
+        .collect();
+
+    Ok(json!({ "InventoryConfigurationList": configs, "IsTruncated": false }))
+}
+
+// ─── Ownership Controls ───────────────────────────────────────────────────────
+
+pub fn get_bucket_ownership_controls(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    get_bucket_config(state, input, "ownership-controls", "OwnershipControlsNotFoundError")
+}
+
+pub fn put_bucket_ownership_controls(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    put_bucket_config(state, input, "ownership-controls")
+}
+
+pub fn delete_bucket_ownership_controls(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    delete_bucket_config(state, input, "ownership-controls")
+}
+
+// ─── Public Access Block ──────────────────────────────────────────────────────
+
+pub fn get_public_access_block(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+
+    let bucket = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    match bucket.configs.get("public-access-block") {
+        Some(raw) => {
+            let parsed: Value = serde_json::from_str(raw).unwrap_or(default_public_access_block());
+            Ok(parsed)
+        }
+        None => Ok(default_public_access_block()),
+    }
+}
+
+pub fn put_public_access_block(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    put_bucket_config(state, input, "public-access-block")
+}
+
+pub fn delete_public_access_block(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    delete_bucket_config(state, input, "public-access-block")
+}
+
+fn default_public_access_block() -> Value {
+    json!({
+        "PublicAccessBlockConfiguration": {
+            "BlockPublicAcls": false,
+            "IgnorePublicAcls": false,
+            "BlockPublicPolicy": false,
+            "RestrictPublicBuckets": false
+        }
+    })
+}
+
+// ─── SelectObjectContent (stub) ───────────────────────────────────────────────
+
+pub fn select_object_content(_state: &S3State, _input: &Value) -> Result<Value, AwsError> {
+    // Stub — returns empty payload. Real implementation requires streaming.
+    Ok(json!({ "Payload": [] }))
+}
+
 // ─── Logging ─────────────────────────────────────────────────────────────────
 
 /// GET /{Bucket}?logging — Return empty logging configuration.
