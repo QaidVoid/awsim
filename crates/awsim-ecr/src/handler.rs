@@ -2,7 +2,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use crate::operations::{auth, extras, images, repositories, tags};
+use crate::operations::{auth, extras, images, registry, repositories, tags};
 use crate::state::EcrState;
 
 /// The ECR service handler.
@@ -93,6 +93,44 @@ impl ServiceHandler for EcrService {
             "InitiateLayerUpload" => extras::initiate_layer_upload(&state, &input, ctx),
             "UploadLayerPart" => extras::upload_layer_part(&state, &input, ctx),
             "CompleteLayerUpload" => extras::complete_layer_upload(&state, &input, ctx),
+
+            "PutImageTagMutability" => registry::put_image_tag_mutability(&state, &input, ctx),
+            "PutImageScanningConfiguration" => {
+                registry::put_image_scanning_configuration(&state, &input, ctx)
+            }
+            "StartLifecyclePolicyPreview" => {
+                registry::start_lifecycle_policy_preview(&state, &input, ctx)
+            }
+            "GetLifecyclePolicyPreview" => {
+                registry::get_lifecycle_policy_preview(&state, &input, ctx)
+            }
+            "GetRegistryPolicy" => registry::get_registry_policy(&state, &input, ctx),
+            "PutRegistryPolicy" => registry::put_registry_policy(&state, &input, ctx),
+            "DeleteRegistryPolicy" => registry::delete_registry_policy(&state, &input, ctx),
+            "DescribeRegistry" => registry::describe_registry(&state, &input, ctx),
+            "GetRegistryScanningConfiguration" => {
+                registry::get_registry_scanning_configuration(&state, &input, ctx)
+            }
+            "PutRegistryScanningConfiguration" => {
+                registry::put_registry_scanning_configuration(&state, &input, ctx)
+            }
+            "PutReplicationConfiguration" => {
+                registry::put_replication_configuration(&state, &input, ctx)
+            }
+            "BatchGetRepositoryScanningConfiguration" => {
+                registry::batch_get_repository_scanning_configuration(&state, &input, ctx)
+            }
+            "CreatePullThroughCacheRule" => {
+                registry::create_pull_through_cache_rule(&state, &input, ctx)
+            }
+            "DeletePullThroughCacheRule" => {
+                registry::delete_pull_through_cache_rule(&state, &input, ctx)
+            }
+            "DescribePullThroughCacheRules" => {
+                registry::describe_pull_through_cache_rules(&state, &input, ctx)
+            }
+            "GetAccountSetting" => registry::get_account_setting(&state, &input, ctx),
+            "PutAccountSetting" => registry::put_account_setting(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

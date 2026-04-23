@@ -14,7 +14,7 @@ pub fn now_epoch_str() -> String {
         .to_string()
 }
 
-fn repo_to_json(repo: &Repository) -> Value {
+pub fn repo_to_json(repo: &Repository) -> Value {
     json!({
         "repositoryName": repo.name,
         "repositoryArn": repo.arn,
@@ -23,7 +23,7 @@ fn repo_to_json(repo: &Repository) -> Value {
         "createdAt": repo.created_at,
         "imageTagMutability": repo.image_tag_mutability,
         "imageScanningConfiguration": {
-            "scanOnPush": false
+            "scanOnPush": repo.scan_on_push
         },
         "encryptionConfiguration": {
             "encryptionType": "AES256"
@@ -74,6 +74,10 @@ pub fn create_repository(
         }
     }
 
+    let scan_on_push = input["imageScanningConfiguration"]["scanOnPush"]
+        .as_bool()
+        .unwrap_or(false);
+
     let repo = Repository {
         name: name.to_string(),
         arn: arn.clone(),
@@ -84,7 +88,9 @@ pub fn create_repository(
         image_tag_mutability,
         tags,
         lifecycle_policy: None,
+        lifecycle_policy_preview: None,
         repository_policy: None,
+        scan_on_push,
     };
 
     info!(repository = %name, "Created ECR repository");

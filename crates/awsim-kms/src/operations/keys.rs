@@ -220,6 +220,36 @@ pub fn schedule_key_deletion(
 }
 
 // ---------------------------------------------------------------------------
+// CancelKeyDeletion
+// ---------------------------------------------------------------------------
+
+pub fn cancel_key_deletion(
+    state: &KmsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let key_id_input = input["KeyId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("KeyId"))?;
+    let resolved_id = resolve_key_id(state, key_id_input)?;
+    let mut key = state.keys.get_mut(&resolved_id).ok_or_else(|| error::not_found("Key"))?;
+
+    if key.key_state != "PendingDeletion" {
+        return Err(AwsError::bad_request(
+            "KMSInvalidStateException",
+            format!("Key {resolved_id} is not pending deletion"),
+        ));
+    }
+
+    key.key_state = "Disabled".to_string();
+    key.deletion_date = None;
+    let key_id = key.key_id.clone();
+    drop(key);
+
+    Ok(json!({ "KeyId": key_id }))
+}
+
+// ---------------------------------------------------------------------------
 // UpdateKeyDescription
 // ---------------------------------------------------------------------------
 

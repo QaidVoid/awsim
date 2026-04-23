@@ -4,8 +4,8 @@ use tracing::debug;
 
 use crate::operations::{
     consumers, create_stream, delete_stream, describe_stream, describe_stream_summary,
-    encryption, get_records, get_shard_iterator, list_shards, list_streams, merge_split,
-    monitoring, put_record, put_records, retention, tags, update_shard_count,
+    encryption, extras, get_records, get_shard_iterator, list_shards, list_streams,
+    merge_split, monitoring, put_record, put_records, retention, tags, update_shard_count,
 };
 use crate::state::KinesisState;
 
@@ -80,6 +80,22 @@ impl ServiceHandler for KinesisService {
             "StopStreamEncryption" => encryption::stop_stream_encryption(&state, &input, ctx),
             // Update shard count
             "UpdateShardCount" => update_shard_count::handle(&state, &input, ctx),
+            // Resource policies
+            "PutResourcePolicy" => extras::put_resource_policy(&state, &input, ctx),
+            "GetResourcePolicy" => extras::get_resource_policy(&state, &input, ctx),
+            "DeleteResourcePolicy" => extras::delete_resource_policy(&state, &input, ctx),
+            // Tags (resource ARN form)
+            "TagResource" => extras::tag_resource(&state, &input, ctx),
+            "UntagResource" => extras::untag_resource(&state, &input, ctx),
+            "ListTagsForResource" => extras::list_tags_for_resource(&state, &input, ctx),
+            // Account & limits
+            "DescribeAccountSettings" => extras::describe_account_settings(&state, &input, ctx),
+            "DescribeLimits" => extras::describe_limits(&state, &input, ctx),
+            "UpdateAccountSettings" => extras::update_account_settings(&state, &input, ctx),
+            "UpdateMaxRecordSize" => extras::update_max_record_size(&state, &input, ctx),
+            // Stream mode / warm throughput
+            "UpdateStreamMode" => extras::update_stream_mode(&state, &input, ctx),
+            "UpdateStreamWarmThroughput" => extras::update_stream_warm_throughput(&state, &input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

@@ -60,6 +60,7 @@ impl ServiceHandler for KmsService {
             "EnableKey" => operations::keys::enable_key(&state, &input, ctx),
             "DisableKey" => operations::keys::disable_key(&state, &input, ctx),
             "ScheduleKeyDeletion" => operations::keys::schedule_key_deletion(&state, &input, ctx),
+            "CancelKeyDeletion" => operations::keys::cancel_key_deletion(&state, &input, ctx),
             "UpdateKeyDescription" => {
                 operations::keys::update_key_description(&state, &input, ctx)
             }
@@ -68,6 +69,7 @@ impl ServiceHandler for KmsService {
             "CreateAlias" => operations::aliases::create_alias(&state, &input, ctx),
             "DeleteAlias" => operations::aliases::delete_alias(&state, &input, ctx),
             "ListAliases" => operations::aliases::list_aliases(&state, &input, ctx),
+            "UpdateAlias" => operations::aliases::update_alias(&state, &input, ctx),
 
             // Cryptographic operations
             "Encrypt" => operations::crypto::encrypt(&state, &input, ctx),
@@ -101,6 +103,12 @@ impl ServiceHandler for KmsService {
             "DisableKeyRotation" => {
                 operations::rotation::disable_key_rotation(&state, &input, ctx)
             }
+            "RotateKeyOnDemand" => operations::rotation::rotate_key_on_demand(&state, &input, ctx),
+            "ListKeyRotations" => operations::rotation::list_key_rotations(&state, &input, ctx),
+
+            // MAC
+            "GenerateMac" => operations::mac::generate_mac(&state, &input, ctx),
+            "VerifyMac" => operations::mac::verify_mac(&state, &input, ctx),
 
             // Grants
             "CreateGrant" => operations::grants::create_grant(&state, &input, ctx),
@@ -126,9 +134,21 @@ impl ServiceHandler for KmsService {
             "DeleteCustomKeyStore" => {
                 operations::keystores::delete_custom_key_store(&state, &input, ctx)
             }
+            "ConnectCustomKeyStore" => {
+                operations::keystores::connect_custom_key_store(&state, &input, ctx)
+            }
+            "DisconnectCustomKeyStore" => {
+                operations::keystores::disconnect_custom_key_store(&state, &input, ctx)
+            }
+            "UpdateCustomKeyStore" => {
+                operations::keystores::update_custom_key_store(&state, &input, ctx)
+            }
 
             // Multi-region replication
             "ReplicateKey" => operations::keystores::replicate_key(&state, &input, ctx),
+            "UpdatePrimaryRegion" => {
+                operations::keystores::update_primary_region(&state, &input, ctx)
+            }
 
             // Key import
             "GetParametersForImport" => {

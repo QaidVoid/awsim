@@ -4,6 +4,7 @@ pub mod grants;
 pub mod import;
 pub mod keys;
 pub mod keystores;
+pub mod mac;
 pub mod policies;
 pub mod rotation;
 pub mod signing;

@@ -34,7 +34,29 @@ pub struct Repository {
     pub image_tag_mutability: String,
     pub tags: HashMap<String, String>,
     pub lifecycle_policy: Option<String>,
+    pub lifecycle_policy_preview: Option<String>,
     pub repository_policy: Option<String>,
+    pub scan_on_push: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PullThroughCacheRule {
+    pub ecr_repository_prefix: String,
+    pub upstream_registry_url: String,
+    pub upstream_registry: Option<String>,
+    pub credential_arn: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct RegistryScanningConfiguration {
+    pub scan_type: String,
+    pub rules: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ReplicationConfiguration {
+    pub rules: Vec<serde_json::Value>,
 }
 
 /// Per-account/region ECR state.
@@ -44,4 +66,9 @@ pub struct EcrState {
     pub repositories: DashMap<String, Repository>,
     /// uploadId → LayerUpload (in-progress layer uploads)
     pub layer_uploads: DashMap<String, LayerUpload>,
+    pub pull_through_cache_rules: DashMap<String, PullThroughCacheRule>,
+    pub registry_policy: dashmap::DashMap<String, String>,
+    pub registry_scanning_config: std::sync::RwLock<RegistryScanningConfiguration>,
+    pub replication_config: std::sync::RwLock<ReplicationConfiguration>,
+    pub account_settings: DashMap<String, String>,
 }

@@ -4,6 +4,7 @@ pub mod delete_stream;
 pub mod describe_stream;
 pub mod describe_stream_summary;
 pub mod encryption;
+pub mod extras;
 pub mod get_records;
 pub mod get_shard_iterator;
 pub mod list_shards;

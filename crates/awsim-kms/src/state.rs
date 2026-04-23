@@ -49,6 +49,17 @@ pub struct KmsCustomKeyStore {
     pub custom_key_store_id: String,
     pub custom_key_store_name: String,
     pub connection_state: String,
+    pub cloud_hsm_cluster_id: Option<String>,
+    pub trust_anchor_certificate: Option<String>,
+    pub custom_key_store_type: String,
+    pub xks_proxy_uri_endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct KeyRotationEvent {
+    pub key_id: String,
+    pub rotation_date: f64,
+    pub rotation_type: String,
 }
 
 /// Per-account/region KMS state.
@@ -62,4 +73,6 @@ pub struct KmsState {
     pub grants: DashMap<String, KmsGrant>,
     /// CustomKeyStoreId → KmsCustomKeyStore
     pub custom_key_stores: DashMap<String, KmsCustomKeyStore>,
+    /// KeyId -> rotation events
+    pub key_rotations: DashMap<String, Vec<KeyRotationEvent>>,
 }

@@ -31,6 +31,11 @@ pub fn handle(state: &KinesisState, input: &Value, ctx: &RequestContext) -> Resu
         .map(|(i, (start, end))| Shard::new_range(i, start, end))
         .collect();
 
+    let stream_mode = input["StreamModeDetails"]["StreamMode"]
+        .as_str()
+        .unwrap_or("PROVISIONED")
+        .to_string();
+
     let stream = KinesisStream {
         name: stream_name.to_string(),
         arn,
@@ -42,6 +47,9 @@ pub fn handle(state: &KinesisState, input: &Value, ctx: &RequestContext) -> Resu
         enhanced_monitoring: Vec::new(),
         encryption_type: "NONE".to_string(),
         key_id: None,
+        stream_mode,
+        warm_throughput_mibps: 0,
+        warm_throughput_records: 0,
     };
 
     info!(stream = %stream_name, shards = shard_count, "Created Kinesis stream");

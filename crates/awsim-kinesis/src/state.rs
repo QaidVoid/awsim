@@ -11,6 +11,26 @@ pub struct KinesisState {
     pub iterators: DashMap<String, ShardIteratorInfo>,
     /// ConsumerArn → StreamConsumer
     pub consumers: DashMap<String, StreamConsumer>,
+    /// Resource ARN -> policy JSON
+    pub resource_policies: DashMap<String, String>,
+    /// Resource ARN -> tags
+    pub resource_tags: DashMap<String, HashMap<String, String>>,
+    pub account_settings: std::sync::RwLock<AccountSettings>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccountSettings {
+    pub max_record_size: u64,
+    pub default_shard_limit: u64,
+}
+
+impl Default for AccountSettings {
+    fn default() -> Self {
+        Self {
+            max_record_size: 1_048_576,
+            default_shard_limit: 500,
+        }
+    }
 }
 
 /// A stream consumer (enhanced fan-out).
@@ -40,6 +60,10 @@ pub struct KinesisStream {
     pub encryption_type: String,
     /// KMS key ID (if encrypted).
     pub key_id: Option<String>,
+    /// PROVISIONED or ON_DEMAND
+    pub stream_mode: String,
+    pub warm_throughput_mibps: u64,
+    pub warm_throughput_records: u64,
 }
 
 /// A single shard within a stream.

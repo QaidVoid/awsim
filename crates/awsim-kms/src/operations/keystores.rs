@@ -31,10 +31,22 @@ pub fn create_custom_key_store(
 
     let id = format!("cks-{}", Uuid::new_v4().to_string().replace('-', "")[..16].to_string());
 
+    let cloud_hsm_cluster_id = input["CloudHsmClusterId"].as_str().map(|s| s.to_string());
+    let trust_anchor_certificate = input["TrustAnchorCertificate"].as_str().map(|s| s.to_string());
+    let custom_key_store_type = input["CustomKeyStoreType"]
+        .as_str()
+        .unwrap_or("AWS_CLOUDHSM")
+        .to_string();
+    let xks_proxy_uri_endpoint = input["XksProxyUriEndpoint"].as_str().map(|s| s.to_string());
+
     let store = KmsCustomKeyStore {
         custom_key_store_id: id.clone(),
         custom_key_store_name: name,
         connection_state: "DISCONNECTED".to_string(),
+        cloud_hsm_cluster_id,
+        trust_anchor_certificate,
+        custom_key_store_type,
+        xks_proxy_uri_endpoint,
     };
 
     state.custom_key_stores.insert(id.clone(), store);
@@ -73,6 +85,10 @@ pub fn describe_custom_key_stores(
                 "CustomKeyStoreId": v.custom_key_store_id,
                 "CustomKeyStoreName": v.custom_key_store_name,
                 "ConnectionState": v.connection_state,
+                "CustomKeyStoreType": v.custom_key_store_type,
+                "CloudHsmClusterId": v.cloud_hsm_cluster_id,
+                "TrustAnchorCertificate": v.trust_anchor_certificate,
+                "XksProxyUriEndpoint": v.xks_proxy_uri_endpoint,
             })
         })
         .collect();
@@ -100,6 +116,85 @@ pub fn delete_custom_key_store(
         ));
     }
 
+    Ok(json!({}))
+}
+
+pub fn connect_custom_key_store(
+    state: &KmsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = input["CustomKeyStoreId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("CustomKeyStoreId"))?;
+    let mut store = state.custom_key_stores.get_mut(id).ok_or_else(|| {
+        AwsError::not_found(
+            "CustomKeyStoreNotFoundException",
+            format!("Custom key store '{id}' does not exist"),
+        )
+    })?;
+    store.connection_state = "CONNECTED".to_string();
+    Ok(json!({}))
+}
+
+pub fn disconnect_custom_key_store(
+    state: &KmsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = input["CustomKeyStoreId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("CustomKeyStoreId"))?;
+    let mut store = state.custom_key_stores.get_mut(id).ok_or_else(|| {
+        AwsError::not_found(
+            "CustomKeyStoreNotFoundException",
+            format!("Custom key store '{id}' does not exist"),
+        )
+    })?;
+    store.connection_state = "DISCONNECTED".to_string();
+    Ok(json!({}))
+}
+
+pub fn update_custom_key_store(
+    state: &KmsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = input["CustomKeyStoreId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("CustomKeyStoreId"))?;
+    let mut store = state.custom_key_stores.get_mut(id).ok_or_else(|| {
+        AwsError::not_found(
+            "CustomKeyStoreNotFoundException",
+            format!("Custom key store '{id}' does not exist"),
+        )
+    })?;
+
+    if let Some(name) = input["NewCustomKeyStoreName"].as_str() {
+        store.custom_key_store_name = name.to_string();
+    }
+    if let Some(cluster) = input["CloudHsmClusterId"].as_str() {
+        store.cloud_hsm_cluster_id = Some(cluster.to_string());
+    }
+    if let Some(uri) = input["XksProxyUriEndpoint"].as_str() {
+        store.xks_proxy_uri_endpoint = Some(uri.to_string());
+    }
+
+    Ok(json!({}))
+}
+
+pub fn update_primary_region(
+    state: &KmsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let key_id_input = input["KeyId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("KeyId"))?;
+    let _ = input["PrimaryRegion"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("PrimaryRegion"))?;
+    let _ = crate::operations::keys::resolve_key_id(state, key_id_input)?;
     Ok(json!({}))
 }
 

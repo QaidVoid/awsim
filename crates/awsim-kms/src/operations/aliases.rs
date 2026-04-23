@@ -92,3 +92,24 @@ pub fn list_aliases(
 
     Ok(json!({ "Aliases": aliases, "Truncated": false }))
 }
+
+pub fn update_alias(
+    state: &KmsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let alias_name = input["AliasName"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("AliasName"))?;
+    let target_key_id = input["TargetKeyId"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("TargetKeyId"))?;
+
+    if !state.aliases.contains_key(alias_name) {
+        return Err(error::not_found("Alias"));
+    }
+
+    let key_id = resolve_key_id(state, target_key_id)?;
+    state.aliases.insert(alias_name.to_string(), key_id);
+    Ok(json!({}))
+}
