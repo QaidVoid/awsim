@@ -1,0 +1,41 @@
+{
+  "smithy": "2.0",
+  "shapes": {
+    "com.amazonaws.acm#CertificateManager": {
+      "type": "service",
+      "version": "2015-12-08",
+      "operations": [
+        {"target": "com.amazonaws.acm#RequestCertificate"},
+        {"target": "com.amazonaws.acm#DescribeCertificate"},
+        {"target": "com.amazonaws.acm#ListCertificates"},
+        {"target": "com.amazonaws.acm#DeleteCertificate"},
+        {"target": "com.amazonaws.acm#GetCertificate"},
+        {"target": "com.amazonaws.acm#ImportCertificate"},
+        {"target": "com.amazonaws.acm#RenewCertificate"},
+        {"target": "com.amazonaws.acm#AddTagsToCertificate"},
+        {"target": "com.amazonaws.acm#RemoveTagsFromCertificate"},
+        {"target": "com.amazonaws.acm#ListTagsForCertificate"},
+        {"target": "com.amazonaws.acm#ExportCertificate"},
+        {"target": "com.amazonaws.acm#GetAccountConfiguration"},
+        {"target": "com.amazonaws.acm#PutAccountConfiguration"},
+        {"target": "com.amazonaws.acm#ResendValidationEmail"},
+        {"target": "com.amazonaws.acm#UpdateCertificateOptions"}
+      ]
+    },
+    "com.amazonaws.acm#RequestCertificate": {"type": "operation"},
+    "com.amazonaws.acm#DescribeCertificate": {"type": "operation"},
+    "com.amazonaws.acm#ListCertificates": {"type": "operation"},
+    "com.amazonaws.acm#DeleteCertificate": {"type": "operation"},
+    "com.amazonaws.acm#GetCertificate": {"type": "operation"},
+    "com.amazonaws.acm#ImportCertificate": {"type": "operation"},
+    "com.amazonaws.acm#RenewCertificate": {"type": "operation"},
+    "com.amazonaws.acm#AddTagsToCertificate": {"type": "operation"},
+    "com.amazonaws.acm#RemoveTagsFromCertificate": {"type": "operation"},
+    "com.amazonaws.acm#ListTagsForCertificate": {"type": "operation"},
+    "com.amazonaws.acm#ExportCertificate": {"type": "operation"},
+    "com.amazonaws.acm#GetAccountConfiguration": {"type": "operation"},
+    "com.amazonaws.acm#PutAccountConfiguration": {"type": "operation"},
+    "com.amazonaws.acm#ResendValidationEmail": {"type": "operation"},
+    "com.amazonaws.acm#UpdateCertificateOptions": {"type": "operation"}
+  }
+}

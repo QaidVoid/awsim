@@ -1,0 +1,35 @@
+{
+  "smithy": "2.0",
+  "shapes": {
+    "com.amazonaws.scheduler#AmazonEventBridgeScheduler": {
+      "type": "service",
+      "version": "2021-06-30",
+      "operations": [
+        {"target": "com.amazonaws.scheduler#CreateSchedule"},
+        {"target": "com.amazonaws.scheduler#GetSchedule"},
+        {"target": "com.amazonaws.scheduler#ListSchedules"},
+        {"target": "com.amazonaws.scheduler#UpdateSchedule"},
+        {"target": "com.amazonaws.scheduler#DeleteSchedule"},
+        {"target": "com.amazonaws.scheduler#CreateScheduleGroup"},
+        {"target": "com.amazonaws.scheduler#GetScheduleGroup"},
+        {"target": "com.amazonaws.scheduler#ListScheduleGroups"},
+        {"target": "com.amazonaws.scheduler#DeleteScheduleGroup"},
+        {"target": "com.amazonaws.scheduler#TagResource"},
+        {"target": "com.amazonaws.scheduler#UntagResource"},
+        {"target": "com.amazonaws.scheduler#ListTagsForResource"}
+      ]
+    },
+    "com.amazonaws.scheduler#CreateSchedule": {"type": "operation"},
+    "com.amazonaws.scheduler#GetSchedule": {"type": "operation"},
+    "com.amazonaws.scheduler#ListSchedules": {"type": "operation"},
+    "com.amazonaws.scheduler#UpdateSchedule": {"type": "operation"},
+    "com.amazonaws.scheduler#DeleteSchedule": {"type": "operation"},
+    "com.amazonaws.scheduler#CreateScheduleGroup": {"type": "operation"},
+    "com.amazonaws.scheduler#GetScheduleGroup": {"type": "operation"},
+    "com.amazonaws.scheduler#ListScheduleGroups": {"type": "operation"},
+    "com.amazonaws.scheduler#DeleteScheduleGroup": {"type": "operation"},
+    "com.amazonaws.scheduler#TagResource": {"type": "operation"},
+    "com.amazonaws.scheduler#UntagResource": {"type": "operation"},
+    "com.amazonaws.scheduler#ListTagsForResource": {"type": "operation"}
+  }
+}
