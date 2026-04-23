@@ -37,6 +37,25 @@ pub struct NamedQuery {
     pub description: Option<String>,
 }
 
+/// An Athena data catalog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataCatalog {
+    pub name: String,
+    pub catalog_type: String, // LAMBDA | GLUE | HIVE
+    pub description: Option<String>,
+    pub parameters: serde_json::Value,
+}
+
+/// An Athena prepared statement.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreparedStatement {
+    pub statement_name: String,
+    pub workgroup: String,
+    pub query_statement: String,
+    pub description: Option<String>,
+    pub last_modified_time: String,
+}
+
 /// Per-account/region Athena state.
 #[derive(Debug, Default)]
 pub struct AthenaState {
@@ -46,6 +65,10 @@ pub struct AthenaState {
     pub query_executions: DashMap<String, QueryExecution>,
     /// NamedQueryId → NamedQuery
     pub named_queries: DashMap<String, NamedQuery>,
+    /// CatalogName → DataCatalog
+    pub data_catalogs: DashMap<String, DataCatalog>,
+    /// "{workgroup}/{statement_name}" → PreparedStatement
+    pub prepared_statements: DashMap<String, PreparedStatement>,
 }
 
 impl AthenaState {
@@ -58,5 +81,17 @@ impl AthenaState {
             output_location: None,
             created_at: now.to_string(),
         });
+    }
+
+    /// Called lazily on first use; ensures the built-in AwsDataCatalog exists.
+    pub fn ensure_default_catalog(&self) {
+        self.data_catalogs
+            .entry("AwsDataCatalog".to_string())
+            .or_insert_with(|| DataCatalog {
+                name: "AwsDataCatalog".to_string(),
+                catalog_type: "GLUE".to_string(),
+                description: Some("The AWS Glue Data Catalog".to_string()),
+                parameters: serde_json::json!({}),
+            });
     }
 }

@@ -162,6 +162,37 @@ pub fn stop_query_execution(
 }
 
 // ---------------------------------------------------------------------------
+// BatchGetQueryExecution
+// ---------------------------------------------------------------------------
+
+pub fn batch_get_query_execution(
+    state: &AthenaState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let ids: Vec<&str> = match &input["QueryExecutionIds"] {
+        Value::Array(arr) => arr.iter().filter_map(|v| v.as_str()).collect(),
+        _ => vec![],
+    };
+
+    let mut found = Vec::new();
+    let mut unprocessed = Vec::new();
+
+    for id in ids {
+        if let Some(qe) = state.query_executions.get(id) {
+            found.push(query_execution_to_value(&qe));
+        } else {
+            unprocessed.push(Value::String(id.to_string()));
+        }
+    }
+
+    Ok(json!({
+        "QueryExecutions": found,
+        "UnprocessedQueryExecutionIds": unprocessed,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

@@ -121,6 +121,42 @@ pub fn list_workgroups(
 }
 
 // ---------------------------------------------------------------------------
+// UpdateWorkGroup
+// ---------------------------------------------------------------------------
+
+pub fn update_workgroup(
+    state: &AthenaState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["WorkGroup"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "WorkGroup is required"))?;
+
+    let mut wg = state.workgroups.get_mut(name).ok_or_else(|| {
+        AwsError::not_found("InvalidRequestException", format!("WorkGroup not found: {name}"))
+    })?;
+
+    if let Some(desc) = input["Description"].as_str() {
+        wg.description = Some(desc.to_string());
+    }
+
+    if let Some(output) = input["ConfigurationUpdates"]["ResultConfigurationUpdates"]
+        ["OutputLocation"]
+        .as_str()
+    {
+        wg.output_location = Some(output.to_string());
+    }
+
+    if let Some(state_val) = input["State"].as_str() {
+        wg.state = state_val.to_string();
+    }
+
+    info!(name = %name, "Updated Athena workgroup");
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

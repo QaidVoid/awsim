@@ -51,6 +51,9 @@ curl -s http://localhost:4566 \
 - `ListWorkGroups` — list all workgroups
   - Returns: paginated `WorkGroups` list; `primary` is always present
 
+- `UpdateWorkGroup` — update workgroup description, state, or output location
+  - Input: `WorkGroup`, optional `Description`, `State` (`ENABLED`/`DISABLED`), `ConfigurationUpdates.ResultConfigurationUpdates.OutputLocation`
+
 ### Query Executions
 - `StartQueryExecution` — submit a SQL query for execution
   - Input: `QueryString` (SQL), `QueryExecutionContext` (`Database`), `ResultConfiguration` (`OutputLocation` as `s3://` URI), optional `WorkGroup`
@@ -71,6 +74,10 @@ curl -s http://localhost:4566 \
 - `StopQueryExecution` — cancel a running query
   - Input: `QueryExecutionId`
 
+- `BatchGetQueryExecution` — retrieve multiple query executions in a single call
+  - Input: `QueryExecutionIds` (list of UUIDs)
+  - Returns: `QueryExecutions` (found), `UnprocessedQueryExecutionIds` (not found)
+
 ### Named Queries
 - `CreateNamedQuery` — save a named SQL query for reuse
   - Input: `Name`, `Database`, `QueryString`, optional `Description`, `WorkGroup`
@@ -86,12 +93,54 @@ curl -s http://localhost:4566 \
 - `DeleteNamedQuery` — delete a named query
   - Input: `NamedQueryId`
 
+- `BatchGetNamedQuery` — retrieve multiple named queries in a single call
+  - Input: `NamedQueryIds` (list of UUIDs)
+  - Returns: `NamedQueries` (found), `UnprocessedNamedQueryIds` (not found)
+
 ### Databases
 - `ListDatabases` — list databases in a data catalog
   - Input: `CatalogName` (use `AwsDataCatalog`)
   - Returns: `DatabaseList`
 
 - `GetDatabase` — get details of a specific database
+  - Input: `CatalogName`, `DatabaseName`
+
+### Data Catalogs
+- `ListDataCatalogs` — list available data catalogs
+  - Returns: `DataCatalogsSummary`; always includes the built-in `AwsDataCatalog` (type `GLUE`)
+
+- `GetDataCatalog` — get details of a data catalog
+  - Input: `Name`
+  - Returns: `DataCatalog` with `CatalogName`, `Type`, `Description`, `Parameters`
+
+- `CreateDataCatalog` — create a custom data catalog
+  - Input: `Name`, `Type` (`LAMBDA`, `GLUE`, or `HIVE`), optional `Description`, `Parameters`
+
+- `DeleteDataCatalog` — delete a data catalog
+  - Input: `Name`
+
+### Prepared Statements
+- `CreatePreparedStatement` — save a parameterized SQL statement for reuse
+  - Input: `StatementName`, `WorkGroup`, `QueryStatement`, optional `Description`
+  - Returns: empty response
+
+- `GetPreparedStatement` — retrieve a prepared statement
+  - Input: `StatementName`, `WorkGroup`
+  - Returns: `PreparedStatement` with `QueryStatement`, `LastModifiedTime`
+
+- `ListPreparedStatements` — list prepared statements in a workgroup
+  - Input: `WorkGroup`
+  - Returns: `PreparedStatements` list with name and modification time
+
+- `DeletePreparedStatement` — delete a prepared statement
+  - Input: `StatementName`, `WorkGroup`
+
+### Table Metadata
+- `GetTableMetadata` — retrieve metadata for a table in a catalog (stub)
+  - Input: `CatalogName`, `DatabaseName`, `TableName`
+  - Returns: `TableMetadata` with `Name`, `TableType`, empty `Columns` and `PartitionKeys`
+
+- `ListTableMetadata` — list table metadata for a database (stub returning empty list)
   - Input: `CatalogName`, `DatabaseName`
 
 ## Curl Examples
@@ -165,3 +214,7 @@ console.log('Rows:', ResultSet?.Rows?.length);
 - The `OutputLocation` in `ResultConfiguration` is recorded but no files are written to S3.
 - `ListDatabases` and `GetDatabase` are stubs returning minimal metadata.
 - Query execution times in `Statistics` are simulated (not real measurements).
+- `ListDataCatalogs` always includes the built-in `AwsDataCatalog` (type `GLUE`).
+- `GetTableMetadata` and `ListTableMetadata` are stubs; real table schemas are not tracked.
+- Prepared statements are scoped by workgroup — the same name can exist in different workgroups.
+- State is in-memory only and lost on restart.

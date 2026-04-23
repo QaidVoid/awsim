@@ -91,6 +91,44 @@ pub fn list_named_queries(
 }
 
 // ---------------------------------------------------------------------------
+// BatchGetNamedQuery
+// ---------------------------------------------------------------------------
+
+pub fn batch_get_named_query(
+    state: &AthenaState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let ids: Vec<&str> = match &input["NamedQueryIds"] {
+        Value::Array(arr) => arr.iter().filter_map(|v| v.as_str()).collect(),
+        _ => vec![],
+    };
+
+    let mut found = Vec::new();
+    let mut unprocessed = Vec::new();
+
+    for id in ids {
+        if let Some(nq) = state.named_queries.get(id) {
+            found.push(json!({
+                "NamedQueryId": nq.id,
+                "Name": nq.name,
+                "Database": nq.database,
+                "QueryString": nq.query_string,
+                "WorkGroup": nq.workgroup,
+                "Description": nq.description,
+            }));
+        } else {
+            unprocessed.push(Value::String(id.to_string()));
+        }
+    }
+
+    Ok(json!({
+        "NamedQueries": found,
+        "UnprocessedNamedQueryIds": unprocessed,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // DeleteNamedQuery
 // ---------------------------------------------------------------------------
 
