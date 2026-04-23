@@ -57,6 +57,9 @@ pub fn create_key(
         deletion_date: None,
         rotation_enabled: false,
         policies: HashMap::new(),
+        tags: HashMap::new(),
+        key_material_imported: false,
+        origin: "AWS_KMS".to_string(),
     };
 
     state.keys.insert(key_id.clone(), key);
@@ -313,7 +316,7 @@ pub fn key_metadata(key: &KmsKey) -> Value {
         "CreationDate": key.creation_date,
         "Enabled": enabled,
         "KeyManager": "CUSTOMER",
-        "Origin": "AWS_KMS",
+        "Origin": key.origin,
         "MultiRegion": false,
     });
 

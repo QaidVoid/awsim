@@ -35,6 +35,20 @@ pub struct KmsKey {
     pub rotation_enabled: bool,
     /// Key policy document (JSON string), keyed by policy name.
     pub policies: HashMap<String, String>,
+    /// Resource tags: key → value.
+    pub tags: HashMap<String, String>,
+    /// Whether key material has been imported.
+    pub key_material_imported: bool,
+    /// "AWS_KMS" or "EXTERNAL"
+    pub origin: String,
+}
+
+/// A custom key store stub.
+#[derive(Debug, Clone)]
+pub struct KmsCustomKeyStore {
+    pub custom_key_store_id: String,
+    pub custom_key_store_name: String,
+    pub connection_state: String,
 }
 
 /// Per-account/region KMS state.
@@ -46,4 +60,6 @@ pub struct KmsState {
     pub aliases: DashMap<String, String>,
     /// GrantId → KmsGrant
     pub grants: DashMap<String, KmsGrant>,
+    /// CustomKeyStoreId → KmsCustomKeyStore
+    pub custom_key_stores: DashMap<String, KmsCustomKeyStore>,
 }

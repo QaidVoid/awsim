@@ -1,6 +1,10 @@
 pub mod aliases;
 pub mod crypto;
 pub mod grants;
+pub mod import;
 pub mod keys;
+pub mod keystores;
 pub mod policies;
 pub mod rotation;
+pub mod signing;
+pub mod tagging;

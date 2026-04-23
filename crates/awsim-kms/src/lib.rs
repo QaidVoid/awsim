@@ -78,6 +78,18 @@ impl ServiceHandler for KmsService {
             }
             "ReEncrypt" => operations::crypto::re_encrypt(&state, &input, ctx),
             "GenerateRandom" => operations::crypto::generate_random(&state, &input, ctx),
+            "GenerateDataKeyPair" => {
+                operations::signing::generate_data_key_pair(&state, &input, ctx)
+            }
+            "GenerateDataKeyPairWithoutPlaintext" => {
+                operations::signing::generate_data_key_pair_without_plaintext(&state, &input, ctx)
+            }
+
+            // Asymmetric / signing operations
+            "Sign" => operations::signing::sign(&state, &input, ctx),
+            "Verify" => operations::signing::verify(&state, &input, ctx),
+            "GetPublicKey" => operations::signing::get_public_key(&state, &input, ctx),
+            "DeriveSharedSecret" => operations::signing::derive_shared_secret(&state, &input, ctx),
 
             // Key rotation
             "GetKeyRotationStatus" => {
@@ -103,6 +115,34 @@ impl ServiceHandler for KmsService {
             "GetKeyPolicy" => operations::policies::get_key_policy(&state, &input, ctx),
             "PutKeyPolicy" => operations::policies::put_key_policy(&state, &input, ctx),
             "ListKeyPolicies" => operations::policies::list_key_policies(&state, &input, ctx),
+
+            // Custom key stores
+            "CreateCustomKeyStore" => {
+                operations::keystores::create_custom_key_store(&state, &input, ctx)
+            }
+            "DescribeCustomKeyStores" => {
+                operations::keystores::describe_custom_key_stores(&state, &input, ctx)
+            }
+            "DeleteCustomKeyStore" => {
+                operations::keystores::delete_custom_key_store(&state, &input, ctx)
+            }
+
+            // Multi-region replication
+            "ReplicateKey" => operations::keystores::replicate_key(&state, &input, ctx),
+
+            // Key import
+            "GetParametersForImport" => {
+                operations::import::get_parameters_for_import(&state, &input, ctx)
+            }
+            "ImportKeyMaterial" => operations::import::import_key_material(&state, &input, ctx),
+            "DeleteImportedKeyMaterial" => {
+                operations::import::delete_imported_key_material(&state, &input, ctx)
+            }
+
+            // Resource tagging
+            "TagResource" => operations::tagging::tag_resource(&state, &input, ctx),
+            "UntagResource" => operations::tagging::untag_resource(&state, &input, ctx),
+            "ListResourceTags" => operations::tagging::list_resource_tags(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }
@@ -406,5 +446,245 @@ mod tests {
         let ctx = ctx();
         let err = block_on(svc.handle("FooBar", json!({}), &ctx)).unwrap_err();
         assert_eq!(err.code, "UnknownOperationException");
+    }
+
+    #[test]
+    fn test_sign_and_verify() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        // Create an asymmetric key with SIGN_VERIFY usage
+        let created = block_on(svc.handle(
+            "CreateKey",
+            json!({ "KeySpec": "RSA_2048", "KeyUsage": "SIGN_VERIFY" }),
+            &ctx,
+        ))
+        .unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+
+        let message_b64 = BASE64.encode(b"hello world");
+
+        let signed = block_on(svc.handle(
+            "Sign",
+            json!({
+                "KeyId": key_id,
+                "Message": message_b64,
+                "SigningAlgorithm": "RSASSA_PSS_SHA_256",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let signature = signed["Signature"].as_str().unwrap();
+        assert!(signature.len() > 0);
+
+        let verified = block_on(svc.handle(
+            "Verify",
+            json!({
+                "KeyId": key_id,
+                "Message": message_b64,
+                "Signature": signature,
+                "SigningAlgorithm": "RSASSA_PSS_SHA_256",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(verified["SignatureValid"].as_bool().unwrap(), true);
+    }
+
+    #[test]
+    fn test_sign_symmetric_key_fails() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+
+        let err = block_on(svc.handle(
+            "Sign",
+            json!({
+                "KeyId": key_id,
+                "Message": BASE64.encode(b"data"),
+                "SigningAlgorithm": "RSASSA_PSS_SHA_256",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn test_get_public_key() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle(
+            "CreateKey",
+            json!({ "KeySpec": "RSA_2048", "KeyUsage": "SIGN_VERIFY" }),
+            &ctx,
+        ))
+        .unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+
+        let result = block_on(svc.handle("GetPublicKey", json!({ "KeyId": key_id }), &ctx))
+            .unwrap();
+        assert!(result["PublicKey"].as_str().is_some());
+        assert_eq!(result["KeySpec"].as_str().unwrap(), "RSA_2048");
+    }
+
+    #[test]
+    fn test_get_public_key_symmetric_fails() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+
+        let err = block_on(svc.handle("GetPublicKey", json!({ "KeyId": key_id }), &ctx))
+            .unwrap_err();
+        assert_eq!(err.code, "UnsupportedOperationException");
+    }
+
+    #[test]
+    fn test_generate_data_key_pair() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+
+        let result = block_on(svc.handle(
+            "GenerateDataKeyPair",
+            json!({ "KeyId": key_id, "KeyPairSpec": "RSA_2048" }),
+            &ctx,
+        ))
+        .unwrap();
+        assert!(result["PublicKey"].as_str().is_some());
+        assert!(result["PrivateKeyPlaintext"].as_str().is_some());
+        assert!(result["PrivateKeyCiphertextBlob"].as_str().is_some());
+    }
+
+    #[test]
+    fn test_generate_data_key_pair_without_plaintext() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+
+        let result = block_on(svc.handle(
+            "GenerateDataKeyPairWithoutPlaintext",
+            json!({ "KeyId": key_id, "KeyPairSpec": "RSA_2048" }),
+            &ctx,
+        ))
+        .unwrap();
+        assert!(result["PublicKey"].as_str().is_some());
+        assert!(result["PrivateKeyPlaintext"].is_null());
+        assert!(result["PrivateKeyCiphertextBlob"].as_str().is_some());
+    }
+
+    #[test]
+    fn test_tag_resource_and_list() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+
+        block_on(svc.handle(
+            "TagResource",
+            json!({
+                "KeyId": key_id,
+                "Tags": [
+                    { "TagKey": "env", "TagValue": "prod" },
+                    { "TagKey": "team", "TagValue": "infra" }
+                ]
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let tags = block_on(svc.handle("ListResourceTags", json!({ "KeyId": key_id }), &ctx))
+            .unwrap();
+        assert_eq!(tags["Tags"].as_array().unwrap().len(), 2);
+
+        block_on(svc.handle(
+            "UntagResource",
+            json!({ "KeyId": key_id, "TagKeys": ["env"] }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let tags2 = block_on(svc.handle("ListResourceTags", json!({ "KeyId": key_id }), &ctx))
+            .unwrap();
+        assert_eq!(tags2["Tags"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_custom_key_store_lifecycle() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+
+        let created = block_on(svc.handle(
+            "CreateCustomKeyStore",
+            json!({ "CustomKeyStoreName": "my-store" }),
+            &ctx,
+        ))
+        .unwrap();
+        let store_id = created["CustomKeyStoreId"].as_str().unwrap();
+        assert!(store_id.starts_with("cks-"));
+
+        let listed = block_on(svc.handle("DescribeCustomKeyStores", json!({}), &ctx)).unwrap();
+        assert_eq!(listed["CustomKeyStores"].as_array().unwrap().len(), 1);
+
+        block_on(svc.handle(
+            "DeleteCustomKeyStore",
+            json!({ "CustomKeyStoreId": store_id }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let listed2 = block_on(svc.handle("DescribeCustomKeyStores", json!({}), &ctx)).unwrap();
+        assert_eq!(listed2["CustomKeyStores"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_get_parameters_for_import() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+
+        let result = block_on(svc.handle(
+            "GetParametersForImport",
+            json!({
+                "KeyId": key_id,
+                "WrappingAlgorithm": "RSAES_OAEP_SHA_256",
+                "WrappingKeySpec": "RSA_2048"
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert!(result["PublicKey"].as_str().is_some());
+        assert!(result["ImportToken"].as_str().is_some());
+    }
+
+    #[test]
+    fn test_import_key_material() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+
+        block_on(svc.handle(
+            "ImportKeyMaterial",
+            json!({
+                "KeyId": key_id,
+                "EncryptedKeyMaterial": BASE64.encode(b"fake-material"),
+                "ImportToken": BASE64.encode(b"fake-token"),
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        // Verify origin is now EXTERNAL
+        let described =
+            block_on(svc.handle("DescribeKey", json!({ "KeyId": key_id }), &ctx)).unwrap();
+        assert_eq!(
+            described["KeyMetadata"]["Origin"].as_str().unwrap(),
+            "EXTERNAL"
+        );
     }
 }

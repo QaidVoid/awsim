@@ -23,6 +23,12 @@ fn xor_encrypt(key_id: &str, secret: &[u8], plaintext: &[u8]) -> Vec<u8> {
     blob
 }
 
+/// Exported helper: XOR-encrypt plaintext with a key's secret, prefixed with key_id.
+/// Used by other modules (e.g. signing) that need to produce a ciphertext blob.
+pub fn encrypt_raw(key_id: &str, secret: &[u8], plaintext: &[u8]) -> Vec<u8> {
+    xor_encrypt(key_id, secret, plaintext)
+}
+
 fn xor_decrypt(secret: &[u8], ciphertext_payload: &[u8]) -> Vec<u8> {
     ciphertext_payload
         .iter()
