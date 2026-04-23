@@ -1,8 +1,12 @@
+pub mod activations;
 pub mod automation;
 pub mod commands;
+pub mod compliance;
 pub mod documents;
 pub mod maintenance;
+pub mod opsmeta;
 pub mod parameters;
 pub mod patch_baselines;
+pub mod policies;
 pub mod sessions;
 pub mod tags;

@@ -3,7 +3,8 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::operations::{
-    automation, commands, documents, maintenance, parameters, patch_baselines, sessions, tags,
+    activations, automation, commands, compliance, documents, maintenance, opsmeta, parameters,
+    patch_baselines, policies, sessions, tags,
 };
 use crate::state::SsmState;
 
@@ -161,6 +162,140 @@ impl ServiceHandler for SsmService {
             "ListComplianceSummaries" => {
                 maintenance::list_compliance_summaries(&state, &input, ctx)
             }
+
+            // OpsMetadata
+            "CreateOpsMetadata" => opsmeta::create_ops_metadata(&state, &input, ctx),
+            "GetOpsMetadata" => opsmeta::get_ops_metadata(&state, &input, ctx),
+            "UpdateOpsMetadata" => opsmeta::update_ops_metadata(&state, &input, ctx),
+            "DeleteOpsMetadata" => opsmeta::delete_ops_metadata(&state, &input, ctx),
+            "ListOpsMetadata" => opsmeta::list_ops_metadata(&state, &input, ctx),
+
+            // OpsItem extras
+            "DeleteOpsItem" => opsmeta::delete_ops_item(&state, &input, ctx),
+            "GetOpsSummary" => opsmeta::get_ops_summary(&state, &input, ctx),
+            "ListOpsItemEvents" => opsmeta::list_ops_item_events(&state, &input, ctx),
+            "ListOpsItemRelatedItems" => opsmeta::list_ops_item_related_items(&state, &input, ctx),
+            "AssociateOpsItemRelatedItem" => {
+                opsmeta::associate_ops_item_related_item(&state, &input, ctx)
+            }
+            "DisassociateOpsItemRelatedItem" => {
+                opsmeta::disassociate_ops_item_related_item(&state, &input, ctx)
+            }
+
+            // Activations / managed instances
+            "CreateActivation" => activations::create_activation(&state, &input, ctx),
+            "DeleteActivation" => activations::delete_activation(&state, &input, ctx),
+            "DescribeActivations" => activations::describe_activations(&state, &input, ctx),
+            "DescribeInstanceInformation" => {
+                activations::describe_instance_information(&state, &input, ctx)
+            }
+            "DescribeInstanceProperties" => {
+                activations::describe_instance_properties(&state, &input, ctx)
+            }
+            "DeregisterManagedInstance" => {
+                activations::deregister_managed_instance(&state, &input, ctx)
+            }
+            "UpdateManagedInstanceRole" => {
+                activations::update_managed_instance_role(&state, &input, ctx)
+            }
+
+            // Compliance
+            "PutComplianceItems" => compliance::put_compliance_items(&state, &input, ctx),
+            "ListComplianceItems" => compliance::list_compliance_items(&state, &input, ctx),
+            "ListResourceComplianceSummaries" => {
+                compliance::list_resource_compliance_summaries(&state, &input, ctx)
+            }
+
+            // Resource policies
+            "PutResourcePolicy" => policies::put_resource_policy(&state, &input, ctx),
+            "GetResourcePolicies" => policies::get_resource_policies(&state, &input, ctx),
+            "DeleteResourcePolicy" => policies::delete_resource_policy(&state, &input, ctx),
+
+            // Maintenance window extras
+            "DeregisterTargetFromMaintenanceWindow" => {
+                maintenance::deregister_target_from_maintenance_window(&state, &input, ctx)
+            }
+            "DeregisterTaskFromMaintenanceWindow" => {
+                maintenance::deregister_task_from_maintenance_window(&state, &input, ctx)
+            }
+            "GetMaintenanceWindowTask" => {
+                maintenance::get_maintenance_window_task(&state, &input, ctx)
+            }
+            "UpdateMaintenanceWindowTarget" => {
+                maintenance::update_maintenance_window_target(&state, &input, ctx)
+            }
+            "UpdateMaintenanceWindowTask" => {
+                maintenance::update_maintenance_window_task(&state, &input, ctx)
+            }
+
+            // Patches extras
+            "DescribeInstancePatches" => {
+                maintenance::describe_instance_patches(&state, &input, ctx)
+            }
+            "DescribeInstancePatchStates" => {
+                maintenance::describe_instance_patch_states(&state, &input, ctx)
+            }
+            "DescribeAvailablePatches" => {
+                maintenance::describe_available_patches(&state, &input, ctx)
+            }
+            "DescribePatchGroups" => maintenance::describe_patch_groups(&state, &input, ctx),
+            "DescribePatchGroupState" => {
+                maintenance::describe_patch_group_state(&state, &input, ctx)
+            }
+            "RegisterPatchBaselineForPatchGroup" => {
+                maintenance::register_patch_baseline_for_patch_group(&state, &input, ctx)
+            }
+            "DeregisterPatchBaselineForPatchGroup" => {
+                maintenance::deregister_patch_baseline_for_patch_group(&state, &input, ctx)
+            }
+
+            // Association extras
+            "DescribeInstanceAssociationsStatus" => {
+                maintenance::describe_instance_associations_status(&state, &input, ctx)
+            }
+            "DescribeEffectiveInstanceAssociations" => {
+                maintenance::describe_effective_instance_associations(&state, &input, ctx)
+            }
+            "DescribeAssociationExecutions" => {
+                maintenance::describe_association_executions(&state, &input, ctx)
+            }
+            "DescribeAssociationExecutionTargets" => {
+                maintenance::describe_association_execution_targets(&state, &input, ctx)
+            }
+            "ListAssociationVersions" => {
+                maintenance::list_association_versions(&state, &input, ctx)
+            }
+
+            // Service settings
+            "UpdateServiceSetting" => maintenance::update_service_setting(&state, &input, ctx),
+            "ResetServiceSetting" => maintenance::reset_service_setting(&state, &input, ctx),
+
+            // Automation extras
+            "DescribeAutomationStepExecutions" => {
+                maintenance::describe_automation_step_executions(&state, &input, ctx)
+            }
+            "SendAutomationSignal" => maintenance::send_automation_signal(&state, &input, ctx),
+
+            // Commands extras
+            "CancelCommand" => maintenance::cancel_command(&state, &input, ctx),
+            "ListCommandInvocations" => {
+                maintenance::list_command_invocations(&state, &input, ctx)
+            }
+
+            // Parameter / document extras
+            "UnlabelParameterVersion" => {
+                maintenance::unlabel_parameter_version(&state, &input, ctx)
+            }
+            "DeleteInventory" => maintenance::delete_inventory(&state, &input, ctx),
+            "UpdateResourceDataSync" => {
+                maintenance::update_resource_data_sync(&state, &input, ctx)
+            }
+            "GetConnectionStatus" => maintenance::get_connection_status(&state, &input, ctx),
+            "GetCalendarState" => maintenance::get_calendar_state(&state, &input, ctx),
+            "UpdateDocumentDefaultVersion" => {
+                maintenance::update_document_default_version(&state, &input, ctx)
+            }
+            "ListDocumentVersions" => maintenance::list_document_versions(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

@@ -428,3 +428,548 @@ pub fn list_compliance_summaries(
 ) -> Result<Value, AwsError> {
     Ok(json!({ "ComplianceSummaryItems": [] }))
 }
+
+pub fn deregister_target_from_maintenance_window(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let window_id = input["WindowId"].as_str().unwrap_or("").to_string();
+    let window_target_id = input["WindowTargetId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "WindowTargetId is required"))?;
+
+    state.maintenance_window_targets.remove(window_target_id);
+
+    Ok(json!({
+        "WindowId": window_id,
+        "WindowTargetId": window_target_id,
+    }))
+}
+
+pub fn deregister_task_from_maintenance_window(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let window_id = input["WindowId"].as_str().unwrap_or("").to_string();
+    let window_task_id = input["WindowTaskId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "WindowTaskId is required"))?;
+
+    state.maintenance_window_tasks.remove(window_task_id);
+
+    Ok(json!({
+        "WindowId": window_id,
+        "WindowTaskId": window_task_id,
+    }))
+}
+
+pub fn get_maintenance_window_task(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let window_task_id = input["WindowTaskId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "WindowTaskId is required"))?;
+
+    let task = state
+        .maintenance_window_tasks
+        .get(window_task_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "DoesNotExistException",
+                format!("Maintenance window task '{window_task_id}' not found"),
+            )
+        })?;
+
+    Ok(json!({
+        "WindowId": task.window_id,
+        "WindowTaskId": task.window_task_id,
+        "TaskArn": task.task_arn,
+        "TaskType": task.task_type,
+        "Targets": task.targets,
+        "Priority": task.priority,
+        "MaxConcurrency": task.max_concurrency,
+        "MaxErrors": task.max_errors,
+        "Name": task.name,
+    }))
+}
+
+pub fn update_maintenance_window_target(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let window_target_id = input["WindowTargetId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "WindowTargetId is required"))?;
+
+    let mut t = state
+        .maintenance_window_targets
+        .get_mut(window_target_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "DoesNotExistException",
+                format!("Maintenance window target '{window_target_id}' not found"),
+            )
+        })?;
+
+    if let Some(targets) = input["Targets"].as_array() {
+        t.targets = targets.clone();
+    }
+    if let Some(name) = input["Name"].as_str() {
+        t.name = name.to_string();
+    }
+
+    Ok(json!({
+        "WindowId": t.window_id,
+        "WindowTargetId": t.window_target_id,
+        "Targets": t.targets,
+        "Name": t.name,
+    }))
+}
+
+pub fn update_maintenance_window_task(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let window_task_id = input["WindowTaskId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "WindowTaskId is required"))?;
+
+    let mut t = state
+        .maintenance_window_tasks
+        .get_mut(window_task_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "DoesNotExistException",
+                format!("Maintenance window task '{window_task_id}' not found"),
+            )
+        })?;
+
+    if let Some(targets) = input["Targets"].as_array() {
+        t.targets = targets.clone();
+    }
+    if let Some(p) = input["Priority"].as_u64() {
+        t.priority = p;
+    }
+    if let Some(c) = input["MaxConcurrency"].as_str() {
+        t.max_concurrency = c.to_string();
+    }
+    if let Some(e) = input["MaxErrors"].as_str() {
+        t.max_errors = e.to_string();
+    }
+
+    Ok(json!({
+        "WindowId": t.window_id,
+        "WindowTaskId": t.window_task_id,
+        "Targets": t.targets,
+        "Priority": t.priority,
+        "MaxConcurrency": t.max_concurrency,
+        "MaxErrors": t.max_errors,
+        "Name": t.name,
+    }))
+}
+
+pub fn describe_instance_patches(
+    _state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let instance_id = input["InstanceId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "InstanceId is required"))?;
+    let _ = instance_id;
+    Ok(json!({ "Patches": [] }))
+}
+
+pub fn describe_instance_patch_states(
+    _state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let ids = input["InstanceIds"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let out: Vec<Value> = ids
+        .into_iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .map(|id| {
+            json!({
+                "InstanceId": id,
+                "PatchGroup": "default",
+                "BaselineId": "pb-default",
+                "OperationStartTime": 0,
+                "OperationEndTime": 0,
+                "Operation": "Scan",
+                "InstalledCount": 0,
+                "MissingCount": 0,
+                "FailedCount": 0,
+                "NotApplicableCount": 0,
+            })
+        })
+        .collect();
+    Ok(json!({ "InstancePatchStates": out }))
+}
+
+pub fn describe_available_patches(
+    _state: &SsmState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "Patches": [] }))
+}
+
+pub fn describe_patch_groups(
+    _state: &SsmState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "Mappings": [] }))
+}
+
+pub fn describe_patch_group_state(
+    _state: &SsmState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({
+        "Instances": 0,
+        "InstancesWithInstalledPatches": 0,
+        "InstancesWithInstalledOtherPatches": 0,
+        "InstancesWithMissingPatches": 0,
+        "InstancesWithFailedPatches": 0,
+        "InstancesWithNotApplicablePatches": 0,
+    }))
+}
+
+pub fn register_patch_baseline_for_patch_group(
+    _state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let baseline_id = input["BaselineId"].as_str().unwrap_or("").to_string();
+    let patch_group = input["PatchGroup"].as_str().unwrap_or("").to_string();
+    Ok(json!({
+        "BaselineId": baseline_id,
+        "PatchGroup": patch_group,
+    }))
+}
+
+pub fn deregister_patch_baseline_for_patch_group(
+    _state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let baseline_id = input["BaselineId"].as_str().unwrap_or("").to_string();
+    let patch_group = input["PatchGroup"].as_str().unwrap_or("").to_string();
+    Ok(json!({
+        "BaselineId": baseline_id,
+        "PatchGroup": patch_group,
+    }))
+}
+
+pub fn describe_instance_associations_status(
+    _state: &SsmState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "InstanceAssociationStatusInfos": [] }))
+}
+
+pub fn describe_effective_instance_associations(
+    _state: &SsmState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "Associations": [] }))
+}
+
+pub fn describe_association_executions(
+    _state: &SsmState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "AssociationExecutions": [] }))
+}
+
+pub fn describe_association_execution_targets(
+    _state: &SsmState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "AssociationExecutionTargets": [] }))
+}
+
+pub fn list_association_versions(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let association_id = input["AssociationId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AssociationId is required"))?;
+
+    let versions: Vec<Value> = state
+        .associations
+        .get(association_id)
+        .map(|a| {
+            vec![json!({
+                "AssociationId": a.association_id,
+                "AssociationVersion": "1",
+                "CreatedDate": a.created_date,
+                "Name": a.document_name,
+                "Targets": a.targets,
+            })]
+        })
+        .unwrap_or_default();
+
+    Ok(json!({ "AssociationVersions": versions }))
+}
+
+pub fn update_service_setting(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let setting_id = input["SettingId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SettingId is required"))?
+        .to_string();
+    let setting_value = input["SettingValue"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SettingValue is required"))?
+        .to_string();
+
+    state.service_settings.insert(setting_id, setting_value);
+    Ok(json!({}))
+}
+
+pub fn reset_service_setting(
+    state: &SsmState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let setting_id = input["SettingId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SettingId is required"))?;
+
+    state.service_settings.remove(setting_id);
+
+    Ok(json!({
+        "ServiceSetting": {
+            "SettingId": setting_id,
+            "SettingValue": "false",
+            "LastModifiedDate": now_epoch_secs(),
+            "LastModifiedUser": "awsim",
+            "ARN": format!("arn:aws:ssm:{}:{}:servicesetting{}", ctx.region, ctx.account_id, setting_id),
+            "Status": "Default",
+        }
+    }))
+}
+
+pub fn describe_automation_step_executions(
+    _state: &SsmState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "StepExecutions": [] }))
+}
+
+pub fn send_automation_signal(
+    _state: &SsmState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({}))
+}
+
+pub fn cancel_command(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let command_id = input["CommandId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "CommandId is required"))?;
+
+    if let Some(mut c) = state.commands.get_mut(command_id) {
+        c.status = "Cancelled".to_string();
+    }
+
+    Ok(json!({}))
+}
+
+pub fn list_command_invocations(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let command_id = input["CommandId"].as_str();
+    let max_results = input["MaxResults"].as_u64().unwrap_or(50) as usize;
+
+    let invocations: Vec<Value> = state
+        .commands
+        .iter()
+        .filter(|e| command_id.map_or(true, |id| e.command_id == id))
+        .map(|e| {
+            let c = e.value();
+            json!({
+                "CommandId": c.command_id,
+                "InstanceId": "i-0000000000000000",
+                "DocumentName": c.document_name,
+                "Status": c.status,
+                "RequestedDateTime": c.created_time,
+            })
+        })
+        .take(max_results)
+        .collect();
+
+    Ok(json!({ "CommandInvocations": invocations }))
+}
+
+pub fn unlabel_parameter_version(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["Name"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
+    let labels = input["Labels"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let labels: Vec<String> = labels
+        .into_iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+    let version = input["ParameterVersion"].as_u64().unwrap_or(0);
+
+    let mut removed = Vec::new();
+    if let Some(mut p) = state.parameters.get_mut(name) {
+        if version == p.version || version == 0 {
+            p.labels.retain(|l| {
+                if labels.contains(l) {
+                    removed.push(l.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        for entry in p.history.iter_mut() {
+            if entry.version == version {
+                entry.labels.retain(|l| !labels.contains(l));
+            }
+        }
+    }
+
+    Ok(json!({
+        "RemovedLabels": removed,
+        "InvalidLabels": [],
+    }))
+}
+
+pub fn delete_inventory(
+    _state: &SsmState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "DeletionId": uuid::Uuid::new_v4().to_string() }))
+}
+
+pub fn update_resource_data_sync(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let sync_name = input["SyncName"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SyncName is required"))?;
+
+    if !state.resource_data_syncs.contains_key(sync_name) {
+        return Err(AwsError::not_found(
+            "ResourceDataSyncNotFoundException",
+            format!("Resource data sync '{sync_name}' does not exist"),
+        ));
+    }
+    Ok(json!({}))
+}
+
+pub fn get_connection_status(
+    _state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let target = input["Target"].as_str().unwrap_or("");
+    Ok(json!({
+        "Target": target,
+        "Status": "connected",
+    }))
+}
+
+pub fn get_calendar_state(
+    _state: &SsmState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({
+        "State": "OPEN",
+        "AtTime": "2024-01-01T00:00:00Z",
+        "NextTransitionTime": "2024-01-02T00:00:00Z",
+    }))
+}
+
+pub fn update_document_default_version(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["Name"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
+    let version = input["DocumentVersion"].as_str().unwrap_or("1").to_string();
+
+    if let Some(mut d) = state.documents.get_mut(name) {
+        d.document_version = version.clone();
+    }
+
+    Ok(json!({
+        "Description": {
+            "Name": name,
+            "DefaultVersion": version,
+        }
+    }))
+}
+
+pub fn list_document_versions(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["Name"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
+
+    let versions: Vec<Value> = state
+        .documents
+        .get(name)
+        .map(|d| {
+            vec![json!({
+                "Name": d.name,
+                "DocumentVersion": d.document_version,
+                "CreatedDate": d.created_date,
+                "IsDefaultVersion": true,
+                "DocumentFormat": d.document_format,
+                "Status": d.status,
+            })]
+        })
+        .unwrap_or_default();
+
+    Ok(json!({ "DocumentVersions": versions }))
+}

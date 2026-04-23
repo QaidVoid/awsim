@@ -161,6 +161,70 @@ pub struct SsmResourceDataSync {
     pub sync_created_time: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct SsmOpsMetadata {
+    pub ops_metadata_arn: String,
+    pub resource_id: String,
+    pub metadata: serde_json::Value,
+    pub creation_date: u64,
+    pub last_modified_date: u64,
+    pub last_modified_user: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SsmActivation {
+    pub activation_id: String,
+    #[allow(dead_code)]
+    pub activation_code: String,
+    pub description: String,
+    pub default_instance_name: String,
+    pub iam_role: String,
+    pub registration_limit: i64,
+    pub registrations_count: i64,
+    pub expiration_date: u64,
+    pub expired: bool,
+    pub created_date: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SsmComplianceItem {
+    pub compliance_type: String,
+    pub resource_type: String,
+    pub resource_id: String,
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub severity: String,
+    pub execution_summary: serde_json::Value,
+    pub details: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct SsmManagedInstance {
+    pub instance_id: String,
+    pub ping_status: String,
+    pub last_ping_date_time: u64,
+    pub agent_version: String,
+    pub platform_type: String,
+    pub platform_name: String,
+    pub platform_version: String,
+    pub iam_role: String,
+    pub registration_date: u64,
+    pub resource_type: String,
+    pub name: String,
+    pub computer_name: String,
+    pub ip_address: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SsmResourcePolicy {
+    pub policy_id: String,
+    pub policy_hash: String,
+    #[allow(dead_code)]
+    pub resource_arn: String,
+    pub policy: String,
+}
+
 /// Per-account/region SSM state.
 #[derive(Debug, Default)]
 pub struct SsmState {
@@ -183,4 +247,10 @@ pub struct SsmState {
     pub maintenance_window_targets: DashMap<String, SsmMaintenanceWindowTarget>,
     pub maintenance_window_tasks: DashMap<String, SsmMaintenanceWindowTask>,
     pub resource_data_syncs: DashMap<String, SsmResourceDataSync>,
+    pub ops_metadata: DashMap<String, SsmOpsMetadata>,
+    pub activations: DashMap<String, SsmActivation>,
+    pub compliance_items: DashMap<String, Vec<SsmComplianceItem>>,
+    pub managed_instances: DashMap<String, SsmManagedInstance>,
+    pub resource_policies: DashMap<String, Vec<SsmResourcePolicy>>,
+    pub service_settings: DashMap<String, String>,
 }
