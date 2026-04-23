@@ -2,7 +2,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use crate::operations::{connections, crawlers, databases, jobs, tables, tags};
+use crate::operations::{connections, crawlers, databases, extras, jobs, tables, tags};
 use crate::state::GlueState;
 
 /// The Glue service handler.
@@ -105,6 +105,27 @@ impl ServiceHandler for GlueService {
             "GetTags" => tags::get_tags(&state, &input, ctx),
             "TagResource" => tags::tag_resource(&state, &input, ctx),
             "UntagResource" => tags::untag_resource(&state, &input, ctx),
+
+            // Extras: Tables/Partitions/Jobs/Connections additions
+            "BatchDeleteTable" => extras::batch_delete_table(&state, &input, ctx),
+            "BatchGetTables" => extras::batch_get_tables(&state, &input, ctx),
+            "GetPartition" => extras::get_partition(&state, &input, ctx),
+            "BatchGetPartition" => extras::batch_get_partition(&state, &input, ctx),
+            "UpdateJob" => extras::update_job(&state, &input, ctx),
+            "GetConnection" => extras::get_connection(&state, &input, ctx),
+            "UpdateConnection" => extras::update_connection(&state, &input, ctx),
+
+            // Triggers
+            "CreateTrigger" => extras::create_trigger(&state, &input, ctx),
+            "GetTrigger" => extras::get_trigger(&state, &input, ctx),
+            "GetTriggers" => extras::get_triggers(&state, &input, ctx),
+            "DeleteTrigger" => extras::delete_trigger(&state, &input, ctx),
+
+            // Workflows
+            "CreateWorkflow" => extras::create_workflow(&state, &input, ctx),
+            "GetWorkflow" => extras::get_workflow(&state, &input, ctx),
+            "ListWorkflows" => extras::list_workflows(&state, &input, ctx),
+            "DeleteWorkflow" => extras::delete_workflow(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

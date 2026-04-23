@@ -78,6 +78,27 @@ pub struct Connection {
     pub created_at: String,
 }
 
+/// A Glue trigger.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Trigger {
+    pub name: String,
+    pub trigger_type: String,
+    pub state: String,
+    pub schedule: Option<String>,
+    pub actions: Value,
+    pub workflow_name: Option<String>,
+    pub created_at: String,
+}
+
+/// A Glue workflow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Workflow {
+    pub name: String,
+    pub description: Option<String>,
+    pub default_run_properties: Value,
+    pub created_at: String,
+}
+
 /// Per-account/region Glue state.
 #[derive(Debug, Default)]
 pub struct GlueState {
@@ -95,4 +116,8 @@ pub struct GlueState {
     pub connections: DashMap<String, Connection>,
     /// resource_arn → tags
     pub tags: DashMap<String, HashMap<String, String>>,
+    /// trigger name → Trigger
+    pub triggers: DashMap<String, Trigger>,
+    /// workflow name → Workflow
+    pub workflows: DashMap<String, Workflow>,
 }

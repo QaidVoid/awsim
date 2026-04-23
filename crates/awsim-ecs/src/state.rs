@@ -75,4 +75,6 @@ pub struct EcsState {
     pub capacity_providers: DashMap<String, CapacityProvider>,
     /// account setting name → value (e.g. "containerInstanceLongArnFormat" → "enabled")
     pub account_settings: DashMap<String, String>,
+    /// "{cluster_name}|{target_type}" → map of attribute name → value
+    pub attributes: DashMap<String, HashMap<String, String>>,
 }

@@ -2,7 +2,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use crate::operations::{clusters, extras, services, task_definitions, tasks};
+use crate::operations::{clusters, container_instances, extras, services, task_definitions, tasks};
 use crate::state::EcsState;
 
 /// The ECS service handler.
@@ -96,6 +96,20 @@ impl ServiceHandler for EcsService {
             // Container agent
             "DiscoverPollEndpoint" => extras::discover_poll_endpoint(&state, &input, ctx),
             "UpdateContainerAgent" => extras::update_container_agent(&state, &input, ctx),
+
+            // Container Instances + Attributes
+            "DescribeContainerInstances" => {
+                container_instances::describe_container_instances(&state, &input, ctx)
+            }
+            "ListContainerInstances" => {
+                container_instances::list_container_instances(&state, &input, ctx)
+            }
+            "ListAttributes" => container_instances::list_attributes(&state, &input, ctx),
+            "PutAttributes" => container_instances::put_attributes(&state, &input, ctx),
+            "DeleteAttributes" => container_instances::delete_attributes(&state, &input, ctx),
+            "ListServicesByNamespace" => {
+                container_instances::list_services_by_namespace(&state, &input, ctx)
+            }
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

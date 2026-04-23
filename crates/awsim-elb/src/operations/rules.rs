@@ -129,6 +129,56 @@ pub fn modify_rule(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
     }))
 }
 
+pub fn set_rule_priorities(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
+    let entries = input.get("RulePriorities").cloned().unwrap_or(Value::Null);
+
+    let items: Vec<Value> = match &entries {
+        Value::Array(arr) => arr.clone(),
+        Value::Object(map) => {
+            if let Some(Value::Object(m)) = map.get("member") {
+                let mut pairs: Vec<_> = m.iter().collect();
+                pairs.sort_by_key(|(k, _)| k.parse::<u64>().unwrap_or(u64::MAX));
+                pairs.into_iter().map(|(_, v)| v.clone()).collect()
+            } else {
+                let mut pairs: Vec<_> = map.iter().collect();
+                pairs.sort_by_key(|(k, _)| k.parse::<u64>().unwrap_or(u64::MAX));
+                pairs.into_iter().map(|(_, v)| v.clone()).collect()
+            }
+        }
+        _ => vec![],
+    };
+
+    let mut updated: Vec<Value> = Vec::new();
+    for item in items {
+        let arn = item
+            .get("RuleArn")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let priority = item
+            .get("Priority")
+            .and_then(|v| match v {
+                Value::String(s) => Some(s.clone()),
+                Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "1".to_string());
+
+        if let Some(mut rule) = state.rules.get_mut(&arn) {
+            rule.priority = priority;
+            updated.push(rule_to_value(&rule));
+        }
+    }
+
+    Ok(json!({
+        "SetRulePrioritiesResult": {
+            "Rules": {
+                "member": updated
+            }
+        }
+    }))
+}
+
 pub fn describe_rules(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
     let listener_arn_filter = opt_str(input, "ListenerArn").map(|s| s.to_string());
     let rule_arns = extract_string_list(input, "RuleArns");

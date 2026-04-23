@@ -1,5 +1,6 @@
 pub mod load_balancers;
 pub mod listeners;
+pub mod metadata;
 pub mod rules;
 pub mod tags;
 pub mod target_groups;

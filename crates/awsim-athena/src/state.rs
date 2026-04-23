@@ -1,5 +1,6 @@
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// A Glue/Athena workgroup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +70,8 @@ pub struct AthenaState {
     pub data_catalogs: DashMap<String, DataCatalog>,
     /// "{workgroup}/{statement_name}" → PreparedStatement
     pub prepared_statements: DashMap<String, PreparedStatement>,
+    /// Resource ARN → tag key/value map
+    pub resource_tags: DashMap<String, HashMap<String, String>>,
 }
 
 impl AthenaState {

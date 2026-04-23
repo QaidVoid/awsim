@@ -3,8 +3,8 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::operations::{
-    data_catalogs, databases, named_queries, prepared_statements, query_executions, table_metadata,
-    workgroups,
+    data_catalogs, databases, extras, named_queries, prepared_statements, query_executions,
+    table_metadata, workgroups,
 };
 use crate::state::AthenaState;
 
@@ -114,6 +114,16 @@ impl ServiceHandler for AthenaService {
             // Table Metadata
             "GetTableMetadata" => table_metadata::get_table_metadata(&state, &input, ctx),
             "ListTableMetadata" => table_metadata::list_table_metadata(&state, &input, ctx),
+
+            // Tags + Misc
+            "TagResource" => extras::tag_resource(&state, &input, ctx),
+            "UntagResource" => extras::untag_resource(&state, &input, ctx),
+            "ListTagsForResource" => extras::list_tags_for_resource(&state, &input, ctx),
+            "ListEngineVersions" => extras::list_engine_versions(&state, &input, ctx),
+            "ListApplicationDPUSizes" => extras::list_application_dpu_sizes(&state, &input, ctx),
+            "GetQueryRuntimeStatistics" => extras::get_query_runtime_statistics(&state, &input, ctx),
+            "UpdateDataCatalog" => extras::update_data_catalog(&state, &input, ctx),
+            "BatchGetPreparedStatement" => extras::batch_get_prepared_statement(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

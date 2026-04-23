@@ -128,11 +128,16 @@ impl ServiceHandler for ElbService {
             "DeleteRule" => operations::rules::delete_rule(&state, &input),
             "DescribeRules" => operations::rules::describe_rules(&state, &input),
             "ModifyRule" => operations::rules::modify_rule(&state, &input),
+            "SetRulePriorities" => operations::rules::set_rule_priorities(&state, &input),
 
             // Tags
             "AddTags" => operations::tags::add_tags(&state, &input),
             "RemoveTags" => operations::tags::remove_tags(&state, &input),
             "DescribeTags" => operations::tags::describe_tags(&state, &input),
+
+            // Metadata
+            "DescribeAccountLimits" => operations::metadata::describe_account_limits(&state, &input),
+            "DescribeSSLPolicies" => operations::metadata::describe_ssl_policies(&state, &input),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }
