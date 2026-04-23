@@ -76,6 +76,9 @@ impl ServiceHandler for DynamoDbService {
             "DescribeContinuousBackups" => {
                 operations::table::describe_continuous_backups(&state, &input, ctx)
             }
+            "UpdateContinuousBackups" => {
+                operations::backup::update_continuous_backups(&state, &input, ctx)
+            }
 
             // Tagging
             "TagResource" => operations::table::tag_resource(&state, &input, ctx),
@@ -110,10 +113,16 @@ impl ServiceHandler for DynamoDbService {
             "DescribeLimits" => operations::table::describe_limits(&state, &input, ctx),
 
             // Backup
-            "CreateBackup" => operations::table::create_backup(&state, &input, ctx),
-            "DeleteBackup" => operations::table::delete_backup(&state, &input, ctx),
-            "DescribeBackup" => operations::table::describe_backup(&state, &input, ctx),
-            "ListBackups" => operations::table::list_backups(&state, &input, ctx),
+            "CreateBackup" => operations::backup::create_backup(&state, &input, ctx),
+            "DeleteBackup" => operations::backup::delete_backup(&state, &input, ctx),
+            "DescribeBackup" => operations::backup::describe_backup(&state, &input, ctx),
+            "ListBackups" => operations::backup::list_backups(&state, &input, ctx),
+            "RestoreTableFromBackup" => {
+                operations::backup::restore_table_from_backup(&state, &input, ctx)
+            }
+            "RestoreTableToPointInTime" => {
+                operations::backup::restore_table_to_point_in_time(&state, &input, ctx)
+            }
 
             // Global Tables
             "DescribeGlobalTable" => operations::table::describe_global_table(&state, &input, ctx),
@@ -149,6 +158,30 @@ impl ServiceHandler for DynamoDbService {
             }
             "ExecuteTransaction" => {
                 operations::partiql::execute_transaction(&state, &input, ctx)
+            }
+
+            // Kinesis Streaming Destination
+            "EnableKinesisStreamingDestination" => {
+                operations::kinesis_dest::enable_kinesis_streaming_destination(&state, &input, ctx)
+            }
+            "DisableKinesisStreamingDestination" => {
+                operations::kinesis_dest::disable_kinesis_streaming_destination(&state, &input, ctx)
+            }
+            "DescribeKinesisStreamingDestination" => {
+                operations::kinesis_dest::describe_kinesis_streaming_destination(
+                    &state, &input, ctx,
+                )
+            }
+
+            // Resource Policy
+            "PutResourcePolicy" => {
+                operations::resource_policy::put_resource_policy(&state, &input, ctx)
+            }
+            "GetResourcePolicy" => {
+                operations::resource_policy::get_resource_policy(&state, &input, ctx)
+            }
+            "DeleteResourcePolicy" => {
+                operations::resource_policy::delete_resource_policy(&state, &input, ctx)
             }
 
             _ => Err(AwsError::unknown_operation(operation)),

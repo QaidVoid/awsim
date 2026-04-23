@@ -1,7 +1,10 @@
+pub mod backup;
 pub mod batch;
 pub mod item;
+pub mod kinesis_dest;
 pub mod partiql;
 pub mod query;
+pub mod resource_policy;
 pub mod streams;
 pub mod table;
 pub mod transact;

@@ -189,11 +189,58 @@ pub fn extract_scalar_str(val: &Value) -> Option<&str> {
     None
 }
 
-/// Per-account/region DynamoDB state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupRecord {
+    pub backup_arn: String,
+    pub backup_name: String,
+    pub table_name: String,
+    pub table_arn: String,
+    pub backup_status: String,
+    pub backup_type: String,
+    pub backup_creation_date_time: f64,
+    pub backup_size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportRecord {
+    pub export_arn: String,
+    pub table_arn: String,
+    pub export_status: String,
+    pub export_format: String,
+    pub s3_bucket: String,
+    pub s3_prefix: Option<String>,
+    pub start_time: f64,
+    pub end_time: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportRecord {
+    pub import_arn: String,
+    pub table_arn: String,
+    pub table_name: String,
+    pub import_status: String,
+    pub input_format: String,
+    pub s3_bucket: String,
+    pub start_time: f64,
+    pub end_time: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KinesisStreamingDestination {
+    pub stream_arn: String,
+    pub destination_status: String,
+    pub approximate_creation_date_time_precision: String,
+}
+
 #[derive(Debug, Default)]
 pub struct DynamoState {
-    /// Table name → Table
     pub tables: DashMap<String, Table>,
+    pub backups: DashMap<String, BackupRecord>,
+    pub exports: DashMap<String, ExportRecord>,
+    pub imports: DashMap<String, ImportRecord>,
+    pub kinesis_destinations: DashMap<String, Vec<KinesisStreamingDestination>>,
+    pub pitr_enabled: DashMap<String, bool>,
+    pub resource_policies: DashMap<String, String>,
 }
 
 impl std::fmt::Debug for Table {
