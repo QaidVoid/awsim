@@ -39,6 +39,7 @@ members = [
     "crates/awsim-comprehend",
     "crates/awsim-kendra",
     "crates/awsim-opensearch",
+    "crates/awsim-iam-policy",
     "crates/awsim-conformance",
 ]
 
@@ -66,6 +67,7 @@ awsim-elb = { path = "crates/awsim-elb" }
 awsim-glue = { path = "crates/awsim-glue" }
 awsim-dynamodb = { path = "crates/awsim-dynamodb" }
 awsim-iam = { path = "crates/awsim-iam" }
+awsim-iam-policy = { path = "crates/awsim-iam-policy" }
 awsim-rds = { path = "crates/awsim-rds" }
 awsim-kinesis = { path = "crates/awsim-kinesis" }
 awsim-kms = { path = "crates/awsim-kms" }
@@ -129,3 +131,8 @@ base64 = "0.22"
 sha2 = "0.10"
 zip = "2"
 rand = "0.8"
+
+# Policy / matching
+regex = "1"
+ipnet = "2"
+chrono = { version = "0.4", features = ["serde"] }

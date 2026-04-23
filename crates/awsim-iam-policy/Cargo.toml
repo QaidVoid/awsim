@@ -1,0 +1,12 @@
+[package]
+name = "awsim-iam-policy"
+description = "AWS IAM policy parser and evaluator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+ipnet = { workspace = true }
+chrono = { workspace = true }
