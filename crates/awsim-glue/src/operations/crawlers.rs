@@ -38,6 +38,8 @@ pub fn create_crawler(
 
     let targets = input.get("Targets").cloned();
     let database_name = input["DatabaseName"].as_str().map(|s| s.to_string());
+    let schedule = input["Schedule"].as_str().map(|s| s.to_string());
+    let description = input["Description"].as_str().map(|s| s.to_string());
 
     let crawler = Crawler {
         name: name.to_string(),
@@ -46,6 +48,8 @@ pub fn create_crawler(
         targets,
         state: "READY".to_string(),
         created_at: now_str(),
+        schedule,
+        description,
     };
 
     info!(name = %name, "Created Glue crawler");
@@ -172,6 +176,89 @@ pub fn stop_crawler(
 }
 
 // ---------------------------------------------------------------------------
+// UpdateCrawler
+// ---------------------------------------------------------------------------
+
+pub fn update_crawler(
+    state: &GlueState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["Name"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "Name is required"))?;
+
+    let mut crawler = state.crawlers.get_mut(name).ok_or_else(|| {
+        AwsError::not_found("EntityNotFoundException", format!("Crawler not found: {name}"))
+    })?;
+
+    if let Some(role) = input["Role"].as_str() {
+        crawler.role = role.to_string();
+    }
+    if let Some(db) = input["DatabaseName"].as_str() {
+        crawler.database_name = Some(db.to_string());
+    }
+    if let Some(desc) = input["Description"].as_str() {
+        crawler.description = Some(desc.to_string());
+    }
+    if let Some(schedule) = input["Schedule"].as_str() {
+        crawler.schedule = Some(schedule.to_string());
+    }
+    if let Some(targets) = input.get("Targets") {
+        if !targets.is_null() {
+            crawler.targets = Some(targets.clone());
+        }
+    }
+
+    info!(name = %name, "Updated Glue crawler");
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// GetCrawlerMetrics
+// ---------------------------------------------------------------------------
+
+pub fn get_crawler_metrics(
+    _state: &GlueState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "CrawlerMetricsList": [] }))
+}
+
+// ---------------------------------------------------------------------------
+// GetClassifier
+// ---------------------------------------------------------------------------
+
+pub fn get_classifier(
+    _state: &GlueState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["Name"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "Name is required"))?;
+
+    // We don't store classifiers; return not found
+    Err(AwsError::not_found(
+        "EntityNotFoundException",
+        format!("Classifier not found: {name}"),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// GetClassifiers
+// ---------------------------------------------------------------------------
+
+pub fn get_classifiers(
+    _state: &GlueState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({ "Classifiers": [] }))
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -183,5 +270,7 @@ fn crawler_to_value(c: &Crawler) -> Value {
         "Targets": c.targets,
         "State": c.state,
         "CreationTime": c.created_at,
+        "Schedule": c.schedule,
+        "Description": c.description,
     })
 }
