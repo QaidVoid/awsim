@@ -1,7 +1,8 @@
+pub mod authz;
 mod error;
 mod ids;
 mod operations;
-mod state;
+pub mod state;
 
 use std::sync::Arc;
 
@@ -14,7 +15,7 @@ use state::{IamState, IamStateSnapshot};
 
 /// IAM is a global service — we use account-only namespacing.
 /// The region key is always "global" for IAM state lookups.
-const IAM_REGION: &str = "global";
+pub const IAM_REGION: &str = "global";
 
 /// The AWSim IAM service handler.
 pub struct IamService {
@@ -30,6 +31,12 @@ impl IamService {
 
     fn get_state(&self, ctx: &RequestContext) -> Arc<IamState> {
         self.store.get(&ctx.account_id, IAM_REGION)
+    }
+
+    /// Expose the underlying store so the gateway can wire IAM-backed
+    /// principal lookup into the authz engine.
+    pub fn store(&self) -> AccountRegionStore<IamState> {
+        self.store.clone()
     }
 }
 

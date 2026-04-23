@@ -9,6 +9,7 @@ use bytes::Bytes;
 use tracing::{debug, info, warn};
 
 use crate::auth;
+use crate::authz::AuthzEngine;
 use crate::error::AwsError;
 use crate::events::EventBus;
 use crate::protocol::{self, Protocol, RouteDefinition};
@@ -31,6 +32,8 @@ pub struct AppState {
     pub request_count: Arc<AtomicU64>,
     /// Server startup time.
     pub start_time: std::time::Instant,
+    /// IAM authorization engine — opt-in via AWSIM_IAM_ENFORCE=true.
+    pub authz: Arc<AuthzEngine>,
 }
 
 impl AppState {
@@ -43,6 +46,7 @@ impl AppState {
             event_bus: EventBus::new(),
             request_count: Arc::new(AtomicU64::new(0)),
             start_time: std::time::Instant::now(),
+            authz: Arc::new(AuthzEngine::from_env()),
         }
     }
 
@@ -129,7 +133,8 @@ async fn process_request(
     request_id: &str,
 ) -> Result<(StatusCode, HeaderMap, Bytes), (Protocol, AwsError)> {
     // 1. Extract service identification from auth header
-    let (service_name, region, account_id) = extract_service_info(state, headers, uri);
+    let (service_name, region, account_id, access_key) =
+        extract_service_info(state, headers, uri);
 
     // 2. Find the service handler
     let handler = state
@@ -171,12 +176,29 @@ async fn process_request(
         account_id,
         region,
         service: service_name.clone(),
-        access_key: None,
+        access_key,
         request_id: request_id.to_string(),
         method: method.to_string(),
         uri: uri.to_string(),
         event_bus: Some(state.event_bus.clone()),
     };
+
+    // 6b. IAM authorization (opt-in via AWSIM_IAM_ENFORCE)
+    if let (Some(action), Some(resource)) = (
+        handler.iam_action(&parsed.operation),
+        handler.iam_resource(&parsed.operation, &parsed.input, &ctx),
+    ) {
+        state
+            .authz
+            .check(&ctx, &action, &resource)
+            .map_err(|e| (detected, e))?;
+    } else {
+        debug!(
+            service = %service_name,
+            operation = %parsed.operation,
+            "Skipping IAM check — handler does not declare action/resource"
+        );
+    }
 
     // 7. Dispatch to service handler
     let result = handler
@@ -196,12 +218,12 @@ async fn process_request(
     ))
 }
 
-/// Extract service name, region, and account ID from the request.
+/// Extract service name, region, account ID, and access key from the request.
 fn extract_service_info(
     state: &AppState,
     headers: &HeaderMap,
     uri: &Uri,
-) -> (String, String, String) {
+) -> (String, String, String, Option<String>) {
     // Try Authorization header first
     if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         if let Some(creds) = auth::parse_authorization(auth_header) {
@@ -209,6 +231,7 @@ fn extract_service_info(
                 creds.service,
                 creds.region,
                 state.default_account_id.clone(),
+                Some(creds.access_key),
             );
         }
     }
@@ -220,6 +243,7 @@ fn extract_service_info(
                 service,
                 state.default_region.clone(),
                 state.default_account_id.clone(),
+                None,
             );
         }
     }
@@ -231,6 +255,7 @@ fn extract_service_info(
                 service,
                 state.default_region.clone(),
                 state.default_account_id.clone(),
+                None,
             );
         }
     }
@@ -238,20 +263,18 @@ fn extract_service_info(
     // Check for pre-signed URL query parameters (SigV4 in query string)
     if let Some(query) = uri.query() {
         if query.contains("X-Amz-Credential") {
-            // Extract service from X-Amz-Credential parameter
-            // Format: X-Amz-Credential=AKID/date/region/service/aws4_request
             if let Some(cred_start) = query.find("X-Amz-Credential=") {
                 let cred_val = &query[cred_start + 17..];
                 let cred_end = cred_val.find('&').unwrap_or(cred_val.len());
                 let cred = &cred_val[..cred_end];
-                // URL-decode the credential (/ may be encoded as %2F)
                 let cred_decoded = cred.replace("%2F", "/");
                 let parts: Vec<&str> = cred_decoded.split('/').collect();
                 if parts.len() >= 4 {
                     return (
-                        parts[3].to_string(), // service name
-                        parts[2].to_string(), // region
+                        parts[3].to_string(),
+                        parts[2].to_string(),
                         state.default_account_id.clone(),
+                        Some(parts[0].to_string()),
                     );
                 }
             }
@@ -265,6 +288,7 @@ fn extract_service_info(
             service,
             state.default_region.clone(),
             state.default_account_id.clone(),
+            None,
         );
     }
 
@@ -280,6 +304,7 @@ fn extract_service_info(
         "unknown".to_string(),
         state.default_region.clone(),
         state.default_account_id.clone(),
+        None,
     )
 }
 

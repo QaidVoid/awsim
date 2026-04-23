@@ -46,8 +46,12 @@ async fn main() -> Result<()> {
     // Register all services; get back the ApiGateway Arc for proxy routing and
     // an Arc<CognitoState> for the default account+region so the OAuth router
     // can share user-pool state with the CognitoService.
-    let (apigw_service, cognito_state) =
+    let (apigw_service, cognito_state, iam_store) =
         register_services(&mut state, &cli.account_id, &cli.region);
+
+    if let Some(authz) = Arc::get_mut(&mut state.authz) {
+        authz.principal_lookup = Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store));
+    }
 
     // Persistence: restore snapshots if --data-dir was provided.
     if let Some(ref data_dir) = cli.data_dir {
@@ -354,10 +358,12 @@ fn register_services(
 ) -> (
     Arc<awsim_apigateway::ApiGatewayService>,
     Arc<awsim_cognito::CognitoState>,
+    awsim_core::AccountRegionStore<awsim_iam::state::IamState>,
 ) {
     use std::sync::Arc;
 
     let iam = Arc::new(awsim_iam::IamService::new());
+    let iam_store = iam.store();
     state.register(iam, vec![]);
 
     let sts = Arc::new(awsim_sts::StsService::new());
@@ -512,5 +518,5 @@ fn register_services(
     let apigw_clone = Arc::clone(&apigateway);
     state.register(apigateway, apigw_routes);
 
-    (apigw_clone, cognito_arc_state)
+    (apigw_clone, cognito_arc_state, iam_store)
 }

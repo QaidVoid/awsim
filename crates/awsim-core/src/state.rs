@@ -12,9 +12,17 @@ use std::sync::Arc;
 /// let state = store.get("000000000000", "us-east-1");
 /// state.queues.insert("my-queue".into(), queue);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AccountRegionStore<T: Default + Send + Sync + 'static> {
     inner: Arc<DashMap<(String, String), Arc<T>>>,
+}
+
+impl<T: Default + Send + Sync + 'static> Clone for AccountRegionStore<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
 impl<T: Default + Send + Sync + 'static> AccountRegionStore<T> {

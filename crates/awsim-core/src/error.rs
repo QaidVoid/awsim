@@ -88,6 +88,17 @@ impl AwsError {
         }
     }
 
+    pub fn access_denied_for(action: &str, principal_arn: &str, resource: &str) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code: "AccessDenied".to_string(),
+            message: format!(
+                "User: {principal_arn} is not authorized to perform: {action} on resource: {resource}"
+            ),
+            error_type: ErrorType::Sender,
+        }
+    }
+
     pub fn validation(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,

@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod authz;
 pub mod error;
 pub mod events;
 pub mod gateway;
@@ -7,6 +8,7 @@ pub mod protocol;
 pub mod router;
 pub mod state;
 
+pub use authz::{AuthzEngine, NoopPrincipalLookup, PrincipalLookup, ResolvedPrincipal, ResourcePolicyLookup};
 pub use error::AwsError;
 pub use events::{EventBus, InternalEvent};
 pub use gateway::AppState;
@@ -61,5 +63,18 @@ pub trait ServiceHandler: Send + Sync {
     /// The default implementation is a no-op and always succeeds.
     fn restore(&self, _data: &[u8]) -> Result<(), String> {
         Ok(())
+    }
+
+    fn iam_action(&self, _operation: &str) -> Option<String> {
+        None
+    }
+
+    fn iam_resource(
+        &self,
+        _operation: &str,
+        _input: &serde_json::Value,
+        _ctx: &router::RequestContext,
+    ) -> Option<String> {
+        None
     }
 }
