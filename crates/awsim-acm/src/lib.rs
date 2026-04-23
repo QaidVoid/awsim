@@ -10,7 +10,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use state::{AcmStateSnapshot};
+use state::{AcmAccountConfig, AcmStateSnapshot};
 
 /// The ACM (Certificate Manager) service handler.
 pub struct AcmService {
@@ -75,6 +75,18 @@ impl ServiceHandler for AcmService {
             "ExportCertificate" => {
                 operations::certificates::export_certificate(&state, &input, ctx)
             }
+            "ImportCertificate" => {
+                operations::certificates::import_certificate(&state, &input, ctx)
+            }
+            "RenewCertificate" => {
+                operations::certificates::renew_certificate(&state, &input, ctx)
+            }
+            "UpdateCertificateOptions" => {
+                operations::certificates::update_certificate_options(&state, &input, ctx)
+            }
+            "ResendValidationEmail" => {
+                operations::certificates::resend_validation_email(&state, &input, ctx)
+            }
             "AddTagsToCertificate" => {
                 operations::tags::add_tags_to_certificate(&state, &input, ctx)
             }
@@ -83,6 +95,26 @@ impl ServiceHandler for AcmService {
             }
             "ListTagsForCertificate" => {
                 operations::tags::list_tags_for_certificate(&state, &input, ctx)
+            }
+            "PutAccountConfiguration" => {
+                let expiry_config = input.get("ExpiryEvents").cloned();
+                let config = AcmAccountConfig {
+                    expiry_events_configuration: expiry_config,
+                };
+                state.account_config.insert("default".to_string(), config);
+                Ok(serde_json::json!({}))
+            }
+            "GetAccountConfiguration" => {
+                let config = state
+                    .account_config
+                    .get("default")
+                    .map(|c| {
+                        serde_json::json!({
+                            "ExpiryEvents": c.expiry_events_configuration,
+                        })
+                    })
+                    .unwrap_or_else(|| serde_json::json!({ "ExpiryEvents": null }));
+                Ok(config)
             }
             _ => Err(AwsError::unknown_operation(operation)),
         }

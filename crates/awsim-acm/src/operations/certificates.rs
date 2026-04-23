@@ -341,3 +341,140 @@ pub fn export_certificate(
         "PrivateKey": key,
     }))
 }
+
+// ---------------------------------------------------------------------------
+// ImportCertificate
+// ---------------------------------------------------------------------------
+
+pub fn import_certificate(
+    state: &AcmState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    // Accept Certificate, PrivateKey, CertificateChain (all PEM/base64).
+    // We store them but don't validate the content — this is a dev emulator.
+    let _certificate = input["Certificate"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Certificate is required"))?;
+    let _private_key = input["PrivateKey"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PrivateKey is required"))?;
+
+    let domain_name = input["DomainName"]
+        .as_str()
+        .unwrap_or("imported.example.com")
+        .to_string();
+
+    // If CertificateArn is given, re-import (update) existing certificate
+    let certificate_arn = if let Some(existing_arn) = input["CertificateArn"].as_str() {
+        if !state.certificates.contains_key(existing_arn) {
+            return Err(AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Certificate not found: {existing_arn}"),
+            ));
+        }
+        existing_arn.to_string()
+    } else {
+        let cert_id = Uuid::new_v4();
+        format!(
+            "arn:aws:acm:{}:{}:certificate/{}",
+            ctx.region, ctx.account_id, cert_id
+        )
+    };
+
+    let mut tags: HashMap<String, String> = HashMap::new();
+    if let Some(tag_list) = input["Tags"].as_array() {
+        for tag in tag_list {
+            if let (Some(k), Some(v)) = (tag["Key"].as_str(), tag["Value"].as_str()) {
+                tags.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+
+    let cert = Certificate {
+        certificate_arn: certificate_arn.clone(),
+        domain_name,
+        subject_alternative_names: Vec::new(),
+        status: "ISSUED".to_string(),
+        validation_method: "IMPORTED".to_string(),
+        dns_validation_records: HashMap::new(),
+        tags,
+        created_at: now_secs(),
+    };
+
+    state.certificates.insert(certificate_arn.clone(), cert);
+
+    Ok(json!({ "CertificateArn": certificate_arn }))
+}
+
+// ---------------------------------------------------------------------------
+// RenewCertificate
+// ---------------------------------------------------------------------------
+
+pub fn renew_certificate(
+    state: &AcmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let arn = input["CertificateArn"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "CertificateArn is required"))?;
+
+    if !state.certificates.contains_key(arn) {
+        return Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Certificate not found: {arn}"),
+        ));
+    }
+
+    // Auto-renewal succeeds immediately for the dev emulator
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// UpdateCertificateOptions
+// ---------------------------------------------------------------------------
+
+pub fn update_certificate_options(
+    state: &AcmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let arn = input["CertificateArn"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "CertificateArn is required"))?;
+
+    // Options currently accepted but not deeply stored — just verify the cert exists
+    if !state.certificates.contains_key(arn) {
+        return Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Certificate not found: {arn}"),
+        ));
+    }
+
+    Ok(json!({}))
+}
+
+// ---------------------------------------------------------------------------
+// ResendValidationEmail
+// ---------------------------------------------------------------------------
+
+pub fn resend_validation_email(
+    state: &AcmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let arn = input["CertificateArn"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "CertificateArn is required"))?;
+
+    if !state.certificates.contains_key(arn) {
+        return Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Certificate not found: {arn}"),
+        ));
+    }
+
+    // Stub: email sending always succeeds
+    Ok(json!({}))
+}

@@ -31,11 +31,19 @@ pub struct AcmStateSnapshot {
     pub certificates: Vec<Certificate>,
 }
 
+/// Account-level ACM configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AcmAccountConfig {
+    pub expiry_events_configuration: Option<serde_json::Value>,
+}
+
 /// Per-account/region ACM state.
 #[derive(Debug, Default)]
 pub struct AcmState {
     /// CertificateArn → Certificate
     pub certificates: DashMap<String, Certificate>,
+    /// Account-level configuration (stored at "default" key)
+    pub account_config: DashMap<String, AcmAccountConfig>,
 }
 
 impl AcmState {
