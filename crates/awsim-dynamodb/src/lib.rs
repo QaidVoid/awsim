@@ -65,6 +65,23 @@ impl ServiceHandler for DynamoDbService {
             "ListTables" => operations::table::list_tables(&state, &input, ctx),
             "UpdateTable" => operations::table::update_table(&state, &input, ctx),
 
+            // Endpoint discovery
+            "DescribeEndpoints" => operations::table::describe_endpoints(&state, &input, ctx),
+
+            // TTL
+            "DescribeTimeToLive" => operations::table::describe_time_to_live(&state, &input, ctx),
+            "UpdateTimeToLive" => operations::table::update_time_to_live(&state, &input, ctx),
+
+            // Continuous Backups
+            "DescribeContinuousBackups" => {
+                operations::table::describe_continuous_backups(&state, &input, ctx)
+            }
+
+            // Tagging
+            "TagResource" => operations::table::tag_resource(&state, &input, ctx),
+            "UntagResource" => operations::table::untag_resource(&state, &input, ctx),
+            "ListTagsOfResource" => operations::table::list_tags_of_resource(&state, &input, ctx),
+
             // Item operations
             "PutItem" => operations::item::put_item(&state, &input, ctx),
             "GetItem" => operations::item::get_item(&state, &input, ctx),
@@ -120,6 +137,8 @@ impl ServiceHandler for DynamoDbService {
                             stream_view_type: t.stream_view_type.clone(),
                             stream_records: t.stream_records.clone(),
                             stream_sequence: t.stream_sequence,
+                            ttl: t.ttl.clone(),
+                            tags: t.tags.clone(),
                         }
                     })
                     .collect::<Vec<_>>()

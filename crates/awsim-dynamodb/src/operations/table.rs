@@ -7,7 +7,7 @@ use tracing::info;
 
 use crate::state::{
     AttributeDefinition, DynamoState, GlobalSecondaryIndex, KeySchemaElement,
-    LocalSecondaryIndex, Projection, Table,
+    LocalSecondaryIndex, Projection, Table, TtlSpecification,
 };
 
 use super::{opt_str, require_str};
@@ -276,6 +276,22 @@ pub fn create_table(
         }
     };
 
+    // Parse optional tags from CreateTable input
+    let tags = {
+        let mut map = std::collections::HashMap::new();
+        if let Some(tag_arr) = input.get("Tags").and_then(|v| v.as_array()) {
+            for tag in tag_arr {
+                if let (Some(k), Some(v)) = (
+                    tag.get("Key").and_then(|v| v.as_str()),
+                    tag.get("Value").and_then(|v| v.as_str()),
+                ) {
+                    map.insert(k.to_string(), v.to_string());
+                }
+            }
+        }
+        map
+    };
+
     let table = Table {
         name: table_name.to_string(),
         arn,
@@ -292,6 +308,8 @@ pub fn create_table(
         stream_view_type,
         stream_records: Vec::new(),
         stream_sequence: 0,
+        ttl: TtlSpecification::default(),
+        tags,
     };
 
     let desc = table_description(&table);
@@ -461,4 +479,237 @@ pub fn update_table(
 
     let desc = table_description(&table);
     Ok(json!({ "TableDescription": desc }))
+}
+
+// ─── DescribeEndpoints ────────────────────────────────────────────────────────
+
+/// DescribeEndpoints — SDK endpoint discovery stub.
+/// Returns a single local endpoint so the SDK's endpoint-discovery logic is
+/// satisfied without making external calls.
+pub fn describe_endpoints(
+    _state: &DynamoState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    Ok(json!({
+        "Endpoints": [
+            {
+                "Address": "localhost",
+                "CachePeriodInMinutes": 1440
+            }
+        ]
+    }))
+}
+
+// ─── Time-to-Live ─────────────────────────────────────────────────────────────
+
+/// DescribeTimeToLive — Return current TTL configuration for a table.
+pub fn describe_time_to_live(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let table_name = require_str(input, "TableName")?;
+
+    let table = state.tables.get(table_name).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Cannot do operations on a non-existent table: {table_name}"),
+        )
+    })?;
+
+    let (status, attr_name) = if table.ttl.enabled {
+        ("ENABLED", Some(table.ttl.attribute_name.clone()))
+    } else {
+        ("DISABLED", None)
+    };
+
+    let mut ttl_desc = json!({ "TimeToLiveStatus": status });
+    if let Some(attr) = attr_name {
+        ttl_desc["AttributeName"] = json!(attr);
+    }
+
+    Ok(json!({ "TimeToLiveDescription": ttl_desc }))
+}
+
+/// UpdateTimeToLive — Enable or disable TTL on a table.
+pub fn update_time_to_live(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let table_name = require_str(input, "TableName")?;
+
+    let spec = input.get("TimeToLiveSpecification").ok_or_else(|| {
+        AwsError::bad_request("ValidationException", "TimeToLiveSpecification is required")
+    })?;
+
+    let enabled = spec
+        .get("Enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let attribute_name = spec
+        .get("AttributeName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let mut table = state.tables.get_mut(table_name).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Cannot do operations on a non-existent table: {table_name}"),
+        )
+    })?;
+
+    table.ttl = TtlSpecification {
+        enabled,
+        attribute_name: attribute_name.clone(),
+    };
+
+    Ok(json!({
+        "TimeToLiveSpecification": {
+            "Enabled": enabled,
+            "AttributeName": attribute_name
+        }
+    }))
+}
+
+// ─── Continuous Backups ───────────────────────────────────────────────────────
+
+/// DescribeContinuousBackups — Return stub backup configuration for a table.
+pub fn describe_continuous_backups(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let table_name = require_str(input, "TableName")?;
+
+    // Verify the table exists.
+    if !state.tables.contains_key(table_name) {
+        return Err(AwsError::not_found(
+            "TableNotFoundException",
+            format!("Table '{table_name}' not found"),
+        ));
+    }
+
+    Ok(json!({
+        "ContinuousBackupsDescription": {
+            "ContinuousBackupsStatus": "ENABLED",
+            "PointInTimeRecoveryDescription": {
+                "PointInTimeRecoveryStatus": "DISABLED"
+            }
+        }
+    }))
+}
+
+// ─── Tagging ─────────────────────────────────────────────────────────────────
+
+/// TagResource — Add or overwrite tags on a table.
+pub fn tag_resource(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let resource_arn = require_str(input, "ResourceArn")?;
+
+    // Find the table by ARN.
+    let table_name = state
+        .tables
+        .iter()
+        .find(|e| e.value().arn == resource_arn)
+        .map(|e| e.key().clone())
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Resource not found: {resource_arn}"),
+            )
+        })?;
+
+    let tags: std::collections::HashMap<String, String> = input
+        .get("Tags")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|tag| {
+                    let k = tag.get("Key")?.as_str()?.to_string();
+                    let v = tag.get("Value")?.as_str()?.to_string();
+                    Some((k, v))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if let Some(mut table) = state.tables.get_mut(&table_name) {
+        table.tags.extend(tags);
+    }
+
+    Ok(json!({}))
+}
+
+/// UntagResource — Remove tags from a table.
+pub fn untag_resource(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let resource_arn = require_str(input, "ResourceArn")?;
+
+    let table_name = state
+        .tables
+        .iter()
+        .find(|e| e.value().arn == resource_arn)
+        .map(|e| e.key().clone())
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Resource not found: {resource_arn}"),
+            )
+        })?;
+
+    let tag_keys: Vec<String> = input
+        .get("TagKeys")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if let Some(mut table) = state.tables.get_mut(&table_name) {
+        for key in &tag_keys {
+            table.tags.remove(key);
+        }
+    }
+
+    Ok(json!({}))
+}
+
+/// ListTagsOfResource — List all tags on a table.
+pub fn list_tags_of_resource(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let resource_arn = require_str(input, "ResourceArn")?;
+
+    let table = state
+        .tables
+        .iter()
+        .find(|e| e.value().arn == resource_arn)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Resource not found: {resource_arn}"),
+            )
+        })?;
+
+    let tags: Vec<Value> = table
+        .value()
+        .tags
+        .iter()
+        .map(|(k, v)| json!({ "Key": k, "Value": v }))
+        .collect();
+
+    Ok(json!({ "Tags": tags }))
 }

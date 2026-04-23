@@ -78,6 +78,15 @@ pub struct LocalSecondaryIndex {
     pub projection: Projection,
 }
 
+/// TTL specification for a table.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TtlSpecification {
+    /// Whether TTL is enabled.
+    pub enabled: bool,
+    /// The attribute name used for TTL.
+    pub attribute_name: String,
+}
+
 /// A DynamoDB Table.
 #[derive(Serialize, Deserialize)]
 pub struct Table {
@@ -108,6 +117,12 @@ pub struct Table {
     /// Monotonically increasing counter used to generate sequence numbers.
     #[serde(default)]
     pub stream_sequence: u64,
+    /// Time-to-Live specification.
+    #[serde(default)]
+    pub ttl: TtlSpecification,
+    /// Resource tags (key → value).
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
 }
 
 /// Serializable snapshot of `DynamoState`.
