@@ -41,7 +41,7 @@ export default defineConfig({
       ],
       '/services/': [
         {
-          text: 'Services',
+          text: 'Core Services',
           items: [
             { text: 'Overview', link: '/services/' },
             { text: 'S3', link: '/services/s3' },
@@ -49,8 +49,56 @@ export default defineConfig({
             { text: 'SQS', link: '/services/sqs' },
             { text: 'SNS', link: '/services/sns' },
             { text: 'Lambda', link: '/services/lambda' },
-            { text: 'Cognito', link: '/services/cognito' },
             { text: 'IAM & STS', link: '/services/iam' },
+          ]
+        },
+        {
+          text: 'Compute & Events',
+          items: [
+            { text: 'API Gateway', link: '/services/apigateway' },
+            { text: 'EventBridge', link: '/services/eventbridge' },
+            { text: 'Step Functions', link: '/services/stepfunctions' },
+            { text: 'CloudWatch Logs', link: '/services/cloudwatch-logs' },
+            { text: 'CloudWatch Metrics', link: '/services/cloudwatch-metrics' },
+          ]
+        },
+        {
+          text: 'Security & Config',
+          items: [
+            { text: 'Cognito', link: '/services/cognito' },
+            { text: 'KMS', link: '/services/kms' },
+            { text: 'Secrets Manager', link: '/services/secretsmanager' },
+            { text: 'SSM Parameter Store', link: '/services/ssm' },
+            { text: 'ACM', link: '/services/acm' },
+            { text: 'WAF', link: '/services/waf' },
+          ]
+        },
+        {
+          text: 'Data & Analytics',
+          items: [
+            { text: 'Kinesis', link: '/services/kinesis' },
+            { text: 'SES', link: '/services/ses' },
+            { text: 'OpenSearch', link: '/services/opensearch' },
+            { text: 'Kendra', link: '/services/kendra' },
+            { text: 'Comprehend', link: '/services/comprehend' },
+            { text: 'Athena', link: '/services/athena' },
+            { text: 'Glue', link: '/services/glue' },
+            { text: 'Bedrock', link: '/services/bedrock' },
+          ]
+        },
+        {
+          text: 'Infrastructure',
+          items: [
+            { text: 'EC2', link: '/services/ec2' },
+            { text: 'ECS', link: '/services/ecs' },
+            { text: 'ECR', link: '/services/ecr' },
+            { text: 'ELB', link: '/services/elb' },
+            { text: 'RDS', link: '/services/rds' },
+            { text: 'CloudFront', link: '/services/cloudfront' },
+            { text: 'Route 53', link: '/services/route53' },
+            { text: 'CloudFormation', link: '/services/cloudformation' },
+            { text: 'AppSync', link: '/services/appsync' },
+            { text: 'Scheduler', link: '/services/scheduler' },
           ]
         }
       ]
