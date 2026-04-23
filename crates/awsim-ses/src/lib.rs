@@ -58,6 +58,18 @@ impl ServiceHandler for SesService {
             },
             RouteDefinition {
                 method: "POST",
+                path_pattern: "/v2/email/outbound-bulk-emails",
+                operation: "SendBulkEmail",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v2/email/outbound-custom-verification-emails",
+                operation: "SendCustomVerificationEmail",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
                 path_pattern: "/v2/email/identities",
                 operation: "CreateEmailIdentity",
                 required_query_param: None,
@@ -78,6 +90,48 @@ impl ServiceHandler for SesService {
                 method: "DELETE",
                 path_pattern: "/v2/email/identities/{EmailIdentity}",
                 operation: "DeleteEmailIdentity",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/identities/{EmailIdentity}/dkim",
+                operation: "PutEmailIdentityDkimAttributes",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/identities/{EmailIdentity}/mail-from",
+                operation: "PutEmailIdentityMailFromAttributes",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/identities/{EmailIdentity}/feedback",
+                operation: "PutEmailIdentityFeedbackAttributes",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v2/email/identities/{EmailIdentity}/policies/{PolicyName}",
+                operation: "CreateEmailIdentityPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v2/email/identities/{EmailIdentity}/policies/{PolicyName}",
+                operation: "DeleteEmailIdentityPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/identities/{EmailIdentity}/policies/{PolicyName}",
+                operation: "UpdateEmailIdentityPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/identities/{EmailIdentity}/policies",
+                operation: "GetEmailIdentityPolicies",
                 required_query_param: None,
             },
             RouteDefinition {
@@ -105,9 +159,249 @@ impl ServiceHandler for SesService {
                 required_query_param: None,
             },
             RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/templates/{TemplateName}",
+                operation: "UpdateEmailTemplate",
+                required_query_param: None,
+            },
+            RouteDefinition {
                 method: "GET",
                 path_pattern: "/v2/email/account",
                 operation: "GetAccount",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/account/sending",
+                operation: "PutAccountSendingAttributes",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/account/suppression",
+                operation: "PutAccountSuppressionAttributes",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/account/dedicated-ips/warmup",
+                operation: "PutAccountDedicatedIpWarmupAttributes",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v2/email/configuration-sets",
+                operation: "CreateConfigurationSet",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/configuration-sets",
+                operation: "ListConfigurationSets",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/configuration-sets/{ConfigurationSetName}",
+                operation: "GetConfigurationSet",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v2/email/configuration-sets/{ConfigurationSetName}",
+                operation: "DeleteConfigurationSet",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v2/email/configuration-sets/{ConfigurationSetName}/event-destinations",
+                operation: "CreateConfigurationSetEventDestination",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/configuration-sets/{ConfigurationSetName}/event-destinations",
+                operation: "GetConfigurationSetEventDestinations",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v2/email/configuration-sets/{ConfigurationSetName}/event-destinations/{EventDestinationName}",
+                operation: "DeleteConfigurationSetEventDestination",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v2/email/dedicated-ip-pools",
+                operation: "CreateDedicatedIpPool",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/dedicated-ip-pools",
+                operation: "ListDedicatedIpPools",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/dedicated-ip-pools/{PoolName}",
+                operation: "GetDedicatedIpPool",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v2/email/dedicated-ip-pools/{PoolName}",
+                operation: "DeleteDedicatedIpPool",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/dedicated-ips/{PoolName}",
+                operation: "GetDedicatedIps",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/suppression/addresses",
+                operation: "PutSuppressedDestination",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/suppression/addresses",
+                operation: "ListSuppressedDestinations",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/suppression/addresses/{EmailAddress}",
+                operation: "GetSuppressedDestination",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v2/email/suppression/addresses/{EmailAddress}",
+                operation: "DeleteSuppressedDestination",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v2/email/contact-lists",
+                operation: "CreateContactList",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/contact-lists",
+                operation: "ListContactLists",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/contact-lists/{ContactListName}",
+                operation: "GetContactList",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/contact-lists/{ContactListName}",
+                operation: "UpdateContactList",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v2/email/contact-lists/{ContactListName}",
+                operation: "DeleteContactList",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v2/email/contact-lists/{ContactListName}/contacts",
+                operation: "CreateContact",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/contact-lists/{ContactListName}/contacts",
+                operation: "ListContacts",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/contact-lists/{ContactListName}/contacts/{EmailAddress}",
+                operation: "GetContact",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/contact-lists/{ContactListName}/contacts/{EmailAddress}",
+                operation: "UpdateContact",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v2/email/contact-lists/{ContactListName}/contacts/{EmailAddress}",
+                operation: "DeleteContact",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v2/email/custom-verification-email-templates",
+                operation: "CreateCustomVerificationEmailTemplate",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/custom-verification-email-templates",
+                operation: "ListCustomVerificationEmailTemplates",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/custom-verification-email-templates/{TemplateName}",
+                operation: "GetCustomVerificationEmailTemplate",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v2/email/custom-verification-email-templates/{TemplateName}",
+                operation: "DeleteCustomVerificationEmailTemplate",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v2/email/tags",
+                operation: "TagResource",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v2/email/tags",
+                operation: "UntagResource",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/tags",
+                operation: "ListTagsForResource",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/deliverability-dashboard",
+                operation: "GetDeliverabilityDashboardOptions",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/deliverability-dashboard",
+                operation: "PutDeliverabilityDashboardOption",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v2/email/deliverability-dashboard/blacklist-report",
+                operation: "GetBlacklistReports",
                 required_query_param: None,
             },
         ]
@@ -124,6 +418,10 @@ impl ServiceHandler for SesService {
 
         match operation {
             "SendEmail" => operations::emails::send_email(&state, &input, ctx),
+            "SendBulkEmail" => operations::more::send_bulk_email(&state, &input, ctx),
+            "SendCustomVerificationEmail" => {
+                operations::more::send_custom_verification_email(&state, &input, ctx)
+            }
             "CreateEmailIdentity" => {
                 operations::identities::create_email_identity(&state, &input, ctx)
             }
@@ -133,6 +431,27 @@ impl ServiceHandler for SesService {
             "GetEmailIdentity" => operations::identities::get_email_identity(&state, &input, ctx),
             "ListEmailIdentities" => {
                 operations::identities::list_email_identities(&state, &input, ctx)
+            }
+            "PutEmailIdentityDkimAttributes" => {
+                operations::more::put_email_identity_dkim_attributes(&state, &input, ctx)
+            }
+            "PutEmailIdentityMailFromAttributes" => {
+                operations::more::put_email_identity_mail_from_attributes(&state, &input, ctx)
+            }
+            "PutEmailIdentityFeedbackAttributes" => {
+                operations::more::put_email_identity_feedback_attributes(&state, &input, ctx)
+            }
+            "CreateEmailIdentityPolicy" => {
+                operations::more::create_email_identity_policy(&state, &input, ctx)
+            }
+            "DeleteEmailIdentityPolicy" => {
+                operations::more::delete_email_identity_policy(&state, &input, ctx)
+            }
+            "GetEmailIdentityPolicies" => {
+                operations::more::get_email_identity_policies(&state, &input, ctx)
+            }
+            "UpdateEmailIdentityPolicy" => {
+                operations::more::update_email_identity_policy(&state, &input, ctx)
             }
             "CreateEmailTemplate" => {
                 operations::templates::create_email_template(&state, &input, ctx)
@@ -144,7 +463,91 @@ impl ServiceHandler for SesService {
             "ListEmailTemplates" => {
                 operations::templates::list_email_templates(&state, &input, ctx)
             }
+            "UpdateEmailTemplate" => operations::more::update_email_template(&state, &input, ctx),
             "GetAccount" => operations::account::get_account(&state, &input, ctx),
+            "PutAccountSendingAttributes" => {
+                operations::more::put_account_sending_attributes(&state, &input, ctx)
+            }
+            "PutAccountSuppressionAttributes" => {
+                operations::more::put_account_suppression_attributes(&state, &input, ctx)
+            }
+            "PutAccountDedicatedIpWarmupAttributes" => {
+                operations::more::put_account_dedicated_ip_warmup_attributes(&state, &input, ctx)
+            }
+            "CreateConfigurationSet" => {
+                operations::more::create_configuration_set(&state, &input, ctx)
+            }
+            "DeleteConfigurationSet" => {
+                operations::more::delete_configuration_set(&state, &input, ctx)
+            }
+            "GetConfigurationSet" => operations::more::get_configuration_set(&state, &input, ctx),
+            "ListConfigurationSets" => {
+                operations::more::list_configuration_sets(&state, &input, ctx)
+            }
+            "CreateConfigurationSetEventDestination" => {
+                operations::more::create_configuration_set_event_destination(&state, &input, ctx)
+            }
+            "DeleteConfigurationSetEventDestination" => {
+                operations::more::delete_configuration_set_event_destination(&state, &input, ctx)
+            }
+            "GetConfigurationSetEventDestinations" => {
+                operations::more::get_configuration_set_event_destinations(&state, &input, ctx)
+            }
+            "CreateDedicatedIpPool" => {
+                operations::more::create_dedicated_ip_pool(&state, &input, ctx)
+            }
+            "DeleteDedicatedIpPool" => {
+                operations::more::delete_dedicated_ip_pool(&state, &input, ctx)
+            }
+            "GetDedicatedIpPool" => operations::more::get_dedicated_ip_pool(&state, &input, ctx),
+            "ListDedicatedIpPools" => {
+                operations::more::list_dedicated_ip_pools(&state, &input, ctx)
+            }
+            "GetDedicatedIps" => operations::more::get_dedicated_ips(&state, &input, ctx),
+            "PutSuppressedDestination" => {
+                operations::more::put_suppressed_destination(&state, &input, ctx)
+            }
+            "DeleteSuppressedDestination" => {
+                operations::more::delete_suppressed_destination(&state, &input, ctx)
+            }
+            "GetSuppressedDestination" => {
+                operations::more::get_suppressed_destination(&state, &input, ctx)
+            }
+            "ListSuppressedDestinations" => {
+                operations::more::list_suppressed_destinations(&state, &input, ctx)
+            }
+            "CreateContactList" => operations::more::create_contact_list(&state, &input, ctx),
+            "DeleteContactList" => operations::more::delete_contact_list(&state, &input, ctx),
+            "GetContactList" => operations::more::get_contact_list(&state, &input, ctx),
+            "ListContactLists" => operations::more::list_contact_lists(&state, &input, ctx),
+            "UpdateContactList" => operations::more::update_contact_list(&state, &input, ctx),
+            "CreateContact" => operations::more::create_contact(&state, &input, ctx),
+            "DeleteContact" => operations::more::delete_contact(&state, &input, ctx),
+            "GetContact" => operations::more::get_contact(&state, &input, ctx),
+            "ListContacts" => operations::more::list_contacts(&state, &input, ctx),
+            "UpdateContact" => operations::more::update_contact(&state, &input, ctx),
+            "CreateCustomVerificationEmailTemplate" => {
+                operations::more::create_custom_verification_email_template(&state, &input, ctx)
+            }
+            "DeleteCustomVerificationEmailTemplate" => {
+                operations::more::delete_custom_verification_email_template(&state, &input, ctx)
+            }
+            "GetCustomVerificationEmailTemplate" => {
+                operations::more::get_custom_verification_email_template(&state, &input, ctx)
+            }
+            "ListCustomVerificationEmailTemplates" => {
+                operations::more::list_custom_verification_email_templates(&state, &input, ctx)
+            }
+            "TagResource" => operations::more::tag_resource(&state, &input, ctx),
+            "UntagResource" => operations::more::untag_resource(&state, &input, ctx),
+            "ListTagsForResource" => operations::more::list_tags_for_resource(&state, &input, ctx),
+            "GetDeliverabilityDashboardOptions" => {
+                operations::more::get_deliverability_dashboard_options(&state, &input, ctx)
+            }
+            "PutDeliverabilityDashboardOption" => {
+                operations::more::put_deliverability_dashboard_option(&state, &input, ctx)
+            }
+            "GetBlacklistReports" => operations::more::get_blacklist_reports(&state, &input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

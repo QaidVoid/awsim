@@ -50,13 +50,36 @@ pub struct QueryLoggingConfig {
     pub cloud_watch_logs_log_group_arn: String,
 }
 
-/// Per-account Route53 state (global — Route53 is not region-scoped).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrafficPolicy {
+    pub id: String,
+    pub name: String,
+    pub version: u32,
+    pub document: String,
+    pub comment: Option<String>,
+    pub r#type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegationSet {
+    pub id: String,
+    pub caller_reference: String,
+    pub name_servers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VpcAssociation {
+    pub vpc_id: String,
+    pub vpc_region: String,
+    pub hosted_zone_id: String,
+}
+
 #[derive(Debug, Default)]
 pub struct Route53State {
-    /// Hosted zone ID → HostedZone
     pub hosted_zones: DashMap<String, HostedZone>,
-    /// Health check ID → HealthCheck
     pub health_checks: DashMap<String, HealthCheck>,
-    /// Query logging config ID → QueryLoggingConfig
     pub query_logging_configs: DashMap<String, QueryLoggingConfig>,
+    pub traffic_policies: DashMap<String, TrafficPolicy>,
+    pub delegation_sets: DashMap<String, DelegationSet>,
+    pub vpc_associations: DashMap<String, Vec<VpcAssociation>>,
 }

@@ -148,6 +148,9 @@ impl ServiceHandler for CognitoIdentityService {
             // Principal tags
             "GetPrincipalTagAttributeMap" => get_principal_tag_attribute_map(&state, &input),
             "SetPrincipalTagAttributeMap" => set_principal_tag_attribute_map(&state, &input),
+            "DeletePrincipalTagAttributeMap" => {
+                delete_principal_tag_attribute_map(&state, &input)
+            }
             // Tagging
             "TagResource" => tag_resource(&state, &input),
             "UntagResource" => untag_resource(&state, &input),
@@ -1309,6 +1312,32 @@ fn set_principal_tag_attribute_map(
         "UseDefaults":          use_defaults,
         "PrincipalTags":        tags_json,
     }))
+}
+
+/// DeletePrincipalTagAttributeMap
+fn delete_principal_tag_attribute_map(
+    state: &IdentityPoolState,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let pool_id = input["IdentityPoolId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let provider_name = input["IdentityProviderName"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameter", "IdentityProviderName is required")
+        })?;
+
+    let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Identity pool not found: {pool_id}"),
+        )
+    })?;
+
+    pool.principal_tag_maps.remove(provider_name);
+
+    Ok(json!({}))
 }
 
 // ---------------------------------------------------------------------------

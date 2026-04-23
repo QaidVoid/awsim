@@ -200,6 +200,90 @@ impl ServiceHandler for Route53Service {
                 operation: "ListTagsForResource",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2013-04-01/tags/{ResourceType}",
+                operation: "ListTagsForResources",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/change/{Id}",
+                operation: "GetChange",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/healthcheck/{HealthCheckId}",
+                operation: "GetHealthCheck",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/queryloggingconfig/{Id}",
+                operation: "GetQueryLoggingConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/geolocation",
+                operation: "GetGeoLocation",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/geolocations",
+                operation: "ListGeoLocations",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/delegationset",
+                operation: "ListReusableDelegationSets",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2013-04-01/delegationset",
+                operation: "CreateReusableDelegationSet",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2013-04-01/trafficpolicy",
+                operation: "CreateTrafficPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/trafficpolicies",
+                operation: "ListTrafficPolicies",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2013-04-01/trafficpolicy/{Id}/{Version}",
+                operation: "GetTrafficPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2013-04-01/trafficpolicy/{Id}/{Version}",
+                operation: "DeleteTrafficPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2013-04-01/hostedzone/{Id}/associatevpc",
+                operation: "AssociateVPCWithHostedZone",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2013-04-01/hostedzone/{Id}/disassociatevpc",
+                operation: "DisassociateVPCFromHostedZone",
+                required_query_param: None,
+            },
         ]
     }
 
@@ -282,6 +366,33 @@ impl ServiceHandler for Route53Service {
             }
             "ListTagsForResource" => {
                 operations::tags::list_tags_for_resource(&state, &input, ctx)
+            }
+            "ListTagsForResources" => {
+                operations::more::list_tags_for_resources(&state, &input, ctx)
+            }
+
+            "GetChange" => operations::more::get_change(&state, &input, ctx),
+            "GetHealthCheck" => operations::more::get_health_check(&state, &input, ctx),
+            "GetQueryLoggingConfig" => {
+                operations::more::get_query_logging_config(&state, &input, ctx)
+            }
+            "GetGeoLocation" => operations::more::get_geo_location(&state, &input, ctx),
+            "ListGeoLocations" => operations::more::list_geo_locations(&state, &input, ctx),
+            "ListReusableDelegationSets" => {
+                operations::more::list_reusable_delegation_sets(&state, &input, ctx)
+            }
+            "CreateReusableDelegationSet" => {
+                operations::more::create_reusable_delegation_set(&state, &input, ctx)
+            }
+            "CreateTrafficPolicy" => operations::more::create_traffic_policy(&state, &input, ctx),
+            "GetTrafficPolicy" => operations::more::get_traffic_policy(&state, &input, ctx),
+            "ListTrafficPolicies" => operations::more::list_traffic_policies(&state, &input, ctx),
+            "DeleteTrafficPolicy" => operations::more::delete_traffic_policy(&state, &input, ctx),
+            "AssociateVPCWithHostedZone" => {
+                operations::more::associate_vpc_with_hosted_zone(&state, &input, ctx)
+            }
+            "DisassociateVPCFromHostedZone" => {
+                operations::more::disassociate_vpc_from_hosted_zone(&state, &input, ctx)
             }
 
             _ => Err(AwsError::unknown_operation(operation)),
