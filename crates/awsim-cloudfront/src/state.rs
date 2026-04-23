@@ -7,6 +7,12 @@ use serde_json::Value;
 pub struct CloudFrontState {
     pub distributions: DashMap<String, Distribution>,
     pub origin_access_controls: DashMap<String, OriginAccessControl>,
+    /// Legacy OAIs (CloudFront Origin Access Identities)
+    pub oais: DashMap<String, OriginAccessIdentity>,
+    /// Invalidation ID → Invalidation
+    pub invalidations: DashMap<String, Invalidation>,
+    /// Cache policy ID → CachePolicy
+    pub cache_policies: DashMap<String, CachePolicy>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,4 +55,38 @@ pub struct OriginAccessControl {
     pub signing_behavior: String,
     pub origin_access_control_origin_type: String,
     pub created_at: String,
+}
+
+/// Legacy CloudFront Origin Access Identity (OAI).
+#[derive(Debug, Clone)]
+pub struct OriginAccessIdentity {
+    pub id: String,
+    pub s3_canonical_user_id: String,
+    pub comment: String,
+    pub caller_reference: String,
+    pub created_at: String,
+}
+
+/// A CloudFront invalidation.
+#[derive(Debug, Clone)]
+pub struct Invalidation {
+    pub id: String,
+    pub distribution_id: String,
+    pub status: String,
+    pub create_time: String,
+    pub paths: Vec<String>,
+    pub caller_reference: String,
+}
+
+/// A CloudFront cache policy.
+#[derive(Debug, Clone)]
+pub struct CachePolicy {
+    pub id: String,
+    pub name: String,
+    pub comment: String,
+    pub default_ttl: u64,
+    pub max_ttl: u64,
+    pub min_ttl: u64,
+    pub created_at: String,
+    pub etag: String,
 }

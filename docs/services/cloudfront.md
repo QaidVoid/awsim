@@ -69,6 +69,23 @@ curl -s -X POST http://localhost:4566/2020-05-31/distribution \
   - Path: `PUT /2020-05-31/distribution/{Id}/config`
   - Requires `If-Match` ETag header
 
+- `GetDistributionConfig` — return only the config portion of a distribution (without the outer `Distribution` wrapper)
+  - Path: `GET /2020-05-31/distribution/{Id}/config`
+  - Returns: `DistributionConfig` and `ETag`
+
+### Invalidations
+- `CreateInvalidation` — submit a cache invalidation for one or more paths
+  - Path: `POST /2020-05-31/distribution/{DistributionId}/invalidation`
+  - Input: `InvalidationBatch` with `CallerReference` and `Paths.Items` (list of paths, e.g., `/*`)
+  - Returns: `Invalidation` with `Id`, `Status: "Completed"`, `CreateTime`, `InvalidationBatch`
+
+- `GetInvalidation` — retrieve a stored invalidation
+  - Path: `GET /2020-05-31/distribution/{DistributionId}/invalidation/{Id}`
+
+- `ListInvalidations` — list invalidations for a distribution
+  - Path: `GET /2020-05-31/distribution/{DistributionId}/invalidation`
+  - Returns: `InvalidationList` with paginated items
+
 ### Origin Access Controls
 - `CreateOriginAccessControl` — create an OAC for restricting S3 access to CloudFront only
   - Input: `OriginAccessControlConfig` with `Name`, `SigningProtocol` (`sigv4`), `SigningBehavior` (`always`, `never`, `no-override`)
@@ -77,9 +94,27 @@ curl -s -X POST http://localhost:4566/2020-05-31/distribution \
 - `ListOriginAccessControls` — list all origin access controls
 - `DeleteOriginAccessControl` — delete an origin access control
 
+### Legacy Origin Access Identities (OAI)
+- `CreateCloudFrontOriginAccessIdentity` — create a legacy OAI
+  - Input: `CloudFrontOriginAccessIdentityConfig` with `CallerReference`, `Comment`
+  - Returns: `CloudFrontOriginAccessIdentity` with `Id`, `S3CanonicalUserId`
+
+- `GetCloudFrontOriginAccessIdentity` — retrieve an OAI by ID
+- `ListCloudFrontOriginAccessIdentities` — list all OAIs
+
 ### Cache Policies
-- `ListCachePolicies` — list available cache policies
-  - Returns: a built-in set of AWS managed policies including `CachingOptimized` (`658327ea-f89d-4fab-a63d-7e88639e58f6`)
+- `CreateCachePolicy` — create a custom cache policy
+  - Input: `CachePolicyConfig` with `Name`, `DefaultTTL`, `MaxTTL`, `MinTTL`, optional `Comment`
+  - Returns: `CachePolicy` with `Id` and `ETag`
+
+- `GetCachePolicy` — retrieve a cache policy by ID
+- `DeleteCachePolicy` — delete a custom cache policy
+
+- `ListCachePolicies` — list cache policies (both the built-in `CachingOptimized` managed policy and custom ones)
+  - Returns: `CachePolicyList` with `CachePolicySummary` items; built-in managed policy ID is `658327ea-f89d-4fab-a63d-7e88639e58f6`
+
+### Response Headers Policies
+- `ListResponseHeadersPolicies` — list response headers policies (stub returning empty list)
 
 ### Tags
 - `TagResource` — add tags to a distribution (ARN-based)
@@ -168,7 +203,10 @@ console.log('Total distributions:', DistributionList?.Quantity);
 
 - CloudFront is a **global** service — state is shared across all regions under the same account.
 - Distributions are recorded in AWSim but no actual CDN edge routing or caching occurs.
-- `ListCachePolicies` returns a single built-in `CachingOptimized` managed policy (ID `658327ea-f89d-4fab-a63d-7e88639e58f6`).
+- `ListCachePolicies` always includes the built-in `CachingOptimized` managed policy (ID `658327ea-f89d-4fab-a63d-7e88639e58f6`) plus any custom policies you create.
 - Distribution status starts as `InProgress` and transitions to `Deployed` quickly (simulated).
 - `DeleteDistribution` requires the distribution to be disabled first (`Enabled: false`), matching real CloudFront behavior.
+- `CreateInvalidation` returns `Status: "Completed"` immediately; no actual cache purge occurs.
+- OAIs (legacy `CloudFrontOriginAccessIdentity`) are stored separately from OACs (`OriginAccessControl`). Prefer OACs for new distributions.
+- `ListResponseHeadersPolicies` returns an empty list; response headers policies are not yet stored.
 - State is in-memory only and lost on restart.

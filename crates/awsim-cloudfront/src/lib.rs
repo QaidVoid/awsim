@@ -84,6 +84,31 @@ impl ServiceHandler for CloudFrontService {
                 operation: "UpdateDistribution",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/distribution/{Id}/config",
+                operation: "GetDistributionConfig",
+                required_query_param: None,
+            },
+            // Invalidations
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2020-05-31/distribution/{DistributionId}/invalidation",
+                operation: "CreateInvalidation",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/distribution/{DistributionId}/invalidation",
+                operation: "ListInvalidations",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/distribution/{DistributionId}/invalidation/{Id}",
+                operation: "GetInvalidation",
+                required_query_param: None,
+            },
             // Origin Access Controls
             RouteDefinition {
                 method: "POST",
@@ -103,11 +128,55 @@ impl ServiceHandler for CloudFrontService {
                 operation: "DeleteOriginAccessControl",
                 required_query_param: None,
             },
+            // Legacy OAIs
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2020-05-31/origin-access-identity/cloudfront",
+                operation: "CreateCloudFrontOriginAccessIdentity",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/origin-access-identity/cloudfront/{Id}",
+                operation: "GetCloudFrontOriginAccessIdentity",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/origin-access-identity/cloudfront",
+                operation: "ListCloudFrontOriginAccessIdentities",
+                required_query_param: None,
+            },
             // Cache Policies
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2020-05-31/cache-policy",
+                operation: "CreateCachePolicy",
+                required_query_param: None,
+            },
             RouteDefinition {
                 method: "GET",
                 path_pattern: "/2020-05-31/cache-policy",
                 operation: "ListCachePolicies",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/cache-policy/{Id}",
+                operation: "GetCachePolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2020-05-31/cache-policy/{Id}",
+                operation: "DeleteCachePolicy",
+                required_query_param: None,
+            },
+            // Response Headers Policies
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2020-05-31/response-headers-policy",
+                operation: "ListResponseHeadersPolicies",
                 required_query_param: None,
             },
             // Tags
@@ -147,6 +216,13 @@ impl ServiceHandler for CloudFrontService {
                     .unwrap_or("");
                 operations::distributions::get_distribution(&state, id)
             }
+            "GetDistributionConfig" => {
+                let id = input
+                    .get("Id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                operations::distributions::get_distribution_config(&state, id)
+            }
             "ListDistributions" => operations::distributions::list_distributions(&state),
             "DeleteDistribution" => {
                 let id = input
@@ -164,6 +240,33 @@ impl ServiceHandler for CloudFrontService {
                 operations::distributions::update_distribution(&state, &id, &input)
             }
 
+            // Invalidations
+            "CreateInvalidation" => {
+                let dist_id = input
+                    .get("DistributionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                operations::invalidations::create_invalidation(&state, dist_id, &input)
+            }
+            "GetInvalidation" => {
+                let dist_id = input
+                    .get("DistributionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let inv_id = input
+                    .get("Id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                operations::invalidations::get_invalidation(&state, dist_id, inv_id)
+            }
+            "ListInvalidations" => {
+                let dist_id = input
+                    .get("DistributionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                operations::invalidations::list_invalidations(&state, dist_id)
+            }
+
             // Origin Access Controls
             "CreateOriginAccessControl" => {
                 operations::origin_access::create_origin_access_control(&state, &input)
@@ -179,29 +282,43 @@ impl ServiceHandler for CloudFrontService {
                 operations::origin_access::delete_origin_access_control(&state, id)
             }
 
-            // Cache Policies — return a fixed list of managed policies
-            "ListCachePolicies" => Ok(serde_json::json!({
-                "CachePolicyList": {
-                    "MaxItems": 100,
-                    "Quantity": 1,
-                    "Items": {
-                        "CachePolicySummary": [{
-                            "Type": "managed",
-                            "CachePolicy": {
-                                "Id": "658327ea-f89d-4fab-a63d-7e88639e58f6",
-                                "LastModifiedTime": "2021-05-10T00:00:00Z",
-                                "CachePolicyConfig": {
-                                    "Name": "CachingOptimized",
-                                    "DefaultTTL": 86400,
-                                    "MaxTTL": 31536000,
-                                    "MinTTL": 1,
-                                    "Comment": "Optimized for caching",
-                                }
-                            }
-                        }]
-                    }
-                }
-            })),
+            // Legacy OAIs
+            "CreateCloudFrontOriginAccessIdentity" => {
+                operations::oai::create_oai(&state, &input)
+            }
+            "GetCloudFrontOriginAccessIdentity" => {
+                let id = input
+                    .get("Id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                operations::oai::get_oai(&state, id)
+            }
+            "ListCloudFrontOriginAccessIdentities" => {
+                operations::oai::list_oais(&state)
+            }
+
+            // Cache Policies
+            "CreateCachePolicy" => operations::cache_policies::create_cache_policy(&state, &input),
+            "GetCachePolicy" => {
+                let id = input
+                    .get("Id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                operations::cache_policies::get_cache_policy(&state, id)
+            }
+            "DeleteCachePolicy" => {
+                let id = input
+                    .get("Id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                operations::cache_policies::delete_cache_policy(&state, id)
+            }
+            "ListCachePolicies" => operations::cache_policies::list_cache_policies(&state),
+
+            // Response Headers Policies
+            "ListResponseHeadersPolicies" => {
+                operations::response_headers_policies::list_response_headers_policies(&state)
+            }
 
             // Tags
             "TagResource" => operations::tags::tag_resource(&state, &input),

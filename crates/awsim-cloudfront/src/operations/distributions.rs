@@ -214,6 +214,24 @@ pub fn get_distribution(state: &CloudFrontState, id: &str) -> Result<Value, AwsE
     }))
 }
 
+/// GET /2020-05-31/distribution/{Id}/config
+/// Returns only the DistributionConfig portion (without the outer Distribution wrapper).
+pub fn get_distribution_config(state: &CloudFrontState, id: &str) -> Result<Value, AwsError> {
+    let dist = state
+        .distributions
+        .get(id)
+        .ok_or_else(|| not_found(id))?;
+
+    let etag = dist.etag.clone();
+    let full = distribution_to_value(&dist);
+    let config = full["DistributionConfig"].clone();
+
+    Ok(json!({
+        "DistributionConfig": config,
+        "ETag": etag,
+    }))
+}
+
 pub fn list_distributions(state: &CloudFrontState) -> Result<Value, AwsError> {
     let items: Vec<Value> = state
         .distributions
