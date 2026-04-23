@@ -46,11 +46,39 @@ async fn main() -> Result<()> {
     // Register all services; get back the ApiGateway Arc for proxy routing and
     // an Arc<CognitoState> for the default account+region so the OAuth router
     // can share user-pool state with the CognitoService.
-    let (apigw_service, cognito_state, iam_store) =
-        register_services(&mut state, &cli.account_id, &cli.region);
+    let (
+        apigw_service,
+        cognito_state,
+        iam_store,
+        s3_store,
+        kms_store,
+        sqs_store,
+        secrets_store,
+        lambda_store,
+    ) = register_services(&mut state, &cli.account_id, &cli.region);
 
     if let Some(authz) = Arc::get_mut(&mut state.authz) {
         authz.principal_lookup = Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store));
+        authz.resource_policy_lookups.insert(
+            "s3".to_string(),
+            Arc::new(awsim_s3::S3ResourcePolicyLookup::new(s3_store)),
+        );
+        authz.resource_policy_lookups.insert(
+            "kms".to_string(),
+            Arc::new(awsim_kms::KmsResourcePolicyLookup::new(kms_store)),
+        );
+        authz.resource_policy_lookups.insert(
+            "sqs".to_string(),
+            Arc::new(awsim_sqs::SqsResourcePolicyLookup::new(sqs_store)),
+        );
+        authz.resource_policy_lookups.insert(
+            "secretsmanager".to_string(),
+            Arc::new(awsim_secretsmanager::SecretsManagerResourcePolicyLookup::new(secrets_store)),
+        );
+        authz.resource_policy_lookups.insert(
+            "lambda".to_string(),
+            Arc::new(awsim_lambda::LambdaResourcePolicyLookup::new(lambda_store)),
+        );
     }
 
     // Persistence: restore snapshots if --data-dir was provided.
@@ -359,6 +387,11 @@ fn register_services(
     Arc<awsim_apigateway::ApiGatewayService>,
     Arc<awsim_cognito::CognitoState>,
     awsim_core::AccountRegionStore<awsim_iam::state::IamState>,
+    awsim_core::AccountRegionStore<awsim_s3::state::S3State>,
+    awsim_core::AccountRegionStore<awsim_kms::state::KmsState>,
+    awsim_core::AccountRegionStore<awsim_sqs::state::SqsState>,
+    awsim_core::AccountRegionStore<awsim_secretsmanager::state::SecretsState>,
+    awsim_core::AccountRegionStore<awsim_lambda::state::LambdaState>,
 ) {
     use std::sync::Arc;
 
@@ -373,12 +406,14 @@ fn register_services(
     state.register(sns, vec![]);
 
     let sqs = Arc::new(awsim_sqs::SqsService::new());
+    let sqs_store = sqs.store();
     state.register(sqs, vec![]);
 
     let dynamodb = Arc::new(awsim_dynamodb::DynamoDbService::new());
     state.register(dynamodb, vec![]);
 
     let s3 = awsim_s3::S3Service::new();
+    let s3_store = s3.store();
     let s3_routes = {
         use awsim_core::ServiceHandler;
         s3.routes()
@@ -386,6 +421,7 @@ fn register_services(
     state.register(Arc::new(s3), s3_routes);
 
     let lambda = awsim_lambda::LambdaService::new();
+    let lambda_store = lambda.store();
     let lambda_routes = {
         use awsim_core::ServiceHandler;
         lambda.routes()
@@ -399,9 +435,11 @@ fn register_services(
     state.register(eventbridge, vec![]);
 
     let kms = Arc::new(awsim_kms::KmsService::new());
+    let kms_store = kms.store();
     state.register(kms, vec![]);
 
     let secretsmanager = Arc::new(awsim_secretsmanager::SecretsManagerService::new());
+    let secrets_store = secretsmanager.store();
     state.register(secretsmanager, vec![]);
 
     let ssm = Arc::new(awsim_ssm::SsmService::new());
@@ -518,5 +556,14 @@ fn register_services(
     let apigw_clone = Arc::clone(&apigateway);
     state.register(apigateway, apigw_routes);
 
-    (apigw_clone, cognito_arc_state, iam_store)
+    (
+        apigw_clone,
+        cognito_arc_state,
+        iam_store,
+        s3_store,
+        kms_store,
+        sqs_store,
+        secrets_store,
+        lambda_store,
+    )
 }

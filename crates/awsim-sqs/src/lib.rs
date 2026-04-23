@@ -1,6 +1,8 @@
+pub mod authz;
 mod handler;
 mod operations;
-mod state;
+pub mod state;
 mod util;
 
+pub use authz::SqsResourcePolicyLookup;
 pub use handler::SqsService;
