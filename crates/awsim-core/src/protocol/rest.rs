@@ -446,18 +446,19 @@ pub fn serialize_xml_response(
         output.clone()
     };
 
-    let body = if output_for_xml.is_null()
-        || (output_for_xml.is_object() && output_for_xml.as_object().unwrap().is_empty())
-    {
-        String::new()
-    } else if let Some(root) = xml_root {
+    let body = if let Some(root) = xml_root {
+        // When an explicit XML root is present, always emit a root element
+        // (even if there are no child fields — e.g. empty BucketLoggingStatus).
+        let fields = super::query::json_to_xml_fields(&output_for_xml);
         format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
              <{root} xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n\
-             {fields}\
-             </{root}>",
-            fields = super::query::json_to_xml_fields(&output_for_xml)
+             {fields}</{root}>",
         )
+    } else if output_for_xml.is_null()
+        || (output_for_xml.is_object() && output_for_xml.as_object().unwrap().is_empty())
+    {
+        String::new()
     } else {
         format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{}",

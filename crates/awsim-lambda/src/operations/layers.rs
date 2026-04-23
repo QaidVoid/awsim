@@ -128,7 +128,9 @@ pub fn delete_layer_version(
     let layer_name = require_str(input, "LayerName")?;
     let version_number = input
         .get("VersionNumber")
-        .and_then(|v| v.as_u64())
+        .and_then(|v| {
+            v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+        })
         .ok_or_else(|| invalid_parameter("VersionNumber is required"))?;
 
     let mut entry = state

@@ -192,7 +192,11 @@ pub fn get_bucket_cors(state: &S3State, input: &Value) -> Result<Value, AwsError
         Some(cors) => {
             // Parse back so we return structured data.
             let parsed: Value = serde_json::from_str(cors).unwrap_or(json!({}));
-            Ok(parsed)
+            // Extract just the CORSConfiguration rules, wrapping with __xml_root.
+            let rules = parsed.get("CORSConfiguration")
+                .cloned()
+                .unwrap_or_else(|| parsed.clone());
+            Ok(json!({ "__xml_root": "CORSConfiguration", "CORSRule": rules.get("CORSRule").cloned().unwrap_or(json!([])) }))
         }
         None => Err(AwsError::not_found(
             "NoSuchCORSConfiguration",
@@ -534,7 +538,10 @@ pub fn get_bucket_lifecycle_configuration(state: &S3State, input: &Value) -> Res
     match &bucket.lifecycle {
         Some(lc) => {
             let parsed: Value = serde_json::from_str(lc).unwrap_or(json!({}));
-            Ok(parsed)
+            // Extract lifecycle rules from stored input - they may be nested under LifecycleConfiguration
+            let lc_val = parsed.get("LifecycleConfiguration").cloned().unwrap_or_else(|| parsed.clone());
+            let rules = lc_val.get("Rule").cloned().unwrap_or(json!([]));
+            Ok(json!({ "__xml_root": "LifecycleConfiguration", "Rule": rules }))
         }
         None => Err(AwsError::not_found(
             "NoSuchLifecycleConfiguration",
@@ -583,9 +590,20 @@ pub fn get_bucket_encryption(state: &S3State, input: &Value) -> Result<Value, Aw
     match &bucket.encryption {
         Some(enc) => {
             let parsed: Value = serde_json::from_str(enc).unwrap_or(default_sse_s3_config());
-            Ok(parsed)
+            // Extract just the rules from ServerSideEncryptionConfiguration
+            let sse_config = parsed.get("ServerSideEncryptionConfiguration").cloned().unwrap_or_else(|| parsed.clone());
+            let rules = sse_config.get("Rule").or_else(|| sse_config.get("Rules")).cloned().unwrap_or(json!([]));
+            Ok(json!({ "__xml_root": "ServerSideEncryptionConfiguration", "Rule": rules }))
         }
-        None => Ok(default_sse_s3_config()),
+        None => Ok(json!({
+            "__xml_root": "ServerSideEncryptionConfiguration",
+            "Rule": [{
+                "ApplyServerSideEncryptionByDefault": {
+                    "SSEAlgorithm": "AES256"
+                },
+                "BucketKeyEnabled": false
+            }]
+        })),
     }
 }
 
@@ -632,11 +650,25 @@ fn default_sse_s3_config() -> Value {
 
 /// GET /{Bucket}?<param> — Retrieve a stored JSON config from bucket.configs.
 /// Returns `not_found_code` error if not set.
+/// `xml_root` is the expected XML root element name (used to wrap the response).
+/// `config_key` is the JSON key under which the config data was stored.
 pub fn get_bucket_config(
     state: &S3State,
     input: &Value,
     config_name: &str,
     not_found_code: &str,
+) -> Result<Value, AwsError> {
+    get_bucket_config_xml(state, input, config_name, not_found_code, None, None)
+}
+
+/// GET with XML root wrapping.
+pub fn get_bucket_config_xml(
+    state: &S3State,
+    input: &Value,
+    config_name: &str,
+    not_found_code: &str,
+    xml_root: Option<&str>,
+    config_key: Option<&str>,
 ) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
@@ -648,7 +680,20 @@ pub fn get_bucket_config(
     match bucket.configs.get(config_name) {
         Some(raw) => {
             let parsed: Value = serde_json::from_str(raw).unwrap_or(serde_json::Value::Object(Default::default()));
-            Ok(parsed)
+            if let (Some(root), Some(key)) = (xml_root, config_key) {
+                // Extract sub-config and wrap with xml_root
+                let config_data = parsed.get(key).cloned().unwrap_or_else(|| parsed.clone());
+                let mut result = serde_json::Map::new();
+                result.insert("__xml_root".to_string(), Value::String(root.to_string()));
+                if let Some(obj) = config_data.as_object() {
+                    for (k, v) in obj {
+                        result.insert(k.clone(), v.clone());
+                    }
+                }
+                Ok(Value::Object(result))
+            } else {
+                Ok(parsed)
+            }
         }
         None => Err(AwsError::not_found(
             not_found_code,
@@ -658,10 +703,20 @@ pub fn get_bucket_config(
 }
 
 /// PUT /{Bucket}?<param> — Store a JSON config on bucket.configs.
+/// Extracts `config_key` subfield if present, otherwise stores the input JSON (excluding path params).
 pub fn put_bucket_config(
     state: &S3State,
     input: &Value,
     config_name: &str,
+) -> Result<Value, AwsError> {
+    put_bucket_config_key(state, input, config_name, None)
+}
+
+pub fn put_bucket_config_key(
+    state: &S3State,
+    input: &Value,
+    config_name: &str,
+    config_key: Option<&str>,
 ) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
@@ -670,7 +725,13 @@ pub fn put_bucket_config(
         .get_mut(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    bucket.configs.insert(config_name.to_string(), input.to_string());
+    let to_store = if let Some(key) = config_key {
+        input.get(key).cloned().unwrap_or_else(|| input.clone())
+    } else {
+        input.clone()
+    };
+
+    bucket.configs.insert(config_name.to_string(), to_store.to_string());
     Ok(json!({}))
 }
 
@@ -694,11 +755,11 @@ pub fn delete_bucket_config(
 // ─── Website ─────────────────────────────────────────────────────────────────
 
 pub fn get_bucket_website(state: &S3State, input: &Value) -> Result<Value, AwsError> {
-    get_bucket_config(state, input, "website", "NoSuchWebsiteConfiguration")
+    get_bucket_config_xml(state, input, "website", "NoSuchWebsiteConfiguration", Some("WebsiteConfiguration"), Some("WebsiteConfiguration"))
 }
 
 pub fn put_bucket_website(state: &S3State, input: &Value) -> Result<Value, AwsError> {
-    put_bucket_config(state, input, "website")
+    put_bucket_config_key(state, input, "website", Some("WebsiteConfiguration"))
 }
 
 pub fn delete_bucket_website(state: &S3State, input: &Value) -> Result<Value, AwsError> {
@@ -708,11 +769,11 @@ pub fn delete_bucket_website(state: &S3State, input: &Value) -> Result<Value, Aw
 // ─── Replication ─────────────────────────────────────────────────────────────
 
 pub fn get_bucket_replication(state: &S3State, input: &Value) -> Result<Value, AwsError> {
-    get_bucket_config(state, input, "replication", "ReplicationConfigurationNotFoundError")
+    get_bucket_config_xml(state, input, "replication", "ReplicationConfigurationNotFoundError", Some("ReplicationConfiguration"), Some("ReplicationConfiguration"))
 }
 
 pub fn put_bucket_replication(state: &S3State, input: &Value) -> Result<Value, AwsError> {
-    put_bucket_config(state, input, "replication")
+    put_bucket_config_key(state, input, "replication", Some("ReplicationConfiguration"))
 }
 
 pub fn delete_bucket_replication(state: &S3State, input: &Value) -> Result<Value, AwsError> {
@@ -1099,11 +1160,11 @@ pub fn list_bucket_inventory_configurations(state: &S3State, input: &Value) -> R
 // ─── Ownership Controls ───────────────────────────────────────────────────────
 
 pub fn get_bucket_ownership_controls(state: &S3State, input: &Value) -> Result<Value, AwsError> {
-    get_bucket_config(state, input, "ownership-controls", "OwnershipControlsNotFoundError")
+    get_bucket_config_xml(state, input, "ownership-controls", "OwnershipControlsNotFoundError", Some("OwnershipControls"), Some("OwnershipControls"))
 }
 
 pub fn put_bucket_ownership_controls(state: &S3State, input: &Value) -> Result<Value, AwsError> {
-    put_bucket_config(state, input, "ownership-controls")
+    put_bucket_config_key(state, input, "ownership-controls", Some("OwnershipControls"))
 }
 
 pub fn delete_bucket_ownership_controls(state: &S3State, input: &Value) -> Result<Value, AwsError> {
@@ -1122,30 +1183,34 @@ pub fn get_public_access_block(state: &S3State, input: &Value) -> Result<Value, 
 
     match bucket.configs.get("public-access-block") {
         Some(raw) => {
-            let parsed: Value = serde_json::from_str(raw).unwrap_or(default_public_access_block());
-            Ok(parsed)
+            let parsed: Value = serde_json::from_str(raw).unwrap_or(json!({}));
+            // Extract the PublicAccessBlockConfiguration fields
+            let config = parsed.get("PublicAccessBlockConfiguration").cloned().unwrap_or_else(|| parsed.clone());
+            let mut result = serde_json::Map::new();
+            result.insert("__xml_root".to_string(), Value::String("PublicAccessBlockConfiguration".to_string()));
+            if let Some(obj) = config.as_object() {
+                for (k, v) in obj {
+                    result.insert(k.clone(), v.clone());
+                }
+            }
+            Ok(Value::Object(result))
         }
-        None => Ok(default_public_access_block()),
-    }
-}
-
-pub fn put_public_access_block(state: &S3State, input: &Value) -> Result<Value, AwsError> {
-    put_bucket_config(state, input, "public-access-block")
-}
-
-pub fn delete_public_access_block(state: &S3State, input: &Value) -> Result<Value, AwsError> {
-    delete_bucket_config(state, input, "public-access-block")
-}
-
-fn default_public_access_block() -> Value {
-    json!({
-        "PublicAccessBlockConfiguration": {
+        None => Ok(json!({
+            "__xml_root": "PublicAccessBlockConfiguration",
             "BlockPublicAcls": false,
             "IgnorePublicAcls": false,
             "BlockPublicPolicy": false,
             "RestrictPublicBuckets": false
-        }
-    })
+        })),
+    }
+}
+
+pub fn put_public_access_block(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    put_bucket_config_key(state, input, "public-access-block", Some("PublicAccessBlockConfiguration"))
+}
+
+pub fn delete_public_access_block(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    delete_bucket_config(state, input, "public-access-block")
 }
 
 // ─── SelectObjectContent (stub) ───────────────────────────────────────────────
@@ -1168,10 +1233,19 @@ pub fn get_bucket_logging(state: &S3State, input: &Value) -> Result<Value, AwsEr
 
     match &bucket.logging {
         Some(log) => {
-            let parsed: Value = serde_json::from_str(log).unwrap_or(json!({ "BucketLoggingStatus": {} }));
-            Ok(parsed)
+            let parsed: Value = serde_json::from_str(log).unwrap_or(json!({}));
+            // Extract BucketLoggingStatus fields and wrap with __xml_root
+            let status = parsed.get("BucketLoggingStatus").cloned().unwrap_or_else(|| parsed.clone());
+            let mut result = serde_json::Map::new();
+            result.insert("__xml_root".to_string(), Value::String("BucketLoggingStatus".to_string()));
+            if let Some(obj) = status.as_object() {
+                for (k, v) in obj {
+                    result.insert(k.clone(), v.clone());
+                }
+            }
+            Ok(Value::Object(result))
         }
-        None => Ok(json!({ "BucketLoggingStatus": {} })),
+        None => Ok(json!({ "__xml_root": "BucketLoggingStatus" })),
     }
 }
 
@@ -1179,11 +1253,13 @@ pub fn get_bucket_logging(state: &S3State, input: &Value) -> Result<Value, AwsEr
 pub fn put_bucket_logging(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
+    let to_store = input.get("BucketLoggingStatus").cloned().unwrap_or_else(|| input.clone());
+
     let mut bucket = state
         .buckets
         .get_mut(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    bucket.logging = Some(input.to_string());
+    bucket.logging = Some(json!({ "BucketLoggingStatus": to_store }).to_string());
     Ok(json!({}))
 }

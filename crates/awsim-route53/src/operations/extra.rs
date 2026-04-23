@@ -17,6 +17,7 @@ pub fn get_hosted_zone_count(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     Ok(json!({
+        "__xml_root": "GetHostedZoneCountResponse",
         "HostedZoneCount": state.hosted_zones.len()
     }))
 }

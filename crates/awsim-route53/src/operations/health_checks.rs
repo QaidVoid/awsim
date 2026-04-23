@@ -115,6 +115,7 @@ pub fn create_health_check(
     state.health_checks.insert(id.clone(), hc);
 
     Ok(json!({
+        "__xml_root": "CreateHealthCheckResponse",
         "HealthCheck": {
             "Id": id,
             "HealthCheckVersion": 1,
@@ -143,6 +144,7 @@ pub fn list_health_checks(
         .collect();
 
     Ok(json!({
+        "__xml_root": "ListHealthChecksResponse",
         "HealthChecks": checks,
         "IsTruncated": false,
         "MaxItems": "100",

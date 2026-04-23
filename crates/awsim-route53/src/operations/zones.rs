@@ -73,6 +73,7 @@ pub fn create_hosted_zone(
     state.hosted_zones.insert(id.clone(), zone);
 
     Ok(json!({
+        "__xml_root": "CreateHostedZoneResponse",
         "HostedZone": {
             "Id": id,
             "Name": name,
@@ -160,6 +161,7 @@ pub fn list_hosted_zones(
         .collect();
 
     Ok(json!({
+        "__xml_root": "ListHostedZonesResponse",
         "HostedZones": zones,
         "IsTruncated": false,
         "MaxItems": "100",
