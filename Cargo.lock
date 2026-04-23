@@ -1755,6 +1755,7 @@ dependencies = [
  "dashmap",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
  "uuid",
 ]
@@ -1803,6 +1804,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "awsim-iam-policy",
  "base64",
  "dashmap",
  "serde",
@@ -1818,6 +1820,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "awsim-iam-policy",
  "base64",
  "dashmap",
  "serde",
@@ -1874,6 +1877,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "awsim-iam-policy",
  "base64",
  "dashmap",
  "md-5",
@@ -1902,6 +1906,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "awsim-iam-policy",
  "base64",
  "dashmap",
  "serde",
@@ -1942,6 +1947,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "awsim-iam-policy",
  "dashmap",
  "md-5",
  "serde",
