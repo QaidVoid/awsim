@@ -1,7 +1,10 @@
+pub mod authz;
 mod error;
 mod operations;
-mod state;
+pub mod state;
 mod util;
+
+pub use authz::KmsResourcePolicyLookup;
 
 use async_trait::async_trait;
 use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
@@ -20,6 +23,10 @@ impl KmsService {
         Self {
             store: AccountRegionStore::new(),
         }
+    }
+
+    pub fn store(&self) -> AccountRegionStore<KmsState> {
+        self.store.clone()
     }
 }
 
@@ -165,6 +172,62 @@ impl ServiceHandler for KmsService {
             "ListResourceTags" => operations::tagging::list_resource_tags(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
+        }
+    }
+
+    fn iam_action(&self, operation: &str) -> Option<String> {
+        match operation {
+            "CreateKey" | "DescribeKey" | "ListKeys" | "EnableKey" | "DisableKey"
+            | "ScheduleKeyDeletion" | "CancelKeyDeletion" | "UpdateKeyDescription"
+            | "CreateAlias" | "DeleteAlias" | "ListAliases" | "UpdateAlias"
+            | "Encrypt" | "Decrypt" | "GenerateDataKey" | "GenerateDataKeyWithoutPlaintext"
+            | "ReEncrypt" | "ReEncryptFrom" | "ReEncryptTo" | "GenerateRandom"
+            | "GenerateDataKeyPair" | "GenerateDataKeyPairWithoutPlaintext"
+            | "Sign" | "Verify" | "GetPublicKey" | "DeriveSharedSecret"
+            | "GetKeyRotationStatus" | "EnableKeyRotation" | "DisableKeyRotation"
+            | "RotateKeyOnDemand" | "ListKeyRotations"
+            | "GenerateMac" | "VerifyMac"
+            | "CreateGrant" | "ListGrants" | "ListRetirableGrants" | "RetireGrant" | "RevokeGrant"
+            | "GetKeyPolicy" | "PutKeyPolicy" | "ListKeyPolicies"
+            | "CreateCustomKeyStore" | "DescribeCustomKeyStores" | "DeleteCustomKeyStore"
+            | "ConnectCustomKeyStore" | "DisconnectCustomKeyStore" | "UpdateCustomKeyStore"
+            | "ReplicateKey" | "UpdatePrimaryRegion"
+            | "GetParametersForImport" | "ImportKeyMaterial" | "DeleteImportedKeyMaterial"
+            | "TagResource" | "UntagResource" | "ListResourceTags" => {
+                Some(format!("kms:{operation}"))
+            }
+            _ => None,
+        }
+    }
+
+    fn iam_resource(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Option<String> {
+        let prefix = format!("arn:aws:kms:{}:{}", ctx.region, ctx.account_id);
+        match operation {
+            "ListKeys" | "ListAliases" | "ListRetirableGrants" | "DescribeCustomKeyStores"
+            | "CreateKey" | "CreateCustomKeyStore" | "GenerateRandom" => Some("*".to_string()),
+            "RetireGrant" => input
+                .get("GrantToken")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| Some("*".to_string())),
+            _ => {
+                let key_id = input
+                    .get("KeyId")
+                    .or_else(|| input.get("ResourceArn"))
+                    .and_then(|v| v.as_str())?;
+                if key_id.starts_with("arn:") {
+                    Some(key_id.to_string())
+                } else if key_id.starts_with("alias/") {
+                    Some(format!("{prefix}:{key_id}"))
+                } else {
+                    Some(format!("{prefix}:key/{key_id}"))
+                }
+            }
         }
     }
 }

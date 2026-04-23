@@ -1,6 +1,9 @@
+pub mod authz;
 mod operations;
-mod state;
+pub mod state;
 mod util;
+
+pub use authz::S3ResourcePolicyLookup;
 
 use std::sync::Arc;
 
@@ -42,6 +45,10 @@ impl S3Service {
     fn get_state(&self, ctx: &RequestContext) -> Arc<S3State> {
         // S3 state is global per account — region is not used for state namespacing.
         self.store.get(&ctx.account_id, "global")
+    }
+
+    pub fn store(&self) -> AccountRegionStore<S3State> {
+        self.store.clone()
     }
 }
 
@@ -884,6 +891,200 @@ impl ServiceHandler for S3Service {
             .collect();
 
         serde_json::to_vec(&S3StateSnapshot { buckets }).ok()
+    }
+
+    fn iam_action(&self, operation: &str) -> Option<String> {
+        match operation {
+            "ListBuckets"
+            | "CreateBucket"
+            | "DeleteBucket"
+            | "HeadBucket"
+            | "GetBucketLocation"
+            | "PutBucketTagging"
+            | "GetBucketTagging"
+            | "DeleteBucketTagging"
+            | "PutObjectTagging"
+            | "GetObjectTagging"
+            | "DeleteObjectTagging"
+            | "PutBucketVersioning"
+            | "GetBucketVersioning"
+            | "PutBucketPolicy"
+            | "GetBucketPolicy"
+            | "DeleteBucketPolicy"
+            | "PutBucketCors"
+            | "GetBucketCors"
+            | "DeleteBucketCors"
+            | "PutBucketNotificationConfiguration"
+            | "GetBucketNotificationConfiguration"
+            | "GetBucketAcl"
+            | "PutBucketAcl"
+            | "GetObjectAcl"
+            | "PutObjectAcl"
+            | "GetBucketLifecycleConfiguration"
+            | "PutBucketLifecycleConfiguration"
+            | "DeleteBucketLifecycleConfiguration"
+            | "GetEncryptionConfiguration"
+            | "PutEncryptionConfiguration"
+            | "GetBucketEncryption"
+            | "PutBucketEncryption"
+            | "DeleteBucketEncryption"
+            | "GetBucketLogging"
+            | "PutBucketLogging"
+            | "GetBucketWebsite"
+            | "PutBucketWebsite"
+            | "DeleteBucketWebsite"
+            | "GetBucketReplication"
+            | "PutBucketReplication"
+            | "DeleteBucketReplication"
+            | "GetBucketRequestPayment"
+            | "PutBucketRequestPayment"
+            | "GetBucketAccelerateConfiguration"
+            | "PutBucketAccelerateConfiguration"
+            | "GetBucketAnalyticsConfiguration"
+            | "PutBucketAnalyticsConfiguration"
+            | "DeleteBucketAnalyticsConfiguration"
+            | "ListBucketAnalyticsConfigurations"
+            | "GetBucketMetricsConfiguration"
+            | "PutBucketMetricsConfiguration"
+            | "DeleteBucketMetricsConfiguration"
+            | "ListBucketMetricsConfigurations"
+            | "GetBucketIntelligentTieringConfiguration"
+            | "PutBucketIntelligentTieringConfiguration"
+            | "DeleteBucketIntelligentTieringConfiguration"
+            | "ListBucketIntelligentTieringConfigurations"
+            | "GetBucketInventoryConfiguration"
+            | "PutBucketInventoryConfiguration"
+            | "DeleteBucketInventoryConfiguration"
+            | "ListBucketInventoryConfigurations"
+            | "GetBucketOwnershipControls"
+            | "PutBucketOwnershipControls"
+            | "DeleteBucketOwnershipControls"
+            | "GetPublicAccessBlock"
+            | "PutPublicAccessBlock"
+            | "DeletePublicAccessBlock"
+            | "GetBucketPolicyStatus"
+            | "GetObjectLockConfiguration"
+            | "PutObjectLockConfiguration"
+            | "GetObjectLegalHold"
+            | "PutObjectLegalHold"
+            | "GetObjectRetention"
+            | "PutObjectRetention"
+            | "GetObjectAttributes"
+            | "RestoreObject"
+            | "RenameObject"
+            | "CreateSession"
+            | "PutObject"
+            | "GetObject"
+            | "HeadObject"
+            | "DeleteObject"
+            | "CopyObject"
+            | "ListObjects"
+            | "ListObjectsV2"
+            | "ListObjectVersions"
+            | "ListBucket"
+            | "DeleteObjects"
+            | "CreateMultipartUpload"
+            | "UploadPart"
+            | "UploadPartCopy"
+            | "CompleteMultipartUpload"
+            | "AbortMultipartUpload"
+            | "ListMultipartUploads"
+            | "ListParts"
+            | "SelectObjectContent" => Some(format!("s3:{operation}")),
+            _ => None,
+        }
+    }
+
+    fn iam_resource(
+        &self,
+        operation: &str,
+        input: &Value,
+        _ctx: &RequestContext,
+    ) -> Option<String> {
+        match operation {
+            "ListBuckets" => Some("*".to_string()),
+            "ListObjects"
+            | "ListObjectsV2"
+            | "ListObjectVersions"
+            | "ListBucket"
+            | "CreateBucket"
+            | "DeleteBucket"
+            | "HeadBucket"
+            | "GetBucketLocation"
+            | "PutBucketTagging"
+            | "GetBucketTagging"
+            | "DeleteBucketTagging"
+            | "PutBucketVersioning"
+            | "GetBucketVersioning"
+            | "PutBucketPolicy"
+            | "GetBucketPolicy"
+            | "DeleteBucketPolicy"
+            | "PutBucketCors"
+            | "GetBucketCors"
+            | "DeleteBucketCors"
+            | "PutBucketNotificationConfiguration"
+            | "GetBucketNotificationConfiguration"
+            | "GetBucketAcl"
+            | "PutBucketAcl"
+            | "GetBucketLifecycleConfiguration"
+            | "PutBucketLifecycleConfiguration"
+            | "DeleteBucketLifecycleConfiguration"
+            | "GetBucketEncryption"
+            | "PutBucketEncryption"
+            | "DeleteBucketEncryption"
+            | "GetBucketLogging"
+            | "PutBucketLogging"
+            | "GetBucketWebsite"
+            | "PutBucketWebsite"
+            | "DeleteBucketWebsite"
+            | "GetBucketReplication"
+            | "PutBucketReplication"
+            | "DeleteBucketReplication"
+            | "GetBucketRequestPayment"
+            | "PutBucketRequestPayment"
+            | "GetBucketAccelerateConfiguration"
+            | "PutBucketAccelerateConfiguration"
+            | "GetBucketAnalyticsConfiguration"
+            | "PutBucketAnalyticsConfiguration"
+            | "DeleteBucketAnalyticsConfiguration"
+            | "ListBucketAnalyticsConfigurations"
+            | "GetBucketMetricsConfiguration"
+            | "PutBucketMetricsConfiguration"
+            | "DeleteBucketMetricsConfiguration"
+            | "ListBucketMetricsConfigurations"
+            | "GetBucketIntelligentTieringConfiguration"
+            | "PutBucketIntelligentTieringConfiguration"
+            | "DeleteBucketIntelligentTieringConfiguration"
+            | "ListBucketIntelligentTieringConfigurations"
+            | "GetBucketInventoryConfiguration"
+            | "PutBucketInventoryConfiguration"
+            | "DeleteBucketInventoryConfiguration"
+            | "ListBucketInventoryConfigurations"
+            | "GetBucketOwnershipControls"
+            | "PutBucketOwnershipControls"
+            | "DeleteBucketOwnershipControls"
+            | "GetPublicAccessBlock"
+            | "PutPublicAccessBlock"
+            | "DeletePublicAccessBlock"
+            | "GetBucketPolicyStatus"
+            | "GetObjectLockConfiguration"
+            | "PutObjectLockConfiguration"
+            | "DeleteObjects"
+            | "ListMultipartUploads"
+            | "CreateSession" => {
+                let bucket = input.get("Bucket").and_then(|v| v.as_str())?;
+                Some(format!("arn:aws:s3:::{bucket}"))
+            }
+            _ => {
+                let bucket = input.get("Bucket").and_then(|v| v.as_str())?;
+                let key = input.get("Key").and_then(|v| v.as_str()).unwrap_or("");
+                if key.is_empty() {
+                    Some(format!("arn:aws:s3:::{bucket}"))
+                } else {
+                    Some(format!("arn:aws:s3:::{bucket}/{key}"))
+                }
+            }
+        }
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {

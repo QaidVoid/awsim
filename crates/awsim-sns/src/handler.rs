@@ -119,6 +119,85 @@ impl ServiceHandler for SnsService {
         }
     }
 
+    fn iam_action(&self, operation: &str) -> Option<String> {
+        match operation {
+            "CreateTopic" | "DeleteTopic" | "ListTopics"
+            | "GetTopicAttributes" | "SetTopicAttributes"
+            | "TagResource" | "UntagResource" | "ListTagsForResource"
+            | "Subscribe" | "Unsubscribe" | "ListSubscriptions" | "ListSubscriptionsByTopic"
+            | "GetSubscriptionAttributes" | "SetSubscriptionAttributes" | "ConfirmSubscription"
+            | "Publish" | "PublishBatch"
+            | "CheckIfPhoneNumberIsOptedOut" | "ListPhoneNumbersOptedOut"
+            | "GetSMSAttributes" | "SetSMSAttributes"
+            | "CreateSMSSandboxPhoneNumber" | "DeleteSMSSandboxPhoneNumber"
+            | "VerifySMSSandboxPhoneNumber" | "ListSMSSandboxPhoneNumbers"
+            | "GetSMSSandboxAccountStatus"
+            | "GetDataProtectionPolicy" | "PutDataProtectionPolicy"
+            | "CreatePlatformApplication" | "DeletePlatformApplication"
+            | "ListPlatformApplications" | "GetPlatformApplicationAttributes"
+            | "SetPlatformApplicationAttributes"
+            | "CreatePlatformEndpoint" | "DeleteEndpoint"
+            | "ListEndpointsByPlatformApplication"
+            | "GetEndpointAttributes" | "SetEndpointAttributes"
+            | "OptInPhoneNumber" | "ListOriginationNumbers"
+            | "AddPermission" | "RemovePermission" => Some(format!("sns:{operation}")),
+            _ => None,
+        }
+    }
+
+    fn iam_resource(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Option<String> {
+        match operation {
+            "ListTopics"
+            | "ListSubscriptions"
+            | "ListPlatformApplications"
+            | "ListPhoneNumbersOptedOut"
+            | "ListSMSSandboxPhoneNumbers"
+            | "GetSMSSandboxAccountStatus"
+            | "GetSMSAttributes"
+            | "SetSMSAttributes"
+            | "ListOriginationNumbers"
+            | "OptInPhoneNumber"
+            | "CheckIfPhoneNumberIsOptedOut"
+            | "CreateSMSSandboxPhoneNumber"
+            | "DeleteSMSSandboxPhoneNumber"
+            | "VerifySMSSandboxPhoneNumber" => Some("*".to_string()),
+            "CreateTopic" => {
+                let name = input.get("Name").and_then(|v| v.as_str())?;
+                Some(format!("arn:aws:sns:{}:{}:{}", ctx.region, ctx.account_id, name))
+            }
+            "CreatePlatformApplication" => {
+                let name = input.get("Name").and_then(|v| v.as_str())?;
+                Some(format!("arn:aws:sns:{}:{}:app/{}", ctx.region, ctx.account_id, name))
+            }
+            _ => {
+                if let Some(arn) = input.get("TopicArn").and_then(|v| v.as_str()) {
+                    return Some(arn.to_string());
+                }
+                if let Some(arn) = input.get("SubscriptionArn").and_then(|v| v.as_str()) {
+                    return Some(arn.to_string());
+                }
+                if let Some(arn) = input.get("ResourceArn").and_then(|v| v.as_str()) {
+                    return Some(arn.to_string());
+                }
+                if let Some(arn) = input.get("PlatformApplicationArn").and_then(|v| v.as_str()) {
+                    return Some(arn.to_string());
+                }
+                if let Some(arn) = input.get("EndpointArn").and_then(|v| v.as_str()) {
+                    return Some(arn.to_string());
+                }
+                if let Some(arn) = input.get("TargetArn").and_then(|v| v.as_str()) {
+                    return Some(arn.to_string());
+                }
+                None
+            }
+        }
+    }
+
     fn snapshot(&self) -> Option<Vec<u8>> {
         let mut all: Vec<SnsStateSnapshot> = Vec::new();
 

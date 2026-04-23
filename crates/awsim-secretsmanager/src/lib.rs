@@ -1,7 +1,10 @@
+pub mod authz;
 mod error;
 mod operations;
-mod state;
+pub mod state;
 mod util;
+
+pub use authz::SecretsManagerResourcePolicyLookup;
 
 use async_trait::async_trait;
 use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
@@ -20,6 +23,10 @@ impl SecretsManagerService {
         Self {
             store: AccountRegionStore::new(),
         }
+    }
+
+    pub fn store(&self) -> AccountRegionStore<SecretsState> {
+        self.store.clone()
     }
 }
 
@@ -93,6 +100,46 @@ impl ServiceHandler for SecretsManagerService {
                 operations::secrets::delete_resource_policy(&state, &input, ctx)
             }
             _ => Err(AwsError::unknown_operation(operation)),
+        }
+    }
+
+    fn iam_action(&self, operation: &str) -> Option<String> {
+        match operation {
+            "CreateSecret" | "GetSecretValue" | "PutSecretValue" | "DescribeSecret"
+            | "ListSecrets" | "UpdateSecret" | "DeleteSecret" | "RestoreSecret"
+            | "TagResource" | "UntagResource" | "RotateSecret" | "CancelRotateSecret"
+            | "ValidateResourcePolicy" | "GetRandomPassword"
+            | "ReplicateSecretToRegions" | "RemoveRegionsFromReplication"
+            | "StopReplicationToReplica" | "ListSecretVersionIds"
+            | "BatchGetSecretValue" | "UpdateSecretVersionStage"
+            | "PutResourcePolicy" | "GetResourcePolicy" | "DeleteResourcePolicy" => {
+                Some(format!("secretsmanager:{operation}"))
+            }
+            _ => None,
+        }
+    }
+
+    fn iam_resource(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Option<String> {
+        match operation {
+            "ListSecrets" | "GetRandomPassword" | "BatchGetSecretValue" | "CreateSecret" => {
+                Some("*".to_string())
+            }
+            _ => {
+                let secret_id = input.get("SecretId").and_then(|v| v.as_str())?;
+                if secret_id.starts_with("arn:") {
+                    Some(secret_id.to_string())
+                } else {
+                    Some(format!(
+                        "arn:aws:secretsmanager:{}:{}:secret:{}",
+                        ctx.region, ctx.account_id, secret_id
+                    ))
+                }
+            }
         }
     }
 }

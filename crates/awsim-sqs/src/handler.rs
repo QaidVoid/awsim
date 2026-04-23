@@ -23,6 +23,10 @@ impl SqsService {
             store: AccountRegionStore::new(),
         }
     }
+
+    pub fn store(&self) -> AccountRegionStore<SqsState> {
+        self.store.clone()
+    }
 }
 
 impl Default for SqsService {
@@ -80,6 +84,40 @@ impl ServiceHandler for SqsService {
             "CancelMessageMoveTask" => message_move::cancel_message_move_task(&state, &input, ctx),
             "ListMessageMoveTasks" => message_move::list_message_move_tasks(&state, &input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),
+        }
+    }
+
+    fn iam_action(&self, operation: &str) -> Option<String> {
+        match operation {
+            "CreateQueue" | "DeleteQueue" | "ListQueues" | "GetQueueUrl"
+            | "GetQueueAttributes" | "SetQueueAttributes"
+            | "SendMessage" | "SendMessageBatch"
+            | "ReceiveMessage" | "DeleteMessage" | "DeleteMessageBatch"
+            | "ChangeMessageVisibility" | "ChangeMessageVisibilityBatch"
+            | "ListDeadLetterSourceQueues" | "PurgeQueue"
+            | "TagQueue" | "UntagQueue" | "ListQueueTags"
+            | "AddPermission" | "RemovePermission"
+            | "StartMessageMoveTask" | "CancelMessageMoveTask" | "ListMessageMoveTasks" => {
+                Some(format!("sqs:{operation}"))
+            }
+            _ => None,
+        }
+    }
+
+    fn iam_resource(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Option<String> {
+        match operation {
+            "ListQueues" | "CreateQueue" | "GetQueueUrl"
+            | "ListMessageMoveTasks" => Some("*".to_string()),
+            _ => {
+                let queue_url = input.get("QueueUrl").and_then(|v| v.as_str())?;
+                let name = queue_url.rsplit('/').next().filter(|s| !s.is_empty())?;
+                Some(format!("arn:aws:sqs:{}:{}:{}", ctx.region, ctx.account_id, name))
+            }
         }
     }
 

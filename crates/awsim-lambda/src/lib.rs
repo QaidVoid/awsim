@@ -1,8 +1,11 @@
+pub mod authz;
 mod error;
 mod executor;
 mod operations;
-mod state;
+pub mod state;
 mod util;
+
+pub use authz::LambdaResourcePolicyLookup;
 
 use std::sync::Arc;
 
@@ -28,6 +31,10 @@ impl LambdaService {
 
     fn get_state(&self, ctx: &RequestContext) -> Arc<LambdaState> {
         self.store.get(&ctx.account_id, &ctx.region)
+    }
+
+    pub fn store(&self) -> AccountRegionStore<LambdaState> {
+        self.store.clone()
     }
 }
 
@@ -375,6 +382,68 @@ impl ServiceHandler for LambdaService {
             }
 
             _ => Err(AwsError::unknown_operation(operation)),
+        }
+    }
+
+    fn iam_action(&self, operation: &str) -> Option<String> {
+        match operation {
+            "CreateFunction" | "GetFunction" | "GetFunctionConfiguration" | "DeleteFunction"
+            | "ListFunctions" | "UpdateFunctionCode" | "UpdateFunctionConfiguration"
+            | "Invoke" | "InvokeFunction" | "InvokeAsync"
+            | "PublishVersion" | "ListVersionsByFunction"
+            | "CreateAlias" | "GetAlias" | "DeleteAlias" | "ListAliases" | "UpdateAlias"
+            | "CreateEventSourceMapping" | "GetEventSourceMapping"
+            | "DeleteEventSourceMapping" | "ListEventSourceMappings" | "UpdateEventSourceMapping"
+            | "PublishLayerVersion" | "ListLayers" | "ListLayerVersions"
+            | "DeleteLayerVersion" | "GetLayerVersion"
+            | "CreateFunctionUrlConfig" | "GetFunctionUrlConfig"
+            | "DeleteFunctionUrlConfig" | "ListFunctionUrlConfigs" | "UpdateFunctionUrlConfig"
+            | "TagResource" | "UntagResource" | "ListTags"
+            | "GetPolicy" | "AddPermission" | "RemovePermission"
+            | "GetAccountSettings" => Some(format!("lambda:{operation}")),
+            _ => None,
+        }
+    }
+
+    fn iam_resource(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Option<String> {
+        let prefix = format!("arn:aws:lambda:{}:{}", ctx.region, ctx.account_id);
+        match operation {
+            "ListFunctions" | "ListEventSourceMappings" | "ListLayers"
+            | "GetAccountSettings" | "CreateFunction" | "CreateEventSourceMapping" => {
+                Some("*".to_string())
+            }
+            "TagResource" | "UntagResource" | "ListTags" => input
+                .get("Resource")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "GetEventSourceMapping" | "DeleteEventSourceMapping" | "UpdateEventSourceMapping" => {
+                input
+                    .get("UUID")
+                    .and_then(|v| v.as_str())
+                    .map(|uuid| format!("{prefix}:event-source-mapping:{uuid}"))
+            }
+            "PublishLayerVersion" | "ListLayerVersions" => input
+                .get("LayerName")
+                .and_then(|v| v.as_str())
+                .map(|name| format!("{prefix}:layer:{name}")),
+            "GetLayerVersion" | "DeleteLayerVersion" => {
+                let name = input.get("LayerName").and_then(|v| v.as_str())?;
+                let version = input.get("VersionNumber").and_then(|v| v.as_i64()).unwrap_or(0);
+                Some(format!("{prefix}:layer:{name}:{version}"))
+            }
+            _ => {
+                let name = input.get("FunctionName").and_then(|v| v.as_str())?;
+                if name.starts_with("arn:") {
+                    Some(name.to_string())
+                } else {
+                    Some(format!("{prefix}:function:{name}"))
+                }
+            }
         }
     }
 }

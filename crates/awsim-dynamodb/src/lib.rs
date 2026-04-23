@@ -188,6 +188,111 @@ impl ServiceHandler for DynamoDbService {
         }
     }
 
+    fn iam_action(&self, operation: &str) -> Option<String> {
+        match operation {
+            "CreateTable"
+            | "DeleteTable"
+            | "DescribeTable"
+            | "ListTables"
+            | "UpdateTable"
+            | "DescribeEndpoints"
+            | "DescribeTimeToLive"
+            | "UpdateTimeToLive"
+            | "DescribeContinuousBackups"
+            | "UpdateContinuousBackups"
+            | "TagResource"
+            | "UntagResource"
+            | "ListTagsOfResource"
+            | "PutItem"
+            | "GetItem"
+            | "DeleteItem"
+            | "UpdateItem"
+            | "Query"
+            | "Scan"
+            | "BatchGetItem"
+            | "BatchWriteItem"
+            | "TransactGetItems"
+            | "TransactWriteItems"
+            | "DescribeStream"
+            | "GetShardIterator"
+            | "GetRecords"
+            | "ListStreams"
+            | "DescribeLimits"
+            | "CreateBackup"
+            | "DeleteBackup"
+            | "DescribeBackup"
+            | "ListBackups"
+            | "RestoreTableFromBackup"
+            | "RestoreTableToPointInTime"
+            | "DescribeGlobalTable"
+            | "ListGlobalTables"
+            | "DescribeExport"
+            | "ExportTableToPointInTime"
+            | "ListExports"
+            | "DescribeImport"
+            | "ImportTable"
+            | "ListImports"
+            | "DescribeContributorInsights"
+            | "UpdateContributorInsights"
+            | "ListContributorInsights"
+            | "ExecuteStatement"
+            | "BatchExecuteStatement"
+            | "ExecuteTransaction"
+            | "EnableKinesisStreamingDestination"
+            | "DisableKinesisStreamingDestination"
+            | "DescribeKinesisStreamingDestination"
+            | "PutResourcePolicy"
+            | "GetResourcePolicy"
+            | "DeleteResourcePolicy" => Some(format!("dynamodb:{operation}")),
+            _ => None,
+        }
+    }
+
+    fn iam_resource(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Option<String> {
+        let prefix = format!("arn:aws:dynamodb:{}:{}", ctx.region, ctx.account_id);
+        match operation {
+            "ListTables"
+            | "DescribeEndpoints"
+            | "DescribeLimits"
+            | "ListGlobalTables"
+            | "ListExports"
+            | "ListImports"
+            | "ListContributorInsights"
+            | "ListBackups"
+            | "ListStreams" => Some("*".to_string()),
+            "DescribeStream" | "GetShardIterator" | "GetRecords" => {
+                if let Some(stream_arn) = input.get("StreamArn").and_then(|v| v.as_str()) {
+                    Some(stream_arn.to_string())
+                } else {
+                    let table = input.get("TableName").and_then(|v| v.as_str())?;
+                    Some(format!("{prefix}:table/{table}/stream/*"))
+                }
+            }
+            "DescribeBackup" | "DeleteBackup" | "RestoreTableFromBackup" => {
+                if let Some(arn) = input.get("BackupArn").and_then(|v| v.as_str()) {
+                    Some(arn.to_string())
+                } else {
+                    let table = input.get("TableName").and_then(|v| v.as_str())?;
+                    Some(format!("{prefix}:table/{table}/backup/*"))
+                }
+            }
+            "DescribeExport" => input.get("ExportArn").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            "DescribeImport" => input.get("ImportArn").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            "TagResource" | "UntagResource" | "ListTagsOfResource" => {
+                input.get("ResourceArn").and_then(|v| v.as_str()).map(|s| s.to_string())
+            }
+            _ => {
+                let table = input.get("TableName").and_then(|v| v.as_str())?;
+                Some(format!("{prefix}:table/{table}"))
+            }
+        }
+    }
+
     fn snapshot(&self) -> Option<Vec<u8>> {
         let tables: Vec<Table> = self
             .store
