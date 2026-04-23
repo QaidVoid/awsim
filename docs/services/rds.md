@@ -95,6 +95,44 @@ aws --endpoint-url http://localhost:4566 \
 
 - `DescribeDBParameterGroups` — list parameter groups
 
+### DB Snapshots
+- `CreateDBSnapshot` — create a snapshot from an existing instance
+  - Input: `DBSnapshotIdentifier`, `DBInstanceIdentifier`
+  - Returns: `DBSnapshot` with `Status` (`available`) immediately
+
+- `DeleteDBSnapshot` — delete a snapshot
+  - Input: `DBSnapshotIdentifier`
+
+- `DescribeDBSnapshots` — list snapshots with optional filter
+  - Input: optional `DBSnapshotIdentifier`, `DBInstanceIdentifier`
+  - Returns: `DBSnapshots` list
+
+- `CopyDBSnapshot` — copy snapshot metadata to a new identifier (stub)
+  - Input: `SourceDBSnapshotIdentifier`, `TargetDBSnapshotIdentifier`
+
+### Engine Versions & Options
+- `DescribeDBEngineVersions` — return available engine versions for `postgres`, `mysql`, `mariadb`
+  - Input: optional `Engine`, `EngineVersion` filters
+  - Returns: list of engine versions with `DBParameterGroupFamily`, `Status`
+
+- `DescribeOrderableDBInstanceOptions` — return available instance classes per engine
+  - Input: `Engine`
+  - Returns: instance classes (`db.t3.micro` through `db.r5.4xlarge`) with storage type options
+
+### DB Cluster Endpoints
+- `DescribeDBClusterEndpoints` — list writer, reader, and custom cluster endpoints
+  - Input: optional `DBClusterIdentifier`, `DBClusterEndpointIdentifier`
+
+- `CreateDBClusterEndpoint` — create a custom cluster endpoint
+  - Input: `DBClusterIdentifier`, `DBClusterEndpointIdentifier`, `EndpointType`
+
+- `DeleteDBClusterEndpoint` — delete a custom cluster endpoint
+  - Input: `DBClusterEndpointIdentifier`
+
+### Stubs
+- `DescribeEventSubscriptions` — returns empty list
+- `DescribeDBLogFiles` — returns empty list
+
 ### Tags
 - `AddTagsToResource` — add tags to any RDS resource (instance, cluster, subnet group, etc.) by ARN
 - `RemoveTagsFromResource` — remove tags from an RDS resource

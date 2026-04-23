@@ -77,6 +77,57 @@ curl -s http://localhost:4566 \
 - `UntagResource` — remove tags from a repository
 - `ListTagsForResource` — list tags on a repository
 
+### Lifecycle Policies
+- `PutLifecyclePolicy` — set the lifecycle policy for a repository
+  - Input: `repositoryName`, `lifecyclePolicyText` (JSON policy string)
+
+- `GetLifecyclePolicy` — retrieve the lifecycle policy for a repository
+  - Input: `repositoryName`
+  - Returns: `lifecyclePolicyText`, `lastEvaluatedAt`
+
+- `DeleteLifecyclePolicy` — remove the lifecycle policy from a repository
+  - Input: `repositoryName`
+
+### Repository Policies
+- `SetRepositoryPolicy` — set an IAM-style access policy on a repository
+  - Input: `repositoryName`, `policyText` (JSON policy string), optional `force`
+
+- `GetRepositoryPolicy` — retrieve the access policy for a repository
+  - Input: `repositoryName`
+  - Returns: `policyText`
+
+- `DeleteRepositoryPolicy` — remove the access policy from a repository
+  - Input: `repositoryName`
+
+### Image Scanning
+- `StartImageScan` — initiate a vulnerability scan for an image (immediately returns COMPLETE)
+  - Input: `repositoryName`, `imageId` (`{imageTag}` or `{imageDigest}`)
+
+- `DescribeImageScanFindings` — retrieve scan results for an image (stub: returns no findings)
+  - Input: `repositoryName`, `imageId`
+  - Returns: `imageScanFindings` with empty `findings` list
+
+### Layer Operations
+- `GetDownloadUrlForLayer` — return a download URL for a layer (stub URL)
+  - Input: `repositoryName`, `layerDigest`
+  - Returns: `downloadUrl`, `layerDigest`
+
+- `BatchCheckLayerAvailability` — check if layers exist (returns all as AVAILABLE)
+  - Input: `repositoryName`, `layerDigests`
+  - Returns: `layers` list with `layerAvailability: "AVAILABLE"`
+
+- `InitiateLayerUpload` — start a layer upload session
+  - Input: `repositoryName`
+  - Returns: `uploadId`, `lastByteReceived: 0`
+
+- `UploadLayerPart` — upload a part of a layer
+  - Input: `repositoryName`, `uploadId`, `partFirstByte`, `partLastByte`, `layerPartBlob`
+  - Returns: `uploadId`, `lastByteReceived`
+
+- `CompleteLayerUpload` — finalize a layer upload and compute its digest
+  - Input: `repositoryName`, `uploadId`, `layerDigests` (client-expected digests)
+  - Returns: `uploadId`, `layerDigest` (SHA-256 of uploaded data)
+
 ## Curl Examples
 
 ```bash

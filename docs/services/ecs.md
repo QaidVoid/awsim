@@ -103,6 +103,42 @@ curl -s http://localhost:4566 \
 - `ListTasks` — list tasks in a cluster with optional filters
   - Input: `cluster`, optional `family`, `serviceName`, `desiredStatus` (`RUNNING`, `STOPPED`, `PENDING`)
 
+### Tagging
+- `TagResource` — add tags to any ECS resource by ARN (clusters, tasks, services, task definitions)
+  - Input: `resourceArn`, `tags` (list of `{key, value}`)
+
+- `UntagResource` — remove tags from a resource by ARN
+  - Input: `resourceArn`, `tagKeys`
+
+- `ListTagsForResource` — list tags on a resource
+  - Input: `resourceArn`
+  - Returns: `tags` list with `key` and `value`
+
+### Capacity Providers
+- `PutClusterCapacityProviders` — update capacity provider configuration for a cluster
+  - Input: `cluster`, `capacityProviders` (list), `defaultCapacityProviderStrategy`
+  - Returns: updated `cluster` object
+
+- `DescribeCapacityProviders` — list capacity providers
+  - Input: optional `capacityProviders` (list of names)
+  - Returns: `FARGATE`, `FARGATE_SPOT` plus any custom providers; with `nextToken`
+
+### Account Settings
+- `PutAccountSetting` / `PutAccountSettingDefault` — configure account-level ECS settings
+  - Input: `name` (e.g., `containerInstanceLongArnFormat`), `value` (`enabled`/`disabled`)
+  - Returns: `setting` with `name`, `value`, `principalArn`
+
+- `ListAccountSettings` — list account ECS settings
+  - Input: optional `name` filter, `effectiveSettings` (boolean)
+  - Returns: `settings` list with defaults (`containerInstanceLongArnFormat`, `serviceLongArnFormat`, etc.)
+
+### Container Agent
+- `DiscoverPollEndpoint` — return endpoint URL for container instance registration (stub)
+  - Returns: `endpoint` and `telemetryEndpoint` URLs
+
+- `UpdateContainerAgent` — accept container agent update request and succeed with stub response
+  - Input: optional `cluster`, `containerInstance`
+
 ## Curl Examples
 
 ```bash

@@ -73,6 +73,34 @@ curl -s -X POST http://localhost:4566 \
   - Input: `TemplateBody` or `TemplateURL`
   - Returns: `Parameters`, `Capabilities`, `Description` parsed from the template
 
+- `DescribeStackResource` — get a single resource from a stack by logical ID
+  - Input: `StackName`, `LogicalResourceId`
+  - Returns: `StackResourceDetail` with `ResourceType`, `ResourceStatus`, `PhysicalResourceId`
+
+- `GetTemplateSummary` — parse template and return metadata without creating a stack
+  - Input: `TemplateBody`
+  - Returns: `Parameters`, `ResourceTypes`, `Description`, `Version`
+
+- `ListStackResources` — paginated list of resources in a stack
+  - Input: `StackName`, optional `NextToken`
+  - Returns: `StackResourceSummaries` list with `LogicalResourceId`, `ResourceType`, `ResourceStatus`
+
+- `ListExports` — list exported output values (stub, returns empty list)
+- `ListImports` — list stacks that import a given export (stub, returns empty list)
+
+- `TagResource` — add or update tags on a stack by ARN
+  - Input: `ResourceArn`, `Tags`
+
+- `UntagResource` — remove tags from a stack by ARN
+  - Input: `ResourceArn`, `TagKeys`
+
+- `SignalResource` — signal a resource (e.g., WaitCondition), accepted silently
+  - Input: `StackName`, `LogicalResourceId`, `UniqueId`, `Status`
+
+- `EstimateTemplateCost` — return a stub cost estimate URL
+  - Input: optional `TemplateBody`, `Parameters`
+  - Returns: `Url` (stub URL)
+
 ### Change Sets
 - `CreateChangeSet` — create a change set to preview stack changes before applying
   - Input: `StackName`, `ChangeSetName`, `TemplateBody` or `TemplateURL`, `Parameters`
