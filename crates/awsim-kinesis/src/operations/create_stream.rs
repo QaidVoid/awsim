@@ -39,6 +39,9 @@ pub fn handle(state: &KinesisState, input: &Value, ctx: &RequestContext) -> Resu
         retention_hours: 24,
         tags: Default::default(),
         created_at: now_secs(),
+        enhanced_monitoring: Vec::new(),
+        encryption_type: "NONE".to_string(),
+        key_id: None,
     };
 
     info!(stream = %stream_name, shards = shard_count, "Created Kinesis stream");

@@ -9,6 +9,18 @@ pub struct KinesisState {
     pub streams: DashMap<String, KinesisStream>,
     /// Shard iterator token → ShardIteratorInfo
     pub iterators: DashMap<String, ShardIteratorInfo>,
+    /// ConsumerArn → StreamConsumer
+    pub consumers: DashMap<String, StreamConsumer>,
+}
+
+/// A stream consumer (enhanced fan-out).
+#[derive(Debug, Clone)]
+pub struct StreamConsumer {
+    pub consumer_arn: String,
+    pub consumer_name: String,
+    pub consumer_status: String,
+    pub stream_arn: String,
+    pub consumer_creation_timestamp: u64,
 }
 
 /// A Kinesis Data Stream.
@@ -22,6 +34,12 @@ pub struct KinesisStream {
     pub retention_hours: u32,
     pub tags: HashMap<String, String>,
     pub created_at: u64,
+    /// Enhanced monitoring shard-level metrics.
+    pub enhanced_monitoring: Vec<String>,
+    /// Encryption type: NONE or KMS.
+    pub encryption_type: String,
+    /// KMS key ID (if encrypted).
+    pub key_id: Option<String>,
 }
 
 /// A single shard within a stream.
