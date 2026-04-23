@@ -108,6 +108,158 @@ pub fn list_rule_groups(
 }
 
 // ---------------------------------------------------------------------------
+// GetRuleGroup
+// ---------------------------------------------------------------------------
+
+pub fn get_rule_group(
+    state: &WafState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["Name"].as_str();
+    let scope = input["Scope"].as_str();
+    let arn = input["ARN"].as_str();
+
+    let rg = if let (Some(n), Some(s)) = (name, scope) {
+        let key = format!("{s}:{n}");
+        state.rule_groups.get(&key).map(|r| r.value().clone())
+    } else if let Some(a) = arn {
+        state
+            .rule_groups
+            .iter()
+            .find(|e| e.value().arn == a)
+            .map(|e| e.value().clone())
+    } else {
+        return Err(AwsError::bad_request(
+            "WAFInvalidParameterException",
+            "Name+Scope or ARN required",
+        ));
+    };
+
+    let rg = rg.ok_or_else(|| {
+        AwsError::not_found("WAFNonexistentItemException", "RuleGroup not found")
+    })?;
+
+    Ok(json!({
+        "RuleGroup": {
+            "ARN": rg.arn,
+            "Id": rg.id,
+            "Name": rg.name,
+            "Capacity": rg.capacity,
+            "Rules": rg.rules,
+            "VisibilityConfig": {
+                "CloudWatchMetricsEnabled": false,
+                "MetricName": rg.name,
+                "SampledRequestsEnabled": false,
+            },
+        },
+        "LockToken": rg.lock_token,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// UpdateRuleGroup
+// ---------------------------------------------------------------------------
+
+pub fn update_rule_group(
+    state: &WafState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["Name"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Name is required"))?;
+
+    let scope = input["Scope"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Scope is required"))?;
+
+    let _lock_token = input["LockToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "LockToken is required")
+    })?;
+
+    let key = format!("{scope}:{name}");
+    let mut rg = state.rule_groups.get_mut(&key).ok_or_else(|| {
+        AwsError::not_found(
+            "WAFNonexistentItemException",
+            format!("RuleGroup not found: {name}"),
+        )
+    })?;
+
+    if let Some(rules) = input["Rules"].as_array() {
+        rg.rules = rules.clone();
+    }
+
+    let new_lock = Uuid::new_v4().to_string();
+    rg.lock_token = new_lock.clone();
+
+    Ok(json!({ "NextLockToken": new_lock }))
+}
+
+// ---------------------------------------------------------------------------
+// CheckCapacity
+// ---------------------------------------------------------------------------
+
+pub fn check_capacity(
+    _state: &WafState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let scope = input["Scope"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "Scope is required")
+    })?;
+
+    if !["REGIONAL", "CLOUDFRONT"].contains(&scope) {
+        return Err(AwsError::bad_request(
+            "WAFInvalidParameterException",
+            "Scope must be REGIONAL or CLOUDFRONT",
+        ));
+    }
+
+    let rules = input["Rules"].as_array().cloned().unwrap_or_default();
+    let capacity = (rules.len() as u64) * 5;
+
+    Ok(json!({ "Capacity": capacity }))
+}
+
+// ---------------------------------------------------------------------------
+// ListAvailableManagedRuleGroups
+// ---------------------------------------------------------------------------
+
+pub fn list_available_managed_rule_groups(
+    _state: &WafState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let _scope = input["Scope"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "Scope is required")
+    })?;
+
+    let groups = vec![
+        json!({
+            "VendorName": "AWS",
+            "Name": "AWSManagedRulesCommonRuleSet",
+            "VersioningSupported": true,
+            "Description": "Contains rules that are generally applicable to web applications.",
+        }),
+        json!({
+            "VendorName": "AWS",
+            "Name": "AWSManagedRulesKnownBadInputsRuleSet",
+            "VersioningSupported": true,
+            "Description": "Block request patterns known to be invalid.",
+        }),
+        json!({
+            "VendorName": "AWS",
+            "Name": "AWSManagedRulesSQLiRuleSet",
+            "VersioningSupported": true,
+            "Description": "Block SQL injection request patterns.",
+        }),
+    ];
+
+    Ok(json!({ "ManagedRuleGroups": groups }))
+}
+
+// ---------------------------------------------------------------------------
 // DeleteRuleGroup
 // ---------------------------------------------------------------------------
 

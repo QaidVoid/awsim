@@ -71,11 +71,44 @@ impl ServiceHandler for WafService {
             "GetIPSet" => operations::ip_sets::get_ip_set(&state, &input, ctx),
             "ListIPSets" => operations::ip_sets::list_ip_sets(&state, &input, ctx),
             "DeleteIPSet" => operations::ip_sets::delete_ip_set(&state, &input, ctx),
+            "UpdateIPSet" => operations::ip_sets::update_ip_set(&state, &input, ctx),
 
             // Rule Group operations
             "CreateRuleGroup" => operations::rule_groups::create_rule_group(&state, &input, ctx),
+            "GetRuleGroup" => operations::rule_groups::get_rule_group(&state, &input, ctx),
             "ListRuleGroups" => operations::rule_groups::list_rule_groups(&state, &input, ctx),
             "DeleteRuleGroup" => operations::rule_groups::delete_rule_group(&state, &input, ctx),
+            "UpdateRuleGroup" => operations::rule_groups::update_rule_group(&state, &input, ctx),
+            "CheckCapacity" => operations::rule_groups::check_capacity(&state, &input, ctx),
+            "ListAvailableManagedRuleGroups" => {
+                operations::rule_groups::list_available_managed_rule_groups(&state, &input, ctx)
+            }
+
+            // Logging Configuration operations
+            "PutLoggingConfiguration" => {
+                operations::logging::put_logging_configuration(&state, &input, ctx)
+            }
+            "GetLoggingConfiguration" => {
+                operations::logging::get_logging_configuration(&state, &input, ctx)
+            }
+            "DeleteLoggingConfiguration" => {
+                operations::logging::delete_logging_configuration(&state, &input, ctx)
+            }
+            "ListLoggingConfigurations" => {
+                operations::logging::list_logging_configurations(&state, &input, ctx)
+            }
+
+            // WebACL Association operations
+            "AssociateWebACL" => operations::associations::associate_web_acl(&state, &input, ctx),
+            "DisassociateWebACL" => {
+                operations::associations::disassociate_web_acl(&state, &input, ctx)
+            }
+            "GetWebACLForResource" => {
+                operations::associations::get_web_acl_for_resource(&state, &input, ctx)
+            }
+            "ListResourcesForWebACL" => {
+                operations::associations::list_resources_for_web_acl(&state, &input, ctx)
+            }
 
             _ => Err(AwsError::unknown_operation(operation)),
         }
@@ -86,6 +119,8 @@ impl ServiceHandler for WafService {
             web_acls: vec![],
             ip_sets: vec![],
             rule_groups: vec![],
+            logging_configs: vec![],
+            web_acl_associations: vec![],
         };
 
         for (_, state) in self.store.iter_all() {
@@ -93,6 +128,8 @@ impl ServiceHandler for WafService {
             snap.web_acls.extend(s.web_acls);
             snap.ip_sets.extend(s.ip_sets);
             snap.rule_groups.extend(s.rule_groups);
+            snap.logging_configs.extend(s.logging_configs);
+            snap.web_acl_associations.extend(s.web_acl_associations);
         }
 
         serde_json::to_vec(&snap).ok()

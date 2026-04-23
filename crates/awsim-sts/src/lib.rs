@@ -95,6 +95,114 @@ impl StsService {
         }))
     }
 
+    fn assume_root(&self, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
+        let target_principal = input["TargetPrincipal"]
+            .as_str()
+            .ok_or_else(|| AwsError::validation("TargetPrincipal is required"))?;
+
+        let duration = input["DurationSeconds"]
+            .as_str()
+            .and_then(|s| s.parse::<u64>().ok())
+            .or_else(|| input["DurationSeconds"].as_u64())
+            .unwrap_or(900);
+
+        debug!(target_principal = %target_principal, "AssumeRoot");
+
+        let credentials = generate_credentials(duration);
+        let source_identity = format!("arn:aws:iam::{}:root", ctx.account_id);
+
+        Ok(json!({
+            "Credentials": credentials,
+            "SourceIdentity": source_identity,
+        }))
+    }
+
+    fn get_federation_token(
+        &self,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Result<Value, AwsError> {
+        let name = input["Name"]
+            .as_str()
+            .ok_or_else(|| AwsError::validation("Name is required"))?;
+
+        let duration = input["DurationSeconds"]
+            .as_str()
+            .and_then(|s| s.parse::<u64>().ok())
+            .or_else(|| input["DurationSeconds"].as_u64())
+            .unwrap_or(43200);
+
+        debug!(name = %name, duration, "GetFederationToken");
+
+        let credentials = generate_credentials(duration);
+        let federated_user_arn =
+            format!("arn:aws:sts::{}:federated-user/{}", ctx.account_id, name);
+        let federated_user_id = format!("{}:{}", ctx.account_id, name);
+
+        Ok(json!({
+            "Credentials": credentials,
+            "FederatedUser": {
+                "FederatedUserId": federated_user_id,
+                "Arn": federated_user_arn,
+            },
+            "PackedPolicySize": 0,
+        }))
+    }
+
+    fn decode_authorization_message(&self, input: &Value) -> Result<Value, AwsError> {
+        let encoded = input["EncodedMessage"]
+            .as_str()
+            .ok_or_else(|| AwsError::validation("EncodedMessage is required"))?;
+
+        if encoded.is_empty() {
+            return Err(AwsError::bad_request(
+                "InvalidAuthorizationMessageException",
+                "EncodedMessage cannot be empty",
+            ));
+        }
+
+        let decoded = json!({
+            "allowed": false,
+            "explicitDeny": false,
+            "matchedStatements": {"items": []},
+            "failures": {"items": []},
+            "context": {
+                "principal": {
+                    "id": "AIDEXAMPLEAWSIM",
+                    "arn": "arn:aws:iam::000000000000:user/awsim-user"
+                },
+                "action": "unknown:Action",
+                "resource": "*",
+                "conditions": {"items": []}
+            }
+        });
+
+        Ok(json!({
+            "DecodedMessage": decoded.to_string(),
+        }))
+    }
+
+    fn get_access_key_info(
+        &self,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Result<Value, AwsError> {
+        let key = input["AccessKeyId"]
+            .as_str()
+            .ok_or_else(|| AwsError::validation("AccessKeyId is required"))?;
+
+        if key.len() < 16 {
+            return Err(AwsError::bad_request(
+                "InvalidParameter",
+                "AccessKeyId must be at least 16 characters",
+            ));
+        }
+
+        Ok(json!({
+            "Account": ctx.account_id,
+        }))
+    }
+
     fn assume_role_with_saml(
         &self,
         input: &Value,
@@ -169,6 +277,10 @@ impl ServiceHandler for StsService {
             "GetSessionToken" => self.get_session_token(&input, ctx),
             "AssumeRoleWithWebIdentity" => self.assume_role_with_web_identity(&input, ctx),
             "AssumeRoleWithSAML" => self.assume_role_with_saml(&input, ctx),
+            "GetFederationToken" => self.get_federation_token(&input, ctx),
+            "DecodeAuthorizationMessage" => self.decode_authorization_message(&input),
+            "GetAccessKeyInfo" => self.get_access_key_info(&input, ctx),
+            "AssumeRoot" => self.assume_root(&input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

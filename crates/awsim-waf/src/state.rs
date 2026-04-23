@@ -42,12 +42,26 @@ pub struct RuleGroup {
     pub created_at: u64,
 }
 
+/// A WAF Logging Configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    pub resource_arn: String,
+    pub log_destination_configs: Vec<String>,
+    pub redacted_fields: Vec<Value>,
+    pub managed_by_firewall_manager: bool,
+    pub logging_filter: Option<Value>,
+}
+
 /// Serializable snapshot.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WafStateSnapshot {
     pub web_acls: Vec<WebAcl>,
     pub ip_sets: Vec<IpSet>,
     pub rule_groups: Vec<RuleGroup>,
+    #[serde(default)]
+    pub logging_configs: Vec<LoggingConfig>,
+    #[serde(default)]
+    pub web_acl_associations: Vec<(String, String)>,
 }
 
 /// Per-account/region WAF state.
@@ -59,6 +73,10 @@ pub struct WafState {
     pub ip_sets: DashMap<String, IpSet>,
     /// "{scope}:{name}" → RuleGroup
     pub rule_groups: DashMap<String, RuleGroup>,
+    /// resource_arn → LoggingConfig
+    pub logging_configs: DashMap<String, LoggingConfig>,
+    /// resource_arn → web_acl_arn
+    pub web_acl_associations: DashMap<String, String>,
 }
 
 impl WafState {
@@ -67,6 +85,16 @@ impl WafState {
             web_acls: self.web_acls.iter().map(|e| e.value().clone()).collect(),
             ip_sets: self.ip_sets.iter().map(|e| e.value().clone()).collect(),
             rule_groups: self.rule_groups.iter().map(|e| e.value().clone()).collect(),
+            logging_configs: self
+                .logging_configs
+                .iter()
+                .map(|e| e.value().clone())
+                .collect(),
+            web_acl_associations: self
+                .web_acl_associations
+                .iter()
+                .map(|e| (e.key().clone(), e.value().clone()))
+                .collect(),
         }
     }
 
@@ -82,6 +110,12 @@ impl WafState {
         for rg in snapshot.rule_groups {
             let key = format!("{}:{}", rg.scope, rg.name);
             self.rule_groups.insert(key, rg);
+        }
+        for cfg in snapshot.logging_configs {
+            self.logging_configs.insert(cfg.resource_arn.clone(), cfg);
+        }
+        for (resource_arn, web_acl_arn) in snapshot.web_acl_associations {
+            self.web_acl_associations.insert(resource_arn, web_acl_arn);
         }
     }
 }

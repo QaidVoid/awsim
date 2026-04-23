@@ -159,6 +159,48 @@ pub fn list_ip_sets(
 }
 
 // ---------------------------------------------------------------------------
+// UpdateIPSet
+// ---------------------------------------------------------------------------
+
+pub fn update_ip_set(
+    state: &WafState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["Name"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Name is required"))?;
+
+    let scope = input["Scope"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Scope is required"))?;
+
+    let _lock_token = input["LockToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "LockToken is required")
+    })?;
+
+    let key = format!("{scope}:{name}");
+    let mut ip_set = state.ip_sets.get_mut(&key).ok_or_else(|| {
+        AwsError::not_found(
+            "WAFNonexistentItemException",
+            format!("IPSet not found: {name}"),
+        )
+    })?;
+
+    if let Some(addresses) = input["Addresses"].as_array() {
+        ip_set.addresses = addresses
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+    }
+
+    let new_lock = Uuid::new_v4().to_string();
+    ip_set.lock_token = new_lock.clone();
+
+    Ok(json!({ "NextLockToken": new_lock }))
+}
+
+// ---------------------------------------------------------------------------
 // DeleteIPSet
 // ---------------------------------------------------------------------------
 
