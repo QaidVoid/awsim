@@ -153,3 +153,11 @@ rand = "0.8"
 regex = "1"
 ipnet = "2"
 chrono = { version = "0.4", features = ["serde"] }
+
+[profile.dev.package.awsim-conformance]
+opt-level = 0
+codegen-units = 256
+
+[profile.release.package.awsim-conformance]
+codegen-units = 16
+
