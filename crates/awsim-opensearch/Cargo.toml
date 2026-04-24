@@ -4,6 +4,7 @@ description = "Amazon OpenSearch (Elasticsearch-compatible) emulator for AWSim"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 awsim-core = { workspace = true }
