@@ -94,11 +94,7 @@ fn validate_queue_name(name: &str) -> Result<(), AwsError> {
             "Queue name must be at most 80 characters",
         ));
     }
-    let base = if name.ends_with(".fifo") {
-        &name[..name.len() - 5]
-    } else {
-        name
-    };
+    let base = name.strip_suffix(".fifo").unwrap_or(name);
     if !base
         .chars()
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')

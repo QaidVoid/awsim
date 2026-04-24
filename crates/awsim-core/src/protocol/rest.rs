@@ -111,6 +111,9 @@ pub fn parse_xml_request(
     })
 }
 
+/// Result of matching an HTTP request against routes: the operation name and path parameters.
+pub type RouteMatch<'a> = (&'a str, Vec<(String, String)>);
+
 /// Match an HTTP request against route definitions.
 /// Returns the operation name and extracted path parameters.
 fn match_route<'a>(
@@ -118,7 +121,7 @@ fn match_route<'a>(
     path: &str,
     query_string: &str,
     routes: &'a [RouteDefinition],
-) -> Result<(&'a str, Vec<(String, String)>), AwsError> {
+) -> Result<RouteMatch<'a>, AwsError> {
     // Strip a trailing slash ONLY for bucket-level operations (paths like `/bucket/`).
     // Don't strip for object keys like `/bucket/folder/` — the trailing slash is
     // significant (it marks S3 "folder" objects).

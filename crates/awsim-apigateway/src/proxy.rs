@@ -31,6 +31,9 @@ pub struct ProxyResponse {
 /// Attempt to route an incoming HTTP request to a Lambda integration.
 ///
 /// Returns `None` if no matching API or route is found.
+// SAFETY: each parameter is an independent piece of the incoming HTTP request needed to
+// build the API Gateway event payload.
+#[allow(clippy::too_many_arguments)]
 pub async fn proxy_request(
     api_id: &str,
     stage: &str,

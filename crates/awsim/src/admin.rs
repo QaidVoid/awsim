@@ -46,7 +46,7 @@ pub async fn stats(State(state): State<AppState>) -> Json<Value> {
         "uptime": uptime,
         "uptimeFormatted": format_duration(uptime),
         "totalRequests": requests,
-        "requestsPerSecond": if uptime > 0 { requests / uptime } else { 0 },
+        "requestsPerSecond": requests.checked_div(uptime).unwrap_or(0),
         "services": state.services.len(),
     }))
 }

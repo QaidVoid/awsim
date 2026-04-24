@@ -318,11 +318,11 @@ fn parse_from_where(
 /// Extract the first `"identifier"` or unquoted word from a string.
 fn extract_quoted_identifier(s: &str) -> Result<String, AwsError> {
     let trimmed = s.trim();
-    if trimmed.starts_with('"') {
-        let end = trimmed[1..].find('"').ok_or_else(|| {
+    if let Some(rest) = trimmed.strip_prefix('"') {
+        let end = rest.find('"').ok_or_else(|| {
             AwsError::bad_request("ValidationException", "Unterminated quoted identifier")
         })?;
-        Ok(trimmed[1..end + 1].to_string())
+        Ok(rest[..end].to_string())
     } else {
         let end = trimmed
             .find(|c: char| c.is_whitespace())

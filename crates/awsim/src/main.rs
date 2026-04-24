@@ -395,14 +395,8 @@ fn arn_to_sqs_url(arn: &str, default_region: &str, default_account: &str) -> Str
     }
 }
 
-/// Register all services and return handles needed by the router:
-///   - the ApiGateway Arc (for proxy routing)
-///   - an `Arc<CognitoState>` for the default account+region (for OAuth/OIDC)
-fn register_services(
-    state: &mut AppState,
-    default_account_id: &str,
-    default_region: &str,
-) -> (
+/// Bundle of handles returned by [`register_services`] for use by the router and OAuth layer.
+type RegisteredServices = (
     Arc<awsim_apigateway::ApiGatewayService>,
     Arc<awsim_cognito::CognitoState>,
     awsim_core::AccountRegionStore<awsim_iam::state::IamState>,
@@ -412,7 +406,16 @@ fn register_services(
     awsim_core::AccountRegionStore<awsim_secretsmanager::state::SecretsState>,
     awsim_core::AccountRegionStore<awsim_lambda::state::LambdaState>,
     awsim_core::AccountRegionStore<awsim_organizations::state::OrganizationsState>,
-) {
+);
+
+/// Register all services and return handles needed by the router:
+///   - the ApiGateway Arc (for proxy routing)
+///   - an `Arc<CognitoState>` for the default account+region (for OAuth/OIDC)
+fn register_services(
+    state: &mut AppState,
+    default_account_id: &str,
+    default_region: &str,
+) -> RegisteredServices {
     use std::sync::Arc;
 
     let iam = Arc::new(awsim_iam::IamService::new());

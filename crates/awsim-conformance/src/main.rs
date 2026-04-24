@@ -137,11 +137,7 @@ async fn main() {
 
     for r in &all_results {
         let status = if r.failed == 0 { "OK " } else { "ERR" };
-        let coverage_pct = if r.total > 0 {
-            r.implemented * 100 / r.total
-        } else {
-            0
-        };
+        let coverage_pct = (r.implemented * 100).checked_div(r.total).unwrap_or(0);
         println!(
             "[{status}] {:<30} {}/{} ops covered ({coverage_pct}%), {} passed, {} failed",
             r.service, r.implemented, r.total, r.passed, r.failed
@@ -154,11 +150,7 @@ async fn main() {
     }
 
     println!("{}", "-".repeat(70));
-    let total_pct = if total_smithy_ops > 0 {
-        total_tested * 100 / total_smithy_ops
-    } else {
-        0
-    };
+    let total_pct = (total_tested * 100).checked_div(total_smithy_ops).unwrap_or(0);
     println!("Total: {total_tested}/{total_smithy_ops} operations covered ({total_pct}%)");
     println!("Passed: {total_passed}  Failed: {total_failed}");
 

@@ -38,10 +38,13 @@ fn build_jwt(header: &Value, payload: &Value) -> String {
 /// - `email`: includes `email` and `email_verified`
 /// - `phone`: includes `phone_number` and `phone_number_verified`
 /// - `profile`: includes `name`, `given_name`, `family_name`, `nickname`,
-///              `preferred_username`, `picture`, `website`, `gender`,
-///              `birthdate`, `zoneinfo`, `locale`, `updated_at`
+///   `preferred_username`, `picture`, `website`, `gender`,
+///   `birthdate`, `zoneinfo`, `locale`, `updated_at`
 ///
 /// The `nonce` parameter (if Some) is included in the token.
+// SAFETY: each parameter is an independent JWT claim sourced from distinct callers; bundling
+// would require a builder layer that would not improve clarity at the call sites.
+#[allow(clippy::too_many_arguments)]
 pub fn id_token(
     sub: &str,
     region: &str,
@@ -180,6 +183,8 @@ pub fn id_token(
 ///
 /// The `scopes` list is included as a space-separated `scope` claim.
 /// `groups` is used to include `cognito:groups` in the access token (no roles — those are ID-token only per AWS spec).
+// SAFETY: each parameter is an independent JWT claim sourced from distinct callers.
+#[allow(clippy::too_many_arguments)]
 pub fn access_token(
     sub: &str,
     region: &str,

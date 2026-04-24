@@ -225,6 +225,8 @@ fn urlencoding(s: &str) -> String {
 }
 
 /// Render the login page HTML.
+// SAFETY: each parameter is an independent OAuth/OIDC field that must be embedded into the form.
+#[allow(clippy::too_many_arguments)]
 fn login_page_html(
     pool_id: &str,
     response_type: &str,

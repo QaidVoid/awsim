@@ -187,11 +187,7 @@ pub fn query(state: &DynamoState, input: &Value, _ctx: &RequestContext) -> Resul
             }
     }
 
-    let count = if select == "COUNT" {
-        items.len()
-    } else {
-        items.len()
-    };
+    let count = items.len();
 
     let result_items: Vec<Value> = items.into_iter().map(|i| item_to_json(&i)).collect();
 

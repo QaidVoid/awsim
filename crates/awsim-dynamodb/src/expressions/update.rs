@@ -55,18 +55,16 @@ type SetAction = (String, String);
 /// Parsed ADD/DELETE action: (path, value_expression_string)
 type AddDeleteAction = (String, String);
 
+/// Parsed clauses of an UpdateExpression: (SET actions, REMOVE paths, ADD actions, DELETE actions).
+type UpdateClauses = (
+    Vec<SetAction>,
+    Vec<String>,
+    Vec<AddDeleteAction>,
+    Vec<AddDeleteAction>,
+);
+
 /// Parse the update expression into its constituent clauses.
-fn parse_update_expression(
-    expr: &str,
-) -> Result<
-    (
-        Vec<SetAction>,
-        Vec<String>,
-        Vec<AddDeleteAction>,
-        Vec<AddDeleteAction>,
-    ),
-    AwsError,
-> {
+fn parse_update_expression(expr: &str) -> Result<UpdateClauses, AwsError> {
     let mut set_actions: Vec<SetAction> = Vec::new();
     let mut remove_paths: Vec<String> = Vec::new();
     let mut add_actions: Vec<AddDeleteAction> = Vec::new();

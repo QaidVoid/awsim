@@ -219,13 +219,12 @@ fn find_table_by_stream_arn<'a>(
                 .stream_arn
                 .as_deref() == Some(stream_arn)
         })
-        .map(|entry| {
+        .and_then(|entry| {
             // Upgrade iter ref to a proper Ref by looking up by key.
             let key = entry.key().clone();
             drop(entry);
             state.tables.get(&key)
         })
-        .flatten()
         .ok_or_else(|| {
             AwsError::not_found(
                 "ResourceNotFoundException",
