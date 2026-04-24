@@ -32,7 +32,9 @@ pub fn format_iso8601(secs: u64) -> String {
     let mut y = 1970u64;
     loop {
         let dy = if is_leap_year(y) { 366 } else { 365 };
-        if days < dy { break; }
+        if days < dy {
+            break;
+        }
         days -= dy;
         y += 1;
     }
@@ -43,7 +45,9 @@ pub fn format_iso8601(secs: u64) -> String {
     };
     let mut mo = 0usize;
     loop {
-        if days < months[mo] { break; }
+        if days < months[mo] {
+            break;
+        }
         days -= months[mo];
         mo += 1;
     }
@@ -61,21 +65,32 @@ pub fn rfc7231_to_iso8601(rfc7231: &str) -> String {
     // Parse: "<day-name>, <dd> <Mon> <yyyy> <HH>:<mm>:<ss> GMT"
     // Example: "Tue, 21 Apr 2026 14:52:46 GMT"
     let parts: Vec<&str> = rfc7231.splitn(2, ", ").collect();
-    let rest = if parts.len() == 2 { parts[1] } else { return rfc7231.to_string(); };
+    let rest = if parts.len() == 2 {
+        parts[1]
+    } else {
+        return rfc7231.to_string();
+    };
 
     const MONTH_NAMES: [&str; 12] = [
-        "Jan","Feb","Mar","Apr","May","Jun",
-        "Jul","Aug","Sep","Oct","Nov","Dec",
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
 
     let tokens: Vec<&str> = rest.split_whitespace().collect();
-    if tokens.len() < 4 { return rfc7231.to_string(); }
+    if tokens.len() < 4 {
+        return rfc7231.to_string();
+    }
 
     let day: u64 = tokens[0].parse().unwrap_or(1);
-    let month = MONTH_NAMES.iter().position(|&m| m == tokens[1]).map(|i| i as u64 + 1).unwrap_or(1);
+    let month = MONTH_NAMES
+        .iter()
+        .position(|&m| m == tokens[1])
+        .map(|i| i as u64 + 1)
+        .unwrap_or(1);
     let year: u64 = tokens[2].parse().unwrap_or(1970);
     let time_parts: Vec<&str> = tokens[3].split(':').collect();
-    if time_parts.len() < 3 { return rfc7231.to_string(); }
+    if time_parts.len() < 3 {
+        return rfc7231.to_string();
+    }
     let h: u64 = time_parts[0].parse().unwrap_or(0);
     let min: u64 = time_parts[1].parse().unwrap_or(0);
     let s: u64 = time_parts[2].parse().unwrap_or(0);
@@ -102,8 +117,7 @@ pub fn format_rfc7231(secs: u64) -> String {
     const DAYS_IN_MONTH: [u64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     const DAY_NAMES: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
     const MONTH_NAMES: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
 
     let sec = secs % 60;

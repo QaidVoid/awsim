@@ -133,9 +133,7 @@ impl ServiceHandler for SsmService {
             "DescribeAutomationExecutions" => {
                 automation::describe_automation_executions(&state, &input, ctx)
             }
-            "StopAutomationExecution" => {
-                automation::stop_automation_execution(&state, &input, ctx)
-            }
+            "StopAutomationExecution" => automation::stop_automation_execution(&state, &input, ctx),
 
             // Sessions
             "StartSession" => sessions::start_session(&state, &input, ctx),
@@ -144,13 +142,9 @@ impl ServiceHandler for SsmService {
             "ResumeSession" => sessions::resume_session(&state, &input, ctx),
 
             // Resource Data Sync
-            "CreateResourceDataSync" => {
-                maintenance::create_resource_data_sync(&state, &input, ctx)
-            }
+            "CreateResourceDataSync" => maintenance::create_resource_data_sync(&state, &input, ctx),
             "ListResourceDataSync" => maintenance::list_resource_data_sync(&state, &input, ctx),
-            "DeleteResourceDataSync" => {
-                maintenance::delete_resource_data_sync(&state, &input, ctx)
-            }
+            "DeleteResourceDataSync" => maintenance::delete_resource_data_sync(&state, &input, ctx),
 
             // Misc
             "UpdateAssociation" => maintenance::update_association(&state, &input, ctx),
@@ -278,18 +272,14 @@ impl ServiceHandler for SsmService {
 
             // Commands extras
             "CancelCommand" => maintenance::cancel_command(&state, &input, ctx),
-            "ListCommandInvocations" => {
-                maintenance::list_command_invocations(&state, &input, ctx)
-            }
+            "ListCommandInvocations" => maintenance::list_command_invocations(&state, &input, ctx),
 
             // Parameter / document extras
             "UnlabelParameterVersion" => {
                 maintenance::unlabel_parameter_version(&state, &input, ctx)
             }
             "DeleteInventory" => maintenance::delete_inventory(&state, &input, ctx),
-            "UpdateResourceDataSync" => {
-                maintenance::update_resource_data_sync(&state, &input, ctx)
-            }
+            "UpdateResourceDataSync" => maintenance::update_resource_data_sync(&state, &input, ctx),
             "GetConnectionStatus" => maintenance::get_connection_status(&state, &input, ctx),
             "GetCalendarState" => maintenance::get_calendar_state(&state, &input, ctx),
             "UpdateDocumentDefaultVersion" => {

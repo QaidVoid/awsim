@@ -29,10 +29,15 @@ pub fn create_custom_key_store(
         }
     }
 
-    let id = format!("cks-{}", Uuid::new_v4().to_string().replace('-', "")[..16].to_string());
+    let id = format!(
+        "cks-{}",
+        Uuid::new_v4().to_string().replace('-', "")[..16].to_string()
+    );
 
     let cloud_hsm_cluster_id = input["CloudHsmClusterId"].as_str().map(|s| s.to_string());
-    let trust_anchor_certificate = input["TrustAnchorCertificate"].as_str().map(|s| s.to_string());
+    let trust_anchor_certificate = input["TrustAnchorCertificate"]
+        .as_str()
+        .map(|s| s.to_string());
     let custom_key_store_type = input["CustomKeyStoreType"]
         .as_str()
         .unwrap_or("AWS_CLOUDHSM")

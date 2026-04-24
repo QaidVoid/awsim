@@ -12,12 +12,12 @@ pub fn get_table_metadata(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let catalog_name = input["CatalogName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "CatalogName is required"))?;
-    let database_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "DatabaseName is required"))?;
+    let catalog_name = input["CatalogName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "CatalogName is required")
+    })?;
+    let database_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "DatabaseName is required")
+    })?;
     let table_name = input["TableName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "TableName is required"))?;

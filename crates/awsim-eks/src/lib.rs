@@ -157,15 +157,25 @@ impl ServiceHandler for EksService {
             "DescribeCluster" => operations::clusters::describe_cluster(&state, &input, ctx),
             "DeleteCluster" => operations::clusters::delete_cluster(&state, &input, ctx),
             "ListClusters" => operations::clusters::list_clusters(&state, &input, ctx),
-            "UpdateClusterConfig" => operations::clusters::update_cluster_config(&state, &input, ctx),
+            "UpdateClusterConfig" => {
+                operations::clusters::update_cluster_config(&state, &input, ctx)
+            }
             "CreateNodegroup" => operations::nodegroups::create_nodegroup(&state, &input, ctx),
             "DescribeNodegroup" => operations::nodegroups::describe_nodegroup(&state, &input, ctx),
             "DeleteNodegroup" => operations::nodegroups::delete_nodegroup(&state, &input, ctx),
             "ListNodegroups" => operations::nodegroups::list_nodegroups(&state, &input, ctx),
-            "CreateFargateProfile" => operations::fargate_profiles::create_fargate_profile(&state, &input, ctx),
-            "DescribeFargateProfile" => operations::fargate_profiles::describe_fargate_profile(&state, &input, ctx),
-            "DeleteFargateProfile" => operations::fargate_profiles::delete_fargate_profile(&state, &input, ctx),
-            "ListFargateProfiles" => operations::fargate_profiles::list_fargate_profiles(&state, &input, ctx),
+            "CreateFargateProfile" => {
+                operations::fargate_profiles::create_fargate_profile(&state, &input, ctx)
+            }
+            "DescribeFargateProfile" => {
+                operations::fargate_profiles::describe_fargate_profile(&state, &input, ctx)
+            }
+            "DeleteFargateProfile" => {
+                operations::fargate_profiles::delete_fargate_profile(&state, &input, ctx)
+            }
+            "ListFargateProfiles" => {
+                operations::fargate_profiles::list_fargate_profiles(&state, &input, ctx)
+            }
             "TagResource" => operations::tags::tag_resource(&state, &input, ctx),
             "UntagResource" => operations::tags::untag_resource(&state, &input, ctx),
             "ListTagsForResource" => operations::tags::list_tags_for_resource(&state, &input, ctx),

@@ -130,7 +130,9 @@ pub fn validate_and_parse(
         .ok_or_else(|| invalid_template("Template must contain a 'Resources' section"))?;
 
     if resources_raw.is_empty() {
-        return Err(invalid_template("Template must contain at least one resource"));
+        return Err(invalid_template(
+            "Template must contain at least one resource",
+        ));
     }
 
     let mut resource_defs: Vec<ResourceDef> = Vec::new();
@@ -143,7 +145,10 @@ pub fn validate_and_parse(
             })?
             .to_string();
 
-        let properties = resource.get("Properties").cloned().unwrap_or(Value::Object(Map::new()));
+        let properties = resource
+            .get("Properties")
+            .cloned()
+            .unwrap_or(Value::Object(Map::new()));
 
         let depends_on: Vec<String> = match resource.get("DependsOn") {
             Some(Value::String(s)) => vec![s.clone()],
@@ -191,14 +196,12 @@ fn parse_parameter_defs(template: &Value) -> Vec<ParameterDef> {
                 .unwrap_or("String")
                 .to_string();
 
-            let default = param
-                .get("Default")
-                .and_then(|v| match v {
-                    Value::String(s) => Some(s.clone()),
-                    Value::Number(n) => Some(n.to_string()),
-                    Value::Bool(b) => Some(b.to_string()),
-                    _ => None,
-                });
+            let default = param.get("Default").and_then(|v| match v {
+                Value::String(s) => Some(s.clone()),
+                Value::Number(n) => Some(n.to_string()),
+                Value::Bool(b) => Some(b.to_string()),
+                _ => None,
+            });
 
             let description = param
                 .get("Description")
@@ -217,10 +220,7 @@ fn parse_parameter_defs(template: &Value) -> Vec<ParameterDef> {
     defs
 }
 
-fn evaluate_conditions(
-    template: &Value,
-    params: &HashMap<String, Value>,
-) -> HashMap<String, bool> {
+fn evaluate_conditions(template: &Value, params: &HashMap<String, Value>) -> HashMap<String, bool> {
     let mut resolved: HashMap<String, bool> = HashMap::new();
 
     if let Some(conditions_obj) = template.get("Conditions").and_then(|v| v.as_object()) {
@@ -319,24 +319,30 @@ pub fn resolve_value(
                 .collect();
             Value::Object(resolved_map)
         }
-        Value::Array(arr) => {
-            Value::Array(
-                arr.iter()
-                    .map(|v| resolve_value(v, params, conditions, resources))
-                    .collect(),
-            )
-        }
+        Value::Array(arr) => Value::Array(
+            arr.iter()
+                .map(|v| resolve_value(v, params, conditions, resources))
+                .collect(),
+        ),
         // Primitives pass through as-is
         _ => val.clone(),
     }
 }
 
-fn resolve_ref(name: &str, params: &HashMap<String, Value>, resources: &HashMap<String, Value>) -> Value {
+fn resolve_ref(
+    name: &str,
+    params: &HashMap<String, Value>,
+    resources: &HashMap<String, Value>,
+) -> Value {
     // Check pseudo-parameters first
     match name {
         "AWS::AccountId" => return Value::String("000000000000".to_string()),
         "AWS::Region" => return Value::String("us-east-1".to_string()),
-        "AWS::StackId" => return Value::String("arn:aws:cloudformation:us-east-1:000000000000:stack/stack/unknown".to_string()),
+        "AWS::StackId" => {
+            return Value::String(
+                "arn:aws:cloudformation:us-east-1:000000000000:stack/stack/unknown".to_string(),
+            );
+        }
         "AWS::StackName" => return Value::String("unknown-stack".to_string()),
         "AWS::NoValue" => return Value::Null,
         _ => {}
@@ -400,10 +406,7 @@ fn resolve_sub(
             if let Some(Value::Object(map)) = arr.get(1) {
                 for (k, v) in map {
                     let resolved = resolve_value(v, params, conditions, resources);
-                    extra.insert(
-                        k.clone(),
-                        resolved.as_str().unwrap_or("").to_string(),
-                    );
+                    extra.insert(k.clone(), resolved.as_str().unwrap_or("").to_string());
                 }
             }
             (s, extra)
@@ -553,7 +556,10 @@ fn topological_sort(resources: Vec<ResourceDef>) -> Result<Vec<ResourceDef>, Str
     }
 
     let mut result: Vec<Option<ResourceDef>> = resources.into_iter().map(|r| Some(r)).collect();
-    Ok(order.into_iter().map(|i| result[i].take().unwrap()).collect())
+    Ok(order
+        .into_iter()
+        .map(|i| result[i].take().unwrap())
+        .collect())
 }
 
 #[cfg(test)]
@@ -600,8 +606,16 @@ mod tests {
         assert!(result.is_ok());
         let parsed = result.unwrap();
         // ResourceA must come before ResourceB
-        let a_pos = parsed.resources.iter().position(|r| r.logical_id == "ResourceA").unwrap();
-        let b_pos = parsed.resources.iter().position(|r| r.logical_id == "ResourceB").unwrap();
+        let a_pos = parsed
+            .resources
+            .iter()
+            .position(|r| r.logical_id == "ResourceA")
+            .unwrap();
+        let b_pos = parsed
+            .resources
+            .iter()
+            .position(|r| r.logical_id == "ResourceB")
+            .unwrap();
         assert!(a_pos < b_pos, "ResourceA should precede ResourceB");
     }
 

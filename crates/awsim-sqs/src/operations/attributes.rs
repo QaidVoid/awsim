@@ -52,9 +52,10 @@ pub fn get_queue_attributes(
     let not_visible = queue.approximate_number_of_messages_not_visible();
 
     let created_at = queue.created_at.clone();
-    queue
-        .attributes
-        .insert("ApproximateNumberOfMessages".to_string(), visible.to_string());
+    queue.attributes.insert(
+        "ApproximateNumberOfMessages".to_string(),
+        visible.to_string(),
+    );
     queue.attributes.insert(
         "ApproximateNumberOfMessagesDelayed".to_string(),
         delayed.to_string(),

@@ -80,7 +80,11 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
 
     // Remove DLQ-bound messages from main queue first
     for dlq_msg in &dlq_messages {
-        if let Some(pos) = queue.messages.iter().position(|m| m.message_id == dlq_msg.message_id) {
+        if let Some(pos) = queue
+            .messages
+            .iter()
+            .position(|m| m.message_id == dlq_msg.message_id)
+        {
             queue.messages.remove(pos);
         }
     }
@@ -88,11 +92,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     // Move selected messages to inflight
     for msg_id in &to_inflight {
         // Find the message in the deque and remove it
-        if let Some(pos) = queue
-            .messages
-            .iter()
-            .position(|m| &m.message_id == msg_id)
-        {
+        if let Some(pos) = queue.messages.iter().position(|m| &m.message_id == msg_id) {
             if let Some(mut msg) = queue.messages.remove(pos) {
                 let receipt_handle = Uuid::new_v4().to_string();
                 let visible_at = now + Duration::from_secs(visibility_timeout);
@@ -123,10 +123,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                 if want_all_msg_attrs {
                     for (k, ma) in &msg.message_attributes {
                         let mut entry = serde_json::Map::new();
-                        entry.insert(
-                            "DataType".to_string(),
-                            Value::String(ma.data_type.clone()),
-                        );
+                        entry.insert("DataType".to_string(), Value::String(ma.data_type.clone()));
                         if let Some(ref sv) = ma.string_value {
                             entry.insert("StringValue".to_string(), Value::String(sv.clone()));
                         }
@@ -141,10 +138,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                                 Value::String(ma.data_type.clone()),
                             );
                             if let Some(ref sv) = ma.string_value {
-                                entry.insert(
-                                    "StringValue".to_string(),
-                                    Value::String(sv.clone()),
-                                );
+                                entry.insert("StringValue".to_string(), Value::String(sv.clone()));
                             }
                             msg_attrs.insert(name.to_string(), Value::Object(entry));
                         }

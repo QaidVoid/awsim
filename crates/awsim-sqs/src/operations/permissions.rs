@@ -21,10 +21,7 @@ pub fn add_permission(
         .as_array()
         .cloned()
         .unwrap_or_default();
-    let actions = input["Actions"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let actions = input["Actions"].as_array().cloned().unwrap_or_default();
 
     let queue_name = queue_name_from_url(queue_url)?;
     let mut queue = state.queues.get_mut(&queue_name).ok_or_else(|| {

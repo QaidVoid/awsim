@@ -4,7 +4,9 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::state::{SsmMaintenanceWindowTarget, SsmMaintenanceWindowTask, SsmResourceDataSync, SsmState};
+use crate::state::{
+    SsmMaintenanceWindowTarget, SsmMaintenanceWindowTask, SsmResourceDataSync, SsmState,
+};
 
 fn now_epoch_secs() -> u64 {
     SystemTime::now()
@@ -52,12 +54,15 @@ pub fn update_maintenance_window(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "WindowId is required"))?;
 
-    let mut window = state.maintenance_windows.get_mut(window_id).ok_or_else(|| {
-        AwsError::not_found(
-            "DoesNotExistException",
-            format!("Maintenance window '{window_id}' does not exist"),
-        )
-    })?;
+    let mut window = state
+        .maintenance_windows
+        .get_mut(window_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "DoesNotExistException",
+                format!("Maintenance window '{window_id}' does not exist"),
+            )
+        })?;
 
     if let Some(name) = input["Name"].as_str() {
         window.name = name.to_string();
@@ -144,7 +149,10 @@ pub fn register_task_with_maintenance_window(
     }
 
     let task_arn = input["TaskArn"].as_str().unwrap_or("").to_string();
-    let task_type = input["TaskType"].as_str().unwrap_or("RUN_COMMAND").to_string();
+    let task_type = input["TaskType"]
+        .as_str()
+        .unwrap_or("RUN_COMMAND")
+        .to_string();
     let targets = input["Targets"].as_array().cloned().unwrap_or_default();
     let priority = input["Priority"].as_u64().unwrap_or(1);
     let max_concurrency = input["MaxConcurrency"].as_str().unwrap_or("1").to_string();
@@ -244,7 +252,10 @@ pub fn create_resource_data_sync(
         ));
     }
 
-    let sync_type = input["SyncType"].as_str().unwrap_or("SyncToDestination").to_string();
+    let sync_type = input["SyncType"]
+        .as_str()
+        .unwrap_or("SyncToDestination")
+        .to_string();
     let s3 = &input["S3Destination"];
     let s3_bucket_name = s3["BucketName"].as_str().unwrap_or("").to_string();
     let s3_region = s3["Region"].as_str().unwrap_or("us-east-1").to_string();
@@ -591,10 +602,7 @@ pub fn describe_instance_patch_states(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let ids = input["InstanceIds"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let ids = input["InstanceIds"].as_array().cloned().unwrap_or_default();
     let out: Vec<Value> = ids
         .into_iter()
         .filter_map(|v| v.as_str().map(String::from))
@@ -840,10 +848,7 @@ pub fn unlabel_parameter_version(
     let name = input["Name"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
-    let labels = input["Labels"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let labels = input["Labels"].as_array().cloned().unwrap_or_default();
     let labels: Vec<String> = labels
         .into_iter()
         .filter_map(|v| v.as_str().map(String::from))

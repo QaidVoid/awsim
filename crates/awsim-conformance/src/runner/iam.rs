@@ -20,20 +20,12 @@ pub async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     // GetUser
     results.push(chk!(
         "GetUser",
-        client
-            .get_user()
-            .user_name("conformance-user")
-            .send()
-            .await,
+        client.get_user().user_name("conformance-user").send().await,
         verbose
     ));
 
     // ListUsers
-    results.push(chk!(
-        "ListUsers",
-        client.list_users().send().await,
-        verbose
-    ));
+    results.push(chk!("ListUsers", client.list_users().send().await, verbose));
 
     // CreateAccessKey
     results.push(chk!(
@@ -114,20 +106,12 @@ pub async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     // GetRole
     results.push(chk!(
         "GetRole",
-        client
-            .get_role()
-            .role_name("conformance-role")
-            .send()
-            .await,
+        client.get_role().role_name("conformance-role").send().await,
         verbose
     ));
 
     // ListRoles
-    results.push(chk!(
-        "ListRoles",
-        client.list_roles().send().await,
-        verbose
-    ));
+    results.push(chk!("ListRoles", client.list_roles().send().await, verbose));
 
     // CreatePolicy
     let policy_doc = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}"#;
@@ -319,11 +303,7 @@ pub async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         // ListPolicyVersions
         results.push(chk!(
             "ListPolicyVersions",
-            client
-                .list_policy_versions()
-                .policy_arn(uarn)
-                .send()
-                .await,
+            client.list_policy_versions().policy_arn(uarn).send().await,
             verbose
         ));
 
@@ -420,7 +400,11 @@ pub async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    let _ = client.delete_role().role_name("conformance-role2").send().await;
+    let _ = client
+        .delete_role()
+        .role_name("conformance-role2")
+        .send()
+        .await;
 
     // CreateInstanceProfile / GetInstanceProfile / DeleteInstanceProfile
     results.push(chk!(
@@ -794,7 +778,8 @@ pub async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         .await;
 
     // PutUserPermissionsBoundary / DeleteUserPermissionsBoundary
-    let boundary_doc = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}"#;
+    let boundary_doc =
+        r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}"#;
     let boundary_r = client
         .create_policy()
         .policy_name("conformance-boundary")
@@ -830,7 +815,9 @@ pub async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         ));
     } else {
         results.push(OpResult::Skipped("PutUserPermissionsBoundary".to_string()));
-        results.push(OpResult::Skipped("DeleteUserPermissionsBoundary".to_string()));
+        results.push(OpResult::Skipped(
+            "DeleteUserPermissionsBoundary".to_string(),
+        ));
     }
 
     // PutRolePermissionsBoundary / DeleteRolePermissionsBoundary
@@ -865,7 +852,9 @@ pub async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         ));
     } else {
         results.push(OpResult::Skipped("PutRolePermissionsBoundary".to_string()));
-        results.push(OpResult::Skipped("DeleteRolePermissionsBoundary".to_string()));
+        results.push(OpResult::Skipped(
+            "DeleteRolePermissionsBoundary".to_string(),
+        ));
     }
 
     let _ = client
@@ -1017,8 +1006,12 @@ pub async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             .send()
             .await;
     } else {
-        results.push(OpResult::Skipped("UpdateServiceSpecificCredential".to_string()));
-        results.push(OpResult::Skipped("ResetServiceSpecificCredential".to_string()));
+        results.push(OpResult::Skipped(
+            "UpdateServiceSpecificCredential".to_string(),
+        ));
+        results.push(OpResult::Skipped(
+            "ResetServiceSpecificCredential".to_string(),
+        ));
     }
 
     // GenerateCredentialReport / GetCredentialReport
@@ -1053,7 +1046,9 @@ pub async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             verbose
         ));
     } else {
-        results.push(OpResult::Skipped("GetServiceLastAccessedDetails".to_string()));
+        results.push(OpResult::Skipped(
+            "GetServiceLastAccessedDetails".to_string(),
+        ));
     }
 
     // ListSAMLProviders / ListVirtualMFADevices / ListServerCertificates / ListMFADevices / ListOpenIDConnectProviders

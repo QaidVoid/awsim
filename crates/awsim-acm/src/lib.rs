@@ -65,9 +65,7 @@ impl ServiceHandler for AcmService {
             "DescribeCertificate" => {
                 operations::certificates::describe_certificate(&state, &input, ctx)
             }
-            "ListCertificates" => {
-                operations::certificates::list_certificates(&state, &input, ctx)
-            }
+            "ListCertificates" => operations::certificates::list_certificates(&state, &input, ctx),
             "DeleteCertificate" => {
                 operations::certificates::delete_certificate(&state, &input, ctx)
             }
@@ -78,9 +76,7 @@ impl ServiceHandler for AcmService {
             "ImportCertificate" => {
                 operations::certificates::import_certificate(&state, &input, ctx)
             }
-            "RenewCertificate" => {
-                operations::certificates::renew_certificate(&state, &input, ctx)
-            }
+            "RenewCertificate" => operations::certificates::renew_certificate(&state, &input, ctx),
             "UpdateCertificateOptions" => {
                 operations::certificates::update_certificate_options(&state, &input, ctx)
             }
@@ -128,16 +124,17 @@ impl ServiceHandler for AcmService {
             .flat_map(|(_, state)| state.to_snapshot().certificates)
             .collect();
 
-        serde_json::to_vec(&AcmStateSnapshot { certificates: certs }).ok()
+        serde_json::to_vec(&AcmStateSnapshot {
+            certificates: certs,
+        })
+        .ok()
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
-        let snapshot: AcmStateSnapshot =
-            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        let snapshot: AcmStateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
 
         use std::collections::HashMap;
-        let mut by_acct_region: HashMap<(String, String), Vec<state::Certificate>> =
-            HashMap::new();
+        let mut by_acct_region: HashMap<(String, String), Vec<state::Certificate>> = HashMap::new();
 
         // ARN: arn:aws:acm:{region}:{account}:certificate/{id}
         for cert in snapshot.certificates {
@@ -147,12 +144,17 @@ impl ServiceHandler for AcmService {
             } else {
                 ("000000000000".to_string(), "us-east-1".to_string())
             };
-            by_acct_region.entry((account, region)).or_default().push(cert);
+            by_acct_region
+                .entry((account, region))
+                .or_default()
+                .push(cert);
         }
 
         for ((account, region), certs) in by_acct_region {
             let state = self.store.get(&account, &region);
-            state.restore_from_snapshot(AcmStateSnapshot { certificates: certs });
+            state.restore_from_snapshot(AcmStateSnapshot {
+                certificates: certs,
+            });
         }
 
         Ok(())

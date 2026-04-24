@@ -28,10 +28,7 @@ impl ScpLookup for StaticScpLookup {
     }
 }
 
-pub async fn start_server(
-    enforce: bool,
-    iam: Arc<awsim_iam::IamService>,
-) -> (ServerHandle, u16) {
+pub async fn start_server(enforce: bool, iam: Arc<awsim_iam::IamService>) -> (ServerHandle, u16) {
     start_server_with_scp(enforce, iam, None).await
 }
 
@@ -97,9 +94,7 @@ pub async fn start_server_with_scp(
     (ServerHandle { shutdown: tx, task }, port)
 }
 
-pub async fn start_server_enforced(
-    iam: Arc<awsim_iam::IamService>,
-) -> (ServerHandle, u16) {
+pub async fn start_server_enforced(iam: Arc<awsim_iam::IamService>) -> (ServerHandle, u16) {
     start_server(true, iam).await
 }
 
@@ -117,9 +112,7 @@ pub async fn start_server_enforced_with_scp(
     start_server_with_scp(true, iam, Some(scp)).await
 }
 
-pub async fn start_server_unenforced(
-    iam: Arc<awsim_iam::IamService>,
-) -> (ServerHandle, u16) {
+pub async fn start_server_unenforced(iam: Arc<awsim_iam::IamService>) -> (ServerHandle, u16) {
     start_server(false, iam).await
 }
 
@@ -128,9 +121,11 @@ pub fn make_sdk_config(port: u16, access_key: &str, secret: &str) -> SdkConfig {
         .behavior_version(BehaviorVersion::latest())
         .endpoint_url(format!("http://127.0.0.1:{port}"))
         .region(Region::new("us-east-1"))
-        .credentials_provider(aws_credential_types::provider::SharedCredentialsProvider::new(
-            Credentials::new(access_key, secret, None, None, "test"),
-        ))
+        .credentials_provider(
+            aws_credential_types::provider::SharedCredentialsProvider::new(Credentials::new(
+                access_key, secret, None, None, "test",
+            )),
+        )
         .build()
 }
 
@@ -150,7 +145,11 @@ pub async fn bootstrap_user(
     user: &str,
     policies: &[(String, String)],
 ) -> (String, String) {
-    iam.create_user().user_name(user).send().await.expect("create_user");
+    iam.create_user()
+        .user_name(user)
+        .send()
+        .await
+        .expect("create_user");
     let ak = iam
         .create_access_key()
         .user_name(user)

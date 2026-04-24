@@ -81,9 +81,7 @@ pub fn describe_vpcs(state: &Ec2State, input: &Value) -> Result<Value, AwsError>
         .filter(|entry| {
             vpc_id_filter.is_empty() || vpc_id_filter.iter().any(|id| id == &entry.vpc_id)
         })
-        .map(|entry| {
-            vpc_to_value(&entry)
-        })
+        .map(|entry| vpc_to_value(&entry))
         .collect();
 
     Ok(json!({ "vpcSet": { "item": vpcs } }))

@@ -52,7 +52,11 @@ pub fn describe_job_queues(
 ) -> Result<Value, AwsError> {
     let names: Vec<String> = input["jobQueues"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let list: Vec<Value> = state

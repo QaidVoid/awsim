@@ -11,18 +11,28 @@ pub fn create_integration(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
     let integration_type = input["IntegrationType"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: IntegrationType"))?
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "BadRequestException",
+                "Missing required field: IntegrationType",
+            )
+        })?
         .to_string();
 
     let integration_uri = input["IntegrationUri"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: IntegrationUri"))?
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "BadRequestException",
+                "Missing required field: IntegrationUri",
+            )
+        })?
         .to_string();
 
     let payload_format_version = input["PayloadFormatVersion"]
@@ -47,7 +57,10 @@ pub fn create_integration(
     };
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     api.integrations.insert(integration_id.clone(), integration);
@@ -68,16 +81,22 @@ pub fn get_integration(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
-    let integration_id = input["IntegrationId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: IntegrationId"))?;
+    let integration_id = input["IntegrationId"].as_str().ok_or_else(|| {
+        AwsError::bad_request(
+            "BadRequestException",
+            "Missing required field: IntegrationId",
+        )
+    })?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     let integration = api.integrations.get(integration_id).ok_or_else(|| {
@@ -95,16 +114,22 @@ pub fn delete_integration(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
-    let integration_id = input["IntegrationId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: IntegrationId"))?;
+    let integration_id = input["IntegrationId"].as_str().ok_or_else(|| {
+        AwsError::bad_request(
+            "BadRequestException",
+            "Missing required field: IntegrationId",
+        )
+    })?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     api.integrations.remove(integration_id).ok_or_else(|| {

@@ -92,7 +92,11 @@ pub async fn test_bedrock(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         .as_ref()
         .ok()
         .map(|r| r.provisioned_model_arn.clone());
-    results.push(chk!("CreateProvisionedModelThroughput", create_pmt_r, verbose));
+    results.push(chk!(
+        "CreateProvisionedModelThroughput",
+        create_pmt_r,
+        verbose
+    ));
 
     if let Some(ref arn) = pmt_arn {
         let pmt_id = arn.rsplit('/').next().unwrap_or(arn);
@@ -116,8 +120,12 @@ pub async fn test_bedrock(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             verbose
         ));
     } else {
-        results.push(OpResult::Skipped("GetProvisionedModelThroughput".to_string()));
-        results.push(OpResult::Skipped("DeleteProvisionedModelThroughput".to_string()));
+        results.push(OpResult::Skipped(
+            "GetProvisionedModelThroughput".to_string(),
+        ));
+        results.push(OpResult::Skipped(
+            "DeleteProvisionedModelThroughput".to_string(),
+        ));
     }
 
     let create_job_r = client
@@ -185,7 +193,10 @@ pub async fn test_bedrock(endpoint: &str, verbose: bool) -> Vec<OpResult> {
 
     results.push(chk!(
         "GetModelInvocationLoggingConfiguration",
-        client.get_model_invocation_logging_configuration().send().await,
+        client
+            .get_model_invocation_logging_configuration()
+            .send()
+            .await,
         verbose
     ));
 

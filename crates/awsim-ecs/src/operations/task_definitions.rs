@@ -50,10 +50,17 @@ pub fn register_task_definition(
         .to_string();
 
     let container_definitions = input["containerDefinitions"].clone();
-    let network_mode = input["networkMode"].as_str().unwrap_or("bridge").to_string();
+    let network_mode = input["networkMode"]
+        .as_str()
+        .unwrap_or("bridge")
+        .to_string();
     let requires_compatibilities: Vec<String> = input["requiresCompatibilities"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let revision = {
@@ -95,9 +102,9 @@ pub fn deregister_task_definition(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let td_id = input["taskDefinition"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "taskDefinition is required"))?;
+    let td_id = input["taskDefinition"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "taskDefinition is required")
+    })?;
 
     let (family, maybe_rev) = parse_task_definition_id(td_id);
 
@@ -109,7 +116,10 @@ pub fn deregister_task_definition(
     })?;
 
     let rev = maybe_rev.ok_or_else(|| {
-        AwsError::bad_request("InvalidParameterException", "Revision must be specified when deregistering")
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "Revision must be specified when deregistering",
+        )
     })?;
 
     let idx = (rev - 1) as usize;
@@ -137,9 +147,9 @@ pub fn describe_task_definition(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let td_id = input["taskDefinition"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "taskDefinition is required"))?;
+    let td_id = input["taskDefinition"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "taskDefinition is required")
+    })?;
 
     let (family, maybe_rev) = parse_task_definition_id(td_id);
 

@@ -52,9 +52,9 @@ pub fn create_api_destination(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ConnectionArn is required"))?;
 
-    let invocation_endpoint = input["InvocationEndpoint"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "InvocationEndpoint is required"))?;
+    let invocation_endpoint = input["InvocationEndpoint"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "InvocationEndpoint is required")
+    })?;
 
     let http_method = input["HttpMethod"]
         .as_str()

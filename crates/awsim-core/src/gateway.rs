@@ -8,12 +8,12 @@ use axum::http::{HeaderMap, Method, Response, StatusCode, Uri};
 use bytes::Bytes;
 use tracing::{debug, info, warn};
 
+use crate::ServiceHandler;
 use crate::auth;
 use crate::authz::AuthzEngine;
 use crate::error::AwsError;
 use crate::events::EventBus;
 use crate::protocol::{self, Protocol, RouteDefinition};
-use crate::ServiceHandler;
 
 /// Shared application state passed to all request handlers.
 #[derive(Clone)]
@@ -133,23 +133,19 @@ async fn process_request(
     request_id: &str,
 ) -> Result<(StatusCode, HeaderMap, Bytes), (Protocol, AwsError)> {
     // 1. Extract service identification from auth header
-    let (service_name, region, account_id, access_key) =
-        extract_service_info(state, headers, uri);
+    let (service_name, region, account_id, access_key) = extract_service_info(state, headers, uri);
 
     // 2. Find the service handler
-    let handler = state
-        .services
-        .get(&service_name)
-        .ok_or_else(|| {
-            let protocol = protocol::detect_protocol(headers, body).unwrap_or(Protocol::RestJson1);
-            (
-                protocol,
-                AwsError::bad_request(
-                    "UnknownService",
-                    format!("Service '{service_name}' is not registered"),
-                ),
-            )
-        })?;
+    let handler = state.services.get(&service_name).ok_or_else(|| {
+        let protocol = protocol::detect_protocol(headers, body).unwrap_or(Protocol::RestJson1);
+        (
+            protocol,
+            AwsError::bad_request(
+                "UnknownService",
+                format!("Service '{service_name}' is not registered"),
+            ),
+        )
+    })?;
 
     let protocol = handler.protocol();
 
@@ -357,7 +353,27 @@ fn extract_service_from_host(host: &str) -> Option<String> {
     if parts.len() >= 2 {
         let first = parts[0];
         // Skip if it looks like a bucket name (for S3 virtual-hosted style)
-        if !first.contains('-') || ["s3", "sqs", "sns", "dynamodb", "lambda", "iam", "sts", "kms", "logs", "events", "states", "ssm", "secretsmanager", "execute-api", "cognito-idp", "cognito-identity"].contains(&first) {
+        if !first.contains('-')
+            || [
+                "s3",
+                "sqs",
+                "sns",
+                "dynamodb",
+                "lambda",
+                "iam",
+                "sts",
+                "kms",
+                "logs",
+                "events",
+                "states",
+                "ssm",
+                "secretsmanager",
+                "execute-api",
+                "cognito-idp",
+                "cognito-identity",
+            ]
+            .contains(&first)
+        {
             return Some(first.to_string());
         }
     }
@@ -370,19 +386,37 @@ fn extract_service_from_host(host: &str) -> Option<String> {
 fn resolve_service_from_path(path: &str) -> Option<String> {
     let service = match path {
         // Lambda
-        p if p.starts_with("/2015-03-31/functions") || p.starts_with("/2018-10-31/layers") => "lambda",
+        p if p.starts_with("/2015-03-31/functions") || p.starts_with("/2018-10-31/layers") => {
+            "lambda"
+        }
         // API Gateway v2
         p if p.starts_with("/v2/apis") => "execute-api",
         // SES v2
         p if p.starts_with("/v2/email") => "ses",
         // Route53
-        p if p.starts_with("/2013-04-01/hostedzone") || p.starts_with("/2013-04-01/healthcheck") || p.starts_with("/2013-04-01/tags") => "route53",
+        p if p.starts_with("/2013-04-01/hostedzone")
+            || p.starts_with("/2013-04-01/healthcheck")
+            || p.starts_with("/2013-04-01/tags") =>
+        {
+            "route53"
+        }
         // CloudFront
-        p if p.starts_with("/2020-05-31/distribution") || p.starts_with("/2020-05-31/origin-access-control") || p.starts_with("/2020-05-31/cache-policy") || p.starts_with("/2020-05-31/tagging") => "cloudfront",
+        p if p.starts_with("/2020-05-31/distribution")
+            || p.starts_with("/2020-05-31/origin-access-control")
+            || p.starts_with("/2020-05-31/cache-policy")
+            || p.starts_with("/2020-05-31/tagging") =>
+        {
+            "cloudfront"
+        }
         // AppSync
         p if p.starts_with("/v1/apis") => "appsync",
         // Bedrock
-        p if p.starts_with("/foundation-models") || p.starts_with("/guardrails") || p.starts_with("/model-customization") => "bedrock",
+        p if p.starts_with("/foundation-models")
+            || p.starts_with("/guardrails")
+            || p.starts_with("/model-customization") =>
+        {
+            "bedrock"
+        }
         // Bedrock Runtime
         p if p.starts_with("/model/") => "bedrock-runtime",
         // EventBridge Scheduler

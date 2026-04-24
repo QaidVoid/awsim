@@ -69,9 +69,7 @@ impl ServiceHandler for CloudFormationService {
             "DescribeStackResources" => {
                 operations::stacks::describe_stack_resources(&state, &input)
             }
-            "DescribeStackResource" => {
-                operations::stacks::describe_stack_resource(&state, &input)
-            }
+            "DescribeStackResource" => operations::stacks::describe_stack_resource(&state, &input),
             "ListStacks" => operations::stacks::list_stacks(&state, &input),
             "ListStackResources" => operations::stacks::list_stack_resources(&state, &input),
             "GetTemplate" => operations::stacks::get_template(&state, &input),
@@ -88,17 +86,11 @@ impl ServiceHandler for CloudFormationService {
 
             // Signals / Cost
             "SignalResource" => operations::stacks::signal_resource(&state, &input),
-            "EstimateTemplateCost" => {
-                operations::stacks::estimate_template_cost(&state, &input)
-            }
+            "EstimateTemplateCost" => operations::stacks::estimate_template_cost(&state, &input),
 
             // Change Sets
-            "CreateChangeSet" => {
-                operations::change_sets::create_change_set(&state, &input, ctx)
-            }
-            "ExecuteChangeSet" => {
-                operations::change_sets::execute_change_set(&state, &input, ctx)
-            }
+            "CreateChangeSet" => operations::change_sets::create_change_set(&state, &input, ctx),
+            "ExecuteChangeSet" => operations::change_sets::execute_change_set(&state, &input, ctx),
             "DeleteChangeSet" => operations::change_sets::delete_change_set(&state, &input),
             "DescribeChangeSet" => operations::change_sets::describe_change_set(&state, &input),
             "ListChangeSets" => operations::change_sets::list_change_sets(&state, &input),

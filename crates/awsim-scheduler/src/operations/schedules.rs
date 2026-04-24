@@ -41,14 +41,10 @@ pub fn create_schedule(
         ));
     }
 
-    let group_name = input["GroupName"]
-        .as_str()
-        .unwrap_or("default")
-        .to_string();
+    let group_name = input["GroupName"].as_str().unwrap_or("default").to_string();
 
     let schedule_state = input["State"].as_str().unwrap_or("ENABLED").to_string();
-    let flexible_time_window = input["FlexibleTimeWindow"]
-        .clone();
+    let flexible_time_window = input["FlexibleTimeWindow"].clone();
     let flexible_time_window = if flexible_time_window.is_null() {
         json!({ "Mode": "OFF" })
     } else {

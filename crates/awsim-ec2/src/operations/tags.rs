@@ -76,10 +76,7 @@ pub fn create_tags(state: &Ec2State, input: &Value) -> Result<Value, AwsError> {
     let tags = parse_tag_list(input, "Tag");
 
     for resource_id in &resource_ids {
-        let mut entry = state
-            .resource_tags
-            .entry(resource_id.clone())
-            .or_default();
+        let mut entry = state.resource_tags.entry(resource_id.clone()).or_default();
         for (k, v) in &tags {
             entry.insert(k.clone(), v.clone());
         }

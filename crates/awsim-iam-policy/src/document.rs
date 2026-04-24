@@ -249,7 +249,10 @@ fn parse_statement(v: &Value) -> Result<Statement, ParseError> {
     let not_action = obj.get("NotAction").map(parse_action).transpose()?;
     let resource = obj.get("Resource").map(parse_resource).transpose()?;
     let not_resource = obj.get("NotResource").map(parse_resource).transpose()?;
-    let condition = obj.get("Condition").map(parse_condition_block).transpose()?;
+    let condition = obj
+        .get("Condition")
+        .map(parse_condition_block)
+        .transpose()?;
     Ok(Statement {
         sid,
         effect,

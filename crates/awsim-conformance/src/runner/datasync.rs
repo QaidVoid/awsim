@@ -26,11 +26,7 @@ pub async fn test_datasync(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         client.list_locations().send().await,
         verbose
     ));
-    results.push(chk!(
-        "ListTasks",
-        client.list_tasks().send().await,
-        verbose
-    ));
+    results.push(chk!("ListTasks", client.list_tasks().send().await, verbose));
 
     results
 }

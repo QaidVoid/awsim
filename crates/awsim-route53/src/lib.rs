@@ -305,9 +305,7 @@ impl ServiceHandler for Route53Service {
             "ListHostedZonesByName" => {
                 operations::zones::list_hosted_zones_by_name(&state, &input, ctx)
             }
-            "GetHostedZoneCount" => {
-                operations::extra::get_hosted_zone_count(&state, &input, ctx)
-            }
+            "GetHostedZoneCount" => operations::extra::get_hosted_zone_count(&state, &input, ctx),
             "ListHostedZonesByVPC" => {
                 operations::extra::list_hosted_zones_by_vpc(&state, &input, ctx)
             }
@@ -345,9 +343,7 @@ impl ServiceHandler for Route53Service {
             "TestDNSAnswer" => operations::extra::test_dns_answer(&state, &input, ctx),
 
             // Checker IP ranges
-            "GetCheckerIpRanges" => {
-                operations::extra::get_checker_ip_ranges(&state, &input, ctx)
-            }
+            "GetCheckerIpRanges" => operations::extra::get_checker_ip_ranges(&state, &input, ctx),
 
             // Query Logging
             "CreateQueryLoggingConfig" => {
@@ -364,9 +360,7 @@ impl ServiceHandler for Route53Service {
             "ChangeTagsForResource" => {
                 operations::tags::change_tags_for_resource(&state, &input, ctx)
             }
-            "ListTagsForResource" => {
-                operations::tags::list_tags_for_resource(&state, &input, ctx)
-            }
+            "ListTagsForResource" => operations::tags::list_tags_for_resource(&state, &input, ctx),
             "ListTagsForResources" => {
                 operations::more::list_tags_for_resources(&state, &input, ctx)
             }

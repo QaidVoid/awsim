@@ -30,7 +30,11 @@ pub async fn test_cognito_idp(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         // DescribeUserPool
         results.push(chk!(
             "DescribeUserPool",
-            client.describe_user_pool().user_pool_id(pool_id).send().await,
+            client
+                .describe_user_pool()
+                .user_pool_id(pool_id)
+                .send()
+                .await,
             verbose
         ));
 
@@ -121,11 +125,7 @@ pub async fn test_cognito_idp(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         // ListGroups (Cognito IDP)
         results.push(chk!(
             "ListGroups",
-            client
-                .list_groups()
-                .user_pool_id(pool_id)
-                .send()
-                .await,
+            client.list_groups().user_pool_id(pool_id).send().await,
             verbose
         ));
 
@@ -199,7 +199,9 @@ pub async fn test_cognito_idp(endpoint: &str, verbose: bool) -> Vec<OpResult> {
                 client
                     .initiate_auth()
                     .client_id(cid)
-                    .auth_flow(aws_sdk_cognitoidentityprovider::types::AuthFlowType::UserPasswordAuth)
+                    .auth_flow(
+                        aws_sdk_cognitoidentityprovider::types::AuthFlowType::UserPasswordAuth
+                    )
                     .auth_parameters("USERNAME", "signup-user")
                     .auth_parameters("PASSWORD", "Pass@word1!")
                     .send()
@@ -388,10 +390,7 @@ pub async fn test_cognito_idp(endpoint: &str, verbose: bool) -> Vec<OpResult> {
                 .provider_details("client_id", "test-client")
                 .provider_details("client_secret", "test-secret")
                 .provider_details("attributes_request_method", "GET")
-                .provider_details(
-                    "oidc_issuer",
-                    "https://accounts.example.com",
-                )
+                .provider_details("oidc_issuer", "https://accounts.example.com",)
                 .provider_details("authorize_scopes", "openid")
                 .send()
                 .await,

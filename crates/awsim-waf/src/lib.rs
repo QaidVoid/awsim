@@ -136,8 +136,7 @@ impl ServiceHandler for WafService {
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
-        let snapshot: WafStateSnapshot =
-            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        let snapshot: WafStateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
 
         // WAF ARNs contain region+account — use defaults for simplicity
         let state = self.store.get("000000000000", "us-east-1");

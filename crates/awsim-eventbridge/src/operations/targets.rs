@@ -75,9 +75,19 @@ pub fn put_targets(
 
         // Upsert: replace if same ID already exists
         if let Some(pos) = rule.targets.iter().position(|t| t.id == id) {
-            rule.targets[pos] = Target { id, arn, input: input_val, input_path };
+            rule.targets[pos] = Target {
+                id,
+                arn,
+                input: input_val,
+                input_path,
+            };
         } else {
-            rule.targets.push(Target { id, arn, input: input_val, input_path });
+            rule.targets.push(Target {
+                id,
+                arn,
+                input: input_val,
+                input_path,
+            });
         }
     }
 

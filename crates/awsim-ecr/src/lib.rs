@@ -77,8 +77,18 @@ mod tests {
     fn test_describe_repositories_all() {
         let svc = EcrService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateRepository", json!({ "repositoryName": "repo-a" }), &ctx)).unwrap();
-        block_on(svc.handle("CreateRepository", json!({ "repositoryName": "repo-b" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateRepository",
+            json!({ "repositoryName": "repo-a" }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "CreateRepository",
+            json!({ "repositoryName": "repo-b" }),
+            &ctx,
+        ))
+        .unwrap();
         let result = block_on(svc.handle("DescribeRepositories", json!({}), &ctx)).unwrap();
         assert_eq!(result["repositories"].as_array().unwrap().len(), 2);
     }
@@ -87,7 +97,12 @@ mod tests {
     fn test_describe_repositories_by_name() {
         let svc = EcrService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateRepository", json!({ "repositoryName": "repo-x" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateRepository",
+            json!({ "repositoryName": "repo-x" }),
+            &ctx,
+        ))
+        .unwrap();
         let result = block_on(svc.handle(
             "DescribeRepositories",
             json!({ "repositoryNames": ["repo-x"] }),
@@ -101,7 +116,12 @@ mod tests {
     fn test_delete_repository_non_empty_without_force() {
         let svc = EcrService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateRepository", json!({ "repositoryName": "nonempty" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateRepository",
+            json!({ "repositoryName": "nonempty" }),
+            &ctx,
+        ))
+        .unwrap();
         block_on(svc.handle(
             "PutImage",
             json!({
@@ -125,7 +145,12 @@ mod tests {
     fn test_delete_repository_force() {
         let svc = EcrService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateRepository", json!({ "repositoryName": "forcedel" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateRepository",
+            json!({ "repositoryName": "forcedel" }),
+            &ctx,
+        ))
+        .unwrap();
         block_on(svc.handle(
             "PutImage",
             json!({
@@ -154,14 +179,24 @@ mod tests {
         let data = result["authorizationData"].as_array().unwrap();
         assert_eq!(data.len(), 1);
         assert!(data[0]["authorizationToken"].as_str().is_some());
-        assert!(data[0]["proxyEndpoint"].as_str().unwrap().contains("us-east-1"));
+        assert!(
+            data[0]["proxyEndpoint"]
+                .as_str()
+                .unwrap()
+                .contains("us-east-1")
+        );
     }
 
     #[test]
     fn test_put_and_list_images() {
         let svc = EcrService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateRepository", json!({ "repositoryName": "img-repo" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateRepository",
+            json!({ "repositoryName": "img-repo" }),
+            &ctx,
+        ))
+        .unwrap();
         block_on(svc.handle(
             "PutImage",
             json!({
@@ -172,12 +207,9 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        let list = block_on(svc.handle(
-            "ListImages",
-            json!({ "repositoryName": "img-repo" }),
-            &ctx,
-        ))
-        .unwrap();
+        let list =
+            block_on(svc.handle("ListImages", json!({ "repositoryName": "img-repo" }), &ctx))
+                .unwrap();
         assert_eq!(list["imageIds"].as_array().unwrap().len(), 1);
     }
 
@@ -185,7 +217,12 @@ mod tests {
     fn test_batch_get_image() {
         let svc = EcrService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateRepository", json!({ "repositoryName": "get-repo" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateRepository",
+            json!({ "repositoryName": "get-repo" }),
+            &ctx,
+        ))
+        .unwrap();
         block_on(svc.handle(
             "PutImage",
             json!({
@@ -213,7 +250,12 @@ mod tests {
     fn test_batch_delete_image() {
         let svc = EcrService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateRepository", json!({ "repositoryName": "del-img-repo" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateRepository",
+            json!({ "repositoryName": "del-img-repo" }),
+            &ctx,
+        ))
+        .unwrap();
         block_on(svc.handle(
             "PutImage",
             json!({
@@ -247,7 +289,10 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        let arn = created["repository"]["repositoryArn"].as_str().unwrap().to_string();
+        let arn = created["repository"]["repositoryArn"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         block_on(svc.handle(
             "TagResource",
@@ -256,12 +301,8 @@ mod tests {
         ))
         .unwrap();
 
-        let tags = block_on(svc.handle(
-            "ListTagsForResource",
-            json!({ "resourceArn": arn }),
-            &ctx,
-        ))
-        .unwrap();
+        let tags = block_on(svc.handle("ListTagsForResource", json!({ "resourceArn": arn }), &ctx))
+            .unwrap();
         assert_eq!(tags["tags"].as_array().unwrap().len(), 1);
 
         block_on(svc.handle(
@@ -271,12 +312,9 @@ mod tests {
         ))
         .unwrap();
 
-        let tags2 = block_on(svc.handle(
-            "ListTagsForResource",
-            json!({ "resourceArn": arn }),
-            &ctx,
-        ))
-        .unwrap();
+        let tags2 =
+            block_on(svc.handle("ListTagsForResource", json!({ "resourceArn": arn }), &ctx))
+                .unwrap();
         assert_eq!(tags2["tags"].as_array().unwrap().len(), 0);
     }
 

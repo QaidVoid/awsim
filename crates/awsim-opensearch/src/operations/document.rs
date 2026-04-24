@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::state::OpenSearchState;
 
@@ -48,11 +48,7 @@ pub fn index_document(
 }
 
 /// Get a document by ID.
-pub fn get_document(
-    state: &OpenSearchState,
-    index_name: &str,
-    doc_id: &str,
-) -> (u16, Value) {
+pub fn get_document(state: &OpenSearchState, index_name: &str, doc_id: &str) -> (u16, Value) {
     let idx = match state.indices.get(index_name) {
         Some(idx) => idx,
         None => {
@@ -63,7 +59,7 @@ pub fn get_document(
                     "_id": doc_id,
                     "found": false,
                 }),
-            )
+            );
         }
     };
 
@@ -170,11 +166,7 @@ pub fn update_document(
 /// Supported script patterns:
 /// - `ctx._source.remove('fieldName')` — remove a field
 /// - `ctx._source.fieldName = params.value` — set a field from params
-pub fn update_by_query(
-    state: &OpenSearchState,
-    index_name: &str,
-    body: &Value,
-) -> (u16, Value) {
+pub fn update_by_query(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, Value) {
     let query = body
         .get("query")
         .cloned()
@@ -296,11 +288,7 @@ fn apply_script(doc: &mut serde_json::Value, source: &str, params: &serde_json::
 }
 
 /// Delete a document by ID.
-pub fn delete_document(
-    state: &OpenSearchState,
-    index_name: &str,
-    doc_id: &str,
-) -> (u16, Value) {
+pub fn delete_document(state: &OpenSearchState, index_name: &str, doc_id: &str) -> (u16, Value) {
     let mut idx = match state.indices.get_mut(index_name) {
         Some(idx) => idx,
         None => {
@@ -311,7 +299,7 @@ pub fn delete_document(
                     "_id": doc_id,
                     "result": "not_found",
                 }),
-            )
+            );
         }
     };
 

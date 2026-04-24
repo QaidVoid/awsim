@@ -2,9 +2,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::{
-    error::{
-        db_parameter_group_already_exists, db_parameter_group_not_found,
-    },
+    error::{db_parameter_group_already_exists, db_parameter_group_not_found},
     ids::parameter_group_arn,
     state::{DbParameterGroup, RdsState},
 };

@@ -1,10 +1,7 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-pub fn list_voices(
-    _input: &Value,
-    _ctx: &RequestContext,
-) -> Result<Value, AwsError> {
+pub fn list_voices(_input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
     Ok(json!({
         "Voices": [
             {

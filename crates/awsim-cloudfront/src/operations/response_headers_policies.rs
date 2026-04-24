@@ -4,9 +4,7 @@ use serde_json::{Value, json};
 use crate::state::CloudFrontState;
 
 /// GET /2020-05-31/response-headers-policy
-pub fn list_response_headers_policies(
-    _state: &CloudFrontState,
-) -> Result<Value, AwsError> {
+pub fn list_response_headers_policies(_state: &CloudFrontState) -> Result<Value, AwsError> {
     Ok(json!({
         "ResponseHeadersPolicyList": {
             "MaxItems": 100,

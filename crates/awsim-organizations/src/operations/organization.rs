@@ -10,7 +10,10 @@ pub fn create_organization(
 ) -> Result<Value, AwsError> {
     let feature_set = input["FeatureSet"].as_str().unwrap_or("ALL").to_string();
     let org_id = format!("o-{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
-    let arn = format!("arn:aws:organizations::{}:organization/{}", ctx.account_id, org_id);
+    let arn = format!(
+        "arn:aws:organizations::{}:organization/{}",
+        ctx.account_id, org_id
+    );
 
     let master_arn = format!(
         "arn:aws:organizations::{}:account/{}/{}",
@@ -35,7 +38,10 @@ pub fn create_organization(
     *state.organization.write().unwrap() = Some(org.clone());
 
     let root_id = format!("r-{}", &uuid::Uuid::new_v4().simple().to_string()[..4]);
-    let root_arn = format!("arn:aws:organizations::{}:root/{}/{}", ctx.account_id, org_id, root_id);
+    let root_arn = format!(
+        "arn:aws:organizations::{}:root/{}/{}",
+        ctx.account_id, org_id, root_id
+    );
     state.roots.insert(
         root_id.clone(),
         Root {

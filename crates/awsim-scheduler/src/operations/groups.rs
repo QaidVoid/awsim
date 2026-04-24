@@ -134,9 +134,7 @@ pub fn delete_schedule_group(
     }
 
     // Also delete all schedules in this group
-    state
-        .schedules
-        .retain(|_, s| s.group_name != name);
+    state.schedules.retain(|_, s| s.group_name != name);
 
     Ok(json!({}))
 }

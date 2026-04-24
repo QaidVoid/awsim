@@ -60,7 +60,10 @@ pub fn cancel_message_move_task(
     if task.status == "COMPLETED" || task.status == "CANCELLED" {
         return Err(AwsError::bad_request(
             "InvalidParameterValue",
-            format!("Task {} is already in terminal state {}", task_handle, task.status),
+            format!(
+                "Task {} is already in terminal state {}",
+                task_handle, task.status
+            ),
         ));
     }
 

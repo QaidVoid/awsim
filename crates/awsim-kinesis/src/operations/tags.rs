@@ -1,10 +1,14 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-use crate::state::KinesisState;
 use super::delete_stream::resolve_stream_name;
+use crate::state::KinesisState;
 
-pub fn add_tags(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn add_tags(
+    state: &KinesisState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let stream_name = resolve_stream_name(state, input)?;
 
     let mut stream = state.streams.get_mut(&stream_name).ok_or_else(|| {
@@ -25,7 +29,11 @@ pub fn add_tags(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> R
     Ok(json!({}))
 }
 
-pub fn remove_tags(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn remove_tags(
+    state: &KinesisState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let stream_name = resolve_stream_name(state, input)?;
 
     let mut stream = state.streams.get_mut(&stream_name).ok_or_else(|| {
@@ -46,7 +54,11 @@ pub fn remove_tags(state: &KinesisState, input: &Value, _ctx: &RequestContext) -
     Ok(json!({}))
 }
 
-pub fn list_tags(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn list_tags(
+    state: &KinesisState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let stream_name = resolve_stream_name(state, input)?;
 
     let stream = state.streams.get(&stream_name).ok_or_else(|| {

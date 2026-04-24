@@ -7,8 +7,8 @@ use crate::{
     state::{ElbState, Rule},
 };
 
-use super::{extract_string_list, opt_str, require_str};
 use super::listeners::parse_actions;
+use super::{extract_string_list, opt_str, require_str};
 
 pub fn rule_to_value(r: &Rule) -> Value {
     let actions: Vec<Value> = r
@@ -68,7 +68,13 @@ pub fn create_rule(
 
     let actions = parse_actions(input, "Actions");
 
-    let arn = rule_arn(&ctx.region, &ctx.account_id, &lb_name, &lb_rand, &listener_rand);
+    let arn = rule_arn(
+        &ctx.region,
+        &ctx.account_id,
+        &lb_name,
+        &lb_rand,
+        &listener_rand,
+    );
 
     let rule = Rule {
         arn: arn.clone(),

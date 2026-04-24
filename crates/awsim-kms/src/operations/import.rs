@@ -3,8 +3,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 
 use crate::error;
-use crate::state::KmsState;
 use crate::operations::keys::resolve_key_id;
+use crate::state::KmsState;
 use crate::util::{now_epoch_f64, random_secret};
 
 // ---------------------------------------------------------------------------
@@ -24,9 +24,7 @@ pub fn get_parameters_for_import(
         .as_str()
         .unwrap_or("RSAES_OAEP_SHA_256");
 
-    let wrapping_key_spec = input["WrappingKeySpec"]
-        .as_str()
-        .unwrap_or("RSA_2048");
+    let wrapping_key_spec = input["WrappingKeySpec"].as_str().unwrap_or("RSA_2048");
 
     let resolved_id = resolve_key_id(state, key_id_input)?;
     let key = state

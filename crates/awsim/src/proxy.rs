@@ -13,8 +13,8 @@ use bytes::Bytes;
 use serde_json::json;
 use tracing::{debug, warn};
 
-use awsim_core::{RequestContext, ServiceHandler};
 use awsim_apigateway::ApiGatewayService;
+use awsim_core::{RequestContext, ServiceHandler};
 
 /// State provided to the proxy handler.
 #[derive(Clone)]
@@ -145,8 +145,8 @@ pub async fn handle_proxy(
 fn lambda_response_to_http(result: serde_json::Value) -> Response<Body> {
     // If the result has a "statusCode" field, treat it as a proxy response.
     if let Some(status_code) = result.get("statusCode").and_then(|v| v.as_u64()) {
-        let status = StatusCode::from_u16(status_code as u16)
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(status_code as u16).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
         let mut builder = Response::builder().status(status);
 

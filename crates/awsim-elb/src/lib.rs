@@ -75,27 +75,19 @@ impl ServiceHandler for ElbService {
             "ModifyLoadBalancerAttributes" => {
                 operations::load_balancers::modify_load_balancer_attributes(&state, &input)
             }
-            "SetSecurityGroups" => {
-                operations::load_balancers::set_security_groups(&state, &input)
-            }
-            "SetSubnets" => {
-                operations::load_balancers::set_subnets(&state, &input)
-            }
+            "SetSecurityGroups" => operations::load_balancers::set_security_groups(&state, &input),
+            "SetSubnets" => operations::load_balancers::set_subnets(&state, &input),
 
             // Target Groups
             "CreateTargetGroup" => {
                 operations::target_groups::create_target_group(&state, &input, ctx)
             }
-            "DeleteTargetGroup" => {
-                operations::target_groups::delete_target_group(&state, &input)
-            }
+            "DeleteTargetGroup" => operations::target_groups::delete_target_group(&state, &input),
             "DescribeTargetGroups" => {
                 operations::target_groups::describe_target_groups(&state, &input)
             }
             "RegisterTargets" => operations::target_groups::register_targets(&state, &input),
-            "DeregisterTargets" => {
-                operations::target_groups::deregister_targets(&state, &input)
-            }
+            "DeregisterTargets" => operations::target_groups::deregister_targets(&state, &input),
             "DescribeTargetHealth" => {
                 operations::target_groups::describe_target_health(&state, &input)
             }
@@ -107,9 +99,7 @@ impl ServiceHandler for ElbService {
             }
 
             // Listeners
-            "CreateListener" => {
-                operations::listeners::create_listener(&state, &input, ctx)
-            }
+            "CreateListener" => operations::listeners::create_listener(&state, &input, ctx),
             "DeleteListener" => operations::listeners::delete_listener(&state, &input),
             "DescribeListeners" => operations::listeners::describe_listeners(&state, &input),
             "ModifyListener" => operations::listeners::modify_listener(&state, &input),
@@ -136,7 +126,9 @@ impl ServiceHandler for ElbService {
             "DescribeTags" => operations::tags::describe_tags(&state, &input),
 
             // Metadata
-            "DescribeAccountLimits" => operations::metadata::describe_account_limits(&state, &input),
+            "DescribeAccountLimits" => {
+                operations::metadata::describe_account_limits(&state, &input)
+            }
             "DescribeSSLPolicies" => operations::metadata::describe_ssl_policies(&state, &input),
 
             _ => Err(AwsError::unknown_operation(operation)),

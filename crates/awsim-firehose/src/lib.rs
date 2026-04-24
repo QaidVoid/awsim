@@ -50,18 +50,32 @@ impl ServiceHandler for FirehoseService {
         let state = self.store.get(&ctx.account_id, &ctx.region);
 
         match operation {
-            "CreateDeliveryStream" => operations::streams::create_delivery_stream(&state, &input, ctx),
-            "DeleteDeliveryStream" => operations::streams::delete_delivery_stream(&state, &input, ctx),
-            "DescribeDeliveryStream" => operations::streams::describe_delivery_stream(&state, &input, ctx),
-            "ListDeliveryStreams" => operations::streams::list_delivery_streams(&state, &input, ctx),
+            "CreateDeliveryStream" => {
+                operations::streams::create_delivery_stream(&state, &input, ctx)
+            }
+            "DeleteDeliveryStream" => {
+                operations::streams::delete_delivery_stream(&state, &input, ctx)
+            }
+            "DescribeDeliveryStream" => {
+                operations::streams::describe_delivery_stream(&state, &input, ctx)
+            }
+            "ListDeliveryStreams" => {
+                operations::streams::list_delivery_streams(&state, &input, ctx)
+            }
             "UpdateDestination" => operations::streams::update_destination(&state, &input, ctx),
             "PutRecord" => operations::records::put_record(&state, &input, ctx),
             "PutRecordBatch" => operations::records::put_record_batch(&state, &input, ctx),
             "TagDeliveryStream" => operations::tags::tag_delivery_stream(&state, &input, ctx),
             "UntagDeliveryStream" => operations::tags::untag_delivery_stream(&state, &input, ctx),
-            "ListTagsForDeliveryStream" => operations::tags::list_tags_for_delivery_stream(&state, &input, ctx),
-            "StartDeliveryStreamEncryption" => operations::encryption::start_encryption(&state, &input, ctx),
-            "StopDeliveryStreamEncryption" => operations::encryption::stop_encryption(&state, &input, ctx),
+            "ListTagsForDeliveryStream" => {
+                operations::tags::list_tags_for_delivery_stream(&state, &input, ctx)
+            }
+            "StartDeliveryStreamEncryption" => {
+                operations::encryption::start_encryption(&state, &input, ctx)
+            }
+            "StopDeliveryStreamEncryption" => {
+                operations::encryption::stop_encryption(&state, &input, ctx)
+            }
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

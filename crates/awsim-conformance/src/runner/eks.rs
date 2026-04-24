@@ -55,7 +55,11 @@ pub async fn test_eks(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     ));
     results.push(chk!(
         "ListNodegroups",
-        client.list_nodegroups().cluster_name("conf-cluster").send().await,
+        client
+            .list_nodegroups()
+            .cluster_name("conf-cluster")
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(
@@ -81,7 +85,11 @@ pub async fn test_eks(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     ));
     results.push(chk!(
         "ListFargateProfiles",
-        client.list_fargate_profiles().cluster_name("conf-cluster").send().await,
+        client
+            .list_fargate_profiles()
+            .cluster_name("conf-cluster")
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(

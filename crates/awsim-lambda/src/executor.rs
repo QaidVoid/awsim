@@ -34,7 +34,10 @@ pub fn execute_function(
             warn!(runtime, "Unsupported runtime");
             ExecutionResult {
                 status_code: 200,
-                payload: format!(r#"{{"errorMessage":"Unsupported runtime: {}","errorType":"UnsupportedRuntime"}}"#, runtime),
+                payload: format!(
+                    r#"{{"errorMessage":"Unsupported runtime: {}","errorType":"UnsupportedRuntime"}}"#,
+                    runtime
+                ),
                 error: Some("UnsupportedRuntime".to_string()),
                 logs: String::new(),
             }

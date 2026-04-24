@@ -15,9 +15,9 @@ pub fn create_log_group(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
     if state.log_groups.contains_key(name) {
         return Err(AwsError::conflict(
@@ -56,9 +56,9 @@ pub fn delete_log_group(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
     state.log_groups.remove(name).ok_or_else(|| {
         AwsError::not_found(
@@ -149,14 +149,13 @@ pub fn put_retention_policy(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
-    let days = input["retentionInDays"]
-        .as_u64()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "retentionInDays is required"))?
-        as u32;
+    let days = input["retentionInDays"].as_u64().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "retentionInDays is required")
+    })? as u32;
 
     let valid_days = [
         1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557,
@@ -189,9 +188,9 @@ pub fn delete_retention_policy(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
     let mut group = state.log_groups.get_mut(name).ok_or_else(|| {
         AwsError::not_found(
@@ -213,9 +212,9 @@ pub fn tag_log_group(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
     let tags = input["tags"]
         .as_object()
@@ -246,13 +245,13 @@ pub fn untag_log_group(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
-    let keys = input["tags"]
-        .as_array()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "tags (key list) is required"))?;
+    let keys = input["tags"].as_array().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "tags (key list) is required")
+    })?;
 
     let mut group = state.log_groups.get_mut(name).ok_or_else(|| {
         AwsError::not_found(
@@ -279,9 +278,9 @@ pub fn list_tags_log_group(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
     let group = state.log_groups.get(name).ok_or_else(|| {
         AwsError::not_found(

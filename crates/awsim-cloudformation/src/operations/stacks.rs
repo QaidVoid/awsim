@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::{
     error::{missing_parameter, stack_already_exists, stack_not_found},
-    ids::{now_iso8601, new_uuid, stack_arn},
+    ids::{new_uuid, now_iso8601, stack_arn},
     state::{CloudFormationState, Stack, StackEvent, StackResource},
     template,
 };
@@ -430,9 +430,7 @@ pub fn list_stacks(state: &CloudFormationState, input: &Value) -> Result<Value, 
     let summaries: Vec<Value> = state
         .stacks
         .iter()
-        .filter(|entry| {
-            status_filters.is_empty() || status_filters.contains(&entry.status)
-        })
+        .filter(|entry| status_filters.is_empty() || status_filters.contains(&entry.status))
         .map(|entry| {
             json!({
                 "StackId": entry.stack_id,
@@ -486,9 +484,12 @@ pub fn describe_stack_resource(
 }
 
 /// GetTemplateSummary — parse template and return metadata without creating a stack.
-pub fn get_template_summary(_state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
-    let template_body = opt_str(input, "TemplateBody")
-        .ok_or_else(|| missing_parameter("TemplateBody"))?;
+pub fn get_template_summary(
+    _state: &CloudFormationState,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let template_body =
+        opt_str(input, "TemplateBody").ok_or_else(|| missing_parameter("TemplateBody"))?;
 
     let parsed = template::validate_and_parse(template_body, &HashMap::new())?;
 
@@ -533,10 +534,7 @@ pub fn get_template_summary(_state: &CloudFormationState, input: &Value) -> Resu
 }
 
 /// ListStackResources — paginated list of resources in a stack.
-pub fn list_stack_resources(
-    state: &CloudFormationState,
-    input: &Value,
-) -> Result<Value, AwsError> {
+pub fn list_stack_resources(state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
     let stack_name = require_str(input, "StackName")?;
 
     let stack = state
@@ -585,10 +583,7 @@ pub fn tag_resource(state: &CloudFormationState, input: &Value) -> Result<Value,
 
     let new_tags = parse_tags(input);
 
-    let mut entry = state
-        .stack_tags
-        .entry(stack_name.to_string())
-        .or_default();
+    let mut entry = state.stack_tags.entry(stack_name.to_string()).or_default();
     for (k, v) in new_tags {
         entry.insert(k, v);
     }
@@ -638,8 +633,8 @@ pub fn estimate_template_cost(
 }
 
 pub fn validate_template(_state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
-    let template_body = opt_str(input, "TemplateBody")
-        .ok_or_else(|| missing_parameter("TemplateBody"))?;
+    let template_body =
+        opt_str(input, "TemplateBody").ok_or_else(|| missing_parameter("TemplateBody"))?;
 
     let parsed = template::validate_and_parse(template_body, &HashMap::new())?;
 

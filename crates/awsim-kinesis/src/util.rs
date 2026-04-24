@@ -15,10 +15,7 @@ pub fn partition_key_to_hash(partition_key: &str) -> u128 {
 
 /// Find which shard index a hash value falls into, given the stream's shard list.
 /// Each shard covers [start_hash, end_hash] inclusive.
-pub fn hash_to_shard_index(
-    hash: u128,
-    shards: &[crate::state::Shard],
-) -> usize {
+pub fn hash_to_shard_index(hash: u128, shards: &[crate::state::Shard]) -> usize {
     for (i, shard) in shards.iter().enumerate() {
         let start: u128 = shard.hash_key_range.0.parse().unwrap_or(0);
         let end: u128 = shard.hash_key_range.1.parse().unwrap_or(u128::MAX);
@@ -27,13 +24,20 @@ pub fn hash_to_shard_index(
         }
     }
     // Fallback: last shard
-    if shards.is_empty() { 0 } else { shards.len() - 1 }
+    if shards.is_empty() {
+        0
+    } else {
+        shards.len() - 1
+    }
 }
 
 /// Encode a ShardIteratorInfo into an opaque base64 token.
 /// Format before encoding: "{stream_name}:{shard_index}:{position}"
 pub fn encode_iterator(info: &ShardIteratorInfo) -> String {
-    let raw = format!("{}:{}:{}", info.stream_name, info.shard_index, info.position);
+    let raw = format!(
+        "{}:{}:{}",
+        info.stream_name, info.shard_index, info.position
+    );
     BASE64.encode(raw.as_bytes())
 }
 

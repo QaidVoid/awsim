@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::Engine as _;
 use awsim_core::{AwsError, RequestContext};
+use base64::Engine as _;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -34,9 +34,7 @@ fn fake_pem_certificate(domain: &str) -> String {
         .map(|c| std::str::from_utf8(c).unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n");
-    format!(
-        "-----BEGIN CERTIFICATE-----\n{wrapped}\n-----END CERTIFICATE-----\n"
-    )
+    format!("-----BEGIN CERTIFICATE-----\n{wrapped}\n-----END CERTIFICATE-----\n")
 }
 
 fn fake_pem_chain() -> String {
@@ -47,9 +45,7 @@ fn fake_pem_chain() -> String {
         .map(|c| std::str::from_utf8(c).unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n");
-    format!(
-        "-----BEGIN CERTIFICATE-----\n{wrapped}\n-----END CERTIFICATE-----\n"
-    )
+    format!("-----BEGIN CERTIFICATE-----\n{wrapped}\n-----END CERTIFICATE-----\n")
 }
 
 fn fake_pem_private_key() -> String {
@@ -61,9 +57,7 @@ fn fake_pem_private_key() -> String {
         .map(|c| std::str::from_utf8(c).unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n");
-    format!(
-        "-----BEGIN RSA PRIVATE KEY-----\n{wrapped}\n-----END RSA PRIVATE KEY-----\n"
-    )
+    format!("-----BEGIN RSA PRIVATE KEY-----\n{wrapped}\n-----END RSA PRIVATE KEY-----\n")
 }
 
 /// Build DNS validation records for all domains.
@@ -71,10 +65,7 @@ fn build_dns_records(domains: &[String]) -> HashMap<String, DnsValidationRecord>
     let mut map = HashMap::new();
     for domain in domains {
         let challenge_name = format!("_acme-challenge.{}.", domain.trim_end_matches('.'));
-        let challenge_value = format!(
-            "{}.acm-validation.aws.",
-            Uuid::new_v4().simple()
-        );
+        let challenge_value = format!("{}.acm-validation.aws.", Uuid::new_v4().simple());
         map.insert(
             domain.clone(),
             DnsValidationRecord {
@@ -160,9 +151,7 @@ pub fn request_certificate(
         created_at: now_secs(),
     };
 
-    state
-        .certificates
-        .insert(certificate_arn.clone(), cert);
+    state.certificates.insert(certificate_arn.clone(), cert);
 
     Ok(json!({ "CertificateArn": certificate_arn }))
 }

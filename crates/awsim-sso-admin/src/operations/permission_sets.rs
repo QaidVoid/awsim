@@ -33,7 +33,10 @@ pub fn create_permission_set(
         arn: arn.clone(),
         name: name.clone(),
         description: input["Description"].as_str().unwrap_or("").to_string(),
-        session_duration: input["SessionDuration"].as_str().unwrap_or("PT1H").to_string(),
+        session_duration: input["SessionDuration"]
+            .as_str()
+            .unwrap_or("PT1H")
+            .to_string(),
         relay_state: input["RelayState"].as_str().unwrap_or("").to_string(),
         created_at: now_secs(),
         managed_policies: vec![],
@@ -59,12 +62,15 @@ pub fn describe_permission_set(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["PermissionSetArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "PermissionSetArn is required"))?;
+    let arn = input["PermissionSetArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("ValidationException", "PermissionSetArn is required")
+    })?;
 
     let ps = state.permission_sets.get(arn).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("Permission set not found: {arn}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Permission set not found: {arn}"),
+        )
     })?;
 
     Ok(json!({
@@ -84,9 +90,9 @@ pub fn delete_permission_set(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["PermissionSetArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "PermissionSetArn is required"))?;
+    let arn = input["PermissionSetArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("ValidationException", "PermissionSetArn is required")
+    })?;
     state.permission_sets.remove(arn);
     Ok(json!({}))
 }
@@ -110,12 +116,15 @@ pub fn update_permission_set(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["PermissionSetArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "PermissionSetArn is required"))?;
+    let arn = input["PermissionSetArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("ValidationException", "PermissionSetArn is required")
+    })?;
 
     let mut ps = state.permission_sets.get_mut(arn).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("Permission set not found: {arn}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Permission set not found: {arn}"),
+        )
     })?;
 
     if let Some(d) = input["Description"].as_str() {
@@ -136,15 +145,18 @@ pub fn attach_managed_policy(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["PermissionSetArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "PermissionSetArn is required"))?;
-    let policy_arn = input["ManagedPolicyArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "ManagedPolicyArn is required"))?;
+    let arn = input["PermissionSetArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("ValidationException", "PermissionSetArn is required")
+    })?;
+    let policy_arn = input["ManagedPolicyArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("ValidationException", "ManagedPolicyArn is required")
+    })?;
 
     let mut ps = state.permission_sets.get_mut(arn).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("Permission set not found: {arn}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Permission set not found: {arn}"),
+        )
     })?;
     if !ps.managed_policies.iter().any(|p| p == policy_arn) {
         ps.managed_policies.push(policy_arn.to_string());
@@ -158,12 +170,12 @@ pub fn detach_managed_policy(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["PermissionSetArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "PermissionSetArn is required"))?;
-    let policy_arn = input["ManagedPolicyArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "ManagedPolicyArn is required"))?;
+    let arn = input["PermissionSetArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("ValidationException", "PermissionSetArn is required")
+    })?;
+    let policy_arn = input["ManagedPolicyArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("ValidationException", "ManagedPolicyArn is required")
+    })?;
 
     if let Some(mut ps) = state.permission_sets.get_mut(arn) {
         ps.managed_policies.retain(|p| p != policy_arn);
@@ -177,12 +189,15 @@ pub fn list_managed_policies(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["PermissionSetArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "PermissionSetArn is required"))?;
+    let arn = input["PermissionSetArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("ValidationException", "PermissionSetArn is required")
+    })?;
 
     let ps = state.permission_sets.get(arn).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("Permission set not found: {arn}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Permission set not found: {arn}"),
+        )
     })?;
 
     let policies: Vec<Value> = ps
@@ -202,15 +217,18 @@ pub fn put_inline_policy(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["PermissionSetArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "PermissionSetArn is required"))?;
+    let arn = input["PermissionSetArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("ValidationException", "PermissionSetArn is required")
+    })?;
     let policy = input["InlinePolicy"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("ValidationException", "InlinePolicy is required"))?;
 
     let mut ps = state.permission_sets.get_mut(arn).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("Permission set not found: {arn}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Permission set not found: {arn}"),
+        )
     })?;
     ps.inline_policy = policy.to_string();
 

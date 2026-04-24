@@ -5,7 +5,10 @@ mod server;
 mod smithy;
 
 #[derive(Parser)]
-#[command(name = "awsim-conformance", about = "Smithy conformance test harness for AWSim")]
+#[command(
+    name = "awsim-conformance",
+    about = "Smithy conformance test harness for AWSim"
+)]
 struct Cli {
     /// Run only specific services (comma-separated, e.g. "dynamodb,s3")
     #[arg(short, long)]
@@ -43,18 +46,17 @@ async fn main() {
         std::process::exit(1);
     }
 
-    let filter: Option<Vec<&str>> = cli.services.as_ref().map(|s| s.split(',').map(|s| s.trim()).collect());
+    let filter: Option<Vec<&str>> = cli
+        .services
+        .as_ref()
+        .map(|s| s.split(',').map(|s| s.trim()).collect());
 
     let mut all_results: Vec<runner::ServiceResult> = Vec::new();
 
     let mut entries: Vec<_> = std::fs::read_dir(model_dir)
         .expect("Failed to read models directory")
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map_or(false, |ext| ext == "json")
-        })
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
         .collect();
     entries.sort_by_key(|e| e.file_name());
 
@@ -97,8 +99,11 @@ async fn main() {
             }
 
             // Operations in the Smithy model but not tested.
-            let tested_names: std::collections::HashSet<_> =
-                result.results.iter().map(|r| r.op_name().to_string()).collect();
+            let tested_names: std::collections::HashSet<_> = result
+                .results
+                .iter()
+                .map(|r| r.op_name().to_string())
+                .collect();
             let smithy_names = model.operation_names();
             let mut not_tested: Vec<_> = smithy_names
                 .iter()
@@ -155,13 +160,14 @@ async fn main() {
     } else {
         0
     };
-    println!(
-        "Total: {total_tested}/{total_smithy_ops} operations covered ({total_pct}%)"
-    );
+    println!("Total: {total_tested}/{total_smithy_ops} operations covered ({total_pct}%)");
     println!("Passed: {total_passed}  Failed: {total_failed}");
 
     if total_failed > 0 {
-        println!("\nFAILED: {} deserialization errors detected.", total_failed);
+        println!(
+            "\nFAILED: {} deserialization errors detected.",
+            total_failed
+        );
         std::process::exit(1);
     } else {
         println!("\nAll tested operations passed shape validation.");

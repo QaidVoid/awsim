@@ -8,12 +8,15 @@ pub fn create_fargate_profile(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let cluster = input["clusterName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "clusterName is required"))?;
-    let name = input["fargateProfileName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "fargateProfileName is required"))?;
+    let cluster = input["clusterName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "clusterName is required")
+    })?;
+    let name = input["fargateProfileName"].as_str().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "fargateProfileName is required",
+        )
+    })?;
     let arn = format!(
         "arn:aws:eks:{}:{}:fargateprofile/{}/{}/{}",
         ctx.region,
@@ -26,16 +29,27 @@ pub fn create_fargate_profile(
         cluster_name: cluster.to_string(),
         name: name.to_string(),
         arn: arn.clone(),
-        pod_execution_role_arn: input["podExecutionRoleArn"].as_str().unwrap_or("").to_string(),
+        pod_execution_role_arn: input["podExecutionRoleArn"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
         subnets: input["subnets"]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default(),
         selectors: input["selectors"].as_array().cloned().unwrap_or_default(),
         status: "ACTIVE".to_string(),
         tags: input["tags"]
             .as_object()
-            .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
             .unwrap_or_default(),
         created_at: now_secs(),
     };
@@ -55,7 +69,12 @@ pub fn describe_fargate_profile(
     let fp = state
         .fargate_profiles
         .get(&(cluster.to_string(), name.to_string()))
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("FargateProfile {name} not found")))?;
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("FargateProfile {name} not found"),
+            )
+        })?;
     Ok(json!({ "fargateProfile": serialize_fp(&fp) }))
 }
 
@@ -69,7 +88,12 @@ pub fn delete_fargate_profile(
     let (_, fp) = state
         .fargate_profiles
         .remove(&(cluster.to_string(), name.to_string()))
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("FargateProfile {name} not found")))?;
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("FargateProfile {name} not found"),
+            )
+        })?;
     Ok(json!({ "fargateProfile": serialize_fp(&fp) }))
 }
 

@@ -55,12 +55,8 @@ mod tests {
         .unwrap();
         assert_eq!(put["Version"], 1);
 
-        let get = block_on(svc.handle(
-            "GetParameter",
-            json!({ "Name": "/env/db/host" }),
-            &ctx,
-        ))
-        .unwrap();
+        let get =
+            block_on(svc.handle("GetParameter", json!({ "Name": "/env/db/host" }), &ctx)).unwrap();
         assert_eq!(get["Parameter"]["Value"].as_str().unwrap(), "localhost");
         assert_eq!(get["Parameter"]["Version"], 1);
     }
@@ -127,8 +123,8 @@ mod tests {
     fn test_get_parameter_not_found() {
         let svc = SsmService::new();
         let ctx = ctx();
-        let err = block_on(svc.handle("GetParameter", json!({ "Name": "/ghost" }), &ctx))
-            .unwrap_err();
+        let err =
+            block_on(svc.handle("GetParameter", json!({ "Name": "/ghost" }), &ctx)).unwrap_err();
         assert_eq!(err.code, "ParameterNotFound");
     }
 
@@ -174,7 +170,12 @@ mod tests {
         let svc = SsmService::new();
         let ctx = ctx();
 
-        for name in ["/app/prod/db/host", "/app/prod/db/port", "/app/prod/key", "/other/val"] {
+        for name in [
+            "/app/prod/db/host",
+            "/app/prod/db/port",
+            "/app/prod/key",
+            "/other/val",
+        ] {
             block_on(svc.handle(
                 "PutParameter",
                 json!({ "Name": name, "Value": "v", "Type": "String" }),
@@ -326,8 +327,7 @@ mod tests {
         .unwrap();
 
         let result =
-            block_on(svc.handle("GetParameterHistory", json!({ "Name": "/hist" }), &ctx))
-                .unwrap();
+            block_on(svc.handle("GetParameterHistory", json!({ "Name": "/hist" }), &ctx)).unwrap();
         // 2 history entries + 1 current = 3
         assert_eq!(result["Parameters"].as_array().unwrap().len(), 3);
     }
@@ -485,8 +485,8 @@ mod tests {
         ))
         .unwrap();
 
-        let desc = block_on(svc.handle("DescribeDocument", json!({ "Name": "UpdDoc" }), &ctx))
-            .unwrap();
+        let desc =
+            block_on(svc.handle("DescribeDocument", json!({ "Name": "UpdDoc" }), &ctx)).unwrap();
         assert_eq!(desc["Document"]["DocumentVersion"].as_str().unwrap(), "1");
 
         block_on(svc.handle(
@@ -531,7 +531,9 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(
-            described["AssociationDescription"]["Name"].as_str().unwrap(),
+            described["AssociationDescription"]["Name"]
+                .as_str()
+                .unwrap(),
             "AWS-RunShellScript"
         );
 
@@ -611,9 +613,12 @@ mod tests {
         let item_id = created["OpsItemId"].as_str().unwrap();
         assert!(item_id.starts_with("oi-"));
 
-        let got = block_on(svc.handle("GetOpsItem", json!({ "OpsItemId": item_id }), &ctx))
-            .unwrap();
-        assert_eq!(got["OpsItem"]["Title"].as_str().unwrap(), "DB connection failure");
+        let got =
+            block_on(svc.handle("GetOpsItem", json!({ "OpsItemId": item_id }), &ctx)).unwrap();
+        assert_eq!(
+            got["OpsItem"]["Title"].as_str().unwrap(),
+            "DB connection failure"
+        );
         assert_eq!(got["OpsItem"]["Status"].as_str().unwrap(), "Open");
 
         block_on(svc.handle(
@@ -623,8 +628,8 @@ mod tests {
         ))
         .unwrap();
 
-        let got2 = block_on(svc.handle("GetOpsItem", json!({ "OpsItemId": item_id }), &ctx))
-            .unwrap();
+        let got2 =
+            block_on(svc.handle("GetOpsItem", json!({ "OpsItemId": item_id }), &ctx)).unwrap();
         assert_eq!(got2["OpsItem"]["Status"].as_str().unwrap(), "Resolved");
 
         let items = block_on(svc.handle("DescribeOpsItems", json!({}), &ctx)).unwrap();

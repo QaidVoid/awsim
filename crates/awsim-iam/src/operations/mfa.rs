@@ -7,8 +7,8 @@ use crate::{
     state::{IamState, VirtualMfaDevice},
 };
 
-use super::{opt_str, require_str};
 use super::super::operations::tags::{parse_tag_keys, parse_tags, tags_to_value};
+use super::{opt_str, require_str};
 
 fn device_to_value(d: &VirtualMfaDevice) -> Value {
     let mut v = json!({
@@ -35,10 +35,7 @@ pub fn create_virtual_mfa_device(
     let path = normalize_path(opt_str(input, "Path"));
     let tags = parse_tags(input);
 
-    let serial_number = format!(
-        "arn:aws:iam::{}:mfa{}{}",
-        ctx.account_id, path, device_name
-    );
+    let serial_number = format!("arn:aws:iam::{}:mfa{}{}", ctx.account_id, path, device_name);
 
     if state.virtual_mfa_devices.contains_key(&serial_number) {
         return Err(entity_already_exists("VirtualMFADevice", device_name));

@@ -25,10 +25,7 @@ pub fn create_key(
         .as_str()
         .unwrap_or("ENCRYPT_DECRYPT")
         .to_string();
-    let description = input["Description"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let description = input["Description"].as_str().unwrap_or("").to_string();
 
     // Validate key_spec / key_usage compatibility
     if key_spec == "SYMMETRIC_DEFAULT" && key_usage != "ENCRYPT_DECRYPT" {
@@ -138,7 +135,10 @@ pub fn enable_key(
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
 
     let resolved_id = resolve_key_id(state, key_id_input)?;
-    let mut key = state.keys.get_mut(&resolved_id).ok_or_else(|| error::not_found("Key"))?;
+    let mut key = state
+        .keys
+        .get_mut(&resolved_id)
+        .ok_or_else(|| error::not_found("Key"))?;
 
     if key.key_state == "PendingDeletion" {
         return Err(error::key_pending_deletion(&resolved_id));
@@ -162,7 +162,10 @@ pub fn disable_key(
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
 
     let resolved_id = resolve_key_id(state, key_id_input)?;
-    let mut key = state.keys.get_mut(&resolved_id).ok_or_else(|| error::not_found("Key"))?;
+    let mut key = state
+        .keys
+        .get_mut(&resolved_id)
+        .ok_or_else(|| error::not_found("Key"))?;
 
     if key.key_state == "PendingDeletion" {
         return Err(error::key_pending_deletion(&resolved_id));
@@ -185,9 +188,7 @@ pub fn schedule_key_deletion(
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
 
-    let pending_window_in_days = input["PendingWindowInDays"]
-        .as_u64()
-        .unwrap_or(30);
+    let pending_window_in_days = input["PendingWindowInDays"].as_u64().unwrap_or(30);
 
     if !(7..=30).contains(&pending_window_in_days) {
         return Err(error::invalid_parameter(
@@ -196,7 +197,10 @@ pub fn schedule_key_deletion(
     }
 
     let resolved_id = resolve_key_id(state, key_id_input)?;
-    let mut key = state.keys.get_mut(&resolved_id).ok_or_else(|| error::not_found("Key"))?;
+    let mut key = state
+        .keys
+        .get_mut(&resolved_id)
+        .ok_or_else(|| error::not_found("Key"))?;
 
     // Compute deletion date: now + pending_window_in_days seconds.
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -232,7 +236,10 @@ pub fn cancel_key_deletion(
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
     let resolved_id = resolve_key_id(state, key_id_input)?;
-    let mut key = state.keys.get_mut(&resolved_id).ok_or_else(|| error::not_found("Key"))?;
+    let mut key = state
+        .keys
+        .get_mut(&resolved_id)
+        .ok_or_else(|| error::not_found("Key"))?;
 
     if key.key_state != "PendingDeletion" {
         return Err(AwsError::bad_request(
@@ -267,7 +274,10 @@ pub fn update_key_description(
         .ok_or_else(|| error::missing_parameter("Description"))?;
 
     let resolved_id = resolve_key_id(state, key_id_input)?;
-    let mut key = state.keys.get_mut(&resolved_id).ok_or_else(|| error::not_found("Key"))?;
+    let mut key = state
+        .keys
+        .get_mut(&resolved_id)
+        .ok_or_else(|| error::not_found("Key"))?;
 
     if key.key_state == "PendingDeletion" {
         return Err(error::key_pending_deletion(&resolved_id));

@@ -94,7 +94,11 @@ pub fn create_user_pool(
 
     let auto_verified_attributes: Vec<String> = input["AutoVerifiedAttributes"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let lambda_config = parse_lambda_config(&input["LambdaConfig"]);
@@ -290,7 +294,11 @@ pub fn create_user_pool_client(
 
     let explicit_auth_flows: Vec<String> = input["ExplicitAuthFlows"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let generate_secret = input["GenerateSecret"].as_bool().unwrap_or(false);
@@ -302,27 +310,47 @@ pub fn create_user_pool_client(
 
     let callback_urls: Vec<String> = input["CallbackURLs"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let logout_urls: Vec<String> = input["LogoutURLs"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let allowed_oauth_flows: Vec<String> = input["AllowedOAuthFlows"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let allowed_oauth_scopes: Vec<String> = input["AllowedOAuthScopes"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let supported_identity_providers: Vec<String> = input["SupportedIdentityProviders"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let access_token_validity = input["AccessTokenValidity"].as_u64().unwrap_or(3600);
@@ -592,9 +620,9 @@ pub fn add_custom_attributes(
 
     if let Some(attrs) = input["CustomAttributes"].as_array() {
         for attr in attrs {
-            let name = attr["Name"]
-                .as_str()
-                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Attribute Name is required"))?;
+            let name = attr["Name"].as_str().ok_or_else(|| {
+                AwsError::bad_request("InvalidParameter", "Attribute Name is required")
+            })?;
             let full_name = if name.starts_with("custom:") {
                 name.to_string()
             } else {
@@ -624,7 +652,9 @@ pub fn add_custom_attributes(
 fn parse_password_policy(v: &Value) -> PasswordPolicy {
     let default = PasswordPolicy::default();
     PasswordPolicy {
-        minimum_length: v["MinimumLength"].as_u64().unwrap_or(default.minimum_length as u64) as u32,
+        minimum_length: v["MinimumLength"]
+            .as_u64()
+            .unwrap_or(default.minimum_length as u64) as u32,
         require_lowercase: v["RequireLowercase"]
             .as_bool()
             .unwrap_or(default.require_lowercase),
@@ -708,7 +738,8 @@ pub fn get_log_delivery_configuration(
         )
     })?;
 
-    let log_configs: Vec<serde_json::Value> = pool.log_delivery_configuration
+    let log_configs: Vec<serde_json::Value> = pool
+        .log_delivery_configuration
         .as_ref()
         .map(|ldc| ldc.log_configurations.clone())
         .unwrap_or_default();

@@ -105,9 +105,7 @@ pub async fn test_cloudwatch_logs(endpoint: &str, verbose: bool) -> Vec<OpResult
             .log_group_name("/conformance/logs")
             .filter_name("conformance-filter")
             .filter_pattern("")
-            .destination_arn(
-                "arn:aws:lambda:us-east-1:000000000000:function:conformance-fn",
-            )
+            .destination_arn("arn:aws:lambda:us-east-1:000000000000:function:conformance-fn",)
             .send()
             .await,
         verbose

@@ -190,8 +190,7 @@ mod tests {
         ))
         .unwrap();
 
-        let list =
-            block_on(svc.handle("ListStateMachines", json!({}), &ctx)).unwrap();
+        let list = block_on(svc.handle("ListStateMachines", json!({}), &ctx)).unwrap();
         assert_eq!(list["stateMachines"].as_array().unwrap().len(), 2);
     }
 
@@ -399,12 +398,9 @@ mod tests {
             .unwrap();
         }
 
-        let list = block_on(svc.handle(
-            "ListExecutions",
-            json!({ "stateMachineArn": sm_arn }),
-            &ctx,
-        ))
-        .unwrap();
+        let list =
+            block_on(svc.handle("ListExecutions", json!({ "stateMachineArn": sm_arn }), &ctx))
+                .unwrap();
         assert_eq!(list["executions"].as_array().unwrap().len(), 3);
     }
 

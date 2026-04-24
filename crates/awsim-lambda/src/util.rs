@@ -93,9 +93,12 @@ pub fn new_uuid() -> String {
 /// Decode base64 zip bytes and compute sha256 + size.
 /// Returns (decoded_bytes, sha256_base64, size).
 pub fn decode_zip(b64: &str) -> Result<(Vec<u8>, String, u64), awsim_core::AwsError> {
-    let bytes = BASE64
-        .decode(b64)
-        .map_err(|e| awsim_core::AwsError::bad_request("InvalidParameterValueException", format!("Invalid base64 ZipFile: {e}")))?;
+    let bytes = BASE64.decode(b64).map_err(|e| {
+        awsim_core::AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!("Invalid base64 ZipFile: {e}"),
+        )
+    })?;
     let hash = sha256_base64(&bytes);
     let size = bytes.len() as u64;
     Ok((bytes, hash, size))

@@ -18,7 +18,13 @@ pub fn create_ou(
     let arn = format!(
         "arn:aws:organizations::{}:ou/{}/{}",
         ctx.account_id,
-        state.organization.read().unwrap().as_ref().map(|o| o.id.clone()).unwrap_or_default(),
+        state
+            .organization
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|o| o.id.clone())
+            .unwrap_or_default(),
         ou_id
     );
     let ou = OrganizationalUnit {
@@ -37,13 +43,15 @@ pub fn describe_ou(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let id = input["OrganizationalUnitId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("MissingParameter", "OrganizationalUnitId is required"))?;
-    let ou = state
-        .ous
-        .get(id)
-        .ok_or_else(|| AwsError::not_found("OrganizationalUnitNotFoundException", format!("OU {id} not found")))?;
+    let id = input["OrganizationalUnitId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("MissingParameter", "OrganizationalUnitId is required")
+    })?;
+    let ou = state.ous.get(id).ok_or_else(|| {
+        AwsError::not_found(
+            "OrganizationalUnitNotFoundException",
+            format!("OU {id} not found"),
+        )
+    })?;
     Ok(json!({ "OrganizationalUnit": serialize_ou(&ou) }))
 }
 

@@ -3,7 +3,11 @@ use serde_json::{Value, json};
 
 use crate::state::KinesisState;
 
-pub fn handle(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn handle(
+    state: &KinesisState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let stream_name = input["StreamName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "StreamName is required"))?;

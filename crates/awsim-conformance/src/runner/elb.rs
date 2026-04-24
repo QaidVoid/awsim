@@ -97,9 +97,7 @@ pub async fn test_elb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             .port(80)
             .default_actions(
                 aws_sdk_elasticloadbalancingv2::types::Action::builder()
-                    .r#type(
-                        aws_sdk_elasticloadbalancingv2::types::ActionTypeEnum::Forward,
-                    )
+                    .r#type(aws_sdk_elasticloadbalancingv2::types::ActionTypeEnum::Forward)
                     .target_group_arn(t_arn)
                     .build(),
             )
@@ -302,9 +300,7 @@ pub async fn test_elb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             verbose
         ));
     } else {
-        results.push(OpResult::Skipped(
-            "RemoveListenerCertificates".to_string(),
-        ));
+        results.push(OpResult::Skipped("RemoveListenerCertificates".to_string()));
     }
 
     // CreateRule
@@ -407,11 +403,7 @@ pub async fn test_elb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     if let Some(ref l_arn) = listener_arn {
         results.push(chk!(
             "DeleteListener",
-            client
-                .delete_listener()
-                .listener_arn(l_arn)
-                .send()
-                .await,
+            client.delete_listener().listener_arn(l_arn).send().await,
             verbose
         ));
     } else {
@@ -422,7 +414,11 @@ pub async fn test_elb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     if let Some(ref arn) = tg_arn {
         results.push(chk!(
             "DeleteTargetGroup",
-            client.delete_target_group().target_group_arn(arn).send().await,
+            client
+                .delete_target_group()
+                .target_group_arn(arn)
+                .send()
+                .await,
             verbose
         ));
     } else {
@@ -447,7 +443,11 @@ pub async fn test_elb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     if let Some(ref arn) = lb_arn {
         results.push(chk!(
             "DeleteLoadBalancer",
-            client.delete_load_balancer().load_balancer_arn(arn).send().await,
+            client
+                .delete_load_balancer()
+                .load_balancer_arn(arn)
+                .send()
+                .await,
             verbose
         ));
     } else {

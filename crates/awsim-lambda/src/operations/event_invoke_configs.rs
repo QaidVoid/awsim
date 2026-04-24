@@ -39,16 +39,10 @@ fn destination_of(input: &Value, field: &str) -> Option<String> {
 fn config_to_json(cfg: &EventInvokeConfig) -> Value {
     let mut destination_config = serde_json::Map::new();
     if let Some(d) = &cfg.destination_on_success {
-        destination_config.insert(
-            "OnSuccess".to_string(),
-            json!({ "Destination": d }),
-        );
+        destination_config.insert("OnSuccess".to_string(), json!({ "Destination": d }));
     }
     if let Some(d) = &cfg.destination_on_failure {
-        destination_config.insert(
-            "OnFailure".to_string(),
-            json!({ "Destination": d }),
-        );
+        destination_config.insert("OnFailure".to_string(), json!({ "Destination": d }));
     }
 
     json!({

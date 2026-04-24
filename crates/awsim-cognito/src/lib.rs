@@ -1,8 +1,8 @@
 mod identity;
 mod jwt;
+pub mod oauth;
 mod operations;
 pub mod state;
-pub mod oauth;
 
 pub use identity::CognitoIdentityService;
 pub use oauth::CognitoOAuthState;
@@ -127,27 +127,19 @@ impl ServiceHandler for CognitoService {
             "AssociateSoftwareToken" => {
                 operations::mfa::associate_software_token(&state, &input, ctx)
             }
-            "VerifySoftwareToken" => {
-                operations::mfa::verify_software_token(&state, &input, ctx)
-            }
-            "SetUserMFAPreference" => {
-                operations::mfa::set_user_mfa_preference(&state, &input, ctx)
-            }
+            "VerifySoftwareToken" => operations::mfa::verify_software_token(&state, &input, ctx),
+            "SetUserMFAPreference" => operations::mfa::set_user_mfa_preference(&state, &input, ctx),
             "AdminSetUserMFAPreference" => {
                 operations::mfa::admin_set_user_mfa_preference(&state, &input, ctx)
             }
 
             // User Pool - additional config
             "UpdateUserPool" => operations::pools::update_user_pool(&state, &input, ctx),
-            "ListUserPoolClients" => {
-                operations::pools::list_user_pool_clients(&state, &input, ctx)
-            }
+            "ListUserPoolClients" => operations::pools::list_user_pool_clients(&state, &input, ctx),
             "UpdateUserPoolClient" => {
                 operations::pools::update_user_pool_client(&state, &input, ctx)
             }
-            "AddCustomAttributes" => {
-                operations::pools::add_custom_attributes(&state, &input, ctx)
-            }
+            "AddCustomAttributes" => operations::pools::add_custom_attributes(&state, &input, ctx),
 
             // Groups
             "CreateGroup" => operations::groups::create_group(&state, &input, ctx),
@@ -164,9 +156,7 @@ impl ServiceHandler for CognitoService {
             "AdminListGroupsForUser" => {
                 operations::groups::admin_list_groups_for_user(&state, &input, ctx)
             }
-            "ListUsersInGroup" => {
-                operations::groups::list_users_in_group(&state, &input, ctx)
-            }
+            "ListUsersInGroup" => operations::groups::list_users_in_group(&state, &input, ctx),
 
             // Additional user management
             "AdminEnableUser" => operations::users::admin_enable_user(&state, &input, ctx),
@@ -193,9 +183,7 @@ impl ServiceHandler for CognitoService {
             "GetUserAttributeVerificationCode" => {
                 operations::users::get_user_attribute_verification_code(&state, &input, ctx)
             }
-            "VerifyUserAttribute" => {
-                operations::users::verify_user_attribute(&state, &input, ctx)
-            }
+            "VerifyUserAttribute" => operations::users::verify_user_attribute(&state, &input, ctx),
             "AdminUserGlobalSignOut" => {
                 operations::users::admin_user_global_sign_out(&state, &input, ctx)
             }
@@ -272,9 +260,7 @@ impl ServiceHandler for CognitoService {
             "AdminUpdateDeviceStatus" => {
                 operations::devices::admin_update_device_status(&state, &input, ctx)
             }
-            "AdminForgetDevice" => {
-                operations::devices::admin_forget_device(&state, &input, ctx)
-            }
+            "AdminForgetDevice" => operations::devices::admin_forget_device(&state, &input, ctx),
 
             // UI Customization & Branding
             "SetUICustomization" => operations::branding::set_ui_customization(&state, &input, ctx),
@@ -296,9 +282,7 @@ impl ServiceHandler for CognitoService {
             }
 
             // Risk Configuration
-            "SetRiskConfiguration" => {
-                operations::risk::set_risk_configuration(&state, &input, ctx)
-            }
+            "SetRiskConfiguration" => operations::risk::set_risk_configuration(&state, &input, ctx),
             "DescribeRiskConfiguration" => {
                 operations::risk::describe_risk_configuration(&state, &input, ctx)
             }
@@ -324,15 +308,9 @@ impl ServiceHandler for CognitoService {
             "DescribeUserImportJob" => {
                 operations::import::describe_user_import_job(&state, &input, ctx)
             }
-            "StartUserImportJob" => {
-                operations::import::start_user_import_job(&state, &input, ctx)
-            }
-            "StopUserImportJob" => {
-                operations::import::stop_user_import_job(&state, &input, ctx)
-            }
-            "ListUserImportJobs" => {
-                operations::import::list_user_import_jobs(&state, &input, ctx)
-            }
+            "StartUserImportJob" => operations::import::start_user_import_job(&state, &input, ctx),
+            "StopUserImportJob" => operations::import::stop_user_import_job(&state, &input, ctx),
+            "ListUserImportJobs" => operations::import::list_user_import_jobs(&state, &input, ctx),
             "GetCSVHeader" => operations::import::get_csv_header(&state, &input, ctx),
 
             // Domain management (additional)
@@ -355,9 +333,7 @@ impl ServiceHandler for CognitoService {
             "GetTokensFromRefreshToken" => {
                 operations::auth::get_tokens_from_refresh_token(&state, &input, ctx)
             }
-            "GetUserAuthFactors" => {
-                operations::auth::get_user_auth_factors(&state, &input, ctx)
-            }
+            "GetUserAuthFactors" => operations::auth::get_user_auth_factors(&state, &input, ctx),
 
             // Additional client secrets
             "AddUserPoolClientSecret" => {
@@ -374,9 +350,7 @@ impl ServiceHandler for CognitoService {
             "AdminSetUserSettings" => {
                 operations::user_settings::admin_set_user_settings(&state, &input, ctx)
             }
-            "SetUserSettings" => {
-                operations::user_settings::set_user_settings(&state, &input, ctx)
-            }
+            "SetUserSettings" => operations::user_settings::set_user_settings(&state, &input, ctx),
 
             // WebAuthn
             "StartWebAuthnRegistration" => {

@@ -120,4 +120,3 @@ fn doy_to_month_day(doy: u64, leap: bool) -> (u64, u64) {
     }
     (12, 31)
 }
-

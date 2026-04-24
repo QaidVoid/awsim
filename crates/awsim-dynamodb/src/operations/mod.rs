@@ -18,10 +18,9 @@ pub fn opt_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
 
 /// Extract a required string from input JSON.
 pub fn require_str<'a>(input: &'a Value, key: &str) -> Result<&'a str, awsim_core::AwsError> {
-    input
-        .get(key)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| awsim_core::AwsError::bad_request("ValidationException", format!("{key} is required")))
+    input.get(key).and_then(|v| v.as_str()).ok_or_else(|| {
+        awsim_core::AwsError::bad_request("ValidationException", format!("{key} is required"))
+    })
 }
 
 /// Build an empty ExpressionAttributeNames map if not present.

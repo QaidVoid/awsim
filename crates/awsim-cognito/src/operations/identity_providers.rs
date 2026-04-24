@@ -79,7 +79,11 @@ pub fn create_identity_provider(
     let now = now_epoch();
     let idp_identifiers: Vec<String> = input["IdpIdentifiers"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let idp = IdentityProvider {
@@ -293,9 +297,7 @@ pub fn get_identity_provider_by_identifier(
         .identity_providers
         .iter()
         .find(|idp| {
-            idp.idp_identifiers
-                .iter()
-                .any(|id| id == idp_identifier)
+            idp.idp_identifiers.iter().any(|id| id == idp_identifier)
                 || idp.provider_name == idp_identifier
         })
         .ok_or_else(|| {
@@ -323,31 +325,52 @@ pub fn admin_link_provider_for_user(
     let dest = &input["DestinationUser"];
     let src = &input["SourceUser"];
 
-    let dest_value = dest["ProviderAttributeValue"]
+    let dest_value = dest["ProviderAttributeValue"].as_str().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameter",
+            "DestinationUser.ProviderAttributeValue is required",
+        )
+    })?;
+    let src_provider = src["ProviderName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "SourceUser.ProviderName is required")
+    })?;
+    let src_attr_name = src["ProviderAttributeName"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DestinationUser.ProviderAttributeValue is required"))?;
-    let src_provider = src["ProviderName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SourceUser.ProviderName is required"))?;
-    let src_attr_name = src["ProviderAttributeName"].as_str().unwrap_or("Cognito_Subject");
-    let src_attr_value = src["ProviderAttributeValue"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SourceUser.ProviderAttributeValue is required"))?;
+        .unwrap_or("Cognito_Subject");
+    let src_attr_value = src["ProviderAttributeValue"].as_str().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameter",
+            "SourceUser.ProviderAttributeValue is required",
+        )
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
     // Find destination user (by username or sub)
-    let username = pool.users.keys()
-        .find(|k| k.as_str() == dest_value || pool.users.get(*k).map_or(false, |u| u.sub == dest_value))
+    let username = pool
+        .users
+        .keys()
+        .find(|k| {
+            k.as_str() == dest_value || pool.users.get(*k).map_or(false, |u| u.sub == dest_value)
+        })
         .cloned()
-        .ok_or_else(|| AwsError::not_found("UserNotFoundException", format!("Destination user not found: {dest_value}")))?;
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "UserNotFoundException",
+                format!("Destination user not found: {dest_value}"),
+            )
+        })?;
 
     let user = pool.users.get_mut(&username).unwrap();
 
     // Remove any existing link for this provider
-    user.linked_providers.retain(|lp| lp.provider_name != src_provider);
+    user.linked_providers
+        .retain(|lp| lp.provider_name != src_provider);
     user.linked_providers.push(LinkedProvider {
         provider_name: src_provider.to_string(),
         provider_attribute_name: src_attr_name.to_string(),
@@ -371,15 +394,23 @@ pub fn admin_disable_provider_for_user(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
     let user_input = &input["User"];
-    let provider_name = user_input["ProviderName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "User.ProviderName is required"))?;
+    let provider_name = user_input["ProviderName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "User.ProviderName is required")
+    })?;
     let provider_attr_value = user_input["ProviderAttributeValue"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "User.ProviderAttributeValue is required"))?;
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameter",
+                "User.ProviderAttributeValue is required",
+            )
+        })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
     // Find user that has this provider link
@@ -387,7 +418,8 @@ pub fn admin_disable_provider_for_user(
     for user in pool.users.values_mut() {
         let len_before = user.linked_providers.len();
         user.linked_providers.retain(|lp| {
-            !(lp.provider_name == provider_name && lp.provider_attribute_value == provider_attr_value)
+            !(lp.provider_name == provider_name
+                && lp.provider_attribute_value == provider_attr_value)
         });
         if user.linked_providers.len() < len_before {
             found = true;

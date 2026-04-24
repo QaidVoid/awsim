@@ -198,7 +198,8 @@ pub fn delete_resource_server(
     })?;
 
     let len_before = pool.resource_servers.len();
-    pool.resource_servers.retain(|rs| rs.identifier != identifier);
+    pool.resource_servers
+        .retain(|rs| rs.identifier != identifier);
 
     if pool.resource_servers.len() == len_before {
         return Err(AwsError::not_found(

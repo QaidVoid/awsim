@@ -36,9 +36,19 @@ pub fn create_db_subnet_group(
         .and_then(|v| {
             // Accept both array and comma-separated string forms.
             if let Some(arr) = v.as_array() {
-                Some(arr.iter().filter_map(|x| x.as_str()).map(|s| s.to_string()).collect())
+                Some(
+                    arr.iter()
+                        .filter_map(|x| x.as_str())
+                        .map(|s| s.to_string())
+                        .collect(),
+                )
             } else if let Some(s) = v.as_str() {
-                Some(s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+                Some(
+                    s.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                )
             } else {
                 None
             }

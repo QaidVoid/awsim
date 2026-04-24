@@ -37,10 +37,7 @@ pub fn create_topic(
         }
     }
 
-    let arn = format!(
-        "arn:aws:sns:{}:{}:{}",
-        ctx.region, ctx.account_id, name
-    );
+    let arn = format!("arn:aws:sns:{}:{}:{}", ctx.region, ctx.account_id, name);
 
     // Return existing if already present
     if state.topics.contains_key(&arn) {
@@ -96,9 +93,10 @@ pub fn delete_topic(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TopicArn is required"))?;
 
-    let topic = state.topics.get(topic_arn).ok_or_else(|| {
-        AwsError::not_found("NotFound", format!("Topic not found: {topic_arn}"))
-    })?;
+    let topic = state
+        .topics
+        .get(topic_arn)
+        .ok_or_else(|| AwsError::not_found("NotFound", format!("Topic not found: {topic_arn}")))?;
 
     // Remove all subscriptions belonging to this topic
     let sub_arns: Vec<String> = topic.subscription_arns.clone();
@@ -145,9 +143,10 @@ pub fn get_topic_attributes(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TopicArn is required"))?;
 
-    let topic = state.topics.get(topic_arn).ok_or_else(|| {
-        AwsError::not_found("NotFound", format!("Topic not found: {topic_arn}"))
-    })?;
+    let topic = state
+        .topics
+        .get(topic_arn)
+        .ok_or_else(|| AwsError::not_found("NotFound", format!("Topic not found: {topic_arn}")))?;
 
     // Build subscription counts from live state
     let confirmed_count = state
@@ -198,9 +197,10 @@ pub fn set_topic_attributes(
 
     let attr_value = input["AttributeValue"].as_str().unwrap_or("");
 
-    let mut topic = state.topics.get_mut(topic_arn).ok_or_else(|| {
-        AwsError::not_found("NotFound", format!("Topic not found: {topic_arn}"))
-    })?;
+    let mut topic = state
+        .topics
+        .get_mut(topic_arn)
+        .ok_or_else(|| AwsError::not_found("NotFound", format!("Topic not found: {topic_arn}")))?;
 
     topic
         .attributes

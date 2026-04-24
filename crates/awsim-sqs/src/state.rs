@@ -254,9 +254,8 @@ impl Queue {
         }
 
         // Discard messages in main queue that have exceeded the retention period
-        self.messages.retain(|m| {
-            now_epoch.saturating_sub(m.sent_at_secs) < retention_secs
-        });
+        self.messages
+            .retain(|m| now_epoch.saturating_sub(m.sent_at_secs) < retention_secs);
 
         // Purge stale FIFO dedup cache entries (5-minute window)
         let five_min = std::time::Duration::from_secs(300);
@@ -323,8 +322,7 @@ pub fn parse_redrive_policy_from_attrs(
     let dlq_arn = v["deadLetterTargetArn"].as_str()?.to_string();
     let max = v["maxReceiveCount"]
         .as_u64()
-        .or_else(|| v["maxReceiveCount"].as_str()?.parse().ok())?
-        as u32;
+        .or_else(|| v["maxReceiveCount"].as_str()?.parse().ok())? as u32;
     Some(RedrivePolicy {
         dead_letter_target_arn: dlq_arn,
         max_receive_count: max,
@@ -349,18 +347,9 @@ fn default_attributes(is_fifo: bool) -> HashMap<String, String> {
     );
     if is_fifo {
         m.insert("FifoQueue".to_string(), "true".to_string());
-        m.insert(
-            "ContentBasedDeduplication".to_string(),
-            "false".to_string(),
-        );
-        m.insert(
-            "DeduplicationScope".to_string(),
-            "queue".to_string(),
-        );
-        m.insert(
-            "FifoThroughputLimit".to_string(),
-            "perQueue".to_string(),
-        );
+        m.insert("ContentBasedDeduplication".to_string(), "false".to_string());
+        m.insert("DeduplicationScope".to_string(), "queue".to_string());
+        m.insert("FifoThroughputLimit".to_string(), "perQueue".to_string());
     }
     m
 }

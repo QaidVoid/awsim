@@ -65,10 +65,7 @@ pub fn start_replay(
         description: input["Description"].as_str().unwrap_or("").to_string(),
         event_source_arn: event_source_arn.to_string(),
         destination: input["Destination"].clone(),
-        event_start_time: input["EventStartTime"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
+        event_start_time: input["EventStartTime"].as_str().unwrap_or("").to_string(),
         event_end_time: input["EventEndTime"].as_str().unwrap_or("").to_string(),
         state: "COMPLETED".to_string(),
         state_reason: None,

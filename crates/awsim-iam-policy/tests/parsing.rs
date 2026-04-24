@@ -171,11 +171,7 @@ fn parse_condition_numeric_value() {
         }]
     }"#;
     let policy = parse(json).unwrap();
-    let cond = &policy.statements[0]
-        .condition
-        .as_ref()
-        .unwrap()
-        .conditions[0];
+    let cond = &policy.statements[0].condition.as_ref().unwrap().conditions[0];
     assert_eq!(cond.values, vec!["100"]);
 }
 
@@ -188,10 +184,6 @@ fn parse_condition_bool_value() {
         }]
     }"#;
     let policy = parse(json).unwrap();
-    let cond = &policy.statements[0]
-        .condition
-        .as_ref()
-        .unwrap()
-        .conditions[0];
+    let cond = &policy.statements[0].condition.as_ref().unwrap().conditions[0];
     assert_eq!(cond.values, vec!["false"]);
 }

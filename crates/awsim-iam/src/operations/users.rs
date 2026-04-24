@@ -33,10 +33,7 @@ pub fn create_user(
     }
 
     let user_id = new_user_id();
-    let arn = format!(
-        "arn:aws:iam::{}:user{}{}",
-        ctx.account_id, path, user_name
-    );
+    let arn = format!("arn:aws:iam::{}:user{}{}", ctx.account_id, path, user_name);
 
     let user = User {
         user_name: user_name.to_string(),
@@ -404,7 +401,12 @@ pub fn get_access_key_last_used(state: &IamState, input: &Value) -> Result<Value
 
     let mut user_name = String::new();
     for entry in state.users.iter() {
-        if entry.value().access_keys.iter().any(|k| k.access_key_id == key_id) {
+        if entry
+            .value()
+            .access_keys
+            .iter()
+            .any(|k| k.access_key_id == key_id)
+        {
             user_name = entry.value().user_name.clone();
             break;
         }
@@ -471,7 +473,10 @@ pub fn put_user_permissions_boundary(state: &IamState, input: &Value) -> Result<
     Ok(json!({}))
 }
 
-pub fn delete_user_permissions_boundary(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+pub fn delete_user_permissions_boundary(
+    state: &IamState,
+    input: &Value,
+) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
     if !state.users.contains_key(user_name) {
         return Err(no_such_entity("User", user_name));
@@ -494,4 +499,3 @@ pub fn delete_login_profile(state: &IamState, input: &Value) -> Result<Value, Aw
 
     Ok(json!({}))
 }
-

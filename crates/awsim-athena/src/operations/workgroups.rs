@@ -66,7 +66,10 @@ pub fn delete_workgroup(
         .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "WorkGroup is required"))?;
 
     state.workgroups.remove(name).ok_or_else(|| {
-        AwsError::not_found("InvalidRequestException", format!("WorkGroup not found: {name}"))
+        AwsError::not_found(
+            "InvalidRequestException",
+            format!("WorkGroup not found: {name}"),
+        )
     })?;
 
     info!(name = %name, "Deleted Athena workgroup");
@@ -87,7 +90,10 @@ pub fn get_workgroup(
         .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "WorkGroup is required"))?;
 
     let wg = state.workgroups.get(name).ok_or_else(|| {
-        AwsError::not_found("InvalidRequestException", format!("WorkGroup not found: {name}"))
+        AwsError::not_found(
+            "InvalidRequestException",
+            format!("WorkGroup not found: {name}"),
+        )
     })?;
 
     Ok(json!({
@@ -134,16 +140,18 @@ pub fn update_workgroup(
         .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "WorkGroup is required"))?;
 
     let mut wg = state.workgroups.get_mut(name).ok_or_else(|| {
-        AwsError::not_found("InvalidRequestException", format!("WorkGroup not found: {name}"))
+        AwsError::not_found(
+            "InvalidRequestException",
+            format!("WorkGroup not found: {name}"),
+        )
     })?;
 
     if let Some(desc) = input["Description"].as_str() {
         wg.description = Some(desc.to_string());
     }
 
-    if let Some(output) = input["ConfigurationUpdates"]["ResultConfigurationUpdates"]
-        ["OutputLocation"]
-        .as_str()
+    if let Some(output) =
+        input["ConfigurationUpdates"]["ResultConfigurationUpdates"]["OutputLocation"].as_str()
     {
         wg.output_location = Some(output.to_string());
     }

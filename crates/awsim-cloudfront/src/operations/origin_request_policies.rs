@@ -68,7 +68,10 @@ pub fn create_origin_request_policy(
 }
 
 pub fn get_origin_request_policy(state: &CloudFrontState, id: &str) -> Result<Value, AwsError> {
-    let p = state.origin_request_policies.get(id).ok_or_else(|| not_found(id))?;
+    let p = state
+        .origin_request_policies
+        .get(id)
+        .ok_or_else(|| not_found(id))?;
     let etag = p.etag.clone();
     let result = policy_to_value(&p);
     Ok(json!({

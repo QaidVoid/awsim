@@ -115,10 +115,12 @@ pub fn get_hosted_zone(
         format!("/hostedzone/{id_raw}")
     };
 
-    let zone = state
-        .hosted_zones
-        .get(&id)
-        .ok_or_else(|| AwsError::not_found("NoSuchHostedZone", format!("No hosted zone found with ID: {id}")))?;
+    let zone = state.hosted_zones.get(&id).ok_or_else(|| {
+        AwsError::not_found(
+            "NoSuchHostedZone",
+            format!("No hosted zone found with ID: {id}"),
+        )
+    })?;
 
     Ok(json!({
         "__xml_root": "GetHostedZoneResponse",
@@ -235,11 +237,7 @@ pub fn list_hosted_zones_by_name(
         })
         .collect();
 
-    zones.sort_by(|a, b| {
-        a["Name"]
-            .as_str()
-            .cmp(&b["Name"].as_str())
-    });
+    zones.sort_by(|a, b| a["Name"].as_str().cmp(&b["Name"].as_str()));
 
     Ok(json!({
         "HostedZones": zones,

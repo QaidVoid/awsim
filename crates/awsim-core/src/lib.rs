@@ -8,7 +8,10 @@ pub mod protocol;
 pub mod router;
 pub mod state;
 
-pub use authz::{AuthzEngine, NoopPrincipalLookup, PrincipalLookup, ResolvedPrincipal, ResourcePolicyLookup, ScpLookup};
+pub use authz::{
+    AuthzEngine, NoopPrincipalLookup, PrincipalLookup, ResolvedPrincipal, ResourcePolicyLookup,
+    ScpLookup,
+};
 pub use error::AwsError;
 pub use events::{EventBus, InternalEvent};
 pub use gateway::AppState;

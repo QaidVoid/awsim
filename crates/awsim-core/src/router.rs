@@ -47,9 +47,6 @@ impl RequestContext {
     /// Returns an ARN prefix for this account and region.
     /// e.g., "arn:aws:s3:us-east-1:000000000000"
     pub fn arn_prefix(&self, service: &str) -> String {
-        format!(
-            "arn:aws:{}:{}:{}",
-            service, self.region, self.account_id
-        )
+        format!("arn:aws:{}:{}:{}", service, self.region, self.account_id)
     }
 }

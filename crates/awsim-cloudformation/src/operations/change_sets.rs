@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use crate::{
     error::{change_set_not_found, missing_parameter, stack_not_found},
-    ids::{change_set_arn, now_iso8601, new_uuid, stack_arn},
-    state::{ChangeSet, Change, CloudFormationState, Stack, StackEvent, StackResource},
+    ids::{change_set_arn, new_uuid, now_iso8601, stack_arn},
+    state::{Change, ChangeSet, CloudFormationState, Stack, StackEvent, StackResource},
     template,
 };
 
@@ -144,7 +144,9 @@ pub fn create_change_set(
     }
 
     if let Some(mut stack) = state.stacks.get_mut(&stack_name) {
-        stack.change_sets.insert(change_set_name.clone(), change_set);
+        stack
+            .change_sets
+            .insert(change_set_name.clone(), change_set);
     }
 
     Ok(json!({ "Id": change_set_id, "StackId": stack_id }))
@@ -172,10 +174,7 @@ pub fn execute_change_set(
     };
 
     // Apply the change set: parse template and build resources
-    let template_body = change_set
-        .template_body
-        .clone()
-        .unwrap_or_default();
+    let template_body = change_set.template_body.clone().unwrap_or_default();
     let parsed = template::validate_and_parse(&template_body, &change_set.parameters)?;
 
     let now = now_iso8601();
@@ -190,8 +189,7 @@ pub fn execute_change_set(
             }
         })
         .map(|r| {
-            let physical_resource_id =
-                Some(format!("awsim-{}-{}", r.logical_id, &new_uuid()[..8]));
+            let physical_resource_id = Some(format!("awsim-{}-{}", r.logical_id, &new_uuid()[..8]));
             StackResource {
                 logical_resource_id: r.logical_id.clone(),
                 physical_resource_id,

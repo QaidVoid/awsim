@@ -48,9 +48,7 @@ pub async fn test_glue(endpoint: &str, verbose: bool) -> Vec<OpResult> {
                     .storage_descriptor(
                         aws_sdk_glue::types::StorageDescriptor::builder()
                             .location("s3://conformance-bucket/data/")
-                            .input_format(
-                                "org.apache.hadoop.mapred.TextInputFormat",
-                            )
+                            .input_format("org.apache.hadoop.mapred.TextInputFormat",)
                             .output_format(
                                 "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
                             )
@@ -160,11 +158,7 @@ pub async fn test_glue(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     ));
 
     // GetJobs
-    results.push(chk!(
-        "GetJobs",
-        client.get_jobs().send().await,
-        verbose
-    ));
+    results.push(chk!("GetJobs", client.get_jobs().send().await, verbose));
 
     // CreateTrigger
     results.push(chk!(

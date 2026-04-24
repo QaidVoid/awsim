@@ -73,9 +73,19 @@ pub fn delete_backup(
     let record = state.backups.remove(backup_arn).map(|(_, r)| r);
 
     let (name, table_name, table_arn, created) = if let Some(r) = record {
-        (r.backup_name, r.table_name, r.table_arn, r.backup_creation_date_time)
+        (
+            r.backup_name,
+            r.table_name,
+            r.table_arn,
+            r.backup_creation_date_time,
+        )
     } else {
-        ("deleted-backup".to_string(), String::new(), String::new(), 0.0)
+        (
+            "deleted-backup".to_string(),
+            String::new(),
+            String::new(),
+            0.0,
+        )
     };
 
     Ok(json!({
@@ -146,10 +156,7 @@ pub fn list_backups(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_filter = opt_str(input, "TableName");
-    let limit = input
-        .get("Limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(100) as usize;
+    let limit = input.get("Limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
 
     let mut summaries: Vec<Value> = state
         .backups
@@ -346,7 +353,9 @@ pub fn update_continuous_backups(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    state.pitr_enabled.insert(table_name.to_string(), pitr_enabled);
+    state
+        .pitr_enabled
+        .insert(table_name.to_string(), pitr_enabled);
 
     let pitr_status = if pitr_enabled { "ENABLED" } else { "DISABLED" };
     let now = now_secs_f64();

@@ -48,26 +48,21 @@ mod tests {
     fn test_create_topic_basic() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let result = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "my-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let result =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "my-topic" }), &ctx)).unwrap();
         let arn = result["TopicArn"].as_str().unwrap();
-        assert!(arn.starts_with("arn:aws:sns:us-east-1:000000000000:my-topic"), "arn={arn}");
+        assert!(
+            arn.starts_with("arn:aws:sns:us-east-1:000000000000:my-topic"),
+            "arn={arn}"
+        );
     }
 
     #[test]
     fn test_create_topic_fifo() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let result = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "my-topic.fifo" }),
-            &ctx,
-        ))
-        .unwrap();
+        let result =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "my-topic.fifo" }), &ctx)).unwrap();
         let arn = result["TopicArn"].as_str().unwrap();
         assert!(arn.ends_with(".fifo"), "arn={arn}");
     }
@@ -76,18 +71,10 @@ mod tests {
     fn test_create_topic_idempotent() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let r1 = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "idempotent-topic" }),
-            &ctx,
-        ))
-        .unwrap();
-        let r2 = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "idempotent-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let r1 = block_on(svc.handle("CreateTopic", json!({ "Name": "idempotent-topic" }), &ctx))
+            .unwrap();
+        let r2 = block_on(svc.handle("CreateTopic", json!({ "Name": "idempotent-topic" }), &ctx))
+            .unwrap();
         assert_eq!(r1["TopicArn"], r2["TopicArn"]);
     }
 
@@ -121,19 +108,11 @@ mod tests {
     fn test_get_topic_attributes() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "attr-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "attr-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
-        let result = block_on(svc.handle(
-            "GetTopicAttributes",
-            json!({ "TopicArn": arn }),
-            &ctx,
-        ))
-        .unwrap();
+        let result =
+            block_on(svc.handle("GetTopicAttributes", json!({ "TopicArn": arn }), &ctx)).unwrap();
         assert!(result["Attributes"]["TopicArn"].as_str().is_some());
     }
 
@@ -141,12 +120,8 @@ mod tests {
     fn test_set_topic_attributes() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "settable-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "settable-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
         block_on(svc.handle(
@@ -160,12 +135,8 @@ mod tests {
         ))
         .unwrap();
 
-        let attrs = block_on(svc.handle(
-            "GetTopicAttributes",
-            json!({ "TopicArn": arn }),
-            &ctx,
-        ))
-        .unwrap();
+        let attrs =
+            block_on(svc.handle("GetTopicAttributes", json!({ "TopicArn": arn }), &ctx)).unwrap();
         assert_eq!(
             attrs["Attributes"]["DisplayName"].as_str().unwrap(),
             "My Topic"
@@ -176,12 +147,8 @@ mod tests {
     fn test_delete_topic() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "delete-me" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "delete-me" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
         block_on(svc.handle("DeleteTopic", json!({ "TopicArn": arn }), &ctx)).unwrap();
@@ -211,12 +178,8 @@ mod tests {
     fn test_tag_and_list_tags() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "tagged-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "tagged-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
         block_on(svc.handle(
@@ -232,12 +195,8 @@ mod tests {
         ))
         .unwrap();
 
-        let tags = block_on(svc.handle(
-            "ListTagsForResource",
-            json!({ "ResourceArn": arn }),
-            &ctx,
-        ))
-        .unwrap();
+        let tags = block_on(svc.handle("ListTagsForResource", json!({ "ResourceArn": arn }), &ctx))
+            .unwrap();
         let tag_arr = tags["Tags"].as_array().unwrap();
         assert_eq!(tag_arr.len(), 2);
     }
@@ -246,12 +205,8 @@ mod tests {
     fn test_untag_resource() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "untag-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "untag-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
         block_on(svc.handle(
@@ -271,12 +226,8 @@ mod tests {
         ))
         .unwrap();
 
-        let tags = block_on(svc.handle(
-            "ListTagsForResource",
-            json!({ "ResourceArn": arn }),
-            &ctx,
-        ))
-        .unwrap();
+        let tags = block_on(svc.handle("ListTagsForResource", json!({ "ResourceArn": arn }), &ctx))
+            .unwrap();
         assert_eq!(tags["Tags"].as_array().unwrap().len(), 0);
     }
 
@@ -288,12 +239,8 @@ mod tests {
     fn test_subscribe_and_list() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "sub-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "sub-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
         let sub_result = block_on(svc.handle(
@@ -312,12 +259,9 @@ mod tests {
         let list = block_on(svc.handle("ListSubscriptions", json!({}), &ctx)).unwrap();
         assert_eq!(list["Subscriptions"].as_array().unwrap().len(), 1);
 
-        let by_topic = block_on(svc.handle(
-            "ListSubscriptionsByTopic",
-            json!({ "TopicArn": arn }),
-            &ctx,
-        ))
-        .unwrap();
+        let by_topic =
+            block_on(svc.handle("ListSubscriptionsByTopic", json!({ "TopicArn": arn }), &ctx))
+                .unwrap();
         assert_eq!(by_topic["Subscriptions"].as_array().unwrap().len(), 1);
     }
 
@@ -325,12 +269,8 @@ mod tests {
     fn test_invalid_protocol() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "proto-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "proto-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
         let err = block_on(svc.handle(
@@ -346,12 +286,8 @@ mod tests {
     fn test_unsubscribe() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "unsub-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "unsub-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
         let sub = block_on(svc.handle(
@@ -362,12 +298,7 @@ mod tests {
         .unwrap();
         let sub_arn = sub["SubscriptionArn"].as_str().unwrap();
 
-        block_on(svc.handle(
-            "Unsubscribe",
-            json!({ "SubscriptionArn": sub_arn }),
-            &ctx,
-        ))
-        .unwrap();
+        block_on(svc.handle("Unsubscribe", json!({ "SubscriptionArn": sub_arn }), &ctx)).unwrap();
 
         let list = block_on(svc.handle("ListSubscriptions", json!({}), &ctx)).unwrap();
         assert_eq!(list["Subscriptions"].as_array().unwrap().len(), 0);
@@ -377,12 +308,8 @@ mod tests {
     fn test_get_subscription_attributes() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "getattr-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "getattr-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
         let sub = block_on(svc.handle(
@@ -399,22 +326,15 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        assert_eq!(
-            attrs["Attributes"]["Protocol"].as_str().unwrap(),
-            "sqs"
-        );
+        assert_eq!(attrs["Attributes"]["Protocol"].as_str().unwrap(), "sqs");
     }
 
     #[test]
     fn test_confirm_subscription() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "confirm-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "confirm-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
         block_on(svc.handle(
@@ -441,12 +361,8 @@ mod tests {
     fn test_publish_success() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "pub-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "pub-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
         let result = block_on(svc.handle(
@@ -478,20 +394,11 @@ mod tests {
     fn test_publish_missing_message() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "no-msg-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "no-msg-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
-        let err = block_on(svc.handle(
-            "Publish",
-            json!({ "TopicArn": arn }),
-            &ctx,
-        ))
-        .unwrap_err();
+        let err = block_on(svc.handle("Publish", json!({ "TopicArn": arn }), &ctx)).unwrap_err();
         assert_eq!(err.code, "InvalidParameter");
     }
 
@@ -499,12 +406,8 @@ mod tests {
     fn test_publish_batch_success() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "batch-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "batch-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
         let result = block_on(svc.handle(
@@ -531,12 +434,8 @@ mod tests {
     fn test_publish_batch_too_many_entries() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "bigbatch-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "bigbatch-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
         let entries: Vec<_> = (0..11)
@@ -556,8 +455,7 @@ mod tests {
     fn test_unknown_operation() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let err =
-            block_on(svc.handle("NonExistentOp", json!({}), &ctx)).unwrap_err();
+        let err = block_on(svc.handle("NonExistentOp", json!({}), &ctx)).unwrap_err();
         assert_eq!(err.code, "UnknownOperationException");
     }
 
@@ -565,12 +463,8 @@ mod tests {
     fn test_delete_topic_removes_subscriptions() {
         let svc = SnsService::new();
         let ctx = ctx();
-        let created = block_on(svc.handle(
-            "CreateTopic",
-            json!({ "Name": "cleanup-topic" }),
-            &ctx,
-        ))
-        .unwrap();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "cleanup-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
         block_on(svc.handle(

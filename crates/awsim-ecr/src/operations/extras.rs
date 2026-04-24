@@ -21,9 +21,9 @@ fn new_uuid() -> String {
 }
 
 fn require_repo_name<'a>(input: &'a Value) -> Result<&'a str, AwsError> {
-    input["repositoryName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "repositoryName is required"))
+    input["repositoryName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "repositoryName is required")
+    })
 }
 
 fn repo_not_found(name: &str) -> AwsError {
@@ -43,11 +43,17 @@ pub fn put_lifecycle_policy(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let repo_name = require_repo_name(input)?;
-    let policy = input["lifecyclePolicyText"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "lifecyclePolicyText is required"))?;
+    let policy = input["lifecyclePolicyText"].as_str().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "lifecyclePolicyText is required",
+        )
+    })?;
 
-    let mut repo = state.repositories.get_mut(repo_name).ok_or_else(|| repo_not_found(repo_name))?;
+    let mut repo = state
+        .repositories
+        .get_mut(repo_name)
+        .ok_or_else(|| repo_not_found(repo_name))?;
     repo.lifecycle_policy = Some(policy.to_string());
 
     Ok(json!({
@@ -63,7 +69,10 @@ pub fn get_lifecycle_policy(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let repo_name = require_repo_name(input)?;
-    let repo = state.repositories.get(repo_name).ok_or_else(|| repo_not_found(repo_name))?;
+    let repo = state
+        .repositories
+        .get(repo_name)
+        .ok_or_else(|| repo_not_found(repo_name))?;
 
     let policy = repo.lifecycle_policy.as_deref().ok_or_else(|| {
         AwsError::not_found(
@@ -86,7 +95,10 @@ pub fn delete_lifecycle_policy(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let repo_name = require_repo_name(input)?;
-    let mut repo = state.repositories.get_mut(repo_name).ok_or_else(|| repo_not_found(repo_name))?;
+    let mut repo = state
+        .repositories
+        .get_mut(repo_name)
+        .ok_or_else(|| repo_not_found(repo_name))?;
 
     let policy = repo.lifecycle_policy.take().ok_or_else(|| {
         AwsError::not_found(
@@ -112,11 +124,14 @@ pub fn set_repository_policy(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let repo_name = require_repo_name(input)?;
-    let policy_text = input["policyText"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "policyText is required"))?;
+    let policy_text = input["policyText"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "policyText is required")
+    })?;
 
-    let mut repo = state.repositories.get_mut(repo_name).ok_or_else(|| repo_not_found(repo_name))?;
+    let mut repo = state
+        .repositories
+        .get_mut(repo_name)
+        .ok_or_else(|| repo_not_found(repo_name))?;
     repo.repository_policy = Some(policy_text.to_string());
 
     Ok(json!({
@@ -132,7 +147,10 @@ pub fn get_repository_policy(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let repo_name = require_repo_name(input)?;
-    let repo = state.repositories.get(repo_name).ok_or_else(|| repo_not_found(repo_name))?;
+    let repo = state
+        .repositories
+        .get(repo_name)
+        .ok_or_else(|| repo_not_found(repo_name))?;
 
     let policy = repo.repository_policy.as_deref().ok_or_else(|| {
         AwsError::not_found(
@@ -154,7 +172,10 @@ pub fn delete_repository_policy(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let repo_name = require_repo_name(input)?;
-    let mut repo = state.repositories.get_mut(repo_name).ok_or_else(|| repo_not_found(repo_name))?;
+    let mut repo = state
+        .repositories
+        .get_mut(repo_name)
+        .ok_or_else(|| repo_not_found(repo_name))?;
 
     let policy = repo.repository_policy.take().ok_or_else(|| {
         AwsError::not_found(
@@ -182,7 +203,10 @@ pub fn start_image_scan(
     let repo_name = require_repo_name(input)?;
     let image_id = &input["imageId"];
 
-    let repo = state.repositories.get(repo_name).ok_or_else(|| repo_not_found(repo_name))?;
+    let repo = state
+        .repositories
+        .get(repo_name)
+        .ok_or_else(|| repo_not_found(repo_name))?;
 
     let tag = image_id["imageTag"].as_str();
     let digest = image_id["imageDigest"].as_str();
@@ -223,7 +247,10 @@ pub fn describe_image_scan_findings(
     let repo_name = require_repo_name(input)?;
     let image_id = &input["imageId"];
 
-    let _repo = state.repositories.get(repo_name).ok_or_else(|| repo_not_found(repo_name))?;
+    let _repo = state
+        .repositories
+        .get(repo_name)
+        .ok_or_else(|| repo_not_found(repo_name))?;
 
     Ok(json!({
         "registryId": ctx.account_id,
@@ -253,11 +280,14 @@ pub fn get_download_url_for_layer(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let repo_name = require_repo_name(input)?;
-    let layer_digest = input["layerDigest"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "layerDigest is required"))?;
+    let layer_digest = input["layerDigest"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "layerDigest is required")
+    })?;
 
-    let _repo = state.repositories.get(repo_name).ok_or_else(|| repo_not_found(repo_name))?;
+    let _repo = state
+        .repositories
+        .get(repo_name)
+        .ok_or_else(|| repo_not_found(repo_name))?;
 
     Ok(json!({
         "downloadUrl": format!(
@@ -278,11 +308,14 @@ pub fn batch_check_layer_availability(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let repo_name = require_repo_name(input)?;
-    let layer_digests = input["layerDigests"]
-        .as_array()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "layerDigests is required"))?;
+    let layer_digests = input["layerDigests"].as_array().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "layerDigests is required")
+    })?;
 
-    let _repo = state.repositories.get(repo_name).ok_or_else(|| repo_not_found(repo_name))?;
+    let _repo = state
+        .repositories
+        .get(repo_name)
+        .ok_or_else(|| repo_not_found(repo_name))?;
 
     let layers: Vec<Value> = layer_digests
         .iter()
@@ -315,15 +348,21 @@ pub fn initiate_layer_upload(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let repo_name = require_repo_name(input)?;
-    let _repo = state.repositories.get(repo_name).ok_or_else(|| repo_not_found(repo_name))?;
+    let _repo = state
+        .repositories
+        .get(repo_name)
+        .ok_or_else(|| repo_not_found(repo_name))?;
 
     let upload_id = new_uuid();
 
-    state.layer_uploads.insert(upload_id.clone(), LayerUpload {
-        upload_id: upload_id.clone(),
-        repository_name: repo_name.to_string(),
-        part_data: Vec::new(),
-    });
+    state.layer_uploads.insert(
+        upload_id.clone(),
+        LayerUpload {
+            upload_id: upload_id.clone(),
+            repository_name: repo_name.to_string(),
+            part_data: Vec::new(),
+        },
+    );
 
     Ok(json!({
         "registryId": ctx.account_id,
@@ -339,15 +378,12 @@ pub fn upload_layer_part(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let repo_name = require_repo_name(input)?;
-    let upload_id = input["uploadId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "uploadId is required"))?;
+    let upload_id = input["uploadId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "uploadId is required")
+    })?;
 
     // Accept part data (base64 encoded layer data)
-    let part_data = input["layerPartBlob"]
-        .as_str()
-        .unwrap_or("")
-        .as_bytes();
+    let part_data = input["layerPartBlob"].as_str().unwrap_or("").as_bytes();
 
     let mut upload = state.layer_uploads.get_mut(upload_id).ok_or_else(|| {
         AwsError::not_found(
@@ -373,9 +409,9 @@ pub fn complete_layer_upload(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let repo_name = require_repo_name(input)?;
-    let upload_id = input["uploadId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "uploadId is required"))?;
+    let upload_id = input["uploadId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "uploadId is required")
+    })?;
 
     let upload = state.layer_uploads.get(upload_id).ok_or_else(|| {
         AwsError::not_found(

@@ -256,9 +256,7 @@ impl ServiceHandler for BedrockService {
                 management::list_model_customization_jobs(&state, &input)
             }
             "GetModelCustomizationJob" => management::get_model_customization_job(&state, &input),
-            "StopModelCustomizationJob" => {
-                management::stop_model_customization_job(&state, &input)
-            }
+            "StopModelCustomizationJob" => management::stop_model_customization_job(&state, &input),
             "ListCustomModels" => management::list_custom_models(&state, &input),
             "ListProvisionedModelThroughputs" => {
                 management::list_provisioned_model_throughputs(&state, &input)
@@ -371,9 +369,7 @@ impl ServiceHandler for BedrockRuntimeService {
 
         match operation {
             "InvokeModel" => runtime::invoke_model(&input),
-            "InvokeModelWithResponseStream" => {
-                runtime::invoke_model_with_response_stream(&input)
-            }
+            "InvokeModelWithResponseStream" => runtime::invoke_model_with_response_stream(&input),
             "Converse" => runtime::converse(&input),
             "ConverseStream" => runtime::converse_stream(&input),
             _ => Err(AwsError::unknown_operation(operation)),

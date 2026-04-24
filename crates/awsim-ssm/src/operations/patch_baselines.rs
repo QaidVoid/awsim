@@ -14,7 +14,10 @@ fn now_epoch_secs() -> u64 {
 }
 
 fn new_baseline_id() -> String {
-    format!("pb-{}", Uuid::new_v4().to_string().replace('-', "")[..17].to_string())
+    format!(
+        "pb-{}",
+        Uuid::new_v4().to_string().replace('-', "")[..17].to_string()
+    )
 }
 
 fn baseline_identity(b: &SsmPatchBaseline) -> Value {
@@ -45,12 +48,20 @@ pub fn create_patch_baseline(
 
     let approved_patches: Vec<String> = input["ApprovedPatches"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let rejected_patches: Vec<String> = input["RejectedPatches"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let baseline_id = new_baseline_id();
@@ -163,10 +174,16 @@ pub fn update_patch_baseline(
         baseline.description = description.to_string();
     }
     if let Some(arr) = input["ApprovedPatches"].as_array() {
-        baseline.approved_patches = arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        baseline.approved_patches = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
     }
     if let Some(arr) = input["RejectedPatches"].as_array() {
-        baseline.rejected_patches = arr.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        baseline.rejected_patches = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
     }
     baseline.modified_date = now_epoch_secs();
 
@@ -209,13 +226,21 @@ pub fn get_default_patch_baseline(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let os = input["OperatingSystem"].as_str().unwrap_or("WINDOWS").to_string();
+    let os = input["OperatingSystem"]
+        .as_str()
+        .unwrap_or("WINDOWS")
+        .to_string();
 
     let baseline_id = state
         .default_patch_baselines
         .get(&os)
         .map(|v| v.value().clone())
-        .unwrap_or_else(|| format!("arn:aws:ssm:us-east-1::patchbaseline/pb-default-{}", os.to_lowercase()));
+        .unwrap_or_else(|| {
+            format!(
+                "arn:aws:ssm:us-east-1::patchbaseline/pb-default-{}",
+                os.to_lowercase()
+            )
+        });
 
     Ok(json!({
         "BaselineId": baseline_id,

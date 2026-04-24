@@ -51,10 +51,7 @@ pub async fn test_stepfunctions(endpoint: &str, verbose: bool) -> Vec<OpResult> 
         .input(r#"{"key":"value"}"#)
         .send()
         .await;
-    let exec_arn = exec_r
-        .as_ref()
-        .ok()
-        .map(|r| r.execution_arn.clone());
+    let exec_arn = exec_r.as_ref().ok().map(|r| r.execution_arn.clone());
     results.push(chk!("StartExecution", exec_r, verbose));
 
     // ListExecutions
@@ -105,10 +102,7 @@ pub async fn test_stepfunctions(endpoint: &str, verbose: bool) -> Vec<OpResult> 
         .name("conformance-activity")
         .send()
         .await;
-    let act_arn = act_r
-        .as_ref()
-        .ok()
-        .map(|r| r.activity_arn.clone());
+    let act_arn = act_r.as_ref().ok().map(|r| r.activity_arn.clone());
     results.push(chk!("CreateActivity", act_r, verbose));
 
     // ListActivities

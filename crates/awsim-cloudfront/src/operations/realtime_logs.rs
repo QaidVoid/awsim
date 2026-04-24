@@ -30,12 +30,19 @@ pub fn create_realtime_log_config(
         .and_then(|v| v.as_str())
         .unwrap_or("default")
         .to_string();
-    let sampling_rate = input.get("SamplingRate").and_then(|v| v.as_i64()).unwrap_or(100);
+    let sampling_rate = input
+        .get("SamplingRate")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(100);
     let end_points = input.get("EndPoints").cloned().unwrap_or(json!([]));
     let fields: Vec<String> = input
         .get("Fields")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
 
     let arn = format!("arn:aws:cloudfront::123456789012:realtime-log-config/{name}");

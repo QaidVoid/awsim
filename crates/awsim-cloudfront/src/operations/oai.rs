@@ -66,10 +66,7 @@ pub fn create_oai(state: &CloudFrontState, input: &Value) -> Result<Value, AwsEr
 
 /// GET /2020-05-31/origin-access-identity/cloudfront/{Id}
 pub fn get_oai(state: &CloudFrontState, id: &str) -> Result<Value, AwsError> {
-    let oai = state
-        .oais
-        .get(id)
-        .ok_or_else(|| not_found(id))?;
+    let oai = state.oais.get(id).ok_or_else(|| not_found(id))?;
 
     let etag = new_etag();
     Ok(json!({
@@ -80,11 +77,7 @@ pub fn get_oai(state: &CloudFrontState, id: &str) -> Result<Value, AwsError> {
 
 /// GET /2020-05-31/origin-access-identity/cloudfront
 pub fn list_oais(state: &CloudFrontState) -> Result<Value, AwsError> {
-    let items: Vec<Value> = state
-        .oais
-        .iter()
-        .map(|e| oai_to_value(e.value()))
-        .collect();
+    let items: Vec<Value> = state.oais.iter().map(|e| oai_to_value(e.value())).collect();
 
     let qty = items.len();
 

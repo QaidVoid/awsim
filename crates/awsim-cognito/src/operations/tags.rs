@@ -65,7 +65,11 @@ pub fn untag_resource(
 
     let tag_keys: Vec<String> = input["TagKeys"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     if let Some(mut tags) = state.resource_tags.get_mut(resource_arn) {

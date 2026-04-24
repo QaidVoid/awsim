@@ -50,9 +50,15 @@ pub fn create_cluster(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["clusterName"].as_str().unwrap_or("default").to_string();
+    let name = input["clusterName"]
+        .as_str()
+        .unwrap_or("default")
+        .to_string();
 
-    let arn = format!("arn:aws:ecs:{}:{}:cluster/{}", ctx.region, ctx.account_id, name);
+    let arn = format!(
+        "arn:aws:ecs:{}:{}:cluster/{}",
+        ctx.region, ctx.account_id, name
+    );
 
     if state.clusters.contains_key(&name) {
         // Idempotent: return existing
@@ -137,7 +143,11 @@ pub fn describe_clusters(
         }
         (found, missing)
     } else {
-        let all: Vec<Value> = state.clusters.iter().map(|e| cluster_to_json(e.value())).collect();
+        let all: Vec<Value> = state
+            .clusters
+            .iter()
+            .map(|e| cluster_to_json(e.value()))
+            .collect();
         (all, vec![])
     };
 

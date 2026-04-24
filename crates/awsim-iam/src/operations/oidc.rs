@@ -1,26 +1,38 @@
-use awsim_core::{AwsError, RequestContext};
-use serde_json::{Value, json};
 use crate::{
     error::{entity_already_exists, no_such_entity},
     ids::now_iso8601,
     state::{IamState, OidcProvider},
 };
+use awsim_core::{AwsError, RequestContext};
+use serde_json::{Value, json};
 
-use super::require_str;
 use super::super::operations::tags::parse_tags;
+use super::require_str;
 
 fn parse_string_list(input: &Value, key: &str) -> Vec<String> {
     input
         .get(key)
         .and_then(|v| v.get("member"))
         .and_then(|m| m.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 fn provider_to_value(p: &OidcProvider) -> Value {
-    let clients: Vec<Value> = p.client_id_list.iter().map(|c| Value::String(c.clone())).collect();
-    let thumbprints: Vec<Value> = p.thumbprint_list.iter().map(|t| Value::String(t.clone())).collect();
+    let clients: Vec<Value> = p
+        .client_id_list
+        .iter()
+        .map(|c| Value::String(c.clone()))
+        .collect();
+    let thumbprints: Vec<Value> = p
+        .thumbprint_list
+        .iter()
+        .map(|t| Value::String(t.clone()))
+        .collect();
     json!({
         "Url": p.url,
         "ClientIDList": { "member": clients },

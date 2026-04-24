@@ -134,10 +134,7 @@ pub fn serialize_response(
 }
 
 /// Serialize an awsQuery/XML error response.
-pub fn serialize_error(
-    error: &AwsError,
-    request_id: &str,
-) -> (StatusCode, HeaderMap, Bytes) {
+pub fn serialize_error(error: &AwsError, request_id: &str) -> (StatusCode, HeaderMap, Bytes) {
     let error_type = match error.error_type {
         crate::error::ErrorType::Sender => "Sender",
         crate::error::ErrorType::Receiver => "Receiver",
@@ -171,10 +168,7 @@ pub fn json_to_xml_fields(value: &Value) -> String {
             for (key, val) in map {
                 match val {
                     Value::Object(_) => {
-                        xml.push_str(&format!(
-                            "<{key}>\n{}</{key}>\n",
-                            json_to_xml_fields(val)
-                        ));
+                        xml.push_str(&format!("<{key}>\n{}</{key}>\n", json_to_xml_fields(val)));
                     }
                     Value::Array(arr) => {
                         for item in arr {

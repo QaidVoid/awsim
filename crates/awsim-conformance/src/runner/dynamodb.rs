@@ -1,6 +1,9 @@
 use crate::chk;
 use crate::runner::common::*;
-use aws_sdk_dynamodb::types::{AttributeDefinition, AttributeValue, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType};
+use aws_sdk_dynamodb::types::{
+    AttributeDefinition, AttributeValue, BillingMode, KeySchemaElement, KeyType,
+    ScalarAttributeType,
+};
 
 pub async fn test_dynamodb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     let config = make_config(endpoint).await;
@@ -116,14 +119,16 @@ pub async fn test_dynamodb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             .batch_write_item()
             .request_items(
                 "conformance-test",
-                vec![aws_sdk_dynamodb::types::WriteRequest::builder()
-                    .put_request(
-                        aws_sdk_dynamodb::types::PutRequest::builder()
-                            .item("id", AttributeValue::S("batch-1".into()))
-                            .build()
-                            .unwrap(),
-                    )
-                    .build()],
+                vec![
+                    aws_sdk_dynamodb::types::WriteRequest::builder()
+                        .put_request(
+                            aws_sdk_dynamodb::types::PutRequest::builder()
+                                .item("id", AttributeValue::S("batch-1".into()))
+                                .build()
+                                .unwrap(),
+                        )
+                        .build()
+                ],
             )
             .send()
             .await,
@@ -138,12 +143,10 @@ pub async fn test_dynamodb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             .request_items(
                 "conformance-test",
                 aws_sdk_dynamodb::types::KeysAndAttributes::builder()
-                    .keys(
-                        std::collections::HashMap::from([(
-                            "id".to_string(),
-                            AttributeValue::S("batch-1".into()),
-                        )])
-                    )
+                    .keys(std::collections::HashMap::from([(
+                        "id".to_string(),
+                        AttributeValue::S("batch-1".into()),
+                    )]))
                     .build()
                     .unwrap(),
             )

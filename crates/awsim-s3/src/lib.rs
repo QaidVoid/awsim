@@ -8,7 +8,10 @@ pub use authz::S3ResourcePolicyLookup;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use awsim_core::{AccountRegionStore, AwsError, InternalEvent, Protocol, RequestContext, RouteDefinition, ServiceHandler};
+use awsim_core::{
+    AccountRegionStore, AwsError, InternalEvent, Protocol, RequestContext, RouteDefinition,
+    ServiceHandler,
+};
 use serde_json::Value;
 use tracing::debug;
 
@@ -258,61 +261,201 @@ impl ServiceHandler for S3Service {
                 required_query_param: Some("logging"),
             },
             // GET /{Bucket}?website
-            RouteDefinition { method: "GET", path_pattern: "/{Bucket}", operation: "GetBucketWebsite", required_query_param: Some("website") },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketWebsite",
+                required_query_param: Some("website"),
+            },
             // PUT /{Bucket}?website
-            RouteDefinition { method: "PUT", path_pattern: "/{Bucket}", operation: "PutBucketWebsite", required_query_param: Some("website") },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketWebsite",
+                required_query_param: Some("website"),
+            },
             // DELETE /{Bucket}?website
-            RouteDefinition { method: "DELETE", path_pattern: "/{Bucket}", operation: "DeleteBucketWebsite", required_query_param: Some("website") },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/{Bucket}",
+                operation: "DeleteBucketWebsite",
+                required_query_param: Some("website"),
+            },
             // GET /{Bucket}?replication
-            RouteDefinition { method: "GET", path_pattern: "/{Bucket}", operation: "GetBucketReplication", required_query_param: Some("replication") },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketReplication",
+                required_query_param: Some("replication"),
+            },
             // PUT /{Bucket}?replication
-            RouteDefinition { method: "PUT", path_pattern: "/{Bucket}", operation: "PutBucketReplication", required_query_param: Some("replication") },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketReplication",
+                required_query_param: Some("replication"),
+            },
             // DELETE /{Bucket}?replication
-            RouteDefinition { method: "DELETE", path_pattern: "/{Bucket}", operation: "DeleteBucketReplication", required_query_param: Some("replication") },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/{Bucket}",
+                operation: "DeleteBucketReplication",
+                required_query_param: Some("replication"),
+            },
             // GET /{Bucket}?requestPayment
-            RouteDefinition { method: "GET", path_pattern: "/{Bucket}", operation: "GetBucketRequestPayment", required_query_param: Some("requestPayment") },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketRequestPayment",
+                required_query_param: Some("requestPayment"),
+            },
             // PUT /{Bucket}?requestPayment
-            RouteDefinition { method: "PUT", path_pattern: "/{Bucket}", operation: "PutBucketRequestPayment", required_query_param: Some("requestPayment") },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketRequestPayment",
+                required_query_param: Some("requestPayment"),
+            },
             // GET /{Bucket}?accelerate
-            RouteDefinition { method: "GET", path_pattern: "/{Bucket}", operation: "GetBucketAccelerateConfiguration", required_query_param: Some("accelerate") },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketAccelerateConfiguration",
+                required_query_param: Some("accelerate"),
+            },
             // PUT /{Bucket}?accelerate
-            RouteDefinition { method: "PUT", path_pattern: "/{Bucket}", operation: "PutBucketAccelerateConfiguration", required_query_param: Some("accelerate") },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketAccelerateConfiguration",
+                required_query_param: Some("accelerate"),
+            },
             // GET /{Bucket}?analytics (with Id query param handled in handler)
-            RouteDefinition { method: "GET", path_pattern: "/{Bucket}", operation: "GetBucketAnalyticsConfiguration", required_query_param: Some("analytics") },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketAnalyticsConfiguration",
+                required_query_param: Some("analytics"),
+            },
             // PUT /{Bucket}?analytics
-            RouteDefinition { method: "PUT", path_pattern: "/{Bucket}", operation: "PutBucketAnalyticsConfiguration", required_query_param: Some("analytics") },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketAnalyticsConfiguration",
+                required_query_param: Some("analytics"),
+            },
             // DELETE /{Bucket}?analytics
-            RouteDefinition { method: "DELETE", path_pattern: "/{Bucket}", operation: "DeleteBucketAnalyticsConfiguration", required_query_param: Some("analytics") },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/{Bucket}",
+                operation: "DeleteBucketAnalyticsConfiguration",
+                required_query_param: Some("analytics"),
+            },
             // GET /{Bucket}?metrics
-            RouteDefinition { method: "GET", path_pattern: "/{Bucket}", operation: "GetBucketMetricsConfiguration", required_query_param: Some("metrics") },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketMetricsConfiguration",
+                required_query_param: Some("metrics"),
+            },
             // PUT /{Bucket}?metrics
-            RouteDefinition { method: "PUT", path_pattern: "/{Bucket}", operation: "PutBucketMetricsConfiguration", required_query_param: Some("metrics") },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketMetricsConfiguration",
+                required_query_param: Some("metrics"),
+            },
             // DELETE /{Bucket}?metrics
-            RouteDefinition { method: "DELETE", path_pattern: "/{Bucket}", operation: "DeleteBucketMetricsConfiguration", required_query_param: Some("metrics") },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/{Bucket}",
+                operation: "DeleteBucketMetricsConfiguration",
+                required_query_param: Some("metrics"),
+            },
             // GET /{Bucket}?intelligent-tiering
-            RouteDefinition { method: "GET", path_pattern: "/{Bucket}", operation: "GetBucketIntelligentTieringConfiguration", required_query_param: Some("intelligent-tiering") },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketIntelligentTieringConfiguration",
+                required_query_param: Some("intelligent-tiering"),
+            },
             // PUT /{Bucket}?intelligent-tiering
-            RouteDefinition { method: "PUT", path_pattern: "/{Bucket}", operation: "PutBucketIntelligentTieringConfiguration", required_query_param: Some("intelligent-tiering") },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketIntelligentTieringConfiguration",
+                required_query_param: Some("intelligent-tiering"),
+            },
             // DELETE /{Bucket}?intelligent-tiering
-            RouteDefinition { method: "DELETE", path_pattern: "/{Bucket}", operation: "DeleteBucketIntelligentTieringConfiguration", required_query_param: Some("intelligent-tiering") },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/{Bucket}",
+                operation: "DeleteBucketIntelligentTieringConfiguration",
+                required_query_param: Some("intelligent-tiering"),
+            },
             // GET /{Bucket}?inventory
-            RouteDefinition { method: "GET", path_pattern: "/{Bucket}", operation: "GetBucketInventoryConfiguration", required_query_param: Some("inventory") },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketInventoryConfiguration",
+                required_query_param: Some("inventory"),
+            },
             // PUT /{Bucket}?inventory
-            RouteDefinition { method: "PUT", path_pattern: "/{Bucket}", operation: "PutBucketInventoryConfiguration", required_query_param: Some("inventory") },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketInventoryConfiguration",
+                required_query_param: Some("inventory"),
+            },
             // DELETE /{Bucket}?inventory
-            RouteDefinition { method: "DELETE", path_pattern: "/{Bucket}", operation: "DeleteBucketInventoryConfiguration", required_query_param: Some("inventory") },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/{Bucket}",
+                operation: "DeleteBucketInventoryConfiguration",
+                required_query_param: Some("inventory"),
+            },
             // GET /{Bucket}?ownershipControls
-            RouteDefinition { method: "GET", path_pattern: "/{Bucket}", operation: "GetBucketOwnershipControls", required_query_param: Some("ownershipControls") },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetBucketOwnershipControls",
+                required_query_param: Some("ownershipControls"),
+            },
             // PUT /{Bucket}?ownershipControls
-            RouteDefinition { method: "PUT", path_pattern: "/{Bucket}", operation: "PutBucketOwnershipControls", required_query_param: Some("ownershipControls") },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketOwnershipControls",
+                required_query_param: Some("ownershipControls"),
+            },
             // DELETE /{Bucket}?ownershipControls
-            RouteDefinition { method: "DELETE", path_pattern: "/{Bucket}", operation: "DeleteBucketOwnershipControls", required_query_param: Some("ownershipControls") },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/{Bucket}",
+                operation: "DeleteBucketOwnershipControls",
+                required_query_param: Some("ownershipControls"),
+            },
             // GET /{Bucket}?publicAccessBlock
-            RouteDefinition { method: "GET", path_pattern: "/{Bucket}", operation: "GetPublicAccessBlock", required_query_param: Some("publicAccessBlock") },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Bucket}",
+                operation: "GetPublicAccessBlock",
+                required_query_param: Some("publicAccessBlock"),
+            },
             // PUT /{Bucket}?publicAccessBlock
-            RouteDefinition { method: "PUT", path_pattern: "/{Bucket}", operation: "PutPublicAccessBlock", required_query_param: Some("publicAccessBlock") },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutPublicAccessBlock",
+                required_query_param: Some("publicAccessBlock"),
+            },
             // DELETE /{Bucket}?publicAccessBlock
-            RouteDefinition { method: "DELETE", path_pattern: "/{Bucket}", operation: "DeletePublicAccessBlock", required_query_param: Some("publicAccessBlock") },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/{Bucket}",
+                operation: "DeletePublicAccessBlock",
+                required_query_param: Some("publicAccessBlock"),
+            },
             // GET /{Bucket}?list-type=2
             RouteDefinition {
                 method: "GET",
@@ -453,7 +596,6 @@ impl ServiceHandler for S3Service {
                 operation: "DeleteBucket",
                 required_query_param: None,
             },
-
             // ── Object-level operations ──────────────────────────────────────
             // PUT /{Bucket}/{Key+}?partNumber=...  — upload part
             RouteDefinition {
@@ -615,53 +757,88 @@ impl ServiceHandler for S3Service {
             // Replication
             "GetBucketReplication" => operations::config::get_bucket_replication(&state, &input),
             "PutBucketReplication" => operations::config::put_bucket_replication(&state, &input),
-            "DeleteBucketReplication" => operations::config::delete_bucket_replication(&state, &input),
+            "DeleteBucketReplication" => {
+                operations::config::delete_bucket_replication(&state, &input)
+            }
 
             // Request Payment
-            "GetBucketRequestPayment" => operations::config::get_bucket_request_payment(&state, &input),
-            "PutBucketRequestPayment" => operations::config::put_bucket_request_payment(&state, &input),
+            "GetBucketRequestPayment" => {
+                operations::config::get_bucket_request_payment(&state, &input)
+            }
+            "PutBucketRequestPayment" => {
+                operations::config::put_bucket_request_payment(&state, &input)
+            }
 
             // Accelerate
-            "GetBucketAccelerateConfiguration" => operations::config::get_bucket_accelerate_configuration(&state, &input),
-            "PutBucketAccelerateConfiguration" => operations::config::put_bucket_accelerate_configuration(&state, &input),
+            "GetBucketAccelerateConfiguration" => {
+                operations::config::get_bucket_accelerate_configuration(&state, &input)
+            }
+            "PutBucketAccelerateConfiguration" => {
+                operations::config::put_bucket_accelerate_configuration(&state, &input)
+            }
 
             // Analytics (Get handles List when Id is absent)
             "GetBucketAnalyticsConfiguration" | "ListBucketAnalyticsConfigurations" => {
                 operations::config::get_bucket_analytics_configuration(&state, &input)
             }
-            "PutBucketAnalyticsConfiguration" => operations::config::put_bucket_analytics_configuration(&state, &input),
-            "DeleteBucketAnalyticsConfiguration" => operations::config::delete_bucket_analytics_configuration(&state, &input),
+            "PutBucketAnalyticsConfiguration" => {
+                operations::config::put_bucket_analytics_configuration(&state, &input)
+            }
+            "DeleteBucketAnalyticsConfiguration" => {
+                operations::config::delete_bucket_analytics_configuration(&state, &input)
+            }
 
             // Metrics (Get handles List when Id is absent)
             "GetBucketMetricsConfiguration" | "ListBucketMetricsConfigurations" => {
                 operations::config::get_bucket_metrics_configuration(&state, &input)
             }
-            "PutBucketMetricsConfiguration" => operations::config::put_bucket_metrics_configuration(&state, &input),
-            "DeleteBucketMetricsConfiguration" => operations::config::delete_bucket_metrics_configuration(&state, &input),
+            "PutBucketMetricsConfiguration" => {
+                operations::config::put_bucket_metrics_configuration(&state, &input)
+            }
+            "DeleteBucketMetricsConfiguration" => {
+                operations::config::delete_bucket_metrics_configuration(&state, &input)
+            }
 
             // Intelligent Tiering (Get handles List when Id is absent)
-            "GetBucketIntelligentTieringConfiguration" | "ListBucketIntelligentTieringConfigurations" => {
+            "GetBucketIntelligentTieringConfiguration"
+            | "ListBucketIntelligentTieringConfigurations" => {
                 operations::config::get_bucket_intelligent_tiering_configuration(&state, &input)
             }
-            "PutBucketIntelligentTieringConfiguration" => operations::config::put_bucket_intelligent_tiering_configuration(&state, &input),
-            "DeleteBucketIntelligentTieringConfiguration" => operations::config::delete_bucket_intelligent_tiering_configuration(&state, &input),
+            "PutBucketIntelligentTieringConfiguration" => {
+                operations::config::put_bucket_intelligent_tiering_configuration(&state, &input)
+            }
+            "DeleteBucketIntelligentTieringConfiguration" => {
+                operations::config::delete_bucket_intelligent_tiering_configuration(&state, &input)
+            }
 
             // Inventory (Get handles List when Id is absent)
             "GetBucketInventoryConfiguration" | "ListBucketInventoryConfigurations" => {
                 operations::config::get_bucket_inventory_configuration(&state, &input)
             }
-            "PutBucketInventoryConfiguration" => operations::config::put_bucket_inventory_configuration(&state, &input),
-            "DeleteBucketInventoryConfiguration" => operations::config::delete_bucket_inventory_configuration(&state, &input),
+            "PutBucketInventoryConfiguration" => {
+                operations::config::put_bucket_inventory_configuration(&state, &input)
+            }
+            "DeleteBucketInventoryConfiguration" => {
+                operations::config::delete_bucket_inventory_configuration(&state, &input)
+            }
 
             // Ownership Controls
-            "GetBucketOwnershipControls" => operations::config::get_bucket_ownership_controls(&state, &input),
-            "PutBucketOwnershipControls" => operations::config::put_bucket_ownership_controls(&state, &input),
-            "DeleteBucketOwnershipControls" => operations::config::delete_bucket_ownership_controls(&state, &input),
+            "GetBucketOwnershipControls" => {
+                operations::config::get_bucket_ownership_controls(&state, &input)
+            }
+            "PutBucketOwnershipControls" => {
+                operations::config::put_bucket_ownership_controls(&state, &input)
+            }
+            "DeleteBucketOwnershipControls" => {
+                operations::config::delete_bucket_ownership_controls(&state, &input)
+            }
 
             // Public Access Block
             "GetPublicAccessBlock" => operations::config::get_public_access_block(&state, &input),
             "PutPublicAccessBlock" => operations::config::put_public_access_block(&state, &input),
-            "DeletePublicAccessBlock" => operations::config::delete_public_access_block(&state, &input),
+            "DeletePublicAccessBlock" => {
+                operations::config::delete_public_access_block(&state, &input)
+            }
 
             // SelectObjectContent (stub)
             "SelectObjectContent" => operations::config::select_object_content(&state, &input),
@@ -670,8 +847,12 @@ impl ServiceHandler for S3Service {
             "GetBucketPolicyStatus" => operations::config::get_bucket_policy_status(&state, &input),
 
             // Object Lock
-            "GetObjectLockConfiguration" => operations::config::get_object_lock_configuration(&state, &input),
-            "PutObjectLockConfiguration" => operations::config::put_object_lock_configuration(&state, &input),
+            "GetObjectLockConfiguration" => {
+                operations::config::get_object_lock_configuration(&state, &input)
+            }
+            "PutObjectLockConfiguration" => {
+                operations::config::put_object_lock_configuration(&state, &input)
+            }
 
             // Object Legal Hold
             "GetObjectLegalHold" => operations::config::get_object_legal_hold(&state, &input),
@@ -705,7 +886,11 @@ impl ServiceHandler for S3Service {
                     let key = input.get("Key").and_then(Value::as_str).unwrap_or("");
                     if let Some(bucket) = state.buckets.get(bucket_name) {
                         if !bucket.notification_config.destinations.is_empty() {
-                            let etag = result.get("ETag").and_then(Value::as_str).unwrap_or("").to_string();
+                            let etag = result
+                                .get("ETag")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
                             let obj = bucket.objects.get(key);
                             let size = obj.as_ref().map(|o| o.content_length).unwrap_or(0);
                             let configured_destinations: Vec<serde_json::Value> = bucket
@@ -785,17 +970,28 @@ impl ServiceHandler for S3Service {
             }
             "DeleteObject" => {
                 // Capture info before deletion for the event
-                let bucket_name = input.get("Bucket").and_then(Value::as_str).unwrap_or("").to_string();
-                let key = input.get("Key").and_then(Value::as_str).unwrap_or("").to_string();
-                let configured_destinations: Vec<serde_json::Value> = if let Some(bucket) = state.buckets.get(&bucket_name) {
-                    bucket.notification_config.destinations
-                        .iter()
-                        .filter(|d| event_matches(&d.events, "s3:ObjectRemoved:Delete"))
-                        .map(|d| serde_json::json!({ "type": d.dest_type, "arn": d.arn }))
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                let bucket_name = input
+                    .get("Bucket")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let key = input
+                    .get("Key")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let configured_destinations: Vec<serde_json::Value> =
+                    if let Some(bucket) = state.buckets.get(&bucket_name) {
+                        bucket
+                            .notification_config
+                            .destinations
+                            .iter()
+                            .filter(|d| event_matches(&d.events, "s3:ObjectRemoved:Delete"))
+                            .map(|d| serde_json::json!({ "type": d.dest_type, "arn": d.arn }))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
 
                 let result = operations::object::delete_object(&state, &input)?;
 
@@ -839,12 +1035,8 @@ impl ServiceHandler for S3Service {
             "CompleteMultipartUpload" => {
                 operations::multipart::complete_multipart_upload(&state, &input)
             }
-            "AbortMultipartUpload" => {
-                operations::multipart::abort_multipart_upload(&state, &input)
-            }
-            "ListMultipartUploads" => {
-                operations::multipart::list_multipart_uploads(&state, &input)
-            }
+            "AbortMultipartUpload" => operations::multipart::abort_multipart_upload(&state, &input),
+            "ListMultipartUploads" => operations::multipart::list_multipart_uploads(&state, &input),
             "ListParts" => operations::multipart::list_parts(&state, &input),
 
             _ => Err(AwsError::unknown_operation(operation)),
@@ -1091,8 +1283,7 @@ impl ServiceHandler for S3Service {
         use dashmap::DashMap;
         use state::S3Object;
 
-        let snapshot: S3StateSnapshot =
-            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        let snapshot: S3StateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
 
         // S3 state is global per account — always use "global" region.
         let state = self.store.get("000000000000", "global");

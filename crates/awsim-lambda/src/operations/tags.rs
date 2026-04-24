@@ -21,9 +21,9 @@ pub fn tag_resource(
         .get_mut(name)
         .ok_or_else(|| resource_not_found("function", name))?;
 
-    let tags = input["Tags"]
-        .as_object()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterValueException", "Tags is required"))?;
+    let tags = input["Tags"].as_object().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterValueException", "Tags is required")
+    })?;
 
     for (k, v) in tags {
         if let Some(s) = v.as_str() {
@@ -51,9 +51,9 @@ pub fn untag_resource(
         .get_mut(name)
         .ok_or_else(|| resource_not_found("function", name))?;
 
-    let tag_keys = input["TagKeys"]
-        .as_array()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterValueException", "TagKeys is required"))?;
+    let tag_keys = input["TagKeys"].as_array().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterValueException", "TagKeys is required")
+    })?;
 
     for key in tag_keys {
         if let Some(k) = key.as_str() {

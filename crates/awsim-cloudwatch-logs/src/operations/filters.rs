@@ -3,9 +3,7 @@ use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::state::{
-    InsightsQuery, LogsState, MetricFilter, QueryDefinition, SubscriptionFilter,
-};
+use crate::state::{InsightsQuery, LogsState, MetricFilter, QueryDefinition, SubscriptionFilter};
 
 fn now_millis() -> u64 {
     crate::state::now_millis()
@@ -48,9 +46,9 @@ pub fn tag_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let resource_arn = input["resourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "resourceArn is required"))?;
+    let resource_arn = input["resourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "resourceArn is required")
+    })?;
 
     let tags = input["tags"]
         .as_object()
@@ -78,9 +76,9 @@ pub fn untag_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let resource_arn = input["resourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "resourceArn is required"))?;
+    let resource_arn = input["resourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "resourceArn is required")
+    })?;
 
     let tag_keys = input["tagKeys"]
         .as_array()
@@ -108,9 +106,9 @@ pub fn list_tags_for_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let resource_arn = input["resourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "resourceArn is required"))?;
+    let resource_arn = input["resourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "resourceArn is required")
+    })?;
 
     let name = log_group_from_arn(resource_arn);
     let group = state.log_groups.get(name).ok_or_else(|| {
@@ -138,19 +136,19 @@ pub fn put_subscription_filter(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let log_group_name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let log_group_name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
-    let filter_name = input["filterName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "filterName is required"))?;
+    let filter_name = input["filterName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "filterName is required")
+    })?;
 
     let filter_pattern = input["filterPattern"].as_str().unwrap_or("").to_string();
 
-    let destination_arn = input["destinationArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "destinationArn is required"))?;
+    let destination_arn = input["destinationArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "destinationArn is required")
+    })?;
 
     require_log_group(state, log_group_name)?;
 
@@ -162,10 +160,14 @@ pub fn put_subscription_filter(
         creation_time: now_millis(),
     };
 
-    info!(log_group = log_group_name, filter_name, "PutSubscriptionFilter");
-    state
-        .subscription_filters
-        .insert((log_group_name.to_string(), filter_name.to_string()), filter);
+    info!(
+        log_group = log_group_name,
+        filter_name, "PutSubscriptionFilter"
+    );
+    state.subscription_filters.insert(
+        (log_group_name.to_string(), filter_name.to_string()),
+        filter,
+    );
 
     Ok(json!({}))
 }
@@ -179,9 +181,9 @@ pub fn describe_subscription_filters(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let log_group_name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let log_group_name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
     let filter_name_prefix = input["filterNamePrefix"].as_str().unwrap_or("");
     let limit = input["limit"].as_u64().unwrap_or(50) as usize;
@@ -189,10 +191,7 @@ pub fn describe_subscription_filters(
     let mut filters: Vec<Value> = state
         .subscription_filters
         .iter()
-        .filter(|e| {
-            e.key().0 == log_group_name
-                && e.filter_name.starts_with(filter_name_prefix)
-        })
+        .filter(|e| e.key().0 == log_group_name && e.filter_name.starts_with(filter_name_prefix))
         .map(|e| {
             json!({
                 "filterName": e.filter_name,
@@ -224,13 +223,13 @@ pub fn delete_subscription_filter(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let log_group_name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let log_group_name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
-    let filter_name = input["filterName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "filterName is required"))?;
+    let filter_name = input["filterName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "filterName is required")
+    })?;
 
     state
         .subscription_filters
@@ -238,7 +237,9 @@ pub fn delete_subscription_filter(
         .ok_or_else(|| {
             AwsError::not_found(
                 "ResourceNotFoundException",
-                format!("Subscription filter {filter_name} not found for log group {log_group_name}"),
+                format!(
+                    "Subscription filter {filter_name} not found for log group {log_group_name}"
+                ),
             )
         })?;
 
@@ -254,13 +255,13 @@ pub fn put_metric_filter(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let log_group_name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let log_group_name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
-    let filter_name = input["filterName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "filterName is required"))?;
+    let filter_name = input["filterName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "filterName is required")
+    })?;
 
     let filter_pattern = input["filterPattern"].as_str().unwrap_or("").to_string();
 
@@ -280,9 +281,10 @@ pub fn put_metric_filter(
     };
 
     info!(log_group = log_group_name, filter_name, "PutMetricFilter");
-    state
-        .metric_filters
-        .insert((log_group_name.to_string(), filter_name.to_string()), filter);
+    state.metric_filters.insert(
+        (log_group_name.to_string(), filter_name.to_string()),
+        filter,
+    );
 
     Ok(json!({}))
 }
@@ -338,13 +340,13 @@ pub fn delete_metric_filter(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let log_group_name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let log_group_name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
-    let filter_name = input["filterName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "filterName is required"))?;
+    let filter_name = input["filterName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "filterName is required")
+    })?;
 
     state
         .metric_filters
@@ -372,9 +374,9 @@ pub fn put_query_definition(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "name is required"))?;
 
-    let query_string = input["queryString"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "queryString is required"))?;
+    let query_string = input["queryString"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "queryString is required")
+    })?;
 
     let log_group_names: Vec<String> = input["logGroupNames"]
         .as_array()
@@ -397,7 +399,9 @@ pub fn put_query_definition(
         log_group_names,
     };
 
-    state.query_definitions.insert(query_definition_id.clone(), def);
+    state
+        .query_definitions
+        .insert(query_definition_id.clone(), def);
 
     Ok(json!({ "queryDefinitionId": query_definition_id }))
 }
@@ -430,7 +434,10 @@ pub fn describe_query_definitions(
         .collect();
 
     defs.sort_by(|a, b| {
-        a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
     });
 
     Ok(json!({ "queryDefinitions": defs }))
@@ -445,9 +452,9 @@ pub fn delete_query_definition(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let query_definition_id = input["queryDefinitionId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "queryDefinitionId is required"))?;
+    let query_definition_id = input["queryDefinitionId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "queryDefinitionId is required")
+    })?;
 
     let existed = state
         .query_definitions

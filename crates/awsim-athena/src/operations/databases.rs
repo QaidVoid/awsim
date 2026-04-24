@@ -7,9 +7,9 @@ pub fn list_databases(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let _catalog = input["CatalogName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "CatalogName is required"))?;
+    let _catalog = input["CatalogName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "CatalogName is required")
+    })?;
 
     Ok(json!({
         "DatabaseList": [
@@ -27,12 +27,12 @@ pub fn get_database(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let _catalog = input["CatalogName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "CatalogName is required"))?;
-    let db_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "DatabaseName is required"))?;
+    let _catalog = input["CatalogName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "CatalogName is required")
+    })?;
+    let db_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "DatabaseName is required")
+    })?;
 
     Ok(json!({
         "Database": {

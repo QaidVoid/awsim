@@ -61,15 +61,10 @@ pub fn create_function_url_config(
         ));
     }
 
-    let auth_type = opt_str(input, "AuthType")
-        .unwrap_or("NONE")
-        .to_string();
+    let auth_type = opt_str(input, "AuthType").unwrap_or("NONE").to_string();
     let cors = input.get("Cors").cloned();
     let now = now_iso8601();
-    let function_url = format!(
-        "http://localhost:4566/lambda/{}",
-        name
-    );
+    let function_url = format!("http://localhost:4566/lambda/{}", name);
 
     let creation_time = now.clone();
     let last_modified_time = now.clone();

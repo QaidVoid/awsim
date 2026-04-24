@@ -16,7 +16,11 @@ impl S3ResourcePolicyLookup {
 fn extract_bucket(arn: &str) -> Option<&str> {
     let rest = arn.strip_prefix("arn:aws:s3:::")?;
     let bucket = rest.split('/').next()?;
-    if bucket.is_empty() { None } else { Some(bucket) }
+    if bucket.is_empty() {
+        None
+    } else {
+        Some(bucket)
+    }
 }
 
 impl ResourcePolicyLookup for S3ResourcePolicyLookup {

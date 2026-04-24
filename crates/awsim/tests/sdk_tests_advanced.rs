@@ -6,13 +6,13 @@
 use std::sync::Arc;
 
 use aws_credential_types::Credentials;
-use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_dynamodb::types::{
-    AttributeDefinition, AttributeValue, BillingMode, KeySchemaElement, KeyType,
-    ScalarAttributeType, WriteRequest, PutRequest, KeysAndAttributes,
+    AttributeDefinition, AttributeValue, BillingMode, KeySchemaElement, KeyType, KeysAndAttributes,
+    PutRequest, ScalarAttributeType, WriteRequest,
 };
-use aws_sdk_kms::types::DataKeySpec;
 use aws_sdk_kms::primitives::Blob;
+use aws_sdk_kms::types::DataKeySpec;
+use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_sqs::types::MessageAttributeValue;
 use awsim_core::{AppState, ServiceHandler};
 
@@ -80,10 +80,7 @@ async fn start_server() -> String {
     state.register(Arc::new(lambda), lambda_routes);
 
     let app = axum::Router::new()
-        .route(
-            "/_awsim/health",
-            axum::routing::get(|| async { "ok" }),
-        )
+        .route("/_awsim/health", axum::routing::get(|| async { "ok" }))
         .fallback(awsim_core::gateway::handle_request)
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
@@ -131,7 +128,9 @@ async fn test_sts_assume_role() {
         "session token should not be empty"
     );
 
-    let assumed_user = result.assumed_role_user().expect("missing assumed role user");
+    let assumed_user = result
+        .assumed_role_user()
+        .expect("missing assumed role user");
     assert!(
         assumed_user.arn().contains("TestRole"),
         "ARN should contain role name"
@@ -294,12 +293,16 @@ async fn test_dynamodb_update_item_expression() {
 
     let item = result.item().expect("item should exist after update");
     assert_eq!(
-        item.get("name").and_then(|v| v.as_s().ok()).map(|s| s.as_str()),
+        item.get("name")
+            .and_then(|v| v.as_s().ok())
+            .map(|s| s.as_str()),
         Some("Bob"),
         "name should be updated to Bob"
     );
     assert_eq!(
-        item.get("score").and_then(|v| v.as_n().ok()).map(|s| s.as_str()),
+        item.get("score")
+            .and_then(|v| v.as_n().ok())
+            .map(|s| s.as_str()),
         Some("99"),
         "score should be updated to 99"
     );
@@ -322,7 +325,13 @@ async fn test_s3_list_objects_with_prefix() {
         .expect("CreateBucket failed");
 
     // Put objects in different "folders"
-    for key in ["images/cat.jpg", "images/dog.jpg", "docs/readme.txt", "docs/notes.txt", "root.txt"] {
+    for key in [
+        "images/cat.jpg",
+        "images/dog.jpg",
+        "docs/readme.txt",
+        "docs/notes.txt",
+        "root.txt",
+    ] {
         client
             .put_object()
             .bucket("prefix-bucket")
@@ -348,13 +357,15 @@ async fn test_s3_list_objects_with_prefix() {
         "should find exactly 2 images"
     );
 
-    let keys: Vec<&str> = result
-        .contents()
-        .iter()
-        .filter_map(|o| o.key())
-        .collect();
-    assert!(keys.contains(&"images/cat.jpg"), "cat.jpg should be in results");
-    assert!(keys.contains(&"images/dog.jpg"), "dog.jpg should be in results");
+    let keys: Vec<&str> = result.contents().iter().filter_map(|o| o.key()).collect();
+    assert!(
+        keys.contains(&"images/cat.jpg"),
+        "cat.jpg should be in results"
+    );
+    assert!(
+        keys.contains(&"images/dog.jpg"),
+        "dog.jpg should be in results"
+    );
 
     // List only docs/
     let docs_result = client
@@ -365,7 +376,11 @@ async fn test_s3_list_objects_with_prefix() {
         .await
         .expect("ListObjectsV2 with docs prefix failed");
 
-    assert_eq!(docs_result.key_count().unwrap_or(0), 2, "should find 2 docs");
+    assert_eq!(
+        docs_result.key_count().unwrap_or(0),
+        2,
+        "should find 2 docs"
+    );
 }
 
 #[tokio::test]
@@ -423,7 +438,11 @@ async fn test_s3_copy_object() {
         .await
         .expect("collecting body failed")
         .into_bytes();
-    assert_eq!(body.as_ref(), original_body, "copy should have same content as original");
+    assert_eq!(
+        body.as_ref(),
+        original_body,
+        "copy should have same content as original"
+    );
 
     // Original should still exist
     client
@@ -505,7 +524,10 @@ async fn test_sqs_message_attributes() {
     let attrs = msg
         .message_attributes()
         .expect("message attributes should be present");
-    assert!(attrs.contains_key("event-type"), "event-type attribute missing");
+    assert!(
+        attrs.contains_key("event-type"),
+        "event-type attribute missing"
+    );
     assert!(attrs.contains_key("order-id"), "order-id attribute missing");
     assert!(attrs.contains_key("amount"), "amount attribute missing");
 
@@ -548,7 +570,10 @@ async fn test_sns_subscribe_and_list() {
         .await
         .expect("CreateQueue failed");
     let queue_url = queue.queue_url().expect("missing queue URL");
-    let queue_arn = format!("arn:aws:sqs:us-east-1:000000000000:{}", "sns-delivery-queue");
+    let queue_arn = format!(
+        "arn:aws:sqs:us-east-1:000000000000:{}",
+        "sns-delivery-queue"
+    );
 
     // Create SNS topic
     let topic = sns_client
@@ -569,8 +594,13 @@ async fn test_sns_subscribe_and_list() {
         .await
         .expect("Subscribe failed");
 
-    let sub_arn = sub_result.subscription_arn().expect("missing subscription ARN");
-    assert!(sub_arn.contains("list-sub-topic"), "subscription ARN should contain topic name");
+    let sub_arn = sub_result
+        .subscription_arn()
+        .expect("missing subscription ARN");
+    assert!(
+        sub_arn.contains("list-sub-topic"),
+        "subscription ARN should contain topic name"
+    );
 
     // ListSubscriptions
     let list_result = sns_client
@@ -660,11 +690,7 @@ async fn test_kms_generate_data_key() {
     let client = aws_sdk_kms::Client::new(&config);
 
     // Create a KMS key
-    let key = client
-        .create_key()
-        .send()
-        .await
-        .expect("CreateKey failed");
+    let key = client.create_key().send().await.expect("CreateKey failed");
     let key_id = key
         .key_metadata()
         .expect("missing key metadata")
@@ -680,8 +706,12 @@ async fn test_kms_generate_data_key() {
         .await
         .expect("GenerateDataKey failed");
 
-    let plaintext_dek = result.plaintext().expect("plaintext DEK should be returned");
-    let encrypted_dek = result.ciphertext_blob().expect("encrypted DEK should be returned");
+    let plaintext_dek = result
+        .plaintext()
+        .expect("plaintext DEK should be returned");
+    let encrypted_dek = result
+        .ciphertext_blob()
+        .expect("encrypted DEK should be returned");
 
     // AES-256 key should be 32 bytes
     assert_eq!(

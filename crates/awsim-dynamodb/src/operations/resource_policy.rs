@@ -49,12 +49,11 @@ pub fn delete_resource_policy(
 ) -> Result<Value, AwsError> {
     let resource_arn = require_str(input, "ResourceArn")?;
 
-    let removed = state
-        .resource_policies
-        .remove(resource_arn)
-        .map(|(_, p)| p);
+    let removed = state.resource_policies.remove(resource_arn).map(|(_, p)| p);
 
-    let revision = removed.map(|p| format!("{:x}", p.len() as u64)).unwrap_or_default();
+    let revision = removed
+        .map(|p| format!("{:x}", p.len() as u64))
+        .unwrap_or_default();
 
     Ok(json!({
         "RevisionId": revision

@@ -279,11 +279,7 @@ pub async fn test_ssm(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     if let Some(ref aid) = association_id {
         results.push(chk!(
             "DeleteAssociation",
-            client
-                .delete_association()
-                .association_id(aid)
-                .send()
-                .await,
+            client.delete_association().association_id(aid).send().await,
             verbose
         ));
     } else {
@@ -300,10 +296,7 @@ pub async fn test_ssm(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         .allow_unassociated_targets(false)
         .send()
         .await;
-    let window_id = create_mw_r
-        .as_ref()
-        .ok()
-        .and_then(|r| r.window_id.clone());
+    let window_id = create_mw_r.as_ref().ok().and_then(|r| r.window_id.clone());
     results.push(chk!("CreateMaintenanceWindow", create_mw_r, verbose));
 
     // DescribeMaintenanceWindows
@@ -381,7 +374,10 @@ pub async fn test_ssm(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         .description("Conformance test patch baseline")
         .send()
         .await;
-    let baseline_id = create_pb_r.as_ref().ok().and_then(|r| r.baseline_id.clone());
+    let baseline_id = create_pb_r
+        .as_ref()
+        .ok()
+        .and_then(|r| r.baseline_id.clone());
     results.push(chk!("CreatePatchBaseline", create_pb_r, verbose));
 
     // DescribePatchBaselines
@@ -450,7 +446,10 @@ pub async fn test_ssm(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         .target("i-0000000000000000")
         .send()
         .await;
-    let session_id = start_sess_r.as_ref().ok().and_then(|r| r.session_id.clone());
+    let session_id = start_sess_r
+        .as_ref()
+        .ok()
+        .and_then(|r| r.session_id.clone());
     results.push(chk!("StartSession", start_sess_r, verbose));
 
     // DescribeSessions
@@ -576,7 +575,10 @@ pub async fn test_ssm(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         .resource_id("/conformance/ops-meta")
         .send()
         .await;
-    let opsm_arn = opsm_r.as_ref().ok().and_then(|r| r.ops_metadata_arn.clone());
+    let opsm_arn = opsm_r
+        .as_ref()
+        .ok()
+        .and_then(|r| r.ops_metadata_arn.clone());
     results.push(chk!("CreateOpsMetadata", opsm_r, verbose));
 
     if let Some(ref arn) = opsm_arn {

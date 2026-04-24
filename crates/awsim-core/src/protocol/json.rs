@@ -39,10 +39,7 @@ pub fn parse_request(headers: &HeaderMap, body: &Bytes) -> Result<ParsedRequest,
 }
 
 /// Serialize a successful JSON response.
-pub fn serialize_response(
-    output: &Value,
-    request_id: &str,
-) -> (StatusCode, HeaderMap, Bytes) {
+pub fn serialize_response(output: &Value, request_id: &str) -> (StatusCode, HeaderMap, Bytes) {
     if let Some(raw_b64) = output.get("__raw_body").and_then(Value::as_str) {
         use base64::Engine;
         let data = base64::engine::general_purpose::STANDARD
@@ -60,27 +57,27 @@ pub fn serialize_response(
 
     let body = serde_json::to_vec(output).unwrap_or_default();
     let mut headers = HeaderMap::new();
-    headers.insert("content-type", "application/x-amz-json-1.0".parse().unwrap());
+    headers.insert(
+        "content-type",
+        "application/x-amz-json-1.0".parse().unwrap(),
+    );
     headers.insert("x-amzn-requestid", request_id.parse().unwrap());
     (StatusCode::OK, headers, Bytes::from(body))
 }
 
 /// Serialize a JSON error response.
-pub fn serialize_error(
-    error: &AwsError,
-    request_id: &str,
-) -> (StatusCode, HeaderMap, Bytes) {
+pub fn serialize_error(error: &AwsError, request_id: &str) -> (StatusCode, HeaderMap, Bytes) {
     let body = serde_json::json!({
         "__type": error.code,
         "message": error.message,
     });
     let body = serde_json::to_vec(&body).unwrap_or_default();
     let mut headers = HeaderMap::new();
-    headers.insert("content-type", "application/x-amz-json-1.0".parse().unwrap());
-    headers.insert("x-amzn-requestid", request_id.parse().unwrap());
     headers.insert(
-        "x-amzn-errortype",
-        error.code.parse().unwrap(),
+        "content-type",
+        "application/x-amz-json-1.0".parse().unwrap(),
     );
+    headers.insert("x-amzn-requestid", request_id.parse().unwrap());
+    headers.insert("x-amzn-errortype", error.code.parse().unwrap());
     (error.status, headers, Bytes::from(body))
 }

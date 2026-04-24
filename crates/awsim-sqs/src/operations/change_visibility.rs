@@ -19,11 +19,9 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "ReceiptHandle is required"))?;
 
-    let visibility_timeout = input["VisibilityTimeout"]
-        .as_u64()
-        .ok_or_else(|| {
-            AwsError::bad_request("MissingParameter", "VisibilityTimeout is required")
-        })?;
+    let visibility_timeout = input["VisibilityTimeout"].as_u64().ok_or_else(|| {
+        AwsError::bad_request("MissingParameter", "VisibilityTimeout is required")
+    })?;
 
     let queue_name = queue_name_from_url(queue_url)?;
 

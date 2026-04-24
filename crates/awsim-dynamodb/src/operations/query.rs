@@ -27,11 +27,7 @@ fn apply_projection_to_item(
     result
 }
 
-pub fn query(
-    state: &DynamoState,
-    input: &Value,
-    _ctx: &RequestContext,
-) -> Result<Value, AwsError> {
+pub fn query(state: &DynamoState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?;
 
     let table = state.tables.get(table_name).ok_or_else(|| {
@@ -47,13 +43,19 @@ pub fn query(
     let filter_expr = opt_str(input, "FilterExpression");
     let key_condition_expr = opt_str(input, "KeyConditionExpression")
         .ok_or_else(|| AwsError::validation("KeyConditionExpression is required for Query"))?;
-    let limit = input.get("Limit").and_then(|v| v.as_u64()).map(|v| v as usize);
+    let limit = input
+        .get("Limit")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
     let scan_index_forward = input
         .get("ScanIndexForward")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
     let select = opt_str(input, "Select").unwrap_or("ALL_ATTRIBUTES");
-    let exclusive_start_key = input.get("ExclusiveStartKey").and_then(|v| v.as_object()).cloned();
+    let exclusive_start_key = input
+        .get("ExclusiveStartKey")
+        .and_then(|v| v.as_object())
+        .cloned();
 
     let key_condition = parse_condition(key_condition_expr)?;
     let filter_condition = filter_expr.map(parse_condition).transpose()?;
@@ -105,10 +107,12 @@ pub fn query(
 
     // Apply pagination (ExclusiveStartKey)
     let start_after = exclusive_start_key.as_ref().and_then(|esk| {
-        let hk_val = esk.get(&hash_key_name)
+        let hk_val = esk
+            .get(&hash_key_name)
             .and_then(|v| extract_scalar_str(v))
             .map(|s| s.to_string())?;
-        let sk_val = range_key_name.as_deref()
+        let sk_val = range_key_name
+            .as_deref()
             .and_then(|rk| esk.get(rk))
             .and_then(|v| extract_scalar_str(v))
             .map(|s| s.to_string());
@@ -187,7 +191,11 @@ pub fn query(
         }
     }
 
-    let count = if select == "COUNT" { items.len() } else { items.len() };
+    let count = if select == "COUNT" {
+        items.len()
+    } else {
+        items.len()
+    };
 
     let result_items: Vec<Value> = items.into_iter().map(|i| item_to_json(&i)).collect();
 
@@ -204,11 +212,7 @@ pub fn query(
     Ok(result)
 }
 
-pub fn scan(
-    state: &DynamoState,
-    input: &Value,
-    _ctx: &RequestContext,
-) -> Result<Value, AwsError> {
+pub fn scan(state: &DynamoState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?;
 
     let table = state.tables.get(table_name).ok_or_else(|| {
@@ -222,9 +226,15 @@ pub fn scan(
     let expr_attr_values = get_expr_attr_values(input);
     let projection_expr = opt_str(input, "ProjectionExpression");
     let filter_expr = opt_str(input, "FilterExpression");
-    let limit = input.get("Limit").and_then(|v| v.as_u64()).map(|v| v as usize);
+    let limit = input
+        .get("Limit")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
     let select = opt_str(input, "Select").unwrap_or("ALL_ATTRIBUTES");
-    let exclusive_start_key = input.get("ExclusiveStartKey").and_then(|v| v.as_object()).cloned();
+    let exclusive_start_key = input
+        .get("ExclusiveStartKey")
+        .and_then(|v| v.as_object())
+        .cloned();
 
     let filter_condition = filter_expr.map(parse_condition).transpose()?;
 
@@ -237,10 +247,12 @@ pub fn scan(
 
     // Pagination start
     let start_after = exclusive_start_key.as_ref().and_then(|esk| {
-        let hk_val = esk.get(&hash_key_name)
+        let hk_val = esk
+            .get(&hash_key_name)
             .and_then(|v| extract_scalar_str(v))
             .map(|s| s.to_string())?;
-        let sk_val = range_key_name.as_deref()
+        let sk_val = range_key_name
+            .as_deref()
             .and_then(|rk| esk.get(rk))
             .and_then(|v| extract_scalar_str(v))
             .map(|s| s.to_string());
@@ -358,13 +370,12 @@ fn extract_pk_from_condition(
                 if let Some(placeholder) = right.strip_prefix(':') {
                     let key = format!(":{placeholder}");
                     if let Some(val) = expr_attr_values.get(&key) {
-                        return val.get("S")
+                        return val
+                            .get("S")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string())
                             .or_else(|| {
-                                val.get("N")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string())
+                                val.get("N").and_then(|v| v.as_str()).map(|s| s.to_string())
                             });
                     }
                 }

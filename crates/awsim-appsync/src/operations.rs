@@ -5,7 +5,10 @@ use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::state::{ApiKey, AppSyncFunction, AppSyncState, DataSource, GraphqlApi, GraphqlType, Resolver, SourceApiAssociation, now_iso};
+use crate::state::{
+    ApiKey, AppSyncFunction, AppSyncState, DataSource, GraphqlApi, GraphqlType, Resolver,
+    SourceApiAssociation, now_iso,
+};
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -126,7 +129,10 @@ pub fn get_graphql_api(state: &AppSyncState, input: &Value) -> Result<Value, Aws
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "apiId is required"))?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     Ok(json!({ "graphqlApi": api_to_json(&*api) }))
@@ -159,7 +165,10 @@ pub fn update_graphql_api(state: &AppSyncState, input: &Value) -> Result<Value, 
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "apiId is required"))?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     if let Some(name) = input["name"].as_str() {
@@ -184,7 +193,10 @@ pub fn start_schema_creation(state: &AppSyncState, input: &Value) -> Result<Valu
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "definition is required"))?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     api.schema = Some(definition.to_string());
@@ -199,7 +211,10 @@ pub fn get_schema_creation_status(state: &AppSyncState, input: &Value) -> Result
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "apiId is required"))?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     Ok(json!({ "status": api.schema_status }))
@@ -233,7 +248,10 @@ pub fn create_api_key(state: &AppSyncState, input: &Value) -> Result<Value, AwsE
     };
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let result = key_to_json(&key);
@@ -249,7 +267,10 @@ pub fn list_api_keys(state: &AppSyncState, input: &Value) -> Result<Value, AwsEr
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "apiId is required"))?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let keys: Vec<Value> = api.api_keys.iter().map(key_to_json).collect();
@@ -265,7 +286,10 @@ pub fn delete_api_key(state: &AppSyncState, input: &Value) -> Result<Value, AwsE
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "id is required"))?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let before = api.api_keys.len();
@@ -289,7 +313,10 @@ pub fn update_api_key(state: &AppSyncState, input: &Value) -> Result<Value, AwsE
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "id is required"))?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let key = api
@@ -330,7 +357,10 @@ pub fn create_data_source(state: &AppSyncState, input: &Value) -> Result<Value, 
     };
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let result = ds_to_json(&ds);
@@ -346,7 +376,10 @@ pub fn list_data_sources(state: &AppSyncState, input: &Value) -> Result<Value, A
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "apiId is required"))?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let sources: Vec<Value> = api.data_sources.iter().map(ds_to_json).collect();
@@ -362,7 +395,10 @@ pub fn delete_data_source(state: &AppSyncState, input: &Value) -> Result<Value, 
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "name is required"))?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let before = api.data_sources.len();
@@ -389,21 +425,25 @@ pub fn create_resolver(state: &AppSyncState, input: &Value) -> Result<Value, Aws
     let field_name = input["fieldName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "fieldName is required"))?;
-    let data_source_name = input["dataSourceName"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let data_source_name = input["dataSourceName"].as_str().unwrap_or("").to_string();
 
     let resolver = Resolver {
         type_name: type_name.to_string(),
         field_name: field_name.to_string(),
         data_source_name,
-        request_mapping_template: input["requestMappingTemplate"].as_str().map(|s| s.to_string()),
-        response_mapping_template: input["responseMappingTemplate"].as_str().map(|s| s.to_string()),
+        request_mapping_template: input["requestMappingTemplate"]
+            .as_str()
+            .map(|s| s.to_string()),
+        response_mapping_template: input["responseMappingTemplate"]
+            .as_str()
+            .map(|s| s.to_string()),
     };
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let result = resolver_to_json(&resolver);
@@ -422,7 +462,10 @@ pub fn list_resolvers(state: &AppSyncState, input: &Value) -> Result<Value, AwsE
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "typeName is required"))?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let resolvers: Vec<Value> = api
@@ -447,7 +490,10 @@ pub fn update_resolver(state: &AppSyncState, input: &Value) -> Result<Value, Aws
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "fieldName is required"))?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let resolver = api
@@ -487,7 +533,10 @@ pub fn delete_resolver(state: &AppSyncState, input: &Value) -> Result<Value, Aws
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "fieldName is required"))?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let before = api.resolvers.len();
@@ -534,7 +583,10 @@ pub fn create_type(
     };
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let result = type_to_json(&gql_type);
@@ -553,7 +605,10 @@ pub fn get_type(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> 
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "typeName is required"))?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let gql_type = api
@@ -573,7 +628,10 @@ pub fn list_types(state: &AppSyncState, input: &Value) -> Result<Value, AwsError
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "apiId is required"))?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let types: Vec<Value> = api.types.iter().map(type_to_json).collect();
@@ -589,7 +647,10 @@ pub fn delete_type(state: &AppSyncState, input: &Value) -> Result<Value, AwsErro
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "typeName is required"))?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let before = api.types.len();
@@ -633,8 +694,12 @@ pub fn create_function(
         name: name.to_string(),
         description: input["description"].as_str().map(|s| s.to_string()),
         data_source_name: data_source_name.to_string(),
-        request_mapping_template: input["requestMappingTemplate"].as_str().map(|s| s.to_string()),
-        response_mapping_template: input["responseMappingTemplate"].as_str().map(|s| s.to_string()),
+        request_mapping_template: input["requestMappingTemplate"]
+            .as_str()
+            .map(|s| s.to_string()),
+        response_mapping_template: input["responseMappingTemplate"]
+            .as_str()
+            .map(|s| s.to_string()),
         function_version: input["functionVersion"]
             .as_str()
             .unwrap_or("2018-05-29")
@@ -643,7 +708,10 @@ pub fn create_function(
     };
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let result = function_to_json(&function);
@@ -662,7 +730,10 @@ pub fn get_function(state: &AppSyncState, input: &Value) -> Result<Value, AwsErr
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "functionId is required"))?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let func = api
@@ -685,7 +756,10 @@ pub fn list_functions(state: &AppSyncState, input: &Value) -> Result<Value, AwsE
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "apiId is required"))?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let functions: Vec<Value> = api.functions.iter().map(function_to_json).collect();
@@ -701,7 +775,10 @@ pub fn delete_function(state: &AppSyncState, input: &Value) -> Result<Value, Aws
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "functionId is required"))?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let before = api.functions.len();
@@ -725,7 +802,10 @@ pub fn update_function(state: &AppSyncState, input: &Value) -> Result<Value, Aws
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "functionId is required"))?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let func = api
@@ -788,12 +868,22 @@ pub fn get_data_source(state: &AppSyncState, input: &Value) -> Result<Value, Aws
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "name is required"))?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
-    let ds = api.data_sources.iter().find(|d| d.name == name).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("Data source {} not found", name))
-    })?;
+    let ds = api
+        .data_sources
+        .iter()
+        .find(|d| d.name == name)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Data source {} not found", name),
+            )
+        })?;
 
     Ok(json!({ "dataSource": ds_to_json(ds) }))
 }
@@ -807,12 +897,22 @@ pub fn update_data_source(state: &AppSyncState, input: &Value) -> Result<Value, 
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "name is required"))?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
-    let ds = api.data_sources.iter_mut().find(|d| d.name == name).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("Data source {} not found", name))
-    })?;
+    let ds = api
+        .data_sources
+        .iter_mut()
+        .find(|d| d.name == name)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Data source {} not found", name),
+            )
+        })?;
 
     if let Some(t) = input["type"].as_str() {
         ds.data_source_type = t.to_string();
@@ -839,7 +939,10 @@ pub fn get_resolver(state: &AppSyncState, input: &Value) -> Result<Value, AwsErr
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "fieldName is required"))?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let r = api
@@ -867,12 +970,19 @@ pub fn update_type(state: &AppSyncState, input: &Value) -> Result<Value, AwsErro
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "typeName is required"))?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
-    let t = api.types.iter_mut().find(|t| t.name == type_name).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("Type {} not found", type_name))
-    })?;
+    let t = api
+        .types
+        .iter_mut()
+        .find(|t| t.name == type_name)
+        .ok_or_else(|| {
+            AwsError::not_found("NotFoundException", format!("Type {} not found", type_name))
+        })?;
 
     if let Some(def) = input["definition"].as_str() {
         t.definition = Some(def.to_string());
@@ -894,7 +1004,10 @@ pub fn get_introspection_schema(state: &AppSyncState, input: &Value) -> Result<V
     let format = input["format"].as_str().unwrap_or("SDL").to_string();
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("GraphQL API {} not found", api_id))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("GraphQL API {} not found", api_id),
+        )
     })?;
 
     let schema = api
@@ -903,8 +1016,7 @@ pub fn get_introspection_schema(state: &AppSyncState, input: &Value) -> Result<V
         .unwrap_or_else(|| "type Query { hello: String }".to_string());
 
     let bytes: Vec<u8> = if format == "JSON" {
-        serde_json::to_vec(&json!({ "data": { "__schema": { "types": [] } } }))
-            .unwrap_or_default()
+        serde_json::to_vec(&json!({ "data": { "__schema": { "types": [] } } })).unwrap_or_default()
     } else {
         schema.into_bytes()
     };
@@ -987,14 +1099,12 @@ pub fn associate_merged_graphql_api(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let merged_api_id = input["mergedApiIdentifier"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("MissingParameter", "mergedApiIdentifier is required"))?;
-    let source_api_id = input["sourceApiIdentifier"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("MissingParameter", "sourceApiIdentifier is required")
-        })?;
+    let merged_api_id = input["mergedApiIdentifier"].as_str().ok_or_else(|| {
+        AwsError::bad_request("MissingParameter", "mergedApiIdentifier is required")
+    })?;
+    let source_api_id = input["sourceApiIdentifier"].as_str().ok_or_else(|| {
+        AwsError::bad_request("MissingParameter", "sourceApiIdentifier is required")
+    })?;
 
     let association_id = Uuid::new_v4().to_string().replace('-', "")[..20].to_string();
     let association_arn = format!(
@@ -1023,12 +1133,15 @@ pub fn get_source_api_association(state: &AppSyncState, input: &Value) -> Result
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "associationId is required"))?;
 
-    let assoc = state.source_api_associations.get(association_id).ok_or_else(|| {
-        AwsError::not_found(
-            "NotFoundException",
-            format!("Source API association {} not found", association_id),
-        )
-    })?;
+    let assoc = state
+        .source_api_associations
+        .get(association_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Source API association {} not found", association_id),
+            )
+        })?;
 
     Ok(json!({ "sourceApiAssociation": association_to_json(&*assoc) }))
 }
@@ -1066,7 +1179,11 @@ pub fn disassociate_merged_graphql_api(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "associationId is required"))?;
 
-    if state.source_api_associations.remove(association_id).is_none() {
+    if state
+        .source_api_associations
+        .remove(association_id)
+        .is_none()
+    {
         return Err(AwsError::not_found(
             "NotFoundException",
             format!("Source API association {} not found", association_id),
@@ -1081,7 +1198,14 @@ pub fn disassociate_merged_graphql_api(
 /// Extract the type name from a GraphQL SDL definition like `type Foo { ... }`.
 fn extract_type_name(definition: &str) -> Option<String> {
     let trimmed = definition.trim();
-    for keyword in &["type ", "input ", "interface ", "enum ", "union ", "scalar "] {
+    for keyword in &[
+        "type ",
+        "input ",
+        "interface ",
+        "enum ",
+        "union ",
+        "scalar ",
+    ] {
         if let Some(rest) = trimmed.strip_prefix(keyword) {
             let name: String = rest
                 .chars()

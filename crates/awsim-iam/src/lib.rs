@@ -108,12 +108,8 @@ impl ServiceHandler for IamService {
             "ListPolicies" => operations::policies::list_policies(&state, &input),
 
             // Policy versions
-            "CreatePolicyVersion" => {
-                operations::policies::create_policy_version(&state, &input)
-            }
-            "DeletePolicyVersion" => {
-                operations::policies::delete_policy_version(&state, &input)
-            }
+            "CreatePolicyVersion" => operations::policies::create_policy_version(&state, &input),
+            "DeletePolicyVersion" => operations::policies::delete_policy_version(&state, &input),
             "GetPolicyVersion" => operations::policies::get_policy_version(&state, &input),
             "ListPolicyVersions" => operations::policies::list_policy_versions(&state, &input),
             "SetDefaultPolicyVersion" => {
@@ -256,9 +252,7 @@ impl ServiceHandler for IamService {
             }
 
             // ── SAML Providers ────────────────────────────────────────────────
-            "CreateSAMLProvider" => {
-                operations::saml::create_saml_provider(&state, &input, ctx)
-            }
+            "CreateSAMLProvider" => operations::saml::create_saml_provider(&state, &input, ctx),
             "GetSAMLProvider" => operations::saml::get_saml_provider(&state, &input),
             "ListSAMLProviders" => operations::saml::list_saml_providers(&state, &input),
             "DeleteSAMLProvider" => operations::saml::delete_saml_provider(&state, &input),
@@ -292,9 +286,7 @@ impl ServiceHandler for IamService {
                 operations::mfa::create_virtual_mfa_device(&state, &input, ctx)
             }
             "ListVirtualMFADevices" => operations::mfa::list_virtual_mfa_devices(&state, &input),
-            "DeleteVirtualMFADevice" => {
-                operations::mfa::delete_virtual_mfa_device(&state, &input)
-            }
+            "DeleteVirtualMFADevice" => operations::mfa::delete_virtual_mfa_device(&state, &input),
             "EnableMFADevice" => operations::mfa::enable_mfa_device(&state, &input),
             "DeactivateMFADevice" => operations::mfa::deactivate_mfa_device(&state, &input),
             "ListMFADevices" => operations::mfa::list_mfa_devices(&state, &input),
@@ -319,9 +311,7 @@ impl ServiceHandler for IamService {
             "ListSigningCertificates" => {
                 operations::misc::list_signing_certificates(&state, &input)
             }
-            "SimulateCustomPolicy" => {
-                operations::misc::simulate_custom_policy(&state, &input)
-            }
+            "SimulateCustomPolicy" => operations::misc::simulate_custom_policy(&state, &input),
             "SimulatePrincipalPolicy" => {
                 operations::misc::simulate_principal_policy(&state, &input)
             }
@@ -381,9 +371,7 @@ impl ServiceHandler for IamService {
             }
 
             // ── Access Keys (extended) ────────────────────────────────────────
-            "GetAccessKeyLastUsed" => {
-                operations::users::get_access_key_last_used(&state, &input)
-            }
+            "GetAccessKeyLastUsed" => operations::users::get_access_key_last_used(&state, &input),
             "UpdateAccessKey" => operations::users::update_access_key(&state, &input),
             "ChangePassword" => operations::users::change_password(&state, &input),
 
@@ -461,62 +449,104 @@ impl ServiceHandler for IamService {
         Some(format!("iam:{operation}"))
     }
 
-    fn iam_resource(
-        &self,
-        operation: &str,
-        input: &Value,
-        ctx: &RequestContext,
-    ) -> Option<String> {
+    fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
         let prefix = format!("arn:aws:iam::{}", ctx.account_id);
         match operation {
-            "ListUsers" | "ListGroups" | "ListRoles" | "ListPolicies"
-            | "ListInstanceProfiles" | "ListAccountAliases"
-            | "ListOpenIDConnectProviders" | "ListSAMLProviders" | "ListServerCertificates"
-            | "ListVirtualMFADevices" | "GetAccountSummary" | "GetAccountPasswordPolicy"
-            | "UpdateAccountPasswordPolicy" | "DeleteAccountPasswordPolicy"
-            | "GetAccountAuthorizationDetails" | "GenerateCredentialReport"
-            | "GetCredentialReport" | "GenerateServiceLastAccessedDetails"
-            | "GetServiceLastAccessedDetails" | "GetServiceLastAccessedDetailsWithEntities"
-            | "SimulateCustomPolicy" | "SimulatePrincipalPolicy"
-            | "GetContextKeysForCustomPolicy" | "GetContextKeysForPrincipalPolicy"
-            | "ListServiceSpecificCredentials" | "ListSigningCertificates"
-            | "CreateAccountAlias" | "DeleteAccountAlias" => Some("*".to_string()),
-            op if op.contains("User") && !op.contains("LoginProfile") && !op.contains("AccessKey")
-                && !op.contains("SSHPublicKey") && !op.contains("MFADevice")
-                && !op.contains("ServiceSpecificCredential") => {
-                input.get("UserName").and_then(|v| v.as_str()).map(|n| format!("{prefix}:user/{n}"))
+            "ListUsers"
+            | "ListGroups"
+            | "ListRoles"
+            | "ListPolicies"
+            | "ListInstanceProfiles"
+            | "ListAccountAliases"
+            | "ListOpenIDConnectProviders"
+            | "ListSAMLProviders"
+            | "ListServerCertificates"
+            | "ListVirtualMFADevices"
+            | "GetAccountSummary"
+            | "GetAccountPasswordPolicy"
+            | "UpdateAccountPasswordPolicy"
+            | "DeleteAccountPasswordPolicy"
+            | "GetAccountAuthorizationDetails"
+            | "GenerateCredentialReport"
+            | "GetCredentialReport"
+            | "GenerateServiceLastAccessedDetails"
+            | "GetServiceLastAccessedDetails"
+            | "GetServiceLastAccessedDetailsWithEntities"
+            | "SimulateCustomPolicy"
+            | "SimulatePrincipalPolicy"
+            | "GetContextKeysForCustomPolicy"
+            | "GetContextKeysForPrincipalPolicy"
+            | "ListServiceSpecificCredentials"
+            | "ListSigningCertificates"
+            | "CreateAccountAlias"
+            | "DeleteAccountAlias" => Some("*".to_string()),
+            op if op.contains("User")
+                && !op.contains("LoginProfile")
+                && !op.contains("AccessKey")
+                && !op.contains("SSHPublicKey")
+                && !op.contains("MFADevice")
+                && !op.contains("ServiceSpecificCredential") =>
+            {
+                input
+                    .get("UserName")
+                    .and_then(|v| v.as_str())
+                    .map(|n| format!("{prefix}:user/{n}"))
             }
-            "CreateLoginProfile" | "GetLoginProfile" | "UpdateLoginProfile" | "DeleteLoginProfile"
-            | "CreateAccessKey" | "DeleteAccessKey" | "ListAccessKeys" | "UpdateAccessKey"
-            | "GetAccessKeyLastUsed" | "ChangePassword"
-            | "UploadSSHPublicKey" | "GetSSHPublicKey" | "ListSSHPublicKeys"
-            | "DeleteSSHPublicKey" | "UpdateSSHPublicKey"
-            | "EnableMFADevice" | "DeactivateMFADevice" | "ListMFADevices"
-            | "PutUserPermissionsBoundary" | "DeleteUserPermissionsBoundary"
-            | "ListGroupsForUser" => {
-                input.get("UserName").and_then(|v| v.as_str()).map(|n| format!("{prefix}:user/{n}"))
+            "CreateLoginProfile"
+            | "GetLoginProfile"
+            | "UpdateLoginProfile"
+            | "DeleteLoginProfile"
+            | "CreateAccessKey"
+            | "DeleteAccessKey"
+            | "ListAccessKeys"
+            | "UpdateAccessKey"
+            | "GetAccessKeyLastUsed"
+            | "ChangePassword"
+            | "UploadSSHPublicKey"
+            | "GetSSHPublicKey"
+            | "ListSSHPublicKeys"
+            | "DeleteSSHPublicKey"
+            | "UpdateSSHPublicKey"
+            | "EnableMFADevice"
+            | "DeactivateMFADevice"
+            | "ListMFADevices"
+            | "PutUserPermissionsBoundary"
+            | "DeleteUserPermissionsBoundary"
+            | "ListGroupsForUser" => input
+                .get("UserName")
+                .and_then(|v| v.as_str())
+                .map(|n| format!("{prefix}:user/{n}")),
+            op if op.contains("Role")
+                && !op.contains("InstanceProfile")
+                && !op.contains("ServiceLinkedRole") =>
+            {
+                input
+                    .get("RoleName")
+                    .and_then(|v| v.as_str())
+                    .map(|n| format!("{prefix}:role/{n}"))
             }
-            op if op.contains("Role") && !op.contains("InstanceProfile")
-                && !op.contains("ServiceLinkedRole") => {
-                input.get("RoleName").and_then(|v| v.as_str()).map(|n| format!("{prefix}:role/{n}"))
-            }
-            "PutRolePermissionsBoundary" | "DeleteRolePermissionsBoundary" => {
-                input.get("RoleName").and_then(|v| v.as_str()).map(|n| format!("{prefix}:role/{n}"))
-            }
-            "CreateServiceLinkedRole" | "DeleteServiceLinkedRole"
-            | "GetServiceLinkedRoleDeletionStatus" => {
-                input.get("RoleName").and_then(|v| v.as_str())
-                    .map(|n| format!("{prefix}:role/aws-service-role/{n}"))
-                    .or(Some("*".to_string()))
-            }
-            op if op.contains("Group") && !op.contains("ListGroupsForUser") => {
-                input.get("GroupName").and_then(|v| v.as_str()).map(|n| format!("{prefix}:group/{n}"))
-            }
-            op if op.contains("InstanceProfile") => {
-                input.get("InstanceProfileName").and_then(|v| v.as_str())
-                    .map(|n| format!("{prefix}:instance-profile/{n}"))
-            }
-            "CreatePolicy" => input.get("PolicyName").and_then(|v| v.as_str())
+            "PutRolePermissionsBoundary" | "DeleteRolePermissionsBoundary" => input
+                .get("RoleName")
+                .and_then(|v| v.as_str())
+                .map(|n| format!("{prefix}:role/{n}")),
+            "CreateServiceLinkedRole"
+            | "DeleteServiceLinkedRole"
+            | "GetServiceLinkedRoleDeletionStatus" => input
+                .get("RoleName")
+                .and_then(|v| v.as_str())
+                .map(|n| format!("{prefix}:role/aws-service-role/{n}"))
+                .or(Some("*".to_string())),
+            op if op.contains("Group") && !op.contains("ListGroupsForUser") => input
+                .get("GroupName")
+                .and_then(|v| v.as_str())
+                .map(|n| format!("{prefix}:group/{n}")),
+            op if op.contains("InstanceProfile") => input
+                .get("InstanceProfileName")
+                .and_then(|v| v.as_str())
+                .map(|n| format!("{prefix}:instance-profile/{n}")),
+            "CreatePolicy" => input
+                .get("PolicyName")
+                .and_then(|v| v.as_str())
                 .map(|n| format!("{prefix}:policy/{n}")),
             op if op.contains("Policy") => {
                 if let Some(arn) = input.get("PolicyArn").and_then(|v| v.as_str()) {
@@ -531,12 +561,22 @@ impl ServiceHandler for IamService {
                 .get("OpenIDConnectProviderArn")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .or_else(|| input.get("Url").and_then(|v| v.as_str()).map(|u| format!("{prefix}:oidc-provider/{u}"))),
+                .or_else(|| {
+                    input
+                        .get("Url")
+                        .and_then(|v| v.as_str())
+                        .map(|u| format!("{prefix}:oidc-provider/{u}"))
+                }),
             op if op.contains("SAMLProvider") => input
                 .get("SAMLProviderArn")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .or_else(|| input.get("Name").and_then(|v| v.as_str()).map(|n| format!("{prefix}:saml-provider/{n}"))),
+                .or_else(|| {
+                    input
+                        .get("Name")
+                        .and_then(|v| v.as_str())
+                        .map(|n| format!("{prefix}:saml-provider/{n}"))
+                }),
             op if op.contains("ServerCertificate") => input
                 .get("ServerCertificateName")
                 .and_then(|v| v.as_str())
@@ -545,8 +585,12 @@ impl ServiceHandler for IamService {
                 .get("SerialNumber")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .or_else(|| input.get("VirtualMFADeviceName").and_then(|v| v.as_str())
-                    .map(|n| format!("{prefix}:mfa/{n}"))),
+                .or_else(|| {
+                    input
+                        .get("VirtualMFADeviceName")
+                        .and_then(|v| v.as_str())
+                        .map(|n| format!("{prefix}:mfa/{n}"))
+                }),
             _ => Some("*".to_string()),
         }
     }
@@ -567,11 +611,21 @@ impl ServiceHandler for IamService {
         };
 
         for (_, state) in self.store.iter_all() {
-            snapshot.users.extend(state.users.iter().map(|e| e.value().clone()));
-            snapshot.groups.extend(state.groups.iter().map(|e| e.value().clone()));
-            snapshot.roles.extend(state.roles.iter().map(|e| e.value().clone()));
-            snapshot.policies.extend(state.policies.iter().map(|e| e.value().clone()));
-            snapshot.instance_profiles.extend(state.instance_profiles.iter().map(|e| e.value().clone()));
+            snapshot
+                .users
+                .extend(state.users.iter().map(|e| e.value().clone()));
+            snapshot
+                .groups
+                .extend(state.groups.iter().map(|e| e.value().clone()));
+            snapshot
+                .roles
+                .extend(state.roles.iter().map(|e| e.value().clone()));
+            snapshot
+                .policies
+                .extend(state.policies.iter().map(|e| e.value().clone()));
+            snapshot
+                .instance_profiles
+                .extend(state.instance_profiles.iter().map(|e| e.value().clone()));
             if let Ok(aliases) = state.account_aliases.lock() {
                 snapshot.account_aliases.extend(aliases.clone());
             }
@@ -580,18 +634,25 @@ impl ServiceHandler for IamService {
                     snapshot.account_password_policy = policy.clone();
                 }
             }
-            snapshot.oidc_providers.extend(state.oidc_providers.iter().map(|e| e.value().clone()));
-            snapshot.saml_providers.extend(state.saml_providers.iter().map(|e| e.value().clone()));
-            snapshot.server_certificates.extend(state.server_certificates.iter().map(|e| e.value().clone()));
-            snapshot.virtual_mfa_devices.extend(state.virtual_mfa_devices.iter().map(|e| e.value().clone()));
+            snapshot
+                .oidc_providers
+                .extend(state.oidc_providers.iter().map(|e| e.value().clone()));
+            snapshot
+                .saml_providers
+                .extend(state.saml_providers.iter().map(|e| e.value().clone()));
+            snapshot
+                .server_certificates
+                .extend(state.server_certificates.iter().map(|e| e.value().clone()));
+            snapshot
+                .virtual_mfa_devices
+                .extend(state.virtual_mfa_devices.iter().map(|e| e.value().clone()));
         }
 
         serde_json::to_vec(&snapshot).ok()
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
-        let snapshot: IamStateSnapshot =
-            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        let snapshot: IamStateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
 
         // IAM is global — always use the "global" region key.
         // Derive the account from the ARN of the first entity, or fall back to default.
@@ -601,12 +662,20 @@ impl ServiceHandler for IamService {
             .map(|u| {
                 // ARN: arn:aws:iam::{account}:user/{name}
                 let parts: Vec<&str> = u.arn.splitn(6, ':').collect();
-                if parts.len() >= 5 { parts[4].to_string() } else { "000000000000".to_string() }
+                if parts.len() >= 5 {
+                    parts[4].to_string()
+                } else {
+                    "000000000000".to_string()
+                }
             })
             .or_else(|| {
                 snapshot.roles.first().map(|r| {
                     let parts: Vec<&str> = r.arn.splitn(6, ':').collect();
-                    if parts.len() >= 5 { parts[4].to_string() } else { "000000000000".to_string() }
+                    if parts.len() >= 5 {
+                        parts[4].to_string()
+                    } else {
+                        "000000000000".to_string()
+                    }
                 })
             })
             .unwrap_or_else(|| "000000000000".to_string());
@@ -626,7 +695,9 @@ impl ServiceHandler for IamService {
             state.policies.insert(policy.arn.clone(), policy);
         }
         for ip in snapshot.instance_profiles {
-            state.instance_profiles.insert(ip.instance_profile_name.clone(), ip);
+            state
+                .instance_profiles
+                .insert(ip.instance_profile_name.clone(), ip);
         }
         if !snapshot.account_aliases.is_empty() {
             if let Ok(mut aliases) = state.account_aliases.lock() {
@@ -643,10 +714,14 @@ impl ServiceHandler for IamService {
             state.saml_providers.insert(provider.arn.clone(), provider);
         }
         for cert in snapshot.server_certificates {
-            state.server_certificates.insert(cert.server_certificate_name.clone(), cert);
+            state
+                .server_certificates
+                .insert(cert.server_certificate_name.clone(), cert);
         }
         for device in snapshot.virtual_mfa_devices {
-            state.virtual_mfa_devices.insert(device.serial_number.clone(), device);
+            state
+                .virtual_mfa_devices
+                .insert(device.serial_number.clone(), device);
         }
 
         Ok(())

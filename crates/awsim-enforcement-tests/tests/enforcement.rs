@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use awsim_enforcement_tests::{
-    bootstrap_user, iam_client, make_sdk_config, s3_client, sdk_err_is_access_denied,
-    start_server_enforced, start_server_enforced_with_scp, start_server_unenforced, with_scp,
-    ALLOW_ALL_S3, ALLOW_GETOBJECT, DENY_PUTOBJECT,
+    ALLOW_ALL_S3, ALLOW_GETOBJECT, DENY_PUTOBJECT, bootstrap_user, iam_client, make_sdk_config,
+    s3_client, sdk_err_is_access_denied, start_server_enforced, start_server_enforced_with_scp,
+    start_server_unenforced, with_scp,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -23,9 +23,17 @@ async fn enforced_alice_get_object_allowed_but_put_and_delete_denied() {
     let cfg = make_sdk_config(port, &ak, &sk);
     let s3 = s3_client(&cfg);
 
-    let got = s3.get_object().bucket("test-bucket").key("foo.txt").send().await;
+    let got = s3
+        .get_object()
+        .bucket("test-bucket")
+        .key("foo.txt")
+        .send()
+        .await;
     if let Err(e) = &got {
-        assert!(!sdk_err_is_access_denied(e), "GetObject must not be AccessDenied");
+        assert!(
+            !sdk_err_is_access_denied(e),
+            "GetObject must not be AccessDenied"
+        );
     }
 
     let put = s3
@@ -36,11 +44,17 @@ async fn enforced_alice_get_object_allowed_but_put_and_delete_denied() {
         .send()
         .await;
     let err = put.expect_err("PutObject must fail");
-    assert!(sdk_err_is_access_denied(&err), "PutObject must be AccessDenied");
+    assert!(
+        sdk_err_is_access_denied(&err),
+        "PutObject must be AccessDenied"
+    );
 
     let del = s3.delete_bucket().bucket("test-bucket").send().await;
     let err = del.expect_err("DeleteBucket must fail");
-    assert!(sdk_err_is_access_denied(&err), "DeleteBucket must be AccessDenied");
+    assert!(
+        sdk_err_is_access_denied(&err),
+        "DeleteBucket must be AccessDenied"
+    );
 
     srv.shutdown().await;
 }
@@ -51,7 +65,12 @@ async fn enforced_bob_no_policy_implicit_deny() {
     let (admin, admin_port) = start_server_unenforced(iam.clone()).await;
     let admin_cfg = make_sdk_config(admin_port, "admin", "admin");
     let admin_iam = iam_client(&admin_cfg);
-    admin_iam.create_user().user_name("bob").send().await.unwrap();
+    admin_iam
+        .create_user()
+        .user_name("bob")
+        .send()
+        .await
+        .unwrap();
     let k = admin_iam
         .create_access_key()
         .user_name("bob")
@@ -73,7 +92,10 @@ async fn enforced_bob_no_policy_implicit_deny() {
         .send()
         .await
         .expect_err("GetObject with no policy must fail");
-    assert!(sdk_err_is_access_denied(&err), "implicit deny must yield AccessDenied");
+    assert!(
+        sdk_err_is_access_denied(&err),
+        "implicit deny must yield AccessDenied"
+    );
 
     srv.shutdown().await;
 }
@@ -106,7 +128,10 @@ async fn enforced_explicit_deny_overrides_allow() {
         .send()
         .await
         .expect_err("PutObject must fail due to explicit Deny");
-    assert!(sdk_err_is_access_denied(&err), "explicit Deny must yield AccessDenied");
+    assert!(
+        sdk_err_is_access_denied(&err),
+        "explicit Deny must yield AccessDenied"
+    );
 
     srv.shutdown().await;
 }
@@ -167,11 +192,17 @@ async fn unenforced_permits_everything() {
         .send()
         .await
     {
-        assert!(!sdk_err_is_access_denied(&e), "enforcement off: must not be AccessDenied");
+        assert!(
+            !sdk_err_is_access_denied(&e),
+            "enforcement off: must not be AccessDenied"
+        );
     }
 
     if let Err(e) = s3.delete_bucket().bucket("test-bucket").send().await {
-        assert!(!sdk_err_is_access_denied(&e), "enforcement off: must not be AccessDenied");
+        assert!(
+            !sdk_err_is_access_denied(&e),
+            "enforcement off: must not be AccessDenied"
+        );
     }
 
     admin.shutdown().await;

@@ -10,7 +10,9 @@ pub fn create_compute_environment(
 ) -> Result<Value, AwsError> {
     let name = input["computeEnvironmentName"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "computeEnvironmentName is required"))?
+        .ok_or_else(|| {
+            AwsError::bad_request("ValidationException", "computeEnvironmentName is required")
+        })?
         .to_string();
 
     let env_type = input["type"].as_str().unwrap_or("MANAGED").to_string();
@@ -54,7 +56,11 @@ pub fn describe_compute_environments(
 ) -> Result<Value, AwsError> {
     let names: Vec<String> = input["computeEnvironments"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let list: Vec<Value> = state
@@ -84,12 +90,15 @@ pub fn update_compute_environment(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["computeEnvironment"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "computeEnvironment is required"))?;
+    let name = input["computeEnvironment"].as_str().ok_or_else(|| {
+        AwsError::bad_request("ValidationException", "computeEnvironment is required")
+    })?;
 
     let mut env = state.compute_environments.get_mut(name).ok_or_else(|| {
-        AwsError::not_found("ClientException", format!("Compute environment not found: {name}"))
+        AwsError::not_found(
+            "ClientException",
+            format!("Compute environment not found: {name}"),
+        )
     })?;
 
     if let Some(s) = input["state"].as_str() {
@@ -110,9 +119,9 @@ pub fn delete_compute_environment(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["computeEnvironment"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "computeEnvironment is required"))?;
+    let name = input["computeEnvironment"].as_str().ok_or_else(|| {
+        AwsError::bad_request("ValidationException", "computeEnvironment is required")
+    })?;
     state.compute_environments.remove(name);
     Ok(json!({}))
 }

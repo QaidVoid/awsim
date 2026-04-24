@@ -67,11 +67,7 @@ pub async fn test_ec2(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         // TerminateInstances
         results.push(chk!(
             "TerminateInstances",
-            client
-                .terminate_instances()
-                .instance_ids(iid)
-                .send()
-                .await,
+            client.terminate_instances().instance_ids(iid).send().await,
             verbose
         ));
     } else {

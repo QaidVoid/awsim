@@ -36,15 +36,15 @@ pub fn create_prepared_statement(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["StatementName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "StatementName is required"))?;
+    let name = input["StatementName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "StatementName is required")
+    })?;
     let workgroup = input["WorkGroup"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "WorkGroup is required"))?;
-    let query_statement = input["QueryStatement"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "QueryStatement is required"))?;
+    let query_statement = input["QueryStatement"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "QueryStatement is required")
+    })?;
 
     let key = stmt_key(workgroup, name);
     if state.prepared_statements.contains_key(&key) {
@@ -78,9 +78,9 @@ pub fn get_prepared_statement(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["StatementName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "StatementName is required"))?;
+    let name = input["StatementName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "StatementName is required")
+    })?;
     let workgroup = input["WorkGroup"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "WorkGroup is required"))?;
@@ -113,10 +113,12 @@ pub fn list_prepared_statements(
         .prepared_statements
         .iter()
         .filter(|e| e.value().workgroup == workgroup)
-        .map(|e| json!({
-            "StatementName": e.value().statement_name,
-            "LastModifiedTime": e.value().last_modified_time,
-        }))
+        .map(|e| {
+            json!({
+                "StatementName": e.value().statement_name,
+                "LastModifiedTime": e.value().last_modified_time,
+            })
+        })
         .collect();
 
     Ok(json!({ "PreparedStatements": stmts }))
@@ -131,9 +133,9 @@ pub fn delete_prepared_statement(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["StatementName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "StatementName is required"))?;
+    let name = input["StatementName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "StatementName is required")
+    })?;
     let workgroup = input["WorkGroup"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "WorkGroup is required"))?;

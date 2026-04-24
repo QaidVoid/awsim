@@ -48,12 +48,15 @@ pub fn describe_task_execution(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["TaskExecutionArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "TaskExecutionArn is required"))?;
+    let arn = input["TaskExecutionArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "TaskExecutionArn is required")
+    })?;
 
     let e = state.executions.get(arn).ok_or_else(|| {
-        AwsError::not_found("InvalidRequestException", format!("Execution not found: {arn}"))
+        AwsError::not_found(
+            "InvalidRequestException",
+            format!("Execution not found: {arn}"),
+        )
     })?;
 
     Ok(json!({
@@ -90,9 +93,9 @@ pub fn cancel_task_execution(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["TaskExecutionArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "TaskExecutionArn is required"))?;
+    let arn = input["TaskExecutionArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "TaskExecutionArn is required")
+    })?;
 
     if let Some(mut e) = state.executions.get_mut(arn) {
         e.status = "ERROR".to_string();

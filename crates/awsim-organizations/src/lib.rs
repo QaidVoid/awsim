@@ -57,15 +57,23 @@ impl ServiceHandler for OrganizationsService {
         let state = self.store.get(&ctx.account_id, "global");
 
         match operation {
-            "CreateOrganization" => operations::organization::create_organization(&state, &input, ctx),
-            "DescribeOrganization" => operations::organization::describe_organization(&state, &input, ctx),
+            "CreateOrganization" => {
+                operations::organization::create_organization(&state, &input, ctx)
+            }
+            "DescribeOrganization" => {
+                operations::organization::describe_organization(&state, &input, ctx)
+            }
             "CreateAccount" => operations::accounts::create_account(&state, &input, ctx),
             "DescribeAccount" => operations::accounts::describe_account(&state, &input, ctx),
             "ListAccounts" => operations::accounts::list_accounts(&state, &input, ctx),
-            "ListAccountsForParent" => operations::accounts::list_accounts_for_parent(&state, &input, ctx),
+            "ListAccountsForParent" => {
+                operations::accounts::list_accounts_for_parent(&state, &input, ctx)
+            }
             "CreateOrganizationalUnit" => operations::ous::create_ou(&state, &input, ctx),
             "DescribeOrganizationalUnit" => operations::ous::describe_ou(&state, &input, ctx),
-            "ListOrganizationalUnitsForParent" => operations::ous::list_ous_for_parent(&state, &input, ctx),
+            "ListOrganizationalUnitsForParent" => {
+                operations::ous::list_ous_for_parent(&state, &input, ctx)
+            }
             "CreatePolicy" => operations::policies::create_policy(&state, &input, ctx),
             "DescribePolicy" => operations::policies::describe_policy(&state, &input, ctx),
             "ListPolicies" => operations::policies::list_policies(&state, &input, ctx),

@@ -7,8 +7,9 @@ use crate::{
 };
 
 use super::{
-    get_expr_attr_names, get_expr_attr_values, opt_str,
+    get_expr_attr_names, get_expr_attr_values,
     item::{item_to_json, parse_item},
+    opt_str,
 };
 
 pub fn transact_get_items(

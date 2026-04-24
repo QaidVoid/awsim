@@ -8,7 +8,11 @@ pub async fn test_organizations(endpoint: &str, verbose: bool) -> Vec<OpResult> 
 
     results.push(chk!(
         "CreateOrganization",
-        client.create_organization().feature_set(aws_sdk_organizations::types::OrganizationFeatureSet::All).send().await,
+        client
+            .create_organization()
+            .feature_set(aws_sdk_organizations::types::OrganizationFeatureSet::All)
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(
@@ -18,7 +22,12 @@ pub async fn test_organizations(endpoint: &str, verbose: bool) -> Vec<OpResult> 
     ));
     results.push(chk!(
         "CreateAccount",
-        client.create_account().email("conf@example.com").account_name("conf-acct").send().await,
+        client
+            .create_account()
+            .email("conf@example.com")
+            .account_name("conf-acct")
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(
@@ -26,19 +35,24 @@ pub async fn test_organizations(endpoint: &str, verbose: bool) -> Vec<OpResult> 
         client.list_accounts().send().await,
         verbose
     ));
-    results.push(chk!(
-        "ListRoots",
-        client.list_roots().send().await,
-        verbose
-    ));
+    results.push(chk!("ListRoots", client.list_roots().send().await, verbose));
     results.push(chk!(
         "CreateOrganizationalUnit",
-        client.create_organizational_unit().parent_id("r-0000").name("conf-ou").send().await,
+        client
+            .create_organizational_unit()
+            .parent_id("r-0000")
+            .name("conf-ou")
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(
         "ListOrganizationalUnitsForParent",
-        client.list_organizational_units_for_parent().parent_id("r-0000").send().await,
+        client
+            .list_organizational_units_for_parent()
+            .parent_id("r-0000")
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(
@@ -55,7 +69,11 @@ pub async fn test_organizations(endpoint: &str, verbose: bool) -> Vec<OpResult> 
     ));
     results.push(chk!(
         "ListPolicies",
-        client.list_policies().filter(aws_sdk_organizations::types::PolicyType::ServiceControlPolicy).send().await,
+        client
+            .list_policies()
+            .filter(aws_sdk_organizations::types::PolicyType::ServiceControlPolicy)
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(

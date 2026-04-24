@@ -146,16 +146,10 @@ impl ServiceHandler for SchedulerService {
             "UpdateSchedule" => operations::schedules::update_schedule(&state, &input, ctx),
 
             // Schedule Group operations
-            "CreateScheduleGroup" => {
-                operations::groups::create_schedule_group(&state, &input, ctx)
-            }
+            "CreateScheduleGroup" => operations::groups::create_schedule_group(&state, &input, ctx),
             "GetScheduleGroup" => operations::groups::get_schedule_group(&state, &input, ctx),
-            "ListScheduleGroups" => {
-                operations::groups::list_schedule_groups(&state, &input, ctx)
-            }
-            "DeleteScheduleGroup" => {
-                operations::groups::delete_schedule_group(&state, &input, ctx)
-            }
+            "ListScheduleGroups" => operations::groups::list_schedule_groups(&state, &input, ctx),
+            "DeleteScheduleGroup" => operations::groups::delete_schedule_group(&state, &input, ctx),
 
             // Tagging
             "TagResource" => operations::tags::tag_resource(&state, &input, ctx),

@@ -92,10 +92,7 @@ pub fn get_records(
         .and_then(|v| v.as_str())
         .ok_or_else(|| AwsError::validation("ShardIterator is required"))?;
 
-    let limit = input
-        .get("Limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1000) as usize;
+    let limit = input.get("Limit").and_then(|v| v.as_u64()).unwrap_or(1000) as usize;
 
     // Parse the iterator token produced by get_shard_iterator.
     let parts: Vec<&str> = iterator.splitn(3, '|').collect();
@@ -112,13 +109,7 @@ pub fn get_records(
     let records: Vec<Value> = table
         .stream_records
         .iter()
-        .filter(|r| {
-            r.dynamodb
-                .sequence_number
-                .parse::<u64>()
-                .unwrap_or(0)
-                >= from_seq
-        })
+        .filter(|r| r.dynamodb.sequence_number.parse::<u64>().unwrap_or(0) >= from_seq)
         .take(limit)
         .map(|r| {
             let mut rec = json!({
@@ -167,10 +158,7 @@ pub fn list_streams(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let filter_table = opt_str(input, "TableName");
-    let limit = input
-        .get("Limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(100) as usize;
+    let limit = input.get("Limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
 
     let streams: Vec<Value> = state
         .tables

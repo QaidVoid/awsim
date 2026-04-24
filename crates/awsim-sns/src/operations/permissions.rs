@@ -22,14 +22,12 @@ pub fn add_permission(
         .as_array()
         .cloned()
         .unwrap_or_default();
-    let action_names = input["ActionNames"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let action_names = input["ActionNames"].as_array().cloned().unwrap_or_default();
 
-    let mut topic = state.topics.get_mut(topic_arn).ok_or_else(|| {
-        AwsError::not_found("NotFound", format!("Topic not found: {topic_arn}"))
-    })?;
+    let mut topic = state
+        .topics
+        .get_mut(topic_arn)
+        .ok_or_else(|| AwsError::not_found("NotFound", format!("Topic not found: {topic_arn}")))?;
 
     // Load existing policy or start fresh
     let raw_policy = topic.attributes.get("Policy").cloned().unwrap_or_default();
@@ -39,10 +37,12 @@ pub fn add_permission(
             "Statement": []
         })
     } else {
-        serde_json::from_str(&raw_policy).unwrap_or_else(|_| json!({
-            "Version": "2012-10-17",
-            "Statement": []
-        }))
+        serde_json::from_str(&raw_policy).unwrap_or_else(|_| {
+            json!({
+                "Version": "2012-10-17",
+                "Statement": []
+            })
+        })
     };
 
     let statement = json!({
@@ -57,7 +57,9 @@ pub fn add_permission(
         stmts.push(statement);
     }
 
-    topic.attributes.insert("Policy".to_string(), policy.to_string());
+    topic
+        .attributes
+        .insert("Policy".to_string(), policy.to_string());
     Ok(json!({}))
 }
 
@@ -77,16 +79,19 @@ pub fn remove_permission(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Label is required"))?;
 
-    let mut topic = state.topics.get_mut(topic_arn).ok_or_else(|| {
-        AwsError::not_found("NotFound", format!("Topic not found: {topic_arn}"))
-    })?;
+    let mut topic = state
+        .topics
+        .get_mut(topic_arn)
+        .ok_or_else(|| AwsError::not_found("NotFound", format!("Topic not found: {topic_arn}")))?;
 
     if let Some(raw_policy) = topic.attributes.get("Policy").cloned() {
         if let Ok(mut policy) = serde_json::from_str::<Value>(&raw_policy) {
             if let Some(stmts) = policy["Statement"].as_array_mut() {
                 stmts.retain(|s| s["Sid"].as_str() != Some(label));
             }
-            topic.attributes.insert("Policy".to_string(), policy.to_string());
+            topic
+                .attributes
+                .insert("Policy".to_string(), policy.to_string());
         }
     }
 

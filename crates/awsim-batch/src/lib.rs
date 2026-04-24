@@ -153,17 +153,31 @@ impl ServiceHandler for BatchService {
         let state = self.store.get(&ctx.account_id, &ctx.region);
 
         match operation {
-            "CreateComputeEnvironment" => operations::compute::create_compute_environment(&state, &input, ctx),
-            "DescribeComputeEnvironments" => operations::compute::describe_compute_environments(&state, &input, ctx),
-            "UpdateComputeEnvironment" => operations::compute::update_compute_environment(&state, &input, ctx),
-            "DeleteComputeEnvironment" => operations::compute::delete_compute_environment(&state, &input, ctx),
+            "CreateComputeEnvironment" => {
+                operations::compute::create_compute_environment(&state, &input, ctx)
+            }
+            "DescribeComputeEnvironments" => {
+                operations::compute::describe_compute_environments(&state, &input, ctx)
+            }
+            "UpdateComputeEnvironment" => {
+                operations::compute::update_compute_environment(&state, &input, ctx)
+            }
+            "DeleteComputeEnvironment" => {
+                operations::compute::delete_compute_environment(&state, &input, ctx)
+            }
             "CreateJobQueue" => operations::queues::create_job_queue(&state, &input, ctx),
             "DescribeJobQueues" => operations::queues::describe_job_queues(&state, &input, ctx),
             "UpdateJobQueue" => operations::queues::update_job_queue(&state, &input, ctx),
             "DeleteJobQueue" => operations::queues::delete_job_queue(&state, &input, ctx),
-            "RegisterJobDefinition" => operations::jobs::register_job_definition(&state, &input, ctx),
-            "DescribeJobDefinitions" => operations::jobs::describe_job_definitions(&state, &input, ctx),
-            "DeregisterJobDefinition" => operations::jobs::deregister_job_definition(&state, &input, ctx),
+            "RegisterJobDefinition" => {
+                operations::jobs::register_job_definition(&state, &input, ctx)
+            }
+            "DescribeJobDefinitions" => {
+                operations::jobs::describe_job_definitions(&state, &input, ctx)
+            }
+            "DeregisterJobDefinition" => {
+                operations::jobs::deregister_job_definition(&state, &input, ctx)
+            }
             "SubmitJob" => operations::jobs::submit_job(&state, &input, ctx),
             "DescribeJobs" => operations::jobs::describe_jobs(&state, &input, ctx),
             "ListJobs" => operations::jobs::list_jobs(&state, &input, ctx),

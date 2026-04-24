@@ -121,9 +121,13 @@ impl ServiceHandler for AthenaService {
             "ListTagsForResource" => extras::list_tags_for_resource(&state, &input, ctx),
             "ListEngineVersions" => extras::list_engine_versions(&state, &input, ctx),
             "ListApplicationDPUSizes" => extras::list_application_dpu_sizes(&state, &input, ctx),
-            "GetQueryRuntimeStatistics" => extras::get_query_runtime_statistics(&state, &input, ctx),
+            "GetQueryRuntimeStatistics" => {
+                extras::get_query_runtime_statistics(&state, &input, ctx)
+            }
             "UpdateDataCatalog" => extras::update_data_catalog(&state, &input, ctx),
-            "BatchGetPreparedStatement" => extras::batch_get_prepared_statement(&state, &input, ctx),
+            "BatchGetPreparedStatement" => {
+                extras::batch_get_prepared_statement(&state, &input, ctx)
+            }
 
             _ => Err(AwsError::unknown_operation(operation)),
         }

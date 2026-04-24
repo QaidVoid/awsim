@@ -102,7 +102,10 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
 
     // Populate system attributes
     let mut attributes: HashMap<String, String> = HashMap::new();
-    attributes.insert("SenderId".to_string(), "AIDA000000000000EXAMPLE".to_string());
+    attributes.insert(
+        "SenderId".to_string(),
+        "AIDA000000000000EXAMPLE".to_string(),
+    );
     attributes.insert("SentTimestamp".to_string(), (now_epoch * 1000).to_string());
     attributes.insert("ApproximateReceiveCount".to_string(), "0".to_string());
     attributes.insert(
@@ -224,10 +227,7 @@ fn parse_message_attributes(val: &Value) -> HashMap<String, MessageAttribute> {
     let mut map = HashMap::new();
     if let Some(obj) = val.as_object() {
         for (k, v) in obj {
-            let data_type = v["DataType"]
-                .as_str()
-                .unwrap_or("String")
-                .to_string();
+            let data_type = v["DataType"].as_str().unwrap_or("String").to_string();
             let string_value = v["StringValue"].as_str().map(|s| s.to_string());
             map.insert(
                 k.clone(),

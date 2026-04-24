@@ -27,10 +27,12 @@ pub fn list_data_catalogs(
     let catalogs: Vec<Value> = state
         .data_catalogs
         .iter()
-        .map(|e| json!({
-            "CatalogName": e.value().name,
-            "Type": e.value().catalog_type,
-        }))
+        .map(|e| {
+            json!({
+                "CatalogName": e.value().name,
+                "Type": e.value().catalog_type,
+            })
+        })
         .collect();
 
     Ok(json!({ "DataCatalogsSummary": catalogs }))
@@ -85,10 +87,7 @@ pub fn create_data_catalog(
     }
 
     let description = input["Description"].as_str().map(|s| s.to_string());
-    let parameters = input
-        .get("Parameters")
-        .cloned()
-        .unwrap_or(json!({}));
+    let parameters = input.get("Parameters").cloned().unwrap_or(json!({}));
 
     let catalog = DataCatalog {
         name: name.to_string(),

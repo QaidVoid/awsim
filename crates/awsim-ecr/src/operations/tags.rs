@@ -12,9 +12,9 @@ pub fn list_tags_for_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let resource_arn = input["resourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "resourceArn is required"))?;
+    let resource_arn = input["resourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "resourceArn is required")
+    })?;
 
     // Extract repo name from ARN: arn:aws:ecr:{region}:{account}:repository/{name}
     let repo_name = resource_arn
@@ -47,9 +47,9 @@ pub fn tag_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let resource_arn = input["resourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "resourceArn is required"))?;
+    let resource_arn = input["resourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "resourceArn is required")
+    })?;
 
     let repo_name = resource_arn
         .split("/")
@@ -83,9 +83,9 @@ pub fn untag_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let resource_arn = input["resourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "resourceArn is required"))?;
+    let resource_arn = input["resourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "resourceArn is required")
+    })?;
 
     let repo_name = resource_arn
         .split("/")

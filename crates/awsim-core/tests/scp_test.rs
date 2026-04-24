@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use awsim_core::{
-    AuthzEngine, PrincipalLookup, RequestContext, ResolvedPrincipal, ScpLookup,
-};
+use awsim_core::{AuthzEngine, PrincipalLookup, RequestContext, ResolvedPrincipal, ScpLookup};
 use awsim_iam_policy::PolicyDocument;
 
 struct StubPrincipal {
@@ -109,7 +107,11 @@ fn scp_allows_only_s3_dynamodb_call_denied() {
     let eng = engine(p, Some(scp));
     let ctx = make_ctx();
     let err = eng
-        .check(&ctx, "dynamodb:PutItem", "arn:aws:dynamodb:us-east-1:000000000000:table/T")
+        .check(
+            &ctx,
+            "dynamodb:PutItem",
+            "arn:aws:dynamodb:us-east-1:000000000000:table/T",
+        )
         .unwrap_err();
     assert_eq!(err.code, "AccessDenied");
 }

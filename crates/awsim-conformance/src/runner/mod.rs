@@ -38,8 +38,8 @@ pub mod scheduler;
 pub mod secretsmanager;
 pub mod sns;
 pub mod sqs;
-pub mod sso_admin;
 pub mod ssm;
+pub mod sso_admin;
 pub mod stepfunctions;
 pub mod sts;
 pub mod waf;
@@ -122,7 +122,11 @@ pub async fn test_service(
             println!(
                 "  [{}] untested Smithy operations: {}",
                 service_name,
-                missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                missing
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
         }
     }

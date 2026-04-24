@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use crate::state::{S3Object, S3State};
 use crate::util::{compute_etag, now_iso8601, now_rfc7231};
 
-use super::{opt_str, require_str};
 use super::bucket::no_such_bucket;
+use super::{opt_str, require_str};
 
 /// PUT /{Bucket}/{Key+} — store an object.
 /// If `x-amz-copy-source` header is present, this is a CopyObject.
@@ -88,7 +88,11 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
 }
 
 /// GET /{Bucket}/{Key+} — retrieve object data.
-pub fn get_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn get_object(
+    state: &S3State,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
     let range_header = opt_str(input, "Range");
@@ -98,10 +102,7 @@ pub fn get_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Resu
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    let obj = bucket
-        .objects
-        .get(key)
-        .ok_or_else(|| no_such_key(key))?;
+    let obj = bucket.objects.get(key).ok_or_else(|| no_such_key(key))?;
 
     let (data_slice, content_range) = apply_range(&obj.data, range_header)?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(data_slice);
@@ -139,10 +140,7 @@ pub fn head_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    let obj = bucket
-        .objects
-        .get(key)
-        .ok_or_else(|| no_such_key(key))?;
+    let obj = bucket.objects.get(key).ok_or_else(|| no_such_key(key))?;
 
     Ok(json!({
         "ContentType": obj.content_type,
@@ -195,7 +193,11 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
             .get(src_key)
             .ok_or_else(|| no_such_key(src_key))?;
 
-        (obj.data.clone(), obj.content_type.clone(), obj.metadata.clone())
+        (
+            obj.data.clone(),
+            obj.content_type.clone(),
+            obj.metadata.clone(),
+        )
     };
 
     let etag = compute_etag(&data);
@@ -246,36 +248,42 @@ fn apply_range<'a>(
     let range_str = range_str.trim();
     let bytes_prefix = "bytes=";
     if !range_str.starts_with(bytes_prefix) {
-        return Err(AwsError::bad_request("InvalidRange", "Unsupported range unit"));
+        return Err(AwsError::bad_request(
+            "InvalidRange",
+            "Unsupported range unit",
+        ));
     }
 
     let range_spec = &range_str[bytes_prefix.len()..];
     let parts: Vec<&str> = range_spec.splitn(2, '-').collect();
 
     if parts.len() != 2 {
-        return Err(AwsError::bad_request("InvalidRange", "Invalid range format"));
+        return Err(AwsError::bad_request(
+            "InvalidRange",
+            "Invalid range format",
+        ));
     }
 
     let total = data.len();
 
     let start: usize = if parts[0].is_empty() {
         // Suffix range: bytes=-N
-        let suffix_len: usize = parts[1].parse().map_err(|_| {
-            AwsError::bad_request("InvalidRange", "Invalid range value")
-        })?;
+        let suffix_len: usize = parts[1]
+            .parse()
+            .map_err(|_| AwsError::bad_request("InvalidRange", "Invalid range value"))?;
         total.saturating_sub(suffix_len)
     } else {
-        parts[0].parse().map_err(|_| {
-            AwsError::bad_request("InvalidRange", "Invalid range start")
-        })?
+        parts[0]
+            .parse()
+            .map_err(|_| AwsError::bad_request("InvalidRange", "Invalid range start"))?
     };
 
     let end: usize = if parts[1].is_empty() {
         total.saturating_sub(1)
     } else {
-        let e: usize = parts[1].parse().map_err(|_| {
-            AwsError::bad_request("InvalidRange", "Invalid range end")
-        })?;
+        let e: usize = parts[1]
+            .parse()
+            .map_err(|_| AwsError::bad_request("InvalidRange", "Invalid range end"))?;
         e.min(total.saturating_sub(1))
     };
 

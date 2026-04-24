@@ -4,7 +4,11 @@ use serde_json::{Value, json};
 use crate::state::{KinesisState, ShardIteratorInfo, now_millis};
 use crate::util::{decode_iterator, encode_iterator};
 
-pub fn handle(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn handle(
+    state: &KinesisState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let iterator_token = input["ShardIterator"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "ShardIterator is required"))?;
@@ -59,7 +63,9 @@ pub fn handle(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Res
         position: new_position,
     };
     let next_token = encode_iterator(&next_iterator_info);
-    state.iterators.insert(next_token.clone(), next_iterator_info);
+    state
+        .iterators
+        .insert(next_token.clone(), next_iterator_info);
 
     // MillisBehindLatest: 0 if we've caught up to the latest record, else a positive value
     let millis_behind = if new_position >= total_records {

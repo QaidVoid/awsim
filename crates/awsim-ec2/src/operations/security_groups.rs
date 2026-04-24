@@ -61,9 +61,7 @@ fn parse_ip_permissions(input: &Value) -> Vec<IpPermission> {
     for item in items {
         let from_port = opt_i64(&item, "FromPort");
         let to_port = opt_i64(&item, "ToPort");
-        let ip_protocol = opt_str(&item, "IpProtocol")
-            .unwrap_or("-1")
-            .to_string();
+        let ip_protocol = opt_str(&item, "IpProtocol").unwrap_or("-1").to_string();
 
         let ip_ranges = parse_ip_ranges(&item);
 
@@ -182,10 +180,7 @@ pub fn authorize_security_group_ingress(
     Ok(json!({ "return": true }))
 }
 
-pub fn authorize_security_group_egress(
-    state: &Ec2State,
-    input: &Value,
-) -> Result<Value, AwsError> {
+pub fn authorize_security_group_egress(state: &Ec2State, input: &Value) -> Result<Value, AwsError> {
     let group_id = require_str(input, "GroupId")?;
     let new_perms = parse_ip_permissions(input);
 

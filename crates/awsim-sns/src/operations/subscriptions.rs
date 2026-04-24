@@ -11,11 +11,7 @@ use crate::state::{SnsState, Subscription};
 // Subscribe
 // ---------------------------------------------------------------------------
 
-pub fn subscribe(
-    state: &SnsState,
-    input: &Value,
-    ctx: &RequestContext,
-) -> Result<Value, AwsError> {
+pub fn subscribe(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
     let topic_arn = input["TopicArn"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TopicArn is required"))?;
@@ -46,7 +42,10 @@ pub fn subscribe(
         sub_attributes.insert("TopicArn".to_string(), topic_arn.to_string());
         sub_attributes.insert("Protocol".to_string(), protocol.to_string());
         sub_attributes.insert("Endpoint".to_string(), endpoint.clone());
-        sub_attributes.insert("ConfirmationWasAuthenticated".to_string(), "true".to_string());
+        sub_attributes.insert(
+            "ConfirmationWasAuthenticated".to_string(),
+            "true".to_string(),
+        );
         sub_attributes.insert("PendingConfirmation".to_string(), "false".to_string());
         sub_attributes.insert("RawMessageDelivery".to_string(), "false".to_string());
 
@@ -85,7 +84,10 @@ pub fn subscribe(
         .unwrap_or_else(|| {
             format!(
                 "arn:aws:sns:{}:{}:{}:{}",
-                ctx.region, ctx.account_id, topic_name, Uuid::new_v4()
+                ctx.region,
+                ctx.account_id,
+                topic_name,
+                Uuid::new_v4()
             )
         });
 
@@ -273,7 +275,9 @@ fn validate_protocol(protocol: &str) -> Result<(), AwsError> {
         | "firehose" => Ok(()),
         _ => Err(AwsError::bad_request(
             "InvalidParameter",
-            format!("Invalid protocol: {protocol}. Must be one of: sqs, lambda, http, https, email, email-json, sms, application, firehose"),
+            format!(
+                "Invalid protocol: {protocol}. Must be one of: sqs, lambda, http, https, email, email-json, sms, application, firehose"
+            ),
         )),
     }
 }

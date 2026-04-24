@@ -20,11 +20,7 @@ pub async fn test_kms(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     results.push(chk!("CreateKey", create_r, verbose));
 
     // ListKeys
-    results.push(chk!(
-        "ListKeys",
-        client.list_keys().send().await,
-        verbose
-    ));
+    results.push(chk!("ListKeys", client.list_keys().send().await, verbose));
 
     if let Some(ref kid) = key_id {
         // DescribeKey
@@ -57,7 +53,9 @@ pub async fn test_kms(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         let encrypt_r = client
             .encrypt()
             .key_id(kid)
-            .plaintext(aws_sdk_kms::primitives::Blob::new(b"hello conformance".to_vec()))
+            .plaintext(aws_sdk_kms::primitives::Blob::new(
+                b"hello conformance".to_vec(),
+            ))
             .send()
             .await;
         let ciphertext = encrypt_r
@@ -222,7 +220,11 @@ pub async fn test_kms(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     if let Some(ref cks) = cks_id {
         results.push(chk!(
             "DeleteCustomKeyStore",
-            client.delete_custom_key_store().custom_key_store_id(cks).send().await,
+            client
+                .delete_custom_key_store()
+                .custom_key_store_id(cks)
+                .send()
+                .await,
             verbose
         ));
     } else {
@@ -255,10 +257,7 @@ pub async fn test_kms(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             .signing_algorithm(aws_sdk_kms::types::SigningAlgorithmSpec::EcdsaSha256)
             .send()
             .await;
-        let signature = sign_r
-            .as_ref()
-            .ok()
-            .and_then(|r| r.signature.clone());
+        let signature = sign_r.as_ref().ok().and_then(|r| r.signature.clone());
         results.push(chk!("Sign", sign_r, verbose));
 
         // Verify
@@ -382,7 +381,12 @@ pub async fn test_kms(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             // RevokeGrant
             results.push(chk!(
                 "RevokeGrant",
-                client.revoke_grant().key_id(skid).grant_id(gid).send().await,
+                client
+                    .revoke_grant()
+                    .key_id(skid)
+                    .grant_id(gid)
+                    .send()
+                    .await,
                 verbose
             ));
         } else {
@@ -413,7 +417,12 @@ pub async fn test_kms(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         // GetKeyPolicy
         results.push(chk!(
             "GetKeyPolicy",
-            client.get_key_policy().key_id(skid).policy_name("default").send().await,
+            client
+                .get_key_policy()
+                .key_id(skid)
+                .policy_name("default")
+                .send()
+                .await,
             verbose
         ));
 

@@ -7,8 +7,8 @@ use crate::{
     state::{IamState, ServerCertificate},
 };
 
-use super::{opt_str, require_str};
 use super::super::operations::tags::{parse_tag_keys, parse_tags, tags_to_value};
+use super::{opt_str, require_str};
 
 fn cert_metadata_to_value(c: &ServerCertificate) -> Value {
     let mut v = json!({

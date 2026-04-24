@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use tracing::info;
 
 use crate::state::{
-    AttributeDefinition, DynamoState, GlobalSecondaryIndex, KeySchemaElement,
-    LocalSecondaryIndex, Projection, Table, TtlSpecification,
+    AttributeDefinition, DynamoState, GlobalSecondaryIndex, KeySchemaElement, LocalSecondaryIndex,
+    Projection, Table, TtlSpecification,
 };
 
 use super::{opt_str, require_str};
@@ -18,7 +18,6 @@ fn now_epoch_f64() -> f64 {
         .unwrap_or_default()
         .as_secs_f64()
 }
-
 
 fn parse_key_schema(input: &Value) -> Vec<KeySchemaElement> {
     input
@@ -360,10 +359,7 @@ pub fn list_tables(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let limit = input
-        .get("Limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(100) as usize;
+    let limit = input.get("Limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
     let exclusive_start = opt_str(input, "ExclusiveStartTableName");
 
     // Collect sorted table names
@@ -376,7 +372,11 @@ pub fn list_tables(
 
     // Apply pagination
     let start_idx = if let Some(start) = exclusive_start {
-        names.iter().position(|n| n == start).map(|i| i + 1).unwrap_or(0)
+        names
+            .iter()
+            .position(|n| n == start)
+            .map(|i| i + 1)
+            .unwrap_or(0)
     } else {
         0
     };
@@ -452,7 +452,10 @@ pub fn update_table(
     }
 
     // Update GSI (add new ones from GlobalSecondaryIndexUpdates)
-    if let Some(gsi_updates) = input.get("GlobalSecondaryIndexUpdates").and_then(|v| v.as_array()) {
+    if let Some(gsi_updates) = input
+        .get("GlobalSecondaryIndexUpdates")
+        .and_then(|v| v.as_array())
+    {
         for update in gsi_updates {
             if let Some(create) = update.get("Create") {
                 let index_name = create
@@ -461,8 +464,7 @@ pub fn update_table(
                     .unwrap_or("")
                     .to_string();
                 let key_schema = parse_key_schema(&create["KeySchema"]);
-                let projection =
-                    parse_projection(&create.get("Projection").unwrap_or(&json!({})));
+                let projection = parse_projection(&create.get("Projection").unwrap_or(&json!({})));
                 table.gsi.push(GlobalSecondaryIndex {
                     index_name: index_name.clone(),
                     key_schema,
@@ -806,10 +808,7 @@ pub fn export_table_to_point_in_time(
         .to_string();
 
     let now = now_epoch_f64();
-    let export_arn = format!(
-        "{}/export/{:016.0}",
-        table_arn, now
-    );
+    let export_arn = format!("{}/export/{:016.0}", table_arn, now);
     let _ = ctx;
 
     let record = crate::state::ExportRecord {
@@ -1037,7 +1036,11 @@ pub fn update_contributor_insights(
         .and_then(|v| v.as_str())
         .unwrap_or("DISABLE");
 
-    let new_status = if status == "ENABLE" { "ENABLING" } else { "DISABLING" };
+    let new_status = if status == "ENABLE" {
+        "ENABLING"
+    } else {
+        "DISABLING"
+    };
 
     Ok(json!({
         "TableName": table_name,

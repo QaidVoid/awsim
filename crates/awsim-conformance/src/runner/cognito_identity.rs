@@ -13,10 +13,7 @@ pub async fn test_cognito_identity(endpoint: &str, verbose: bool) -> Vec<OpResul
         .allow_unauthenticated_identities(false)
         .send()
         .await;
-    let pool_id = create_r
-        .as_ref()
-        .ok()
-        .map(|r| r.identity_pool_id.clone());
+    let pool_id = create_r.as_ref().ok().map(|r| r.identity_pool_id.clone());
     results.push(chk!("CreateIdentityPool", create_r, verbose));
 
     // ListIdentityPools
@@ -58,10 +55,7 @@ pub async fn test_cognito_identity(endpoint: &str, verbose: bool) -> Vec<OpResul
             .identity_pool_id(pid)
             .send()
             .await;
-        let identity_id = get_id_r
-            .as_ref()
-            .ok()
-            .and_then(|r| r.identity_id.clone());
+        let identity_id = get_id_r.as_ref().ok().and_then(|r| r.identity_id.clone());
         results.push(chk!("GetId", get_id_r, verbose));
 
         // GetCredentialsForIdentity

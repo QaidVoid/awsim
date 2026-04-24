@@ -1,5 +1,5 @@
 use awsim_core::AwsError;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::state::{IndexedDocument, KendraState};
 
@@ -12,10 +12,12 @@ pub fn batch_put_document(state: &KendraState, input: &Value) -> Result<Value, A
         .as_array()
         .ok_or_else(|| AwsError::validation("Documents is required"))?;
 
-    let mut index = state
-        .indexes
-        .get_mut(index_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Index {index_id} not found")))?;
+    let mut index = state.indexes.get_mut(index_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Index {index_id} not found"),
+        )
+    })?;
 
     let mut failed: Vec<Value> = Vec::new();
 
@@ -39,9 +41,7 @@ pub fn batch_put_document(state: &KendraState, input: &Value) -> Result<Value, A
             .as_str()
             .map(|b| {
                 // Decode base64
-                String::from_utf8(
-                    base64_decode(b).unwrap_or_default()
-                ).unwrap_or_default()
+                String::from_utf8(base64_decode(b).unwrap_or_default()).unwrap_or_default()
             })
             .or_else(|| doc["Content"].as_str().map(String::from))
             .unwrap_or_default();
@@ -78,10 +78,12 @@ pub fn batch_delete_document(state: &KendraState, input: &Value) -> Result<Value
         .as_array()
         .ok_or_else(|| AwsError::validation("DocumentIdList is required"))?;
 
-    let mut index = state
-        .indexes
-        .get_mut(index_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Index {index_id} not found")))?;
+    let mut index = state.indexes.get_mut(index_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Index {index_id} not found"),
+        )
+    })?;
 
     let ids_to_remove: Vec<String> = doc_ids
         .iter()
@@ -152,13 +154,17 @@ mod tests {
         let state = empty_index();
 
         // Put
-        let result = batch_put_document(&state, &json!({
-            "IndexId": "idx-1",
-            "Documents": [
-                {"Id": "d1", "Title": "Doc One", "Content": "Hello world"},
-                {"Id": "d2", "Title": "Doc Two", "Content": "Goodbye world"},
-            ]
-        })).unwrap();
+        let result = batch_put_document(
+            &state,
+            &json!({
+                "IndexId": "idx-1",
+                "Documents": [
+                    {"Id": "d1", "Title": "Doc One", "Content": "Hello world"},
+                    {"Id": "d2", "Title": "Doc Two", "Content": "Goodbye world"},
+                ]
+            }),
+        )
+        .unwrap();
         assert_eq!(result["FailedDocuments"].as_array().unwrap().len(), 0);
 
         // Verify
@@ -167,10 +173,14 @@ mod tests {
         drop(idx);
 
         // Delete
-        let result = batch_delete_document(&state, &json!({
-            "IndexId": "idx-1",
-            "DocumentIdList": ["d1"]
-        })).unwrap();
+        let result = batch_delete_document(
+            &state,
+            &json!({
+                "IndexId": "idx-1",
+                "DocumentIdList": ["d1"]
+            }),
+        )
+        .unwrap();
         assert_eq!(result["FailedDocuments"].as_array().unwrap().len(), 0);
 
         let idx = state.indexes.get("idx-1").unwrap();

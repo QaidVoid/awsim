@@ -22,14 +22,24 @@ pub fn send_bulk_email(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let from = input["FromEmailAddress"].as_str().unwrap_or("noreply@awsim.local").to_string();
-    let entries = input["BulkEmailEntries"].as_array().cloned().unwrap_or_default();
+    let from = input["FromEmailAddress"]
+        .as_str()
+        .unwrap_or("noreply@awsim.local")
+        .to_string();
+    let entries = input["BulkEmailEntries"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
 
     let mut results = Vec::new();
     for entry in entries {
         let to: Vec<String> = entry["Destination"]["ToAddresses"]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let message_id = Uuid::new_v4().to_string();
@@ -169,11 +179,9 @@ pub fn create_configuration_set(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["ConfigurationSetName"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("InvalidParameter", "ConfigurationSetName is required")
-        })?;
+    let name = input["ConfigurationSetName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "ConfigurationSetName is required")
+    })?;
     let mut cs = ConfigurationSet {
         name: name.to_string(),
         sending_enabled: true,
@@ -206,11 +214,9 @@ pub fn get_configuration_set(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["ConfigurationSetName"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("InvalidParameter", "ConfigurationSetName is required")
-        })?;
+    let name = input["ConfigurationSetName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "ConfigurationSetName is required")
+    })?;
     let cs = state
         .configuration_sets
         .get(name)
@@ -251,7 +257,11 @@ pub fn create_configuration_set_event_destination(
     let event_dest = &input["EventDestination"];
     let event_types: Vec<String> = event_dest["MatchingEventTypes"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     if let Some(mut cs) = state.configuration_sets.get_mut(cs_name) {
         cs.event_destinations.push(EventDestination {
@@ -309,7 +319,10 @@ pub fn create_dedicated_ip_pool(
     let name = input["PoolName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PoolName is required"))?;
-    let scaling_mode = input["ScalingMode"].as_str().unwrap_or("STANDARD").to_string();
+    let scaling_mode = input["ScalingMode"]
+        .as_str()
+        .unwrap_or("STANDARD")
+        .to_string();
     let pool = DedicatedIpPool {
         name: name.to_string(),
         scaling_mode,
@@ -552,7 +565,10 @@ pub fn create_contact(
     let email = input["EmailAddress"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EmailAddress is required"))?;
-    let topic_prefs = input["TopicPreferences"].as_array().cloned().unwrap_or_default();
+    let topic_prefs = input["TopicPreferences"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let unsubscribe = input["UnsubscribeAll"].as_bool().unwrap_or(false);
     let attributes = input["AttributesData"].as_str().map(String::from);
     state.contacts.insert(
@@ -656,10 +672,18 @@ pub fn create_custom_verification_email_template(
         from: input["FromEmailAddress"].as_str().unwrap_or("").to_string(),
         subject: input["TemplateSubject"].as_str().unwrap_or("").to_string(),
         content: input["TemplateContent"].as_str().unwrap_or("").to_string(),
-        success_url: input["SuccessRedirectionURL"].as_str().unwrap_or("").to_string(),
-        failure_url: input["FailureRedirectionURL"].as_str().unwrap_or("").to_string(),
+        success_url: input["SuccessRedirectionURL"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        failure_url: input["FailureRedirectionURL"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
     };
-    state.custom_verification_templates.insert(name.to_string(), cv);
+    state
+        .custom_verification_templates
+        .insert(name.to_string(), cv);
     Ok(json!({}))
 }
 

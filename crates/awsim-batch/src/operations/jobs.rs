@@ -19,14 +19,19 @@ pub fn register_job_definition(
 ) -> Result<Value, AwsError> {
     let name = input["jobDefinitionName"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "jobDefinitionName is required"))?
+        .ok_or_else(|| {
+            AwsError::bad_request("ValidationException", "jobDefinitionName is required")
+        })?
         .to_string();
 
     let job_type = input["type"].as_str().unwrap_or("container").to_string();
     let container_props = input["containerProperties"].clone();
 
     let revision = {
-        let mut r = state.job_definition_revisions.entry(name.clone()).or_insert(0);
+        let mut r = state
+            .job_definition_revisions
+            .entry(name.clone())
+            .or_insert(0);
         *r += 1;
         *r
     };
@@ -151,7 +156,11 @@ pub fn describe_jobs(
 ) -> Result<Value, AwsError> {
     let ids: Vec<String> = input["jobs"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let list: Vec<Value> = state
@@ -185,7 +194,9 @@ pub fn list_jobs(
     let list: Vec<Value> = state
         .jobs
         .iter()
-        .filter(|e| queue_filter.is_none_or(|q| e.value().queue == q || e.value().queue.ends_with(q)))
+        .filter(|e| {
+            queue_filter.is_none_or(|q| e.value().queue == q || e.value().queue.ends_with(q))
+        })
         .map(|e| {
             let j = e.value();
             json!({

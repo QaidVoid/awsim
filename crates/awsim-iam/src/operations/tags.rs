@@ -2,10 +2,7 @@ use awsim_core::AwsError;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-use crate::{
-    error::no_such_entity,
-    state::IamState,
-};
+use crate::{error::no_such_entity, state::IamState};
 
 use super::require_str;
 
@@ -33,7 +30,11 @@ pub fn parse_tag_keys(input: &Value) -> Vec<String> {
         .get("TagKeys")
         .and_then(|t| t.get("member"))
         .and_then(|m| m.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default()
 }
 

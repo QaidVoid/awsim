@@ -12,11 +12,7 @@ use crate::state::{MessageAttribute, PublishedMessage, SnsState};
 // Publish
 // ---------------------------------------------------------------------------
 
-pub fn publish(
-    state: &SnsState,
-    input: &Value,
-    ctx: &RequestContext,
-) -> Result<Value, AwsError> {
+pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
     // TopicArn or TargetArn
     let topic_arn = input["TopicArn"]
         .as_str()
@@ -138,10 +134,7 @@ pub fn publish_batch(
     let entries = input["PublishBatchRequestEntries"]
         .as_array()
         .ok_or_else(|| {
-            AwsError::bad_request(
-                "InvalidParameter",
-                "PublishBatchRequestEntries is required",
-            )
+            AwsError::bad_request("InvalidParameter", "PublishBatchRequestEntries is required")
         })?;
 
     if entries.is_empty() {

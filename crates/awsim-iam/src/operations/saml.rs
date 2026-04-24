@@ -7,8 +7,8 @@ use crate::{
     state::{IamState, SamlProvider},
 };
 
-use super::require_str;
 use super::super::operations::tags::parse_tags;
+use super::require_str;
 
 fn provider_to_value(p: &SamlProvider) -> Value {
     let mut v = json!({

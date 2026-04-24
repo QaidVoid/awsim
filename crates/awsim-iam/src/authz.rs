@@ -156,7 +156,10 @@ fn collect_identity_policies(state: &IamState, user: &crate::state::User) -> Vec
     docs
 }
 
-fn collect_role_identity_policies(state: &IamState, role: &crate::state::Role) -> Vec<PolicyDocument> {
+fn collect_role_identity_policies(
+    state: &IamState,
+    role: &crate::state::Role,
+) -> Vec<PolicyDocument> {
     let mut docs = Vec::new();
     for raw in role.inline_policies.values() {
         if let Some(doc) = parse_policy_document(raw) {

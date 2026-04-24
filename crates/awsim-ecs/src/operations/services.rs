@@ -39,12 +39,16 @@ pub fn create_service(
 
     let service_name = input["serviceName"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "serviceName is required"))?
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameterException", "serviceName is required")
+        })?
         .to_string();
 
     let task_definition = input["taskDefinition"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "taskDefinition is required"))?
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameterException", "taskDefinition is required")
+        })?
         .to_string();
 
     let desired_count = input["desiredCount"].as_i64().unwrap_or(1);
@@ -216,7 +220,11 @@ pub fn update_service(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "service is required"))?;
 
     let service_name = if service_id.starts_with("arn:") {
-        service_id.split('/').last().unwrap_or(service_id).to_string()
+        service_id
+            .split('/')
+            .last()
+            .unwrap_or(service_id)
+            .to_string()
     } else {
         service_id.to_string()
     };

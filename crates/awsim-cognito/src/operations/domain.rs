@@ -154,7 +154,9 @@ pub fn update_user_pool_domain(
     pool_mut.domain = Some(domain.to_string());
     drop(pool_mut);
 
-    state.domain_pool_map.insert(domain.to_string(), pool_id.to_string());
+    state
+        .domain_pool_map
+        .insert(domain.to_string(), pool_id.to_string());
 
     info!(domain = %domain, pool_id = %pool_id, "Cognito: updated user pool domain");
     Ok(json!({

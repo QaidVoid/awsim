@@ -10,7 +10,7 @@ use crate::state::HistoryEvent;
 
 /// Result of executing an ASL state machine.
 pub struct ExecResult {
-    pub status: String,     // SUCCEEDED or FAILED
+    pub status: String, // SUCCEEDED or FAILED
     pub output: Option<String>,
     pub error: Option<String>,
     pub cause: Option<String>,
@@ -54,10 +54,7 @@ pub fn execute(definition: &str, input: &str, start_time: &str) -> ExecResult {
         }
     };
 
-    ctx.push_event(
-        "ExecutionStarted",
-        json!({ "input": input }),
-    );
+    ctx.push_event("ExecutionStarted", json!({ "input": input }));
 
     match ctx.run_state(&start_at, input_val) {
         Ok(output) => {
@@ -169,9 +166,7 @@ impl InterpreterContext {
 
                 match next {
                     StateTransition::End => Ok(final_output),
-                    StateTransition::Next(next_state) => {
-                        self.run_state(&next_state, final_output)
-                    }
+                    StateTransition::Next(next_state) => self.run_state(&next_state, final_output),
                 }
             }
             Err(e) => Err(e),
@@ -202,7 +197,10 @@ impl InterpreterContext {
     }
 
     fn exec_fail(&mut self, state: &Value) -> Result<(Value, StateTransition), StateFailed> {
-        let error = state["Error"].as_str().unwrap_or("States.TaskFailed").to_string();
+        let error = state["Error"]
+            .as_str()
+            .unwrap_or("States.TaskFailed")
+            .to_string();
         let cause = state["Cause"].as_str().unwrap_or("").to_string();
         Err(StateFailed { error, cause })
     }
@@ -311,11 +309,8 @@ impl InterpreterContext {
                 let output_str = branch_result.output.unwrap_or_else(|| "null".to_string());
                 let output: Value = serde_json::from_str(&output_str).unwrap_or(Value::Null);
                 let parallel_output = json!([output]);
-                let result_output = apply_result_path(
-                    &input,
-                    &parallel_output,
-                    state["ResultPath"].as_str(),
-                );
+                let result_output =
+                    apply_result_path(&input, &parallel_output, state["ResultPath"].as_str());
                 return Ok((result_output, transition(state)));
             }
         }
@@ -362,8 +357,7 @@ impl InterpreterContext {
         let item_output_str = item_result.output.unwrap_or_else(|| "null".to_string());
         let item_output: Value = serde_json::from_str(&item_output_str).unwrap_or(Value::Null);
         let map_output = json!([item_output]);
-        let result_output =
-            apply_result_path(&input, &map_output, state["ResultPath"].as_str());
+        let result_output = apply_result_path(&input, &map_output, state["ResultPath"].as_str());
         Ok((result_output, transition(state)))
     }
 }
@@ -497,16 +491,28 @@ fn evaluate_condition(choice: &Value, input: &Value) -> bool {
 
     // StringLessThan / GreaterThan
     if let Some(expected) = choice["StringLessThan"].as_str() {
-        return variable_value.as_str().map(|v| v < expected).unwrap_or(false);
+        return variable_value
+            .as_str()
+            .map(|v| v < expected)
+            .unwrap_or(false);
     }
     if let Some(expected) = choice["StringGreaterThan"].as_str() {
-        return variable_value.as_str().map(|v| v > expected).unwrap_or(false);
+        return variable_value
+            .as_str()
+            .map(|v| v > expected)
+            .unwrap_or(false);
     }
     if let Some(expected) = choice["StringLessThanOrEquals"].as_str() {
-        return variable_value.as_str().map(|v| v <= expected).unwrap_or(false);
+        return variable_value
+            .as_str()
+            .map(|v| v <= expected)
+            .unwrap_or(false);
     }
     if let Some(expected) = choice["StringGreaterThanOrEquals"].as_str() {
-        return variable_value.as_str().map(|v| v >= expected).unwrap_or(false);
+        return variable_value
+            .as_str()
+            .map(|v| v >= expected)
+            .unwrap_or(false);
     }
 
     // NumericEquals / LessThan / GreaterThan
@@ -514,16 +520,28 @@ fn evaluate_condition(choice: &Value, input: &Value) -> bool {
         return variable_value.as_f64() == Some(expected);
     }
     if let Some(expected) = choice["NumericLessThan"].as_f64() {
-        return variable_value.as_f64().map(|v| v < expected).unwrap_or(false);
+        return variable_value
+            .as_f64()
+            .map(|v| v < expected)
+            .unwrap_or(false);
     }
     if let Some(expected) = choice["NumericGreaterThan"].as_f64() {
-        return variable_value.as_f64().map(|v| v > expected).unwrap_or(false);
+        return variable_value
+            .as_f64()
+            .map(|v| v > expected)
+            .unwrap_or(false);
     }
     if let Some(expected) = choice["NumericLessThanOrEquals"].as_f64() {
-        return variable_value.as_f64().map(|v| v <= expected).unwrap_or(false);
+        return variable_value
+            .as_f64()
+            .map(|v| v <= expected)
+            .unwrap_or(false);
     }
     if let Some(expected) = choice["NumericGreaterThanOrEquals"].as_f64() {
-        return variable_value.as_f64().map(|v| v >= expected).unwrap_or(false);
+        return variable_value
+            .as_f64()
+            .map(|v| v >= expected)
+            .unwrap_or(false);
     }
 
     // BooleanEquals

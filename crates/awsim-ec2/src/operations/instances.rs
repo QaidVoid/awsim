@@ -4,7 +4,10 @@ use awsim_core::AwsError;
 use serde_json::{Value, json};
 use tracing::info;
 
-use crate::{ids::{new_ec2_id, now_iso8601}, state::{Ec2State, Instance}};
+use crate::{
+    ids::{new_ec2_id, now_iso8601},
+    state::{Ec2State, Instance},
+};
 
 fn instance_to_value(i: &Instance) -> Value {
     let tags: Vec<Value> = i
@@ -34,8 +37,14 @@ fn instance_to_value(i: &Instance) -> Value {
 // ---------------------------------------------------------------------------
 
 pub fn run_instances(state: &Ec2State, input: &Value) -> Result<Value, AwsError> {
-    let image_id = input["ImageId"].as_str().unwrap_or("ami-00000000").to_string();
-    let instance_type = input["InstanceType"].as_str().unwrap_or("t2.micro").to_string();
+    let image_id = input["ImageId"]
+        .as_str()
+        .unwrap_or("ami-00000000")
+        .to_string();
+    let instance_type = input["InstanceType"]
+        .as_str()
+        .unwrap_or("t2.micro")
+        .to_string();
     let min_count = input["MinCount"].as_u64().unwrap_or(1);
     let max_count = input["MaxCount"].as_u64().unwrap_or(1);
     let count = min_count.max(1).min(max_count);
@@ -47,12 +56,9 @@ pub fn run_instances(state: &Ec2State, input: &Value) -> Result<Value, AwsError>
 
     for _ in 0..count {
         let instance_id = new_ec2_id("i");
-        let vpc_id = subnet_id.as_ref().and_then(|sid| {
-            state
-                .subnets
-                .get(sid.as_str())
-                .map(|s| s.vpc_id.clone())
-        });
+        let vpc_id = subnet_id
+            .as_ref()
+            .and_then(|sid| state.subnets.get(sid.as_str()).map(|s| s.vpc_id.clone()));
 
         let instance = Instance {
             instance_id: instance_id.clone(),

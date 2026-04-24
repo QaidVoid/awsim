@@ -11,7 +11,10 @@ pub struct OrganizationsScpLookup {
 }
 
 impl OrganizationsScpLookup {
-    pub fn new(store: AccountRegionStore<OrganizationsState>, default_account: impl Into<String>) -> Self {
+    pub fn new(
+        store: AccountRegionStore<OrganizationsState>,
+        default_account: impl Into<String>,
+    ) -> Self {
         Self {
             store,
             default_account: default_account.into(),
@@ -34,7 +37,8 @@ fn parse_account_from_arn(arn: &str) -> Option<String> {
 
 impl ScpLookup for OrganizationsScpLookup {
     fn lookup(&self, principal_arn: &str) -> Vec<PolicyDocument> {
-        let account_id = parse_account_from_arn(principal_arn).unwrap_or_else(|| self.default_account.clone());
+        let account_id =
+            parse_account_from_arn(principal_arn).unwrap_or_else(|| self.default_account.clone());
         let state: Arc<OrganizationsState> = self.store.get(&account_id, "global");
 
         let mut policy_contents: Vec<String> = Vec::new();

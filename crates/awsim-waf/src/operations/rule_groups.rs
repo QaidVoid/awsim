@@ -85,9 +85,9 @@ pub fn list_rule_groups(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let scope = input["Scope"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Scope is required"))?;
+    let scope = input["Scope"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "Scope is required")
+    })?;
 
     let list: Vec<Value> = state
         .rule_groups
@@ -136,9 +136,8 @@ pub fn get_rule_group(
         ));
     };
 
-    let rg = rg.ok_or_else(|| {
-        AwsError::not_found("WAFNonexistentItemException", "RuleGroup not found")
-    })?;
+    let rg = rg
+        .ok_or_else(|| AwsError::not_found("WAFNonexistentItemException", "RuleGroup not found"))?;
 
     Ok(json!({
         "RuleGroup": {
@@ -170,9 +169,9 @@ pub fn update_rule_group(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Name is required"))?;
 
-    let scope = input["Scope"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Scope is required"))?;
+    let scope = input["Scope"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "Scope is required")
+    })?;
 
     let _lock_token = input["LockToken"].as_str().ok_or_else(|| {
         AwsError::bad_request("WAFInvalidParameterException", "LockToken is required")
@@ -272,13 +271,13 @@ pub fn delete_rule_group(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Name is required"))?;
 
-    let scope = input["Scope"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Scope is required"))?;
+    let scope = input["Scope"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "Scope is required")
+    })?;
 
-    let _lock_token = input["LockToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "LockToken is required"))?;
+    let _lock_token = input["LockToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "LockToken is required")
+    })?;
 
     let key = format!("{scope}:{name}");
     if state.rule_groups.remove(&key).is_none() {

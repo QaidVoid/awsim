@@ -13,7 +13,10 @@ pub enum OpResult {
 impl OpResult {
     pub fn op_name(&self) -> &str {
         match self {
-            OpResult::Pass(n) | OpResult::Fail(n, _) | OpResult::NotImplemented(n) | OpResult::Skipped(n) => n,
+            OpResult::Pass(n)
+            | OpResult::Fail(n, _)
+            | OpResult::NotImplemented(n)
+            | OpResult::Skipped(n) => n,
         }
     }
 
@@ -88,11 +91,7 @@ pub fn is_deserialization_error(err: &str) -> bool {
 }
 
 pub fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        s
-    } else {
-        &s[..max]
-    }
+    if s.len() <= max { s } else { &s[..max] }
 }
 
 pub fn sdk_err_to_string<E: std::fmt::Debug>(e: E) -> String {
@@ -104,7 +103,9 @@ macro_rules! chk {
     ($op:expr, $result:expr, $verbose:expr) => {
         $crate::runner::common::categorise(
             $op,
-            $result.map(|_| ()).map_err(|e| $crate::runner::common::sdk_err_to_string(e)),
+            $result
+                .map(|_| ())
+                .map_err(|e| $crate::runner::common::sdk_err_to_string(e)),
             $verbose,
         )
     };

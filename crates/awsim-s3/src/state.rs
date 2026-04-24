@@ -67,7 +67,11 @@ pub struct Bucket {
 }
 
 impl Bucket {
-    pub fn new(name: impl Into<String>, region: impl Into<String>, created_at: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        region: impl Into<String>,
+        created_at: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             region: region.into(),

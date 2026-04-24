@@ -10,9 +10,9 @@ use crate::{
 use super::{opt_str, require_str};
 
 fn validate_policy_document(doc: &str) -> Result<(), AwsError> {
-    awsim_iam_policy::parse(doc).map(|_| ()).map_err(|e| {
-        malformed_policy_document(format!("Syntax errors in policy. {e}"))
-    })
+    awsim_iam_policy::parse(doc)
+        .map(|_| ())
+        .map_err(|e| malformed_policy_document(format!("Syntax errors in policy. {e}")))
 }
 
 fn policy_to_value(p: &Policy) -> Value {
@@ -324,7 +324,11 @@ pub fn create_policy_version(state: &IamState, input: &Value) -> Result<Value, A
     let next_num = policy
         .versions
         .iter()
-        .filter_map(|v| v.version_id.strip_prefix('v').and_then(|n| n.parse::<u32>().ok()))
+        .filter_map(|v| {
+            v.version_id
+                .strip_prefix('v')
+                .and_then(|n| n.parse::<u32>().ok())
+        })
         .max()
         .unwrap_or(0)
         + 1;
@@ -434,7 +438,12 @@ pub fn set_default_policy_version(state: &IamState, input: &Value) -> Result<Val
     }
 
     // Update the canonical policy_document to the new default
-    if let Some(doc) = policy.versions.iter().find(|v| v.version_id == version_id).map(|v| v.document.clone()) {
+    if let Some(doc) = policy
+        .versions
+        .iter()
+        .find(|v| v.version_id == version_id)
+        .map(|v| v.document.clone())
+    {
         policy.policy_document = doc;
         policy.update_date = now_iso8601();
     }
@@ -541,9 +550,15 @@ pub fn list_entities_for_policy(state: &IamState, input: &Value) -> Result<Value
         return Err(no_such_entity("Policy", policy_arn));
     }
 
-    let include_users = entity_filter.map_or(true, |f| f == "User" || f == "LocalManagedPolicy" || f == "AWSManagedPolicy");
-    let include_roles = entity_filter.map_or(true, |f| f == "Role" || f == "LocalManagedPolicy" || f == "AWSManagedPolicy");
-    let include_groups = entity_filter.map_or(true, |f| f == "Group" || f == "LocalManagedPolicy" || f == "AWSManagedPolicy");
+    let include_users = entity_filter.map_or(true, |f| {
+        f == "User" || f == "LocalManagedPolicy" || f == "AWSManagedPolicy"
+    });
+    let include_roles = entity_filter.map_or(true, |f| {
+        f == "Role" || f == "LocalManagedPolicy" || f == "AWSManagedPolicy"
+    });
+    let include_groups = entity_filter.map_or(true, |f| {
+        f == "Group" || f == "LocalManagedPolicy" || f == "AWSManagedPolicy"
+    });
 
     // With explicit User/Role/Group filters:
     let include_users = include_users || entity_filter == Some("User");

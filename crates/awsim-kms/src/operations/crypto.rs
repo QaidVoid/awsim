@@ -4,8 +4,8 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::error;
-use crate::state::KmsState;
 use crate::operations::keys::resolve_key;
+use crate::state::KmsState;
 
 /// Encode `{key_id_bytes (36 bytes)}{xor_encrypted_data}` to base64.
 ///
@@ -55,11 +55,7 @@ fn decode_ciphertext_blob(blob_b64: &str) -> Result<(String, Vec<u8>), AwsError>
 // Encrypt
 // ---------------------------------------------------------------------------
 
-pub fn encrypt(
-    state: &KmsState,
-    input: &Value,
-    _ctx: &RequestContext,
-) -> Result<Value, AwsError> {
+pub fn encrypt(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
     let key_id_input = input["KeyId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
@@ -95,11 +91,7 @@ pub fn encrypt(
 // Decrypt
 // ---------------------------------------------------------------------------
 
-pub fn decrypt(
-    state: &KmsState,
-    input: &Value,
-    _ctx: &RequestContext,
-) -> Result<Value, AwsError> {
+pub fn decrypt(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
     let ciphertext_b64 = input["CiphertextBlob"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("CiphertextBlob"))?;
@@ -202,9 +194,7 @@ pub fn generate_random(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let number_of_bytes = input["NumberOfBytes"]
-        .as_u64()
-        .unwrap_or(32) as usize;
+    let number_of_bytes = input["NumberOfBytes"].as_u64().unwrap_or(32) as usize;
 
     if number_of_bytes < 1 || number_of_bytes > 1024 {
         return Err(error::invalid_parameter(

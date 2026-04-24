@@ -23,7 +23,10 @@ pub async fn test_cloudfront(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     // ListCloudFrontOriginAccessIdentities
     results.push(chk!(
         "ListCloudFrontOriginAccessIdentities",
-        client.list_cloud_front_origin_access_identities().send().await,
+        client
+            .list_cloud_front_origin_access_identities()
+            .send()
+            .await,
         verbose
     ));
 

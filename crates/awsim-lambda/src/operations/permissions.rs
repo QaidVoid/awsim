@@ -77,10 +77,7 @@ pub fn add_permission(
 
     let mut condition = serde_json::Map::new();
     if let Some(arn) = source_arn {
-        condition.insert(
-            "ArnLike".to_string(),
-            json!({ "AWS:SourceArn": arn }),
-        );
+        condition.insert("ArnLike".to_string(), json!({ "AWS:SourceArn": arn }));
     }
     if let Some(acct) = source_account {
         condition.insert(

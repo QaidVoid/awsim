@@ -87,10 +87,12 @@ pub fn get_health_check(
         .and_then(Value::as_str)
         .ok_or_else(|| AwsError::bad_request("InvalidInput", "HealthCheckId is required"))?;
 
-    let hc = state
-        .health_checks
-        .get(id)
-        .ok_or_else(|| AwsError::not_found("NoSuchHealthCheck", format!("No health check found with ID: {id}")))?;
+    let hc = state.health_checks.get(id).ok_or_else(|| {
+        AwsError::not_found(
+            "NoSuchHealthCheck",
+            format!("No health check found with ID: {id}"),
+        )
+    })?;
 
     Ok(json!({
         "__xml_root": "GetHealthCheckResponse",
@@ -114,7 +116,10 @@ pub fn get_query_logging_config(
         .ok_or_else(|| AwsError::bad_request("InvalidInput", "Id is required"))?;
 
     let cfg = state.query_logging_configs.get(id).ok_or_else(|| {
-        AwsError::not_found("NoSuchQueryLoggingConfig", format!("No query logging config: {id}"))
+        AwsError::not_found(
+            "NoSuchQueryLoggingConfig",
+            format!("No query logging config: {id}"),
+        )
     })?;
 
     Ok(json!({
@@ -304,7 +309,10 @@ pub fn create_traffic_policy(
         .get("Document")
         .and_then(Value::as_str)
         .unwrap_or("{}");
-    let comment = input.get("Comment").and_then(Value::as_str).map(String::from);
+    let comment = input
+        .get("Comment")
+        .and_then(Value::as_str)
+        .map(String::from);
     let id = Uuid::new_v4().to_string();
     let tp = TrafficPolicy {
         id: id.clone(),
@@ -337,10 +345,9 @@ pub fn get_traffic_policy(
         .get("Id")
         .and_then(Value::as_str)
         .ok_or_else(|| AwsError::bad_request("InvalidInput", "Id is required"))?;
-    let tp = state
-        .traffic_policies
-        .get(id)
-        .ok_or_else(|| AwsError::not_found("NoSuchTrafficPolicy", format!("No traffic policy: {id}")))?;
+    let tp = state.traffic_policies.get(id).ok_or_else(|| {
+        AwsError::not_found("NoSuchTrafficPolicy", format!("No traffic policy: {id}"))
+    })?;
     Ok(json!({
         "__xml_root": "GetTrafficPolicyResponse",
         "TrafficPolicy": {
@@ -416,8 +423,16 @@ pub fn associate_vpc_with_hosted_zone(
         ));
     }
     let vpc = input.get("VPC").cloned().unwrap_or_else(|| json!({}));
-    let vpc_id = vpc.get("VPCId").and_then(Value::as_str).unwrap_or("vpc-unknown").to_string();
-    let vpc_region = vpc.get("VPCRegion").and_then(Value::as_str).unwrap_or("us-east-1").to_string();
+    let vpc_id = vpc
+        .get("VPCId")
+        .and_then(Value::as_str)
+        .unwrap_or("vpc-unknown")
+        .to_string();
+    let vpc_region = vpc
+        .get("VPCRegion")
+        .and_then(Value::as_str)
+        .unwrap_or("us-east-1")
+        .to_string();
     state
         .vpc_associations
         .entry(zone_id.clone())

@@ -6,9 +6,7 @@ use crate::{
         db_instance_already_exists, db_instance_not_found, invalid_db_instance_state,
         invalid_parameter,
     },
-    ids::{
-        default_engine_version, default_port, instance_arn, instance_endpoint, now_iso8601,
-    },
+    ids::{default_engine_version, default_port, instance_arn, instance_endpoint, now_iso8601},
     state::{DbEndpoint, DbInstance, RdsState},
 };
 

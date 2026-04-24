@@ -29,7 +29,11 @@ pub async fn test_acm(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         // DescribeCertificate
         results.push(chk!(
             "DescribeCertificate",
-            client.describe_certificate().certificate_arn(arn).send().await,
+            client
+                .describe_certificate()
+                .certificate_arn(arn)
+                .send()
+                .await,
             verbose
         ));
 
@@ -79,7 +83,11 @@ pub async fn test_acm(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         // DeleteCertificate
         results.push(chk!(
             "DeleteCertificate",
-            client.delete_certificate().certificate_arn(arn).send().await,
+            client
+                .delete_certificate()
+                .certificate_arn(arn)
+                .send()
+                .await,
             verbose
         ));
     } else {

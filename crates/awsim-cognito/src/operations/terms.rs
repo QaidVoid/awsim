@@ -64,7 +64,10 @@ pub fn create_terms(
     let now = now_epoch();
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
     let entry = TermsEntry {
@@ -98,14 +101,22 @@ pub fn update_terms(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TermsId is required"))?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
     let entry = pool
         .terms
         .iter_mut()
         .find(|t| t.terms_id == terms_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Terms not found: {terms_id}")))?;
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Terms not found: {terms_id}"),
+            )
+        })?;
 
     if let Some(name) = input["TermsName"].as_str() {
         entry.terms_name = name.to_string();
@@ -139,7 +150,10 @@ pub fn delete_terms(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TermsId is required"))?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
     let len_before = pool.terms.len();
@@ -168,14 +182,22 @@ pub fn describe_terms(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TermsId is required"))?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
     let entry = pool
         .terms
         .iter()
         .find(|t| t.terms_id == terms_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Terms not found: {terms_id}")))?;
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Terms not found: {terms_id}"),
+            )
+        })?;
 
     Ok(json!({ "Terms": terms_to_value(entry) }))
 }
@@ -191,9 +213,17 @@ pub fn list_terms(
     let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
-    let entries: Vec<Value> = pool.terms.iter().take(max_results).map(terms_to_value).collect();
+    let entries: Vec<Value> = pool
+        .terms
+        .iter()
+        .take(max_results)
+        .map(terms_to_value)
+        .collect();
     Ok(json!({ "Terms": entries, "NextToken": Value::Null }))
 }

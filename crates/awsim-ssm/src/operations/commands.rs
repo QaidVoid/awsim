@@ -68,10 +68,7 @@ pub fn send_command(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidDocument", "DocumentName is required"))?;
 
-    let targets = input["Targets"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let targets = input["Targets"].as_array().cloned().unwrap_or_default();
 
     let command_id = new_command_id();
     let now = now_epoch_secs();
@@ -113,9 +110,7 @@ pub fn list_commands(
     let commands: Vec<Value> = state
         .commands
         .iter()
-        .filter(|e| {
-            filter_command_id.map_or(true, |id| e.command_id == id)
-        })
+        .filter(|e| filter_command_id.map_or(true, |id| e.command_id == id))
         .map(|e| {
             json!({
                 "CommandId": e.command_id,

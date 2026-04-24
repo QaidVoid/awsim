@@ -379,25 +379,16 @@ impl ServiceHandler for CloudFrontService {
                 operations::distributions::create_distribution(&state, &input, ctx)
             }
             "GetDistribution" => {
-                let id = input
-                    .get("Id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
                 operations::distributions::get_distribution(&state, id)
             }
             "GetDistributionConfig" => {
-                let id = input
-                    .get("Id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
                 operations::distributions::get_distribution_config(&state, id)
             }
             "ListDistributions" => operations::distributions::list_distributions(&state),
             "DeleteDistribution" => {
-                let id = input
-                    .get("Id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
                 operations::distributions::delete_distribution(&state, id)
             }
             "UpdateDistribution" => {
@@ -422,10 +413,7 @@ impl ServiceHandler for CloudFrontService {
                     .get("DistributionId")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let inv_id = input
-                    .get("Id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let inv_id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
                 operations::invalidations::get_invalidation(&state, dist_id, inv_id)
             }
             "ListInvalidations" => {
@@ -444,42 +432,26 @@ impl ServiceHandler for CloudFrontService {
                 operations::origin_access::list_origin_access_controls(&state)
             }
             "DeleteOriginAccessControl" => {
-                let id = input
-                    .get("Id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
                 operations::origin_access::delete_origin_access_control(&state, id)
             }
 
             // Legacy OAIs
-            "CreateCloudFrontOriginAccessIdentity" => {
-                operations::oai::create_oai(&state, &input)
-            }
+            "CreateCloudFrontOriginAccessIdentity" => operations::oai::create_oai(&state, &input),
             "GetCloudFrontOriginAccessIdentity" => {
-                let id = input
-                    .get("Id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
                 operations::oai::get_oai(&state, id)
             }
-            "ListCloudFrontOriginAccessIdentities" => {
-                operations::oai::list_oais(&state)
-            }
+            "ListCloudFrontOriginAccessIdentities" => operations::oai::list_oais(&state),
 
             // Cache Policies
             "CreateCachePolicy" => operations::cache_policies::create_cache_policy(&state, &input),
             "GetCachePolicy" => {
-                let id = input
-                    .get("Id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
                 operations::cache_policies::get_cache_policy(&state, id)
             }
             "DeleteCachePolicy" => {
-                let id = input
-                    .get("Id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
                 operations::cache_policies::delete_cache_policy(&state, id)
             }
             "ListCachePolicies" => operations::cache_policies::list_cache_policies(&state),
@@ -545,9 +517,7 @@ impl ServiceHandler for CloudFrontService {
             }
             "DeleteFieldLevelEncryptionConfig" => {
                 let id = input.get("Id").and_then(|v| v.as_str()).unwrap_or("");
-                operations::field_level_encryption::delete_field_level_encryption_config(
-                    &state, id,
-                )
+                operations::field_level_encryption::delete_field_level_encryption_config(&state, id)
             }
             "ListFieldLevelEncryptionConfigs" => {
                 operations::field_level_encryption::list_field_level_encryption_configs(&state)

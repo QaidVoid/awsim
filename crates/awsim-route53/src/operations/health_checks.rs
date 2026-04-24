@@ -68,14 +68,17 @@ pub fn update_health_check(
         .and_then(Value::as_str)
         .ok_or_else(|| AwsError::bad_request("InvalidInput", "HealthCheckId is required"))?;
 
-    let mut hc = state
-        .health_checks
-        .get_mut(id)
-        .ok_or_else(|| AwsError::not_found("NoSuchHealthCheck", format!("No health check found with ID: {id}")))?;
+    let mut hc = state.health_checks.get_mut(id).ok_or_else(|| {
+        AwsError::not_found(
+            "NoSuchHealthCheck",
+            format!("No health check found with ID: {id}"),
+        )
+    })?;
 
     // Merge any provided fields into the config
     if let Some(new_config) = input.get("HealthCheckConfig") {
-        if let (Some(existing), Some(updates)) = (hc.config.as_object_mut(), new_config.as_object()) {
+        if let (Some(existing), Some(updates)) = (hc.config.as_object_mut(), new_config.as_object())
+        {
             for (k, v) in updates {
                 existing.insert(k.clone(), v.clone());
             }

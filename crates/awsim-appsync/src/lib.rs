@@ -371,9 +371,7 @@ impl ServiceHandler for AppSyncService {
                 operations::associate_merged_graphql_api(&state, &input, ctx)
             }
             "GetSourceApiAssociation" => operations::get_source_api_association(&state, &input),
-            "ListSourceApiAssociations" => {
-                operations::list_source_api_associations(&state, &input)
-            }
+            "ListSourceApiAssociations" => operations::list_source_api_associations(&state, &input),
             "DisassociateMergedGraphqlApi" => {
                 operations::disassociate_merged_graphql_api(&state, &input)
             }

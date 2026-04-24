@@ -198,11 +198,7 @@ pub async fn test_athena(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     if let Some(ref nqid) = named_query_id {
         results.push(chk!(
             "GetNamedQuery",
-            client
-                .get_named_query()
-                .named_query_id(nqid)
-                .send()
-                .await,
+            client.get_named_query().named_query_id(nqid).send().await,
             verbose
         ));
     } else {

@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::{
     error::{invalid_parameter, resource_not_found},
-    state::{LayerVersion, LambdaState},
+    state::{LambdaState, LayerVersion},
     util::{decode_zip, now_iso8601, opt_str, require_str, sha256_base64},
 };
 
@@ -48,7 +48,9 @@ pub fn publish_layer_version(
             (None, sha256_base64(placeholder), 0u64)
         }
     } else {
-        return Err(invalid_parameter("Content is required for PublishLayerVersion"));
+        return Err(invalid_parameter(
+            "Content is required for PublishLayerVersion",
+        ));
     };
 
     let layer_arn = format!(
@@ -129,7 +131,8 @@ pub fn delete_layer_version(
     let version_number = input
         .get("VersionNumber")
         .and_then(|v| {
-            v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
         })
         .ok_or_else(|| invalid_parameter("VersionNumber is required"))?;
 

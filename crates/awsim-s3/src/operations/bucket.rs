@@ -39,7 +39,11 @@ pub fn list_buckets(state: &S3State, ctx: &RequestContext) -> Result<Value, AwsE
 }
 
 /// PUT /{Bucket} — create a bucket.
-pub fn create_bucket(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn create_bucket(
+    state: &S3State,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
     validate_bucket_name(bucket_name)?;
@@ -128,7 +132,8 @@ fn validate_bucket_name(name: &str) -> Result<(), AwsError> {
         }
     }
 
-    if name.starts_with('-') || name.ends_with('-') || name.starts_with('.') || name.ends_with('.') {
+    if name.starts_with('-') || name.ends_with('-') || name.starts_with('.') || name.ends_with('.')
+    {
         return Err(AwsError::bad_request(
             "InvalidBucketName",
             "Bucket name cannot start or end with a hyphen or period",

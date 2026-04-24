@@ -4,7 +4,11 @@ use tracing::info;
 
 use crate::state::KinesisState;
 
-pub fn handle(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn handle(
+    state: &KinesisState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     // Accept either StreamName or StreamARN
     let stream_name = resolve_stream_name(state, input)?;
 

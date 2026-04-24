@@ -8,7 +8,12 @@ pub async fn test_cloudtrail(endpoint: &str, verbose: bool) -> Vec<OpResult> {
 
     results.push(chk!(
         "CreateTrail",
-        client.create_trail().name("conf-trail").s3_bucket_name("conf-bucket").send().await,
+        client
+            .create_trail()
+            .name("conf-trail")
+            .s3_bucket_name("conf-bucket")
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(
@@ -38,7 +43,12 @@ pub async fn test_cloudtrail(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     ));
     results.push(chk!(
         "UpdateTrail",
-        client.update_trail().name("conf-trail").s3_bucket_name("conf-bucket-2").send().await,
+        client
+            .update_trail()
+            .name("conf-trail")
+            .s3_bucket_name("conf-bucket-2")
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(
@@ -58,7 +68,11 @@ pub async fn test_cloudtrail(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     ));
     results.push(chk!(
         "GetEventSelectors",
-        client.get_event_selectors().trail_name("conf-trail").send().await,
+        client
+            .get_event_selectors()
+            .trail_name("conf-trail")
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(

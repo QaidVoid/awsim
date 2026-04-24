@@ -6,7 +6,7 @@ use tracing::info;
 
 use crate::error;
 use crate::state::{Secret, SecretVersion, SecretsState};
-use crate::util::{new_version_id, now_epoch_f64, random_suffix, random_password};
+use crate::util::{new_version_id, now_epoch_f64, random_password, random_suffix};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -172,12 +172,13 @@ pub fn get_secret_value(
         .ok_or_else(|| error::missing_parameter("SecretId"))?;
 
     let name = resolve_name(state, secret_id)?;
-    let secret = state.secrets.get(&name).ok_or_else(|| error::resource_not_found(secret_id))?;
+    let secret = state
+        .secrets
+        .get(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
 
     if secret.deleted_date.is_some() {
-        return Err(error::invalid_request(
-            "Secret is marked for deletion",
-        ));
+        return Err(error::invalid_request("Secret is marked for deletion"));
     }
 
     let version_stage = input["VersionStage"].as_str().unwrap_or("AWSCURRENT");
@@ -194,12 +195,13 @@ pub fn get_secret_value(
             .iter()
             .find(|(_, v)| v.stages.contains(&version_stage.to_string()))
             .map(|(id, _)| id.clone())
-            .ok_or_else(|| {
-                error::resource_not_found(&format!("stage {version_stage}"))
-            })?
+            .ok_or_else(|| error::resource_not_found(&format!("stage {version_stage}")))?
     };
 
-    let version = secret.versions.get(&version_id).ok_or_else(|| error::resource_not_found(&version_id))?;
+    let version = secret
+        .versions
+        .get(&version_id)
+        .ok_or_else(|| error::resource_not_found(&version_id))?;
 
     let mut response = json!({
         "ARN": secret.arn,
@@ -284,7 +286,9 @@ pub fn put_secret_value(
         created_date: now.clone(),
     };
 
-    secret.versions.insert(new_version_id_str.clone(), new_version);
+    secret
+        .versions
+        .insert(new_version_id_str.clone(), new_version);
     secret.last_changed_date = now;
 
     let arn = secret.arn.clone();
@@ -365,8 +369,8 @@ pub fn update_secret(
         secret.description = desc.to_string();
     }
 
-    let has_new_value = input["SecretString"].as_str().is_some()
-        || input["SecretBinary"].as_str().is_some();
+    let has_new_value =
+        input["SecretString"].as_str().is_some() || input["SecretBinary"].as_str().is_some();
 
     let now = now_epoch_f64();
 
@@ -429,7 +433,9 @@ pub fn delete_secret(
         .ok_or_else(|| error::resource_not_found(secret_id))?;
 
     if secret.deleted_date.is_some() {
-        return Err(error::invalid_request("Secret is already scheduled for deletion"));
+        return Err(error::invalid_request(
+            "Secret is already scheduled for deletion",
+        ));
     }
 
     let force = input["ForceDeleteWithoutRecovery"]
@@ -495,7 +501,9 @@ pub fn restore_secret(
         .ok_or_else(|| error::resource_not_found(secret_id))?;
 
     if secret.deleted_date.is_none() {
-        return Err(error::invalid_request("Secret is not scheduled for deletion"));
+        return Err(error::invalid_request(
+            "Secret is not scheduled for deletion",
+        ));
     }
 
     secret.deleted_date = None;
@@ -606,9 +614,10 @@ pub fn rotate_secret(
     let pending_vid = new_version_id();
 
     // Clone the current value into the new version (no real Lambda invocation)
-    let current_value = secret.versions.get(&secret.current_version_id).map(|v| {
-        (v.secret_string.clone(), v.secret_binary.clone())
-    });
+    let current_value = secret
+        .versions
+        .get(&secret.current_version_id)
+        .map(|v| (v.secret_string.clone(), v.secret_binary.clone()));
     let (secret_string, secret_binary) = current_value.unwrap_or((None, None));
 
     // Mark old AWSCURRENT as AWSPREVIOUS
@@ -708,7 +717,9 @@ pub fn get_random_password(
 ) -> Result<Value, AwsError> {
     let length = input["PasswordLength"].as_u64().unwrap_or(32) as usize;
     if length < 1 || length > 4096 {
-        return Err(error::invalid_parameter("PasswordLength must be between 1 and 4096"));
+        return Err(error::invalid_parameter(
+            "PasswordLength must be between 1 and 4096",
+        ));
     }
 
     let exclude_uppercase = input["ExcludeUppercase"].as_bool().unwrap_or(false);
@@ -716,7 +727,13 @@ pub fn get_random_password(
     let exclude_numbers = input["ExcludeNumbers"].as_bool().unwrap_or(false);
     let exclude_punctuation = input["ExcludePunctuation"].as_bool().unwrap_or(false);
 
-    let password = random_password(length, exclude_uppercase, exclude_lowercase, exclude_numbers, exclude_punctuation);
+    let password = random_password(
+        length,
+        exclude_uppercase,
+        exclude_lowercase,
+        exclude_numbers,
+        exclude_punctuation,
+    );
 
     Ok(json!({ "RandomPassword": password }))
 }
@@ -854,7 +871,10 @@ pub fn batch_get_secret_value(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let secret_id_list = input["SecretIdList"].as_array().cloned().unwrap_or_default();
+    let secret_id_list = input["SecretIdList"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
 
     let mut secret_values: Vec<Value> = Vec::new();
     let mut errors: Vec<Value> = Vec::new();

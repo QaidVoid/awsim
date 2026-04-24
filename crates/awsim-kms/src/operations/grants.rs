@@ -3,8 +3,8 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::error;
-use crate::state::{KmsGrant, KmsState};
 use crate::operations::keys::resolve_key_id;
+use crate::state::{KmsGrant, KmsState};
 
 // ---------------------------------------------------------------------------
 // CreateGrant

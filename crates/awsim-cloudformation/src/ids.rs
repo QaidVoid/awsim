@@ -19,9 +19,7 @@ pub fn change_set_arn(
     change_set_name: &str,
 ) -> String {
     let uid = new_uuid();
-    format!(
-        "arn:aws:cloudformation:{region}:{account_id}:changeSet/{change_set_name}/{uid}"
-    )
+    format!("arn:aws:cloudformation:{region}:{account_id}:changeSet/{change_set_name}/{uid}")
 }
 
 /// Current UTC timestamp in ISO 8601 format.

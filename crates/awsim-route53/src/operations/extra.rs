@@ -150,7 +150,9 @@ pub fn create_query_logging_config(
     let log_group_arn = input
         .get("CloudWatchLogsLogGroupArn")
         .and_then(Value::as_str)
-        .ok_or_else(|| AwsError::bad_request("InvalidInput", "CloudWatchLogsLogGroupArn is required"))?;
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidInput", "CloudWatchLogsLogGroupArn is required")
+        })?;
 
     // Normalize the hosted zone id
     let zone_id = if hosted_zone_id.starts_with("/hostedzone/") {
@@ -211,16 +213,13 @@ pub fn list_query_logging_configs(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let zone_filter = input
-        .get("HostedZoneId")
-        .and_then(Value::as_str)
-        .map(|s| {
-            if s.starts_with("/hostedzone/") {
-                s.to_string()
-            } else {
-                format!("/hostedzone/{s}")
-            }
-        });
+    let zone_filter = input.get("HostedZoneId").and_then(Value::as_str).map(|s| {
+        if s.starts_with("/hostedzone/") {
+            s.to_string()
+        } else {
+            format!("/hostedzone/{s}")
+        }
+    });
 
     let configs: Vec<Value> = state
         .query_logging_configs

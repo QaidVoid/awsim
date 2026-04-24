@@ -22,9 +22,9 @@ pub fn create_database(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["DatabaseInput"]["Name"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "DatabaseInput.Name is required"))?;
+    let name = input["DatabaseInput"]["Name"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "DatabaseInput.Name is required")
+    })?;
 
     if state.databases.contains_key(name) {
         return Err(AwsError::conflict(
@@ -63,7 +63,10 @@ pub fn get_database(
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "Name is required"))?;
 
     let db = state.databases.get(name).ok_or_else(|| {
-        AwsError::not_found("EntityNotFoundException", format!("Database not found: {name}"))
+        AwsError::not_found(
+            "EntityNotFoundException",
+            format!("Database not found: {name}"),
+        )
     })?;
 
     Ok(json!({
@@ -113,7 +116,10 @@ pub fn delete_database(
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "Name is required"))?;
 
     state.databases.remove(name).ok_or_else(|| {
-        AwsError::not_found("EntityNotFoundException", format!("Database not found: {name}"))
+        AwsError::not_found(
+            "EntityNotFoundException",
+            format!("Database not found: {name}"),
+        )
     })?;
 
     info!(name = %name, "Deleted Glue database");
@@ -134,7 +140,10 @@ pub fn update_database(
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "Name is required"))?;
 
     let mut db = state.databases.get_mut(name).ok_or_else(|| {
-        AwsError::not_found("EntityNotFoundException", format!("Database not found: {name}"))
+        AwsError::not_found(
+            "EntityNotFoundException",
+            format!("Database not found: {name}"),
+        )
     })?;
 
     if let Some(desc) = input["DatabaseInput"]["Description"].as_str() {

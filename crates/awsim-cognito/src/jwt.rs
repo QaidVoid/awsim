@@ -104,19 +104,22 @@ pub fn id_token(
             let preferred = groups
                 .iter()
                 .filter(|g| g.role_arn.is_some())
-                .min_by(|a, b| {
-                    match (a.precedence, b.precedence) {
-                        (Some(pa), Some(pb)) => pa.cmp(&pb).then_with(|| a.group_name.cmp(&b.group_name)),
-                        (Some(_), None) => std::cmp::Ordering::Less,
-                        (None, Some(_)) => std::cmp::Ordering::Greater,
-                        (None, None) => a.group_name.cmp(&b.group_name),
+                .min_by(|a, b| match (a.precedence, b.precedence) {
+                    (Some(pa), Some(pb)) => {
+                        pa.cmp(&pb).then_with(|| a.group_name.cmp(&b.group_name))
                     }
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a.group_name.cmp(&b.group_name),
                 })
                 .and_then(|g| g.role_arn.as_ref());
 
             obj.insert("cognito:roles".to_string(), Value::Array(roles));
             if let Some(pref) = preferred {
-                obj.insert("cognito:preferred_role".to_string(), Value::String(pref.clone()));
+                obj.insert(
+                    "cognito:preferred_role".to_string(),
+                    Value::String(pref.clone()),
+                );
             }
         }
     }
@@ -167,7 +170,8 @@ pub fn id_token(
 
     // Always merge remaining user attributes (cognito:* etc.) not already present.
     for (k, v) in attributes {
-        obj.entry(k.clone()).or_insert_with(|| Value::String(v.clone()));
+        obj.entry(k.clone())
+            .or_insert_with(|| Value::String(v.clone()));
     }
 
     build_jwt(&header, &payload)
@@ -223,7 +227,9 @@ pub fn access_token(
             .iter()
             .map(|g| Value::String(g.group_name.clone()))
             .collect();
-        payload.as_object_mut().unwrap()
+        payload
+            .as_object_mut()
+            .unwrap()
             .insert("cognito:groups".to_string(), Value::Array(group_names));
     }
 

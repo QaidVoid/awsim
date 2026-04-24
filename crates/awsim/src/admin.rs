@@ -1,7 +1,7 @@
+use awsim_core::AppState;
 use axum::extract::State;
 use axum::response::Json;
-use awsim_core::AppState;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 
 pub async fn health(State(state): State<AppState>) -> Json<Value> {

@@ -19,17 +19,26 @@ pub fn create_task(
 ) -> Result<Value, AwsError> {
     let source = input["SourceLocationArn"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "SourceLocationArn is required"))?
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidRequestException", "SourceLocationArn is required")
+        })?
         .to_string();
     let destination = input["DestinationLocationArn"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "DestinationLocationArn is required"))?
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidRequestException",
+                "DestinationLocationArn is required",
+            )
+        })?
         .to_string();
 
     let id = uuid::Uuid::new_v4().simple().to_string();
     let arn = format!(
         "arn:aws:datasync:{}:{}:task/task-{}",
-        ctx.region, ctx.account_id, &id[..17]
+        ctx.region,
+        ctx.account_id,
+        &id[..17]
     );
 
     let task = Task {

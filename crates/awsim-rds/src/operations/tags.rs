@@ -24,10 +24,7 @@ fn parse_tags(input: &Value) -> HashMap<String, String> {
     map
 }
 
-pub fn add_tags_to_resource(
-    state: &RdsState,
-    input: &Value,
-) -> Result<Value, AwsError> {
+pub fn add_tags_to_resource(state: &RdsState, input: &Value) -> Result<Value, AwsError> {
     let resource_name = require_str(input, "ResourceName")?;
     let new_tags = parse_tags(input);
 
@@ -37,16 +34,18 @@ pub fn add_tags_to_resource(
     Ok(json!({}))
 }
 
-pub fn remove_tags_from_resource(
-    state: &RdsState,
-    input: &Value,
-) -> Result<Value, AwsError> {
+pub fn remove_tags_from_resource(state: &RdsState, input: &Value) -> Result<Value, AwsError> {
     let resource_name = require_str(input, "ResourceName")?;
 
     let keys_to_remove: Vec<String> = input
         .get("TagKeys")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|k| k.as_str()).map(|s| s.to_string()).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|k| k.as_str())
+                .map(|s| s.to_string())
+                .collect()
+        })
         .unwrap_or_default();
 
     if let Some(mut entry) = state.tags.get_mut(resource_name) {
@@ -58,10 +57,7 @@ pub fn remove_tags_from_resource(
     Ok(json!({}))
 }
 
-pub fn list_tags_for_resource(
-    state: &RdsState,
-    input: &Value,
-) -> Result<Value, AwsError> {
+pub fn list_tags_for_resource(state: &RdsState, input: &Value) -> Result<Value, AwsError> {
     let resource_name = require_str(input, "ResourceName")?;
 
     let tags: Vec<Value> = state

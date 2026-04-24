@@ -312,19 +312,13 @@ impl ServiceHandler for LambdaService {
 
         match operation {
             // Functions
-            "CreateFunction" => {
-                operations::functions::create_function(&state, &input, ctx)
-            }
-            "GetFunction" => {
-                operations::functions::get_function(&state, &input, ctx)
-            }
+            "CreateFunction" => operations::functions::create_function(&state, &input, ctx),
+            "GetFunction" => operations::functions::get_function(&state, &input, ctx),
             "GetFunctionConfiguration" => {
                 operations::functions::get_function_configuration(&state, &input, ctx)
             }
             "DeleteFunction" => operations::functions::delete_function(&state, &input),
-            "ListFunctions" => {
-                operations::functions::list_functions(&state, &input, ctx)
-            }
+            "ListFunctions" => operations::functions::list_functions(&state, &input, ctx),
             "UpdateFunctionCode" => {
                 operations::functions::update_function_code(&state, &input, ctx)
             }
@@ -336,9 +330,7 @@ impl ServiceHandler for LambdaService {
             "Invoke" => operations::invocations::invoke(&state, &input, ctx),
 
             // Versions
-            "PublishVersion" => {
-                operations::versions::publish_version(&state, &input, ctx)
-            }
+            "PublishVersion" => operations::versions::publish_version(&state, &input, ctx),
             "ListVersionsByFunction" => {
                 operations::versions::list_versions_by_function(&state, &input, ctx)
             }
@@ -351,35 +343,23 @@ impl ServiceHandler for LambdaService {
 
             // Event Source Mappings
             "CreateEventSourceMapping" => {
-                operations::event_source_mappings::create_event_source_mapping(
-                    &state, &input, ctx,
-                )
+                operations::event_source_mappings::create_event_source_mapping(&state, &input, ctx)
             }
             "GetEventSourceMapping" => {
                 operations::event_source_mappings::get_event_source_mapping(&state, &input, ctx)
             }
             "DeleteEventSourceMapping" => {
-                operations::event_source_mappings::delete_event_source_mapping(
-                    &state, &input, ctx,
-                )
+                operations::event_source_mappings::delete_event_source_mapping(&state, &input, ctx)
             }
             "ListEventSourceMappings" => {
-                operations::event_source_mappings::list_event_source_mappings(
-                    &state, &input, ctx,
-                )
+                operations::event_source_mappings::list_event_source_mappings(&state, &input, ctx)
             }
 
             // Layers
-            "PublishLayerVersion" => {
-                operations::layers::publish_layer_version(&state, &input, ctx)
-            }
+            "PublishLayerVersion" => operations::layers::publish_layer_version(&state, &input, ctx),
             "ListLayers" => operations::layers::list_layers(&state, &input, ctx),
-            "ListLayerVersions" => {
-                operations::layers::list_layer_versions(&state, &input, ctx)
-            }
-            "DeleteLayerVersion" => {
-                operations::layers::delete_layer_version(&state, &input, ctx)
-            }
+            "ListLayerVersions" => operations::layers::list_layer_versions(&state, &input, ctx),
+            "DeleteLayerVersion" => operations::layers::delete_layer_version(&state, &input, ctx),
 
             // Function URL Configs
             "CreateFunctionUrlConfig" => {
@@ -403,9 +383,7 @@ impl ServiceHandler for LambdaService {
             // Policy / Permissions
             "GetPolicy" => operations::permissions::get_policy(&state, &input, ctx),
             "AddPermission" => operations::permissions::add_permission(&state, &input, ctx),
-            "RemovePermission" => {
-                operations::permissions::remove_permission(&state, &input, ctx)
-            }
+            "RemovePermission" => operations::permissions::remove_permission(&state, &input, ctx),
 
             // Account Settings
             "GetAccountSettings" => {
@@ -445,39 +423,63 @@ impl ServiceHandler for LambdaService {
 
     fn iam_action(&self, operation: &str) -> Option<String> {
         match operation {
-            "CreateFunction" | "GetFunction" | "GetFunctionConfiguration" | "DeleteFunction"
-            | "ListFunctions" | "UpdateFunctionCode" | "UpdateFunctionConfiguration"
-            | "Invoke" | "InvokeFunction" | "InvokeAsync"
-            | "PublishVersion" | "ListVersionsByFunction"
-            | "CreateAlias" | "GetAlias" | "DeleteAlias" | "ListAliases" | "UpdateAlias"
-            | "CreateEventSourceMapping" | "GetEventSourceMapping"
-            | "DeleteEventSourceMapping" | "ListEventSourceMappings" | "UpdateEventSourceMapping"
-            | "PublishLayerVersion" | "ListLayers" | "ListLayerVersions"
-            | "DeleteLayerVersion" | "GetLayerVersion"
-            | "CreateFunctionUrlConfig" | "GetFunctionUrlConfig"
-            | "DeleteFunctionUrlConfig" | "ListFunctionUrlConfigs" | "UpdateFunctionUrlConfig"
-            | "TagResource" | "UntagResource" | "ListTags"
-            | "GetPolicy" | "AddPermission" | "RemovePermission"
+            "CreateFunction"
+            | "GetFunction"
+            | "GetFunctionConfiguration"
+            | "DeleteFunction"
+            | "ListFunctions"
+            | "UpdateFunctionCode"
+            | "UpdateFunctionConfiguration"
+            | "Invoke"
+            | "InvokeFunction"
+            | "InvokeAsync"
+            | "PublishVersion"
+            | "ListVersionsByFunction"
+            | "CreateAlias"
+            | "GetAlias"
+            | "DeleteAlias"
+            | "ListAliases"
+            | "UpdateAlias"
+            | "CreateEventSourceMapping"
+            | "GetEventSourceMapping"
+            | "DeleteEventSourceMapping"
+            | "ListEventSourceMappings"
+            | "UpdateEventSourceMapping"
+            | "PublishLayerVersion"
+            | "ListLayers"
+            | "ListLayerVersions"
+            | "DeleteLayerVersion"
+            | "GetLayerVersion"
+            | "CreateFunctionUrlConfig"
+            | "GetFunctionUrlConfig"
+            | "DeleteFunctionUrlConfig"
+            | "ListFunctionUrlConfigs"
+            | "UpdateFunctionUrlConfig"
+            | "TagResource"
+            | "UntagResource"
+            | "ListTags"
+            | "GetPolicy"
+            | "AddPermission"
+            | "RemovePermission"
             | "GetAccountSettings"
-            | "PutFunctionEventInvokeConfig" | "GetFunctionEventInvokeConfig"
-            | "UpdateFunctionEventInvokeConfig" | "DeleteFunctionEventInvokeConfig"
+            | "PutFunctionEventInvokeConfig"
+            | "GetFunctionEventInvokeConfig"
+            | "UpdateFunctionEventInvokeConfig"
+            | "DeleteFunctionEventInvokeConfig"
             | "ListFunctionEventInvokeConfigs" => Some(format!("lambda:{operation}")),
             _ => None,
         }
     }
 
-    fn iam_resource(
-        &self,
-        operation: &str,
-        input: &Value,
-        ctx: &RequestContext,
-    ) -> Option<String> {
+    fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
         let prefix = format!("arn:aws:lambda:{}:{}", ctx.region, ctx.account_id);
         match operation {
-            "ListFunctions" | "ListEventSourceMappings" | "ListLayers"
-            | "GetAccountSettings" | "CreateFunction" | "CreateEventSourceMapping" => {
-                Some("*".to_string())
-            }
+            "ListFunctions"
+            | "ListEventSourceMappings"
+            | "ListLayers"
+            | "GetAccountSettings"
+            | "CreateFunction"
+            | "CreateEventSourceMapping" => Some("*".to_string()),
             "TagResource" | "UntagResource" | "ListTags" => input
                 .get("Resource")
                 .and_then(|v| v.as_str())
@@ -494,7 +496,10 @@ impl ServiceHandler for LambdaService {
                 .map(|name| format!("{prefix}:layer:{name}")),
             "GetLayerVersion" | "DeleteLayerVersion" => {
                 let name = input.get("LayerName").and_then(|v| v.as_str())?;
-                let version = input.get("VersionNumber").and_then(|v| v.as_i64()).unwrap_or(0);
+                let version = input
+                    .get("VersionNumber")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
                 Some(format!("{prefix}:layer:{name}:{version}"))
             }
             _ => {

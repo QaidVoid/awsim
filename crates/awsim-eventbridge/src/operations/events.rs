@@ -205,9 +205,7 @@ fn matches_pattern(rule: &Rule, source: &str, detail_type: &str) -> bool {
 
     // Check `source` array (any-of semantics)
     if let Some(sources) = pattern["source"].as_array() {
-        let matched = sources
-            .iter()
-            .any(|s| s.as_str() == Some(source));
+        let matched = sources.iter().any(|s| s.as_str() == Some(source));
         if !matched {
             return false;
         }

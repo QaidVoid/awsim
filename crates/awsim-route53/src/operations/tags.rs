@@ -71,10 +71,9 @@ pub fn change_tags_for_resource(
             }
         }
         "healthcheck" => {
-            let _hc = state
-                .health_checks
-                .get(resource_id)
-                .ok_or_else(|| AwsError::not_found("NoSuchHealthCheck", "Health check not found"))?;
+            let _hc = state.health_checks.get(resource_id).ok_or_else(|| {
+                AwsError::not_found("NoSuchHealthCheck", "Health check not found")
+            })?;
             // Health checks don't have tags in our simplified state; accept silently.
         }
         other => {
@@ -116,10 +115,9 @@ pub fn list_tags_for_resource(
                 .collect()
         }
         "healthcheck" => {
-            let _hc = state
-                .health_checks
-                .get(resource_id)
-                .ok_or_else(|| AwsError::not_found("NoSuchHealthCheck", "Health check not found"))?;
+            let _hc = state.health_checks.get(resource_id).ok_or_else(|| {
+                AwsError::not_found("NoSuchHealthCheck", "Health check not found")
+            })?;
             vec![]
         }
         other => {

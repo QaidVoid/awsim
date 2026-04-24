@@ -56,11 +56,19 @@ impl ServiceHandler for EcsService {
             "ListClusters" => clusters::list_clusters(&state, &input, ctx),
 
             // Task Definitions
-            "RegisterTaskDefinition" => task_definitions::register_task_definition(&state, &input, ctx),
-            "DeregisterTaskDefinition" => task_definitions::deregister_task_definition(&state, &input, ctx),
-            "DescribeTaskDefinition" => task_definitions::describe_task_definition(&state, &input, ctx),
+            "RegisterTaskDefinition" => {
+                task_definitions::register_task_definition(&state, &input, ctx)
+            }
+            "DeregisterTaskDefinition" => {
+                task_definitions::deregister_task_definition(&state, &input, ctx)
+            }
+            "DescribeTaskDefinition" => {
+                task_definitions::describe_task_definition(&state, &input, ctx)
+            }
             "ListTaskDefinitions" => task_definitions::list_task_definitions(&state, &input, ctx),
-            "ListTaskDefinitionFamilies" => task_definitions::list_task_definition_families(&state, &input, ctx),
+            "ListTaskDefinitionFamilies" => {
+                task_definitions::list_task_definition_families(&state, &input, ctx)
+            }
 
             // Services
             "CreateService" => services::create_service(&state, &input, ctx),
@@ -84,9 +92,7 @@ impl ServiceHandler for EcsService {
             "PutClusterCapacityProviders" => {
                 extras::put_cluster_capacity_providers(&state, &input, ctx)
             }
-            "DescribeCapacityProviders" => {
-                extras::describe_capacity_providers(&state, &input, ctx)
-            }
+            "DescribeCapacityProviders" => extras::describe_capacity_providers(&state, &input, ctx),
 
             // Account Settings
             "PutAccountSetting" => extras::put_account_setting(&state, &input, ctx),

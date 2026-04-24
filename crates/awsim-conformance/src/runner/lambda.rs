@@ -155,10 +155,7 @@ pub async fn test_lambda(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         .starting_position(aws_sdk_lambda::types::EventSourcePosition::TrimHorizon)
         .send()
         .await;
-    let esm_uuid = esm_r
-        .as_ref()
-        .ok()
-        .and_then(|r| r.uuid.clone());
+    let esm_uuid = esm_r.as_ref().ok().and_then(|r| r.uuid.clone());
     results.push(chk!("CreateEventSourceMapping", esm_r, verbose));
 
     // ListEventSourceMappings

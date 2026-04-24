@@ -39,8 +39,8 @@ pub struct ApiRoute {
 #[derive(Debug, Clone)]
 pub struct Integration {
     pub integration_id: String,
-    pub integration_type: String,  // "AWS_PROXY", "HTTP_PROXY", etc.
-    pub integration_uri: String,   // Lambda function ARN
+    pub integration_type: String, // "AWS_PROXY", "HTTP_PROXY", etc.
+    pub integration_uri: String,  // Lambda function ARN
     pub payload_format_version: String, // "1.0" or "2.0"
     pub integration_method: Option<String>,
     pub description: Option<String>,

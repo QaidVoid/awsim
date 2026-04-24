@@ -124,9 +124,15 @@ impl ServiceHandler for PollyService {
             "GetLexicon" => operations::lexicons::get_lexicon(&state, &input, ctx),
             "ListLexicons" => operations::lexicons::list_lexicons(&state, &input, ctx),
             "DeleteLexicon" => operations::lexicons::delete_lexicon(&state, &input, ctx),
-            "StartSpeechSynthesisTask" => operations::speech::start_speech_synthesis_task(&state, &input, ctx),
-            "GetSpeechSynthesisTask" => operations::speech::get_speech_synthesis_task(&state, &input, ctx),
-            "ListSpeechSynthesisTasks" => operations::speech::list_speech_synthesis_tasks(&state, &input, ctx),
+            "StartSpeechSynthesisTask" => {
+                operations::speech::start_speech_synthesis_task(&state, &input, ctx)
+            }
+            "GetSpeechSynthesisTask" => {
+                operations::speech::get_speech_synthesis_task(&state, &input, ctx)
+            }
+            "ListSpeechSynthesisTasks" => {
+                operations::speech::list_speech_synthesis_tasks(&state, &input, ctx)
+            }
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

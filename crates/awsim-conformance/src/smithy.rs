@@ -40,7 +40,10 @@ pub enum FieldType {
     Blob,
     Timestamp,
     List(Box<FieldType>),
-    Map { key: Box<FieldType>, value: Box<FieldType> },
+    Map {
+        key: Box<FieldType>,
+        value: Box<FieldType>,
+    },
     Structure,
     Enum(Vec<String>),
     Unknown,
@@ -70,10 +73,8 @@ pub fn parse_model(path: &Path) -> SmithyModel {
         .expect("model has no shapes object");
 
     // Build a flat map of all shape definitions.
-    let all_shapes: HashMap<String, Value> = shapes
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
+    let all_shapes: HashMap<String, Value> =
+        shapes.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
     // Find the service shape.
     let mut service_id = String::new();
@@ -98,12 +99,8 @@ pub fn parse_model(path: &Path) -> SmithyModel {
     for op_id in &operation_targets {
         if let Some(op_shape) = all_shapes.get(op_id) {
             let name = local_name(op_id);
-            let input_shape = op_shape["input"]["target"]
-                .as_str()
-                .map(|s| s.to_string());
-            let output_shape = op_shape["output"]["target"]
-                .as_str()
-                .map(|s| s.to_string());
+            let input_shape = op_shape["input"]["target"].as_str().map(|s| s.to_string());
+            let output_shape = op_shape["output"]["target"].as_str().map(|s| s.to_string());
 
             let required_input_fields = if let Some(ref input_id) = input_shape {
                 extract_required_fields(input_id, &all_shapes)
@@ -133,18 +130,11 @@ pub fn parse_model(path: &Path) -> SmithyModel {
 /// Extract the local name from a fully-qualified Smithy shape ID.
 /// e.g. "com.amazonaws.dynamodb#CreateTable" → "CreateTable"
 fn local_name(shape_id: &str) -> String {
-    shape_id
-        .rsplit('#')
-        .next()
-        .unwrap_or(shape_id)
-        .to_string()
+    shape_id.rsplit('#').next().unwrap_or(shape_id).to_string()
 }
 
 /// Extract required fields from an input structure shape.
-fn extract_required_fields(
-    shape_id: &str,
-    all_shapes: &HashMap<String, Value>,
-) -> Vec<FieldInfo> {
+fn extract_required_fields(shape_id: &str, all_shapes: &HashMap<String, Value>) -> Vec<FieldInfo> {
     let shape = match all_shapes.get(shape_id) {
         Some(s) => s,
         None => return Vec::new(),

@@ -27,7 +27,10 @@ fn credential_to_value(c: &WebAuthnCredential) -> Value {
 
 fn username_for_token(state: &CognitoState, access_token: &str) -> Result<String, AwsError> {
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::bad_request("NotAuthorizedException", "Token has been revoked"));
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Token has been revoked",
+        ));
     }
     crate::jwt::extract_username_from_access_token(access_token)
         .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))
@@ -65,7 +68,10 @@ pub fn start_webauthn_registration(
             }));
         }
     }
-    Err(AwsError::not_found("UserNotFoundException", format!("User not found: {username}")))
+    Err(AwsError::not_found(
+        "UserNotFoundException",
+        format!("User not found: {username}"),
+    ))
 }
 
 pub fn complete_webauthn_registration(
@@ -106,7 +112,10 @@ pub fn complete_webauthn_registration(
             return Ok(json!({}));
         }
     }
-    Err(AwsError::not_found("UserNotFoundException", format!("User not found: {username}")))
+    Err(AwsError::not_found(
+        "UserNotFoundException",
+        format!("User not found: {username}"),
+    ))
 }
 
 pub fn delete_webauthn_credential(
@@ -125,7 +134,8 @@ pub fn delete_webauthn_credential(
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
             let len_before = user.webauthn_credentials.len();
-            user.webauthn_credentials.retain(|c| c.credential_id != credential_id);
+            user.webauthn_credentials
+                .retain(|c| c.credential_id != credential_id);
             if user.webauthn_credentials.len() == len_before {
                 return Err(AwsError::not_found(
                     "ResourceNotFoundException",
@@ -136,7 +146,10 @@ pub fn delete_webauthn_credential(
             return Ok(json!({}));
         }
     }
-    Err(AwsError::not_found("UserNotFoundException", format!("User not found: {username}")))
+    Err(AwsError::not_found(
+        "UserNotFoundException",
+        format!("User not found: {username}"),
+    ))
 }
 
 pub fn list_webauthn_credentials(
@@ -161,5 +174,8 @@ pub fn list_webauthn_credentials(
             return Ok(json!({ "Credentials": creds, "NextToken": Value::Null }));
         }
     }
-    Err(AwsError::not_found("UserNotFoundException", format!("User not found: {username}")))
+    Err(AwsError::not_found(
+        "UserNotFoundException",
+        format!("User not found: {username}"),
+    ))
 }

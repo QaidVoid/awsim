@@ -114,10 +114,7 @@ pub fn get_invalidation(
 }
 
 /// GET /2020-05-31/distribution/{DistributionId}/invalidation
-pub fn list_invalidations(
-    state: &CloudFrontState,
-    dist_id: &str,
-) -> Result<Value, AwsError> {
+pub fn list_invalidations(state: &CloudFrontState, dist_id: &str) -> Result<Value, AwsError> {
     if !state.distributions.contains_key(dist_id) {
         return Err(not_found_dist(dist_id));
     }

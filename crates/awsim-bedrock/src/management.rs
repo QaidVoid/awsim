@@ -41,15 +41,11 @@ pub fn create_model_customization_job(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let job_name = input["jobName"]
-        .as_str()
-        .unwrap_or("customization-job");
+    let job_name = input["jobName"].as_str().unwrap_or("customization-job");
     let base_model = input["baseModelIdentifier"]
         .as_str()
         .unwrap_or("anthropic.claude-v2:1");
-    let custom_model_name = input["customModelName"]
-        .as_str()
-        .unwrap_or("custom-model");
+    let custom_model_name = input["customModelName"].as_str().unwrap_or("custom-model");
 
     let job_id = Uuid::new_v4().to_string();
     let job_arn = format!(
@@ -140,11 +136,9 @@ pub fn create_guardrail(
 }
 
 pub fn get_guardrail(state: &BedrockState, input: &Value) -> Result<Value, AwsError> {
-    let guardrail_id = input["guardrailIdentifier"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("MissingParameter", "guardrailIdentifier is required")
-        })?;
+    let guardrail_id = input["guardrailIdentifier"].as_str().ok_or_else(|| {
+        AwsError::bad_request("MissingParameter", "guardrailIdentifier is required")
+    })?;
 
     let g = state.guardrails.get(guardrail_id).ok_or_else(|| {
         AwsError::not_found(
@@ -185,11 +179,9 @@ pub fn list_guardrails(state: &BedrockState, _input: &Value) -> Result<Value, Aw
 }
 
 pub fn delete_guardrail(state: &BedrockState, input: &Value) -> Result<Value, AwsError> {
-    let guardrail_id = input["guardrailIdentifier"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("MissingParameter", "guardrailIdentifier is required")
-        })?;
+    let guardrail_id = input["guardrailIdentifier"].as_str().ok_or_else(|| {
+        AwsError::bad_request("MissingParameter", "guardrailIdentifier is required")
+    })?;
 
     if state.guardrails.remove(guardrail_id).is_none() {
         return Err(AwsError::not_found(
@@ -219,11 +211,9 @@ pub fn create_provisioned_model_throughput(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["provisionedModelName"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("MissingParameter", "provisionedModelName is required")
-        })?;
+    let name = input["provisionedModelName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("MissingParameter", "provisionedModelName is required")
+    })?;
     let model_id = input["modelId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelId is required"))?;
@@ -258,11 +248,9 @@ pub fn get_provisioned_model_throughput(
     state: &BedrockState,
     input: &Value,
 ) -> Result<Value, AwsError> {
-    let identifier = input["provisionedModelId"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("MissingParameter", "provisionedModelId is required")
-        })?;
+    let identifier = input["provisionedModelId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("MissingParameter", "provisionedModelId is required")
+    })?;
 
     let pmt = state
         .provisioned_models
@@ -282,11 +270,9 @@ pub fn delete_provisioned_model_throughput(
     state: &BedrockState,
     input: &Value,
 ) -> Result<Value, AwsError> {
-    let identifier = input["provisionedModelId"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("MissingParameter", "provisionedModelId is required")
-        })?;
+    let identifier = input["provisionedModelId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("MissingParameter", "provisionedModelId is required")
+    })?;
 
     let key = state
         .provisioned_models
@@ -385,10 +371,7 @@ pub fn get_model_invocation_job(state: &BedrockState, input: &Value) -> Result<V
     }
 }
 
-pub fn list_model_invocation_jobs(
-    state: &BedrockState,
-    _input: &Value,
-) -> Result<Value, AwsError> {
+pub fn list_model_invocation_jobs(state: &BedrockState, _input: &Value) -> Result<Value, AwsError> {
     let summaries: Vec<Value> = state
         .invocation_jobs
         .iter()
@@ -646,10 +629,7 @@ pub fn delete_custom_model(state: &BedrockState, input: &Value) -> Result<Value,
     }
 }
 
-pub fn get_model_customization_job(
-    state: &BedrockState,
-    input: &Value,
-) -> Result<Value, AwsError> {
+pub fn get_model_customization_job(state: &BedrockState, input: &Value) -> Result<Value, AwsError> {
     let job_identifier = input["jobIdentifier"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "jobIdentifier is required"))?;
@@ -658,9 +638,7 @@ pub fn get_model_customization_job(
     let job = state
         .customization_jobs
         .iter()
-        .find(|e| {
-            e.key() == job_identifier || e.value().job_arn == job_identifier
-        });
+        .find(|e| e.key() == job_identifier || e.value().job_arn == job_identifier);
 
     match job {
         Some(j) => {
@@ -688,9 +666,10 @@ pub fn stop_model_customization_job(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "jobIdentifier is required"))?;
 
-    let found = state.customization_jobs.iter().find(|e| {
-        e.key() == job_identifier || e.value().job_arn == job_identifier
-    });
+    let found = state
+        .customization_jobs
+        .iter()
+        .find(|e| e.key() == job_identifier || e.value().job_arn == job_identifier);
 
     if let Some(entry) = found {
         let key = entry.key().clone();

@@ -3,9 +3,9 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::operations::{
-    consumers, create_stream, delete_stream, describe_stream, describe_stream_summary,
-    encryption, extras, get_records, get_shard_iterator, list_shards, list_streams,
-    merge_split, monitoring, put_record, put_records, retention, tags, update_shard_count,
+    consumers, create_stream, delete_stream, describe_stream, describe_stream_summary, encryption,
+    extras, get_records, get_shard_iterator, list_shards, list_streams, merge_split, monitoring,
+    put_record, put_records, retention, tags, update_shard_count,
 };
 use crate::state::KinesisState;
 
@@ -68,13 +68,19 @@ impl ServiceHandler for KinesisService {
             "DecreaseStreamRetentionPeriod" => retention::decrease(&state, &input, ctx),
             // Consumers (enhanced fan-out)
             "RegisterStreamConsumer" => consumers::register_stream_consumer(&state, &input, ctx),
-            "DeregisterStreamConsumer" => consumers::deregister_stream_consumer(&state, &input, ctx),
+            "DeregisterStreamConsumer" => {
+                consumers::deregister_stream_consumer(&state, &input, ctx)
+            }
             "DescribeStreamConsumer" => consumers::describe_stream_consumer(&state, &input, ctx),
             "ListStreamConsumers" => consumers::list_stream_consumers(&state, &input, ctx),
             "SubscribeToShard" => consumers::subscribe_to_shard(&state, &input, ctx),
             // Monitoring
-            "EnableEnhancedMonitoring" => monitoring::enable_enhanced_monitoring(&state, &input, ctx),
-            "DisableEnhancedMonitoring" => monitoring::disable_enhanced_monitoring(&state, &input, ctx),
+            "EnableEnhancedMonitoring" => {
+                monitoring::enable_enhanced_monitoring(&state, &input, ctx)
+            }
+            "DisableEnhancedMonitoring" => {
+                monitoring::disable_enhanced_monitoring(&state, &input, ctx)
+            }
             // Encryption
             "StartStreamEncryption" => encryption::start_stream_encryption(&state, &input, ctx),
             "StopStreamEncryption" => encryption::stop_stream_encryption(&state, &input, ctx),
@@ -95,7 +101,9 @@ impl ServiceHandler for KinesisService {
             "UpdateMaxRecordSize" => extras::update_max_record_size(&state, &input, ctx),
             // Stream mode / warm throughput
             "UpdateStreamMode" => extras::update_stream_mode(&state, &input, ctx),
-            "UpdateStreamWarmThroughput" => extras::update_stream_warm_throughput(&state, &input, ctx),
+            "UpdateStreamWarmThroughput" => {
+                extras::update_stream_warm_throughput(&state, &input, ctx)
+            }
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

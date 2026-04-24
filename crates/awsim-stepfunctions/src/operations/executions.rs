@@ -81,10 +81,7 @@ pub fn start_execution(
     let exec_input = input["input"].as_str().unwrap_or("{}").to_string();
 
     // Extract state machine name from ARN (last segment after "stateMachine:")
-    let sm_name = sm_arn
-        .rsplit(':')
-        .next()
-        .unwrap_or("unknown");
+    let sm_name = sm_arn.rsplit(':').next().unwrap_or("unknown");
 
     let exec_arn = build_exec_arn(ctx, sm_name, &exec_name);
 

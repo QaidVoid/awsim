@@ -15,10 +15,7 @@ pub fn create_account(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "AccountName is required"))?;
 
-    let account_id: String = format!(
-        "{:012}",
-        rand_num()
-    );
+    let account_id: String = format!("{:012}", rand_num());
     let arn = format!(
         "arn:aws:organizations::{}:account/{}/{}",
         ctx.account_id,
@@ -63,10 +60,12 @@ pub fn describe_account(
     let id = input["AccountId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "AccountId is required"))?;
-    let acc = state
-        .accounts
-        .get(id)
-        .ok_or_else(|| AwsError::not_found("AccountNotFoundException", format!("Account {id} not found")))?;
+    let acc = state.accounts.get(id).ok_or_else(|| {
+        AwsError::not_found(
+            "AccountNotFoundException",
+            format!("Account {id} not found"),
+        )
+    })?;
     Ok(json!({ "Account": serialize_account(&acc) }))
 }
 
@@ -75,7 +74,11 @@ pub fn list_accounts(
     _input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let accounts: Vec<Value> = state.accounts.iter().map(|e| serialize_account(e.value())).collect();
+    let accounts: Vec<Value> = state
+        .accounts
+        .iter()
+        .map(|e| serialize_account(e.value()))
+        .collect();
     Ok(json!({ "Accounts": accounts }))
 }
 

@@ -90,8 +90,7 @@ pub fn describe_subnets(state: &Ec2State, input: &Value) -> Result<Value, AwsErr
         .subnets
         .iter()
         .filter(|entry| {
-            subnet_id_filter.is_empty()
-                || subnet_id_filter.iter().any(|id| id == &entry.subnet_id)
+            subnet_id_filter.is_empty() || subnet_id_filter.iter().any(|id| id == &entry.subnet_id)
         })
         .map(|entry| subnet_to_value(&entry))
         .collect();

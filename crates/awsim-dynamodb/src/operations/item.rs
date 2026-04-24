@@ -100,11 +100,8 @@ fn emit_stream_record(
 
 /// Parse a DynamoDB item map from JSON value.
 pub fn parse_item(val: &Value) -> Option<DynamoItem> {
-    val.as_object().map(|obj| {
-        obj.iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
-    })
+    val.as_object()
+        .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
 }
 
 /// Apply projection to an item (return only specified attributes).
@@ -174,9 +171,7 @@ pub fn put_item(
             let condition = parse_condition(cond_expr)?;
             let composite_key = table.composite_key(&item);
 
-            let existing = composite_key
-                .as_deref()
-                .and_then(|ck| table.items.get(ck));
+            let existing = composite_key.as_deref().and_then(|ck| table.items.get(ck));
 
             let empty_item: DynamoItem = DynamoItem::new();
             let check_item = existing.unwrap_or(&empty_item);
@@ -210,7 +205,11 @@ pub fn put_item(
     let return_values = opt_str(input, "ReturnValues").unwrap_or("NONE");
 
     // Emit stream record after lock is released.
-    let event_name = if old_item.is_some() { "MODIFY" } else { "INSERT" };
+    let event_name = if old_item.is_some() {
+        "MODIFY"
+    } else {
+        "INSERT"
+    };
     emit_stream_record(
         state,
         &table_name,
@@ -246,8 +245,7 @@ pub fn get_item(
         )
     })?;
 
-    let key = parse_item(&input["Key"])
-        .ok_or_else(|| AwsError::validation("Key is required"))?;
+    let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 
     let composite_key = table
         .composite_key(&key)
@@ -272,8 +270,7 @@ pub fn delete_item(
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?.to_string();
 
-    let key = parse_item(&input["Key"])
-        .ok_or_else(|| AwsError::validation("Key is required"))?;
+    let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 
     let (old_item, keys_item) = {
         let mut table = state.tables.get_mut(&table_name).ok_or_else(|| {
@@ -346,8 +343,7 @@ pub fn update_item(
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?.to_string();
 
-    let key = parse_item(&input["Key"])
-        .ok_or_else(|| AwsError::validation("Key is required"))?;
+    let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 
     let (old_item, new_item, keys_item) = {
         let mut table = state.tables.get_mut(&table_name).ok_or_else(|| {
@@ -415,7 +411,11 @@ pub fn update_item(
     let return_values = opt_str(input, "ReturnValues").unwrap_or("NONE");
 
     // Emit stream record after lock is released.
-    let event_name = if old_item.is_some() { "MODIFY" } else { "INSERT" };
+    let event_name = if old_item.is_some() {
+        "MODIFY"
+    } else {
+        "INSERT"
+    };
     emit_stream_record(
         state,
         &table_name,

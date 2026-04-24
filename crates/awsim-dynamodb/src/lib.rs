@@ -156,9 +156,7 @@ impl ServiceHandler for DynamoDbService {
             "BatchExecuteStatement" => {
                 operations::partiql::batch_execute_statement(&state, &input, ctx)
             }
-            "ExecuteTransaction" => {
-                operations::partiql::execute_transaction(&state, &input, ctx)
-            }
+            "ExecuteTransaction" => operations::partiql::execute_transaction(&state, &input, ctx),
 
             // Kinesis Streaming Destination
             "EnableKinesisStreamingDestination" => {
@@ -248,12 +246,7 @@ impl ServiceHandler for DynamoDbService {
         }
     }
 
-    fn iam_resource(
-        &self,
-        operation: &str,
-        input: &Value,
-        ctx: &RequestContext,
-    ) -> Option<String> {
+    fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
         let prefix = format!("arn:aws:dynamodb:{}:{}", ctx.region, ctx.account_id);
         match operation {
             "ListTables"
@@ -281,11 +274,18 @@ impl ServiceHandler for DynamoDbService {
                     Some(format!("{prefix}:table/{table}/backup/*"))
                 }
             }
-            "DescribeExport" => input.get("ExportArn").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            "DescribeImport" => input.get("ImportArn").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            "TagResource" | "UntagResource" | "ListTagsOfResource" => {
-                input.get("ResourceArn").and_then(|v| v.as_str()).map(|s| s.to_string())
-            }
+            "DescribeExport" => input
+                .get("ExportArn")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "DescribeImport" => input
+                .get("ImportArn")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "TagResource" | "UntagResource" | "ListTagsOfResource" => input
+                .get("ResourceArn")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             _ => {
                 let table = input.get("TableName").and_then(|v| v.as_str())?;
                 Some(format!("{prefix}:table/{table}"))

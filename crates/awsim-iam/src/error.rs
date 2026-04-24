@@ -8,10 +8,7 @@ pub fn entity_already_exists(entity: &str, name: &str) -> AwsError {
 }
 
 pub fn no_such_entity(entity: &str, name: &str) -> AwsError {
-    AwsError::not_found(
-        "NoSuchEntity",
-        format!("{entity} {name} cannot be found"),
-    )
+    AwsError::not_found("NoSuchEntity", format!("{entity} {name} cannot be found"))
 }
 
 pub fn missing_parameter(param: &str) -> AwsError {

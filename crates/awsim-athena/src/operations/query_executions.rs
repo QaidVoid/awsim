@@ -23,9 +23,9 @@ pub fn start_query_execution(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let query_string = input["QueryString"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "QueryString is required"))?;
+    let query_string = input["QueryString"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "QueryString is required")
+    })?;
 
     let workgroup = input["WorkGroup"].as_str().unwrap_or("primary").to_string();
     let database = input["QueryExecutionContext"]["Database"]
@@ -68,12 +68,15 @@ pub fn get_query_execution(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let id = input["QueryExecutionId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "QueryExecutionId is required"))?;
+    let id = input["QueryExecutionId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "QueryExecutionId is required")
+    })?;
 
     let qe = state.query_executions.get(id).ok_or_else(|| {
-        AwsError::not_found("InvalidRequestException", format!("QueryExecution not found: {id}"))
+        AwsError::not_found(
+            "InvalidRequestException",
+            format!("QueryExecution not found: {id}"),
+        )
     })?;
 
     Ok(json!({ "QueryExecution": query_execution_to_value(&qe) }))
@@ -88,9 +91,9 @@ pub fn get_query_results(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let id = input["QueryExecutionId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "QueryExecutionId is required"))?;
+    let id = input["QueryExecutionId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "QueryExecutionId is required")
+    })?;
 
     // Verify the execution exists
     if !state.query_executions.contains_key(id) {
@@ -145,9 +148,9 @@ pub fn stop_query_execution(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let id = input["QueryExecutionId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "QueryExecutionId is required"))?;
+    let id = input["QueryExecutionId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "QueryExecutionId is required")
+    })?;
 
     // In the stub, queries already complete instantly, so stopping is a no-op.
     // Verify it exists and return success.

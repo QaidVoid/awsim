@@ -88,10 +88,7 @@ pub fn list_signing_certificates(state: &IamState, input: &Value) -> Result<Valu
     }))
 }
 
-pub fn upload_signing_certificate(
-    state: &IamState,
-    input: &Value,
-) -> Result<Value, AwsError> {
+pub fn upload_signing_certificate(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
     let body = require_str(input, "CertificateBody")?;
 
@@ -308,7 +305,10 @@ fn extract_string_list(input: &Value, key: &str) -> Vec<String> {
         None => return Vec::new(),
     };
     if let Some(arr) = v.as_array() {
-        return arr.iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
+        return arr
+            .iter()
+            .filter_map(|x| x.as_str().map(str::to_string))
+            .collect();
     }
     if let Some(members) = v.get("member").and_then(|m| m.as_array()) {
         return members
@@ -326,9 +326,8 @@ fn parse_policy_input_list(input: &Value, key: &str) -> Result<Vec<PolicyDocumen
     extract_string_list(input, key)
         .iter()
         .map(|raw| {
-            awsim_iam_policy::parse(raw).map_err(|e| {
-                malformed_policy_document(format!("Syntax errors in policy. {e}"))
-            })
+            awsim_iam_policy::parse(raw)
+                .map_err(|e| malformed_policy_document(format!("Syntax errors in policy. {e}")))
         })
         .collect()
 }
@@ -342,11 +341,7 @@ fn extract_context_entries(input: &Value) -> HashMap<String, ContextValue> {
     let entries = raw
         .as_array()
         .cloned()
-        .or_else(|| {
-            raw.get("member")
-                .and_then(|m| m.as_array())
-                .cloned()
-        })
+        .or_else(|| raw.get("member").and_then(|m| m.as_array()).cloned())
         .unwrap_or_default();
     for entry in entries {
         let key = match entry.get("ContextKeyName").and_then(|v| v.as_str()) {
@@ -423,10 +418,7 @@ fn build_evaluation_results(
     out
 }
 
-pub fn simulate_custom_policy(
-    _state: &IamState,
-    input: &Value,
-) -> Result<Value, AwsError> {
+pub fn simulate_custom_policy(_state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let actions = extract_string_list(input, "ActionNames");
     let mut resources = extract_string_list(input, "ResourceArns");
     if resources.is_empty() {
@@ -450,10 +442,7 @@ pub fn simulate_custom_policy(
     }))
 }
 
-pub fn simulate_principal_policy(
-    state: &IamState,
-    input: &Value,
-) -> Result<Value, AwsError> {
+pub fn simulate_principal_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let principal_arn = require_str(input, "PolicySourceArn")?.to_string();
     let actions = extract_string_list(input, "ActionNames");
     let mut resources = extract_string_list(input, "ResourceArns");
@@ -463,7 +452,8 @@ pub fn simulate_principal_policy(
     let mut identity_policies = parse_policy_input_list(input, "PolicyInputList")?;
     let context = extract_context_entries(input);
 
-    let (principal_policies, principal_account) = collect_principal_policies(state, &principal_arn)?;
+    let (principal_policies, principal_account) =
+        collect_principal_policies(state, &principal_arn)?;
     identity_policies.extend(principal_policies);
 
     let results = build_evaluation_results(

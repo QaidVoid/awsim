@@ -8,8 +8,5 @@ pub fn resource_not_found(resource_type: &str, id: &str) -> AwsError {
 }
 
 pub fn missing_parameter(param: &str) -> AwsError {
-    AwsError::bad_request(
-        "ValidationError",
-        format!("'{}' is required", param),
-    )
+    AwsError::bad_request("ValidationError", format!("'{}' is required", param))
 }

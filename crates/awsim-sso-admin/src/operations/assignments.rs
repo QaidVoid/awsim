@@ -23,18 +23,26 @@ pub fn create_account_assignment(
         .to_string();
     let permission_set_arn = input["PermissionSetArn"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "PermissionSetArn is required"))?
+        .ok_or_else(|| {
+            AwsError::bad_request("ValidationException", "PermissionSetArn is required")
+        })?
         .to_string();
     let target_id = input["TargetId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("ValidationException", "TargetId is required"))?
         .to_string();
-    let target_type = input["TargetType"].as_str().unwrap_or("AWS_ACCOUNT").to_string();
+    let target_type = input["TargetType"]
+        .as_str()
+        .unwrap_or("AWS_ACCOUNT")
+        .to_string();
     let principal_id = input["PrincipalId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("ValidationException", "PrincipalId is required"))?
         .to_string();
-    let principal_type = input["PrincipalType"].as_str().unwrap_or("USER").to_string();
+    let principal_type = input["PrincipalType"]
+        .as_str()
+        .unwrap_or("USER")
+        .to_string();
 
     let id = format!("aa-{}", uuid::Uuid::new_v4().simple());
     let assignment = AccountAssignment {
@@ -51,7 +59,9 @@ pub fn create_account_assignment(
         request_type: "CREATE".to_string(),
     };
 
-    state.account_assignments.insert(id.clone(), assignment.clone());
+    state
+        .account_assignments
+        .insert(id.clone(), assignment.clone());
 
     Ok(json!({
         "AccountAssignmentCreationStatus": {
@@ -75,10 +85,18 @@ pub fn describe_account_assignment_creation_status(
 ) -> Result<Value, AwsError> {
     let id = input["AccountAssignmentCreationRequestId"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "AccountAssignmentCreationRequestId is required"))?;
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "ValidationException",
+                "AccountAssignmentCreationRequestId is required",
+            )
+        })?;
 
     let a = state.account_assignments.get(id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("Assignment not found: {id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Assignment not found: {id}"),
+        )
     })?;
 
     Ok(json!({
@@ -140,7 +158,9 @@ pub fn delete_account_assignment(
         .iter()
         .filter(|e| {
             let a = e.value();
-            a.permission_set_arn == ps_arn && a.target_id == target_id && a.principal_id == principal_id
+            a.permission_set_arn == ps_arn
+                && a.target_id == target_id
+                && a.principal_id == principal_id
         })
         .map(|e| e.key().clone())
         .collect();

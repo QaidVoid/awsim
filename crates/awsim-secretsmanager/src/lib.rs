@@ -105,26 +105,34 @@ impl ServiceHandler for SecretsManagerService {
 
     fn iam_action(&self, operation: &str) -> Option<String> {
         match operation {
-            "CreateSecret" | "GetSecretValue" | "PutSecretValue" | "DescribeSecret"
-            | "ListSecrets" | "UpdateSecret" | "DeleteSecret" | "RestoreSecret"
-            | "TagResource" | "UntagResource" | "RotateSecret" | "CancelRotateSecret"
-            | "ValidateResourcePolicy" | "GetRandomPassword"
-            | "ReplicateSecretToRegions" | "RemoveRegionsFromReplication"
-            | "StopReplicationToReplica" | "ListSecretVersionIds"
-            | "BatchGetSecretValue" | "UpdateSecretVersionStage"
-            | "PutResourcePolicy" | "GetResourcePolicy" | "DeleteResourcePolicy" => {
-                Some(format!("secretsmanager:{operation}"))
-            }
+            "CreateSecret"
+            | "GetSecretValue"
+            | "PutSecretValue"
+            | "DescribeSecret"
+            | "ListSecrets"
+            | "UpdateSecret"
+            | "DeleteSecret"
+            | "RestoreSecret"
+            | "TagResource"
+            | "UntagResource"
+            | "RotateSecret"
+            | "CancelRotateSecret"
+            | "ValidateResourcePolicy"
+            | "GetRandomPassword"
+            | "ReplicateSecretToRegions"
+            | "RemoveRegionsFromReplication"
+            | "StopReplicationToReplica"
+            | "ListSecretVersionIds"
+            | "BatchGetSecretValue"
+            | "UpdateSecretVersionStage"
+            | "PutResourcePolicy"
+            | "GetResourcePolicy"
+            | "DeleteResourcePolicy" => Some(format!("secretsmanager:{operation}")),
             _ => None,
         }
     }
 
-    fn iam_resource(
-        &self,
-        operation: &str,
-        input: &Value,
-        ctx: &RequestContext,
-    ) -> Option<String> {
+    fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
         match operation {
             "ListSecrets" | "GetRandomPassword" | "BatchGetSecretValue" | "CreateSecret" => {
                 Some("*".to_string())
@@ -157,7 +165,9 @@ mod tests {
 
     fn block_on<F: std::future::Future>(f: F) -> F::Output {
         use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-        fn noop_clone(_: *const ()) -> RawWaker { noop_raw_waker() }
+        fn noop_clone(_: *const ()) -> RawWaker {
+            noop_raw_waker()
+        }
         fn noop(_: *const ()) {}
         fn noop_raw_waker() -> RawWaker {
             static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
@@ -212,12 +222,8 @@ mod tests {
     fn test_create_secret_no_value() {
         let svc = SecretsManagerService::new();
         let ctx = ctx();
-        let err = block_on(svc.handle(
-            "CreateSecret",
-            json!({ "Name": "empty" }),
-            &ctx,
-        ))
-        .unwrap_err();
+        let err =
+            block_on(svc.handle("CreateSecret", json!({ "Name": "empty" }), &ctx)).unwrap_err();
         assert_eq!(err.code, "InvalidParameterException");
     }
 
@@ -231,12 +237,9 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        let result = block_on(svc.handle(
-            "GetSecretValue",
-            json!({ "SecretId": "my-secret" }),
-            &ctx,
-        ))
-        .unwrap();
+        let result =
+            block_on(svc.handle("GetSecretValue", json!({ "SecretId": "my-secret" }), &ctx))
+                .unwrap();
         assert_eq!(result["SecretString"].as_str().unwrap(), "hello");
         assert_eq!(result["Name"].as_str().unwrap(), "my-secret");
     }
@@ -252,12 +255,8 @@ mod tests {
         ))
         .unwrap();
         let arn = created["ARN"].as_str().unwrap();
-        let result = block_on(svc.handle(
-            "GetSecretValue",
-            json!({ "SecretId": arn }),
-            &ctx,
-        ))
-        .unwrap();
+        let result =
+            block_on(svc.handle("GetSecretValue", json!({ "SecretId": arn }), &ctx)).unwrap();
         assert_eq!(result["SecretString"].as_str().unwrap(), "data");
     }
 
@@ -265,12 +264,8 @@ mod tests {
     fn test_get_secret_not_found() {
         let svc = SecretsManagerService::new();
         let ctx = ctx();
-        let err = block_on(svc.handle(
-            "GetSecretValue",
-            json!({ "SecretId": "ghost" }),
-            &ctx,
-        ))
-        .unwrap_err();
+        let err = block_on(svc.handle("GetSecretValue", json!({ "SecretId": "ghost" }), &ctx))
+            .unwrap_err();
         assert_eq!(err.code, "ResourceNotFoundException");
     }
 
@@ -321,12 +316,9 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        let result = block_on(svc.handle(
-            "DescribeSecret",
-            json!({ "SecretId": "desc-secret" }),
-            &ctx,
-        ))
-        .unwrap();
+        let result =
+            block_on(svc.handle("DescribeSecret", json!({ "SecretId": "desc-secret" }), &ctx))
+                .unwrap();
         assert_eq!(result["Name"].as_str().unwrap(), "desc-secret");
         assert_eq!(result["Description"].as_str().unwrap(), "my desc");
         // Value must not be present in metadata
@@ -369,12 +361,9 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        let desc = block_on(svc.handle(
-            "DescribeSecret",
-            json!({ "SecretId": "upd-secret" }),
-            &ctx,
-        ))
-        .unwrap();
+        let desc =
+            block_on(svc.handle("DescribeSecret", json!({ "SecretId": "upd-secret" }), &ctx))
+                .unwrap();
         assert_eq!(desc["Description"].as_str().unwrap(), "new");
     }
 
@@ -397,29 +386,16 @@ mod tests {
         .unwrap();
 
         // GetSecretValue on a deleted secret should fail
-        let err = block_on(svc.handle(
-            "GetSecretValue",
-            json!({ "SecretId": "del-secret" }),
-            &ctx,
-        ))
-        .unwrap_err();
+        let err = block_on(svc.handle("GetSecretValue", json!({ "SecretId": "del-secret" }), &ctx))
+            .unwrap_err();
         assert_eq!(err.code, "InvalidRequestException");
 
         // Restore it
-        block_on(svc.handle(
-            "RestoreSecret",
-            json!({ "SecretId": "del-secret" }),
-            &ctx,
-        ))
-        .unwrap();
+        block_on(svc.handle("RestoreSecret", json!({ "SecretId": "del-secret" }), &ctx)).unwrap();
 
         // Should be accessible again
-        let val = block_on(svc.handle(
-            "GetSecretValue",
-            json!({ "SecretId": "del-secret" }),
-            &ctx,
-        ))
-        .unwrap();
+        let val = block_on(svc.handle("GetSecretValue", json!({ "SecretId": "del-secret" }), &ctx))
+            .unwrap();
         assert_eq!(val["SecretString"].as_str().unwrap(), "x");
     }
 
@@ -442,12 +418,8 @@ mod tests {
         .unwrap();
 
         // Immediately gone
-        let err = block_on(svc.handle(
-            "GetSecretValue",
-            json!({ "SecretId": "force-del" }),
-            &ctx,
-        ))
-        .unwrap_err();
+        let err = block_on(svc.handle("GetSecretValue", json!({ "SecretId": "force-del" }), &ctx))
+            .unwrap_err();
         assert_eq!(err.code, "ResourceNotFoundException");
     }
 
@@ -472,12 +444,8 @@ mod tests {
         ))
         .unwrap();
 
-        let desc = block_on(svc.handle(
-            "DescribeSecret",
-            json!({ "SecretId": "tagged" }),
-            &ctx,
-        ))
-        .unwrap();
+        let desc =
+            block_on(svc.handle("DescribeSecret", json!({ "SecretId": "tagged" }), &ctx)).unwrap();
         assert_eq!(desc["Tags"].as_array().unwrap().len(), 2);
 
         block_on(svc.handle(
@@ -487,12 +455,8 @@ mod tests {
         ))
         .unwrap();
 
-        let desc2 = block_on(svc.handle(
-            "DescribeSecret",
-            json!({ "SecretId": "tagged" }),
-            &ctx,
-        ))
-        .unwrap();
+        let desc2 =
+            block_on(svc.handle("DescribeSecret", json!({ "SecretId": "tagged" }), &ctx)).unwrap();
         assert_eq!(desc2["Tags"].as_array().unwrap().len(), 1);
     }
 
@@ -560,6 +524,9 @@ mod tests {
         let errors = result["Errors"].as_array().unwrap();
         assert_eq!(values.len(), 2);
         assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0]["ErrorCode"].as_str().unwrap(), "ResourceNotFoundException");
+        assert_eq!(
+            errors[0]["ErrorCode"].as_str().unwrap(),
+            "ResourceNotFoundException"
+        );
     }
 }

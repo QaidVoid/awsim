@@ -54,7 +54,9 @@ pub async fn test_kinesis(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             .put_record()
             .stream_name("conformance-stream")
             .partition_key("pk-1")
-            .data(aws_sdk_kinesis::primitives::Blob::new(b"hello stream".to_vec()))
+            .data(aws_sdk_kinesis::primitives::Blob::new(
+                b"hello stream".to_vec()
+            ))
             .send()
             .await,
         verbose
@@ -81,10 +83,7 @@ pub async fn test_kinesis(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             .shard_iterator_type(aws_sdk_kinesis::types::ShardIteratorType::TrimHorizon)
             .send()
             .await;
-        let shard_iter = iter_r
-            .as_ref()
-            .ok()
-            .and_then(|r| r.shard_iterator.clone());
+        let shard_iter = iter_r.as_ref().ok().and_then(|r| r.shard_iterator.clone());
         results.push(chk!("GetShardIterator", iter_r, verbose));
 
         if let Some(iter) = shard_iter {
@@ -121,7 +120,9 @@ pub async fn test_kinesis(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             .records(
                 aws_sdk_kinesis::types::PutRecordsRequestEntry::builder()
                     .partition_key("pk-batch")
-                    .data(aws_sdk_kinesis::primitives::Blob::new(b"batch record 1".to_vec()))
+                    .data(aws_sdk_kinesis::primitives::Blob::new(
+                        b"batch record 1".to_vec()
+                    ))
                     .build()
                     .unwrap(),
             )
@@ -234,7 +235,9 @@ pub async fn test_kinesis(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         .ok()
         .and_then(|r| r.stream_description_summary.as_ref())
         .map(|s| s.stream_arn.clone())
-        .unwrap_or_else(|| "arn:aws:kinesis:us-east-1:000000000000:stream/conformance-stream".to_string());
+        .unwrap_or_else(|| {
+            "arn:aws:kinesis:us-east-1:000000000000:stream/conformance-stream".to_string()
+        });
 
     let consumer_r = client
         .register_stream_consumer()

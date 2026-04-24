@@ -68,9 +68,7 @@ impl ServiceHandler for KmsService {
             "DisableKey" => operations::keys::disable_key(&state, &input, ctx),
             "ScheduleKeyDeletion" => operations::keys::schedule_key_deletion(&state, &input, ctx),
             "CancelKeyDeletion" => operations::keys::cancel_key_deletion(&state, &input, ctx),
-            "UpdateKeyDescription" => {
-                operations::keys::update_key_description(&state, &input, ctx)
-            }
+            "UpdateKeyDescription" => operations::keys::update_key_description(&state, &input, ctx),
 
             // Aliases
             "CreateAlias" => operations::aliases::create_alias(&state, &input, ctx),
@@ -104,12 +102,8 @@ impl ServiceHandler for KmsService {
             "GetKeyRotationStatus" => {
                 operations::rotation::get_key_rotation_status(&state, &input, ctx)
             }
-            "EnableKeyRotation" => {
-                operations::rotation::enable_key_rotation(&state, &input, ctx)
-            }
-            "DisableKeyRotation" => {
-                operations::rotation::disable_key_rotation(&state, &input, ctx)
-            }
+            "EnableKeyRotation" => operations::rotation::enable_key_rotation(&state, &input, ctx),
+            "DisableKeyRotation" => operations::rotation::disable_key_rotation(&state, &input, ctx),
             "RotateKeyOnDemand" => operations::rotation::rotate_key_on_demand(&state, &input, ctx),
             "ListKeyRotations" => operations::rotation::list_key_rotations(&state, &input, ctx),
 
@@ -120,9 +114,7 @@ impl ServiceHandler for KmsService {
             // Grants
             "CreateGrant" => operations::grants::create_grant(&state, &input, ctx),
             "ListGrants" => operations::grants::list_grants(&state, &input, ctx),
-            "ListRetirableGrants" => {
-                operations::grants::list_retirable_grants(&state, &input, ctx)
-            }
+            "ListRetirableGrants" => operations::grants::list_retirable_grants(&state, &input, ctx),
             "RetireGrant" => operations::grants::retire_grant(&state, &input, ctx),
             "RevokeGrant" => operations::grants::revoke_grant(&state, &input, ctx),
 
@@ -177,39 +169,75 @@ impl ServiceHandler for KmsService {
 
     fn iam_action(&self, operation: &str) -> Option<String> {
         match operation {
-            "CreateKey" | "DescribeKey" | "ListKeys" | "EnableKey" | "DisableKey"
-            | "ScheduleKeyDeletion" | "CancelKeyDeletion" | "UpdateKeyDescription"
-            | "CreateAlias" | "DeleteAlias" | "ListAliases" | "UpdateAlias"
-            | "Encrypt" | "Decrypt" | "GenerateDataKey" | "GenerateDataKeyWithoutPlaintext"
-            | "ReEncrypt" | "ReEncryptFrom" | "ReEncryptTo" | "GenerateRandom"
-            | "GenerateDataKeyPair" | "GenerateDataKeyPairWithoutPlaintext"
-            | "Sign" | "Verify" | "GetPublicKey" | "DeriveSharedSecret"
-            | "GetKeyRotationStatus" | "EnableKeyRotation" | "DisableKeyRotation"
-            | "RotateKeyOnDemand" | "ListKeyRotations"
-            | "GenerateMac" | "VerifyMac"
-            | "CreateGrant" | "ListGrants" | "ListRetirableGrants" | "RetireGrant" | "RevokeGrant"
-            | "GetKeyPolicy" | "PutKeyPolicy" | "ListKeyPolicies"
-            | "CreateCustomKeyStore" | "DescribeCustomKeyStores" | "DeleteCustomKeyStore"
-            | "ConnectCustomKeyStore" | "DisconnectCustomKeyStore" | "UpdateCustomKeyStore"
-            | "ReplicateKey" | "UpdatePrimaryRegion"
-            | "GetParametersForImport" | "ImportKeyMaterial" | "DeleteImportedKeyMaterial"
-            | "TagResource" | "UntagResource" | "ListResourceTags" => {
-                Some(format!("kms:{operation}"))
-            }
+            "CreateKey"
+            | "DescribeKey"
+            | "ListKeys"
+            | "EnableKey"
+            | "DisableKey"
+            | "ScheduleKeyDeletion"
+            | "CancelKeyDeletion"
+            | "UpdateKeyDescription"
+            | "CreateAlias"
+            | "DeleteAlias"
+            | "ListAliases"
+            | "UpdateAlias"
+            | "Encrypt"
+            | "Decrypt"
+            | "GenerateDataKey"
+            | "GenerateDataKeyWithoutPlaintext"
+            | "ReEncrypt"
+            | "ReEncryptFrom"
+            | "ReEncryptTo"
+            | "GenerateRandom"
+            | "GenerateDataKeyPair"
+            | "GenerateDataKeyPairWithoutPlaintext"
+            | "Sign"
+            | "Verify"
+            | "GetPublicKey"
+            | "DeriveSharedSecret"
+            | "GetKeyRotationStatus"
+            | "EnableKeyRotation"
+            | "DisableKeyRotation"
+            | "RotateKeyOnDemand"
+            | "ListKeyRotations"
+            | "GenerateMac"
+            | "VerifyMac"
+            | "CreateGrant"
+            | "ListGrants"
+            | "ListRetirableGrants"
+            | "RetireGrant"
+            | "RevokeGrant"
+            | "GetKeyPolicy"
+            | "PutKeyPolicy"
+            | "ListKeyPolicies"
+            | "CreateCustomKeyStore"
+            | "DescribeCustomKeyStores"
+            | "DeleteCustomKeyStore"
+            | "ConnectCustomKeyStore"
+            | "DisconnectCustomKeyStore"
+            | "UpdateCustomKeyStore"
+            | "ReplicateKey"
+            | "UpdatePrimaryRegion"
+            | "GetParametersForImport"
+            | "ImportKeyMaterial"
+            | "DeleteImportedKeyMaterial"
+            | "TagResource"
+            | "UntagResource"
+            | "ListResourceTags" => Some(format!("kms:{operation}")),
             _ => None,
         }
     }
 
-    fn iam_resource(
-        &self,
-        operation: &str,
-        input: &Value,
-        ctx: &RequestContext,
-    ) -> Option<String> {
+    fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
         let prefix = format!("arn:aws:kms:{}:{}", ctx.region, ctx.account_id);
         match operation {
-            "ListKeys" | "ListAliases" | "ListRetirableGrants" | "DescribeCustomKeyStores"
-            | "CreateKey" | "CreateCustomKeyStore" | "GenerateRandom" => Some("*".to_string()),
+            "ListKeys"
+            | "ListAliases"
+            | "ListRetirableGrants"
+            | "DescribeCustomKeyStores"
+            | "CreateKey"
+            | "CreateCustomKeyStore"
+            | "GenerateRandom" => Some("*".to_string()),
             "RetireGrant" => input
                 .get("GrantToken")
                 .and_then(|v| v.as_str())
@@ -246,7 +274,9 @@ mod tests {
 
     fn block_on<F: std::future::Future>(f: F) -> F::Output {
         use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-        fn noop_clone(_: *const ()) -> RawWaker { noop_raw_waker() }
+        fn noop_clone(_: *const ()) -> RawWaker {
+            noop_raw_waker()
+        }
         fn noop(_: *const ()) {}
         fn noop_raw_waker() -> RawWaker {
             static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
@@ -298,12 +328,9 @@ mod tests {
         let ctx = ctx();
         let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
         let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
-        let described = block_on(svc.handle("DescribeKey", json!({ "KeyId": key_id }), &ctx))
-            .unwrap();
-        assert_eq!(
-            described["KeyMetadata"]["KeyId"].as_str().unwrap(),
-            key_id
-        );
+        let described =
+            block_on(svc.handle("DescribeKey", json!({ "KeyId": key_id }), &ctx)).unwrap();
+        assert_eq!(described["KeyMetadata"]["KeyId"].as_str().unwrap(), key_id);
     }
 
     #[test]
@@ -324,16 +351,16 @@ mod tests {
         let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
 
         block_on(svc.handle("DisableKey", json!({ "KeyId": key_id }), &ctx)).unwrap();
-        let described = block_on(svc.handle("DescribeKey", json!({ "KeyId": key_id }), &ctx))
-            .unwrap();
+        let described =
+            block_on(svc.handle("DescribeKey", json!({ "KeyId": key_id }), &ctx)).unwrap();
         assert_eq!(
             described["KeyMetadata"]["KeyState"].as_str().unwrap(),
             "Disabled"
         );
 
         block_on(svc.handle("EnableKey", json!({ "KeyId": key_id }), &ctx)).unwrap();
-        let described2 = block_on(svc.handle("DescribeKey", json!({ "KeyId": key_id }), &ctx))
-            .unwrap();
+        let described2 =
+            block_on(svc.handle("DescribeKey", json!({ "KeyId": key_id }), &ctx)).unwrap();
         assert_eq!(
             described2["KeyMetadata"]["KeyState"].as_str().unwrap(),
             "Enabled"
@@ -354,7 +381,9 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(result["KeyId"].as_str().unwrap(), key_id);
-        assert!(result["DeletionDate"].as_f64().is_some() || result["DeletionDate"].as_str().is_some());
+        assert!(
+            result["DeletionDate"].as_f64().is_some() || result["DeletionDate"].as_str().is_some()
+        );
     }
 
     #[test]
@@ -374,12 +403,7 @@ mod tests {
         let aliases = block_on(svc.handle("ListAliases", json!({}), &ctx)).unwrap();
         assert_eq!(aliases["Aliases"].as_array().unwrap().len(), 1);
 
-        block_on(svc.handle(
-            "DeleteAlias",
-            json!({ "AliasName": "alias/my-key" }),
-            &ctx,
-        ))
-        .unwrap();
+        block_on(svc.handle("DeleteAlias", json!({ "AliasName": "alias/my-key" }), &ctx)).unwrap();
 
         let aliases2 = block_on(svc.handle("ListAliases", json!({}), &ctx)).unwrap();
         assert_eq!(aliases2["Aliases"].as_array().unwrap().len(), 0);
@@ -419,12 +443,8 @@ mod tests {
         .unwrap();
         let ciphertext = encrypted["CiphertextBlob"].as_str().unwrap();
 
-        let decrypted = block_on(svc.handle(
-            "Decrypt",
-            json!({ "CiphertextBlob": ciphertext }),
-            &ctx,
-        ))
-        .unwrap();
+        let decrypted =
+            block_on(svc.handle("Decrypt", json!({ "CiphertextBlob": ciphertext }), &ctx)).unwrap();
         let decrypted_b64 = decrypted["Plaintext"].as_str().unwrap();
         let decrypted_bytes = BASE64.decode(decrypted_b64).unwrap();
         assert_eq!(decrypted_bytes, plaintext.as_bytes());
@@ -513,13 +533,12 @@ mod tests {
         assert_ne!(ciphertext, new_ciphertext);
 
         // Decrypt the re-encrypted blob
-        let decrypted = block_on(svc.handle(
-            "Decrypt",
-            json!({ "CiphertextBlob": new_ciphertext }),
-            &ctx,
-        ))
-        .unwrap();
-        let decrypted_bytes = BASE64.decode(decrypted["Plaintext"].as_str().unwrap()).unwrap();
+        let decrypted =
+            block_on(svc.handle("Decrypt", json!({ "CiphertextBlob": new_ciphertext }), &ctx))
+                .unwrap();
+        let decrypted_bytes = BASE64
+            .decode(decrypted["Plaintext"].as_str().unwrap())
+            .unwrap();
         assert_eq!(decrypted_bytes, b"reencrypt me");
     }
 
@@ -605,8 +624,8 @@ mod tests {
         .unwrap();
         let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
 
-        let result = block_on(svc.handle("GetPublicKey", json!({ "KeyId": key_id }), &ctx))
-            .unwrap();
+        let result =
+            block_on(svc.handle("GetPublicKey", json!({ "KeyId": key_id }), &ctx)).unwrap();
         assert!(result["PublicKey"].as_str().is_some());
         assert_eq!(result["KeySpec"].as_str().unwrap(), "RSA_2048");
     }
@@ -618,8 +637,8 @@ mod tests {
         let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
         let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
 
-        let err = block_on(svc.handle("GetPublicKey", json!({ "KeyId": key_id }), &ctx))
-            .unwrap_err();
+        let err =
+            block_on(svc.handle("GetPublicKey", json!({ "KeyId": key_id }), &ctx)).unwrap_err();
         assert_eq!(err.code, "UnsupportedOperationException");
     }
 
@@ -679,8 +698,8 @@ mod tests {
         ))
         .unwrap();
 
-        let tags = block_on(svc.handle("ListResourceTags", json!({ "KeyId": key_id }), &ctx))
-            .unwrap();
+        let tags =
+            block_on(svc.handle("ListResourceTags", json!({ "KeyId": key_id }), &ctx)).unwrap();
         assert_eq!(tags["Tags"].as_array().unwrap().len(), 2);
 
         block_on(svc.handle(
@@ -690,8 +709,8 @@ mod tests {
         ))
         .unwrap();
 
-        let tags2 = block_on(svc.handle("ListResourceTags", json!({ "KeyId": key_id }), &ctx))
-            .unwrap();
+        let tags2 =
+            block_on(svc.handle("ListResourceTags", json!({ "KeyId": key_id }), &ctx)).unwrap();
         assert_eq!(tags2["Tags"].as_array().unwrap().len(), 1);
     }
 

@@ -21,12 +21,7 @@ impl PrincipalLookup for StubLookup {
     }
 }
 
-fn make_principal(
-    arn: &str,
-    account: &str,
-    docs: Vec<&str>,
-    is_root: bool,
-) -> ResolvedPrincipal {
+fn make_principal(arn: &str, account: &str, docs: Vec<&str>, is_root: bool) -> ResolvedPrincipal {
     let identity_policies: Vec<PolicyDocument> = docs
         .into_iter()
         .map(|d| awsim_iam_policy::parse(d).expect("policy parses"))

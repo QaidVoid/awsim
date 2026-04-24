@@ -54,13 +54,15 @@ pub fn delete_platform_application(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["PlatformApplicationArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PlatformApplicationArn is required"))?;
+    let arn = input["PlatformApplicationArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "PlatformApplicationArn is required")
+    })?;
 
     state.platform_applications.remove(arn);
     // Also remove all endpoints for this application
-    state.platform_endpoints.retain(|_, e| e.platform_application_arn != arn);
+    state
+        .platform_endpoints
+        .retain(|_, e| e.platform_application_arn != arn);
 
     Ok(json!({}))
 }
@@ -98,9 +100,9 @@ pub fn get_platform_application_attributes(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["PlatformApplicationArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PlatformApplicationArn is required"))?;
+    let arn = input["PlatformApplicationArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "PlatformApplicationArn is required")
+    })?;
 
     let app = state.platform_applications.get(arn).ok_or_else(|| {
         AwsError::not_found("NotFound", format!("Platform application not found: {arn}"))
@@ -124,9 +126,9 @@ pub fn set_platform_application_attributes(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["PlatformApplicationArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PlatformApplicationArn is required"))?;
+    let arn = input["PlatformApplicationArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "PlatformApplicationArn is required")
+    })?;
 
     let mut app = state.platform_applications.get_mut(arn).ok_or_else(|| {
         AwsError::not_found("NotFound", format!("Platform application not found: {arn}"))
@@ -152,9 +154,9 @@ pub fn create_platform_endpoint(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let platform_application_arn = input["PlatformApplicationArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PlatformApplicationArn is required"))?;
+    let platform_application_arn = input["PlatformApplicationArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "PlatformApplicationArn is required")
+    })?;
     let token = input["Token"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Token is required"))?;
@@ -198,7 +200,9 @@ pub fn create_platform_endpoint(
         attributes,
     };
 
-    state.platform_endpoints.insert(endpoint_arn.clone(), endpoint);
+    state
+        .platform_endpoints
+        .insert(endpoint_arn.clone(), endpoint);
     Ok(json!({ "EndpointArn": endpoint_arn }))
 }
 
@@ -228,9 +232,9 @@ pub fn list_endpoints_by_platform_application(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let platform_application_arn = input["PlatformApplicationArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PlatformApplicationArn is required"))?;
+    let platform_application_arn = input["PlatformApplicationArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "PlatformApplicationArn is required")
+    })?;
 
     let endpoints: Vec<Value> = state
         .platform_endpoints
@@ -266,9 +270,10 @@ pub fn get_endpoint_attributes(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EndpointArn is required"))?;
 
-    let endpoint = state.platform_endpoints.get(arn).ok_or_else(|| {
-        AwsError::not_found("NotFound", format!("Endpoint not found: {arn}"))
-    })?;
+    let endpoint = state
+        .platform_endpoints
+        .get(arn)
+        .ok_or_else(|| AwsError::not_found("NotFound", format!("Endpoint not found: {arn}")))?;
 
     let attrs: serde_json::Map<String, Value> = endpoint
         .attributes
@@ -292,9 +297,10 @@ pub fn set_endpoint_attributes(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EndpointArn is required"))?;
 
-    let mut endpoint = state.platform_endpoints.get_mut(arn).ok_or_else(|| {
-        AwsError::not_found("NotFound", format!("Endpoint not found: {arn}"))
-    })?;
+    let mut endpoint = state
+        .platform_endpoints
+        .get_mut(arn)
+        .ok_or_else(|| AwsError::not_found("NotFound", format!("Endpoint not found: {arn}")))?;
 
     if let Some(attrs) = input["Attributes"].as_object() {
         for (k, v) in attrs {

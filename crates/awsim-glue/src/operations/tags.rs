@@ -18,10 +18,8 @@ pub fn get_tags(
 
     let tags_map = state.tags.get(resource_arn);
     let tags: Value = if let Some(tags) = tags_map {
-        let obj: serde_json::Map<String, Value> = tags
-            .iter()
-            .map(|(k, v)| (k.clone(), json!(v)))
-            .collect();
+        let obj: serde_json::Map<String, Value> =
+            tags.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
         json!(obj)
     } else {
         json!({})
@@ -47,10 +45,7 @@ pub fn tag_resource(
         .as_object()
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "TagsToAdd is required"))?;
 
-    let mut entry = state
-        .tags
-        .entry(resource_arn.to_string())
-        .or_default();
+    let mut entry = state.tags.entry(resource_arn.to_string()).or_default();
 
     for (k, v) in new_tags {
         if let Some(val) = v.as_str() {
@@ -74,9 +69,9 @@ pub fn untag_resource(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "ResourceArn is required"))?;
 
-    let tags_to_remove = input["TagsToRemove"]
-        .as_array()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "TagsToRemove is required"))?;
+    let tags_to_remove = input["TagsToRemove"].as_array().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "TagsToRemove is required")
+    })?;
 
     if let Some(mut entry) = state.tags.get_mut(resource_arn) {
         for key_val in tags_to_remove {

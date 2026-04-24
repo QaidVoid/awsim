@@ -6,7 +6,7 @@ use crate::{
     error::resource_not_found,
     executor,
     state::{InvocationRecord, LambdaState},
-    util::{now_iso8601, opt_str, require_str, new_uuid},
+    util::{new_uuid, now_iso8601, opt_str, require_str},
 };
 
 /// Extract zip bytes to the given directory, returning an error string on failure.
@@ -19,7 +19,9 @@ fn extract_zip(zip_bytes: &[u8], dest: &std::path::Path) -> Result<(), String> {
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| format!("zip open failed: {e}"))?;
 
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|e| format!("zip entry {i}: {e}"))?;
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("zip entry {i}: {e}"))?;
         let entry_path = dest.join(entry.name());
 
         if entry.is_dir() {
@@ -27,11 +29,12 @@ fn extract_zip(zip_bytes: &[u8], dest: &std::path::Path) -> Result<(), String> {
                 .map_err(|e| format!("mkdir {}: {e}", entry_path.display()))?;
         } else {
             if let Some(parent) = entry_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("mkdir parent: {e}"))?;
+                std::fs::create_dir_all(parent).map_err(|e| format!("mkdir parent: {e}"))?;
             }
             let mut data = Vec::new();
-            entry.read_to_end(&mut data).map_err(|e| format!("read entry: {e}"))?;
+            entry
+                .read_to_end(&mut data)
+                .map_err(|e| format!("read entry: {e}"))?;
             std::fs::write(&entry_path, &data)
                 .map_err(|e| format!("write {}: {e}", entry_path.display()))?;
         }
@@ -62,14 +65,12 @@ fn ensure_code_dir(
             }
         }
         // Hash mismatch — clear and re-extract
-        std::fs::remove_dir_all(&cache_dir)
-            .map_err(|e| format!("remove stale cache: {e}"))?;
+        std::fs::remove_dir_all(&cache_dir).map_err(|e| format!("remove stale cache: {e}"))?;
     }
 
     debug!(function_name, "Extracting zip to cache directory");
     extract_zip(code_data, &cache_dir)?;
-    std::fs::write(&stamp_path, code_sha256)
-        .map_err(|e| format!("write sha stamp: {e}"))?;
+    std::fs::write(&stamp_path, code_sha256).map_err(|e| format!("write sha stamp: {e}"))?;
 
     Ok(cache_dir)
 }
@@ -183,7 +184,11 @@ pub fn invoke(
         }
     }
 
-    let response_status = if invocation_type == "Event" { 202u64 } else { 200u64 };
+    let response_status = if invocation_type == "Event" {
+        202u64
+    } else {
+        200u64
+    };
 
     let mut response = json!({
         "StatusCode": response_status,

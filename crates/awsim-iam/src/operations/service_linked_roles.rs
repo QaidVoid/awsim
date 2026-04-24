@@ -20,11 +20,20 @@ pub fn create_service_linked_role(
     let custom_suffix = opt_str(input, "CustomSuffix").unwrap_or("");
 
     let role_name = if custom_suffix.is_empty() {
-        format!("AWSServiceRoleFor{}", aws_service_name.split('.').next().unwrap_or(aws_service_name))
+        format!(
+            "AWSServiceRoleFor{}",
+            aws_service_name
+                .split('.')
+                .next()
+                .unwrap_or(aws_service_name)
+        )
     } else {
         format!(
             "AWSServiceRoleFor{}_{}",
-            aws_service_name.split('.').next().unwrap_or(aws_service_name),
+            aws_service_name
+                .split('.')
+                .next()
+                .unwrap_or(aws_service_name),
             custom_suffix
         )
     };
@@ -40,10 +49,7 @@ pub fn create_service_linked_role(
     );
 
     let role_id = new_role_id();
-    let arn = format!(
-        "arn:aws:iam::{}:role{}{}",
-        ctx.account_id, path, role_name
-    );
+    let arn = format!("arn:aws:iam::{}:role{}{}", ctx.account_id, path, role_name);
 
     let role = Role {
         role_name: role_name.clone(),
@@ -81,7 +87,9 @@ pub fn delete_service_linked_role(state: &IamState, input: &Value) -> Result<Val
     }
 
     let task_id = new_uuid();
-    state.deletion_tasks.insert(task_id.clone(), "SUCCEEDED".to_string());
+    state
+        .deletion_tasks
+        .insert(task_id.clone(), "SUCCEEDED".to_string());
     state.roles.remove(role_name);
 
     Ok(json!({ "DeletionTaskId": task_id }))

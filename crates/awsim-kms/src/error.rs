@@ -1,17 +1,11 @@
 use awsim_core::AwsError;
 
 pub fn not_found(resource: &str) -> AwsError {
-    AwsError::not_found(
-        "NotFoundException",
-        format!("{resource} does not exist"),
-    )
+    AwsError::not_found("NotFoundException", format!("{resource} does not exist"))
 }
 
 pub fn invalid_key_id(key_id: &str) -> AwsError {
-    AwsError::bad_request(
-        "InvalidKeyIdException",
-        format!("Invalid key ID: {key_id}"),
-    )
+    AwsError::bad_request("InvalidKeyIdException", format!("Invalid key ID: {key_id}"))
 }
 
 pub fn alias_exists(alias: &str) -> AwsError {
@@ -22,10 +16,7 @@ pub fn alias_exists(alias: &str) -> AwsError {
 }
 
 pub fn key_disabled(key_id: &str) -> AwsError {
-    AwsError::bad_request(
-        "DisabledException",
-        format!("Key {key_id} is disabled"),
-    )
+    AwsError::bad_request("DisabledException", format!("Key {key_id} is disabled"))
 }
 
 pub fn key_pending_deletion(key_id: &str) -> AwsError {

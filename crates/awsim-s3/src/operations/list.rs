@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use crate::state::S3State;
 use crate::util::rfc7231_to_iso8601;
 
-use super::require_str;
 use super::bucket::no_such_bucket;
+use super::require_str;
 
 /// GET /{Bucket}?list-type=2 — list objects with prefix/delimiter/pagination.
 pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError> {
@@ -18,7 +18,12 @@ pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError
         .get("max-keys")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse().ok())
-        .or_else(|| input.get("max-keys").and_then(Value::as_u64).map(|n| n as usize))
+        .or_else(|| {
+            input
+                .get("max-keys")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize)
+        })
         .unwrap_or(1000)
         .min(1000);
     let continuation_token = input
@@ -131,7 +136,12 @@ pub fn list_objects(state: &S3State, input: &Value) -> Result<Value, AwsError> {
         .get("max-keys")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse().ok())
-        .or_else(|| input.get("max-keys").and_then(Value::as_u64).map(|n| n as usize))
+        .or_else(|| {
+            input
+                .get("max-keys")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize)
+        })
         .unwrap_or(1000)
         .min(1000);
 
@@ -176,7 +186,10 @@ pub fn list_objects(state: &S3State, input: &Value) -> Result<Value, AwsError> {
         }
     }
 
-    let cp_list: Vec<Value> = common_prefixes.iter().map(|p| json!({"Prefix": p})).collect();
+    let cp_list: Vec<Value> = common_prefixes
+        .iter()
+        .map(|p| json!({"Prefix": p}))
+        .collect();
     let is_truncated = next_marker.is_some();
 
     let mut result = json!({
@@ -209,7 +222,12 @@ pub fn list_object_versions(state: &S3State, input: &Value) -> Result<Value, Aws
         .get("max-keys")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse().ok())
-        .or_else(|| input.get("max-keys").and_then(Value::as_u64).map(|n| n as usize))
+        .or_else(|| {
+            input
+                .get("max-keys")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize)
+        })
         .unwrap_or(1000)
         .min(1000);
 
@@ -249,7 +267,10 @@ pub fn list_object_versions(state: &S3State, input: &Value) -> Result<Value, Aws
         }
     }
 
-    let cp_list: Vec<Value> = common_prefixes.iter().map(|p| json!({"Prefix": p})).collect();
+    let cp_list: Vec<Value> = common_prefixes
+        .iter()
+        .map(|p| json!({"Prefix": p}))
+        .collect();
 
     let mut result = json!({
         "__xml_root": "ListVersionsResult",

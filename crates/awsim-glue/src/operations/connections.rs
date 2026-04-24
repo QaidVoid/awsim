@@ -25,9 +25,9 @@ pub fn create_connection(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let conn_input = &input["ConnectionInput"];
-    let name = conn_input["Name"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "ConnectionInput.Name is required"))?;
+    let name = conn_input["Name"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "ConnectionInput.Name is required")
+    })?;
     let connection_type = conn_input["ConnectionType"]
         .as_str()
         .unwrap_or("JDBC")
@@ -92,9 +92,9 @@ pub fn delete_connection(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["ConnectionName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "ConnectionName is required"))?;
+    let name = input["ConnectionName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "ConnectionName is required")
+    })?;
 
     state.connections.remove(name).ok_or_else(|| {
         AwsError::not_found(

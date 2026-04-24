@@ -42,7 +42,9 @@ pub async fn test_s3(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             .put_object()
             .bucket("conformance-bucket")
             .key("test-object.txt")
-            .body(aws_sdk_s3::primitives::ByteStream::from_static(b"hello conformance"))
+            .body(aws_sdk_s3::primitives::ByteStream::from_static(
+                b"hello conformance"
+            ))
             .send()
             .await,
         verbose
@@ -359,7 +361,11 @@ pub async fn test_s3(endpoint: &str, verbose: bool) -> Vec<OpResult> {
                                     .days(30)
                                     .build(),
                             )
-                            .filter(aws_sdk_s3::types::LifecycleRuleFilter::builder().prefix("logs/").build())
+                            .filter(
+                                aws_sdk_s3::types::LifecycleRuleFilter::builder()
+                                    .prefix("logs/")
+                                    .build()
+                            )
                             .build()
                             .unwrap(),
                     )
@@ -447,10 +453,7 @@ pub async fn test_s3(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         client
             .put_bucket_logging()
             .bucket("conformance-bucket")
-            .bucket_logging_status(
-                aws_sdk_s3::types::BucketLoggingStatus::builder()
-                    .build(),
-            )
+            .bucket_logging_status(aws_sdk_s3::types::BucketLoggingStatus::builder().build(),)
             .send()
             .await,
         verbose
@@ -520,7 +523,9 @@ pub async fn test_s3(endpoint: &str, verbose: bool) -> Vec<OpResult> {
                 aws_sdk_s3::types::OwnershipControls::builder()
                     .rules(
                         aws_sdk_s3::types::OwnershipControlsRule::builder()
-                            .object_ownership(aws_sdk_s3::types::ObjectOwnership::BucketOwnerEnforced)
+                            .object_ownership(
+                                aws_sdk_s3::types::ObjectOwnership::BucketOwnerEnforced
+                            )
                             .build()
                             .unwrap(),
                     )
@@ -657,8 +662,7 @@ pub async fn test_s3(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             .put_bucket_notification_configuration()
             .bucket("conformance-bucket")
             .notification_configuration(
-                aws_sdk_s3::types::NotificationConfiguration::builder()
-                    .build(),
+                aws_sdk_s3::types::NotificationConfiguration::builder().build(),
             )
             .send()
             .await,
@@ -694,7 +698,11 @@ pub async fn test_s3(endpoint: &str, verbose: bool) -> Vec<OpResult> {
                                     .build()
                                     .unwrap(),
                             )
-                            .filter(aws_sdk_s3::types::ReplicationRuleFilter::builder().prefix("").build())
+                            .filter(
+                                aws_sdk_s3::types::ReplicationRuleFilter::builder()
+                                    .prefix("")
+                                    .build()
+                            )
                             .build()
                             .unwrap(),
                     )
@@ -735,10 +743,7 @@ pub async fn test_s3(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         .key("multipart-object.txt")
         .send()
         .await;
-    let upload_id = mpu_r
-        .as_ref()
-        .ok()
-        .and_then(|r| r.upload_id.clone());
+    let upload_id = mpu_r.as_ref().ok().and_then(|r| r.upload_id.clone());
     results.push(chk!("CreateMultipartUpload", mpu_r, verbose));
 
     if let Some(ref uid) = upload_id {
@@ -830,7 +835,13 @@ pub async fn test_s3(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             results.push(OpResult::Skipped("AbortMultipartUpload".to_string()));
         }
     } else {
-        for op in &["UploadPart", "ListParts", "ListMultipartUploads", "CompleteMultipartUpload", "AbortMultipartUpload"] {
+        for op in &[
+            "UploadPart",
+            "ListParts",
+            "ListMultipartUploads",
+            "CompleteMultipartUpload",
+            "AbortMultipartUpload",
+        ] {
             results.push(OpResult::Skipped(op.to_string()));
         }
     }

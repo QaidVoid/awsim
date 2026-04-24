@@ -42,9 +42,7 @@ pub fn function_configuration(f: &LambdaFunction) -> Value {
 
 /// Resolve code bytes (either from ZipFile base64 or a placeholder for S3).
 /// Returns (bytes_opt, sha256, size).
-fn resolve_code(
-    input: &Value,
-) -> Result<(Option<Vec<u8>>, String, u64), AwsError> {
+fn resolve_code(input: &Value) -> Result<(Option<Vec<u8>>, String, u64), AwsError> {
     if let Some(zip_b64) = opt_str(input, "ZipFile") {
         let (bytes, hash, size) = decode_zip(zip_b64)?;
         return Ok((Some(bytes), hash, size));
@@ -84,19 +82,14 @@ pub fn create_function(
     let name = require_str(input, "FunctionName")?;
 
     if state.functions.contains_key(name) {
-        return Err(resource_conflict(format!(
-            "Function already exist: {name}"
-        )));
+        return Err(resource_conflict(format!("Function already exist: {name}")));
     }
 
     let role = require_str(input, "Role")?;
     let runtime = opt_str(input, "Runtime").map(str::to_string);
     let handler = opt_str(input, "Handler").map(str::to_string);
     let description = opt_str(input, "Description").unwrap_or("").to_string();
-    let timeout = input
-        .get("Timeout")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(3) as u32;
+    let timeout = input.get("Timeout").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
     let memory_size = input
         .get("MemorySize")
         .and_then(|v| v.as_u64())
@@ -173,10 +166,7 @@ pub fn get_function(
         .ok_or_else(|| resource_not_found("function", name))?;
 
     let config = function_configuration(&f);
-    let code_location = format!(
-        "http://awsim.local/2015-03-31/functions/{}/code",
-        f.name
-    );
+    let code_location = format!("http://awsim.local/2015-03-31/functions/{}/code", f.name);
 
     Ok(json!({
         "Configuration": config,

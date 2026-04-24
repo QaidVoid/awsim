@@ -2,7 +2,10 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use crate::operations::{api_destinations, archives, buses, connections, event_sources, events, replays, rules, tags, targets};
+use crate::operations::{
+    api_destinations, archives, buses, connections, event_sources, events, replays, rules, tags,
+    targets,
+};
 use crate::state::EventBridgeState;
 
 /// The EventBridge service handler.
@@ -96,7 +99,9 @@ impl ServiceHandler for EventBridgeService {
             // API Destinations
             "CreateApiDestination" => api_destinations::create_api_destination(&state, &input, ctx),
             "DeleteApiDestination" => api_destinations::delete_api_destination(&state, &input, ctx),
-            "DescribeApiDestination" => api_destinations::describe_api_destination(&state, &input, ctx),
+            "DescribeApiDestination" => {
+                api_destinations::describe_api_destination(&state, &input, ctx)
+            }
             "ListApiDestinations" => api_destinations::list_api_destinations(&state, &input, ctx),
 
             // Replays

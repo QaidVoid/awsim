@@ -120,9 +120,6 @@ fn find_bus_by_arn_mut<'a>(
 fn extract_bus_name_from_arn(arn: &str) -> Result<&str, AwsError> {
     // Expect "arn:aws:events:*:*:event-bus/{name}"
     arn.split("event-bus/").nth(1).ok_or_else(|| {
-        AwsError::bad_request(
-            "InvalidParameterValue",
-            format!("Cannot parse ARN: {arn}"),
-        )
+        AwsError::bad_request("InvalidParameterValue", format!("Cannot parse ARN: {arn}"))
     })
 }

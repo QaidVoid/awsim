@@ -100,15 +100,12 @@ pub fn describe_db_snapshots(
     let filter_instance = opt_str(input, "DBInstanceIdentifier");
 
     if let Some(snap_id) = filter_snapshot {
-        let snapshot = state
-            .snapshots
-            .get(snap_id)
-            .ok_or_else(|| {
-                AwsError::not_found(
-                    "DBSnapshotNotFound",
-                    format!("DB snapshot not found: {snap_id}"),
-                )
-            })?;
+        let snapshot = state.snapshots.get(snap_id).ok_or_else(|| {
+            AwsError::not_found(
+                "DBSnapshotNotFound",
+                format!("DB snapshot not found: {snap_id}"),
+            )
+        })?;
         let items = vec![snapshot_to_value(&snapshot)];
         return Ok(json!({
             "DBSnapshots": { "DBSnapshot": items },
@@ -174,7 +171,9 @@ pub fn copy_db_snapshot(
     };
 
     let result = snapshot_to_value(&copied);
-    state.snapshots.insert(target_snapshot_id.to_string(), copied);
+    state
+        .snapshots
+        .insert(target_snapshot_id.to_string(), copied);
 
     Ok(json!({ "DBSnapshot": result }))
 }

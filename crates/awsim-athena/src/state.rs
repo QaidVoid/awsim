@@ -77,13 +77,15 @@ pub struct AthenaState {
 impl AthenaState {
     /// Called lazily on first use; ensures the built-in `primary` workgroup exists.
     pub fn ensure_primary_workgroup(&self, now: &str) {
-        self.workgroups.entry("primary".to_string()).or_insert_with(|| WorkGroup {
-            name: "primary".to_string(),
-            description: Some("Primary workgroup".to_string()),
-            state: "ENABLED".to_string(),
-            output_location: None,
-            created_at: now.to_string(),
-        });
+        self.workgroups
+            .entry("primary".to_string())
+            .or_insert_with(|| WorkGroup {
+                name: "primary".to_string(),
+                description: Some("Primary workgroup".to_string()),
+                state: "ENABLED".to_string(),
+                output_location: None,
+                created_at: now.to_string(),
+            });
     }
 
     /// Called lazily on first use; ensures the built-in AwsDataCatalog exists.

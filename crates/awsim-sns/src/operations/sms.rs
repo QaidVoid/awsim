@@ -245,9 +245,9 @@ pub fn put_data_protection_policy(
     let resource_arn = input["ResourceArn"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
-    let policy = input["DataProtectionPolicy"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DataProtectionPolicy is required"))?;
+    let policy = input["DataProtectionPolicy"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "DataProtectionPolicy is required")
+    })?;
 
     if !state.topics.contains_key(resource_arn) {
         return Err(AwsError::not_found(
@@ -273,9 +273,6 @@ fn default_sms_attributes() -> std::collections::HashMap<String, String> {
     );
     m.insert("DefaultSenderID".to_string(), String::new());
     m.insert("DefaultSMSType".to_string(), "Transactional".to_string());
-    m.insert(
-        "UsageReportS3Bucket".to_string(),
-        String::new(),
-    );
+    m.insert("UsageReportS3Bucket".to_string(), String::new());
     m
 }

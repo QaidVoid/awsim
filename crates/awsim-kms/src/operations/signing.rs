@@ -3,8 +3,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 
 use crate::error;
-use crate::state::KmsState;
 use crate::operations::keys::resolve_key;
+use crate::state::KmsState;
 use crate::util::random_secret;
 
 // Valid signing algorithms accepted by the stub.
@@ -25,11 +25,7 @@ const SIGNING_ALGORITHMS: &[&str] = &[
 // Sign
 // ---------------------------------------------------------------------------
 
-pub fn sign(
-    state: &KmsState,
-    input: &Value,
-    _ctx: &RequestContext,
-) -> Result<Value, AwsError> {
+pub fn sign(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
     let key_id_input = input["KeyId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
@@ -77,11 +73,7 @@ pub fn sign(
 // Verify
 // ---------------------------------------------------------------------------
 
-pub fn verify(
-    state: &KmsState,
-    input: &Value,
-    _ctx: &RequestContext,
-) -> Result<Value, AwsError> {
+pub fn verify(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
     let key_id_input = input["KeyId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
@@ -187,9 +179,7 @@ pub fn generate_data_key_pair(
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
 
-    let key_pair_spec = input["KeyPairSpec"]
-        .as_str()
-        .unwrap_or("RSA_2048");
+    let key_pair_spec = input["KeyPairSpec"].as_str().unwrap_or("RSA_2048");
 
     let key = resolve_key(state, key_id_input)?;
     if key.key_state == "Disabled" {
@@ -228,7 +218,9 @@ pub fn generate_data_key_pair_without_plaintext(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let mut result = generate_data_key_pair(state, input, ctx)?;
-    result.as_object_mut().map(|m| m.remove("PrivateKeyPlaintext"));
+    result
+        .as_object_mut()
+        .map(|m| m.remove("PrivateKeyPlaintext"));
     Ok(result)
 }
 
@@ -249,9 +241,7 @@ pub fn derive_shared_secret(
         .as_str()
         .ok_or_else(|| error::missing_parameter("PublicKey"))?;
 
-    let key_agreement_algorithm = input["KeyAgreementAlgorithm"]
-        .as_str()
-        .unwrap_or("ECDH");
+    let key_agreement_algorithm = input["KeyAgreementAlgorithm"].as_str().unwrap_or("ECDH");
 
     let key = resolve_key(state, key_id_input)?;
     if key.key_state == "Disabled" {

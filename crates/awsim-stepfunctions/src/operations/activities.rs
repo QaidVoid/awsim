@@ -94,10 +94,7 @@ pub fn delete_activity(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "activityArn is required"))?;
 
     state.activities.remove(arn).ok_or_else(|| {
-        AwsError::not_found(
-            "ActivityDoesNotExist",
-            format!("Activity not found: {arn}"),
-        )
+        AwsError::not_found("ActivityDoesNotExist", format!("Activity not found: {arn}"))
     })?;
 
     info!(arn, "Deleted activity");
@@ -118,10 +115,7 @@ pub fn describe_activity(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "activityArn is required"))?;
 
     let activity = state.activities.get(arn).ok_or_else(|| {
-        AwsError::not_found(
-            "ActivityDoesNotExist",
-            format!("Activity not found: {arn}"),
-        )
+        AwsError::not_found("ActivityDoesNotExist", format!("Activity not found: {arn}"))
     })?;
 
     Ok(activity_to_value(&activity))

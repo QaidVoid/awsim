@@ -22,7 +22,9 @@ pub fn lb_arn(region: &str, account: &str, lb_type: &str, name: &str) -> String 
         _ => "app",
     };
     let rand = random_hex(16);
-    format!("arn:aws:elasticloadbalancing:{region}:{account}:loadbalancer/{type_prefix}/{name}/{rand}")
+    format!(
+        "arn:aws:elasticloadbalancing:{region}:{account}:loadbalancer/{type_prefix}/{name}/{rand}"
+    )
 }
 
 /// Target Group ARN.
@@ -34,13 +36,23 @@ pub fn tg_arn(region: &str, account: &str, name: &str) -> String {
 /// Listener ARN.
 pub fn listener_arn(region: &str, account: &str, lb_name: &str, lb_rand: &str) -> String {
     let rand = random_hex(16);
-    format!("arn:aws:elasticloadbalancing:{region}:{account}:listener/app/{lb_name}/{lb_rand}/{rand}")
+    format!(
+        "arn:aws:elasticloadbalancing:{region}:{account}:listener/app/{lb_name}/{lb_rand}/{rand}"
+    )
 }
 
 /// Rule ARN.
-pub fn rule_arn(region: &str, account: &str, lb_name: &str, lb_rand: &str, listener_rand: &str) -> String {
+pub fn rule_arn(
+    region: &str,
+    account: &str,
+    lb_name: &str,
+    lb_rand: &str,
+    listener_rand: &str,
+) -> String {
     let rand = random_hex(16);
-    format!("arn:aws:elasticloadbalancing:{region}:{account}:listener-rule/app/{lb_name}/{lb_rand}/{listener_rand}/{rand}")
+    format!(
+        "arn:aws:elasticloadbalancing:{region}:{account}:listener-rule/app/{lb_name}/{lb_rand}/{listener_rand}/{rand}"
+    )
 }
 
 /// DNS name for a load balancer.

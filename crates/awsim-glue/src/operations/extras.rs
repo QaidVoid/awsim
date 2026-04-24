@@ -18,13 +18,17 @@ pub fn batch_delete_table(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let db_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "DatabaseName is required"))?;
+    let db_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "DatabaseName is required")
+    })?;
 
     let names: Vec<String> = input["TablesToDelete"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let mut errors: Vec<Value> = Vec::new();
@@ -49,14 +53,18 @@ pub fn batch_get_tables(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let db_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "DatabaseName is required"))?;
+    let db_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "DatabaseName is required")
+    })?;
 
     let names: Vec<String> = input["TablesToGet"]
         .as_array()
         .or_else(|| input["TableNames"].as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let mut found: Vec<Value> = Vec::new();
@@ -88,7 +96,11 @@ pub fn get_partition(
     let table_name = input["TableName"].as_str().unwrap_or("");
     let values: Vec<String> = input["PartitionValues"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let key = table_key(db_name, table_name);
@@ -137,7 +149,11 @@ pub fn batch_get_partition(
                 .map(|p| {
                     p["Values"]
                         .as_array()
-                        .map(|v| v.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                        .map(|v| {
+                            v.iter()
+                                .filter_map(|x| x.as_str().map(String::from))
+                                .collect()
+                        })
                         .unwrap_or_default()
                 })
                 .collect()
@@ -151,7 +167,11 @@ pub fn batch_get_partition(
     if let Some(table) = state.tables.get(&key) {
         for vals in requested {
             let values_str = vals.join("/");
-            match table.partitions.iter().find(|p| p.values.join("/") == values_str) {
+            match table
+                .partitions
+                .iter()
+                .find(|p| p.values.join("/") == values_str)
+            {
                 Some(p) => found.push(json!({
                     "Values": p.values,
                     "DatabaseName": db_name,
@@ -308,7 +328,10 @@ pub fn get_trigger(
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "Name is required"))?;
 
     let trigger = state.triggers.get(name).ok_or_else(|| {
-        AwsError::not_found("EntityNotFoundException", format!("Trigger not found: {name}"))
+        AwsError::not_found(
+            "EntityNotFoundException",
+            format!("Trigger not found: {name}"),
+        )
     })?;
 
     Ok(json!({ "Trigger": trigger_to_value(&trigger) }))
@@ -338,7 +361,10 @@ pub fn delete_trigger(
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "Name is required"))?;
 
     state.triggers.remove(name).ok_or_else(|| {
-        AwsError::not_found("EntityNotFoundException", format!("Trigger not found: {name}"))
+        AwsError::not_found(
+            "EntityNotFoundException",
+            format!("Trigger not found: {name}"),
+        )
     })?;
 
     Ok(json!({ "Name": name }))
@@ -494,7 +520,10 @@ pub fn get_table_versions(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let db_name = input["DatabaseName"].as_str().unwrap_or("");
-    let table_name = input["Name"].as_str().or_else(|| input["TableName"].as_str()).unwrap_or("");
+    let table_name = input["Name"]
+        .as_str()
+        .or_else(|| input["TableName"].as_str())
+        .unwrap_or("");
 
     let prefix = format!("{db_name}.{table_name}.");
     let mut versions: Vec<Value> = state
@@ -541,7 +570,11 @@ pub fn batch_delete_table_version(
 
     let ids: Vec<String> = input["VersionIds"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let mut errors: Vec<Value> = Vec::new();

@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use crate::state::OpenSearchState;
@@ -178,7 +178,7 @@ pub fn update_aliases(state: &OpenSearchState, body: &Value) -> (u16, Value) {
                     "error": "actions array is required",
                     "status": 400,
                 }),
-            )
+            );
         }
     };
 
@@ -226,11 +226,7 @@ pub fn update_aliases(state: &OpenSearchState, body: &Value) -> (u16, Value) {
 ///
 /// Processes an NDJSON body of alternating header/body pairs.
 /// Returns `{"responses": [...]}` where each element is a search result.
-pub fn msearch(
-    state: &OpenSearchState,
-    default_index: Option<&str>,
-    body: &str,
-) -> (u16, Value) {
+pub fn msearch(state: &OpenSearchState, default_index: Option<&str>, body: &str) -> (u16, Value) {
     let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
     let mut responses: Vec<Value> = Vec::new();
 
@@ -252,10 +248,7 @@ pub fn msearch(
         };
 
         // Resolve index from header, fallback to default
-        let index = header["index"]
-            .as_str()
-            .or(default_index)
-            .unwrap_or("_all");
+        let index = header["index"].as_str().or(default_index).unwrap_or("_all");
 
         let (_, result) = super::search::search(state, index, &search_body);
         responses.push(result);

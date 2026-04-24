@@ -54,10 +54,7 @@ impl AuthzEngine {
     }
 
     pub fn from_env() -> Self {
-        let enabled = std::env::var("AWSIM_IAM_ENFORCE")
-            .ok()
-            .as_deref()
-            == Some("true");
+        let enabled = std::env::var("AWSIM_IAM_ENFORCE").ok().as_deref() == Some("true");
         Self::new(enabled)
     }
 
@@ -74,11 +71,7 @@ impl AuthzEngine {
         let access_key = match ctx.access_key.as_deref() {
             Some(k) if !k.is_empty() => k,
             _ => {
-                return Err(AwsError::access_denied_for(
-                    action,
-                    "anonymous",
-                    resource,
-                ));
+                return Err(AwsError::access_denied_for(action, "anonymous", resource));
             }
         };
 
@@ -128,9 +121,11 @@ impl AuthzEngine {
 
         match evaluate(&req, &eval_ctx) {
             Decision::Allow => Ok(()),
-            Decision::ExplicitDeny | Decision::ImplicitDeny => Err(
-                AwsError::access_denied_for(action, &principal.arn, resource),
-            ),
+            Decision::ExplicitDeny | Decision::ImplicitDeny => Err(AwsError::access_denied_for(
+                action,
+                &principal.arn,
+                resource,
+            )),
         }
     }
 }

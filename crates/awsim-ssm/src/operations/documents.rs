@@ -108,7 +108,10 @@ pub fn get_document(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
 
     let doc = state.documents.get(name).ok_or_else(|| {
-        AwsError::not_found("InvalidDocument", format!("Document '{name}' does not exist"))
+        AwsError::not_found(
+            "InvalidDocument",
+            format!("Document '{name}' does not exist"),
+        )
     })?;
 
     Ok(json!({
@@ -136,7 +139,10 @@ pub fn describe_document(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
 
     let doc = state.documents.get(name).ok_or_else(|| {
-        AwsError::not_found("InvalidDocument", format!("Document '{name}' does not exist"))
+        AwsError::not_found(
+            "InvalidDocument",
+            format!("Document '{name}' does not exist"),
+        )
     })?;
 
     Ok(json!({ "Document": document_description(&doc) }))
@@ -160,7 +166,10 @@ pub fn update_document(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Content is required"))?;
 
     let mut doc = state.documents.get_mut(name).ok_or_else(|| {
-        AwsError::not_found("InvalidDocument", format!("Document '{name}' does not exist"))
+        AwsError::not_found(
+            "InvalidDocument",
+            format!("Document '{name}' does not exist"),
+        )
     })?;
 
     doc.content = content.to_string();
@@ -230,13 +239,12 @@ pub fn create_association(
 ) -> Result<Value, AwsError> {
     let document_name = input["Name"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name (document name) is required"))?
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameter", "Name (document name) is required")
+        })?
         .to_string();
 
-    let targets = input["Targets"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let targets = input["Targets"].as_array().cloned().unwrap_or_default();
 
     let association_id = Uuid::new_v4().to_string();
     let now = now_epoch_secs();
@@ -371,7 +379,10 @@ pub fn create_maintenance_window(
     let allow_unassociated_targets = input["AllowUnassociatedTargets"].as_bool().unwrap_or(false);
     let _ = allow_unassociated_targets;
 
-    let window_id = format!("mw-{}", Uuid::new_v4().to_string().replace('-', "")[..16].to_string());
+    let window_id = format!(
+        "mw-{}",
+        Uuid::new_v4().to_string().replace('-', "")[..16].to_string()
+    );
     let now = now_epoch_secs();
 
     let window = crate::state::SsmMaintenanceWindow {
@@ -455,7 +466,10 @@ pub fn create_ops_item(
     let description = input["Description"].as_str().unwrap_or("").to_string();
     let severity = input["Severity"].as_str().unwrap_or("3").to_string();
 
-    let ops_item_id = format!("oi-{}", Uuid::new_v4().to_string().replace('-', "")[..16].to_string());
+    let ops_item_id = format!(
+        "oi-{}",
+        Uuid::new_v4().to_string().replace('-', "")[..16].to_string()
+    );
     let now = now_epoch_secs();
 
     let item = crate::state::SsmOpsItem {

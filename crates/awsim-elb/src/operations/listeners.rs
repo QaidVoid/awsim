@@ -111,8 +111,7 @@ pub fn describe_listeners(state: &ElbState, input: &Value) -> Result<Value, AwsE
             let lb_ok = lb_arn_filter
                 .as_ref()
                 .map_or(true, |arn| &l.load_balancer_arn == arn);
-            let arn_ok =
-                listener_arns.is_empty() || listener_arns.contains(&l.arn);
+            let arn_ok = listener_arns.is_empty() || listener_arns.contains(&l.arn);
             lb_ok && arn_ok
         })
         .map(|e| listener_to_value(e.value()))
@@ -162,10 +161,7 @@ pub fn modify_listener(state: &ElbState, input: &Value) -> Result<Value, AwsErro
     }))
 }
 
-pub fn describe_listener_certificates(
-    state: &ElbState,
-    input: &Value,
-) -> Result<Value, AwsError> {
+pub fn describe_listener_certificates(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
     let arn = require_str(input, "ListenerArn")?;
 
     if !state.listeners.contains_key(arn) {

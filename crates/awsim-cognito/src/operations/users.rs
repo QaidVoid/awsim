@@ -50,7 +50,12 @@ pub fn user_to_value(user: &CognitoUser) -> Value {
     })
 }
 
-fn make_user(username: &str, password: &str, attributes: HashMap<String, String>, status: &str) -> CognitoUser {
+fn make_user(
+    username: &str,
+    password: &str,
+    attributes: HashMap<String, String>,
+    status: &str,
+) -> CognitoUser {
     let sub = Uuid::new_v4().to_string();
     let mut attrs = attributes;
     attrs.insert("sub".to_string(), sub.clone());
@@ -194,14 +199,12 @@ pub fn confirm_sign_up(
         .iter()
         .find(|e| e.clients.contains_key(client_id));
 
-    let pool_id = pool_entry
-        .map(|e| e.id.clone())
-        .ok_or_else(|| {
-            AwsError::not_found(
-                "ResourceNotFoundException",
-                format!("No user pool found for client: {client_id}"),
-            )
-        })?;
+    let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("No user pool found for client: {client_id}"),
+        )
+    })?;
 
     let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
 
@@ -289,9 +292,7 @@ pub fn admin_create_user(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
 
-    let password = input["TemporaryPassword"]
-        .as_str()
-        .unwrap_or("Temp@1234");
+    let password = input["TemporaryPassword"].as_str().unwrap_or("Temp@1234");
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -452,7 +453,10 @@ pub fn list_users(
 
     // Apply Filter if provided
     if let Some(filter_str) = input["Filter"].as_str() {
-        users = users.into_iter().filter(|u| evaluate_cognito_filter(u, filter_str)).collect();
+        users = users
+            .into_iter()
+            .filter(|u| evaluate_cognito_filter(u, filter_str))
+            .collect();
     }
 
     // Apply PaginationToken — skip users up to and including the token username
@@ -533,9 +537,8 @@ pub fn get_user(
         ));
     }
 
-    let username = crate::jwt::extract_username_from_access_token(access_token).ok_or_else(
-        || AwsError::bad_request("NotAuthorizedException", "Invalid access token"),
-    )?;
+    let username = crate::jwt::extract_username_from_access_token(access_token)
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
 
     for pool_entry in state.user_pools.iter() {
         if let Some(user) = pool_entry.users.get(&username) {
@@ -644,14 +647,12 @@ pub fn confirm_forgot_password(
         .iter()
         .find(|e| e.clients.contains_key(client_id));
 
-    let pool_id = pool_entry
-        .map(|e| e.id.clone())
-        .ok_or_else(|| {
-            AwsError::not_found(
-                "ResourceNotFoundException",
-                format!("No pool found for client: {client_id}"),
-            )
-        })?;
+    let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("No pool found for client: {client_id}"),
+        )
+    })?;
 
     let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
     let user = pool.users.get_mut(username).ok_or_else(|| {
@@ -694,9 +695,8 @@ pub fn change_password(
         ));
     }
 
-    let username = crate::jwt::extract_username_from_access_token(access_token).ok_or_else(
-        || AwsError::bad_request("NotAuthorizedException", "Invalid access token"),
-    )?;
+    let username = crate::jwt::extract_username_from_access_token(access_token)
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
@@ -990,7 +990,11 @@ pub fn delete_user_attributes(
 
     let attr_names: Vec<String> = input["UserAttributeNames"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     for mut pool_entry in state.user_pools.iter_mut() {
@@ -1069,14 +1073,12 @@ pub fn resend_confirmation_code(
         .iter()
         .find(|e| e.clients.contains_key(client_id));
 
-    let pool_id = pool_entry
-        .map(|e| e.id.clone())
-        .ok_or_else(|| {
-            AwsError::not_found(
-                "ResourceNotFoundException",
-                format!("No pool found for client: {client_id}"),
-            )
-        })?;
+    let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("No pool found for client: {client_id}"),
+        )
+    })?;
 
     let pool = state.user_pools.get(&pool_id).unwrap();
     if !pool.users.contains_key(username) {

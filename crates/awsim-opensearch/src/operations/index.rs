@@ -1,14 +1,10 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use crate::state::{OpenSearchIndex, OpenSearchState};
 
 /// Create an index.
-pub fn create_index(
-    state: &OpenSearchState,
-    index_name: &str,
-    body: &Value,
-) -> (u16, Value) {
+pub fn create_index(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, Value) {
     if state.indices.contains_key(index_name) {
         return (
             400,

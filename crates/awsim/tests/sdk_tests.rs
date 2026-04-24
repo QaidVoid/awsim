@@ -7,12 +7,12 @@
 use std::sync::Arc;
 
 use aws_credential_types::Credentials;
-use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_dynamodb::types::{
     AttributeDefinition, AttributeValue, BillingMode, KeySchemaElement, KeyType,
     ScalarAttributeType,
 };
 use aws_sdk_kms::primitives::Blob;
+use aws_sdk_s3::primitives::ByteStream;
 use awsim_core::{AppState, ServiceHandler};
 
 // ---------------------------------------------------------------------------
@@ -24,9 +24,7 @@ async fn make_config(endpoint: &str) -> aws_config::SdkConfig {
     aws_config::defaults(aws_config::BehaviorVersion::latest())
         .endpoint_url(endpoint)
         .region(aws_config::Region::new("us-east-1"))
-        .credentials_provider(
-            Credentials::new("test", "test", None, None, "test"),
-        )
+        .credentials_provider(Credentials::new("test", "test", None, None, "test"))
         .load()
         .await
 }
@@ -104,10 +102,7 @@ async fn start_server() -> String {
     state.register(Arc::new(lambda), lambda_routes);
 
     let app = axum::Router::new()
-        .route(
-            "/_awsim/health",
-            axum::routing::get(|| async { "ok" }),
-        )
+        .route("/_awsim/health", axum::routing::get(|| async { "ok" }))
         .fallback(awsim_core::gateway::handle_request)
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
@@ -165,12 +160,11 @@ async fn test_s3_create_and_list_buckets() {
         .await
         .expect("ListBuckets failed");
 
-    let names: Vec<&str> = result
-        .buckets()
-        .iter()
-        .filter_map(|b| b.name())
-        .collect();
-    assert!(names.contains(&"list-test-bucket"), "bucket not in list: {names:?}");
+    let names: Vec<&str> = result.buckets().iter().filter_map(|b| b.name()).collect();
+    assert!(
+        names.contains(&"list-test-bucket"),
+        "bucket not in list: {names:?}"
+    );
 }
 
 #[tokio::test]
@@ -192,9 +186,16 @@ async fn test_s3_delete_bucket() {
         .await
         .expect("DeleteBucket failed");
 
-    let result = client.list_buckets().send().await.expect("ListBuckets failed");
+    let result = client
+        .list_buckets()
+        .send()
+        .await
+        .expect("ListBuckets failed");
     let names: Vec<&str> = result.buckets().iter().filter_map(|b| b.name()).collect();
-    assert!(!names.contains(&"delete-me"), "deleted bucket still in list");
+    assert!(
+        !names.contains(&"delete-me"),
+        "deleted bucket still in list"
+    );
 }
 
 #[tokio::test]
@@ -341,7 +342,12 @@ async fn test_sqs_send_and_receive() {
         .expect("ReceiveMessage failed");
 
     let messages = result.messages();
-    assert_eq!(messages.len(), 1, "expected 1 message, got {}", messages.len());
+    assert_eq!(
+        messages.len(),
+        1,
+        "expected 1 message, got {}",
+        messages.len()
+    );
     assert_eq!(messages[0].body().unwrap_or_default(), "Hello from SQS!");
 }
 
@@ -589,7 +595,11 @@ async fn test_sns_list_topics() {
         .await
         .expect("CreateTopic failed");
 
-    let result = client.list_topics().send().await.expect("ListTopics failed");
+    let result = client
+        .list_topics()
+        .send()
+        .await
+        .expect("ListTopics failed");
     assert!(
         result.topics().len() >= 2,
         "expected at least 2 topics, got {}",
@@ -607,11 +617,7 @@ async fn test_kms_encrypt_decrypt() {
     let config = make_config(&endpoint).await;
     let client = aws_sdk_kms::Client::new(&config);
 
-    let key = client
-        .create_key()
-        .send()
-        .await
-        .expect("CreateKey failed");
+    let key = client.create_key().send().await.expect("CreateKey failed");
     let key_id = key
         .key_metadata()
         .expect("missing key metadata")
@@ -667,8 +673,14 @@ async fn test_kms_generate_data_key() {
         .await
         .expect("GenerateDataKey failed");
 
-    assert!(result.plaintext().is_some(), "plaintext DEK should be returned");
-    assert!(result.ciphertext_blob().is_some(), "encrypted DEK should be returned");
+    assert!(
+        result.plaintext().is_some(),
+        "plaintext DEK should be returned"
+    );
+    assert!(
+        result.ciphertext_blob().is_some(),
+        "encrypted DEK should be returned"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -730,4 +742,3 @@ async fn test_secretsmanager_update_secret() {
 
     assert_eq!(result.secret_string().unwrap_or_default(), "updated");
 }
-

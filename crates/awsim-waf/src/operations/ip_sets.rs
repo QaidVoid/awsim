@@ -35,7 +35,10 @@ pub fn create_ip_set(
     let ip_address_version = input["IPAddressVersion"]
         .as_str()
         .ok_or_else(|| {
-            AwsError::bad_request("WAFInvalidParameterException", "IPAddressVersion is required")
+            AwsError::bad_request(
+                "WAFInvalidParameterException",
+                "IPAddressVersion is required",
+            )
         })?
         .to_string();
 
@@ -106,13 +109,16 @@ pub fn get_ip_set(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Name is required"))?;
 
-    let scope = input["Scope"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Scope is required"))?;
+    let scope = input["Scope"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "Scope is required")
+    })?;
 
     let key = format!("{scope}:{name}");
     let ip_set = state.ip_sets.get(&key).ok_or_else(|| {
-        AwsError::not_found("WAFNonexistentItemException", format!("IPSet not found: {name}"))
+        AwsError::not_found(
+            "WAFNonexistentItemException",
+            format!("IPSet not found: {name}"),
+        )
     })?;
 
     Ok(json!({
@@ -136,9 +142,9 @@ pub fn list_ip_sets(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let scope = input["Scope"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Scope is required"))?;
+    let scope = input["Scope"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "Scope is required")
+    })?;
 
     let list: Vec<Value> = state
         .ip_sets
@@ -171,9 +177,9 @@ pub fn update_ip_set(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Name is required"))?;
 
-    let scope = input["Scope"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Scope is required"))?;
+    let scope = input["Scope"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "Scope is required")
+    })?;
 
     let _lock_token = input["LockToken"].as_str().ok_or_else(|| {
         AwsError::bad_request("WAFInvalidParameterException", "LockToken is required")
@@ -213,13 +219,13 @@ pub fn delete_ip_set(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Name is required"))?;
 
-    let scope = input["Scope"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Scope is required"))?;
+    let scope = input["Scope"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "Scope is required")
+    })?;
 
-    let _lock_token = input["LockToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "LockToken is required"))?;
+    let _lock_token = input["LockToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "LockToken is required")
+    })?;
 
     let key = format!("{scope}:{name}");
     if state.ip_sets.remove(&key).is_none() {

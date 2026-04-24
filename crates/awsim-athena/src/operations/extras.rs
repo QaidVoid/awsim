@@ -8,9 +8,9 @@ pub fn tag_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["ResourceARN"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "ResourceARN is required"))?;
+    let arn = input["ResourceARN"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "ResourceARN is required")
+    })?;
 
     let mut entry = state.resource_tags.entry(arn.to_string()).or_default();
 
@@ -30,13 +30,17 @@ pub fn untag_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["ResourceARN"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "ResourceARN is required"))?;
+    let arn = input["ResourceARN"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "ResourceARN is required")
+    })?;
 
     let keys: Vec<String> = input["TagKeys"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     if let Some(mut entry) = state.resource_tags.get_mut(arn) {
@@ -53,9 +57,9 @@ pub fn list_tags_for_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["ResourceARN"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "ResourceARN is required"))?;
+    let arn = input["ResourceARN"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "ResourceARN is required")
+    })?;
 
     let tags: Vec<Value> = state
         .resource_tags
@@ -113,9 +117,9 @@ pub fn get_query_runtime_statistics(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let qid = input["QueryExecutionId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "QueryExecutionId is required"))?;
+    let qid = input["QueryExecutionId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "QueryExecutionId is required")
+    })?;
 
     let _ = state.query_executions.get(qid).ok_or_else(|| {
         AwsError::not_found(
@@ -182,7 +186,11 @@ pub fn batch_get_prepared_statement(
     let workgroup = input["WorkGroup"].as_str().unwrap_or("primary");
     let names: Vec<String> = input["PreparedStatementNames"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     let mut found: Vec<Value> = Vec::new();

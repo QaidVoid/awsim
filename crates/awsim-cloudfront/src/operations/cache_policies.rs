@@ -59,10 +59,7 @@ pub fn create_cache_policy(state: &CloudFrontState, input: &Value) -> Result<Val
         .get("MaxTTL")
         .and_then(|v| v.as_u64())
         .unwrap_or(31536000);
-    let min_ttl = config
-        .get("MinTTL")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1);
+    let min_ttl = config.get("MinTTL").and_then(|v| v.as_u64()).unwrap_or(1);
 
     let id = Uuid::new_v4().to_string();
     let etag = new_etag();
@@ -89,10 +86,7 @@ pub fn create_cache_policy(state: &CloudFrontState, input: &Value) -> Result<Val
 
 /// GET /2020-05-31/cache-policy/{Id}
 pub fn get_cache_policy(state: &CloudFrontState, id: &str) -> Result<Value, AwsError> {
-    let policy = state
-        .cache_policies
-        .get(id)
-        .ok_or_else(|| not_found(id))?;
+    let policy = state.cache_policies.get(id).ok_or_else(|| not_found(id))?;
 
     let etag = policy.etag.clone();
     let result = policy_to_value(&policy);

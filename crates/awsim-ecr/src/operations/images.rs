@@ -41,18 +41,14 @@ fn image_detail_to_json(img: &ContainerImage, repo_name: &str, registry_id: &str
 // PutImage
 // ---------------------------------------------------------------------------
 
-pub fn put_image(
-    state: &EcrState,
-    input: &Value,
-    ctx: &RequestContext,
-) -> Result<Value, AwsError> {
-    let repo_name = input["repositoryName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "repositoryName is required"))?;
+pub fn put_image(state: &EcrState, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
+    let repo_name = input["repositoryName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "repositoryName is required")
+    })?;
 
-    let manifest = input["imageManifest"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "imageManifest is required"))?;
+    let manifest = input["imageManifest"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "imageManifest is required")
+    })?;
 
     let image_tag = input["imageTag"].as_str().map(|s| s.to_string());
 
@@ -71,10 +67,16 @@ pub fn put_image(
     // If tag mutability is IMMUTABLE and tag already exists, error
     if repo.image_tag_mutability == "IMMUTABLE" {
         if let Some(ref tag) = image_tag {
-            if repo.images.iter().any(|img| img.image_tag.as_deref() == Some(tag)) {
+            if repo
+                .images
+                .iter()
+                .any(|img| img.image_tag.as_deref() == Some(tag))
+            {
                 return Err(AwsError::conflict(
                     "ImageTagAlreadyExistsException",
-                    format!("An image with tag '{tag}' already exists in the repository '{repo_name}'"),
+                    format!(
+                        "An image with tag '{tag}' already exists in the repository '{repo_name}'"
+                    ),
                 ));
             }
         }
@@ -82,7 +84,8 @@ pub fn put_image(
 
     // Remove existing image with same tag (if mutable)
     if let Some(ref tag) = image_tag {
-        repo.images.retain(|img| img.image_tag.as_deref() != Some(tag));
+        repo.images
+            .retain(|img| img.image_tag.as_deref() != Some(tag));
     }
 
     let size = manifest.len() as u64;
@@ -111,9 +114,9 @@ pub fn batch_get_image(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let repo_name = input["repositoryName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "repositoryName is required"))?;
+    let repo_name = input["repositoryName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "repositoryName is required")
+    })?;
 
     let image_ids = input["imageIds"].as_array().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "imageIds is required")
@@ -167,9 +170,9 @@ pub fn batch_delete_image(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let repo_name = input["repositoryName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "repositoryName is required"))?;
+    let repo_name = input["repositoryName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "repositoryName is required")
+    })?;
 
     let image_ids = input["imageIds"].as_array().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "imageIds is required")
@@ -224,9 +227,9 @@ pub fn list_images(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let repo_name = input["repositoryName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "repositoryName is required"))?;
+    let repo_name = input["repositoryName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "repositoryName is required")
+    })?;
 
     let repo = state.repositories.get(repo_name).ok_or_else(|| {
         AwsError::not_found(
@@ -259,9 +262,9 @@ pub fn describe_images(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let repo_name = input["repositoryName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "repositoryName is required"))?;
+    let repo_name = input["repositoryName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "repositoryName is required")
+    })?;
 
     let repo = state.repositories.get(repo_name).ok_or_else(|| {
         AwsError::not_found(

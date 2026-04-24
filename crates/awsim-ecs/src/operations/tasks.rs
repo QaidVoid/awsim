@@ -25,17 +25,15 @@ fn task_to_json(task: &Task) -> Value {
 // RunTask
 // ---------------------------------------------------------------------------
 
-pub fn run_task(
-    state: &EcsState,
-    input: &Value,
-    ctx: &RequestContext,
-) -> Result<Value, AwsError> {
+pub fn run_task(state: &EcsState, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
     let cluster_id = input["cluster"].as_str().unwrap_or("default");
     let cluster_name = resolve_cluster_name(cluster_id).to_string();
 
     let task_definition = input["taskDefinition"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "taskDefinition is required"))?
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameterException", "taskDefinition is required")
+        })?
         .to_string();
 
     let count = input["count"].as_u64().unwrap_or(1);
@@ -54,7 +52,8 @@ pub fn run_task(
         task_definition.clone()
     } else {
         // family:revision or family — look up
-        let (family, maybe_rev) = crate::operations::task_definitions::parse_task_definition_id(&task_definition);
+        let (family, maybe_rev) =
+            crate::operations::task_definitions::parse_task_definition_id(&task_definition);
         match state.task_definitions.get(family) {
             Some(revisions) => {
                 let td = if let Some(rev) = maybe_rev {
@@ -158,9 +157,9 @@ pub fn describe_tasks(
     let cluster_id = input["cluster"].as_str().unwrap_or("default");
     let cluster_name = resolve_cluster_name(cluster_id);
 
-    let task_ids = input["tasks"].as_array().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameterException", "tasks is required")
-    })?;
+    let task_ids = input["tasks"]
+        .as_array()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "tasks is required"))?;
 
     let cluster = state.clusters.get(cluster_name).ok_or_else(|| {
         AwsError::not_found(
@@ -177,7 +176,11 @@ pub fn describe_tasks(
         let found = if id.starts_with("arn:") {
             cluster.tasks.get(id)
         } else {
-            cluster.tasks.iter().find(|(k, _)| k.ends_with(id)).map(|(_, v)| v)
+            cluster
+                .tasks
+                .iter()
+                .find(|(k, _)| k.ends_with(id))
+                .map(|(_, v)| v)
         };
 
         match found {

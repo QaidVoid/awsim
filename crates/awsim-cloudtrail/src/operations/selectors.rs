@@ -12,7 +12,10 @@ pub fn get_event_selectors(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "TrailName is required"))?;
     let key = resolve_name(name);
-    let trail_arn = format!("arn:aws:cloudtrail:{}:{}:trail/{}", ctx.region, ctx.account_id, key);
+    let trail_arn = format!(
+        "arn:aws:cloudtrail:{}:{}:trail/{}",
+        ctx.region, ctx.account_id, key
+    );
     let selectors: Vec<Value> = state
         .event_selectors
         .get(&key)
@@ -44,18 +47,27 @@ pub fn put_event_selectors(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "TrailName is required"))?;
     let key = resolve_name(name);
-    let trail_arn = format!("arn:aws:cloudtrail:{}:{}:trail/{}", ctx.region, ctx.account_id, key);
+    let trail_arn = format!(
+        "arn:aws:cloudtrail:{}:{}:trail/{}",
+        ctx.region, ctx.account_id, key
+    );
     let sels: Vec<EventSelector> = input["EventSelectors"]
         .as_array()
         .map(|a| {
             a.iter()
                 .map(|v| EventSelector {
                     read_write_type: v["ReadWriteType"].as_str().unwrap_or("All").to_string(),
-                    include_management_events: v["IncludeManagementEvents"].as_bool().unwrap_or(true),
+                    include_management_events: v["IncludeManagementEvents"]
+                        .as_bool()
+                        .unwrap_or(true),
                     data_resources: v["DataResources"].as_array().cloned().unwrap_or_default(),
                     exclude_management_event_sources: v["ExcludeManagementEventSources"]
                         .as_array()
-                        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str().map(String::from))
+                                .collect()
+                        })
                         .unwrap_or_default(),
                 })
                 .collect()
@@ -78,13 +90,19 @@ pub fn put_insight_selectors(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "TrailName is required"))?;
     let key = resolve_name(name);
-    let trail_arn = format!("arn:aws:cloudtrail:{}:{}:trail/{}", ctx.region, ctx.account_id, key);
+    let trail_arn = format!(
+        "arn:aws:cloudtrail:{}:{}:trail/{}",
+        ctx.region, ctx.account_id, key
+    );
     let sels: Vec<InsightSelector> = input["InsightSelectors"]
         .as_array()
         .map(|a| {
             a.iter()
                 .map(|v| InsightSelector {
-                    insight_type: v["InsightType"].as_str().unwrap_or("ApiCallRateInsight").to_string(),
+                    insight_type: v["InsightType"]
+                        .as_str()
+                        .unwrap_or("ApiCallRateInsight")
+                        .to_string(),
                 })
                 .collect()
         })

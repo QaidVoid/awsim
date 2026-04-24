@@ -43,7 +43,11 @@ async fn create_policy_rejects_invalid_effect() {
     .await
     .unwrap_err();
     assert_eq!(err.code, "MalformedPolicyDocument");
-    assert!(err.message.to_lowercase().contains("permit"), "msg: {}", err.message);
+    assert!(
+        err.message.to_lowercase().contains("permit"),
+        "msg: {}",
+        err.message
+    );
 }
 
 #[tokio::test]
@@ -84,13 +88,9 @@ async fn create_policy_accepts_valid_document() {
 #[tokio::test]
 async fn put_user_policy_rejects_invalid() {
     let svc = IamService::new();
-    call(
-        &svc,
-        "CreateUser",
-        json!({ "UserName": "alice" }),
-    )
-    .await
-    .unwrap();
+    call(&svc, "CreateUser", json!({ "UserName": "alice" }))
+        .await
+        .unwrap();
     let bad = json!({ "Version": "2012-10-17", "Statement": [{ "Effect": "Nope", "Action": "*", "Resource": "*" }] });
     let err = call(
         &svc,
@@ -181,13 +181,9 @@ async fn simulate_principal_policy_with_attached_managed_policy() {
     let svc = IamService::new();
     let ctx = RequestContext::new("iam", "us-east-1");
 
-    svc.handle(
-        "CreateUser",
-        json!({ "UserName": "bob" }),
-        &ctx,
-    )
-    .await
-    .unwrap();
+    svc.handle("CreateUser", json!({ "UserName": "bob" }), &ctx)
+        .await
+        .unwrap();
 
     let policy_doc = valid_policy().to_string();
     let created = svc

@@ -58,17 +58,16 @@ pub fn create_job(
 // GetJob
 // ---------------------------------------------------------------------------
 
-pub fn get_job(
-    state: &GlueState,
-    input: &Value,
-    _ctx: &RequestContext,
-) -> Result<Value, AwsError> {
+pub fn get_job(state: &GlueState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
     let job_name = input["JobName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "JobName is required"))?;
 
     let job = state.jobs.get(job_name).ok_or_else(|| {
-        AwsError::not_found("EntityNotFoundException", format!("Job not found: {job_name}"))
+        AwsError::not_found(
+            "EntityNotFoundException",
+            format!("Job not found: {job_name}"),
+        )
     })?;
 
     Ok(json!({ "Job": job_to_value(&job) }))
@@ -83,11 +82,7 @@ pub fn get_jobs(
     _input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let list: Vec<Value> = state
-        .jobs
-        .iter()
-        .map(|e| job_to_value(e.value()))
-        .collect();
+    let list: Vec<Value> = state.jobs.iter().map(|e| job_to_value(e.value())).collect();
 
     Ok(json!({ "Jobs": list }))
 }
@@ -106,7 +101,10 @@ pub fn delete_job(
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "JobName is required"))?;
 
     state.jobs.remove(job_name).ok_or_else(|| {
-        AwsError::not_found("EntityNotFoundException", format!("Job not found: {job_name}"))
+        AwsError::not_found(
+            "EntityNotFoundException",
+            format!("Job not found: {job_name}"),
+        )
     })?;
 
     info!(name = %job_name, "Deleted Glue job");

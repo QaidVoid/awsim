@@ -95,7 +95,10 @@ pub fn create_user_import_job(
     };
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
     let val = job_to_value(&job);
@@ -122,11 +125,22 @@ pub fn describe_user_import_job(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "JobId is required"))?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
-    let job = pool.import_jobs.iter().find(|j| j.job_id == job_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Import job not found: {job_id}")))?;
+    let job = pool
+        .import_jobs
+        .iter()
+        .find(|j| j.job_id == job_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Import job not found: {job_id}"),
+            )
+        })?;
 
     Ok(json!({ "UserImportJob": job_to_value(job) }))
 }
@@ -149,11 +163,22 @@ pub fn start_user_import_job(
 
     let now = now_epoch();
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
-    let job = pool.import_jobs.iter_mut().find(|j| j.job_id == job_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Import job not found: {job_id}")))?;
+    let job = pool
+        .import_jobs
+        .iter_mut()
+        .find(|j| j.job_id == job_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Import job not found: {job_id}"),
+            )
+        })?;
 
     if job.status != "Created" && job.status != "Stopped" {
         return Err(AwsError::bad_request(
@@ -189,11 +214,22 @@ pub fn stop_user_import_job(
 
     let now = now_epoch();
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
-    let job = pool.import_jobs.iter_mut().find(|j| j.job_id == job_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Import job not found: {job_id}")))?;
+    let job = pool
+        .import_jobs
+        .iter_mut()
+        .find(|j| j.job_id == job_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Import job not found: {job_id}"),
+            )
+        })?;
 
     job.status = "Stopped".to_string();
     job.completion_date = Some(now);
@@ -218,10 +254,18 @@ pub fn list_user_import_jobs(
     let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
-    let jobs: Vec<Value> = pool.import_jobs.iter().take(max_results).map(job_to_value).collect();
+    let jobs: Vec<Value> = pool
+        .import_jobs
+        .iter()
+        .take(max_results)
+        .map(job_to_value)
+        .collect();
     Ok(json!({ "UserImportJobs": jobs }))
 }
 
@@ -240,7 +284,10 @@ pub fn get_csv_header(
 
     // Verify pool exists
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
     let mut headers: Vec<String> = CSV_HEADER.iter().map(|s| s.to_string()).collect();

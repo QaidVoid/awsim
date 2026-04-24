@@ -35,11 +35,7 @@ pub fn create_load_balancer(
     let name = require_str(input, "Name")?.to_string();
 
     // Check for duplicate name
-    if state
-        .load_balancers
-        .iter()
-        .any(|e| e.value().name == name)
-    {
+    if state.load_balancers.iter().any(|e| e.value().name == name) {
         return Err(AwsError::conflict(
             "DuplicateLoadBalancerName",
             format!("A load balancer named '{name}' already exists"),
@@ -89,12 +85,10 @@ pub fn delete_load_balancer(state: &ElbState, input: &Value) -> Result<Value, Aw
     }
 
     // Remove associated listeners and rules
+    state.listeners.retain(|_, v| v.load_balancer_arn != arn);
     state
-        .listeners
-        .retain(|_, v| v.load_balancer_arn != arn);
-    state.rules.retain(|_, v| {
-        state.listeners.contains_key(&v.listener_arn)
-    });
+        .rules
+        .retain(|_, v| state.listeners.contains_key(&v.listener_arn));
 
     Ok(json!({}))
 }
@@ -192,10 +186,7 @@ fn parse_attribute_list(input: &Value) -> Vec<AttributeKeyValue> {
     result
 }
 
-pub fn modify_load_balancer_attributes(
-    state: &ElbState,
-    input: &Value,
-) -> Result<Value, AwsError> {
+pub fn modify_load_balancer_attributes(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
     let arn = require_str(input, "LoadBalancerArn")?;
 
     if !state.load_balancers.contains_key(arn) {

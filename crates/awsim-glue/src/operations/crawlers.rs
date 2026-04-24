@@ -72,7 +72,10 @@ pub fn get_crawler(
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "Name is required"))?;
 
     let crawler = state.crawlers.get(name).ok_or_else(|| {
-        AwsError::not_found("EntityNotFoundException", format!("Crawler not found: {name}"))
+        AwsError::not_found(
+            "EntityNotFoundException",
+            format!("Crawler not found: {name}"),
+        )
     })?;
 
     Ok(json!({ "Crawler": crawler_to_value(&crawler) }))
@@ -110,7 +113,10 @@ pub fn delete_crawler(
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "Name is required"))?;
 
     state.crawlers.remove(name).ok_or_else(|| {
-        AwsError::not_found("EntityNotFoundException", format!("Crawler not found: {name}"))
+        AwsError::not_found(
+            "EntityNotFoundException",
+            format!("Crawler not found: {name}"),
+        )
     })?;
 
     info!(name = %name, "Deleted Glue crawler");
@@ -132,7 +138,10 @@ pub fn start_crawler(
 
     {
         let mut crawler = state.crawlers.get_mut(name).ok_or_else(|| {
-            AwsError::not_found("EntityNotFoundException", format!("Crawler not found: {name}"))
+            AwsError::not_found(
+                "EntityNotFoundException",
+                format!("Crawler not found: {name}"),
+            )
         })?;
 
         if crawler.state == "RUNNING" {
@@ -165,7 +174,10 @@ pub fn stop_crawler(
 
     {
         let mut crawler = state.crawlers.get_mut(name).ok_or_else(|| {
-            AwsError::not_found("EntityNotFoundException", format!("Crawler not found: {name}"))
+            AwsError::not_found(
+                "EntityNotFoundException",
+                format!("Crawler not found: {name}"),
+            )
         })?;
 
         crawler.state = "READY".to_string();
@@ -189,7 +201,10 @@ pub fn update_crawler(
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "Name is required"))?;
 
     let mut crawler = state.crawlers.get_mut(name).ok_or_else(|| {
-        AwsError::not_found("EntityNotFoundException", format!("Crawler not found: {name}"))
+        AwsError::not_found(
+            "EntityNotFoundException",
+            format!("Crawler not found: {name}"),
+        )
     })?;
 
     if let Some(role) = input["Role"].as_str() {

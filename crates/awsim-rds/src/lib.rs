@@ -60,38 +60,20 @@ impl ServiceHandler for RdsService {
 
         match operation {
             // DB Instances
-            "CreateDBInstance" => {
-                operations::instances::create_db_instance(&state, &input, ctx)
-            }
-            "DeleteDBInstance" => {
-                operations::instances::delete_db_instance(&state, &input, ctx)
-            }
+            "CreateDBInstance" => operations::instances::create_db_instance(&state, &input, ctx),
+            "DeleteDBInstance" => operations::instances::delete_db_instance(&state, &input, ctx),
             "DescribeDBInstances" => {
                 operations::instances::describe_db_instances(&state, &input, ctx)
             }
-            "ModifyDBInstance" => {
-                operations::instances::modify_db_instance(&state, &input, ctx)
-            }
-            "StartDBInstance" => {
-                operations::instances::start_db_instance(&state, &input, ctx)
-            }
-            "StopDBInstance" => {
-                operations::instances::stop_db_instance(&state, &input, ctx)
-            }
-            "RebootDBInstance" => {
-                operations::instances::reboot_db_instance(&state, &input, ctx)
-            }
+            "ModifyDBInstance" => operations::instances::modify_db_instance(&state, &input, ctx),
+            "StartDBInstance" => operations::instances::start_db_instance(&state, &input, ctx),
+            "StopDBInstance" => operations::instances::stop_db_instance(&state, &input, ctx),
+            "RebootDBInstance" => operations::instances::reboot_db_instance(&state, &input, ctx),
 
             // DB Clusters
-            "CreateDBCluster" => {
-                operations::clusters::create_db_cluster(&state, &input, ctx)
-            }
-            "DeleteDBCluster" => {
-                operations::clusters::delete_db_cluster(&state, &input, ctx)
-            }
-            "DescribeDBClusters" => {
-                operations::clusters::describe_db_clusters(&state, &input, ctx)
-            }
+            "CreateDBCluster" => operations::clusters::create_db_cluster(&state, &input, ctx),
+            "DeleteDBCluster" => operations::clusters::delete_db_cluster(&state, &input, ctx),
+            "DescribeDBClusters" => operations::clusters::describe_db_clusters(&state, &input, ctx),
 
             // DB Subnet Groups
             "CreateDBSubnetGroup" => {
@@ -117,9 +99,7 @@ impl ServiceHandler for RdsService {
 
             // Tags
             "AddTagsToResource" => operations::tags::add_tags_to_resource(&state, &input),
-            "RemoveTagsFromResource" => {
-                operations::tags::remove_tags_from_resource(&state, &input)
-            }
+            "RemoveTagsFromResource" => operations::tags::remove_tags_from_resource(&state, &input),
             "ListTagsForResource" => operations::tags::list_tags_for_resource(&state, &input),
 
             // Engine versions / orderable options
@@ -131,18 +111,12 @@ impl ServiceHandler for RdsService {
             }
 
             // Snapshots
-            "CreateDBSnapshot" => {
-                operations::snapshots::create_db_snapshot(&state, &input, ctx)
-            }
-            "DeleteDBSnapshot" => {
-                operations::snapshots::delete_db_snapshot(&state, &input, ctx)
-            }
+            "CreateDBSnapshot" => operations::snapshots::create_db_snapshot(&state, &input, ctx),
+            "DeleteDBSnapshot" => operations::snapshots::delete_db_snapshot(&state, &input, ctx),
             "DescribeDBSnapshots" => {
                 operations::snapshots::describe_db_snapshots(&state, &input, ctx)
             }
-            "CopyDBSnapshot" => {
-                operations::snapshots::copy_db_snapshot(&state, &input, ctx)
-            }
+            "CopyDBSnapshot" => operations::snapshots::copy_db_snapshot(&state, &input, ctx),
 
             // Event subscriptions (stub)
             "DescribeEventSubscriptions" => {
@@ -150,9 +124,7 @@ impl ServiceHandler for RdsService {
             }
 
             // Log files (stub)
-            "DescribeDBLogFiles" => {
-                operations::snapshots::describe_db_log_files(&input)
-            }
+            "DescribeDBLogFiles" => operations::snapshots::describe_db_log_files(&input),
 
             // Cluster endpoints
             "DescribeDBClusterEndpoints" => {
@@ -206,8 +178,7 @@ impl ServiceHandler for RdsService {
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
-        let snapshot: RdsStateSnapshot =
-            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        let snapshot: RdsStateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
 
         // Derive account+region from ARN of first entity.
         // ARN: arn:aws:rds:{region}:{account}:db:{identifier}

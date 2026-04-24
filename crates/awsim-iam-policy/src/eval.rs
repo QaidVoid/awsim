@@ -99,7 +99,10 @@ pub fn evaluate(req: &AuthzRequest, ctx: &EvalContext) -> Decision {
         }
     }
 
-    let identity_allows = ctx.identity_policies.iter().any(|p| any_allow(p, req, false));
+    let identity_allows = ctx
+        .identity_policies
+        .iter()
+        .any(|p| any_allow(p, req, false));
     let resource_allows = ctx
         .resource_policy
         .map(|p| any_allow(p, req, true))
@@ -248,8 +251,8 @@ fn condition_eval(c: &Condition, context: &HashMap<String, ContextValue>) -> boo
     let val = context.get(c.key.as_str());
 
     if c.operator.base == BaseOperator::Null {
-        let absent = val.is_none()
-            || matches!(val, Some(ContextValue::StringList(v)) if v.is_empty());
+        let absent =
+            val.is_none() || matches!(val, Some(ContextValue::StringList(v)) if v.is_empty());
         let expect_null = c.values.iter().any(|v| v == "true");
         return absent == expect_null;
     }
@@ -311,9 +314,7 @@ fn scalar_match(
         BaseOperator::NumericEquals => num_cmp(context_value, policy_values, |a, b| a == b),
         BaseOperator::NumericNotEquals => num_cmp(context_value, policy_values, |a, b| a != b),
         BaseOperator::NumericLessThan => num_cmp(context_value, policy_values, |a, b| a < b),
-        BaseOperator::NumericLessThanEquals => {
-            num_cmp(context_value, policy_values, |a, b| a <= b)
-        }
+        BaseOperator::NumericLessThanEquals => num_cmp(context_value, policy_values, |a, b| a <= b),
         BaseOperator::NumericGreaterThan => num_cmp(context_value, policy_values, |a, b| a > b),
         BaseOperator::NumericGreaterThanEquals => {
             num_cmp(context_value, policy_values, |a, b| a >= b)

@@ -38,7 +38,11 @@ pub fn create_function(state: &CloudFrontState, input: &Value) -> Result<Value, 
         .to_string();
 
     let cfg = input.get("FunctionConfig").unwrap_or(input);
-    let comment = cfg.get("Comment").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let comment = cfg
+        .get("Comment")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let runtime = cfg
         .get("Runtime")
         .and_then(|v| v.as_str())
@@ -106,7 +110,10 @@ pub fn list_functions(state: &CloudFrontState) -> Result<Value, AwsError> {
 }
 
 pub fn publish_function(state: &CloudFrontState, name: &str) -> Result<Value, AwsError> {
-    let mut f = state.functions.get_mut(name).ok_or_else(|| not_found(name))?;
+    let mut f = state
+        .functions
+        .get_mut(name)
+        .ok_or_else(|| not_found(name))?;
     f.stage = "LIVE".to_string();
     let result = function_to_value(&f);
     Ok(json!({

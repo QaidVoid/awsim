@@ -86,40 +86,16 @@ pub struct SnsStateSnapshot {
 fn default_topic_attributes(is_fifo: bool, arn: &str) -> HashMap<String, String> {
     let mut m = HashMap::new();
     m.insert("TopicArn".to_string(), arn.to_string());
-    m.insert(
-        "DisplayName".to_string(),
-        String::new(),
-    );
-    m.insert(
-        "SubscriptionsConfirmed".to_string(),
-        "0".to_string(),
-    );
-    m.insert(
-        "SubscriptionsPending".to_string(),
-        "0".to_string(),
-    );
-    m.insert(
-        "SubscriptionsDeleted".to_string(),
-        "0".to_string(),
-    );
-    m.insert(
-        "DeliveryPolicy".to_string(),
-        String::new(),
-    );
-    m.insert(
-        "EffectiveDeliveryPolicy".to_string(),
-        String::new(),
-    );
-    m.insert(
-        "Policy".to_string(),
-        String::new(),
-    );
+    m.insert("DisplayName".to_string(), String::new());
+    m.insert("SubscriptionsConfirmed".to_string(), "0".to_string());
+    m.insert("SubscriptionsPending".to_string(), "0".to_string());
+    m.insert("SubscriptionsDeleted".to_string(), "0".to_string());
+    m.insert("DeliveryPolicy".to_string(), String::new());
+    m.insert("EffectiveDeliveryPolicy".to_string(), String::new());
+    m.insert("Policy".to_string(), String::new());
     if is_fifo {
         m.insert("FifoTopic".to_string(), "true".to_string());
-        m.insert(
-            "ContentBasedDeduplication".to_string(),
-            "false".to_string(),
-        );
+        m.insert("ContentBasedDeduplication".to_string(), "false".to_string());
     }
     m
 }
@@ -173,19 +149,27 @@ pub struct SnsState {
 impl SnsState {
     pub fn to_snapshot(&self) -> SnsStateSnapshot {
         SnsStateSnapshot {
-            topics: self.topics.iter().map(|e| {
-                let t = e.value();
-                Topic {
-                    arn: t.arn.clone(),
-                    name: t.name.clone(),
-                    attributes: t.attributes.clone(),
-                    tags: t.tags.clone(),
-                    is_fifo: t.is_fifo,
-                    subscription_arns: t.subscription_arns.clone(),
-                    created_at: t.created_at.clone(),
-                }
-            }).collect(),
-            subscriptions: self.subscriptions.iter().map(|e| e.value().clone()).collect(),
+            topics: self
+                .topics
+                .iter()
+                .map(|e| {
+                    let t = e.value();
+                    Topic {
+                        arn: t.arn.clone(),
+                        name: t.name.clone(),
+                        attributes: t.attributes.clone(),
+                        tags: t.tags.clone(),
+                        is_fifo: t.is_fifo,
+                        subscription_arns: t.subscription_arns.clone(),
+                        created_at: t.created_at.clone(),
+                    }
+                })
+                .collect(),
+            subscriptions: self
+                .subscriptions
+                .iter()
+                .map(|e| e.value().clone())
+                .collect(),
         }
     }
 

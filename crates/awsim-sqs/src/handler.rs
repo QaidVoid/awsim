@@ -10,7 +10,10 @@ use crate::operations::{
     get_queue_url, list_queues, message_move, permissions, purge_queue, receive_message,
     send_message, tags,
 };
-use crate::state::{InflightMessage, Queue, QueueSnapshot, SqsState, SqsStateSnapshot, parse_redrive_policy_from_attrs};
+use crate::state::{
+    InflightMessage, Queue, QueueSnapshot, SqsState, SqsStateSnapshot,
+    parse_redrive_policy_from_attrs,
+};
 
 /// The SQS service handler.
 pub struct SqsService {
@@ -68,9 +71,7 @@ impl ServiceHandler for SqsService {
             "DeleteMessage" => delete_message::handle(&state, &input, ctx),
             "DeleteMessageBatch" => delete_message::handle_batch(&state, &input, ctx),
             "ChangeMessageVisibility" => change_visibility::handle(&state, &input, ctx),
-            "ChangeMessageVisibilityBatch" => {
-                change_visibility::handle_batch(&state, &input, ctx)
-            }
+            "ChangeMessageVisibilityBatch" => change_visibility::handle_batch(&state, &input, ctx),
             "ListDeadLetterSourceQueues" => {
                 dead_letter::list_dead_letter_source_queues(&state, &input, ctx)
             }
@@ -89,34 +90,45 @@ impl ServiceHandler for SqsService {
 
     fn iam_action(&self, operation: &str) -> Option<String> {
         match operation {
-            "CreateQueue" | "DeleteQueue" | "ListQueues" | "GetQueueUrl"
-            | "GetQueueAttributes" | "SetQueueAttributes"
-            | "SendMessage" | "SendMessageBatch"
-            | "ReceiveMessage" | "DeleteMessage" | "DeleteMessageBatch"
-            | "ChangeMessageVisibility" | "ChangeMessageVisibilityBatch"
-            | "ListDeadLetterSourceQueues" | "PurgeQueue"
-            | "TagQueue" | "UntagQueue" | "ListQueueTags"
-            | "AddPermission" | "RemovePermission"
-            | "StartMessageMoveTask" | "CancelMessageMoveTask" | "ListMessageMoveTasks" => {
-                Some(format!("sqs:{operation}"))
-            }
+            "CreateQueue"
+            | "DeleteQueue"
+            | "ListQueues"
+            | "GetQueueUrl"
+            | "GetQueueAttributes"
+            | "SetQueueAttributes"
+            | "SendMessage"
+            | "SendMessageBatch"
+            | "ReceiveMessage"
+            | "DeleteMessage"
+            | "DeleteMessageBatch"
+            | "ChangeMessageVisibility"
+            | "ChangeMessageVisibilityBatch"
+            | "ListDeadLetterSourceQueues"
+            | "PurgeQueue"
+            | "TagQueue"
+            | "UntagQueue"
+            | "ListQueueTags"
+            | "AddPermission"
+            | "RemovePermission"
+            | "StartMessageMoveTask"
+            | "CancelMessageMoveTask"
+            | "ListMessageMoveTasks" => Some(format!("sqs:{operation}")),
             _ => None,
         }
     }
 
-    fn iam_resource(
-        &self,
-        operation: &str,
-        input: &Value,
-        ctx: &RequestContext,
-    ) -> Option<String> {
+    fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
         match operation {
-            "ListQueues" | "CreateQueue" | "GetQueueUrl"
-            | "ListMessageMoveTasks" => Some("*".to_string()),
+            "ListQueues" | "CreateQueue" | "GetQueueUrl" | "ListMessageMoveTasks" => {
+                Some("*".to_string())
+            }
             _ => {
                 let queue_url = input.get("QueueUrl").and_then(|v| v.as_str())?;
                 let name = queue_url.rsplit('/').next().filter(|s| !s.is_empty())?;
-                Some(format!("arn:aws:sqs:{}:{}:{}", ctx.region, ctx.account_id, name))
+                Some(format!(
+                    "arn:aws:sqs:{}:{}:{}",
+                    ctx.region, ctx.account_id, name
+                ))
             }
         }
     }
@@ -147,11 +159,7 @@ impl ServiceHandler for SqsService {
                     })
                     .collect();
 
-                let inflight: Vec<InflightMessage> = q
-                    .inflight
-                    .values()
-                    .cloned()
-                    .collect();
+                let inflight: Vec<InflightMessage> = q.inflight.values().cloned().collect();
 
                 queue_snapshots.push(QueueSnapshot {
                     name: q.name.clone(),
@@ -169,13 +177,14 @@ impl ServiceHandler for SqsService {
             }
         }
 
-        let snapshot = SqsStateSnapshot { queues: queue_snapshots };
+        let snapshot = SqsStateSnapshot {
+            queues: queue_snapshots,
+        };
         serde_json::to_vec(&snapshot).ok()
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
-        let snapshot: SqsStateSnapshot =
-            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        let snapshot: SqsStateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
 
         let now_epoch = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -230,7 +239,8 @@ impl ServiceHandler for SqsService {
             }
 
             // Re-derive redrive_policy from attributes (covers old snapshots without the field)
-            let redrive_policy = qs.redrive_policy
+            let redrive_policy = qs
+                .redrive_policy
                 .or_else(|| parse_redrive_policy_from_attrs(&qs.attributes));
 
             let queue = Queue {

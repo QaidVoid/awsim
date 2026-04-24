@@ -15,7 +15,11 @@ pub fn enable_enhanced_monitoring(
 
     let shard_level_metrics: Vec<String> = input["ShardLevelMetrics"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
 
     let mut stream = state.streams.get_mut(stream_name).ok_or_else(|| {
@@ -59,7 +63,11 @@ pub fn disable_enhanced_monitoring(
 
     let shard_level_metrics: Vec<String> = input["ShardLevelMetrics"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
 
     let mut stream = state.streams.get_mut(stream_name).ok_or_else(|| {

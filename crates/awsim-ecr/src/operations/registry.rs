@@ -3,7 +3,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-use crate::state::{EcrState, PullThroughCacheRule, RegistryScanningConfiguration, ReplicationConfiguration};
+use crate::state::{
+    EcrState, PullThroughCacheRule, RegistryScanningConfiguration, ReplicationConfiguration,
+};
 
 fn now_epoch_str() -> String {
     SystemTime::now()
@@ -14,9 +16,9 @@ fn now_epoch_str() -> String {
 }
 
 fn require_str<'a>(input: &'a Value, key: &str) -> Result<&'a str, AwsError> {
-    input[key]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", format!("{key} is required")))
+    input[key].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", format!("{key} is required"))
+    })
 }
 
 fn repo_not_found(name: &str) -> AwsError {
@@ -239,10 +241,7 @@ pub fn put_registry_scanning_configuration(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let scan_type = input["scanType"].as_str().unwrap_or("BASIC").to_string();
-    let rules: Vec<Value> = input["rules"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let rules: Vec<Value> = input["rules"].as_array().cloned().unwrap_or_default();
 
     let new_cfg = RegistryScanningConfiguration {
         scan_type: scan_type.clone(),
@@ -287,7 +286,11 @@ pub fn batch_get_repository_scanning_configuration(
 ) -> Result<Value, AwsError> {
     let names: Vec<String> = input["repositoryNames"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
 
     let mut configs = Vec::new();
@@ -388,7 +391,11 @@ pub fn describe_pull_through_cache_rules(
 ) -> Result<Value, AwsError> {
     let filter: Vec<String> = input["ecrRepositoryPrefixes"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
 
     let rules: Vec<Value> = state

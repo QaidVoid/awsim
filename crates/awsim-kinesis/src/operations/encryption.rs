@@ -12,9 +12,7 @@ pub fn start_stream_encryption(
     let stream_name = input["StreamName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "StreamName is required"))?;
-    let encryption_type = input["EncryptionType"]
-        .as_str()
-        .unwrap_or("KMS");
+    let encryption_type = input["EncryptionType"].as_str().unwrap_or("KMS");
     let key_id = input["KeyId"].as_str().unwrap_or("").to_string();
 
     let mut stream = state.streams.get_mut(stream_name).ok_or_else(|| {
@@ -25,7 +23,11 @@ pub fn start_stream_encryption(
     })?;
 
     stream.encryption_type = encryption_type.to_string();
-    stream.key_id = if key_id.is_empty() { None } else { Some(key_id) };
+    stream.key_id = if key_id.is_empty() {
+        None
+    } else {
+        Some(key_id)
+    };
 
     Ok(json!({}))
 }

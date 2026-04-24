@@ -4,8 +4,8 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
-use crate::state::{CognitoGroup, CognitoState};
 use crate::operations::users::user_to_value;
+use crate::state::{CognitoGroup, CognitoState};
 
 /// Warn if a role ARN doesn't match the expected format.
 /// Does NOT call IAM — just a format check to catch obvious mistakes.

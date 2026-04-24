@@ -98,7 +98,8 @@ pub fn delete_ssh_public_key(state: &IamState, input: &Value) -> Result<Value, A
         .ok_or_else(|| no_such_entity("User", user_name))?;
 
     let before = user.ssh_public_keys.len();
-    user.ssh_public_keys.retain(|k| k.ssh_public_key_id != key_id);
+    user.ssh_public_keys
+        .retain(|k| k.ssh_public_key_id != key_id);
 
     if user.ssh_public_keys.len() == before {
         return Err(no_such_entity("SSHPublicKey", key_id));

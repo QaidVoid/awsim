@@ -40,14 +40,17 @@ pub fn create_repository(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["repositoryName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "repositoryName is required"))?;
+    let name = input["repositoryName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "repositoryName is required")
+    })?;
 
     if state.repositories.contains_key(name) {
         return Err(AwsError::conflict(
             "RepositoryAlreadyExistsException",
-            format!("The repository with name '{name}' already exists in the registry with id '{}'", ctx.account_id),
+            format!(
+                "The repository with name '{name}' already exists in the registry with id '{}'",
+                ctx.account_id
+            ),
         ));
     }
 
@@ -109,9 +112,9 @@ pub fn delete_repository(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["repositoryName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "repositoryName is required"))?;
+    let name = input["repositoryName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "repositoryName is required")
+    })?;
 
     let force = input["force"].as_bool().unwrap_or(false);
 

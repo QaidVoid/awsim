@@ -13,10 +13,7 @@ pub async fn test_secretsmanager(endpoint: &str, verbose: bool) -> Vec<OpResult>
         .secret_string(r#"{"password":"hunter2"}"#)
         .send()
         .await;
-    let secret_id = create_r
-        .as_ref()
-        .ok()
-        .and_then(|r| r.arn.clone());
+    let secret_id = create_r.as_ref().ok().and_then(|r| r.arn.clone());
     results.push(chk!("CreateSecret", create_r, verbose));
 
     // ListSecrets

@@ -72,7 +72,10 @@ mod tests {
     #[test]
     fn ec2_id_format() {
         let id = new_ec2_id("vpc");
-        assert!(id.starts_with("vpc-"), "vpc id should start with vpc-: {id}");
+        assert!(
+            id.starts_with("vpc-"),
+            "vpc id should start with vpc-: {id}"
+        );
         assert_eq!(id.len(), 12); // "vpc-" (4) + 8 hex = 12
     }
 

@@ -12,7 +12,10 @@ pub fn create_policy(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "Name is required"))?;
     let content = input["Content"].as_str().unwrap_or("{}").to_string();
-    let ptype = input["Type"].as_str().unwrap_or("SERVICE_CONTROL_POLICY").to_string();
+    let ptype = input["Type"]
+        .as_str()
+        .unwrap_or("SERVICE_CONTROL_POLICY")
+        .to_string();
     let description = input["Description"].as_str().unwrap_or("").to_string();
 
     let uid = uuid::Uuid::new_v4().simple().to_string();
@@ -20,7 +23,13 @@ pub fn create_policy(
     let arn = format!(
         "arn:aws:organizations::{}:policy/{}/{}/{}",
         ctx.account_id,
-        state.organization.read().unwrap().as_ref().map(|o| o.id.clone()).unwrap_or_default(),
+        state
+            .organization
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|o| o.id.clone())
+            .unwrap_or_default(),
         ptype.to_lowercase(),
         policy_id,
     );
@@ -45,10 +54,9 @@ pub fn describe_policy(
     let id = input["PolicyId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "PolicyId is required"))?;
-    let p = state
-        .policies
-        .get(id)
-        .ok_or_else(|| AwsError::not_found("PolicyNotFoundException", format!("Policy {id} not found")))?;
+    let p = state.policies.get(id).ok_or_else(|| {
+        AwsError::not_found("PolicyNotFoundException", format!("Policy {id} not found"))
+    })?;
     Ok(json!({ "Policy": serialize_policy_full(&p) }))
 }
 
@@ -77,7 +85,10 @@ pub fn attach_policy(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "TargetId is required"))?;
 
-    let mut entry = state.policy_attachments.entry(policy_id.to_string()).or_default();
+    let mut entry = state
+        .policy_attachments
+        .entry(policy_id.to_string())
+        .or_default();
     if !entry.contains(&target.to_string()) {
         entry.push(target.to_string());
     }

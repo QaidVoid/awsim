@@ -39,7 +39,9 @@ fn validate_param_type(param_type: &str) -> Result<(), AwsError> {
         "String" | "StringList" | "SecureString" => Ok(()),
         _ => Err(AwsError::bad_request(
             "InvalidParameterType",
-            format!("Invalid parameter type: {param_type}. Must be String, StringList, or SecureString"),
+            format!(
+                "Invalid parameter type: {param_type}. Must be String, StringList, or SecureString"
+            ),
         )),
     }
 }
@@ -171,10 +173,7 @@ pub fn get_parameter(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
 
     let param = state.parameters.get(name).ok_or_else(|| {
-        AwsError::not_found(
-            "ParameterNotFound",
-            format!("Parameter {name} not found"),
-        )
+        AwsError::not_found("ParameterNotFound", format!("Parameter {name} not found"))
     })?;
 
     debug!(name, "GetParameter");
@@ -255,7 +254,10 @@ pub fn get_parameters_by_path(
 
     // Stable sort by name
     parameters.sort_by(|a, b| {
-        a["Name"].as_str().unwrap_or("").cmp(b["Name"].as_str().unwrap_or(""))
+        a["Name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["Name"].as_str().unwrap_or(""))
     });
 
     Ok(json!({ "Parameters": parameters }))
@@ -366,7 +368,10 @@ pub fn describe_parameters(
         .collect();
 
     params.sort_by(|a, b| {
-        a["Name"].as_str().unwrap_or("").cmp(b["Name"].as_str().unwrap_or(""))
+        a["Name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["Name"].as_str().unwrap_or(""))
     });
 
     Ok(json!({ "Parameters": params }))
@@ -386,10 +391,7 @@ pub fn get_parameter_history(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
 
     let param = state.parameters.get(name).ok_or_else(|| {
-        AwsError::not_found(
-            "ParameterNotFound",
-            format!("Parameter {name} not found"),
-        )
+        AwsError::not_found("ParameterNotFound", format!("Parameter {name} not found"))
     })?;
 
     // Build history: all previous versions + current

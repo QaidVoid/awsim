@@ -166,7 +166,11 @@ pub async fn test_route53(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     if let Some(ref hcid) = health_check_id {
         results.push(chk!(
             "DeleteHealthCheck",
-            client.delete_health_check().health_check_id(hcid).send().await,
+            client
+                .delete_health_check()
+                .health_check_id(hcid)
+                .send()
+                .await,
             verbose
         ));
     } else {

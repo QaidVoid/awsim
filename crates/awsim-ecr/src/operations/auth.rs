@@ -8,10 +8,7 @@ use crate::operations::repositories::now_epoch_str;
 // GetAuthorizationToken
 // ---------------------------------------------------------------------------
 
-pub fn get_authorization_token(
-    _input: &Value,
-    ctx: &RequestContext,
-) -> Result<Value, AwsError> {
+pub fn get_authorization_token(_input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
     let credentials = format!("{}:{}", "AWS", uuid::Uuid::new_v4());
     let token = base64::engine::general_purpose::STANDARD.encode(credentials.as_bytes());
 

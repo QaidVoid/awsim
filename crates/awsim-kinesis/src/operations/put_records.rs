@@ -5,7 +5,11 @@ use tracing::debug;
 use crate::state::{KinesisRecord, KinesisState, now_millis};
 use crate::util::{hash_to_shard_index, partition_key_to_hash};
 
-pub fn handle(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn handle(
+    state: &KinesisState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let stream_name = input["StreamName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "StreamName is required"))?;
@@ -59,7 +63,8 @@ pub fn handle(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Res
         let explicit_hash_key = entry["ExplicitHashKey"].as_str().map(|s| s.to_string());
 
         let hash = if let Some(ref ehk) = explicit_hash_key {
-            ehk.parse::<u128>().unwrap_or_else(|_| partition_key_to_hash(partition_key))
+            ehk.parse::<u128>()
+                .unwrap_or_else(|_| partition_key_to_hash(partition_key))
         } else {
             partition_key_to_hash(partition_key)
         };

@@ -26,11 +26,7 @@ pub fn evaluate_condition(
             }
         }
 
-        ConditionExpr::Between {
-            operand,
-            low,
-            high,
-        } => {
+        ConditionExpr::Between { operand, low, high } => {
             let v = resolve_operand(operand, item, expr_attr_names, expr_attr_values);
             let lo = resolve_operand(low, item, expr_attr_names, expr_attr_values);
             let hi = resolve_operand(high, item, expr_attr_names, expr_attr_values);
@@ -62,35 +58,31 @@ pub fn evaluate_condition(
             }
         }
 
-        ConditionExpr::Logical { op, children } => {
-            match op {
-                super::parser::LogicalOp::And => {
-                    for child in children {
-                        if !evaluate_condition(
-                            child,
-                            item,
-                            expr_attr_names,
-                            expr_attr_values,
-                        )? {
-                            return Ok(false);
-                        }
+        ConditionExpr::Logical { op, children } => match op {
+            super::parser::LogicalOp::And => {
+                for child in children {
+                    if !evaluate_condition(child, item, expr_attr_names, expr_attr_values)? {
+                        return Ok(false);
                     }
-                    Ok(true)
                 }
-                super::parser::LogicalOp::Or => {
-                    for child in children {
-                        if evaluate_condition(child, item, expr_attr_names, expr_attr_values)? {
-                            return Ok(true);
-                        }
-                    }
-                    Ok(false)
-                }
+                Ok(true)
             }
-        }
+            super::parser::LogicalOp::Or => {
+                for child in children {
+                    if evaluate_condition(child, item, expr_attr_names, expr_attr_values)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+        },
 
-        ConditionExpr::Not(inner) => {
-            Ok(!evaluate_condition(inner, item, expr_attr_names, expr_attr_values)?)
-        }
+        ConditionExpr::Not(inner) => Ok(!evaluate_condition(
+            inner,
+            item,
+            expr_attr_names,
+            expr_attr_values,
+        )?),
 
         ConditionExpr::AttributeExists(path) => {
             let resolved = resolve_path(path, expr_attr_names);

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use awsim_core::AwsError;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::state::{DocumentAttribute, DocumentAttributeValue, IndexedDocument, KendraState};
 
@@ -18,10 +18,12 @@ pub fn query(state: &KendraState, input: &Value) -> Result<Value, AwsError> {
         .ok_or_else(|| AwsError::validation("QueryText is required"))?;
     let page_size = input["PageSize"].as_u64().unwrap_or(10) as usize;
 
-    let index = state
-        .indexes
-        .get(index_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Index {index_id} not found")))?;
+    let index = state.indexes.get(index_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Index {index_id} not found"),
+        )
+    })?;
 
     let query_lower = query_text.to_lowercase();
     let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
@@ -77,58 +79,67 @@ pub fn query(state: &KendraState, input: &Value) -> Result<Value, AwsError> {
         });
     } else {
         scored.sort_by(|a, b| {
-            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
     }
 
     // Build facet results before truncating (use all matching docs)
-    let facet_results: Vec<Value> = if let Some(facets) = input.get("Facets").and_then(|f| f.as_array()) {
-        facets.iter().map(|facet| {
-            let key = facet["DocumentAttributeKey"].as_str().unwrap_or("");
-            let mut value_counts: HashMap<String, u32> = HashMap::new();
-            for sd in &scored {
-                if let Some(attr) = sd.doc.attributes.get(key) {
-                    let val_str = attribute_value_to_string(&attr.value);
-                    *value_counts.entry(val_str).or_default() += 1;
-                }
-            }
-            json!({
-                "DocumentAttributeKey": key,
-                "DocumentAttributeValueCountPairs": value_counts.iter().map(|(v, c)| json!({
-                    "DocumentAttributeValue": {"StringValue": v},
-                    "Count": c,
-                })).collect::<Vec<_>>(),
-            })
-        }).collect()
-    } else {
-        Vec::new()
-    };
+    let facet_results: Vec<Value> =
+        if let Some(facets) = input.get("Facets").and_then(|f| f.as_array()) {
+            facets
+                .iter()
+                .map(|facet| {
+                    let key = facet["DocumentAttributeKey"].as_str().unwrap_or("");
+                    let mut value_counts: HashMap<String, u32> = HashMap::new();
+                    for sd in &scored {
+                        if let Some(attr) = sd.doc.attributes.get(key) {
+                            let val_str = attribute_value_to_string(&attr.value);
+                            *value_counts.entry(val_str).or_default() += 1;
+                        }
+                    }
+                    json!({
+                        "DocumentAttributeKey": key,
+                        "DocumentAttributeValueCountPairs": value_counts.iter().map(|(v, c)| json!({
+                            "DocumentAttributeValue": {"StringValue": v},
+                            "Count": c,
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
     let total = scored.len();
     scored.truncate(page_size);
 
-    let results: Vec<Value> = scored.iter().map(|sd| {
-        let doc = sd.doc;
-        let snippet = extract_snippet(&doc.content, &query_terms, 200);
-        json!({
-            "Id": doc.id,
-            "Type": "DOCUMENT",
-            "DocumentId": doc.id,
-            "DocumentTitle": {
-                "Text": doc.title.as_deref().unwrap_or(""),
-                "Highlights": [],
-            },
-            "DocumentExcerpt": {
-                "Text": snippet,
-                "Highlights": [],
-            },
-            "DocumentURI": null,
-            "ScoreAttributes": {
-                "ScoreConfidence": if sd.score > 0.5 { "VERY_HIGH" } else { "MEDIUM" },
-            },
-            "RelevanceScore": sd.score.min(1.0),
+    let results: Vec<Value> = scored
+        .iter()
+        .map(|sd| {
+            let doc = sd.doc;
+            let snippet = extract_snippet(&doc.content, &query_terms, 200);
+            json!({
+                "Id": doc.id,
+                "Type": "DOCUMENT",
+                "DocumentId": doc.id,
+                "DocumentTitle": {
+                    "Text": doc.title.as_deref().unwrap_or(""),
+                    "Highlights": [],
+                },
+                "DocumentExcerpt": {
+                    "Text": snippet,
+                    "Highlights": [],
+                },
+                "DocumentURI": null,
+                "ScoreAttributes": {
+                    "ScoreConfidence": if sd.score > 0.5 { "VERY_HIGH" } else { "MEDIUM" },
+                },
+                "RelevanceScore": sd.score.min(1.0),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(json!({
         "QueryId": uuid::Uuid::new_v4().to_string(),
@@ -139,10 +150,7 @@ pub fn query(state: &KendraState, input: &Value) -> Result<Value, AwsError> {
 }
 
 /// Evaluate an AttributeFilter against a document's attribute map.
-fn evaluate_attribute_filter(
-    filter: &Value,
-    attrs: &HashMap<String, DocumentAttribute>,
-) -> bool {
+fn evaluate_attribute_filter(filter: &Value, attrs: &HashMap<String, DocumentAttribute>) -> bool {
     let Some(obj) = filter.as_object() else {
         return true;
     };
@@ -198,7 +206,9 @@ fn evaluate_attribute_filter(
 
 /// Check whether a document attribute equals an expected JSON value.
 fn match_attribute_value(attr: Option<&DocumentAttribute>, expected: &Value) -> bool {
-    let Some(attr) = attr else { return false; };
+    let Some(attr) = attr else {
+        return false;
+    };
     match &attr.value {
         DocumentAttributeValue::StringValue(s) => {
             expected["StringValue"].as_str().map_or(false, |e| e == s)
@@ -222,16 +232,16 @@ fn match_attribute_value(attr: Option<&DocumentAttribute>, expected: &Value) -> 
 
 /// ContainsAll — all expected list values must be present in the attribute.
 fn match_contains_all(attr: Option<&DocumentAttribute>, expected: &Value) -> bool {
-    let Some(attr) = attr else { return false; };
+    let Some(attr) = attr else {
+        return false;
+    };
     if let Some(arr) = expected["StringListValue"].as_array() {
         let expected_strings: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
         match &attr.value {
             DocumentAttributeValue::StringListValue(list) => {
                 expected_strings.iter().all(|e| list.iter().any(|s| s == e))
             }
-            DocumentAttributeValue::StringValue(s) => {
-                expected_strings.iter().all(|e| s == e)
-            }
+            DocumentAttributeValue::StringValue(s) => expected_strings.iter().all(|e| s == e),
             _ => false,
         }
     } else {
@@ -241,16 +251,16 @@ fn match_contains_all(attr: Option<&DocumentAttribute>, expected: &Value) -> boo
 
 /// ContainsAny — at least one expected value must be present in the attribute.
 fn match_contains_any(attr: Option<&DocumentAttribute>, expected: &Value) -> bool {
-    let Some(attr) = attr else { return false; };
+    let Some(attr) = attr else {
+        return false;
+    };
     if let Some(arr) = expected["StringListValue"].as_array() {
         let expected_strings: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
         match &attr.value {
             DocumentAttributeValue::StringListValue(list) => {
                 expected_strings.iter().any(|e| list.iter().any(|s| s == e))
             }
-            DocumentAttributeValue::StringValue(s) => {
-                expected_strings.iter().any(|e| s == e)
-            }
+            DocumentAttributeValue::StringValue(s) => expected_strings.iter().any(|e| s == e),
             _ => false,
         }
     } else {
@@ -286,10 +296,12 @@ pub fn retrieve(state: &KendraState, input: &Value) -> Result<Value, AwsError> {
         .ok_or_else(|| AwsError::validation("QueryText is required"))?;
     let page_size = input["PageSize"].as_u64().unwrap_or(10) as usize;
 
-    let index = state
-        .indexes
-        .get(index_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Index {index_id} not found")))?;
+    let index = state.indexes.get(index_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Index {index_id} not found"),
+        )
+    })?;
 
     let query_lower = query_text.to_lowercase();
     let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
@@ -357,7 +369,10 @@ fn extract_snippet(content: &str, terms: &[&str], max_len: usize) -> String {
 
     // Align to word boundaries
     let start = if start > 0 {
-        content[start..].find(' ').map(|p| start + p + 1).unwrap_or(start)
+        content[start..]
+            .find(' ')
+            .map(|p| start + p + 1)
+            .unwrap_or(start)
     } else {
         0
     };
@@ -421,7 +436,11 @@ mod tests {
     #[test]
     fn test_query_finds_matching_docs() {
         let state = test_state();
-        let result = query(&state, &json!({"IndexId": "test-idx", "QueryText": "Rust programming"})).unwrap();
+        let result = query(
+            &state,
+            &json!({"IndexId": "test-idx", "QueryText": "Rust programming"}),
+        )
+        .unwrap();
         let items = result["ResultItems"].as_array().unwrap();
         assert!(!items.is_empty());
         assert_eq!(items[0]["DocumentId"], "doc1");
@@ -430,7 +449,11 @@ mod tests {
     #[test]
     fn test_query_no_results() {
         let state = test_state();
-        let result = query(&state, &json!({"IndexId": "test-idx", "QueryText": "xyz_nonexistent_term"})).unwrap();
+        let result = query(
+            &state,
+            &json!({"IndexId": "test-idx", "QueryText": "xyz_nonexistent_term"}),
+        )
+        .unwrap();
         let items = result["ResultItems"].as_array().unwrap();
         assert!(items.is_empty());
     }
@@ -438,7 +461,11 @@ mod tests {
     #[test]
     fn test_retrieve_returns_passages() {
         let state = test_state();
-        let result = retrieve(&state, &json!({"IndexId": "test-idx", "QueryText": "Lambda"})).unwrap();
+        let result = retrieve(
+            &state,
+            &json!({"IndexId": "test-idx", "QueryText": "Lambda"}),
+        )
+        .unwrap();
         let items = result["ResultItems"].as_array().unwrap();
         assert!(!items.is_empty());
         assert_eq!(items[0]["DocumentId"], "doc2");
@@ -454,7 +481,10 @@ mod tests {
     #[test]
     fn test_query_missing_index() {
         let state = test_state();
-        let result = query(&state, &json!({"IndexId": "nonexistent", "QueryText": "test"}));
+        let result = query(
+            &state,
+            &json!({"IndexId": "nonexistent", "QueryText": "test"}),
+        );
         assert!(result.is_err());
     }
 }

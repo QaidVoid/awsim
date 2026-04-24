@@ -153,7 +153,9 @@ fn match_route<'a>(
 
             if let Some(required_param) = route.required_query_param {
                 // This route requires a specific query parameter to be present
-                if query_params.iter().any(|(k, _)| k == required_param) && specificity > best_specificity {
+                if query_params.iter().any(|(k, _)| k == required_param)
+                    && specificity > best_specificity
+                {
                     best_match = Some((route.operation, path_params));
                     best_specificity = specificity;
                 }
@@ -166,9 +168,7 @@ fn match_route<'a>(
         }
     }
 
-    best_match.ok_or_else(|| {
-        AwsError::unknown_operation(&format!("{method} {path}"))
-    })
+    best_match.ok_or_else(|| AwsError::unknown_operation(&format!("{method} {path}")))
 }
 
 /// Match a path pattern like "/2015-03-31/functions/{FunctionName}" against an actual path.
@@ -219,10 +219,7 @@ fn parse_query_string(qs: &str) -> Vec<(String, String)> {
             let mut parts = pair.splitn(2, '=');
             let key = parts.next()?;
             let value = parts.next().unwrap_or("");
-            Some((
-                percent_decode(key),
-                percent_decode(value),
-            ))
+            Some((percent_decode(key), percent_decode(value)))
         })
         .collect()
 }
@@ -279,8 +276,8 @@ fn parse_xml_body(body: &Bytes) -> Result<Value, AwsError> {
 
 /// Simple XML → JSON parser for AWS request bodies.
 fn parse_xml_element(xml: &str) -> Result<Value, AwsError> {
-    use quick_xml::events::Event;
     use quick_xml::Reader;
+    use quick_xml::events::Event;
 
     let mut reader = Reader::from_str(xml);
     let mut map = serde_json::Map::new();
@@ -325,14 +322,10 @@ fn parse_xml_element(xml: &str) -> Result<Value, AwsError> {
                     }
                 } else if !current_key.is_empty() {
                     let value = Value::String(current_text.clone());
-                    if let Some((_parent_key, _parent_map)) = stack.last_mut() {
-                    }
+                    if let Some((_parent_key, _parent_map)) = stack.last_mut() {}
                     map.insert(current_key.clone(), value);
                     if let Some((parent_key, mut parent_map)) = stack.pop() {
-                        parent_map.insert(
-                            current_key.clone(),
-                            Value::String(current_text.clone()),
-                        );
+                        parent_map.insert(current_key.clone(), Value::String(current_text.clone()));
                         map = parent_map;
                         current_key = parent_key;
                     }
@@ -360,10 +353,7 @@ fn parse_xml_element(xml: &str) -> Result<Value, AwsError> {
 /// top-level keys are placed in response headers (e.g., `Content-Type`,
 /// `ETag`, `Last-Modified`).  This allows services such as S3 GetObject to
 /// return arbitrary binary data.
-pub fn serialize_xml_response(
-    output: &Value,
-    request_id: &str,
-) -> (StatusCode, HeaderMap, Bytes) {
+pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, HeaderMap, Bytes) {
     let mut headers = HeaderMap::new();
     headers.insert("x-amz-request-id", request_id.parse().unwrap());
 
@@ -402,8 +392,13 @@ pub fn serialize_xml_response(
     // --- Promote well-known fields to HTTP headers (S3 convention) ---
     if let Some(map) = output.as_object() {
         let header_fields = [
-            "ETag", "ContentType", "ContentLength", "LastModified",
-            "VersionId", "ServerSideEncryption", "StorageClass",
+            "ETag",
+            "ContentType",
+            "ContentLength",
+            "LastModified",
+            "VersionId",
+            "ServerSideEncryption",
+            "StorageClass",
         ];
         for field in &header_fields {
             if let Some(val) = map.get(*field) {
@@ -509,12 +504,17 @@ mod tests {
 
     #[test]
     fn test_match_path_with_param() {
-        let result =
-            match_path_pattern("/2015-03-31/functions/{FunctionName}", "/2015-03-31/functions/my-func");
+        let result = match_path_pattern(
+            "/2015-03-31/functions/{FunctionName}",
+            "/2015-03-31/functions/my-func",
+        );
         assert!(result.is_some());
         let params = result.unwrap();
         assert_eq!(params.len(), 1);
-        assert_eq!(params[0], ("FunctionName".to_string(), "my-func".to_string()));
+        assert_eq!(
+            params[0],
+            ("FunctionName".to_string(), "my-func".to_string())
+        );
     }
 
     #[test]

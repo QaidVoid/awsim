@@ -144,8 +144,9 @@ pub fn ensure_default_bus(state: &EventBridgeState, ctx: &RequestContext) {
             "arn:aws:events:{}:{}:event-bus/default",
             ctx.region, ctx.account_id
         );
-        state
-            .event_buses
-            .insert("default".to_string(), EventBus::new("default".to_string(), arn));
+        state.event_buses.insert(
+            "default".to_string(),
+            EventBus::new("default".to_string(), arn),
+        );
     }
 }

@@ -51,7 +51,10 @@ pub fn start_speech_synthesis_task(
     let bucket = input["OutputS3BucketName"].as_str().unwrap_or("");
 
     let task_id = uuid::Uuid::new_v4().to_string();
-    let output_uri = format!("https://s3.{}.amazonaws.com/{}/{}.{}", ctx.region, bucket, task_id, format);
+    let output_uri = format!(
+        "https://s3.{}.amazonaws.com/{}/{}.{}",
+        ctx.region, bucket, task_id, format
+    );
 
     let task = SpeechSynthesisTask {
         task_id: task_id.clone(),
@@ -87,7 +90,10 @@ pub fn get_speech_synthesis_task(
         .ok_or_else(|| AwsError::bad_request("InvalidTaskIdException", "TaskId is required"))?;
 
     let t = state.tasks.get(task_id).ok_or_else(|| {
-        AwsError::not_found("SynthesisTaskNotFoundException", format!("Task not found: {task_id}"))
+        AwsError::not_found(
+            "SynthesisTaskNotFoundException",
+            format!("Task not found: {task_id}"),
+        )
     })?;
 
     Ok(json!({

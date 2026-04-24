@@ -177,7 +177,10 @@ impl Lexer {
                     }
                     _ if c.is_alphanumeric() || c == '_' => {
                         let mut word = String::new();
-                        while self.peek().map_or(false, |ch| ch.is_alphanumeric() || ch == '_') {
+                        while self
+                            .peek()
+                            .map_or(false, |ch| ch.is_alphanumeric() || ch == '_')
+                        {
                             word.push(self.advance().unwrap());
                         }
                         tokens.push(Token::Word(word));
@@ -372,11 +375,7 @@ impl Parser {
                     }
                 }
                 let high = self.parse_operand()?;
-                return Ok(ConditionExpr::Between {
-                    operand,
-                    low,
-                    high,
-                });
+                return Ok(ConditionExpr::Between { operand, low, high });
             }
             if w.eq_ignore_ascii_case("IN") {
                 self.advance();

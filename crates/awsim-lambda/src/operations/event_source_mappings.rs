@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use crate::{
     error::resource_not_found,
     state::{EventSourceMapping, LambdaState},
-    util::{now_iso8601, new_uuid, opt_bool, opt_str, opt_u64, require_str},
+    util::{new_uuid, now_iso8601, opt_bool, opt_str, opt_u64, require_str},
 };
 
 fn mapping_to_value(m: &EventSourceMapping) -> Value {
@@ -50,7 +50,11 @@ pub fn create_event_source_mapping(
         function_arn,
         batch_size,
         enabled,
-        state: if enabled { "Enabled".to_string() } else { "Disabled".to_string() },
+        state: if enabled {
+            "Enabled".to_string()
+        } else {
+            "Disabled".to_string()
+        },
         last_modified: now_iso8601(),
     };
 

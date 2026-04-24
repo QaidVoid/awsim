@@ -125,10 +125,12 @@ pub fn change_resource_record_sets(
         .ok_or_else(|| AwsError::bad_request("InvalidInput", "Id is required"))?;
     let id = resolve_zone_id(id_raw);
 
-    let mut zone = state
-        .hosted_zones
-        .get_mut(&id)
-        .ok_or_else(|| AwsError::not_found("NoSuchHostedZone", format!("No hosted zone found with ID: {id}")))?;
+    let mut zone = state.hosted_zones.get_mut(&id).ok_or_else(|| {
+        AwsError::not_found(
+            "NoSuchHostedZone",
+            format!("No hosted zone found with ID: {id}"),
+        )
+    })?;
 
     // Changes are in ChangeBatch.Changes.Change (array)
     let changes = input
@@ -144,9 +146,9 @@ pub fn change_resource_record_sets(
             .get("Action")
             .and_then(Value::as_str)
             .ok_or_else(|| AwsError::bad_request("InvalidInput", "Action is required"))?;
-        let rs_value = change
-            .get("ResourceRecordSet")
-            .ok_or_else(|| AwsError::bad_request("InvalidInput", "ResourceRecordSet is required"))?;
+        let rs_value = change.get("ResourceRecordSet").ok_or_else(|| {
+            AwsError::bad_request("InvalidInput", "ResourceRecordSet is required")
+        })?;
         let rrs = parse_record_set(rs_value)?;
 
         match action {
@@ -192,10 +194,12 @@ pub fn list_resource_record_sets(
         .ok_or_else(|| AwsError::bad_request("InvalidInput", "Id is required"))?;
     let id = resolve_zone_id(id_raw);
 
-    let zone = state
-        .hosted_zones
-        .get(&id)
-        .ok_or_else(|| AwsError::not_found("NoSuchHostedZone", format!("No hosted zone found with ID: {id}")))?;
+    let zone = state.hosted_zones.get(&id).ok_or_else(|| {
+        AwsError::not_found(
+            "NoSuchHostedZone",
+            format!("No hosted zone found with ID: {id}"),
+        )
+    })?;
 
     let record_sets: Vec<Value> = zone
         .record_sets

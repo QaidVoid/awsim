@@ -1,8 +1,7 @@
 use uuid::Uuid;
 
 const UPPER_ALPHANUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-const MIXED_CHARS: &[u8] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const MIXED_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// Generate `len` random characters from the given alphabet using UUID bytes as entropy.
 fn random_chars(alphabet: &[u8], len: usize) -> String {
@@ -157,14 +156,20 @@ mod tests {
     #[test]
     fn user_id_format() {
         let id = new_user_id();
-        assert!(id.starts_with("AIDA"), "user id should start with AIDA: {id}");
+        assert!(
+            id.starts_with("AIDA"),
+            "user id should start with AIDA: {id}"
+        );
         assert_eq!(id.len(), 20);
     }
 
     #[test]
     fn access_key_format() {
         let id = new_access_key_id();
-        assert!(id.starts_with("AKIA"), "access key id should start with AKIA: {id}");
+        assert!(
+            id.starts_with("AKIA"),
+            "access key id should start with AKIA: {id}"
+        );
         assert_eq!(id.len(), 20);
     }
 

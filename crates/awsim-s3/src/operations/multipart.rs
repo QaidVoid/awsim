@@ -8,8 +8,8 @@ use uuid::Uuid;
 use crate::state::{MultipartUpload, PartData, S3Object, S3State};
 use crate::util::{compute_etag, now_rfc7231};
 
-use super::require_str;
 use super::bucket::no_such_bucket;
+use super::require_str;
 
 /// POST /{Bucket}/{Key+}?uploads — initiate a multipart upload.
 pub fn create_multipart_upload(state: &S3State, input: &Value) -> Result<Value, AwsError> {
@@ -76,7 +76,13 @@ pub fn upload_part(state: &S3State, input: &Value) -> Result<Value, AwsError> {
         .get_mut(upload_id)
         .ok_or_else(|| no_such_upload(upload_id))?;
 
-    upload.parts.insert(part_number, PartData { data, etag: etag.clone() });
+    upload.parts.insert(
+        part_number,
+        PartData {
+            data,
+            etag: etag.clone(),
+        },
+    );
 
     Ok(json!({
         "ETag": etag,

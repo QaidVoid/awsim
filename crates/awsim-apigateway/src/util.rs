@@ -31,8 +31,7 @@ pub fn epoch_to_clf(epoch: u64) -> String {
 }
 
 const MONTH_NAMES: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
 fn epoch_to_parts(epoch: u64) -> (u64, u64, u64, u64, u64, u64) {
@@ -58,7 +57,16 @@ fn epoch_to_parts(epoch: u64) -> (u64, u64, u64, u64, u64, u64) {
     let months: [u64; 12] = [
         31,
         if is_leap(year) { 29 } else { 28 },
-        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
     ];
     let mut month = 1u64;
     for &dim in &months {

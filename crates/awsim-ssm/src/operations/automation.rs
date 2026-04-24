@@ -35,10 +35,7 @@ pub fn start_automation_execution(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DocumentName is required"))?
         .to_string();
 
-    let document_version = input["DocumentVersion"]
-        .as_str()
-        .unwrap_or("1")
-        .to_string();
+    let document_version = input["DocumentVersion"].as_str().unwrap_or("1").to_string();
     let mode = input["Mode"].as_str().unwrap_or("Auto").to_string();
     let parameters = input["Parameters"].clone();
 
@@ -56,7 +53,9 @@ pub fn start_automation_execution(
         end_time: Some(now),
     };
 
-    state.automation_executions.insert(execution_id.clone(), execution);
+    state
+        .automation_executions
+        .insert(execution_id.clone(), execution);
 
     Ok(json!({ "AutomationExecutionId": execution_id }))
 }
@@ -66,16 +65,19 @@ pub fn get_automation_execution(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let execution_id = input["AutomationExecutionId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AutomationExecutionId is required"))?;
-
-    let execution = state.automation_executions.get(execution_id).ok_or_else(|| {
-        AwsError::not_found(
-            "AutomationExecutionNotFoundException",
-            format!("Automation execution '{execution_id}' not found"),
-        )
+    let execution_id = input["AutomationExecutionId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "AutomationExecutionId is required")
     })?;
+
+    let execution = state
+        .automation_executions
+        .get(execution_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "AutomationExecutionNotFoundException",
+                format!("Automation execution '{execution_id}' not found"),
+            )
+        })?;
 
     Ok(json!({
         "AutomationExecution": {
@@ -115,16 +117,19 @@ pub fn stop_automation_execution(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let execution_id = input["AutomationExecutionId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AutomationExecutionId is required"))?;
-
-    let mut execution = state.automation_executions.get_mut(execution_id).ok_or_else(|| {
-        AwsError::not_found(
-            "AutomationExecutionNotFoundException",
-            format!("Automation execution '{execution_id}' not found"),
-        )
+    let execution_id = input["AutomationExecutionId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "AutomationExecutionId is required")
     })?;
+
+    let mut execution = state
+        .automation_executions
+        .get_mut(execution_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "AutomationExecutionNotFoundException",
+                format!("Automation execution '{execution_id}' not found"),
+            )
+        })?;
 
     execution.status = "Cancelled".to_string();
     execution.end_time = Some(now_epoch_secs());

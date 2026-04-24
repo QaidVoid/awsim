@@ -44,17 +44,27 @@ pub fn set_ui_customization(
     let now = now_epoch();
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
-    let entry = pool.ui_customizations.entry(client_key.clone()).or_insert(UiCustomization {
-        css: None,
-        image_url: None,
-        creation_date: now,
-        last_modified_date: now,
-    });
-    if css.is_some() { entry.css = css; }
-    if image_url.is_some() { entry.image_url = image_url; }
+    let entry = pool
+        .ui_customizations
+        .entry(client_key.clone())
+        .or_insert(UiCustomization {
+            css: None,
+            image_url: None,
+            creation_date: now,
+            last_modified_date: now,
+        });
+    if css.is_some() {
+        entry.css = css;
+    }
+    if image_url.is_some() {
+        entry.image_url = image_url;
+    }
     entry.last_modified_date = now;
 
     info!(pool_id = %pool_id, client_key = %client_key, "Cognito: set UI customization");
@@ -85,14 +95,23 @@ pub fn get_ui_customization(
     let client_key = input["ClientId"].as_str().unwrap_or("pool").to_string();
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
-    let (css, image_url, creation_date, last_modified_date) = if let Some(c) = pool.ui_customizations.get(&client_key) {
-        (c.css.clone(), c.image_url.clone(), c.creation_date, c.last_modified_date)
-    } else {
-        (None, None, 0u64, 0u64)
-    };
+    let (css, image_url, creation_date, last_modified_date) =
+        if let Some(c) = pool.ui_customizations.get(&client_key) {
+            (
+                c.css.clone(),
+                c.image_url.clone(),
+                c.creation_date,
+                c.last_modified_date,
+            )
+        } else {
+            (None, None, 0u64, 0u64)
+        };
 
     Ok(json!({
         "UICustomization": {
@@ -125,7 +144,10 @@ pub fn create_managed_login_branding(
     let branding_id = Uuid::new_v4().to_string();
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
     let branding = ManagedLoginBranding {
@@ -157,16 +179,27 @@ pub fn describe_managed_login_branding(
     let pool_id = input["UserPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let branding_id = input["ManagedLoginBrandingId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ManagedLoginBrandingId is required"))?;
-
-    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+    let branding_id = input["ManagedLoginBrandingId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "ManagedLoginBrandingId is required")
     })?;
 
-    let branding = pool.managed_login_brandings.iter().find(|b| b.branding_id == branding_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Branding not found: {branding_id}")))?;
+    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
+
+    let branding = pool
+        .managed_login_brandings
+        .iter()
+        .find(|b| b.branding_id == branding_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Branding not found: {branding_id}"),
+            )
+        })?;
 
     Ok(json!({ "ManagedLoginBranding": branding_to_value(branding) }))
 }
@@ -188,12 +221,22 @@ pub fn describe_managed_login_branding_by_client(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
-    let branding = pool.managed_login_brandings.iter()
+    let branding = pool
+        .managed_login_brandings
+        .iter()
         .find(|b| b.client_id.as_deref() == Some(client_id))
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("No branding found for client: {client_id}")))?;
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("No branding found for client: {client_id}"),
+            )
+        })?;
 
     Ok(json!({ "ManagedLoginBranding": branding_to_value(branding) }))
 }
@@ -210,17 +253,28 @@ pub fn update_managed_login_branding(
     let pool_id = input["UserPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let branding_id = input["ManagedLoginBrandingId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ManagedLoginBrandingId is required"))?;
+    let branding_id = input["ManagedLoginBrandingId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "ManagedLoginBrandingId is required")
+    })?;
     let now = now_epoch();
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
-    let branding = pool.managed_login_brandings.iter_mut().find(|b| b.branding_id == branding_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Branding not found: {branding_id}")))?;
+    let branding = pool
+        .managed_login_brandings
+        .iter_mut()
+        .find(|b| b.branding_id == branding_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Branding not found: {branding_id}"),
+            )
+        })?;
 
     if !input["Settings"].is_null() {
         branding.settings = input["Settings"].clone();
@@ -247,18 +301,25 @@ pub fn delete_managed_login_branding(
     let pool_id = input["UserPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let branding_id = input["ManagedLoginBrandingId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ManagedLoginBrandingId is required"))?;
+    let branding_id = input["ManagedLoginBrandingId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "ManagedLoginBrandingId is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
 
     let len_before = pool.managed_login_brandings.len();
-    pool.managed_login_brandings.retain(|b| b.branding_id != branding_id);
+    pool.managed_login_brandings
+        .retain(|b| b.branding_id != branding_id);
     if pool.managed_login_brandings.len() == len_before {
-        return Err(AwsError::not_found("ResourceNotFoundException", format!("Branding not found: {branding_id}")));
+        return Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Branding not found: {branding_id}"),
+        ));
     }
 
     info!(pool_id = %pool_id, branding_id = %branding_id, "Cognito: deleted managed login branding");

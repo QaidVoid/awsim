@@ -15,13 +15,12 @@ pub fn create_api(
 ) -> Result<Value, AwsError> {
     let name = input["Name"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: Name"))?
+        .ok_or_else(|| {
+            AwsError::bad_request("BadRequestException", "Missing required field: Name")
+        })?
         .to_string();
 
-    let protocol_type = input["ProtocolType"]
-        .as_str()
-        .unwrap_or("HTTP")
-        .to_string();
+    let protocol_type = input["ProtocolType"].as_str().unwrap_or("HTTP").to_string();
 
     if protocol_type != "HTTP" && protocol_type != "WEBSOCKET" {
         return Err(AwsError::bad_request(
@@ -40,10 +39,7 @@ pub fn create_api(
     let api_endpoint = format!("http://localhost:4566/restapis/{api_id}");
     let created_date = now_iso8601();
 
-    let description = input["Description"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let description = input["Description"].as_str().unwrap_or("").to_string();
 
     let tags = input["Tags"]
         .as_object()
@@ -86,12 +82,15 @@ pub fn get_api(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     Ok(api_to_json(&api))
@@ -118,12 +117,15 @@ pub fn delete_api(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
     state.apis.remove(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     Ok(json!({}))
@@ -134,12 +136,15 @@ pub fn update_api(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     if let Some(name) = input["Name"].as_str() {
@@ -163,4 +168,3 @@ fn api_to_json(api: &HttpApi) -> Value {
         "Tags": api.tags,
     })
 }
-

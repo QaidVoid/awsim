@@ -5,7 +5,11 @@ use tracing::info;
 use crate::state::{KinesisState, KinesisStream, Shard, now_secs};
 use crate::util::divide_hash_space;
 
-pub fn handle(state: &KinesisState, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn handle(
+    state: &KinesisState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let stream_name = input["StreamName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "StreamName is required"))?;

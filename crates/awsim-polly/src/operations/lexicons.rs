@@ -46,7 +46,10 @@ pub fn get_lexicon(
         .ok_or_else(|| AwsError::bad_request("InvalidLexiconNameException", "Name is required"))?;
 
     let lex = state.lexicons.get(name).ok_or_else(|| {
-        AwsError::not_found("LexiconNotFoundException", format!("Lexicon not found: {name}"))
+        AwsError::not_found(
+            "LexiconNotFoundException",
+            format!("Lexicon not found: {name}"),
+        )
     })?;
 
     Ok(json!({

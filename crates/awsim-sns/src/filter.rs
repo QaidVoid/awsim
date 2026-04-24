@@ -3,10 +3,7 @@ use std::collections::HashMap;
 
 /// Evaluate a filter policy against message attributes.
 /// Returns true if the message should be delivered.
-pub fn matches_filter(
-    filter_policy: &Value,
-    message_attributes: &HashMap<String, Value>,
-) -> bool {
+pub fn matches_filter(filter_policy: &Value, message_attributes: &HashMap<String, Value>) -> bool {
     let policy = match filter_policy.as_object() {
         Some(p) => p,
         None => return true, // Invalid policy = pass through
@@ -149,7 +146,10 @@ mod tests {
     #[test]
     fn test_string_exact_match() {
         let policy = json!({ "store": ["example_corp"] });
-        assert!(matches_filter(&policy, &attrs(&[("store", "example_corp")])));
+        assert!(matches_filter(
+            &policy,
+            &attrs(&[("store", "example_corp")])
+        ));
         assert!(!matches_filter(&policy, &attrs(&[("store", "other_corp")])));
     }
 
@@ -162,9 +162,18 @@ mod tests {
     #[test]
     fn test_string_or_logic() {
         let policy = json!({ "event": ["order-created", "order-updated"] });
-        assert!(matches_filter(&policy, &attrs(&[("event", "order-created")])));
-        assert!(matches_filter(&policy, &attrs(&[("event", "order-updated")])));
-        assert!(!matches_filter(&policy, &attrs(&[("event", "order-deleted")])));
+        assert!(matches_filter(
+            &policy,
+            &attrs(&[("event", "order-created")])
+        ));
+        assert!(matches_filter(
+            &policy,
+            &attrs(&[("event", "order-updated")])
+        ));
+        assert!(!matches_filter(
+            &policy,
+            &attrs(&[("event", "order-deleted")])
+        ));
     }
 
     #[test]
@@ -193,9 +202,18 @@ mod tests {
     #[test]
     fn test_prefix_match() {
         let policy = json!({ "event": [{ "prefix": "order-" }] });
-        assert!(matches_filter(&policy, &attrs(&[("event", "order-created")])));
-        assert!(matches_filter(&policy, &attrs(&[("event", "order-shipped")])));
-        assert!(!matches_filter(&policy, &attrs(&[("event", "invoice-created")])));
+        assert!(matches_filter(
+            &policy,
+            &attrs(&[("event", "order-created")])
+        ));
+        assert!(matches_filter(
+            &policy,
+            &attrs(&[("event", "order-shipped")])
+        ));
+        assert!(!matches_filter(
+            &policy,
+            &attrs(&[("event", "invoice-created")])
+        ));
     }
 
     #[test]
@@ -253,7 +271,10 @@ mod tests {
     #[test]
     fn test_numeric_non_numeric_attr_fails() {
         let policy = json!({ "price": [{ "numeric": [">=", 10] }] });
-        assert!(!matches_filter(&policy, &attrs(&[("price", "not-a-number")])));
+        assert!(!matches_filter(
+            &policy,
+            &attrs(&[("price", "not-a-number")])
+        ));
     }
 
     #[test]

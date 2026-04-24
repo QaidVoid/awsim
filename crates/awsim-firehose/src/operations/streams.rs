@@ -8,9 +8,9 @@ pub fn create_delivery_stream(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["DeliveryStreamName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required"))?;
+    let name = input["DeliveryStreamName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
+    })?;
     if state.streams.contains_key(name) {
         return Err(AwsError::conflict(
             "ResourceInUseException",
@@ -26,7 +26,10 @@ pub fn create_delivery_stream(
         name: name.to_string(),
         arn: arn.clone(),
         status: "ACTIVE".to_string(),
-        stream_type: input["DeliveryStreamType"].as_str().unwrap_or("DirectPut").to_string(),
+        stream_type: input["DeliveryStreamType"]
+            .as_str()
+            .unwrap_or("DirectPut")
+            .to_string(),
         version_id: "1".to_string(),
         create_timestamp: now_secs(),
         last_update_timestamp: now_secs(),
@@ -57,13 +60,15 @@ pub fn delete_delivery_stream(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["DeliveryStreamName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required"))?;
-    state
-        .streams
-        .remove(name)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Stream {name} not found")))?;
+    let name = input["DeliveryStreamName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
+    })?;
+    state.streams.remove(name).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Stream {name} not found"),
+        )
+    })?;
     Ok(json!({}))
 }
 
@@ -72,13 +77,15 @@ pub fn describe_delivery_stream(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["DeliveryStreamName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required"))?;
-    let s = state
-        .streams
-        .get(name)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Stream {name} not found")))?;
+    let name = input["DeliveryStreamName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
+    })?;
+    let s = state.streams.get(name).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Stream {name} not found"),
+        )
+    })?;
     Ok(json!({
         "DeliveryStreamDescription": {
             "DeliveryStreamName": s.name,
@@ -116,13 +123,15 @@ pub fn update_destination(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["DeliveryStreamName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required"))?;
-    let mut s = state
-        .streams
-        .get_mut(name)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Stream {name} not found")))?;
+    let name = input["DeliveryStreamName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
+    })?;
+    let mut s = state.streams.get_mut(name).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Stream {name} not found"),
+        )
+    })?;
     s.destinations = collect_destinations(input);
     s.last_update_timestamp = now_secs();
     s.version_id = format!("{}", s.version_id.parse::<u64>().unwrap_or(1) + 1);
@@ -145,7 +154,9 @@ fn collect_destinations(input: &Value) -> Vec<Value> {
         out.push(json!({ "DestinationId": id.clone(), "ElasticsearchDestinationDescription": es }));
     }
     if let Some(http) = input.get("HttpEndpointDestinationConfiguration").cloned() {
-        out.push(json!({ "DestinationId": id.clone(), "HttpEndpointDestinationDescription": http }));
+        out.push(
+            json!({ "DestinationId": id.clone(), "HttpEndpointDestinationDescription": http }),
+        );
     }
     if let Some(sf) = input.get("SnowflakeDestinationConfiguration").cloned() {
         out.push(json!({ "DestinationId": id, "SnowflakeDestinationDescription": sf }));

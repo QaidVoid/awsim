@@ -10,7 +10,10 @@ mod integrations;
 mod proxy;
 
 #[derive(Parser)]
-#[command(name = "awsim", about = "AWSim — fully offline, free AWS development environment")]
+#[command(
+    name = "awsim",
+    about = "AWSim — fully offline, free AWS development environment"
+)]
 struct Cli {
     /// Port to listen on
     #[arg(short, long, default_value = "4566", env = "AWSIM_PORT")]
@@ -80,9 +83,10 @@ async fn main() -> Result<()> {
             "lambda".to_string(),
             Arc::new(awsim_lambda::LambdaResourcePolicyLookup::new(lambda_store)),
         );
-        authz.scp_lookup = Some(Arc::new(
-            awsim_organizations::OrganizationsScpLookup::new(organizations_store, &cli.account_id),
-        ));
+        authz.scp_lookup = Some(Arc::new(awsim_organizations::OrganizationsScpLookup::new(
+            organizations_store,
+            &cli.account_id,
+        )));
     }
 
     // Persistence: restore snapshots if --data-dir was provided.
@@ -98,8 +102,10 @@ async fn main() -> Result<()> {
             #[cfg(unix)]
             {
                 use tokio::signal::unix::{SignalKind, signal};
-                let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
-                let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+                let mut sigint =
+                    signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+                let mut sigterm =
+                    signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
                 tokio::select! {
                     _ = sigint.recv() => {}
                     _ = sigterm.recv() => {}
@@ -193,8 +199,10 @@ async fn main() -> Result<()> {
 
     // Build the OpenSearch (Elasticsearch-compatible) sub-router.
     // Nest OpenSearch under /opensearch prefix so it doesn't conflict with AWS routes.
-    let opensearch_nested: axum::Router<()> = axum::Router::new()
-        .nest("/opensearch", awsim_opensearch::router(Arc::new(awsim_opensearch::state::OpenSearchState::default())));
+    let opensearch_nested: axum::Router<()> = axum::Router::new().nest(
+        "/opensearch",
+        awsim_opensearch::router(Arc::new(awsim_opensearch::state::OpenSearchState::default())),
+    );
 
     // Merge all routers and add shared middleware.
     let app = cognito_oauth_router
@@ -257,14 +265,18 @@ fn spawn_event_router(state: &AppState) {
                     let protocol = event.detail["protocol"].as_str().unwrap_or("").to_string();
                     let endpoint = event.detail["endpoint"].as_str().unwrap_or("").to_string();
                     let message = event.detail["message"].as_str().unwrap_or("").to_string();
-                    let message_id = event.detail["message_id"].as_str().unwrap_or("").to_string();
+                    let message_id = event.detail["message_id"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
                     let topic_arn = event.detail["topic_arn"].as_str().unwrap_or("").to_string();
 
                     match event.event_type.as_str() {
                         "sns:Publish" if protocol == "sqs" => {
                             // endpoint is a queue ARN: arn:aws:sqs:{region}:{account}:{queue-name}
                             // Derive the queue URL so SQS SendMessage can find the queue.
-                            let queue_url = arn_to_sqs_url(&endpoint, &default_region, &default_account_id);
+                            let queue_url =
+                                arn_to_sqs_url(&endpoint, &default_region, &default_account_id);
 
                             if let Some(sqs_handler) = services.get("sqs") {
                                 // Build a minimal context (no event bus needed for delivery calls).
@@ -336,7 +348,9 @@ fn spawn_event_router(state: &AppState) {
                         "cognito:LambdaTrigger" => {
                             integrations::handle_cognito_trigger(&services, &event).await;
                         }
-                        t if t.starts_with("s3:ObjectCreated:") || t.starts_with("s3:ObjectRemoved:") => {
+                        t if t.starts_with("s3:ObjectCreated:")
+                            || t.starts_with("s3:ObjectRemoved:") =>
+                        {
                             integrations::handle_s3_event(&services, &event).await;
                         }
                         _ => {
@@ -345,7 +359,10 @@ fn spawn_event_router(state: &AppState) {
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    warn!(skipped = n, "Event bus receiver lagged; some events were dropped");
+                    warn!(
+                        skipped = n,
+                        "Event bus receiver lagged; some events were dropped"
+                    );
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     // Sender dropped — bus is shut down, exit the task.
@@ -374,9 +391,7 @@ fn arn_to_sqs_url(arn: &str, default_region: &str, default_account: &str) -> Str
     } else {
         // ARN parse failed — try to use the last segment as a queue name.
         let queue = arn.rsplit(':').next().unwrap_or(arn);
-        format!(
-            "http://sqs.{default_region}.localhost:4566/{default_account}/{queue}"
-        )
+        format!("http://sqs.{default_region}.localhost:4566/{default_account}/{queue}")
     }
 }
 

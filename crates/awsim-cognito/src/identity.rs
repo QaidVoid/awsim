@@ -148,9 +148,7 @@ impl ServiceHandler for CognitoIdentityService {
             // Principal tags
             "GetPrincipalTagAttributeMap" => get_principal_tag_attribute_map(&state, &input),
             "SetPrincipalTagAttributeMap" => set_principal_tag_attribute_map(&state, &input),
-            "DeletePrincipalTagAttributeMap" => {
-                delete_principal_tag_attribute_map(&state, &input)
-            }
+            "DeletePrincipalTagAttributeMap" => delete_principal_tag_attribute_map(&state, &input),
             // Tagging
             "TagResource" => tag_resource(&state, &input),
             "UntagResource" => untag_resource(&state, &input),
@@ -165,9 +163,15 @@ impl ServiceHandler for CognitoIdentityService {
             .into_iter()
             .map(|((account, region), state)| {
                 let pools: std::collections::HashMap<String, IdentityPool> = state
-                    .pools.iter().map(|e| (e.key().clone(), e.value().clone())).collect();
+                    .pools
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect();
                 let identities: std::collections::HashMap<String, Identity> = state
-                    .identities.iter().map(|e| (e.key().clone(), e.value().clone())).collect();
+                    .identities
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect();
                 (account, region, IdentityPoolSnapshot { pools, identities })
             })
             .collect();
@@ -179,8 +183,12 @@ impl ServiceHandler for CognitoIdentityService {
             serde_json::from_slice(data).map_err(|e| e.to_string())?;
         for (account, region, s) in snap {
             let state = self.state.get(&account, &region);
-            for (id, pool) in s.pools { state.pools.insert(id, pool); }
-            for (id, identity) in s.identities { state.identities.insert(id, identity); }
+            for (id, pool) in s.pools {
+                state.pools.insert(id, pool);
+            }
+            for (id, identity) in s.identities {
+                state.identities.insert(id, identity);
+            }
         }
         Ok(())
     }
@@ -325,9 +333,7 @@ fn create_identity_pool(
         })
         .unwrap_or_default();
 
-    let developer_provider_name = input["DeveloperProviderName"]
-        .as_str()
-        .map(String::from);
+    let developer_provider_name = input["DeveloperProviderName"].as_str().map(String::from);
 
     let created_date = now_iso8601();
 
@@ -587,15 +593,10 @@ fn evaluate_rule(claim_value: &str, match_type: &str, expected: &str) -> bool {
 /// Priority:
 /// 1. Provider-specific role mapping rules (Token or Rules type)
 /// 2. Default authenticated / unauthenticated role from pool config
-fn determine_role(
-    pool: &IdentityPool,
-    identity: &Identity,
-    input: &Value,
-) -> Option<String> {
+fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Option<String> {
     // Merge logins from the stored identity and the request input.
     let input_logins = input.get("Logins").and_then(|l| l.as_object());
-    let has_logins = !identity.logins.is_empty()
-        || input_logins.map_or(false, |m| !m.is_empty());
+    let has_logins = !identity.logins.is_empty() || input_logins.map_or(false, |m| !m.is_empty());
 
     if has_logins {
         // Check provider-specific role mappings first.
@@ -650,9 +651,8 @@ fn determine_role(
                                             };
 
                                             if evaluate_rule(claim_value, match_type, expected) {
-                                                if let Some(role) = rule
-                                                    .get("RoleARN")
-                                                    .and_then(|r| r.as_str())
+                                                if let Some(role) =
+                                                    rule.get("RoleARN").and_then(|r| r.as_str())
                                                 {
                                                     return Some(role.to_string());
                                                 }
@@ -865,13 +865,10 @@ fn get_identity_pool_roles(state: &IdentityPoolState, input: &Value) -> Result<V
 
     let pool = get_pool(state, pool_id)?;
 
-    let roles_json: Value = pool
-        .roles
-        .iter()
-        .fold(json!({}), |mut acc, (k, v)| {
-            acc[k] = Value::String(v.clone());
-            acc
-        });
+    let roles_json: Value = pool.roles.iter().fold(json!({}), |mut acc, (k, v)| {
+        acc[k] = Value::String(v.clone());
+        acc
+    });
 
     let rm_json: Value = pool
         .role_mappings
@@ -889,10 +886,7 @@ fn get_identity_pool_roles(state: &IdentityPoolState, input: &Value) -> Result<V
 }
 
 /// LookupDeveloperIdentity
-fn lookup_developer_identity(
-    state: &IdentityPoolState,
-    input: &Value,
-) -> Result<Value, AwsError> {
+fn lookup_developer_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
     let pool_id = input["IdentityPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
@@ -916,11 +910,7 @@ fn lookup_developer_identity(
     // Look up by DeveloperUserIdentifier
     if let Some(dev_id) = input["DeveloperUserIdentifier"].as_str() {
         for entry in state.identities.iter() {
-            if entry
-                .developer_user_identifiers
-                .iter()
-                .any(|d| d == dev_id)
-            {
+            if entry.developer_user_identifiers.iter().any(|d| d == dev_id) {
                 return Ok(json!({
                     "IdentityId":                entry.identity_id,
                     "DeveloperUserIdentifierList": entry.developer_user_identifiers,
@@ -999,11 +989,9 @@ fn list_identities(state: &IdentityPoolState, input: &Value) -> Result<Value, Aw
 
 /// DeleteIdentities
 fn delete_identities(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let ids = input["IdentityIdsToDelete"]
-        .as_array()
-        .ok_or_else(|| {
-            AwsError::bad_request("InvalidParameter", "IdentityIdsToDelete is required")
-        })?;
+    let ids = input["IdentityIdsToDelete"].as_array().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "IdentityIdsToDelete is required")
+    })?;
 
     for id_val in ids {
         if let Some(id) = id_val.as_str() {
@@ -1023,21 +1011,15 @@ fn merge_developer_identities(
     let pool_id = input["IdentityPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
-    let source_id = input["SourceUserIdentifier"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("InvalidParameter", "SourceUserIdentifier is required")
-        })?;
-    let dest_id = input["DestinationUserIdentifier"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("InvalidParameter", "DestinationUserIdentifier is required")
-        })?;
-    let dev_provider = input["DeveloperProviderName"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("InvalidParameter", "DeveloperProviderName is required")
-        })?;
+    let source_id = input["SourceUserIdentifier"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "SourceUserIdentifier is required")
+    })?;
+    let dest_id = input["DestinationUserIdentifier"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "DestinationUserIdentifier is required")
+    })?;
+    let dev_provider = input["DeveloperProviderName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "DeveloperProviderName is required")
+    })?;
 
     get_pool(state, pool_id)?;
 
@@ -1124,11 +1106,9 @@ fn unlink_developer_identity(state: &IdentityPoolState, input: &Value) -> Result
     let pool_id = input["IdentityPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
-    let dev_user_identifier = input["DeveloperUserIdentifier"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("InvalidParameter", "DeveloperUserIdentifier is required")
-        })?;
+    let dev_user_identifier = input["DeveloperUserIdentifier"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "DeveloperUserIdentifier is required")
+    })?;
 
     get_pool(state, pool_id)?;
 
@@ -1163,10 +1143,8 @@ fn unlink_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, Aw
         )
     })?;
 
-    let providers_to_remove: Vec<&str> = logins_to_remove
-        .iter()
-        .filter_map(|v| v.as_str())
-        .collect();
+    let providers_to_remove: Vec<&str> =
+        logins_to_remove.iter().filter_map(|v| v.as_str()).collect();
 
     identity
         .logins
@@ -1187,11 +1165,9 @@ fn get_principal_tag_attribute_map(
     let pool_id = input["IdentityPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
-    let provider_name = input["IdentityProviderName"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("InvalidParameter", "IdentityProviderName is required")
-        })?;
+    let provider_name = input["IdentityProviderName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "IdentityProviderName is required")
+    })?;
 
     let pool = get_pool(state, pool_id)?;
 
@@ -1201,12 +1177,10 @@ fn get_principal_tag_attribute_map(
         .map(|m| (m.use_defaults, m.principal_tags.clone()))
         .unwrap_or((true, HashMap::new()));
 
-    let tags_json: Value = principal_tags
-        .iter()
-        .fold(json!({}), |mut acc, (k, v)| {
-            acc[k] = Value::String(v.clone());
-            acc
-        });
+    let tags_json: Value = principal_tags.iter().fold(json!({}), |mut acc, (k, v)| {
+        acc[k] = Value::String(v.clone());
+        acc
+    });
 
     Ok(json!({
         "IdentityPoolId":       pool_id,
@@ -1224,11 +1198,9 @@ fn set_principal_tag_attribute_map(
     let pool_id = input["IdentityPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
-    let provider_name = input["IdentityProviderName"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("InvalidParameter", "IdentityProviderName is required")
-        })?;
+    let provider_name = input["IdentityProviderName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "IdentityProviderName is required")
+    })?;
     let use_defaults = input["UseDefaults"].as_bool().unwrap_or(true);
 
     let principal_tags: HashMap<String, String> = input["PrincipalTags"]
@@ -1255,12 +1227,10 @@ fn set_principal_tag_attribute_map(
         },
     );
 
-    let tags_json: Value = principal_tags
-        .iter()
-        .fold(json!({}), |mut acc, (k, v)| {
-            acc[k] = Value::String(v.clone());
-            acc
-        });
+    let tags_json: Value = principal_tags.iter().fold(json!({}), |mut acc, (k, v)| {
+        acc[k] = Value::String(v.clone());
+        acc
+    });
 
     Ok(json!({
         "IdentityPoolId":       pool_id,
@@ -1278,11 +1248,9 @@ fn delete_principal_tag_attribute_map(
     let pool_id = input["IdentityPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
-    let provider_name = input["IdentityProviderName"]
-        .as_str()
-        .ok_or_else(|| {
-            AwsError::bad_request("InvalidParameter", "IdentityProviderName is required")
-        })?;
+    let provider_name = input["IdentityProviderName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "IdentityProviderName is required")
+    })?;
 
     let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -1321,9 +1289,8 @@ fn tag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsEr
         .unwrap_or_default();
 
     // Resolve the pool from ARN
-    let pool_id_raw = pool_id_from_arn(resource_arn).ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format")
-    })?;
+    let pool_id_raw = pool_id_from_arn(resource_arn)
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format"))?;
     // Pool ids use ':' but we stored them with '_' in the ARN; convert back
     let pool_id = pool_id_raw.replace('_', ":");
 
@@ -1354,9 +1321,8 @@ fn untag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, Aws
         .filter_map(|v| v.as_str())
         .collect();
 
-    let pool_id_raw = pool_id_from_arn(resource_arn).ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format")
-    })?;
+    let pool_id_raw = pool_id_from_arn(resource_arn)
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format"))?;
     let pool_id = pool_id_raw.replace('_', ":");
 
     let mut pool = state.pools.get_mut(&pool_id).ok_or_else(|| {
@@ -1379,20 +1345,16 @@ fn list_tags_for_resource(state: &IdentityPoolState, input: &Value) -> Result<Va
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
 
-    let pool_id_raw = pool_id_from_arn(resource_arn).ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format")
-    })?;
+    let pool_id_raw = pool_id_from_arn(resource_arn)
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format"))?;
     let pool_id = pool_id_raw.replace('_', ":");
 
     let pool = get_pool(state, &pool_id)?;
 
-    let tags_json: Value = pool
-        .tags
-        .iter()
-        .fold(json!({}), |mut acc, (k, v)| {
-            acc[k] = Value::String(v.clone());
-            acc
-        });
+    let tags_json: Value = pool.tags.iter().fold(json!({}), |mut acc, (k, v)| {
+        acc[k] = Value::String(v.clone());
+        acc
+    });
 
     Ok(json!({ "Tags": tags_json }))
 }
@@ -1414,21 +1376,18 @@ fn pool_to_json(pool: &IdentityPool) -> Value {
         })
         .collect();
 
-    let slp_json: Value = pool
-        .supported_login_providers
-        .iter()
-        .fold(json!({}), |mut acc, (k, v)| {
-            acc[k] = Value::String(v.clone());
-            acc
-        });
+    let slp_json: Value =
+        pool.supported_login_providers
+            .iter()
+            .fold(json!({}), |mut acc, (k, v)| {
+                acc[k] = Value::String(v.clone());
+                acc
+            });
 
-    let roles_json: Value = pool
-        .roles
-        .iter()
-        .fold(json!({}), |mut acc, (k, v)| {
-            acc[k] = Value::String(v.clone());
-            acc
-        });
+    let roles_json: Value = pool.roles.iter().fold(json!({}), |mut acc, (k, v)| {
+        acc[k] = Value::String(v.clone());
+        acc
+    });
 
     let mut resp = json!({
         "IdentityPoolId":                    pool.id,
@@ -1473,7 +1432,12 @@ mod tests {
             "AllowUnauthenticatedIdentities": true,
         });
         let result = create_identity_pool(&state, &input, &ctx).unwrap();
-        assert!(result["IdentityPoolId"].as_str().unwrap().starts_with("us-east-1:"));
+        assert!(
+            result["IdentityPoolId"]
+                .as_str()
+                .unwrap()
+                .starts_with("us-east-1:")
+        );
         assert_eq!(result["IdentityPoolName"], "my-pool");
         assert_eq!(result["AllowUnauthenticatedIdentities"], true);
 
@@ -1495,7 +1459,8 @@ mod tests {
 
         delete_identity_pool(&state, &json!({ "IdentityPoolId": pool_id })).unwrap();
 
-        let err = describe_identity_pool(&state, &json!({ "IdentityPoolId": pool_id })).unwrap_err();
+        let err =
+            describe_identity_pool(&state, &json!({ "IdentityPoolId": pool_id })).unwrap_err();
         assert_eq!(err.code, "ResourceNotFoundException");
     }
 
@@ -1568,11 +1533,8 @@ mod tests {
         let id_result = get_id(&state, &json!({ "IdentityPoolId": pool_id }), &ctx).unwrap();
         let identity_id = id_result["IdentityId"].as_str().unwrap();
 
-        let creds_result = get_credentials_for_identity(
-            &state,
-            &json!({ "IdentityId": identity_id }),
-        )
-        .unwrap();
+        let creds_result =
+            get_credentials_for_identity(&state, &json!({ "IdentityId": identity_id })).unwrap();
 
         let creds = &creds_result["Credentials"];
         assert!(creds["AccessKeyId"].as_str().unwrap().starts_with("ASIA"));
@@ -1600,11 +1562,8 @@ mod tests {
         let id_result = get_id(&state, &json!({ "IdentityPoolId": pool_id }), &ctx).unwrap();
         let identity_id = id_result["IdentityId"].as_str().unwrap();
 
-        let err = get_credentials_for_identity(
-            &state,
-            &json!({ "IdentityId": identity_id }),
-        )
-        .unwrap_err();
+        let err = get_credentials_for_identity(&state, &json!({ "IdentityId": identity_id }))
+            .unwrap_err();
         assert_eq!(err.code, "NotAuthorizedException");
     }
 
@@ -1646,11 +1605,8 @@ mod tests {
         .unwrap();
         let identity_id = id_result["IdentityId"].as_str().unwrap();
 
-        let creds_result = get_credentials_for_identity(
-            &state,
-            &json!({ "IdentityId": identity_id }),
-        )
-        .unwrap();
+        let creds_result =
+            get_credentials_for_identity(&state, &json!({ "IdentityId": identity_id })).unwrap();
 
         let creds = &creds_result["Credentials"];
         assert!(creds["AccessKeyId"].as_str().unwrap().starts_with("ASIA"));
@@ -1730,14 +1686,42 @@ mod tests {
 
     #[test]
     fn test_evaluate_rule() {
-        assert!(evaluate_rule("accounts.google.com", "Equals", "accounts.google.com"));
-        assert!(!evaluate_rule("accounts.google.com", "Equals", "google.com"));
+        assert!(evaluate_rule(
+            "accounts.google.com",
+            "Equals",
+            "accounts.google.com"
+        ));
+        assert!(!evaluate_rule(
+            "accounts.google.com",
+            "Equals",
+            "google.com"
+        ));
         assert!(evaluate_rule("accounts.google.com", "Contains", "google"));
-        assert!(!evaluate_rule("accounts.google.com", "Contains", "facebook"));
-        assert!(evaluate_rule("accounts.google.com", "StartsWith", "accounts"));
-        assert!(!evaluate_rule("accounts.google.com", "StartsWith", "google"));
-        assert!(evaluate_rule("accounts.google.com", "NotEqual", "facebook.com"));
-        assert!(!evaluate_rule("accounts.google.com", "NotEqual", "accounts.google.com"));
+        assert!(!evaluate_rule(
+            "accounts.google.com",
+            "Contains",
+            "facebook"
+        ));
+        assert!(evaluate_rule(
+            "accounts.google.com",
+            "StartsWith",
+            "accounts"
+        ));
+        assert!(!evaluate_rule(
+            "accounts.google.com",
+            "StartsWith",
+            "google"
+        ));
+        assert!(evaluate_rule(
+            "accounts.google.com",
+            "NotEqual",
+            "facebook.com"
+        ));
+        assert!(!evaluate_rule(
+            "accounts.google.com",
+            "NotEqual",
+            "accounts.google.com"
+        ));
         assert!(!evaluate_rule("x", "Unknown", "x"));
     }
 
@@ -1841,11 +1825,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(lookup_result["IdentityId"], identity_id);
-        assert!(lookup_result["DeveloperUserIdentifierList"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v == "user-123"));
+        assert!(
+            lookup_result["DeveloperUserIdentifierList"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "user-123")
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1924,10 +1910,12 @@ mod tests {
             &json!({ "IdentityIdsToDelete": [identity_id.clone()] }),
         )
         .unwrap();
-        assert_eq!(result["UnprocessedIdentityIds"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            result["UnprocessedIdentityIds"].as_array().unwrap().len(),
+            0
+        );
 
-        let err =
-            describe_identity(&state, &json!({ "IdentityId": identity_id })).unwrap_err();
+        let err = describe_identity(&state, &json!({ "IdentityId": identity_id })).unwrap_err();
         assert_eq!(err.code, "ResourceNotFoundException");
     }
 
@@ -1977,10 +1965,12 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(lookup["DeveloperUserIdentifierList"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert!(
+            lookup["DeveloperUserIdentifierList"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2092,8 +2082,7 @@ mod tests {
         )
         .unwrap();
 
-        let list_result =
-            list_tags_for_resource(&state, &json!({ "ResourceArn": arn })).unwrap();
+        let list_result = list_tags_for_resource(&state, &json!({ "ResourceArn": arn })).unwrap();
         assert_eq!(list_result["Tags"]["env"], "test");
         assert_eq!(list_result["Tags"]["team"], "infra");
 
@@ -2106,8 +2095,7 @@ mod tests {
         )
         .unwrap();
 
-        let list_result2 =
-            list_tags_for_resource(&state, &json!({ "ResourceArn": arn })).unwrap();
+        let list_result2 = list_tags_for_resource(&state, &json!({ "ResourceArn": arn })).unwrap();
         assert!(list_result2["Tags"]["team"].is_null());
         assert_eq!(list_result2["Tags"]["env"], "test");
     }

@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::state::OpenSearchState;
 
@@ -43,18 +43,13 @@ pub fn bulk(state: &OpenSearchState, body: &str) -> (u16, Value) {
                     break;
                 }
                 let source: Value = serde_json::from_str(lines[i]).unwrap_or(json!({}));
-                let (_, result) = super::document::index_document(
-                    state,
-                    index_name,
-                    doc_id.as_deref(),
-                    &source,
-                );
+                let (_, result) =
+                    super::document::index_document(state, index_name, doc_id.as_deref(), &source);
                 items.push(json!({ action: result }));
             }
             "delete" => {
                 if let Some(id) = &doc_id {
-                    let (_, result) =
-                        super::document::delete_document(state, index_name, id);
+                    let (_, result) = super::document::delete_document(state, index_name, id);
                     items.push(json!({ "delete": result }));
                 }
             }

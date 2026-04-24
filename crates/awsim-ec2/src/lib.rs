@@ -127,9 +127,7 @@ impl ServiceHandler for Ec2Service {
 
             // Metadata
             "DescribeRegions" => operations::metadata::describe_regions(ctx),
-            "DescribeAvailabilityZones" => {
-                operations::metadata::describe_availability_zones(ctx)
-            }
+            "DescribeAvailabilityZones" => operations::metadata::describe_availability_zones(ctx),
 
             // Instances
             "RunInstances" => operations::instances::run_instances(&state, &input),

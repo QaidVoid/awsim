@@ -14,9 +14,9 @@ pub fn tag_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let resource_arn = input["resourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "resourceArn is required"))?;
+    let resource_arn = input["resourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "resourceArn is required")
+    })?;
 
     let mut entry = state
         .resource_tags
@@ -39,9 +39,9 @@ pub fn untag_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let resource_arn = input["resourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "resourceArn is required"))?;
+    let resource_arn = input["resourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "resourceArn is required")
+    })?;
 
     let tag_keys: Vec<&str> = input["tagKeys"]
         .as_array()
@@ -62,9 +62,9 @@ pub fn list_tags_for_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let resource_arn = input["resourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "resourceArn is required"))?;
+    let resource_arn = input["resourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "resourceArn is required")
+    })?;
 
     let tags: Vec<Value> = state
         .resource_tags
@@ -183,9 +183,7 @@ pub fn describe_capacity_providers(
 
     // If specific providers were requested, filter
     if !requested.is_empty() {
-        providers.retain(|p| {
-            requested.contains(&p["name"].as_str().unwrap_or(""))
-        });
+        providers.retain(|p| requested.contains(&p["name"].as_str().unwrap_or("")));
     }
 
     Ok(json!({

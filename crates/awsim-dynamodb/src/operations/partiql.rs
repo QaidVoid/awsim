@@ -147,11 +147,7 @@ fn run_statement(
 
 // ─── SELECT ──────────────────────────────────────────────────────────────────
 
-fn run_select(
-    state: &DynamoState,
-    stmt: &str,
-    params: &Value,
-) -> Result<Vec<Value>, AwsError> {
+fn run_select(state: &DynamoState, stmt: &str, params: &Value) -> Result<Vec<Value>, AwsError> {
     // Minimal parse: SELECT ... FROM "TableName" [WHERE "key" = val]
     let (table_name, where_key, where_val) = parse_from_where(stmt, params)?;
 
@@ -180,21 +176,23 @@ fn run_select(
 
 // ─── INSERT ───────────────────────────────────────────────────────────────────
 
-fn run_insert(
-    state: &DynamoState,
-    stmt: &str,
-    _params: &Value,
-) -> Result<(), AwsError> {
+fn run_insert(state: &DynamoState, stmt: &str, _params: &Value) -> Result<(), AwsError> {
     // INSERT INTO "TableName" VALUE {'key': 'val', ...}
     let upper = stmt.to_uppercase();
     let into_pos = upper.find("INTO").ok_or_else(|| {
-        AwsError::bad_request("ValidationException", "Invalid INSERT statement: missing INTO")
+        AwsError::bad_request(
+            "ValidationException",
+            "Invalid INSERT statement: missing INTO",
+        )
     })?;
     let after_into = stmt[into_pos + 4..].trim();
     let table_name = extract_quoted_identifier(after_into)?;
 
     let value_pos = upper.find("VALUE").ok_or_else(|| {
-        AwsError::bad_request("ValidationException", "Invalid INSERT statement: missing VALUE")
+        AwsError::bad_request(
+            "ValidationException",
+            "Invalid INSERT statement: missing VALUE",
+        )
     })?;
     let json_str = stmt[value_pos + 5..].trim();
 
@@ -225,11 +223,7 @@ fn run_insert(
 
 // ─── UPDATE ───────────────────────────────────────────────────────────────────
 
-fn run_update(
-    state: &DynamoState,
-    stmt: &str,
-    params: &Value,
-) -> Result<(), AwsError> {
+fn run_update(state: &DynamoState, stmt: &str, params: &Value) -> Result<(), AwsError> {
     // UPDATE "TableName" SET attr = val WHERE "pk" = val
     let upper = stmt.to_uppercase();
     let (table_name, where_key, where_val) = parse_from_where(stmt, params)?;
@@ -264,11 +258,7 @@ fn run_update(
 
 // ─── DELETE ───────────────────────────────────────────────────────────────────
 
-fn run_delete(
-    state: &DynamoState,
-    stmt: &str,
-    params: &Value,
-) -> Result<(), AwsError> {
+fn run_delete(state: &DynamoState, stmt: &str, params: &Value) -> Result<(), AwsError> {
     let (table_name, where_key, where_val) = parse_from_where(stmt, params)?;
 
     let mut table = state.tables.get_mut(&table_name).ok_or_else(|| {

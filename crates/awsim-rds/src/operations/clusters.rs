@@ -4,8 +4,7 @@ use serde_json::{Value, json};
 use crate::{
     error::{db_cluster_already_exists, db_cluster_not_found, invalid_parameter},
     ids::{
-        cluster_arn, cluster_endpoint, cluster_reader_endpoint, default_engine_version,
-        now_iso8601,
+        cluster_arn, cluster_endpoint, cluster_reader_endpoint, default_engine_version, now_iso8601,
     },
     state::{DbCluster, RdsState},
 };

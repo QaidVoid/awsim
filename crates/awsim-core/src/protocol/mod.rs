@@ -22,18 +22,13 @@ pub enum Protocol {
 impl Protocol {
     pub fn response_content_type(&self) -> &'static str {
         match self {
-            Self::AwsJson1_0 | Self::AwsJson1_1 | Self::RestJson1 => {
-                "application/x-amz-json-1.0"
-            }
+            Self::AwsJson1_0 | Self::AwsJson1_1 | Self::RestJson1 => "application/x-amz-json-1.0",
             Self::RestXml | Self::AwsQuery | Self::Ec2Query => "application/xml",
         }
     }
 
     pub fn is_json(&self) -> bool {
-        matches!(
-            self,
-            Self::AwsJson1_0 | Self::AwsJson1_1 | Self::RestJson1
-        )
+        matches!(self, Self::AwsJson1_0 | Self::AwsJson1_1 | Self::RestJson1)
     }
 
     pub fn is_xml(&self) -> bool {

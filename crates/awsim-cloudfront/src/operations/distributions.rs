@@ -15,9 +15,7 @@ fn not_found(id: &str) -> AwsError {
 }
 
 fn parse_config(input: &Value) -> DistributionConfig {
-    let config = input
-        .get("DistributionConfig")
-        .unwrap_or(input);
+    let config = input.get("DistributionConfig").unwrap_or(input);
 
     let comment = config
         .get("Comment")
@@ -200,10 +198,7 @@ pub fn create_distribution(
 }
 
 pub fn get_distribution(state: &CloudFrontState, id: &str) -> Result<Value, AwsError> {
-    let dist = state
-        .distributions
-        .get(id)
-        .ok_or_else(|| not_found(id))?;
+    let dist = state.distributions.get(id).ok_or_else(|| not_found(id))?;
 
     let etag = dist.etag.clone();
     let result = distribution_to_value(&dist);
@@ -217,10 +212,7 @@ pub fn get_distribution(state: &CloudFrontState, id: &str) -> Result<Value, AwsE
 /// GET /2020-05-31/distribution/{Id}/config
 /// Returns only the DistributionConfig portion (without the outer Distribution wrapper).
 pub fn get_distribution_config(state: &CloudFrontState, id: &str) -> Result<Value, AwsError> {
-    let dist = state
-        .distributions
-        .get(id)
-        .ok_or_else(|| not_found(id))?;
+    let dist = state.distributions.get(id).ok_or_else(|| not_found(id))?;
 
     let etag = dist.etag.clone();
     let full = distribution_to_value(&dist);

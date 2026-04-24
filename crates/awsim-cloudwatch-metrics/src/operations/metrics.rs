@@ -90,10 +90,7 @@ pub fn put_metric_data(
                 AwsError::bad_request("InvalidParameterValue", "MetricName is required")
             })?
             .to_string();
-        let value = datum
-            .get("Value")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
+        let value = datum.get("Value").and_then(Value::as_f64).unwrap_or(0.0);
         let unit = datum
             .get("Unit")
             .and_then(Value::as_str)
@@ -224,11 +221,21 @@ pub fn get_metric_statistics(
     for stat in &statistics {
         let stat_name = stat.as_str().unwrap_or("");
         match stat_name {
-            "Sum" => { dp["Sum"] = json!(sum); }
-            "Average" => { dp["Average"] = json!(average); }
-            "Minimum" => { dp["Minimum"] = json!(minimum); }
-            "Maximum" => { dp["Maximum"] = json!(maximum); }
-            "SampleCount" => { dp["SampleCount"] = json!(count); }
+            "Sum" => {
+                dp["Sum"] = json!(sum);
+            }
+            "Average" => {
+                dp["Average"] = json!(average);
+            }
+            "Minimum" => {
+                dp["Minimum"] = json!(minimum);
+            }
+            "Maximum" => {
+                dp["Maximum"] = json!(maximum);
+            }
+            "SampleCount" => {
+                dp["SampleCount"] = json!(count);
+            }
             _ => {}
         }
     }
@@ -254,7 +261,11 @@ pub fn get_metric_data(
     let mut results: Vec<Value> = Vec::new();
 
     for query in &queries {
-        let id = query.get("Id").and_then(Value::as_str).unwrap_or("").to_string();
+        let id = query
+            .get("Id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let metric_stat = query.get("MetricStat");
 
         let (values, timestamps) = if let Some(ms) = metric_stat {

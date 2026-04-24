@@ -46,9 +46,9 @@ pub fn create_connection(
         ));
     }
 
-    let auth_type = input["AuthorizationType"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AuthorizationType is required"))?;
+    let auth_type = input["AuthorizationType"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "AuthorizationType is required")
+    })?;
 
     let arn = format!(
         "arn:aws:events:{}:{}:connection/{}",

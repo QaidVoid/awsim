@@ -122,8 +122,7 @@ pub fn create_db_cluster_endpoint(
         return Err(db_cluster_not_found(cluster_id));
     }
 
-    let custom_endpoint_type = opt_str(input, "StaticMembers")
-        .map(|_| "READER".to_string());
+    let custom_endpoint_type = opt_str(input, "StaticMembers").map(|_| "READER".to_string());
 
     let ep = DbClusterEndpoint {
         endpoint_identifier: endpoint_id.to_string(),
@@ -176,4 +175,3 @@ pub fn delete_db_cluster_endpoint(
 
     Ok(json!({ "DBClusterEndpoint": endpoint_to_value(&ep) }))
 }
-

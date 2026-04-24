@@ -227,10 +227,7 @@ pub async fn test_sqs(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     ));
 
     // ListMessageMoveTasks
-    let dlq_arn = format!(
-        "arn:aws:sqs:us-east-1:000000000000:{}",
-        "conformance-queue"
-    );
+    let dlq_arn = format!("arn:aws:sqs:us-east-1:000000000000:{}", "conformance-queue");
     results.push(chk!(
         "ListMessageMoveTasks",
         client

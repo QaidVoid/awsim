@@ -26,12 +26,12 @@ pub fn create_table(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let db_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "DatabaseName is required"))?;
-    let table_name = input["TableInput"]["Name"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "TableInput.Name is required"))?;
+    let db_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "DatabaseName is required")
+    })?;
+    let table_name = input["TableInput"]["Name"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "TableInput.Name is required")
+    })?;
 
     let key = table_key(db_name, table_name);
     if state.tables.contains_key(&key) {
@@ -47,8 +47,14 @@ pub fn create_table(
     let table = GlueTable {
         database_name: db_name.to_string(),
         name: table_name.to_string(),
-        storage_descriptor: if storage_descriptor.is_null() { None } else { Some(storage_descriptor) },
-        description: input["TableInput"]["Description"].as_str().map(|s| s.to_string()),
+        storage_descriptor: if storage_descriptor.is_null() {
+            None
+        } else {
+            Some(storage_descriptor)
+        },
+        description: input["TableInput"]["Description"]
+            .as_str()
+            .map(|s| s.to_string()),
         created_at: now.clone(),
         updated_at: now,
         partitions: Vec::new(),
@@ -69,9 +75,9 @@ pub fn get_table(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let db_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "DatabaseName is required"))?;
+    let db_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "DatabaseName is required")
+    })?;
     let table_name = input["Name"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "Name is required"))?;
@@ -96,9 +102,9 @@ pub fn get_tables(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let db_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "DatabaseName is required"))?;
+    let db_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "DatabaseName is required")
+    })?;
 
     let list: Vec<Value> = state
         .tables
@@ -119,9 +125,9 @@ pub fn delete_table(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let db_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "DatabaseName is required"))?;
+    let db_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "DatabaseName is required")
+    })?;
     let table_name = input["Name"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "Name is required"))?;
@@ -147,12 +153,12 @@ pub fn update_table(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let db_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "DatabaseName is required"))?;
-    let table_name = input["TableInput"]["Name"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "TableInput.Name is required"))?;
+    let db_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "DatabaseName is required")
+    })?;
+    let table_name = input["TableInput"]["Name"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "TableInput.Name is required")
+    })?;
 
     let key = table_key(db_name, table_name);
     let mut table = state.tables.get_mut(&key).ok_or_else(|| {
@@ -192,7 +198,11 @@ pub fn search_tables(
         .to_lowercase();
 
     let search_text = input["SearchText"].as_str().unwrap_or("").to_lowercase();
-    let query = if !search_text.is_empty() { search_text } else { filter_expr };
+    let query = if !search_text.is_empty() {
+        search_text
+    } else {
+        filter_expr
+    };
 
     let list: Vec<Value> = state
         .tables
@@ -220,9 +230,9 @@ pub fn get_partitions(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let db_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "DatabaseName is required"))?;
+    let db_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "DatabaseName is required")
+    })?;
     let table_name = input["TableName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "TableName is required"))?;
@@ -235,11 +245,7 @@ pub fn get_partitions(
         )
     })?;
 
-    let partitions: Vec<Value> = table
-        .partitions
-        .iter()
-        .map(partition_to_value)
-        .collect();
+    let partitions: Vec<Value> = table.partitions.iter().map(partition_to_value).collect();
 
     Ok(json!({ "Partitions": partitions }))
 }
@@ -253,16 +259,18 @@ pub fn create_partition(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let db_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "DatabaseName is required"))?;
+    let db_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "DatabaseName is required")
+    })?;
     let table_name = input["TableName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "TableName is required"))?;
 
     let values: Vec<String> = input["PartitionInput"]["Values"]
         .as_array()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "PartitionInput.Values is required"))?
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidInputException", "PartitionInput.Values is required")
+        })?
         .iter()
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
         .collect();
@@ -315,16 +323,18 @@ pub fn delete_partition(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let db_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "DatabaseName is required"))?;
+    let db_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "DatabaseName is required")
+    })?;
     let table_name = input["TableName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "TableName is required"))?;
 
     let values: Vec<String> = input["PartitionValues"]
         .as_array()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "PartitionValues is required"))?
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidInputException", "PartitionValues is required")
+        })?
         .iter()
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
         .collect();
@@ -339,7 +349,9 @@ pub fn delete_partition(
     })?;
 
     let before = table.partitions.len();
-    table.partitions.retain(|p| p.values.join("/") != values_str);
+    table
+        .partitions
+        .retain(|p| p.values.join("/") != values_str);
     if table.partitions.len() == before {
         return Err(AwsError::not_found(
             "EntityNotFoundException",
@@ -360,16 +372,16 @@ pub fn batch_create_partition(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let db_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "DatabaseName is required"))?;
+    let db_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "DatabaseName is required")
+    })?;
     let table_name = input["TableName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "TableName is required"))?;
 
-    let partition_inputs = input["PartitionInputList"]
-        .as_array()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "PartitionInputList is required"))?;
+    let partition_inputs = input["PartitionInputList"].as_array().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "PartitionInputList is required")
+    })?;
 
     let key = table_key(db_name, table_name);
     let mut table = state.tables.get_mut(&key).ok_or_else(|| {
@@ -434,16 +446,16 @@ pub fn batch_delete_partition(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let db_name = input["DatabaseName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "DatabaseName is required"))?;
+    let db_name = input["DatabaseName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "DatabaseName is required")
+    })?;
     let table_name = input["TableName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "TableName is required"))?;
 
-    let partition_value_list = input["PartitionsToDelete"]
-        .as_array()
-        .ok_or_else(|| AwsError::bad_request("InvalidInputException", "PartitionsToDelete is required"))?;
+    let partition_value_list = input["PartitionsToDelete"].as_array().ok_or_else(|| {
+        AwsError::bad_request("InvalidInputException", "PartitionsToDelete is required")
+    })?;
 
     let key = table_key(db_name, table_name);
     let mut table = state.tables.get_mut(&key).ok_or_else(|| {
@@ -467,7 +479,9 @@ pub fn batch_delete_partition(
 
         let values_str = values.join("/");
         let before = table.partitions.len();
-        table.partitions.retain(|p| p.values.join("/") != values_str);
+        table
+            .partitions
+            .retain(|p| p.values.join("/") != values_str);
         if table.partitions.len() == before {
             errors.push(json!({
                 "PartitionValues": values,

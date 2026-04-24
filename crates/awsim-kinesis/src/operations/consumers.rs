@@ -43,7 +43,9 @@ pub fn register_stream_consumer(
         consumer_creation_timestamp: now_secs(),
     };
 
-    state.consumers.insert(consumer_arn.clone(), consumer.clone());
+    state
+        .consumers
+        .insert(consumer_arn.clone(), consumer.clone());
 
     Ok(json!({
         "Consumer": {
@@ -75,9 +77,9 @@ pub fn deregister_stream_consumer(
     }
 
     if let (Some(s_arn), Some(name)) = (stream_arn, consumer_name) {
-        state.consumers.retain(|_, c| {
-            !(c.stream_arn == s_arn && c.consumer_name == name)
-        });
+        state
+            .consumers
+            .retain(|_, c| !(c.stream_arn == s_arn && c.consumer_name == name));
         return Ok(json!({}));
     }
 
@@ -101,9 +103,16 @@ pub fn describe_stream_consumer(
     let consumer_name = input["ConsumerName"].as_str();
 
     let consumer = if let Some(arn) = consumer_arn {
-        state.consumers.get(arn).ok_or_else(|| {
-            AwsError::not_found("ResourceNotFoundException", format!("Consumer not found: {arn}"))
-        })?.clone()
+        state
+            .consumers
+            .get(arn)
+            .ok_or_else(|| {
+                AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("Consumer not found: {arn}"),
+                )
+            })?
+            .clone()
     } else if let (Some(s_arn), Some(name)) = (stream_arn, consumer_name) {
         state
             .consumers

@@ -72,9 +72,7 @@ pub async fn proxy_request(
                 Ok(s) => Value::String(s.to_string()),
                 Err(_) => {
                     use base64::Engine;
-                    Value::String(
-                        base64::engine::general_purpose::STANDARD.encode(body),
-                    )
+                    Value::String(base64::engine::general_purpose::STANDARD.encode(body))
                 }
             }
         };
@@ -158,8 +156,7 @@ fn match_route(
         // Route key format: "METHOD /path" or "ANY /path"
         let (route_method, route_path) = parse_route_key(&route.route_key)?;
 
-        let method_matches = route_method == "ANY"
-            || route_method.eq_ignore_ascii_case(method);
+        let method_matches = route_method == "ANY" || route_method.eq_ignore_ascii_case(method);
 
         if method_matches && path_matches(route_path, path) {
             if let Some(ref target) = route.target {

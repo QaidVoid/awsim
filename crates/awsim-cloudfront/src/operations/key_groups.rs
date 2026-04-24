@@ -15,10 +15,18 @@ fn not_found(id: &str) -> AwsError {
 }
 
 fn extract_items(items: Option<&Value>) -> Vec<String> {
-    let Some(items) = items else { return vec![]; };
-    let inner = items.get("PublicKey").or_else(|| items.get("Items")).unwrap_or(items);
+    let Some(items) = items else {
+        return vec![];
+    };
+    let inner = items
+        .get("PublicKey")
+        .or_else(|| items.get("Items"))
+        .unwrap_or(items);
     match inner {
-        Value::Array(arr) => arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect(),
+        Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect(),
         Value::String(s) => vec![s.clone()],
         _ => vec![],
     }
@@ -40,8 +48,16 @@ fn kg_to_value(kg: &KeyGroup) -> Value {
 
 pub fn create_key_group(state: &CloudFrontState, input: &Value) -> Result<Value, AwsError> {
     let cfg = input.get("KeyGroupConfig").unwrap_or(input);
-    let name = cfg.get("Name").and_then(|v| v.as_str()).unwrap_or("default").to_string();
-    let comment = cfg.get("Comment").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let name = cfg
+        .get("Name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
+    let comment = cfg
+        .get("Comment")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let items = extract_items(cfg.get("Items"));
 
     let id = Uuid::new_v4().to_string();

@@ -10,13 +10,13 @@ mod util;
 
 use std::sync::Arc;
 
+use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 use axum::routing::{delete, get, head, post, put};
-use axum::Router;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use state::OpenSearchState;
 
@@ -100,7 +100,10 @@ async fn create_index(
 ) -> impl IntoResponse {
     let body = body.map(|b| b.0).unwrap_or(json!({}));
     let (status, result) = operations::index::create_index(&state, &index, &body);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn get_index(
@@ -108,7 +111,10 @@ async fn get_index(
     Path(index): Path<String>,
 ) -> impl IntoResponse {
     let (status, result) = operations::index::get_index(&state, &index);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn head_index(
@@ -124,7 +130,10 @@ async fn delete_index(
     Path(index): Path<String>,
 ) -> impl IntoResponse {
     let (status, result) = operations::index::delete_index(&state, &index);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn get_mapping(
@@ -132,7 +141,10 @@ async fn get_mapping(
     Path(index): Path<String>,
 ) -> impl IntoResponse {
     let (status, result) = operations::index::get_mapping(&state, &index);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn search(
@@ -140,9 +152,14 @@ async fn search(
     Path(index): Path<String>,
     body: Option<Json<Value>>,
 ) -> impl IntoResponse {
-    let body = body.map(|b| b.0).unwrap_or(json!({"query": {"match_all": {}}}));
+    let body = body
+        .map(|b| b.0)
+        .unwrap_or(json!({"query": {"match_all": {}}}));
     let (status, result) = operations::search::search(&state, &index, &body);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn count(
@@ -150,9 +167,14 @@ async fn count(
     Path(index): Path<String>,
     body: Option<Json<Value>>,
 ) -> impl IntoResponse {
-    let body = body.map(|b| b.0).unwrap_or(json!({"query": {"match_all": {}}}));
+    let body = body
+        .map(|b| b.0)
+        .unwrap_or(json!({"query": {"match_all": {}}}));
     let (status, result) = operations::search::count(&state, &index, &body);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn put_doc(
@@ -161,7 +183,10 @@ async fn put_doc(
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
     let (status, result) = operations::document::index_document(&state, &index, Some(&id), &body);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn post_doc_auto_id(
@@ -170,7 +195,10 @@ async fn post_doc_auto_id(
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
     let (status, result) = operations::document::index_document(&state, &index, None, &body);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::CREATED), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::CREATED),
+        Json(result),
+    )
 }
 
 async fn get_doc(
@@ -178,7 +206,10 @@ async fn get_doc(
     Path((index, id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let (status, result) = operations::document::get_document(&state, &index, &id);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn delete_doc(
@@ -186,7 +217,10 @@ async fn delete_doc(
     Path((index, id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let (status, result) = operations::document::delete_document(&state, &index, &id);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn bulk_handler(
@@ -194,7 +228,10 @@ async fn bulk_handler(
     body: String,
 ) -> impl IntoResponse {
     let (status, result) = operations::bulk::bulk(&state, &body);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn bulk_index_handler(
@@ -203,21 +240,28 @@ async fn bulk_index_handler(
     body: String,
 ) -> impl IntoResponse {
     let (status, result) = operations::bulk::bulk(&state, &body);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 // --- Cluster-level handlers ---
 
 async fn cluster_health_handler(State(state): State<Arc<OpenSearchState>>) -> impl IntoResponse {
     let (status, result) = operations::cluster::cluster_health(&state);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
-async fn task_handler(
-    Path(task_id): Path<String>,
-) -> impl IntoResponse {
+async fn task_handler(Path(task_id): Path<String>) -> impl IntoResponse {
     let (status, result) = operations::cluster::get_task(&task_id);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 #[derive(Deserialize)]
@@ -232,7 +276,10 @@ async fn reindex_handler(
 ) -> impl IntoResponse {
     let wait = params.wait_for_completion.unwrap_or(true);
     let (status, result) = operations::cluster::reindex(&state, &body, wait);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn aliases_handler(
@@ -240,7 +287,10 @@ async fn aliases_handler(
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
     let (status, result) = operations::cluster::update_aliases(&state, &body);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn msearch_global_handler(
@@ -248,7 +298,10 @@ async fn msearch_global_handler(
     body: String,
 ) -> impl IntoResponse {
     let (status, result) = operations::cluster::msearch(&state, None, &body);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn msearch_index_handler(
@@ -257,7 +310,10 @@ async fn msearch_index_handler(
     body: String,
 ) -> impl IntoResponse {
     let (status, result) = operations::cluster::msearch(&state, Some(&index), &body);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 // --- Document-level handlers ---
@@ -268,7 +324,10 @@ async fn update_doc_handler(
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
     let (status, result) = operations::document::update_document(&state, &index, &id, &body);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn update_by_query_handler(
@@ -276,9 +335,14 @@ async fn update_by_query_handler(
     Path(index): Path<String>,
     body: Option<Json<Value>>,
 ) -> impl IntoResponse {
-    let body = body.map(|b| b.0).unwrap_or(json!({"query": {"match_all": {}}}));
+    let body = body
+        .map(|b| b.0)
+        .unwrap_or(json!({"query": {"match_all": {}}}));
     let (status, result) = operations::document::update_by_query(&state, &index, &body);
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(result))
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
 }
 
 async fn get_source_handler(
@@ -291,6 +355,9 @@ async fn get_source_handler(
         let source = result["_source"].clone();
         (StatusCode::OK, Json(source))
     } else {
-        (StatusCode::from_u16(status).unwrap_or(StatusCode::NOT_FOUND), Json(result))
+        (
+            StatusCode::from_u16(status).unwrap_or(StatusCode::NOT_FOUND),
+            Json(result),
+        )
     }
 }

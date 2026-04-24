@@ -60,8 +60,10 @@ mod tests {
     fn test_create_cluster_idempotent() {
         let svc = EcsService::new();
         let ctx = ctx();
-        let r1 = block_on(svc.handle("CreateCluster", json!({ "clusterName": "idem" }), &ctx)).unwrap();
-        let r2 = block_on(svc.handle("CreateCluster", json!({ "clusterName": "idem" }), &ctx)).unwrap();
+        let r1 =
+            block_on(svc.handle("CreateCluster", json!({ "clusterName": "idem" }), &ctx)).unwrap();
+        let r2 =
+            block_on(svc.handle("CreateCluster", json!({ "clusterName": "idem" }), &ctx)).unwrap();
         assert_eq!(r1["cluster"]["clusterArn"], r2["cluster"]["clusterArn"]);
     }
 
@@ -80,12 +82,8 @@ mod tests {
         let svc = EcsService::new();
         let ctx = ctx();
         block_on(svc.handle("CreateCluster", json!({ "clusterName": "dc" }), &ctx)).unwrap();
-        let result = block_on(svc.handle(
-            "DescribeClusters",
-            json!({ "clusters": ["dc"] }),
-            &ctx,
-        ))
-        .unwrap();
+        let result =
+            block_on(svc.handle("DescribeClusters", json!({ "clusters": ["dc"] }), &ctx)).unwrap();
         assert_eq!(result["clusters"].as_array().unwrap().len(), 1);
         assert_eq!(result["failures"].as_array().unwrap().len(), 0);
     }
@@ -94,12 +92,9 @@ mod tests {
     fn test_describe_clusters_missing() {
         let svc = EcsService::new();
         let ctx = ctx();
-        let result = block_on(svc.handle(
-            "DescribeClusters",
-            json!({ "clusters": ["ghost"] }),
-            &ctx,
-        ))
-        .unwrap();
+        let result =
+            block_on(svc.handle("DescribeClusters", json!({ "clusters": ["ghost"] }), &ctx))
+                .unwrap();
         assert_eq!(result["clusters"].as_array().unwrap().len(), 0);
         assert_eq!(result["failures"].as_array().unwrap().len(), 1);
     }
@@ -185,8 +180,18 @@ mod tests {
     fn test_list_task_definitions() {
         let svc = EcsService::new();
         let ctx = ctx();
-        block_on(svc.handle("RegisterTaskDefinition", json!({ "family": "svc-a", "containerDefinitions": [] }), &ctx)).unwrap();
-        block_on(svc.handle("RegisterTaskDefinition", json!({ "family": "svc-b", "containerDefinitions": [] }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "RegisterTaskDefinition",
+            json!({ "family": "svc-a", "containerDefinitions": [] }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "RegisterTaskDefinition",
+            json!({ "family": "svc-b", "containerDefinitions": [] }),
+            &ctx,
+        ))
+        .unwrap();
         let result = block_on(svc.handle("ListTaskDefinitions", json!({}), &ctx)).unwrap();
         assert_eq!(result["taskDefinitionArns"].as_array().unwrap().len(), 2);
     }
@@ -195,7 +200,12 @@ mod tests {
     fn test_deregister_task_definition() {
         let svc = EcsService::new();
         let ctx = ctx();
-        block_on(svc.handle("RegisterTaskDefinition", json!({ "family": "old-svc", "containerDefinitions": [] }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "RegisterTaskDefinition",
+            json!({ "family": "old-svc", "containerDefinitions": [] }),
+            &ctx,
+        ))
+        .unwrap();
         block_on(svc.handle(
             "DeregisterTaskDefinition",
             json!({ "taskDefinition": "old-svc:1" }),
@@ -227,7 +237,8 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        let list = block_on(svc.handle("ListServices", json!({ "cluster": "prod" }), &ctx)).unwrap();
+        let list =
+            block_on(svc.handle("ListServices", json!({ "cluster": "prod" }), &ctx)).unwrap();
         assert_eq!(list["serviceArns"].as_array().unwrap().len(), 1);
     }
 
@@ -281,7 +292,12 @@ mod tests {
     fn test_delete_service() {
         let svc = EcsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateCluster", json!({ "clusterName": "del-cluster" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateCluster",
+            json!({ "clusterName": "del-cluster" }),
+            &ctx,
+        ))
+        .unwrap();
         block_on(svc.handle(
             "CreateService",
             json!({ "cluster": "del-cluster", "serviceName": "del-svc", "taskDefinition": "t:1", "desiredCount": 0 }),
@@ -294,7 +310,8 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        let list = block_on(svc.handle("ListServices", json!({ "cluster": "del-cluster" }), &ctx)).unwrap();
+        let list = block_on(svc.handle("ListServices", json!({ "cluster": "del-cluster" }), &ctx))
+            .unwrap();
         assert_eq!(list["serviceArns"].as_array().unwrap().len(), 0);
     }
 
@@ -306,7 +323,12 @@ mod tests {
     fn test_run_task() {
         let svc = EcsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateCluster", json!({ "clusterName": "run-cluster" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateCluster",
+            json!({ "clusterName": "run-cluster" }),
+            &ctx,
+        ))
+        .unwrap();
         let result = block_on(svc.handle(
             "RunTask",
             json!({ "cluster": "run-cluster", "taskDefinition": "web:1", "count": 2 }),
@@ -322,7 +344,12 @@ mod tests {
     fn test_stop_task() {
         let svc = EcsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateCluster", json!({ "clusterName": "stop-cluster" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateCluster",
+            json!({ "clusterName": "stop-cluster" }),
+            &ctx,
+        ))
+        .unwrap();
         let run = block_on(svc.handle(
             "RunTask",
             json!({ "cluster": "stop-cluster", "taskDefinition": "web:1", "count": 1 }),
@@ -343,14 +370,20 @@ mod tests {
     fn test_list_tasks() {
         let svc = EcsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateCluster", json!({ "clusterName": "list-cluster" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateCluster",
+            json!({ "clusterName": "list-cluster" }),
+            &ctx,
+        ))
+        .unwrap();
         block_on(svc.handle(
             "RunTask",
             json!({ "cluster": "list-cluster", "taskDefinition": "web:1", "count": 3 }),
             &ctx,
         ))
         .unwrap();
-        let result = block_on(svc.handle("ListTasks", json!({ "cluster": "list-cluster" }), &ctx)).unwrap();
+        let result =
+            block_on(svc.handle("ListTasks", json!({ "cluster": "list-cluster" }), &ctx)).unwrap();
         assert_eq!(result["taskArns"].as_array().unwrap().len(), 3);
     }
 
@@ -358,7 +391,12 @@ mod tests {
     fn test_describe_tasks() {
         let svc = EcsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateCluster", json!({ "clusterName": "desc-cluster" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateCluster",
+            json!({ "clusterName": "desc-cluster" }),
+            &ctx,
+        ))
+        .unwrap();
         let run = block_on(svc.handle(
             "RunTask",
             json!({ "cluster": "desc-cluster", "taskDefinition": "web:1", "count": 1 }),

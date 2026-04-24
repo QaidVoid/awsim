@@ -18,7 +18,11 @@ pub async fn test_firehose(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     ));
     results.push(chk!(
         "DescribeDeliveryStream",
-        client.describe_delivery_stream().delivery_stream_name("conf-stream").send().await,
+        client
+            .describe_delivery_stream()
+            .delivery_stream_name("conf-stream")
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(
@@ -74,7 +78,11 @@ pub async fn test_firehose(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     ));
     results.push(chk!(
         "ListTagsForDeliveryStream",
-        client.list_tags_for_delivery_stream().delivery_stream_name("conf-stream").send().await,
+        client
+            .list_tags_for_delivery_stream()
+            .delivery_stream_name("conf-stream")
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(
@@ -89,17 +97,29 @@ pub async fn test_firehose(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     ));
     results.push(chk!(
         "StartDeliveryStreamEncryption",
-        client.start_delivery_stream_encryption().delivery_stream_name("conf-stream").send().await,
+        client
+            .start_delivery_stream_encryption()
+            .delivery_stream_name("conf-stream")
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(
         "StopDeliveryStreamEncryption",
-        client.stop_delivery_stream_encryption().delivery_stream_name("conf-stream").send().await,
+        client
+            .stop_delivery_stream_encryption()
+            .delivery_stream_name("conf-stream")
+            .send()
+            .await,
         verbose
     ));
     results.push(chk!(
         "DeleteDeliveryStream",
-        client.delete_delivery_stream().delivery_stream_name("conf-stream").send().await,
+        client
+            .delete_delivery_stream()
+            .delivery_stream_name("conf-stream")
+            .send()
+            .await,
         verbose
     ));
 

@@ -1,25 +1,31 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-use crate::state::KinesisState;
 use super::delete_stream::resolve_stream_name;
+use crate::state::KinesisState;
 
 /// Minimum and maximum retention period in hours (Kinesis limits).
 const MIN_RETENTION_HOURS: u32 = 24;
 const MAX_RETENTION_HOURS: u32 = 8760; // 365 days
 
-pub fn increase(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn increase(
+    state: &KinesisState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let stream_name = resolve_stream_name(state, input)?;
 
-    let hours = input["RetentionPeriodHours"]
-        .as_u64()
-        .ok_or_else(|| AwsError::bad_request("MissingParameter", "RetentionPeriodHours is required"))?
-        as u32;
+    let hours = input["RetentionPeriodHours"].as_u64().ok_or_else(|| {
+        AwsError::bad_request("MissingParameter", "RetentionPeriodHours is required")
+    })? as u32;
 
     if hours > MAX_RETENTION_HOURS {
         return Err(AwsError::bad_request(
             "InvalidArgumentException",
-            format!("RetentionPeriodHours must be at most {}", MAX_RETENTION_HOURS),
+            format!(
+                "RetentionPeriodHours must be at most {}",
+                MAX_RETENTION_HOURS
+            ),
         ));
     }
 
@@ -41,18 +47,24 @@ pub fn increase(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> R
     Ok(json!({}))
 }
 
-pub fn decrease(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn decrease(
+    state: &KinesisState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let stream_name = resolve_stream_name(state, input)?;
 
-    let hours = input["RetentionPeriodHours"]
-        .as_u64()
-        .ok_or_else(|| AwsError::bad_request("MissingParameter", "RetentionPeriodHours is required"))?
-        as u32;
+    let hours = input["RetentionPeriodHours"].as_u64().ok_or_else(|| {
+        AwsError::bad_request("MissingParameter", "RetentionPeriodHours is required")
+    })? as u32;
 
     if hours < MIN_RETENTION_HOURS {
         return Err(AwsError::bad_request(
             "InvalidArgumentException",
-            format!("RetentionPeriodHours must be at least {}", MIN_RETENTION_HOURS),
+            format!(
+                "RetentionPeriodHours must be at least {}",
+                MIN_RETENTION_HOURS
+            ),
         ));
     }
 

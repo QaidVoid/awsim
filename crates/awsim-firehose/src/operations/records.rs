@@ -8,9 +8,9 @@ pub fn put_record(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["DeliveryStreamName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required"))?;
+    let name = input["DeliveryStreamName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
+    })?;
     if !state.streams.contains_key(name) {
         return Err(AwsError::not_found(
             "ResourceNotFoundException",
@@ -29,9 +29,9 @@ pub fn put_record_batch(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["DeliveryStreamName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required"))?;
+    let name = input["DeliveryStreamName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
+    })?;
     if !state.streams.contains_key(name) {
         return Err(AwsError::not_found(
             "ResourceNotFoundException",

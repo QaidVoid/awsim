@@ -93,10 +93,7 @@ async fn start_server() -> String {
     state.register(Arc::new(lambda), lambda_routes);
 
     let app = axum::Router::new()
-        .route(
-            "/_awsim/health",
-            axum::routing::get(|| async { "ok" }),
-        )
+        .route("/_awsim/health", axum::routing::get(|| async { "ok" }))
         .fallback(awsim_core::gateway::handle_request)
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);

@@ -191,7 +191,10 @@ pub fn list_state_machines(
         .collect();
 
     machines.sort_by(|a, b| {
-        a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
     });
 
     Ok(json!({ "stateMachines": machines }))

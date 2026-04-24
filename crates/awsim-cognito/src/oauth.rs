@@ -130,14 +130,14 @@ fn purge_expired_codes(codes: &DashMap<String, AuthCodeEntry>) {
 
 /// Parse scopes from a space-separated string.
 fn parse_scopes(scope_str: &str) -> Vec<String> {
-    scope_str
-        .split_whitespace()
-        .map(String::from)
-        .collect()
+    scope_str.split_whitespace().map(String::from).collect()
 }
 
 /// Build GroupRolePair list for a user from pool group data.
-fn user_group_role_pairs(pool: &crate::state::UserPool, user_groups: &[String]) -> Vec<GroupRolePair> {
+fn user_group_role_pairs(
+    pool: &crate::state::UserPool,
+    user_groups: &[String],
+) -> Vec<GroupRolePair> {
     user_groups
         .iter()
         .filter_map(|gname| {
@@ -370,9 +370,7 @@ async fn authorize_get(
     // Validate redirect_uri against client's callback_urls.
     if let Some(pool_ref) = oauth_state.cognito.user_pools.get(&pool_id) {
         if let Some(client) = pool_ref.clients.get(&params.client_id) {
-            if !client.callback_urls.is_empty()
-                && !client.callback_urls.contains(&redirect_uri)
-            {
+            if !client.callback_urls.is_empty() && !client.callback_urls.contains(&redirect_uri) {
                 warn!(
                     client_id = %params.client_id,
                     redirect_uri = %redirect_uri,
@@ -424,11 +422,7 @@ async fn authorize_post(
     Path(pool_id): Path<String>,
     Form(form): Form<AuthorizeForm>,
 ) -> Response {
-    let response_type = form
-        .response_type
-        .as_deref()
-        .unwrap_or("code")
-        .to_string();
+    let response_type = form.response_type.as_deref().unwrap_or("code").to_string();
     let client_id = form.client_id.as_deref().unwrap_or("").to_string();
     let redirect_uri = match &form.redirect_uri {
         Some(u) if !u.is_empty() => u.clone(),
@@ -436,11 +430,7 @@ async fn authorize_post(
             return (StatusCode::BAD_REQUEST, "redirect_uri is required").into_response();
         }
     };
-    let scope_str = form
-        .scope
-        .as_deref()
-        .unwrap_or("openid")
-        .to_string();
+    let scope_str = form.scope.as_deref().unwrap_or("openid").to_string();
     let state_param = form.state.as_deref().unwrap_or("").to_string();
     let nonce = form.nonce.clone();
     let code_challenge = form.code_challenge.clone();
@@ -773,10 +763,7 @@ async fn token(
 
             // PKCE verification.
             if let Some(challenge) = &entry.code_challenge {
-                let method = entry
-                    .code_challenge_method
-                    .as_deref()
-                    .unwrap_or("plain");
+                let method = entry.code_challenge_method.as_deref().unwrap_or("plain");
                 match &form.code_verifier {
                     Some(verifier) => {
                         if !verify_pkce(verifier, challenge, method) {
@@ -807,9 +794,19 @@ async fn token(
             let (sub, username, attributes, group_pairs) = match user {
                 Some(ref u) => {
                     let pairs = user_group_role_pairs(&pool, &u.groups);
-                    (u.sub.clone(), u.username.clone(), u.attributes.clone(), pairs)
+                    (
+                        u.sub.clone(),
+                        u.username.clone(),
+                        u.attributes.clone(),
+                        pairs,
+                    )
                 }
-                None => (entry.user_sub.clone(), entry.username.clone(), HashMap::new(), vec![]),
+                None => (
+                    entry.user_sub.clone(),
+                    entry.username.clone(),
+                    HashMap::new(),
+                    vec![],
+                ),
             };
 
             let scopes = entry.scopes.clone();
@@ -1007,7 +1004,12 @@ async fn token(
             let (user_sub, username, attributes, group_pairs) = match user {
                 Some(ref u) => {
                     let pairs = user_group_role_pairs(&pool, &u.groups);
-                    (u.sub.clone(), u.username.clone(), u.attributes.clone(), pairs)
+                    (
+                        u.sub.clone(),
+                        u.username.clone(),
+                        u.attributes.clone(),
+                        pairs,
+                    )
                 }
                 None => (sub.clone(), sub.clone(), HashMap::new(), vec![]),
             };
@@ -1178,9 +1180,7 @@ async fn revoke(
     };
 
     // Add to revocation store.
-    oauth_state
-        .revoked_refresh_tokens
-        .insert(token.clone(), ());
+    oauth_state.revoked_refresh_tokens.insert(token.clone(), ());
 
     info!("OAuth: revoked refresh token");
 

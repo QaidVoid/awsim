@@ -14,7 +14,10 @@ pub fn create_trail(
     let bucket = input["S3BucketName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "S3BucketName is required"))?;
-    let arn = format!("arn:aws:cloudtrail:{}:{}:trail/{}", ctx.region, ctx.account_id, name);
+    let arn = format!(
+        "arn:aws:cloudtrail:{}:{}:trail/{}",
+        ctx.region, ctx.account_id, name
+    );
 
     let trail = Trail {
         name: name.to_string(),
@@ -22,14 +25,18 @@ pub fn create_trail(
         s3_bucket_name: bucket.to_string(),
         s3_key_prefix: input["S3KeyPrefix"].as_str().map(String::from),
         sns_topic_name: input["SnsTopicName"].as_str().map(String::from),
-        sns_topic_arn: input["SnsTopicName"].as_str().map(|t| {
-            format!("arn:aws:sns:{}:{}:{}", ctx.region, ctx.account_id, t)
-        }),
-        include_global_service_events: input["IncludeGlobalServiceEvents"].as_bool().unwrap_or(true),
+        sns_topic_arn: input["SnsTopicName"]
+            .as_str()
+            .map(|t| format!("arn:aws:sns:{}:{}:{}", ctx.region, ctx.account_id, t)),
+        include_global_service_events: input["IncludeGlobalServiceEvents"]
+            .as_bool()
+            .unwrap_or(true),
         is_multi_region_trail: input["IsMultiRegionTrail"].as_bool().unwrap_or(false),
         home_region: ctx.region.clone(),
         log_file_validation_enabled: input["EnableLogFileValidation"].as_bool().unwrap_or(false),
-        cloud_watch_logs_log_group_arn: input["CloudWatchLogsLogGroupArn"].as_str().map(String::from),
+        cloud_watch_logs_log_group_arn: input["CloudWatchLogsLogGroupArn"]
+            .as_str()
+            .map(String::from),
         cloud_watch_logs_role_arn: input["CloudWatchLogsRoleArn"].as_str().map(String::from),
         kms_key_id: input["KmsKeyId"].as_str().map(String::from),
         has_custom_event_selectors: false,
@@ -58,9 +65,11 @@ pub fn describe_trails(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let requested: Option<Vec<String>> = input["trailNameList"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let requested: Option<Vec<String>> = input["trailNameList"].as_array().map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    });
     let trails: Vec<Value> = state
         .trails
         .iter()
@@ -102,10 +111,9 @@ pub fn update_trail(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "Name is required"))?;
     let key = resolve_name(name);
-    let mut trail = state
-        .trails
-        .get_mut(&key)
-        .ok_or_else(|| AwsError::not_found("TrailNotFoundException", format!("Trail {key} not found")))?;
+    let mut trail = state.trails.get_mut(&key).ok_or_else(|| {
+        AwsError::not_found("TrailNotFoundException", format!("Trail {key} not found"))
+    })?;
     if let Some(b) = input["S3BucketName"].as_str() {
         trail.s3_bucket_name = b.to_string();
     }
@@ -135,10 +143,9 @@ pub fn start_logging(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "Name is required"))?;
     let key = resolve_name(name);
-    let mut s = state
-        .trail_status
-        .get_mut(&key)
-        .ok_or_else(|| AwsError::not_found("TrailNotFoundException", format!("Trail {key} not found")))?;
+    let mut s = state.trail_status.get_mut(&key).ok_or_else(|| {
+        AwsError::not_found("TrailNotFoundException", format!("Trail {key} not found"))
+    })?;
     s.is_logging = true;
     s.start_logging_time = Some(now_secs());
     Ok(json!({}))
@@ -153,10 +160,9 @@ pub fn stop_logging(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "Name is required"))?;
     let key = resolve_name(name);
-    let mut s = state
-        .trail_status
-        .get_mut(&key)
-        .ok_or_else(|| AwsError::not_found("TrailNotFoundException", format!("Trail {key} not found")))?;
+    let mut s = state.trail_status.get_mut(&key).ok_or_else(|| {
+        AwsError::not_found("TrailNotFoundException", format!("Trail {key} not found"))
+    })?;
     s.is_logging = false;
     s.stop_logging_time = Some(now_secs());
     Ok(json!({}))
@@ -171,10 +177,9 @@ pub fn get_trail_status(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "Name is required"))?;
     let key = resolve_name(name);
-    let s = state
-        .trail_status
-        .get(&key)
-        .ok_or_else(|| AwsError::not_found("TrailNotFoundException", format!("Trail {key} not found")))?;
+    let s = state.trail_status.get(&key).ok_or_else(|| {
+        AwsError::not_found("TrailNotFoundException", format!("Trail {key} not found"))
+    })?;
     Ok(json!({
         "IsLogging": s.is_logging,
         "LatestDeliveryError": s.latest_delivery_error,

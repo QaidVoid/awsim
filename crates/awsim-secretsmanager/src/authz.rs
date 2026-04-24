@@ -37,7 +37,10 @@ impl ResourcePolicyLookup for SecretsManagerResourcePolicyLookup {
                 }
             }
             if let Some(suffixed) = extract_secret_key(resource_arn) {
-                let bare_name = suffixed.rsplit_once('-').map(|(n, _)| n).unwrap_or(&suffixed);
+                let bare_name = suffixed
+                    .rsplit_once('-')
+                    .map(|(n, _)| n)
+                    .unwrap_or(&suffixed);
                 if let Some(raw) = state.resource_policies.get(bare_name) {
                     return awsim_iam_policy::parse(raw.value()).ok();
                 }

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use awsim_enforcement_tests::{
-    bootstrap_user, iam_client, make_sdk_config, s3_client, sdk_err_is_access_denied,
-    start_server_enforced, start_server_unenforced, ALLOW_ALL_S3, ALLOW_GETOBJECT, DENY_PUTOBJECT,
+    ALLOW_ALL_S3, ALLOW_GETOBJECT, DENY_PUTOBJECT, bootstrap_user, iam_client, make_sdk_config,
+    s3_client, sdk_err_is_access_denied, start_server_enforced, start_server_unenforced,
 };
 
 struct Report {
@@ -12,7 +12,10 @@ struct Report {
 
 impl Report {
     fn new() -> Self {
-        Self { passes: vec![], failures: vec![] }
+        Self {
+            passes: vec![],
+            failures: vec![],
+        }
     }
     fn pass(&mut self, name: &str) {
         println!("PASS: {name}");
@@ -38,7 +41,12 @@ async fn scenario_enforced(report: &mut Report) {
     )
     .await;
 
-    admin_iam.create_user().user_name("bob").send().await.expect("create_user bob");
+    admin_iam
+        .create_user()
+        .user_name("bob")
+        .send()
+        .await
+        .expect("create_user bob");
     let bob_keys = admin_iam
         .create_access_key()
         .user_name("bob")
@@ -95,7 +103,10 @@ async fn scenario_enforced(report: &mut Report) {
         .send()
         .await
     {
-        Ok(_) => report.fail("alice_put_object_denied", "expected AccessDenied, got Ok".into()),
+        Ok(_) => report.fail(
+            "alice_put_object_denied",
+            "expected AccessDenied, got Ok".into(),
+        ),
         Err(e) => {
             if sdk_err_is_access_denied(&e) {
                 report.pass("alice_put_object_denied");
@@ -109,7 +120,10 @@ async fn scenario_enforced(report: &mut Report) {
     }
 
     match alice_s3.delete_bucket().bucket("test-bucket").send().await {
-        Ok(_) => report.fail("alice_delete_bucket_denied", "expected AccessDenied, got Ok".into()),
+        Ok(_) => report.fail(
+            "alice_delete_bucket_denied",
+            "expected AccessDenied, got Ok".into(),
+        ),
         Err(e) => {
             if sdk_err_is_access_denied(&e) {
                 report.pass("alice_delete_bucket_denied");
@@ -131,7 +145,10 @@ async fn scenario_enforced(report: &mut Report) {
         .send()
         .await
     {
-        Ok(_) => report.fail("bob_get_object_implicit_deny", "expected AccessDenied, got Ok".into()),
+        Ok(_) => report.fail(
+            "bob_get_object_implicit_deny",
+            "expected AccessDenied, got Ok".into(),
+        ),
         Err(e) => {
             if sdk_err_is_access_denied(&e) {
                 report.pass("bob_get_object_implicit_deny");
@@ -201,7 +218,12 @@ async fn scenario_unenforced(report: &mut Report) {
     let admin_cfg = make_sdk_config(admin_port, "admin", "admin");
     let admin_iam = iam_client(&admin_cfg);
 
-    admin_iam.create_user().user_name("nobody").send().await.expect("create_user");
+    admin_iam
+        .create_user()
+        .user_name("nobody")
+        .send()
+        .await
+        .expect("create_user");
     let keys = admin_iam
         .create_access_key()
         .user_name("nobody")

@@ -20,9 +20,9 @@ pub fn create_named_query(
     let database = input["Database"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "Database is required"))?;
-    let query_string = input["QueryString"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "QueryString is required"))?;
+    let query_string = input["QueryString"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "QueryString is required")
+    })?;
 
     let workgroup = input["WorkGroup"].as_str().unwrap_or("primary").to_string();
     let description = input["Description"].as_str().map(|s| s.to_string());
@@ -52,12 +52,15 @@ pub fn get_named_query(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let id = input["NamedQueryId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "NamedQueryId is required"))?;
+    let id = input["NamedQueryId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "NamedQueryId is required")
+    })?;
 
     let nq = state.named_queries.get(id).ok_or_else(|| {
-        AwsError::not_found("InvalidRequestException", format!("NamedQuery not found: {id}"))
+        AwsError::not_found(
+            "InvalidRequestException",
+            format!("NamedQuery not found: {id}"),
+        )
     })?;
 
     Ok(json!({
@@ -137,12 +140,15 @@ pub fn delete_named_query(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let id = input["NamedQueryId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "NamedQueryId is required"))?;
+    let id = input["NamedQueryId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "NamedQueryId is required")
+    })?;
 
     state.named_queries.remove(id).ok_or_else(|| {
-        AwsError::not_found("InvalidRequestException", format!("NamedQuery not found: {id}"))
+        AwsError::not_found(
+            "InvalidRequestException",
+            format!("NamedQuery not found: {id}"),
+        )
     })?;
 
     info!(id = %id, "Deleted Athena named query");

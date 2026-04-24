@@ -3,8 +3,8 @@ use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::state::{CognitoState, UserPool, MfaSession};
 use crate::jwt::{self, GroupRolePair};
+use crate::state::{CognitoState, MfaSession, UserPool};
 
 /// Build the list of GroupRolePair for a user from pool group data.
 fn group_role_pairs(pool: &UserPool, user_groups: &[String]) -> Vec<GroupRolePair> {
@@ -30,9 +30,33 @@ pub fn build_auth_result_pub(
     groups: &[GroupRolePair],
 ) -> Value {
     // Use default openid scope for direct auth flows (InitiateAuth, etc.)
-    let default_scopes: Vec<String> = vec!["openid".to_string(), "email".to_string(), "profile".to_string()];
-    let id_tok = jwt::id_token(user_sub, region, pool_id, client_id, username, attributes, &default_scopes, None, groups, None);
-    let access_tok = jwt::access_token(user_sub, region, pool_id, client_id, username, &default_scopes, groups, None);
+    let default_scopes: Vec<String> = vec![
+        "openid".to_string(),
+        "email".to_string(),
+        "profile".to_string(),
+    ];
+    let id_tok = jwt::id_token(
+        user_sub,
+        region,
+        pool_id,
+        client_id,
+        username,
+        attributes,
+        &default_scopes,
+        None,
+        groups,
+        None,
+    );
+    let access_tok = jwt::access_token(
+        user_sub,
+        region,
+        pool_id,
+        client_id,
+        username,
+        &default_scopes,
+        groups,
+        None,
+    );
     let refresh_tok = jwt::refresh_token(user_sub);
 
     json!({
@@ -55,7 +79,9 @@ fn build_auth_result(
     attributes: &std::collections::HashMap<String, String>,
     groups: &[GroupRolePair],
 ) -> Value {
-    build_auth_result_pub(user_sub, username, region, pool_id, client_id, attributes, groups)
+    build_auth_result_pub(
+        user_sub, username, region, pool_id, client_id, attributes, groups,
+    )
 }
 
 /// Publish a fire-and-forget Lambda trigger event onto the event bus.
@@ -97,14 +123,12 @@ pub fn initiate_auth(
         .iter()
         .find(|e| e.clients.contains_key(client_id));
 
-    let pool_id = pool_entry
-        .map(|e| e.id.clone())
-        .ok_or_else(|| {
-            AwsError::not_found(
-                "ResourceNotFoundException",
-                format!("No pool found for client: {client_id}"),
-            )
-        })?;
+    let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("No pool found for client: {client_id}"),
+        )
+    })?;
 
     match auth_flow {
         "USER_PASSWORD_AUTH" | "USER_SRP_AUTH" => {
@@ -129,7 +153,10 @@ pub fn initiate_auth(
             }
 
             let user = pool.users.get(username).ok_or_else(|| {
-                AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+                AwsError::not_found(
+                    "UserNotFoundException",
+                    format!("User not found: {username}"),
+                )
             })?;
 
             if user.password != password {
@@ -150,8 +177,13 @@ pub fn initiate_auth(
             if user.status == "FORCE_CHANGE_PASSWORD" {
                 let session_id = Uuid::new_v4().to_string();
                 let user_attrs_json = serde_json::to_string(
-                    &user.attributes.iter().map(|(k,v)| json!({"Name":k,"Value":v})).collect::<Vec<_>>()
-                ).unwrap_or_default();
+                    &user
+                        .attributes
+                        .iter()
+                        .map(|(k, v)| json!({"Name":k,"Value":v}))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_default();
                 info!(username = %username, "Cognito: InitiateAuth → NEW_PASSWORD_REQUIRED");
                 return Ok(json!({
                     "ChallengeName": "NEW_PASSWORD_REQUIRED",
@@ -197,7 +229,12 @@ pub fn initiate_auth(
                     "userName": username,
                     "callerContext": { "clientId": client_id }
                 });
-                invoke_trigger(ctx, "PostAuthentication_Authentication", arn, &trigger_event);
+                invoke_trigger(
+                    ctx,
+                    "PostAuthentication_Authentication",
+                    arn,
+                    &trigger_event,
+                );
             }
 
             let pairs = group_role_pairs(&pool, &user.groups);
@@ -308,7 +345,10 @@ pub fn admin_initiate_auth(
             }
 
             let user = pool.users.get(username).ok_or_else(|| {
-                AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+                AwsError::not_found(
+                    "UserNotFoundException",
+                    format!("User not found: {username}"),
+                )
             })?;
 
             if user.password != password {
@@ -329,8 +369,13 @@ pub fn admin_initiate_auth(
             if user.status == "FORCE_CHANGE_PASSWORD" {
                 let session_id = Uuid::new_v4().to_string();
                 let user_attrs_json = serde_json::to_string(
-                    &user.attributes.iter().map(|(k,v)| json!({"Name":k,"Value":v})).collect::<Vec<_>>()
-                ).unwrap_or_default();
+                    &user
+                        .attributes
+                        .iter()
+                        .map(|(k, v)| json!({"Name":k,"Value":v}))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_default();
                 info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth → NEW_PASSWORD_REQUIRED");
                 return Ok(json!({
                     "ChallengeName": "NEW_PASSWORD_REQUIRED",
@@ -375,7 +420,12 @@ pub fn admin_initiate_auth(
                     "userName": username,
                     "callerContext": { "clientId": client_id }
                 });
-                invoke_trigger(ctx, "PostAuthentication_Authentication", arn, &trigger_event);
+                invoke_trigger(
+                    ctx,
+                    "PostAuthentication_Authentication",
+                    arn,
+                    &trigger_event,
+                );
             }
 
             let pairs = group_role_pairs(&pool, &user.groups);
@@ -421,27 +471,34 @@ pub fn respond_to_auth_challenge(
         .iter()
         .find(|e| e.clients.contains_key(client_id));
 
-    let pool_id = pool_entry
-        .map(|e| e.id.clone())
-        .ok_or_else(|| {
-            AwsError::not_found(
-                "ResourceNotFoundException",
-                format!("No pool found for client: {client_id}"),
-            )
-        })?;
+    let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("No pool found for client: {client_id}"),
+        )
+    })?;
 
     match challenge_name {
         "NEW_PASSWORD_REQUIRED" => {
-            let username = responses["USERNAME"]
-                .as_str()
-                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required in ChallengeResponses"))?;
-            let new_password = responses["NEW_PASSWORD"]
-                .as_str()
-                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "NEW_PASSWORD is required in ChallengeResponses"))?;
+            let username = responses["USERNAME"].as_str().ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameter",
+                    "USERNAME is required in ChallengeResponses",
+                )
+            })?;
+            let new_password = responses["NEW_PASSWORD"].as_str().ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameter",
+                    "NEW_PASSWORD is required in ChallengeResponses",
+                )
+            })?;
 
             let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
             let user = pool.users.get_mut(username).ok_or_else(|| {
-                AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+                AwsError::not_found(
+                    "UserNotFoundException",
+                    format!("User not found: {username}"),
+                )
             })?;
 
             user.password = new_password.to_string();
@@ -491,13 +548,11 @@ pub fn respond_to_auth_challenge(
                 Ok(json!({ "AuthenticationResult": {} }))
             }
         }
-        "MFA_SETUP" => {
-            Ok(json!({
-                "ChallengeName": "MFA_SETUP",
-                "ChallengeParameters": {},
-                "Session": input["Session"]
-            }))
-        }
+        "MFA_SETUP" => Ok(json!({
+            "ChallengeName": "MFA_SETUP",
+            "ChallengeParameters": {},
+            "Session": input["Session"]
+        })),
         name => Err(AwsError::bad_request(
             "InvalidParameter",
             format!("Unsupported ChallengeName: {name}"),
@@ -527,12 +582,18 @@ pub fn admin_respond_to_auth_challenge(
 
     match challenge_name {
         "NEW_PASSWORD_REQUIRED" => {
-            let username = responses["USERNAME"]
-                .as_str()
-                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required in ChallengeResponses"))?;
-            let new_password = responses["NEW_PASSWORD"]
-                .as_str()
-                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "NEW_PASSWORD is required in ChallengeResponses"))?;
+            let username = responses["USERNAME"].as_str().ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameter",
+                    "USERNAME is required in ChallengeResponses",
+                )
+            })?;
+            let new_password = responses["NEW_PASSWORD"].as_str().ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameter",
+                    "NEW_PASSWORD is required in ChallengeResponses",
+                )
+            })?;
 
             let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
                 AwsError::not_found(
@@ -549,7 +610,10 @@ pub fn admin_respond_to_auth_challenge(
             }
 
             let user = pool.users.get_mut(username).ok_or_else(|| {
-                AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+                AwsError::not_found(
+                    "UserNotFoundException",
+                    format!("User not found: {username}"),
+                )
             })?;
 
             user.password = new_password.to_string();
@@ -627,14 +691,12 @@ pub fn get_tokens_from_refresh_token(
         .iter()
         .find(|e| e.clients.contains_key(client_id));
 
-    let pool_id = pool_entry
-        .map(|e| e.id.clone())
-        .ok_or_else(|| {
-            AwsError::not_found(
-                "ResourceNotFoundException",
-                format!("No pool found for client: {client_id}"),
-            )
-        })?;
+    let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("No pool found for client: {client_id}"),
+        )
+    })?;
 
     // Extract sub from our opaque refresh token format: "refresh-{sub}-{uuid}"
     let sub = refresh_tok
@@ -643,7 +705,10 @@ pub fn get_tokens_from_refresh_token(
         .unwrap_or("unknown");
 
     let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("Pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Pool not found: {pool_id}"),
+        )
     })?;
     let user = pool
         .users
@@ -695,5 +760,8 @@ pub fn get_user_auth_factors(
         }
     }
 
-    Err(AwsError::not_found("UserNotFoundException", format!("User not found: {username}")))
+    Err(AwsError::not_found(
+        "UserNotFoundException",
+        format!("User not found: {username}"),
+    ))
 }

@@ -100,13 +100,16 @@ pub fn get_web_acl(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Name is required"))?;
 
-    let scope = input["Scope"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Scope is required"))?;
+    let scope = input["Scope"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "Scope is required")
+    })?;
 
     let key = format!("{scope}:{name}");
     let acl = state.web_acls.get(&key).ok_or_else(|| {
-        AwsError::not_found("WAFNonexistentItemException", format!("WebACL not found: {name}"))
+        AwsError::not_found(
+            "WAFNonexistentItemException",
+            format!("WebACL not found: {name}"),
+        )
     })?;
 
     Ok(json!({
@@ -131,9 +134,9 @@ pub fn list_web_acls(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let scope = input["Scope"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Scope is required"))?;
+    let scope = input["Scope"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "Scope is required")
+    })?;
 
     validate_scope(scope)?;
 
@@ -168,13 +171,13 @@ pub fn delete_web_acl(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Name is required"))?;
 
-    let scope = input["Scope"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Scope is required"))?;
+    let scope = input["Scope"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "Scope is required")
+    })?;
 
-    let _lock_token = input["LockToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "LockToken is required"))?;
+    let _lock_token = input["LockToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "LockToken is required")
+    })?;
 
     let key = format!("{scope}:{name}");
     if state.web_acls.remove(&key).is_none() {
@@ -200,17 +203,20 @@ pub fn update_web_acl(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Name is required"))?;
 
-    let scope = input["Scope"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "Scope is required"))?;
+    let scope = input["Scope"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "Scope is required")
+    })?;
 
-    let _lock_token = input["LockToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("WAFInvalidParameterException", "LockToken is required"))?;
+    let _lock_token = input["LockToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("WAFInvalidParameterException", "LockToken is required")
+    })?;
 
     let key = format!("{scope}:{name}");
     let mut acl = state.web_acls.get_mut(&key).ok_or_else(|| {
-        AwsError::not_found("WAFNonexistentItemException", format!("WebACL not found: {name}"))
+        AwsError::not_found(
+            "WAFNonexistentItemException",
+            format!("WebACL not found: {name}"),
+        )
     })?;
 
     if !input["DefaultAction"].is_null() {

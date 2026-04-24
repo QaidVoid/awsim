@@ -61,7 +61,9 @@ impl ServiceHandler for CloudTrailService {
             "PutEventSelectors" => operations::selectors::put_event_selectors(&state, &input, ctx),
             "ListTrails" => operations::trails::list_trails(&state, &input, ctx),
             "LookupEvents" => operations::trails::lookup_events(&state, &input, ctx),
-            "PutInsightSelectors" => operations::selectors::put_insight_selectors(&state, &input, ctx),
+            "PutInsightSelectors" => {
+                operations::selectors::put_insight_selectors(&state, &input, ctx)
+            }
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

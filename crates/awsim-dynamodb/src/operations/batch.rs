@@ -74,9 +74,9 @@ pub fn batch_write_item(
     let unprocessed_items = serde_json::Map::new();
 
     for (table_name, requests) in request_items {
-        let requests_arr = requests
-            .as_array()
-            .ok_or_else(|| AwsError::validation(format!("Requests for {table_name} must be an array")))?;
+        let requests_arr = requests.as_array().ok_or_else(|| {
+            AwsError::validation(format!("Requests for {table_name} must be an array"))
+        })?;
 
         let mut table = match state.tables.get_mut(table_name.as_str()) {
             Some(t) => t,

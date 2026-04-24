@@ -120,12 +120,8 @@ mod tests {
     fn test_delete_nonexistent_log_group() {
         let svc = CloudWatchLogsService::new();
         let ctx = ctx();
-        let err = block_on(svc.handle(
-            "DeleteLogGroup",
-            json!({ "logGroupName": "/ghost" }),
-            &ctx,
-        ))
-        .unwrap_err();
+        let err = block_on(svc.handle("DeleteLogGroup", json!({ "logGroupName": "/ghost" }), &ctx))
+            .unwrap_err();
         assert_eq!(err.code, "ResourceNotFoundException");
     }
 
@@ -141,9 +137,24 @@ mod tests {
     fn test_describe_log_groups_prefix_filter() {
         let svc = CloudWatchLogsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateLogGroup", json!({ "logGroupName": "/app/foo" }), &ctx)).unwrap();
-        block_on(svc.handle("CreateLogGroup", json!({ "logGroupName": "/app/bar" }), &ctx)).unwrap();
-        block_on(svc.handle("CreateLogGroup", json!({ "logGroupName": "/other/baz" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/app/foo" }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/app/bar" }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/other/baz" }),
+            &ctx,
+        ))
+        .unwrap();
 
         let result = block_on(svc.handle(
             "DescribeLogGroups",
@@ -158,7 +169,12 @@ mod tests {
     fn test_put_retention_policy() {
         let svc = CloudWatchLogsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateLogGroup", json!({ "logGroupName": "/ret/group" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/ret/group" }),
+            &ctx,
+        ))
+        .unwrap();
 
         block_on(svc.handle(
             "PutRetentionPolicy",
@@ -176,7 +192,12 @@ mod tests {
     fn test_put_retention_policy_invalid_days() {
         let svc = CloudWatchLogsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateLogGroup", json!({ "logGroupName": "/ret2/group" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/ret2/group" }),
+            &ctx,
+        ))
+        .unwrap();
 
         let err = block_on(svc.handle(
             "PutRetentionPolicy",
@@ -191,7 +212,12 @@ mod tests {
     fn test_delete_retention_policy() {
         let svc = CloudWatchLogsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateLogGroup", json!({ "logGroupName": "/delret/group" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/delret/group" }),
+            &ctx,
+        ))
+        .unwrap();
         block_on(svc.handle(
             "PutRetentionPolicy",
             json!({ "logGroupName": "/delret/group", "retentionInDays": 30 }),
@@ -215,7 +241,12 @@ mod tests {
     fn test_tag_untag_log_group() {
         let svc = CloudWatchLogsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateLogGroup", json!({ "logGroupName": "/tag/group" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/tag/group" }),
+            &ctx,
+        ))
+        .unwrap();
 
         block_on(svc.handle(
             "TagLogGroup",
@@ -256,7 +287,12 @@ mod tests {
     fn test_create_log_stream() {
         let svc = CloudWatchLogsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateLogGroup", json!({ "logGroupName": "/stream/group" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/stream/group" }),
+            &ctx,
+        ))
+        .unwrap();
 
         block_on(svc.handle(
             "CreateLogStream",
@@ -270,7 +306,12 @@ mod tests {
     fn test_create_log_stream_duplicate() {
         let svc = CloudWatchLogsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateLogGroup", json!({ "logGroupName": "/dup/stream/group" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/dup/stream/group" }),
+            &ctx,
+        ))
+        .unwrap();
 
         block_on(svc.handle(
             "CreateLogStream",
@@ -292,7 +333,12 @@ mod tests {
     fn test_delete_log_stream() {
         let svc = CloudWatchLogsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateLogGroup", json!({ "logGroupName": "/del/stream/group" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/del/stream/group" }),
+            &ctx,
+        ))
+        .unwrap();
         block_on(svc.handle(
             "CreateLogStream",
             json!({ "logGroupName": "/del/stream/group", "logStreamName": "del-stream" }),
@@ -320,7 +366,12 @@ mod tests {
     fn test_describe_log_streams_prefix() {
         let svc = CloudWatchLogsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateLogGroup", json!({ "logGroupName": "/desc/streams" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/desc/streams" }),
+            &ctx,
+        ))
+        .unwrap();
 
         for name in &["app-stream-1", "app-stream-2", "other-stream"] {
             block_on(svc.handle(
@@ -521,7 +572,12 @@ mod tests {
     fn test_log_group_arn_format() {
         let svc = CloudWatchLogsService::new();
         let ctx = ctx();
-        block_on(svc.handle("CreateLogGroup", json!({ "logGroupName": "/arn/check" }), &ctx)).unwrap();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/arn/check" }),
+            &ctx,
+        ))
+        .unwrap();
 
         let result = block_on(svc.handle("DescribeLogGroups", json!({}), &ctx)).unwrap();
         let group = &result["logGroups"].as_array().unwrap()[0];

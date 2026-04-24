@@ -28,7 +28,10 @@ fn device_to_value(d: &DeviceInfo) -> Value {
     })
 }
 
-fn get_username_from_token<'a>(state: &'a CognitoState, token: &str) -> Result<(String, String), AwsError> {
+fn get_username_from_token<'a>(
+    state: &'a CognitoState,
+    token: &str,
+) -> Result<(String, String), AwsError> {
     let username = jwt::extract_username_from_access_token(token)
         .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
 
@@ -38,7 +41,10 @@ fn get_username_from_token<'a>(state: &'a CognitoState, token: &str) -> Result<(
             return Ok((pool_ref.id.clone(), username));
         }
     }
-    Err(AwsError::not_found("UserNotFoundException", format!("User not found: {username}")))
+    Err(AwsError::not_found(
+        "UserNotFoundException",
+        format!("User not found: {username}"),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -61,12 +67,16 @@ pub fn confirm_device(
     let (pool_id, username) = get_username_from_token(state, token)?;
     let now = now_epoch();
 
-    let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", "User pool not found")
-    })?;
+    let mut pool = state
+        .user_pools
+        .get_mut(&pool_id)
+        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "User pool not found"))?;
 
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
     })?;
 
     // Remove existing device with same key if present
@@ -104,15 +114,27 @@ pub fn get_device(
 
     let (pool_id, username) = get_username_from_token(state, token)?;
 
-    let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", "User pool not found")
-    })?;
+    let pool = state
+        .user_pools
+        .get(&pool_id)
+        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "User pool not found"))?;
     let user = pool.users.get(&username).ok_or_else(|| {
-        AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
     })?;
 
-    let device = user.devices.iter().find(|d| d.device_key == device_key)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Device not found: {device_key}")))?;
+    let device = user
+        .devices
+        .iter()
+        .find(|d| d.device_key == device_key)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Device not found: {device_key}"),
+            )
+        })?;
 
     Ok(json!({ "Device": device_to_value(device) }))
 }
@@ -133,14 +155,23 @@ pub fn list_devices(
 
     let (pool_id, username) = get_username_from_token(state, token)?;
 
-    let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", "User pool not found")
-    })?;
+    let pool = state
+        .user_pools
+        .get(&pool_id)
+        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "User pool not found"))?;
     let user = pool.users.get(&username).ok_or_else(|| {
-        AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
     })?;
 
-    let devices: Vec<Value> = user.devices.iter().take(limit).map(device_to_value).collect();
+    let devices: Vec<Value> = user
+        .devices
+        .iter()
+        .take(limit)
+        .map(device_to_value)
+        .collect();
     Ok(json!({ "Devices": devices }))
 }
 
@@ -159,20 +190,34 @@ pub fn update_device_status(
     let device_key = input["DeviceKey"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DeviceKey is required"))?;
-    let status = input["DeviceRememberedStatus"].as_str().unwrap_or("remembered");
+    let status = input["DeviceRememberedStatus"]
+        .as_str()
+        .unwrap_or("remembered");
 
     let (pool_id, username) = get_username_from_token(state, token)?;
     let now = now_epoch();
 
-    let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", "User pool not found")
-    })?;
+    let mut pool = state
+        .user_pools
+        .get_mut(&pool_id)
+        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "User pool not found"))?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
     })?;
 
-    let device = user.devices.iter_mut().find(|d| d.device_key == device_key)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Device not found: {device_key}")))?;
+    let device = user
+        .devices
+        .iter_mut()
+        .find(|d| d.device_key == device_key)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Device not found: {device_key}"),
+            )
+        })?;
 
     device.remembered = status == "remembered";
     device.last_modified_date = now;
@@ -199,17 +244,24 @@ pub fn forget_device(
 
     let (pool_id, username) = get_username_from_token(state, token)?;
 
-    let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", "User pool not found")
-    })?;
+    let mut pool = state
+        .user_pools
+        .get_mut(&pool_id)
+        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "User pool not found"))?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
     })?;
 
     let len_before = user.devices.len();
     user.devices.retain(|d| d.device_key != device_key);
     if user.devices.len() == len_before {
-        return Err(AwsError::not_found("ResourceNotFoundException", format!("Device not found: {device_key}")));
+        return Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Device not found: {device_key}"),
+        ));
     }
 
     info!(username = %username, device_key = %device_key, "Cognito: forgot device");
@@ -236,13 +288,27 @@ pub fn admin_get_device(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DeviceKey is required"))?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
     let user = pool.users.get(username).ok_or_else(|| {
-        AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
     })?;
-    let device = user.devices.iter().find(|d| d.device_key == device_key)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Device not found: {device_key}")))?;
+    let device = user
+        .devices
+        .iter()
+        .find(|d| d.device_key == device_key)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Device not found: {device_key}"),
+            )
+        })?;
 
     Ok(json!({ "Device": device_to_value(device) }))
 }
@@ -265,13 +331,24 @@ pub fn admin_list_devices(
     let limit = input["Limit"].as_u64().unwrap_or(60) as usize;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
     let user = pool.users.get(username).ok_or_else(|| {
-        AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
     })?;
 
-    let devices: Vec<Value> = user.devices.iter().take(limit).map(device_to_value).collect();
+    let devices: Vec<Value> = user
+        .devices
+        .iter()
+        .take(limit)
+        .map(device_to_value)
+        .collect();
     Ok(json!({ "Devices": devices }))
 }
 
@@ -293,17 +370,33 @@ pub fn admin_update_device_status(
     let device_key = input["DeviceKey"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DeviceKey is required"))?;
-    let status = input["DeviceRememberedStatus"].as_str().unwrap_or("remembered");
+    let status = input["DeviceRememberedStatus"]
+        .as_str()
+        .unwrap_or("remembered");
 
     let now = now_epoch();
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
     })?;
-    let device = user.devices.iter_mut().find(|d| d.device_key == device_key)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Device not found: {device_key}")))?;
+    let device = user
+        .devices
+        .iter_mut()
+        .find(|d| d.device_key == device_key)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Device not found: {device_key}"),
+            )
+        })?;
 
     device.remembered = status == "remembered";
     device.last_modified_date = now;
@@ -332,16 +425,25 @@ pub fn admin_forget_device(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DeviceKey is required"))?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found("ResourceNotFoundException", format!("User pool not found: {pool_id}"))
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
     })?;
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::not_found("UserNotFoundException", format!("User not found: {username}"))
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
     })?;
 
     let len_before = user.devices.len();
     user.devices.retain(|d| d.device_key != device_key);
     if user.devices.len() == len_before {
-        return Err(AwsError::not_found("ResourceNotFoundException", format!("Device not found: {device_key}")));
+        return Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Device not found: {device_key}"),
+        ));
     }
 
     info!(username = %username, pool_id = %pool_id, device_key = %device_key, "Cognito: admin forgot device");

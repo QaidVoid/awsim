@@ -11,13 +11,15 @@ pub fn create_stage(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
     let stage_name = input["StageName"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: StageName"))?
+        .ok_or_else(|| {
+            AwsError::bad_request("BadRequestException", "Missing required field: StageName")
+        })?
         .to_string();
 
     let auto_deploy = input["AutoDeploy"].as_bool().unwrap_or(false);
@@ -36,7 +38,10 @@ pub fn create_stage(
     };
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     api.stages.insert(stage_name.clone(), stage);
@@ -56,16 +61,19 @@ pub fn get_stage(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
-    let stage_name = input["StageName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: StageName"))?;
+    let stage_name = input["StageName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: StageName")
+    })?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     let stage = api.stages.get(stage_name).ok_or_else(|| {
@@ -80,12 +88,15 @@ pub fn get_stages(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     let items: Vec<Value> = api.stages.values().map(stage_to_json).collect();
@@ -98,16 +109,19 @@ pub fn delete_stage(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
-    let stage_name = input["StageName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: StageName"))?;
+    let stage_name = input["StageName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: StageName")
+    })?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     api.stages.remove(stage_name).ok_or_else(|| {

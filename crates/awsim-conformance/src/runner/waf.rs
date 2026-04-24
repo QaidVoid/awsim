@@ -119,11 +119,7 @@ pub async fn test_waf(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     // CheckCapacity
     results.push(chk!(
         "CheckCapacity",
-        client
-            .check_capacity()
-            .scope(scope.clone())
-            .send()
-            .await,
+        client.check_capacity().scope(scope.clone()).send().await,
         verbose
     ));
 

@@ -117,11 +117,7 @@ impl StsService {
         }))
     }
 
-    fn get_federation_token(
-        &self,
-        input: &Value,
-        ctx: &RequestContext,
-    ) -> Result<Value, AwsError> {
+    fn get_federation_token(&self, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
         let name = input["Name"]
             .as_str()
             .ok_or_else(|| AwsError::validation("Name is required"))?;
@@ -135,8 +131,7 @@ impl StsService {
         debug!(name = %name, duration, "GetFederationToken");
 
         let credentials = generate_credentials(duration);
-        let federated_user_arn =
-            format!("arn:aws:sts::{}:federated-user/{}", ctx.account_id, name);
+        let federated_user_arn = format!("arn:aws:sts::{}:federated-user/{}", ctx.account_id, name);
         let federated_user_id = format!("{}:{}", ctx.account_id, name);
 
         Ok(json!({
@@ -182,11 +177,7 @@ impl StsService {
         }))
     }
 
-    fn get_access_key_info(
-        &self,
-        input: &Value,
-        ctx: &RequestContext,
-    ) -> Result<Value, AwsError> {
+    fn get_access_key_info(&self, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
         let key = input["AccessKeyId"]
             .as_str()
             .ok_or_else(|| AwsError::validation("AccessKeyId is required"))?;
@@ -221,10 +212,7 @@ impl StsService {
             .as_str()
             .ok_or_else(|| AwsError::validation("SAMLAssertion is required"))?;
 
-        let session_name = role_arn
-            .split('/')
-            .last()
-            .unwrap_or("SAMLSession");
+        let session_name = role_arn.split('/').last().unwrap_or("SAMLSession");
 
         let duration = input["DurationSeconds"]
             .as_str()
@@ -349,9 +337,7 @@ fn unix_to_iso8601(secs: u64) -> String {
     // Gregorian calendar calculation from days since 1970-01-01
     let (year, month, day) = days_to_ymd(remaining);
 
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
 /// Convert days since 1970-01-01 to (year, month, day).
@@ -387,16 +373,14 @@ fn generate_assumed_role_output(
     account_id: &str,
     duration_seconds: u64,
 ) -> (Value, Value) {
-    let role_id_suffix = uuid::Uuid::new_v4().simple().to_string()[..20]
-        .to_uppercase();
+    let role_id_suffix = uuid::Uuid::new_v4().simple().to_string()[..20].to_uppercase();
     let assumed_role_id = format!("AROA{role_id_suffix}:{session_name}");
 
     // Derive the assumed-role ARN from the role ARN.
     // role ARN format: arn:aws:iam::ACCOUNT:role/ROLE-NAME
     let role_name = role_arn.split('/').last().unwrap_or("unknown-role");
-    let assumed_role_arn = format!(
-        "arn:aws:sts::{account_id}:assumed-role/{role_name}/{session_name}"
-    );
+    let assumed_role_arn =
+        format!("arn:aws:sts::{account_id}:assumed-role/{role_name}/{session_name}");
 
     let credentials = generate_credentials(duration_seconds);
     let assumed_role_user = json!({
@@ -473,8 +457,18 @@ mod tests {
         assert!(!creds["Expiration"].as_str().unwrap().is_empty());
 
         let aru = &result["AssumedRoleUser"];
-        assert!(aru["Arn"].as_str().unwrap().contains("assumed-role/MyRole/test-session"));
-        assert!(aru["AssumedRoleId"].as_str().unwrap().contains("test-session"));
+        assert!(
+            aru["Arn"]
+                .as_str()
+                .unwrap()
+                .contains("assumed-role/MyRole/test-session")
+        );
+        assert!(
+            aru["AssumedRoleId"]
+                .as_str()
+                .unwrap()
+                .contains("test-session")
+        );
     }
 
     #[test]
@@ -514,7 +508,12 @@ mod tests {
         let creds = &result["Credentials"];
         assert!(creds["AccessKeyId"].as_str().unwrap().starts_with("ASIA"));
         let aru = &result["AssumedRoleUser"];
-        assert!(aru["Arn"].as_str().unwrap().contains("assumed-role/SAMLRole"));
+        assert!(
+            aru["Arn"]
+                .as_str()
+                .unwrap()
+                .contains("assumed-role/SAMLRole")
+        );
     }
 
     #[test]
@@ -533,7 +532,9 @@ mod tests {
     fn futures_executor_block_on<F: std::future::Future>(f: F) -> F::Output {
         use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
-        fn noop_clone(_: *const ()) -> RawWaker { noop_raw_waker() }
+        fn noop_clone(_: *const ()) -> RawWaker {
+            noop_raw_waker()
+        }
         fn noop(_: *const ()) {}
         fn noop_raw_waker() -> RawWaker {
             static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);

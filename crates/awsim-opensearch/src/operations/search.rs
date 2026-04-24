@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::state::OpenSearchState;
 
@@ -11,14 +11,13 @@ use crate::state::OpenSearchState;
 /// - `bool` queries with `must`, `should`, `filter`
 /// - `term` queries (exact match)
 /// - `query_string` queries
-pub fn search(
-    state: &OpenSearchState,
-    index_pattern: &str,
-    body: &Value,
-) -> (u16, Value) {
+pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u16, Value) {
     let size = body["size"].as_u64().unwrap_or(10) as usize;
     let from = body["from"].as_u64().unwrap_or(0) as usize;
-    let query = body.get("query").cloned().unwrap_or(json!({"match_all": {}}));
+    let query = body
+        .get("query")
+        .cloned()
+        .unwrap_or(json!({"match_all": {}}));
 
     // Resolve index pattern (support wildcards like "captify-*")
     let matching_indices: Vec<String> = if index_pattern.contains('*') {
@@ -89,12 +88,11 @@ pub fn search(
 }
 
 /// Count documents matching a query.
-pub fn count(
-    state: &OpenSearchState,
-    index_name: &str,
-    body: &Value,
-) -> (u16, Value) {
-    let query = body.get("query").cloned().unwrap_or(json!({"match_all": {}}));
+pub fn count(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, Value) {
+    let query = body
+        .get("query")
+        .cloned()
+        .unwrap_or(json!({"match_all": {}}));
 
     // Resolve alias if needed
     let resolved: Vec<String> = if let Some(aliased) = state.aliases.get(index_name) {
@@ -151,11 +149,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
             let fields = mm
                 .get("fields")
                 .and_then(|f| f.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                })
+                .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
                 .unwrap_or_default();
 
             let mut best_score = 0.0;
@@ -231,15 +225,26 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
                 }
             }
 
-            return if total_score > 0.0 { total_score } else if must_pass { 1.0 } else { 0.0 };
+            return if total_score > 0.0 {
+                total_score
+            } else if must_pass {
+                1.0
+            } else {
+                0.0
+            };
         }
 
         // query_string: { "query": "text" }
         if let Some(qs) = obj.get("query_string").and_then(|q| q.as_object()) {
             let query_text = qs.get("query").and_then(|q| q.as_str()).unwrap_or("");
-            let doc_str = serde_json::to_string(doc).unwrap_or_default().to_lowercase();
+            let doc_str = serde_json::to_string(doc)
+                .unwrap_or_default()
+                .to_lowercase();
             let query_lower = query_text.to_lowercase();
-            return if query_lower.split_whitespace().any(|term| doc_str.contains(term)) {
+            return if query_lower
+                .split_whitespace()
+                .any(|term| doc_str.contains(term))
+            {
                 0.5
             } else {
                 0.0
@@ -314,13 +319,16 @@ mod tests {
         docs.insert("2".to_string(), json!({"title": "Python Guide", "body": "Python is great for data science", "tags": ["python", "data"]}));
         docs.insert("3".to_string(), json!({"title": "AWS Lambda", "body": "Serverless computing with AWS Lambda and Rust", "tags": ["aws", "lambda", "rust"]}));
 
-        state.indices.insert("articles".to_string(), OpenSearchIndex {
-            name: "articles".to_string(),
-            mappings: json!({}),
-            settings: json!({}),
-            documents: docs,
-            created_at: "2026-01-01".to_string(),
-        });
+        state.indices.insert(
+            "articles".to_string(),
+            OpenSearchIndex {
+                name: "articles".to_string(),
+                mappings: json!({}),
+                settings: json!({}),
+                documents: docs,
+                created_at: "2026-01-01".to_string(),
+            },
+        );
         state
     }
 
@@ -335,18 +343,29 @@ mod tests {
     #[test]
     fn test_match_query() {
         let state = test_state();
-        let (_, result) = search(&state, "articles", &json!({"query": {"match": {"title": "Rust"}}}));
+        let (_, result) = search(
+            &state,
+            "articles",
+            &json!({"query": {"match": {"title": "Rust"}}}),
+        );
         let hits = result["hits"]["hits"].as_array().unwrap();
         assert!(!hits.is_empty());
-        assert!(hits.iter().any(|h| h["_source"]["title"].as_str().unwrap().contains("Rust")));
+        assert!(
+            hits.iter()
+                .any(|h| h["_source"]["title"].as_str().unwrap().contains("Rust"))
+        );
     }
 
     #[test]
     fn test_multi_match() {
         let state = test_state();
-        let (_, result) = search(&state, "articles", &json!({
-            "query": {"multi_match": {"query": "Rust", "fields": ["title^2", "body"]}}
-        }));
+        let (_, result) = search(
+            &state,
+            "articles",
+            &json!({
+                "query": {"multi_match": {"query": "Rust", "fields": ["title^2", "body"]}}
+            }),
+        );
         let hits = result["hits"]["hits"].as_array().unwrap();
         assert_eq!(hits.len(), 2); // "Rust Programming" and "AWS Lambda" (body mentions Rust)
     }
@@ -354,9 +373,13 @@ mod tests {
     #[test]
     fn test_bool_must() {
         let state = test_state();
-        let (_, result) = search(&state, "articles", &json!({
-            "query": {"bool": {"must": [{"match": {"body": "Rust"}}, {"match": {"body": "Lambda"}}]}}
-        }));
+        let (_, result) = search(
+            &state,
+            "articles",
+            &json!({
+                "query": {"bool": {"must": [{"match": {"body": "Rust"}}, {"match": {"body": "Lambda"}}]}}
+            }),
+        );
         let hits = result["hits"]["hits"].as_array().unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0]["_source"]["title"], "AWS Lambda");
@@ -372,7 +395,11 @@ mod tests {
     #[test]
     fn test_pagination() {
         let state = test_state();
-        let (_, result) = search(&state, "articles", &json!({"query": {"match_all": {}}, "size": 2, "from": 0}));
+        let (_, result) = search(
+            &state,
+            "articles",
+            &json!({"query": {"match_all": {}}, "size": 2, "from": 0}),
+        );
         let hits = result["hits"]["hits"].as_array().unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!(result["hits"]["total"]["value"], 3);

@@ -8,9 +8,9 @@ pub fn tag_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["resourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "resourceArn is required"))?;
+    let arn = input["resourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "resourceArn is required")
+    })?;
     let mut entry = state.resource_tags.entry(arn.to_string()).or_default();
     if let Some(tags) = input["tags"].as_object() {
         for (k, v) in tags {
@@ -27,9 +27,9 @@ pub fn untag_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["resourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "resourceArn is required"))?;
+    let arn = input["resourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "resourceArn is required")
+    })?;
     if let Some(mut t) = state.resource_tags.get_mut(arn) {
         if let Some(keys) = input["tagKeys"].as_array() {
             for k in keys {
@@ -47,9 +47,13 @@ pub fn list_tags_for_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["resourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "resourceArn is required"))?;
-    let tags = state.resource_tags.get(arn).map(|t| t.clone()).unwrap_or_default();
+    let arn = input["resourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "resourceArn is required")
+    })?;
+    let tags = state
+        .resource_tags
+        .get(arn)
+        .map(|t| t.clone())
+        .unwrap_or_default();
     Ok(json!({ "tags": tags }))
 }

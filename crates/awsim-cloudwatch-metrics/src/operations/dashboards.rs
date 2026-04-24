@@ -14,9 +14,7 @@ pub fn put_dashboard(
     let name = input
         .get("DashboardName")
         .and_then(Value::as_str)
-        .ok_or_else(|| {
-            AwsError::bad_request("InvalidParameterValue", "DashboardName is required")
-        })?
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterValue", "DashboardName is required"))?
         .to_string();
     let body = input
         .get("DashboardBody")
@@ -44,15 +42,12 @@ pub fn get_dashboard(
             AwsError::bad_request("InvalidParameterValue", "DashboardName is required")
         })?;
 
-    let dashboard = state
-        .dashboards
-        .get(name)
-        .ok_or_else(|| {
-            AwsError::not_found(
-                "ResourceNotFoundException",
-                format!("Dashboard {name} not found"),
-            )
-        })?;
+    let dashboard = state.dashboards.get(name).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Dashboard {name} not found"),
+        )
+    })?;
 
     Ok(json!({
         "DashboardName": dashboard.name,

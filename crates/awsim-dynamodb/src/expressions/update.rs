@@ -83,9 +83,10 @@ fn parse_update_expression(
             let abs_pos = start + pos;
             // Make sure this is a word boundary (not inside a name)
             let is_word_boundary = abs_pos == 0
-                || upper.chars().nth(abs_pos - 1).map_or(true, |c| {
-                    !c.is_alphanumeric() && c != '_'
-                });
+                || upper
+                    .chars()
+                    .nth(abs_pos - 1)
+                    .map_or(true, |c| !c.is_alphanumeric() && c != '_');
             if is_word_boundary {
                 clauses.push((kw.trim().to_string(), abs_pos));
             }
@@ -238,10 +239,8 @@ fn evaluate_value_expr(
     // Check for arithmetic: path + :val or path - :val
     // Look for + or - at the top level (not inside parens)
     if let Some((left_expr, op, right_expr)) = find_top_level_arithmetic(expr) {
-        let left_val =
-            evaluate_value_expr(&left_expr, item, expr_attr_names, expr_attr_values)?;
-        let right_val =
-            evaluate_value_expr(&right_expr, item, expr_attr_names, expr_attr_values)?;
+        let left_val = evaluate_value_expr(&left_expr, item, expr_attr_names, expr_attr_values)?;
+        let right_val = evaluate_value_expr(&right_expr, item, expr_attr_names, expr_attr_values)?;
 
         let ln = extract_num(&left_val).unwrap_or(0.0);
         let rn = extract_num(&right_val).unwrap_or(0.0);
@@ -259,12 +258,11 @@ fn evaluate_value_expr(
     // Simple placeholder
     if let Some(placeholder) = expr.strip_prefix(':') {
         let full = format!(":{placeholder}");
-        return expr_attr_values
-            .get(&full)
-            .cloned()
-            .ok_or_else(|| {
-                AwsError::validation(format!("Value {full} not found in ExpressionAttributeValues"))
-            });
+        return expr_attr_values.get(&full).cloned().ok_or_else(|| {
+            AwsError::validation(format!(
+                "Value {full} not found in ExpressionAttributeValues"
+            ))
+        });
     }
 
     // Path reference
@@ -321,7 +319,9 @@ fn get_nested_val<'a>(item: &'a DynamoItem, path: &str) -> Option<&'a Value> {
     let mut current: Option<&Value> = item.get(parts[0]);
     for part in &parts[1..] {
         current = current.and_then(|v| {
-            v.get("M").and_then(|m| m.as_object()).and_then(|m| m.get(*part))
+            v.get("M")
+                .and_then(|m| m.as_object())
+                .and_then(|m| m.get(*part))
         });
     }
     current
@@ -404,8 +404,8 @@ fn apply_add(item: &mut DynamoItem, path: &str, value: &Value) -> Result<(), Aws
                 existing.get("N").and_then(|v| v.as_str()),
                 value.get("N").and_then(|v| v.as_str()),
             ) {
-                let result: f64 = en.parse::<f64>().unwrap_or(0.0)
-                    + vn.parse::<f64>().unwrap_or(0.0);
+                let result: f64 =
+                    en.parse::<f64>().unwrap_or(0.0) + vn.parse::<f64>().unwrap_or(0.0);
                 let s = if result.fract() == 0.0 {
                     format!("{}", result as i64)
                 } else {

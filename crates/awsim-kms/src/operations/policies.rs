@@ -2,8 +2,8 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::error;
-use crate::state::KmsState;
 use crate::operations::keys::resolve_key_id;
+use crate::state::KmsState;
 
 const DEFAULT_POLICY_NAME: &str = "default";
 
@@ -20,12 +20,13 @@ pub fn get_key_policy(
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
 
-    let policy_name = input["PolicyName"]
-        .as_str()
-        .unwrap_or(DEFAULT_POLICY_NAME);
+    let policy_name = input["PolicyName"].as_str().unwrap_or(DEFAULT_POLICY_NAME);
 
     let resolved_id = resolve_key_id(state, key_id_input)?;
-    let key = state.keys.get(&resolved_id).ok_or_else(|| error::not_found("Key"))?;
+    let key = state
+        .keys
+        .get(&resolved_id)
+        .ok_or_else(|| error::not_found("Key"))?;
 
     let policy = key
         .policies
@@ -49,22 +50,24 @@ pub fn put_key_policy(
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
 
-    let policy_name = input["PolicyName"]
-        .as_str()
-        .unwrap_or(DEFAULT_POLICY_NAME);
+    let policy_name = input["PolicyName"].as_str().unwrap_or(DEFAULT_POLICY_NAME);
 
     let policy = input["Policy"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("Policy"))?;
 
     let resolved_id = resolve_key_id(state, key_id_input)?;
-    let mut key = state.keys.get_mut(&resolved_id).ok_or_else(|| error::not_found("Key"))?;
+    let mut key = state
+        .keys
+        .get_mut(&resolved_id)
+        .ok_or_else(|| error::not_found("Key"))?;
 
     if key.key_state == "PendingDeletion" {
         return Err(error::key_pending_deletion(&resolved_id));
     }
 
-    key.policies.insert(policy_name.to_string(), policy.to_string());
+    key.policies
+        .insert(policy_name.to_string(), policy.to_string());
 
     Ok(json!({}))
 }

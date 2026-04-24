@@ -9,9 +9,9 @@ use crate::{
 };
 
 fn validate_policy_document(doc: &str) -> Result<(), AwsError> {
-    awsim_iam_policy::parse(doc).map(|_| ()).map_err(|e| {
-        malformed_policy_document(format!("Syntax errors in policy. {e}"))
-    })
+    awsim_iam_policy::parse(doc)
+        .map(|_| ())
+        .map_err(|e| malformed_policy_document(format!("Syntax errors in policy. {e}")))
 }
 
 use super::{opt_str, require_str};
@@ -49,10 +49,7 @@ pub fn create_role(
     }
 
     let role_id = new_role_id();
-    let arn = format!(
-        "arn:aws:iam::{}:role{}{}",
-        ctx.account_id, path, role_name
-    );
+    let arn = format!("arn:aws:iam::{}:role{}{}", ctx.account_id, path, role_name);
 
     let max_session_duration = input
         .get("MaxSessionDuration")
@@ -195,7 +192,10 @@ pub fn put_role_permissions_boundary(state: &IamState, input: &Value) -> Result<
     Ok(json!({}))
 }
 
-pub fn delete_role_permissions_boundary(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+pub fn delete_role_permissions_boundary(
+    state: &IamState,
+    input: &Value,
+) -> Result<Value, AwsError> {
     let role_name = require_str(input, "RoleName")?;
     if !state.roles.contains_key(role_name) {
         return Err(no_such_entity("Role", role_name));

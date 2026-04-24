@@ -54,7 +54,9 @@ pub fn create_target_group(
         })
         .unwrap_or(80);
     let vpc_id = opt_str(input, "VpcId").unwrap_or("").to_string();
-    let target_type = opt_str(input, "TargetType").unwrap_or("instance").to_string();
+    let target_type = opt_str(input, "TargetType")
+        .unwrap_or("instance")
+        .to_string();
 
     let arn = tg_arn(&ctx.region, &ctx.account_id, &name);
 
@@ -252,10 +254,7 @@ fn parse_attribute_list(input: &Value) -> Vec<AttributeKeyValue> {
     result
 }
 
-pub fn modify_target_group_attributes(
-    state: &ElbState,
-    input: &Value,
-) -> Result<Value, AwsError> {
+pub fn modify_target_group_attributes(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
     let arn = require_str(input, "TargetGroupArn")?;
 
     if !state.target_groups.contains_key(arn) {
@@ -287,7 +286,10 @@ fn parse_targets(input: &Value) -> Vec<Target> {
                             Value::String(s) => s.parse().ok(),
                             _ => None,
                         });
-                        targets.push(Target { id: id.to_string(), port });
+                        targets.push(Target {
+                            id: id.to_string(),
+                            port,
+                        });
                     }
                 }
             }
@@ -307,7 +309,10 @@ fn parse_targets(input: &Value) -> Vec<Target> {
                             Value::String(s) => s.parse().ok(),
                             _ => None,
                         });
-                        targets.push(Target { id: id.to_string(), port });
+                        targets.push(Target {
+                            id: id.to_string(),
+                            port,
+                        });
                     }
                 }
             }

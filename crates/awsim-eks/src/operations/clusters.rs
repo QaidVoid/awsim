@@ -17,7 +17,10 @@ pub fn create_cluster(
             format!("Cluster {name} already exists"),
         ));
     }
-    let arn = format!("arn:aws:eks:{}:{}:cluster/{}", ctx.region, ctx.account_id, name);
+    let arn = format!(
+        "arn:aws:eks:{}:{}:cluster/{}",
+        ctx.region, ctx.account_id, name
+    );
     let cluster = Cluster {
         name: name.to_string(),
         arn: arn.clone(),
@@ -33,7 +36,11 @@ pub fn create_cluster(
         platform_version: "eks.1".to_string(),
         tags: input["tags"]
             .as_object()
-            .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
             .unwrap_or_default(),
         created_at: now_secs(),
     };
@@ -49,10 +56,12 @@ pub fn describe_cluster(
     let name = input["name"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "name is required"))?;
-    let c = state
-        .clusters
-        .get(name)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Cluster {name} not found")))?;
+    let c = state.clusters.get(name).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Cluster {name} not found"),
+        )
+    })?;
     Ok(json!({ "cluster": serialize_cluster(&c) }))
 }
 
@@ -64,10 +73,12 @@ pub fn delete_cluster(
     let name = input["name"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "name is required"))?;
-    let (_, c) = state
-        .clusters
-        .remove(name)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Cluster {name} not found")))?;
+    let (_, c) = state.clusters.remove(name).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Cluster {name} not found"),
+        )
+    })?;
     Ok(json!({ "cluster": serialize_cluster(&c) }))
 }
 
@@ -88,10 +99,12 @@ pub fn update_cluster_config(
     let name = input["name"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "name is required"))?;
-    let mut c = state
-        .clusters
-        .get_mut(name)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Cluster {name} not found")))?;
+    let mut c = state.clusters.get_mut(name).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Cluster {name} not found"),
+        )
+    })?;
     if let Some(l) = input.get("logging") {
         c.logging = l.clone();
     }

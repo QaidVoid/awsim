@@ -23,10 +23,7 @@ pub fn tag_resource(
         .as_object()
         .ok_or_else(|| AwsError::bad_request("ValidationException", "Tags is required"))?;
 
-    let mut tags_entry = state
-        .tags
-        .entry(resource_arn)
-        .or_insert_with(HashMap::new);
+    let mut tags_entry = state.tags.entry(resource_arn).or_insert_with(HashMap::new);
 
     for (k, v) in tags_input {
         if let Some(val) = v.as_str() {

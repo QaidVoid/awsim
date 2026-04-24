@@ -49,7 +49,11 @@ pub struct AcmState {
 impl AcmState {
     pub fn to_snapshot(&self) -> AcmStateSnapshot {
         AcmStateSnapshot {
-            certificates: self.certificates.iter().map(|e| e.value().clone()).collect(),
+            certificates: self
+                .certificates
+                .iter()
+                .map(|e| e.value().clone())
+                .collect(),
         }
     }
 

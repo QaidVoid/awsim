@@ -46,12 +46,8 @@ mod tests {
     fn test_create_event_bus() {
         let svc = EventBridgeService::new();
         let ctx = ctx();
-        let result = block_on(svc.handle(
-            "CreateEventBus",
-            json!({ "Name": "my-bus" }),
-            &ctx,
-        ))
-        .unwrap();
+        let result =
+            block_on(svc.handle("CreateEventBus", json!({ "Name": "my-bus" }), &ctx)).unwrap();
         let arn = result["EventBusArn"].as_str().unwrap();
         assert!(
             arn.starts_with("arn:aws:events:us-east-1:000000000000:event-bus/my-bus"),
@@ -63,12 +59,8 @@ mod tests {
     fn test_create_default_bus_rejected() {
         let svc = EventBridgeService::new();
         let ctx = ctx();
-        let err = block_on(svc.handle(
-            "CreateEventBus",
-            json!({ "Name": "default" }),
-            &ctx,
-        ))
-        .unwrap_err();
+        let err =
+            block_on(svc.handle("CreateEventBus", json!({ "Name": "default" }), &ctx)).unwrap_err();
         assert_eq!(err.code, "InvalidParameterValue");
     }
 
@@ -77,12 +69,8 @@ mod tests {
         let svc = EventBridgeService::new();
         let ctx = ctx();
         block_on(svc.handle("CreateEventBus", json!({ "Name": "dup-bus" }), &ctx)).unwrap();
-        let err = block_on(svc.handle(
-            "CreateEventBus",
-            json!({ "Name": "dup-bus" }),
-            &ctx,
-        ))
-        .unwrap_err();
+        let err =
+            block_on(svc.handle("CreateEventBus", json!({ "Name": "dup-bus" }), &ctx)).unwrap_err();
         assert_eq!(err.code, "ResourceAlreadyExistsException");
     }
 
@@ -92,7 +80,12 @@ mod tests {
         let ctx = ctx();
         let result = block_on(svc.handle("DescribeEventBus", json!({}), &ctx)).unwrap();
         assert_eq!(result["Name"].as_str().unwrap(), "default");
-        assert!(result["Arn"].as_str().unwrap().ends_with("event-bus/default"));
+        assert!(
+            result["Arn"]
+                .as_str()
+                .unwrap()
+                .ends_with("event-bus/default")
+        );
     }
 
     #[test]
@@ -110,12 +103,8 @@ mod tests {
         let ctx = ctx();
         block_on(svc.handle("CreateEventBus", json!({ "Name": "del-bus" }), &ctx)).unwrap();
         block_on(svc.handle("DeleteEventBus", json!({ "Name": "del-bus" }), &ctx)).unwrap();
-        let err = block_on(svc.handle(
-            "DescribeEventBus",
-            json!({ "Name": "del-bus" }),
-            &ctx,
-        ))
-        .unwrap_err();
+        let err = block_on(svc.handle("DescribeEventBus", json!({ "Name": "del-bus" }), &ctx))
+            .unwrap_err();
         assert_eq!(err.code, "ResourceNotFoundException");
     }
 
@@ -123,12 +112,8 @@ mod tests {
     fn test_delete_default_bus_rejected() {
         let svc = EventBridgeService::new();
         let ctx = ctx();
-        let err = block_on(svc.handle(
-            "DeleteEventBus",
-            json!({ "Name": "default" }),
-            &ctx,
-        ))
-        .unwrap_err();
+        let err =
+            block_on(svc.handle("DeleteEventBus", json!({ "Name": "default" }), &ctx)).unwrap_err();
         assert_eq!(err.code, "InvalidParameterValue");
     }
 
@@ -200,12 +185,8 @@ mod tests {
         ))
         .unwrap();
 
-        let result = block_on(svc.handle(
-            "DescribeRule",
-            json!({ "Name": "desc-rule" }),
-            &ctx,
-        ))
-        .unwrap();
+        let result =
+            block_on(svc.handle("DescribeRule", json!({ "Name": "desc-rule" }), &ctx)).unwrap();
         assert_eq!(result["Name"].as_str().unwrap(), "desc-rule");
         assert_eq!(result["Description"].as_str().unwrap(), "A test rule");
         assert_eq!(result["State"].as_str().unwrap(), "ENABLED");
@@ -247,17 +228,10 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        let result = block_on(svc.handle(
-            "ListRules",
-            json!({ "NamePrefix": "app-" }),
-            &ctx,
-        ))
-        .unwrap();
+        let result =
+            block_on(svc.handle("ListRules", json!({ "NamePrefix": "app-" }), &ctx)).unwrap();
         assert_eq!(result["Rules"].as_array().unwrap().len(), 1);
-        assert_eq!(
-            result["Rules"][0]["Name"].as_str().unwrap(),
-            "app-rule-1"
-        );
+        assert_eq!(result["Rules"][0]["Name"].as_str().unwrap(), "app-rule-1");
     }
 
     #[test]
@@ -271,34 +245,16 @@ mod tests {
         ))
         .unwrap();
 
-        block_on(svc.handle(
-            "DisableRule",
-            json!({ "Name": "toggle-rule" }),
-            &ctx,
-        ))
-        .unwrap();
+        block_on(svc.handle("DisableRule", json!({ "Name": "toggle-rule" }), &ctx)).unwrap();
 
-        let desc = block_on(svc.handle(
-            "DescribeRule",
-            json!({ "Name": "toggle-rule" }),
-            &ctx,
-        ))
-        .unwrap();
+        let desc =
+            block_on(svc.handle("DescribeRule", json!({ "Name": "toggle-rule" }), &ctx)).unwrap();
         assert_eq!(desc["State"].as_str().unwrap(), "DISABLED");
 
-        block_on(svc.handle(
-            "EnableRule",
-            json!({ "Name": "toggle-rule" }),
-            &ctx,
-        ))
-        .unwrap();
+        block_on(svc.handle("EnableRule", json!({ "Name": "toggle-rule" }), &ctx)).unwrap();
 
-        let desc2 = block_on(svc.handle(
-            "DescribeRule",
-            json!({ "Name": "toggle-rule" }),
-            &ctx,
-        ))
-        .unwrap();
+        let desc2 =
+            block_on(svc.handle("DescribeRule", json!({ "Name": "toggle-rule" }), &ctx)).unwrap();
         assert_eq!(desc2["State"].as_str().unwrap(), "ENABLED");
     }
 
@@ -312,18 +268,9 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        block_on(svc.handle(
-            "DeleteRule",
-            json!({ "Name": "del-rule" }),
-            &ctx,
-        ))
-        .unwrap();
-        let err = block_on(svc.handle(
-            "DescribeRule",
-            json!({ "Name": "del-rule" }),
-            &ctx,
-        ))
-        .unwrap_err();
+        block_on(svc.handle("DeleteRule", json!({ "Name": "del-rule" }), &ctx)).unwrap();
+        let err =
+            block_on(svc.handle("DescribeRule", json!({ "Name": "del-rule" }), &ctx)).unwrap_err();
         assert_eq!(err.code, "ResourceNotFoundException");
     }
 
@@ -356,12 +303,8 @@ mod tests {
         .unwrap();
         assert_eq!(result["FailedEntryCount"].as_u64().unwrap(), 0);
 
-        let list = block_on(svc.handle(
-            "ListTargetsByRule",
-            json!({ "Rule": "tgt-rule" }),
-            &ctx,
-        ))
-        .unwrap();
+        let list =
+            block_on(svc.handle("ListTargetsByRule", json!({ "Rule": "tgt-rule" }), &ctx)).unwrap();
         assert_eq!(list["Targets"].as_array().unwrap().len(), 2);
     }
 
@@ -395,12 +338,8 @@ mod tests {
         ))
         .unwrap();
 
-        let list = block_on(svc.handle(
-            "ListTargetsByRule",
-            json!({ "Rule": "rm-rule" }),
-            &ctx,
-        ))
-        .unwrap();
+        let list =
+            block_on(svc.handle("ListTargetsByRule", json!({ "Rule": "rm-rule" }), &ctx)).unwrap();
         assert_eq!(list["Targets"].as_array().unwrap().len(), 1);
         assert_eq!(list["Targets"][0]["Id"].as_str().unwrap(), "t2");
     }
@@ -523,16 +462,9 @@ mod tests {
     fn test_tag_and_list_tags_for_event_bus() {
         let svc = EventBridgeService::new();
         let ctx = ctx();
-        block_on(svc.handle(
-            "CreateEventBus",
-            json!({ "Name": "tagged-bus" }),
-            &ctx,
-        ))
-        .unwrap();
+        block_on(svc.handle("CreateEventBus", json!({ "Name": "tagged-bus" }), &ctx)).unwrap();
 
-        let arn = format!(
-            "arn:aws:events:us-east-1:000000000000:event-bus/tagged-bus"
-        );
+        let arn = format!("arn:aws:events:us-east-1:000000000000:event-bus/tagged-bus");
 
         block_on(svc.handle(
             "TagResource",
@@ -547,12 +479,9 @@ mod tests {
         ))
         .unwrap();
 
-        let tags_result = block_on(svc.handle(
-            "ListTagsForResource",
-            json!({ "ResourceARN": arn }),
-            &ctx,
-        ))
-        .unwrap();
+        let tags_result =
+            block_on(svc.handle("ListTagsForResource", json!({ "ResourceARN": arn }), &ctx))
+                .unwrap();
         assert_eq!(tags_result["Tags"].as_array().unwrap().len(), 2);
     }
 
@@ -560,12 +489,7 @@ mod tests {
     fn test_untag_resource() {
         let svc = EventBridgeService::new();
         let ctx = ctx();
-        block_on(svc.handle(
-            "CreateEventBus",
-            json!({ "Name": "untag-bus" }),
-            &ctx,
-        ))
-        .unwrap();
+        block_on(svc.handle("CreateEventBus", json!({ "Name": "untag-bus" }), &ctx)).unwrap();
 
         let arn = "arn:aws:events:us-east-1:000000000000:event-bus/untag-bus";
 
@@ -586,12 +510,9 @@ mod tests {
         ))
         .unwrap();
 
-        let tags_result = block_on(svc.handle(
-            "ListTagsForResource",
-            json!({ "ResourceARN": arn }),
-            &ctx,
-        ))
-        .unwrap();
+        let tags_result =
+            block_on(svc.handle("ListTagsForResource", json!({ "ResourceARN": arn }), &ctx))
+                .unwrap();
         assert_eq!(tags_result["Tags"].as_array().unwrap().len(), 0);
     }
 

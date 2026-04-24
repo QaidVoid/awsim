@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-use crate::state::KinesisState;
 use super::delete_stream::resolve_stream_name;
+use crate::state::KinesisState;
 
 fn require_resource_arn<'a>(input: &'a Value) -> Result<&'a str, AwsError> {
     input["ResourceARN"]
@@ -192,7 +192,12 @@ pub fn update_stream_mode(
     let stream_name = resolve_stream_name(state, input)?;
     let mode = input["StreamModeDetails"]["StreamMode"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("MissingParameter", "StreamModeDetails.StreamMode is required"))?;
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "MissingParameter",
+                "StreamModeDetails.StreamMode is required",
+            )
+        })?;
 
     let mut stream = state.streams.get_mut(&stream_name).ok_or_else(|| {
         AwsError::not_found(
@@ -212,7 +217,9 @@ pub fn update_stream_warm_throughput(
 ) -> Result<Value, AwsError> {
     let stream_name = resolve_stream_name(state, input)?;
     let mibps = input["WarmThroughputMiBps"].as_u64().unwrap_or(0);
-    let records = input["WarmThroughputRecordsPerSecond"].as_u64().unwrap_or(0);
+    let records = input["WarmThroughputRecordsPerSecond"]
+        .as_u64()
+        .unwrap_or(0);
 
     let mut stream = state.streams.get_mut(&stream_name).ok_or_else(|| {
         AwsError::not_found(

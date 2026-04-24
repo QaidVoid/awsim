@@ -96,7 +96,10 @@ pub fn put_metric_alarm(
         .get("EvaluationPeriods")
         .and_then(Value::as_u64)
         .unwrap_or(1);
-    let threshold = input.get("Threshold").and_then(Value::as_f64).unwrap_or(0.0);
+    let threshold = input
+        .get("Threshold")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
     let comparison_operator = input
         .get("ComparisonOperator")
         .and_then(Value::as_str)
@@ -156,9 +159,7 @@ pub fn describe_alarms(
             let alarm = entry.value();
             let name_ok =
                 filter_names.is_empty() || filter_names.contains(&alarm.alarm_name.as_str());
-            let state_ok = filter_state
-                .map(|s| alarm.state_value == s)
-                .unwrap_or(true);
+            let state_ok = filter_state.map(|s| alarm.state_value == s).unwrap_or(true);
             name_ok && state_ok
         })
         .map(|entry| alarm_to_json(entry.value()))
@@ -206,15 +207,12 @@ pub fn set_alarm_state(
         .unwrap_or("")
         .to_string();
 
-    let mut alarm = state
-        .alarms
-        .get_mut(alarm_name)
-        .ok_or_else(|| {
-            AwsError::not_found(
-                "ResourceNotFoundException",
-                format!("Alarm {alarm_name} not found"),
-            )
-        })?;
+    let mut alarm = state.alarms.get_mut(alarm_name).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Alarm {alarm_name} not found"),
+        )
+    })?;
 
     alarm.state_value = state_value.to_string();
     alarm.state_reason = state_reason;

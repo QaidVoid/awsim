@@ -14,7 +14,12 @@ fn now_secs() -> u64 {
 
 fn make_arn(ctx: &RequestContext) -> String {
     let id = uuid::Uuid::new_v4().simple().to_string();
-    format!("arn:aws:datasync:{}:{}:location/loc-{}", ctx.region, ctx.account_id, &id[..17])
+    format!(
+        "arn:aws:datasync:{}:{}:location/loc-{}",
+        ctx.region,
+        ctx.account_id,
+        &id[..17]
+    )
 }
 
 pub fn create_location_s3(
@@ -22,11 +27,15 @@ pub fn create_location_s3(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let bucket = input["S3BucketArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "S3BucketArn is required"))?;
+    let bucket = input["S3BucketArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "S3BucketArn is required")
+    })?;
     let subdir = input["Subdirectory"].as_str().unwrap_or("/");
-    let uri = format!("s3://{}{}", bucket.trim_start_matches("arn:aws:s3:::"), subdir);
+    let uri = format!(
+        "s3://{}{}",
+        bucket.trim_start_matches("arn:aws:s3:::"),
+        subdir
+    );
 
     let arn = make_arn(ctx);
     let loc = Location {
@@ -112,12 +121,15 @@ pub fn describe_location_s3(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["LocationArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "LocationArn is required"))?;
+    let arn = input["LocationArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "LocationArn is required")
+    })?;
 
     let loc = state.locations.get(arn).ok_or_else(|| {
-        AwsError::not_found("InvalidRequestException", format!("Location not found: {arn}"))
+        AwsError::not_found(
+            "InvalidRequestException",
+            format!("Location not found: {arn}"),
+        )
     })?;
 
     Ok(json!({
@@ -151,9 +163,9 @@ pub fn delete_location(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arn = input["LocationArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "LocationArn is required"))?;
+    let arn = input["LocationArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidRequestException", "LocationArn is required")
+    })?;
     state.locations.remove(arn);
     Ok(json!({}))
 }

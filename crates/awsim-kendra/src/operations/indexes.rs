@@ -1,5 +1,5 @@
 use awsim_core::{AwsError, RequestContext};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::state::{DataSource, KendraIndex, KendraState};
 
@@ -49,10 +49,9 @@ pub fn describe_index(state: &KendraState, input: &Value) -> Result<Value, AwsEr
         .as_str()
         .ok_or_else(|| AwsError::validation("Id is required"))?;
 
-    let index = state
-        .indexes
-        .get(id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Index {id} not found")))?;
+    let index = state.indexes.get(id).ok_or_else(|| {
+        AwsError::not_found("ResourceNotFoundException", format!("Index {id} not found"))
+    })?;
 
     Ok(json!({
         "Id": index.id,
@@ -105,10 +104,9 @@ pub fn update_index(state: &KendraState, input: &Value) -> Result<Value, AwsErro
         .as_str()
         .ok_or_else(|| AwsError::validation("Id is required"))?;
 
-    let mut index = state
-        .indexes
-        .get_mut(id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Index {id} not found")))?;
+    let mut index = state.indexes.get_mut(id).ok_or_else(|| {
+        AwsError::not_found("ResourceNotFoundException", format!("Index {id} not found"))
+    })?;
 
     if let Some(name) = input["Name"].as_str() {
         index.name = name.to_string();
@@ -139,10 +137,12 @@ pub fn create_data_source(
     let role_arn = input["RoleArn"].as_str().unwrap_or("");
     let configuration = input.get("Configuration").cloned().unwrap_or(json!({}));
 
-    let mut index = state
-        .indexes
-        .get_mut(index_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Index {index_id} not found")))?;
+    let mut index = state.indexes.get_mut(index_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Index {index_id} not found"),
+        )
+    })?;
 
     let ds_id = uuid::Uuid::new_v4().to_string();
 
@@ -167,10 +167,12 @@ pub fn list_data_sources(state: &KendraState, input: &Value) -> Result<Value, Aw
         .as_str()
         .ok_or_else(|| AwsError::validation("IndexId is required"))?;
 
-    let index = state
-        .indexes
-        .get(index_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Index {index_id} not found")))?;
+    let index = state.indexes.get(index_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Index {index_id} not found"),
+        )
+    })?;
 
     let items: Vec<Value> = index
         .data_sources
@@ -197,10 +199,12 @@ pub fn delete_data_source(state: &KendraState, input: &Value) -> Result<Value, A
         .as_str()
         .ok_or_else(|| AwsError::validation("Id is required"))?;
 
-    let mut index = state
-        .indexes
-        .get_mut(index_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", format!("Index {index_id} not found")))?;
+    let mut index = state.indexes.get_mut(index_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Index {index_id} not found"),
+        )
+    })?;
 
     index.data_sources.remove(ds_id);
 

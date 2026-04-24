@@ -13,17 +13,17 @@ pub fn put_log_events(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let group_name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let group_name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
-    let stream_name = input["logStreamName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logStreamName is required"))?;
+    let stream_name = input["logStreamName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logStreamName is required")
+    })?;
 
-    let log_events = input["logEvents"]
-        .as_array()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logEvents is required"))?;
+    let log_events = input["logEvents"].as_array().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logEvents is required")
+    })?;
 
     let group = state.log_groups.get(group_name).ok_or_else(|| {
         AwsError::not_found(
@@ -44,10 +44,16 @@ pub fn put_log_events(
 
     for ev in log_events {
         let timestamp = ev["timestamp"].as_u64().ok_or_else(|| {
-            AwsError::bad_request("InvalidParameterException", "each logEvent must have a timestamp")
+            AwsError::bad_request(
+                "InvalidParameterException",
+                "each logEvent must have a timestamp",
+            )
         })?;
         let message = ev["message"].as_str().ok_or_else(|| {
-            AwsError::bad_request("InvalidParameterException", "each logEvent must have a message")
+            AwsError::bad_request(
+                "InvalidParameterException",
+                "each logEvent must have a message",
+            )
         })?;
 
         new_events.push(LogEvent {
@@ -71,7 +77,10 @@ pub fn put_log_events(
 
     // Update stream metadata (outside the write-lock scope)
     if let Some(ts) = new_first_ts {
-        if stream.first_event_timestamp.map_or(true, |existing| ts < existing) {
+        if stream
+            .first_event_timestamp
+            .map_or(true, |existing| ts < existing)
+        {
             stream.first_event_timestamp = Some(ts);
         }
     }
@@ -99,13 +108,13 @@ pub fn get_log_events(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let group_name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let group_name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
-    let stream_name = input["logStreamName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logStreamName is required"))?;
+    let stream_name = input["logStreamName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logStreamName is required")
+    })?;
 
     let start_time = input["startTime"].as_u64();
     let end_time = input["endTime"].as_u64();
@@ -174,7 +183,11 @@ pub fn get_log_events(
     };
 
     let next_forward_offset = offset + page.len();
-    let next_backward_offset = if offset == 0 { 0 } else { offset.saturating_sub(limit) };
+    let next_backward_offset = if offset == 0 {
+        0
+    } else {
+        offset.saturating_sub(limit)
+    };
 
     Ok(json!({
         "events": page,
@@ -192,9 +205,9 @@ pub fn filter_log_events(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let group_name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let group_name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
     let stream_names: Option<Vec<&str>> = input["logStreamNames"]
         .as_array()

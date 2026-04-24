@@ -1,5 +1,5 @@
 use awsim_core::AwsError;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// DetectEntities — extract named entities from text.
 ///
@@ -14,9 +14,7 @@ pub fn detect_entities(input: &Value) -> Result<Value, AwsError> {
         .as_str()
         .ok_or_else(|| AwsError::validation("Text parameter is required"))?;
 
-    let _language = input["LanguageCode"]
-        .as_str()
-        .unwrap_or("en");
+    let _language = input["LanguageCode"].as_str().unwrap_or("en");
 
     let entities = extract_entities(text);
 
@@ -34,9 +32,7 @@ pub fn detect_key_phrases(input: &Value) -> Result<Value, AwsError> {
         .as_str()
         .ok_or_else(|| AwsError::validation("Text parameter is required"))?;
 
-    let _language = input["LanguageCode"]
-        .as_str()
-        .unwrap_or("en");
+    let _language = input["LanguageCode"].as_str().unwrap_or("en");
 
     let phrases = extract_key_phrases(text);
 
@@ -105,12 +101,34 @@ pub fn detect_sentiment(input: &Value) -> Result<Value, AwsError> {
     // Simple heuristic: count positive/negative words
     let lower = text.to_lowercase();
     let positive_words = [
-        "good", "great", "excellent", "amazing", "wonderful", "fantastic",
-        "love", "happy", "pleased", "best", "beautiful", "perfect", "nice",
+        "good",
+        "great",
+        "excellent",
+        "amazing",
+        "wonderful",
+        "fantastic",
+        "love",
+        "happy",
+        "pleased",
+        "best",
+        "beautiful",
+        "perfect",
+        "nice",
     ];
     let negative_words = [
-        "bad", "terrible", "awful", "horrible", "hate", "worst", "poor",
-        "ugly", "angry", "sad", "disappointed", "wrong", "fail",
+        "bad",
+        "terrible",
+        "awful",
+        "horrible",
+        "hate",
+        "worst",
+        "poor",
+        "ugly",
+        "angry",
+        "sad",
+        "disappointed",
+        "wrong",
+        "fail",
     ];
 
     let pos_count = positive_words.iter().filter(|w| lower.contains(*w)).count();
@@ -161,11 +179,17 @@ fn extract_entities(text: &str) -> Vec<Value> {
     let mut i = 0;
     while i < words.len() {
         let word = words[i];
-        let word_start = text[offset..].find(word).map(|p| offset + p).unwrap_or(offset);
+        let word_start = text[offset..]
+            .find(word)
+            .map(|p| offset + p)
+            .unwrap_or(offset);
         let word_end = word_start + word.len();
 
         // Detect capitalized sequences (potential names/orgs)
-        if word.len() > 1 && word.chars().next().map_or(false, |c| c.is_uppercase()) && !is_sentence_start(text, word_start) {
+        if word.len() > 1
+            && word.chars().next().map_or(false, |c| c.is_uppercase())
+            && !is_sentence_start(text, word_start)
+        {
             // Collect consecutive capitalized words
             let mut end_idx = i;
             let mut entity_end = word_end;
@@ -173,7 +197,10 @@ fn extract_entities(text: &str) -> Vec<Value> {
                 let next = words[end_idx + 1];
                 if next.len() > 1 && next.chars().next().map_or(false, |c| c.is_uppercase()) {
                     end_idx += 1;
-                    let next_start = text[entity_end..].find(next).map(|p| entity_end + p).unwrap_or(entity_end);
+                    let next_start = text[entity_end..]
+                        .find(next)
+                        .map(|p| entity_end + p)
+                        .unwrap_or(entity_end);
                     entity_end = next_start + next.len();
                 } else {
                     break;
@@ -202,7 +229,9 @@ fn extract_entities(text: &str) -> Vec<Value> {
 
         // Detect numbers/quantities
         if word.chars().any(|c| c.is_ascii_digit())
-            && word.chars().all(|c| c.is_ascii_digit() || c == ',' || c == '.' || c == '%' || c == '$')
+            && word
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == ',' || c == '.' || c == '%' || c == '$')
         {
             entities.push(json!({
                 "Text": word,
@@ -222,20 +251,19 @@ fn extract_entities(text: &str) -> Vec<Value> {
 
 fn extract_key_phrases(text: &str) -> Vec<Value> {
     let mut phrases = Vec::new();
-    let sentences: Vec<&str> = text.split(|c: char| c == '.' || c == '!' || c == '?').collect();
+    let sentences: Vec<&str> = text
+        .split(|c: char| c == '.' || c == '!' || c == '?')
+        .collect();
 
     let stop_words = [
-        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "could",
-        "should", "may", "might", "shall", "can", "to", "of", "in", "for",
-        "on", "with", "at", "by", "from", "as", "into", "through", "during",
-        "before", "after", "above", "below", "between", "and", "but", "or",
-        "nor", "not", "so", "yet", "both", "either", "neither", "each",
-        "every", "all", "any", "few", "more", "most", "other", "some",
-        "such", "no", "only", "own", "same", "than", "too", "very",
-        "this", "that", "these", "those", "i", "me", "my", "we", "our",
-        "you", "your", "he", "him", "his", "she", "her", "it", "its",
-        "they", "them", "their", "what", "which", "who", "whom",
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+        "do", "does", "did", "will", "would", "could", "should", "may", "might", "shall", "can",
+        "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "through",
+        "during", "before", "after", "above", "below", "between", "and", "but", "or", "nor", "not",
+        "so", "yet", "both", "either", "neither", "each", "every", "all", "any", "few", "more",
+        "most", "other", "some", "such", "no", "only", "own", "same", "than", "too", "very",
+        "this", "that", "these", "those", "i", "me", "my", "we", "our", "you", "your", "he", "him",
+        "his", "she", "her", "it", "its", "they", "them", "their", "what", "which", "who", "whom",
     ];
 
     for sentence in sentences {
@@ -266,7 +294,8 @@ fn extract_key_phrases(text: &str) -> Vec<Value> {
                     // Allow one stop word inside a phrase
                     if end + 1 < words.len() && end - start < 3 {
                         let after_lower = words[end + 1].to_lowercase();
-                        let after_clean = after_lower.trim_matches(|c: char| c.is_ascii_punctuation());
+                        let after_clean =
+                            after_lower.trim_matches(|c: char| c.is_ascii_punctuation());
                         if !stop_words.contains(&after_clean) && !after_clean.is_empty() {
                             end += 2;
                             continue;
@@ -328,7 +357,8 @@ mod tests {
 
     #[test]
     fn test_detect_key_phrases() {
-        let input = json!({"Text": "The quick brown fox jumps over the lazy dog.", "LanguageCode": "en"});
+        let input =
+            json!({"Text": "The quick brown fox jumps over the lazy dog.", "LanguageCode": "en"});
         let result = detect_key_phrases(&input).unwrap();
         let phrases = result["KeyPhrases"].as_array().unwrap();
         assert!(!phrases.is_empty());

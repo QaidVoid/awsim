@@ -7,18 +7,12 @@ pub async fn test_sns(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     let mut results = Vec::new();
 
     // CreateTopic
-    let create_r = client
-        .create_topic()
-        .name("conformance-topic")
-        .send()
-        .await;
+    let create_r = client.create_topic().name("conformance-topic").send().await;
     let topic_arn = create_r
         .as_ref()
         .ok()
         .and_then(|r| r.topic_arn.clone())
-        .unwrap_or_else(|| {
-            "arn:aws:sns:us-east-1:000000000000:conformance-topic".to_string()
-        });
+        .unwrap_or_else(|| "arn:aws:sns:us-east-1:000000000000:conformance-topic".to_string());
     results.push(chk!("CreateTopic", create_r, verbose));
 
     // ListTopics
@@ -59,10 +53,7 @@ pub async fn test_sns(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         .endpoint("test@example.com")
         .send()
         .await;
-    let subscription_arn = sub_r
-        .as_ref()
-        .ok()
-        .and_then(|r| r.subscription_arn.clone());
+    let subscription_arn = sub_r.as_ref().ok().and_then(|r| r.subscription_arn.clone());
     results.push(chk!("Subscribe", sub_r, verbose));
 
     // ListSubscriptions
@@ -314,7 +305,10 @@ pub async fn test_sns(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             client
                 .set_platform_application_attributes()
                 .platform_application_arn(app_arn)
-                .attributes("EventDeliveryFailure", "arn:aws:sns:us-east-1:000000000000:conformance-topic")
+                .attributes(
+                    "EventDeliveryFailure",
+                    "arn:aws:sns:us-east-1:000000000000:conformance-topic"
+                )
                 .send()
                 .await,
             verbose
@@ -348,7 +342,11 @@ pub async fn test_sns(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             // GetEndpointAttributes
             results.push(chk!(
                 "GetEndpointAttributes",
-                client.get_endpoint_attributes().endpoint_arn(ep_arn).send().await,
+                client
+                    .get_endpoint_attributes()
+                    .endpoint_arn(ep_arn)
+                    .send()
+                    .await,
                 verbose
             ));
 

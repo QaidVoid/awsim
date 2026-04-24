@@ -13,13 +13,13 @@ pub fn create_log_stream(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let group_name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let group_name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
-    let stream_name = input["logStreamName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logStreamName is required"))?;
+    let stream_name = input["logStreamName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logStreamName is required")
+    })?;
 
     let group = state.log_groups.get(group_name).ok_or_else(|| {
         AwsError::not_found(
@@ -56,13 +56,13 @@ pub fn delete_log_stream(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let group_name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let group_name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
-    let stream_name = input["logStreamName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logStreamName is required"))?;
+    let stream_name = input["logStreamName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logStreamName is required")
+    })?;
 
     let group = state.log_groups.get(group_name).ok_or_else(|| {
         AwsError::not_found(
@@ -91,9 +91,9 @@ pub fn describe_log_streams(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let group_name = input["logGroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "logGroupName is required"))?;
+    let group_name = input["logGroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "logGroupName is required")
+    })?;
 
     let group = state.log_groups.get(group_name).ok_or_else(|| {
         AwsError::not_found(

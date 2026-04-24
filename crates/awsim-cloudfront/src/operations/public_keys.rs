@@ -29,7 +29,11 @@ fn pk_to_value(p: &PublicKey) -> Value {
 
 pub fn create_public_key(state: &CloudFrontState, input: &Value) -> Result<Value, AwsError> {
     let cfg = input.get("PublicKeyConfig").unwrap_or(input);
-    let name = cfg.get("Name").and_then(|v| v.as_str()).unwrap_or("default").to_string();
+    let name = cfg
+        .get("Name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
     let caller_reference = cfg
         .get("CallerReference")
         .and_then(|v| v.as_str())
@@ -40,7 +44,11 @@ pub fn create_public_key(state: &CloudFrontState, input: &Value) -> Result<Value
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let comment = cfg.get("Comment").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let comment = cfg
+        .get("Comment")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let id = Uuid::new_v4().to_string();
     let etag = new_etag();

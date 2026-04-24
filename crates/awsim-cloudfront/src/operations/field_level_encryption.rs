@@ -37,7 +37,11 @@ pub fn create_field_level_encryption_config(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let comment = cfg.get("Comment").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let comment = cfg
+        .get("Comment")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let id = Uuid::new_v4().to_string();
     let etag = new_etag();
@@ -59,7 +63,10 @@ pub fn get_field_level_encryption_config(
     state: &CloudFrontState,
     id: &str,
 ) -> Result<Value, AwsError> {
-    let f = state.field_level_encryption_configs.get(id).ok_or_else(|| not_found(id))?;
+    let f = state
+        .field_level_encryption_configs
+        .get(id)
+        .ok_or_else(|| not_found(id))?;
     let etag = f.etag.clone();
     let result = fle_to_value(&f);
     Ok(json!({ "FieldLevelEncryption": result, "ETag": etag }))

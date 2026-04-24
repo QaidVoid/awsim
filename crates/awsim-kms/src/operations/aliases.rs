@@ -2,8 +2,8 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::error;
-use crate::state::KmsState;
 use crate::operations::keys::resolve_key_id;
+use crate::state::KmsState;
 
 // ---------------------------------------------------------------------------
 // CreateAlias

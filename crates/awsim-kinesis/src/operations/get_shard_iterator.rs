@@ -4,7 +4,11 @@ use serde_json::{Value, json};
 use crate::state::{KinesisState, ShardIteratorInfo};
 use crate::util::encode_iterator;
 
-pub fn handle(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn handle(
+    state: &KinesisState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let stream_name = input["StreamName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "StreamName is required"))?;
@@ -13,9 +17,9 @@ pub fn handle(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Res
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "ShardId is required"))?;
 
-    let iterator_type = input["ShardIteratorType"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("MissingParameter", "ShardIteratorType is required"))?;
+    let iterator_type = input["ShardIteratorType"].as_str().ok_or_else(|| {
+        AwsError::bad_request("MissingParameter", "ShardIteratorType is required")
+    })?;
 
     let stream = state.streams.get(stream_name).ok_or_else(|| {
         AwsError::not_found(
@@ -32,7 +36,10 @@ pub fn handle(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Res
         .ok_or_else(|| {
             AwsError::bad_request(
                 "ResourceNotFoundException",
-                format!("Shard {} does not exist in stream {}", shard_id, stream_name),
+                format!(
+                    "Shard {} does not exist in stream {}",
+                    shard_id, stream_name
+                ),
             )
         })?;
 
@@ -42,14 +49,12 @@ pub fn handle(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Res
         "TRIM_HORIZON" => 0,
         "LATEST" => shard.records.len(),
         "AT_SEQUENCE_NUMBER" => {
-            let seq = input["StartingSequenceNumber"]
-                .as_str()
-                .ok_or_else(|| {
-                    AwsError::bad_request(
-                        "MissingParameter",
-                        "StartingSequenceNumber is required for AT_SEQUENCE_NUMBER",
-                    )
-                })?;
+            let seq = input["StartingSequenceNumber"].as_str().ok_or_else(|| {
+                AwsError::bad_request(
+                    "MissingParameter",
+                    "StartingSequenceNumber is required for AT_SEQUENCE_NUMBER",
+                )
+            })?;
             shard
                 .records
                 .iter()
@@ -57,14 +62,12 @@ pub fn handle(state: &KinesisState, input: &Value, _ctx: &RequestContext) -> Res
                 .unwrap_or(shard.records.len())
         }
         "AFTER_SEQUENCE_NUMBER" => {
-            let seq = input["StartingSequenceNumber"]
-                .as_str()
-                .ok_or_else(|| {
-                    AwsError::bad_request(
-                        "MissingParameter",
-                        "StartingSequenceNumber is required for AFTER_SEQUENCE_NUMBER",
-                    )
-                })?;
+            let seq = input["StartingSequenceNumber"].as_str().ok_or_else(|| {
+                AwsError::bad_request(
+                    "MissingParameter",
+                    "StartingSequenceNumber is required for AFTER_SEQUENCE_NUMBER",
+                )
+            })?;
             shard
                 .records
                 .iter()

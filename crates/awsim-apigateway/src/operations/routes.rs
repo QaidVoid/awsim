@@ -11,13 +11,15 @@ pub fn create_route(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
     let route_key = input["RouteKey"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: RouteKey"))?
+        .ok_or_else(|| {
+            AwsError::bad_request("BadRequestException", "Missing required field: RouteKey")
+        })?
         .to_string();
 
     let target = input["Target"].as_str().map(|s| s.to_string());
@@ -32,7 +34,10 @@ pub fn create_route(
     };
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     api.routes.insert(route_id.clone(), route);
@@ -49,20 +54,26 @@ pub fn get_route(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
-    let route_id = input["RouteId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: RouteId"))?;
+    let route_id = input["RouteId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: RouteId")
+    })?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     let route = api.routes.get(route_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("Route with ID {route_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("Route with ID {route_id} not found"),
+        )
     })?;
 
     Ok(route_to_json(route))
@@ -73,12 +84,15 @@ pub fn get_routes(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     let items: Vec<Value> = api.routes.values().map(route_to_json).collect();
@@ -91,20 +105,26 @@ pub fn delete_route(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
-    let route_id = input["RouteId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: RouteId"))?;
+    let route_id = input["RouteId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: RouteId")
+    })?;
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     api.routes.remove(route_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("Route with ID {route_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("Route with ID {route_id} not found"),
+        )
     })?;
 
     Ok(json!({}))

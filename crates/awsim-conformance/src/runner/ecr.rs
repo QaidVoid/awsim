@@ -243,7 +243,9 @@ pub async fn test_ecr(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         client
             .batch_check_layer_availability()
             .repository_name("conformance-repo")
-            .layer_digests("sha256:b5b2b2c507a0944348e0303114d8d93aaaa081732b86451d9bce1f432a537bc7")
+            .layer_digests(
+                "sha256:b5b2b2c507a0944348e0303114d8d93aaaa081732b86451d9bce1f432a537bc7"
+            )
             .send()
             .await,
         verbose
@@ -284,7 +286,9 @@ pub async fn test_ecr(endpoint: &str, verbose: bool) -> Vec<OpResult> {
                 .complete_layer_upload()
                 .repository_name("conformance-repo")
                 .upload_id(upload_id)
-                .layer_digests("sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")
+                .layer_digests(
+                    "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+                )
                 .send()
                 .await,
             verbose

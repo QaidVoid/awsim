@@ -79,7 +79,12 @@ pub async fn test_appsync(endpoint: &str, verbose: bool) -> Vec<OpResult> {
 
         results.push(chk!(
             "GetDataSource",
-            client.get_data_source().api_id(aid).name("noneds").send().await,
+            client
+                .get_data_source()
+                .api_id(aid)
+                .name("noneds")
+                .send()
+                .await,
             verbose
         ));
 
@@ -223,7 +228,12 @@ pub async fn test_appsync(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         if let Some(ref fid) = function_id {
             results.push(chk!(
                 "GetFunction",
-                client.get_function().api_id(aid).function_id(fid).send().await,
+                client
+                    .get_function()
+                    .api_id(aid)
+                    .function_id(fid)
+                    .send()
+                    .await,
                 verbose
             ));
 
@@ -243,7 +253,12 @@ pub async fn test_appsync(endpoint: &str, verbose: bool) -> Vec<OpResult> {
 
             results.push(chk!(
                 "DeleteFunction",
-                client.delete_function().api_id(aid).function_id(fid).send().await,
+                client
+                    .delete_function()
+                    .api_id(aid)
+                    .function_id(fid)
+                    .send()
+                    .await,
                 verbose
             ));
         } else {
@@ -317,13 +332,23 @@ pub async fn test_appsync(endpoint: &str, verbose: bool) -> Vec<OpResult> {
 
         results.push(chk!(
             "DeleteType",
-            client.delete_type().api_id(aid).type_name("Query").send().await,
+            client
+                .delete_type()
+                .api_id(aid)
+                .type_name("Query")
+                .send()
+                .await,
             verbose
         ));
 
         results.push(chk!(
             "DeleteDataSource",
-            client.delete_data_source().api_id(aid).name("noneds").send().await,
+            client
+                .delete_data_source()
+                .api_id(aid)
+                .name("noneds")
+                .send()
+                .await,
             verbose
         ));
 
@@ -372,7 +397,11 @@ pub async fn test_appsync(endpoint: &str, verbose: bool) -> Vec<OpResult> {
 
         results.push(chk!(
             "ListSourceApiAssociations",
-            client.list_source_api_associations().api_id(aid).send().await,
+            client
+                .list_source_api_associations()
+                .api_id(aid)
+                .send()
+                .await,
             verbose
         ));
 

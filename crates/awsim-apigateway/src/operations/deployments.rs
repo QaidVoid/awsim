@@ -12,9 +12,9 @@ pub fn create_deployment(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
     let description = input["Description"].as_str().map(|s| s.to_string());
 
@@ -29,7 +29,10 @@ pub fn create_deployment(
     };
 
     let mut api = state.apis.get_mut(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     api.deployments.insert(deployment_id.clone(), deployment);
@@ -47,16 +50,22 @@ pub fn get_deployment(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let api_id = input["ApiId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: ApiId"))?;
+    let api_id = input["ApiId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Missing required field: ApiId")
+    })?;
 
-    let deployment_id = input["DeploymentId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("BadRequestException", "Missing required field: DeploymentId"))?;
+    let deployment_id = input["DeploymentId"].as_str().ok_or_else(|| {
+        AwsError::bad_request(
+            "BadRequestException",
+            "Missing required field: DeploymentId",
+        )
+    })?;
 
     let api = state.apis.get(api_id).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("API with ID {api_id} not found"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("API with ID {api_id} not found"),
+        )
     })?;
 
     let deployment = api.deployments.get(deployment_id).ok_or_else(|| {

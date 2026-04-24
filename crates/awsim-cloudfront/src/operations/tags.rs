@@ -38,10 +38,7 @@ fn parse_tags(input: &Value) -> Vec<(String, String)> {
 /// POST /2020-05-31/tagging?Operation=Tag
 pub fn tag_resource(state: &CloudFrontState, input: &Value) -> Result<Value, AwsError> {
     // The resource ARN is passed as a query param; it's in input["Resource"] after parsing.
-    let resource_arn = input
-        .get("Resource")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let resource_arn = input.get("Resource").and_then(|v| v.as_str()).unwrap_or("");
 
     // Extract distribution ID from ARN: arn:aws:cloudfront::{account}:distribution/{id}
     let dist_id = resource_arn.rsplit('/').next().unwrap_or("");
@@ -59,10 +56,7 @@ pub fn tag_resource(state: &CloudFrontState, input: &Value) -> Result<Value, Aws
 
 /// GET /2020-05-31/tagging?Resource={arn}
 pub fn list_tags_for_resource(state: &CloudFrontState, input: &Value) -> Result<Value, AwsError> {
-    let resource_arn = input
-        .get("Resource")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let resource_arn = input.get("Resource").and_then(|v| v.as_str()).unwrap_or("");
 
     let dist_id = resource_arn.rsplit('/').next().unwrap_or("");
 

@@ -34,8 +34,17 @@ fn s3_read() -> PolicyDocument {
 #[test]
 fn implicit_deny_when_no_policy() {
     let ctx = HashMap::new();
-    let r = req("arn:aws:iam::1:user/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
-    assert_eq!(evaluate(&r, &EvalContext::default()), Decision::ImplicitDeny);
+    let r = req(
+        "arn:aws:iam::1:user/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
+    assert_eq!(
+        evaluate(&r, &EvalContext::default()),
+        Decision::ImplicitDeny
+    );
 }
 
 #[test]
@@ -47,7 +56,13 @@ fn allow_admin_wildcard() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:user/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:user/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
@@ -59,7 +74,13 @@ fn allow_specific_action_resource() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:user/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:user/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
@@ -85,10 +106,9 @@ fn implicit_deny_action_not_in_policy() {
 fn explicit_deny_overrides_allow() {
     let ctx = HashMap::new();
     let allow = admin();
-    let deny = parse(
-        r#"{"Statement":[{"Effect":"Deny","Action":"s3:DeleteObject","Resource":"*"}]}"#,
-    )
-    .unwrap();
+    let deny =
+        parse(r#"{"Statement":[{"Effect":"Deny","Action":"s3:DeleteObject","Resource":"*"}]}"#)
+            .unwrap();
     let identity = vec![allow, deny];
     let ec = EvalContext {
         identity_policies: &identity,
@@ -107,10 +127,9 @@ fn explicit_deny_overrides_allow() {
 #[test]
 fn not_action_inversion() {
     let ctx = HashMap::new();
-    let pol = parse(
-        r#"{"Statement":[{"Effect":"Allow","NotAction":"s3:DeleteObject","Resource":"*"}]}"#,
-    )
-    .unwrap();
+    let pol =
+        parse(r#"{"Statement":[{"Effect":"Allow","NotAction":"s3:DeleteObject","Resource":"*"}]}"#)
+            .unwrap();
     let identity = vec![pol];
     let ec = EvalContext {
         identity_policies: &identity,
@@ -137,7 +156,9 @@ fn not_action_inversion() {
 #[test]
 fn wildcard_action_pattern() {
     let ctx = HashMap::new();
-    let pol = parse(r#"{"Statement":[{"Effect":"Allow","Action":"ec2:Describe*","Resource":"*"}]}"#).unwrap();
+    let pol =
+        parse(r#"{"Statement":[{"Effect":"Allow","Action":"ec2:Describe*","Resource":"*"}]}"#)
+            .unwrap();
     let identity = vec![pol];
     let ec = EvalContext {
         identity_policies: &identity,
@@ -192,10 +213,9 @@ fn wildcard_resource_pattern() {
 fn permissions_boundary_intersection() {
     let ctx = HashMap::new();
     let identity = vec![admin()];
-    let boundary = parse(
-        r#"{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}"#,
-    )
-    .unwrap();
+    let boundary =
+        parse(r#"{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}"#)
+            .unwrap();
     let ec = EvalContext {
         identity_policies: &identity,
         permissions_boundary: Some(&boundary),
@@ -223,16 +243,21 @@ fn permissions_boundary_intersection() {
 fn session_policy_intersection() {
     let ctx = HashMap::new();
     let identity = vec![admin()];
-    let session = parse(
-        r#"{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}"#,
-    )
-    .unwrap();
+    let session =
+        parse(r#"{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}"#)
+            .unwrap();
     let ec = EvalContext {
         identity_policies: &identity,
         session_policy: Some(&session),
         ..Default::default()
     };
-    let allowed = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let allowed = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&allowed, &ec), Decision::Allow);
     let denied = req(
         "arn:aws:iam::1:u/x",
@@ -248,10 +273,8 @@ fn session_policy_intersection() {
 fn scp_intersection_required() {
     let ctx = HashMap::new();
     let identity = vec![admin()];
-    let scp = parse(
-        r#"{"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}"#,
-    )
-    .unwrap();
+    let scp =
+        parse(r#"{"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}"#).unwrap();
     let scps = vec![scp];
     let ec = EvalContext {
         identity_policies: &identity,
@@ -280,10 +303,8 @@ fn scp_intersection_required() {
 fn scp_explicit_deny() {
     let ctx = HashMap::new();
     let identity = vec![admin()];
-    let scp = parse(
-        r#"{"Statement":[{"Effect":"Deny","Action":"iam:*","Resource":"*"}]}"#,
-    )
-    .unwrap();
+    let scp =
+        parse(r#"{"Statement":[{"Effect":"Deny","Action":"iam:*","Resource":"*"}]}"#).unwrap();
     let scps = vec![scp];
     let ec = EvalContext {
         identity_policies: &identity,
@@ -406,7 +427,13 @@ fn condition_string_equals_match() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
@@ -427,7 +454,13 @@ fn condition_string_equals_mismatch() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::ImplicitDeny);
 }
 
@@ -448,7 +481,13 @@ fn condition_string_like_wildcards() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
@@ -466,12 +505,24 @@ fn condition_numeric_less_than() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:ListBucket", "arn:aws:s3:::b", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:ListBucket",
+        "arn:aws:s3:::b",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 
     let mut ctx2 = HashMap::new();
     ctx2.insert("s3:max-keys".to_string(), ContextValue::Number(150.0));
-    let r2 = req("arn:aws:iam::1:u/x", "1", "s3:ListBucket", "arn:aws:s3:::b", &ctx2);
+    let r2 = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:ListBucket",
+        "arn:aws:s3:::b",
+        &ctx2,
+    );
     assert_eq!(evaluate(&r2, &ec), Decision::ImplicitDeny);
 }
 
@@ -492,7 +543,13 @@ fn condition_ip_address_cidr() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 
     let mut ctx2 = HashMap::new();
@@ -500,7 +557,13 @@ fn condition_ip_address_cidr() {
         "aws:SourceIp".to_string(),
         ContextValue::Ip("8.8.8.8".into()),
     );
-    let r2 = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx2);
+    let r2 = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx2,
+    );
     assert_eq!(evaluate(&r2, &ec), Decision::ImplicitDeny);
 }
 
@@ -521,7 +584,13 @@ fn condition_not_ip_address() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
@@ -540,17 +609,20 @@ fn condition_date_less_than() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
 #[test]
 fn condition_bool_true() {
     let mut ctx = HashMap::new();
-    ctx.insert(
-        "aws:SecureTransport".to_string(),
-        ContextValue::Bool(true),
-    );
+    ctx.insert("aws:SecureTransport".to_string(), ContextValue::Bool(true));
     let pol = parse(
         r#"{"Statement":[{"Effect":"Allow","Action":"*","Resource":"*",
         "Condition":{"Bool":{"aws:SecureTransport":"true"}}}]}"#,
@@ -561,17 +633,20 @@ fn condition_bool_true() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
 #[test]
 fn condition_bool_false_deny() {
     let mut ctx = HashMap::new();
-    ctx.insert(
-        "aws:SecureTransport".to_string(),
-        ContextValue::Bool(false),
-    );
+    ctx.insert("aws:SecureTransport".to_string(), ContextValue::Bool(false));
     let pol = parse(
         r#"{"Statement":[{"Effect":"Deny","Action":"*","Resource":"*",
         "Condition":{"Bool":{"aws:SecureTransport":"false"}}}]}"#,
@@ -582,7 +657,13 @@ fn condition_bool_false_deny() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::ExplicitDeny);
 }
 
@@ -599,7 +680,13 @@ fn condition_null_absent() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
@@ -620,7 +707,13 @@ fn condition_null_present_required() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
@@ -641,7 +734,13 @@ fn condition_arn_like() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
@@ -658,7 +757,13 @@ fn condition_if_exists_absent() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
@@ -679,7 +784,13 @@ fn condition_if_exists_present_must_match() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::ImplicitDeny);
 }
 
@@ -700,7 +811,13 @@ fn condition_for_any_value_match() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
@@ -721,7 +838,13 @@ fn condition_for_all_values_satisfied() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
@@ -742,7 +865,13 @@ fn condition_for_all_values_violated() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::ImplicitDeny);
 }
 
@@ -763,7 +892,13 @@ fn condition_string_equals_ignore_case() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
@@ -784,7 +919,13 @@ fn condition_numeric_greater_than_equals() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
@@ -803,7 +944,13 @@ fn condition_date_with_epoch() {
         identity_policies: &identity,
         ..Default::default()
     };
-    let r = req("arn:aws:iam::1:u/x", "1", "s3:GetObject", "arn:aws:s3:::b/k", &ctx);
+    let r = req(
+        "arn:aws:iam::1:u/x",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 

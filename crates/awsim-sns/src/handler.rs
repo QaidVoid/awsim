@@ -80,30 +80,48 @@ impl ServiceHandler for SnsService {
             "CheckIfPhoneNumberIsOptedOut" => {
                 sms::check_if_phone_number_is_opted_out(&state, &input, ctx)
             }
-            "ListPhoneNumbersOptedOut" => {
-                sms::list_phone_numbers_opted_out(&state, &input, ctx)
-            }
+            "ListPhoneNumbersOptedOut" => sms::list_phone_numbers_opted_out(&state, &input, ctx),
             "GetSMSAttributes" => sms::get_sms_attributes(&state, &input, ctx),
             "SetSMSAttributes" => sms::set_sms_attributes(&state, &input, ctx),
-            "CreateSMSSandboxPhoneNumber" => sms::create_sms_sandbox_phone_number(&state, &input, ctx),
-            "DeleteSMSSandboxPhoneNumber" => sms::delete_sms_sandbox_phone_number(&state, &input, ctx),
-            "VerifySMSSandboxPhoneNumber" => sms::verify_sms_sandbox_phone_number(&state, &input, ctx),
-            "ListSMSSandboxPhoneNumbers" => sms::list_sms_sandbox_phone_numbers(&state, &input, ctx),
-            "GetSMSSandboxAccountStatus" => sms::get_sms_sandbox_account_status(&state, &input, ctx),
+            "CreateSMSSandboxPhoneNumber" => {
+                sms::create_sms_sandbox_phone_number(&state, &input, ctx)
+            }
+            "DeleteSMSSandboxPhoneNumber" => {
+                sms::delete_sms_sandbox_phone_number(&state, &input, ctx)
+            }
+            "VerifySMSSandboxPhoneNumber" => {
+                sms::verify_sms_sandbox_phone_number(&state, &input, ctx)
+            }
+            "ListSMSSandboxPhoneNumbers" => {
+                sms::list_sms_sandbox_phone_numbers(&state, &input, ctx)
+            }
+            "GetSMSSandboxAccountStatus" => {
+                sms::get_sms_sandbox_account_status(&state, &input, ctx)
+            }
             "GetDataProtectionPolicy" => sms::get_data_protection_policy(&state, &input, ctx),
             "PutDataProtectionPolicy" => sms::put_data_protection_policy(&state, &input, ctx),
 
             // Platform applications
-            "CreatePlatformApplication" => platform::create_platform_application(&state, &input, ctx),
-            "DeletePlatformApplication" => platform::delete_platform_application(&state, &input, ctx),
+            "CreatePlatformApplication" => {
+                platform::create_platform_application(&state, &input, ctx)
+            }
+            "DeletePlatformApplication" => {
+                platform::delete_platform_application(&state, &input, ctx)
+            }
             "ListPlatformApplications" => platform::list_platform_applications(&state, &input, ctx),
-            "GetPlatformApplicationAttributes" => platform::get_platform_application_attributes(&state, &input, ctx),
-            "SetPlatformApplicationAttributes" => platform::set_platform_application_attributes(&state, &input, ctx),
+            "GetPlatformApplicationAttributes" => {
+                platform::get_platform_application_attributes(&state, &input, ctx)
+            }
+            "SetPlatformApplicationAttributes" => {
+                platform::set_platform_application_attributes(&state, &input, ctx)
+            }
 
             // Push endpoints
             "CreatePlatformEndpoint" => platform::create_platform_endpoint(&state, &input, ctx),
             "DeleteEndpoint" => platform::delete_endpoint(&state, &input, ctx),
-            "ListEndpointsByPlatformApplication" => platform::list_endpoints_by_platform_application(&state, &input, ctx),
+            "ListEndpointsByPlatformApplication" => {
+                platform::list_endpoints_by_platform_application(&state, &input, ctx)
+            }
             "GetEndpointAttributes" => platform::get_endpoint_attributes(&state, &input, ctx),
             "SetEndpointAttributes" => platform::set_endpoint_attributes(&state, &input, ctx),
 
@@ -121,36 +139,53 @@ impl ServiceHandler for SnsService {
 
     fn iam_action(&self, operation: &str) -> Option<String> {
         match operation {
-            "CreateTopic" | "DeleteTopic" | "ListTopics"
-            | "GetTopicAttributes" | "SetTopicAttributes"
-            | "TagResource" | "UntagResource" | "ListTagsForResource"
-            | "Subscribe" | "Unsubscribe" | "ListSubscriptions" | "ListSubscriptionsByTopic"
-            | "GetSubscriptionAttributes" | "SetSubscriptionAttributes" | "ConfirmSubscription"
-            | "Publish" | "PublishBatch"
-            | "CheckIfPhoneNumberIsOptedOut" | "ListPhoneNumbersOptedOut"
-            | "GetSMSAttributes" | "SetSMSAttributes"
-            | "CreateSMSSandboxPhoneNumber" | "DeleteSMSSandboxPhoneNumber"
-            | "VerifySMSSandboxPhoneNumber" | "ListSMSSandboxPhoneNumbers"
+            "CreateTopic"
+            | "DeleteTopic"
+            | "ListTopics"
+            | "GetTopicAttributes"
+            | "SetTopicAttributes"
+            | "TagResource"
+            | "UntagResource"
+            | "ListTagsForResource"
+            | "Subscribe"
+            | "Unsubscribe"
+            | "ListSubscriptions"
+            | "ListSubscriptionsByTopic"
+            | "GetSubscriptionAttributes"
+            | "SetSubscriptionAttributes"
+            | "ConfirmSubscription"
+            | "Publish"
+            | "PublishBatch"
+            | "CheckIfPhoneNumberIsOptedOut"
+            | "ListPhoneNumbersOptedOut"
+            | "GetSMSAttributes"
+            | "SetSMSAttributes"
+            | "CreateSMSSandboxPhoneNumber"
+            | "DeleteSMSSandboxPhoneNumber"
+            | "VerifySMSSandboxPhoneNumber"
+            | "ListSMSSandboxPhoneNumbers"
             | "GetSMSSandboxAccountStatus"
-            | "GetDataProtectionPolicy" | "PutDataProtectionPolicy"
-            | "CreatePlatformApplication" | "DeletePlatformApplication"
-            | "ListPlatformApplications" | "GetPlatformApplicationAttributes"
+            | "GetDataProtectionPolicy"
+            | "PutDataProtectionPolicy"
+            | "CreatePlatformApplication"
+            | "DeletePlatformApplication"
+            | "ListPlatformApplications"
+            | "GetPlatformApplicationAttributes"
             | "SetPlatformApplicationAttributes"
-            | "CreatePlatformEndpoint" | "DeleteEndpoint"
+            | "CreatePlatformEndpoint"
+            | "DeleteEndpoint"
             | "ListEndpointsByPlatformApplication"
-            | "GetEndpointAttributes" | "SetEndpointAttributes"
-            | "OptInPhoneNumber" | "ListOriginationNumbers"
-            | "AddPermission" | "RemovePermission" => Some(format!("sns:{operation}")),
+            | "GetEndpointAttributes"
+            | "SetEndpointAttributes"
+            | "OptInPhoneNumber"
+            | "ListOriginationNumbers"
+            | "AddPermission"
+            | "RemovePermission" => Some(format!("sns:{operation}")),
             _ => None,
         }
     }
 
-    fn iam_resource(
-        &self,
-        operation: &str,
-        input: &Value,
-        ctx: &RequestContext,
-    ) -> Option<String> {
+    fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
         match operation {
             "ListTopics"
             | "ListSubscriptions"
@@ -168,11 +203,17 @@ impl ServiceHandler for SnsService {
             | "VerifySMSSandboxPhoneNumber" => Some("*".to_string()),
             "CreateTopic" => {
                 let name = input.get("Name").and_then(|v| v.as_str())?;
-                Some(format!("arn:aws:sns:{}:{}:{}", ctx.region, ctx.account_id, name))
+                Some(format!(
+                    "arn:aws:sns:{}:{}:{}",
+                    ctx.region, ctx.account_id, name
+                ))
             }
             "CreatePlatformApplication" => {
                 let name = input.get("Name").and_then(|v| v.as_str())?;
-                Some(format!("arn:aws:sns:{}:{}:app/{}", ctx.region, ctx.account_id, name))
+                Some(format!(
+                    "arn:aws:sns:{}:{}:app/{}",
+                    ctx.region, ctx.account_id, name
+                ))
             }
             _ => {
                 if let Some(arn) = input.get("TopicArn").and_then(|v| v.as_str()) {
@@ -208,15 +249,17 @@ impl ServiceHandler for SnsService {
         // Combine all per-account-region snapshots into one flat structure
         let combined = SnsStateSnapshot {
             topics: all.iter().flat_map(|s| s.topics.iter().cloned()).collect(),
-            subscriptions: all.iter().flat_map(|s| s.subscriptions.iter().cloned()).collect(),
+            subscriptions: all
+                .iter()
+                .flat_map(|s| s.subscriptions.iter().cloned())
+                .collect(),
         };
 
         serde_json::to_vec(&combined).ok()
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
-        let snapshot: SnsStateSnapshot =
-            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        let snapshot: SnsStateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
 
         // Group by account+region derived from topic ARN.
         // Topic ARN format: arn:aws:sns:{region}:{account}:{name}
@@ -232,7 +275,10 @@ impl ServiceHandler for SnsService {
             };
             by_acct_region
                 .entry((account, region))
-                .or_insert_with(|| SnsStateSnapshot { topics: vec![], subscriptions: vec![] })
+                .or_insert_with(|| SnsStateSnapshot {
+                    topics: vec![],
+                    subscriptions: vec![],
+                })
                 .topics
                 .push(topic);
         }
@@ -246,7 +292,10 @@ impl ServiceHandler for SnsService {
             };
             by_acct_region
                 .entry((account, region))
-                .or_insert_with(|| SnsStateSnapshot { topics: vec![], subscriptions: vec![] })
+                .or_insert_with(|| SnsStateSnapshot {
+                    topics: vec![],
+                    subscriptions: vec![],
+                })
                 .subscriptions
                 .push(sub);
         }

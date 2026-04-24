@@ -201,7 +201,9 @@ pub async fn test_ecs(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         "TagResource",
         client
             .tag_resource()
-            .resource_arn(format!("arn:aws:ecs:us-east-1:000000000000:cluster/conformance-cluster"))
+            .resource_arn(format!(
+                "arn:aws:ecs:us-east-1:000000000000:cluster/conformance-cluster"
+            ))
             .tags(
                 aws_sdk_ecs::types::Tag::builder()
                     .key("env")
@@ -218,7 +220,9 @@ pub async fn test_ecs(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         "ListTagsForResource",
         client
             .list_tags_for_resource()
-            .resource_arn(format!("arn:aws:ecs:us-east-1:000000000000:cluster/conformance-cluster"))
+            .resource_arn(format!(
+                "arn:aws:ecs:us-east-1:000000000000:cluster/conformance-cluster"
+            ))
             .send()
             .await,
         verbose
@@ -229,7 +233,9 @@ pub async fn test_ecs(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         "UntagResource",
         client
             .untag_resource()
-            .resource_arn(format!("arn:aws:ecs:us-east-1:000000000000:cluster/conformance-cluster"))
+            .resource_arn(format!(
+                "arn:aws:ecs:us-east-1:000000000000:cluster/conformance-cluster"
+            ))
             .tag_keys("env")
             .send()
             .await,
@@ -257,10 +263,7 @@ pub async fn test_ecs(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     // DescribeCapacityProviders
     results.push(chk!(
         "DescribeCapacityProviders",
-        client
-            .describe_capacity_providers()
-            .send()
-            .await,
+        client.describe_capacity_providers().send().await,
         verbose
     ));
 
@@ -279,10 +282,7 @@ pub async fn test_ecs(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     // ListAccountSettings
     results.push(chk!(
         "ListAccountSettings",
-        client
-            .list_account_settings()
-            .send()
-            .await,
+        client.list_account_settings().send().await,
         verbose
     ));
 

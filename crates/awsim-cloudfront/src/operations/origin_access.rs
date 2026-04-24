@@ -31,9 +31,7 @@ pub fn create_origin_access_control(
     state: &CloudFrontState,
     input: &Value,
 ) -> Result<Value, AwsError> {
-    let cfg = input
-        .get("OriginAccessControlConfig")
-        .unwrap_or(input);
+    let cfg = input.get("OriginAccessControlConfig").unwrap_or(input);
 
     let name = cfg
         .get("Name")

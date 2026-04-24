@@ -95,7 +95,10 @@ pub fn get_email_identity(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EmailIdentity is required"))?;
 
     let entry = state.identities.get(identity).ok_or_else(|| {
-        AwsError::not_found("NotFoundException", format!("Identity not found: {identity}"))
+        AwsError::not_found(
+            "NotFoundException",
+            format!("Identity not found: {identity}"),
+        )
     })?;
 
     Ok(json!({
