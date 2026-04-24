@@ -12,23 +12,27 @@ jobs:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            archive: tar.gz
+            archive: tar.xz
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            archive: tar.gz
+            archive: tar.xz
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            archive: tar.gz
+            archive: tar.xz
           - target: x86_64-apple-darwin
             os: macos-latest
-            archive: tar.gz
+            archive: tar.xz
           - target: aarch64-apple-darwin
             os: macos-latest
-            archive: tar.gz
+            archive: tar.xz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
 
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +41,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools
+      - name: Install cross-compilation tools (musl)
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
@@ -53,31 +57,62 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --bin awsim
 
-      - name: Package
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../awsim-${{ matrix.target }}.tar.gz awsim
+          tar cJf ../../../awsim-${{ matrix.target }}.tar.xz awsim
           cd ../../..
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/${{ matrix.target }}/release/awsim.exe -DestinationPath awsim-${{ matrix.target }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: awsim-${{ matrix.target }}
-          path: awsim-${{ matrix.target }}.tar.gz
+          path: awsim-${{ matrix.target }}.${{ matrix.archive }}
+
+  changelog:
+    name: Generate changelog
+    runs-on: ubuntu-latest
+    outputs:
+      changelog: ${{ steps.cliff.outputs.content }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
 
   release:
     name: Create Release
-    needs: build
+    needs: [build, changelog]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
 
+      - name: Generate checksums
+        run: sha256sum awsim-*.tar.xz awsim-*.zip > SHA256SUMS
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: awsim-*.tar.gz
-          generate_release_notes: true
+          files: |
+            awsim-*.tar.xz
+            awsim-*.zip
+            SHA256SUMS
+          body: ${{ needs.changelog.outputs.changelog }}
