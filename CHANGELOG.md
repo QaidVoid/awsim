@@ -1,0 +1,213 @@
+
+## 0.1.0 — 2026-04-24
+
+### Bug Fixes
+
+- **bedrock:** Correct REST routes to match SDK expectations
+- **elb:** Remove spurious *Result wrapper in operation responses
+- **cloudfront:** Add __xml_root markers to OriginRequestPolicy/KeyGroup/PublicKey/Function ops
+- **ui:** Accept optional MFA config in createUserPool API
+- **core:** Protocol/json serialization tweak
+- **route53:** Add __xml_root markers to Route53 responses
+- **s3:** Correct XML root elements for GetBucketTagging, ListParts, ListMultipartUploads
+- **core:** Use atomic writes for snapshots to prevent corruption
+- **s3:** Preserve trailing slash in object keys for folder markers
+- **s3:** Correct HTTP header names for ETag, Content-Type, VersionId etc.
+- **s3:** Promote ETag and other S3 fields to HTTP response headers
+- Raise body size limit to 100 MB for S3 uploads
+- **cognito:** Return Expiration as epoch float, add UserAttributes to AdminGetUser
+- **cognito:** Match JWT issuer claim to OIDC discovery issuer URL
+- **ui:** Commit missing UI changes — auth headers, ASL viewer component
+- **ui:** Merge username/email fields in Cognito — auto-detect email from input
+- **ui:** Polish Cognito page — fix disabled states, dropdowns, add visual improvements
+- **ui:** Add missing Authorization headers to all service pages
+- **core:** Robust auth parsing + path-based service detection fallback
+- **core:** Add debug logging for unresolved service routing
+- **core:** Add missing service target prefixes for Athena, Glue, ACM, WAF, ECR, ECS
+- **kms:** Accept epoch timestamp in DeletionDate test assertion
+- **cloudformation:** Add missing json! macro import in tests
+
+### Documentation
+
+- Add IAM enforcement guide and update guide pages
+- Remove IAM-not-enforced from out-of-scope, add enforcement section
+- Update Glue, Bedrock, AppSync, ACM service reference pages
+- Update CloudFormation, RDS, ECS, ECR service pages with new operations
+- Update service docs for secretsmanager, ssm, cloudwatch-logs, ec2
+- Update service pages with newly added operations
+- Enrich all service pages with examples, SDK snippets, and behavior notes
+- Add dedicated documentation pages for all 37 services
+- Add VitePress documentation site with guides and service reference
+- Add VitePress documentation site
+- Update out-of-scope list — remove services now implemented
+
+### Features
+
+- **lambda:** Add FunctionEventInvokeConfig operations
+- **ui:** Add 8 new services to sidebar navigation
+- **ui:** Add SSO Admin (Identity Center) console page
+- **ui:** Add Polly admin console page
+- **ui:** Add Organizations admin console page
+- **ui:** Add Firehose admin console page
+- **ui:** Add EKS admin console page
+- **ui:** Add DataSync admin console page
+- **ui:** Add CloudTrail admin console page
+- **ui:** Add Batch admin console page
+- **authz:** Wire Organizations SCP lookup into enforcement
+- **glue:** Expand operations and state types
+- **ssm:** Add activations, compliance, ops metadata, resource policies
+- **core:** Register 8 new services and route their target prefixes
+- **sso-admin:** Add Identity Center (SSO) service crate
+- **polly:** Add Polly text-to-speech service crate
+- **datasync:** Add DataSync service crate
+- **firehose:** Add Firehose data delivery service crate
+- **eks:** Add Kubernetes (EKS) service crate
+- **organizations:** Add AWS Organizations service crate
+- **cloudtrail:** Add CloudTrail audit log service crate
+- **batch:** Add AWS Batch service crate
+- **core:** Add SCP support to IAM enforcement
+- **authz:** Wire resource-policy lookups for S3, KMS, SQS, Secrets, Lambda
+- **iam:** Validate policy documents on write, real policy simulators
+- **services:** Wire iam_action/iam_resource mappings for 8 services
+- **core,iam:** Integrate IAM policy enforcement into gateway
+- **iam-policy:** Add awsim-iam-policy engine crate
+- **s3:** Add object lock, retention, legal hold, attributes, ListObjects v1
+- **route53,cognito-identity,ses:** Expand DNS, identity federation, email coverage
+- **sns,sqs,secrets,scheduler:** Reach full operation parity for messaging services
+- **ecr,kinesis,kms:** Add 39 ops covering registry, streaming, MAC, custom keystores
+- **dynamodb:** Add backups, exports, imports, kinesis streaming, resource policies
+- **athena,glue,ecs,elb:** Add 32 ops across analytics and compute services
+- **waf,sts:** Add WebACL associations, logging configs, federation tokens
+- **appsync,bedrock,cloudfront:** Add 52 ops across three services
+- **cognito-idp:** Add WebAuthn, terms, client secrets, legacy MFA settings
+- **iam:** Add 32 ops covering MFA, signing certs, service-specific creds, permissions boundaries
+- **ssm:** Add 29 new operations across patch baselines, automation, sessions, maintenance
+- **conformance:** Expand Cognito and IAM+DynamoDB conformance test coverage
+- **iam:** Add 10 new operations to raise coverage toward parity
+- **dynamodb:** Add 21 new operations to raise coverage from 24% toward parity
+- **kinesis:** Add 10 new operations for consumers, monitoring, encryption, and shard count update
+- **scheduler:** Add TagResource, UntagResource, ListTagsForResource
+- **ssm:** Add documents, associations, maintenance windows, OpsCenter
+- **sns:** Add 16 new operations for platform apps, push endpoints, phone numbers, and topic permissions
+- **sqs:** Add AddPermission, RemovePermission, StartMessageMoveTask, CancelMessageMoveTask, ListMessageMoveTasks
+- **secretsmanager:** Add ListSecretVersionIds and BatchGetSecretValue
+- **kms:** Add Sign/Verify, GetPublicKey, data key pairs, key import, tagging
+- **s3:** Add 35 new bucket operations (website, replication, analytics, metrics, tiering, inventory, ownership, public-access-block, accelerate, request-payment, SelectObjectContent)
+- **acm:** Add ImportCertificate, RenewCertificate, account config
+- **athena:** Add data catalogs, prepared statements, batch operations, table metadata
+- **elb:** Add target group/LB attributes, listener certs, modify operations
+- **cloudfront:** Add invalidations, cache policies, distribution config, OAIs
+- **route53:** Add DNS answer testing, DNSSEC, query logging, health check extras
+- **appsync:** Add types, functions, resolver updates, API key updates
+- **bedrock:** Add logging config, tagging, streaming stubs
+- **glue:** Add partitions, connections, job runs, tagging, search
+- **ecr:** Add lifecycle policies, repository policies, image scanning, layer ops
+- **ecs:** Add tagging, capacity providers, account settings, container agent ops
+- **ec2:** Add tagging, RunInstances, DescribeInstances, NAT/VPC endpoints stubs
+- **stepfunctions:** Add tagging, activities, task callbacks
+- **cloudwatch-logs:** Add subscription filters, metric filters, Insights queries
+- **eventbridge:** Add archives, connections, API destinations, replays
+- **ssm:** Add inventory, commands, labels
+- **lambda:** Add function URLs, tagging, permissions, account settings
+- **secretsmanager:** Add RotateSecret, GetRandomPassword, validation stubs
+- **cloudformation:** Add GetTemplateSummary, ListStackResources, SignalResource and more
+- **kms:** Add key rotation, grants, policies, GenerateRandom
+- **s3:** Add ACL, lifecycle, encryption, logging operations
+- **dynamodb:** Add DescribeEndpoints, TTL, tagging, continuous backups
+- **sns:** Add SMS stubs, verify batch publish and ConfirmSubscription
+- **sqs:** Add ChangeMessageVisibilityBatch, ListDeadLetterSourceQueues
+- **cognito:** Add persistence for Identity Pools
+- **cognito:** Add snapshot-based persistence for user pools
+- **opensearch:** Add msearch, update, updateByQuery, reindex, aliases, cluster health
+- Add S3 pre-signed URL support, Kendra attribute filters, Cognito user list filtering
+- **s3:** Add object-level tagging (PutObjectTagging, GetObjectTagging, DeleteObjectTagging)
+- **opensearch:** Implement Amazon OpenSearch with Elasticsearch-compatible REST API
+- **kendra:** Implement Amazon Kendra with indexes, documents, query, retrieval
+- **comprehend:** Implement Amazon Comprehend with entity detection, key phrases, sentiment
+- **ui:** Show IAM role claims in tokens, group precedence, Identity Pool role mapping editor
+- **cognito:** Add cognito:roles and cognito:preferred_role claims to JWT tokens based on group membership
+- **cognito:** Wire Identity Pool credential vending to IAM roles with role mapping rules
+- **ui:** Comprehensive IAM management console with policies, access keys, tagging
+- **iam:** Add policy versions, inline policy CRUD, attached policy listing, entity queries
+- **ui:** Fully editable Cognito settings with MFA, password policy, triggers, domain, providers
+- **cognito:** Add device tracking, branding, risk config, import jobs, provider linking (+48 operations)
+- **cognito:** Complete Identity Pools with all 23 operations
+- **cognito:** Add 40+ missing user pool operations (groups, resources, IdPs, domains, auth challenges)
+- **cognito:** Implement TOTP MFA and Lambda trigger invocation
+- **cognito:** PKCE, client secret validation, scopes, revoke endpoint, login page
+- **ui:** Comprehensive Cognito management console with auth testing and token inspector
+- **sns:** Implement subscription filter policies; test: add advanced integration tests
+- **scheduler:** Implement EventBridge Scheduler with schedules and schedule groups
+- **waf:** Implement WAF v2 with web ACLs, IP sets, rule groups
+- **acm:** Implement ACM with certificate request, validation, auto-issuance
+- **sqs:** Implement Dead Letter Queues, visibility timeout expiry, message retention
+- **cloudwatch-metrics:** Implement CloudWatch Metrics with alarms and dashboards
+- **bedrock:** Implement Bedrock with foundation models, guardrails, mock InvokeModel
+- **appsync:** Implement AppSync with GraphQL APIs, schemas, data sources, resolvers
+- **glue:** Implement Glue Data Catalog with databases, tables, crawlers, jobs
+- **athena:** Implement Athena with workgroups, query execution, named queries
+- **cognito:** Implement OAuth2/OIDC endpoints for hosted UI auth flows
+- Add request metrics, startup banner, enhanced dashboard with live stats
+- Implement EventBridge→Lambda triggers and Kinesis→Lambda polling
+- **ui:** Add STS identity viewer, RDS management, API request log, remaining sidebar entries
+- Implement SQS→Lambda polling and S3 event notifications
+- **cognito:** Implement Cognito Identity Pools with federation and credential vending
+- **ui:** Add interactive EC2, ECS, ECR, CloudFormation, Kinesis, Step Functions pages
+- **ui:** Add interactive EventBridge, KMS, SSM, and SES management pages
+- **dynamodb:** Implement DynamoDB Streams with change capture and Lambda triggers
+- **rds:** Implement RDS with DB instances, clusters, subnet groups
+- **apigateway:** Implement API Gateway v2 with routes, integrations, proxy routing
+- **ui:** Add interactive IAM, Lambda invocation, and Cognito user management pages
+- **lambda:** Implement local process execution for Node.js and Python runtimes
+- **core:** Add snapshot-based persistence with save/restore on shutdown
+- Implement CloudFormation resource providers and SNS→SQS fan-out
+- **ui:** Add interactive S3 browser, SQS messaging, DynamoDB item explorer
+- Add nix flake with dev shell and package build
+- **core:** Add internal event bus for cross-service integrations
+- **ui:** Add AWS API client and live resource listing for service pages
+- Add Dockerfile, docker-compose, README
+- **ui:** Create SvelteKit admin console with dashboard and service pages
+- Add admin REST API for SvelteKit console
+- **cloudformation:** Implement CloudFormation with stacks, change sets, template validation
+- **ec2:** Implement EC2 networking primitives (VPCs, subnets, security groups, gateways)
+- **ecs:** Implement ECS with clusters, task definitions, services, tasks
+- **ecr:** Implement ECR with repositories, images, authorization
+- **cognito:** Implement Cognito User Pools with auth flows, JWT tokens, user management
+- **ses:** Implement SES v2 with email sending, identities, templates
+- **kinesis:** Implement Kinesis with streams, shards, records, iterators
+- **stepfunctions:** Implement Step Functions with state machines, executions, ASL interpreter
+- **ssm:** Implement SSM Parameter Store with hierarchical parameters
+- **secretsmanager:** Implement Secrets Manager with secrets, versions, rotation
+- **kms:** Implement KMS with keys, aliases, encrypt/decrypt
+- **lambda:** Implement Lambda service with functions, invocation, event source mappings
+- **eventbridge:** Implement EventBridge with event buses, rules, targets, event matching
+- **dynamodb:** Implement DynamoDB service with tables, items, queries, expressions
+- **s3:** Implement S3 service with buckets, objects, multipart uploads
+- **sns:** Implement SNS service with topics, subscriptions, publishing
+- **iam:** Implement IAM service with users, groups, roles, policies
+- **sts:** Implement STS service (GetCallerIdentity, AssumeRole, GetSessionToken)
+- **core:** Implement gateway pipeline, protocol parsers, and service routing
+- Initialize AWSim project structure
+
+### Refactor
+
+- **conformance:** Split runner.rs into 41 per-service modules
+- **cloudformation:** Replace serde_yaml with saphyr
+
+### Tests
+
+- **conformance:** Expand to 871 passing assertions across 39 services
+- **conformance:** Cover Batch, DataSync, Polly, SSO Admin (16 new tests)
+- **conformance:** Add coverage for 4 new services (CloudTrail, EKS, Firehose, Organizations)
+- **iam:** Add end-to-end IAM enforcement test suite
+- **conformance:** Expand to 666 passing assertions, 49% operation coverage
+- **conformance:** Expand to 622 passing assertions across 31 services
+- **conformance:** Expand S3, ECR, ECS, Kinesis coverage to 400+ operations
+- **conformance:** Add 12 new service test suites, expand to 500+ operations
+- **conformance:** Add tests for Lambda URLs, EventBridge, Step Functions, CloudWatch Logs, EC2, CloudFormation, RDS
+- **conformance:** Expand test coverage to 246 operations across all services
+- Add Smithy conformance test harness with per-service SDK validation
+- Add integration tests for CloudWatch Logs, SSM, Lambda, DynamoDB Query, S3 multipart, SQS FIFO
+- Add integration tests with aws-sdk-rust for S3, SQS, DynamoDB, IAM, SNS, KMS, Secrets Manager
+
+
