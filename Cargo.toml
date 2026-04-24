@@ -59,52 +59,52 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/QaidVoid/awsim"
 
 [workspace.dependencies]
-awsim-apigateway = { path = "crates/awsim-apigateway" }
-awsim-appsync = { path = "crates/awsim-appsync" }
-awsim-athena = { path = "crates/awsim-athena" }
-awsim-bedrock = { path = "crates/awsim-bedrock" }
-awsim-cloudformation = { path = "crates/awsim-cloudformation" }
-awsim-cloudfront = { path = "crates/awsim-cloudfront" }
-awsim-cloudwatch-logs = { path = "crates/awsim-cloudwatch-logs" }
-awsim-cognito = { path = "crates/awsim-cognito" }
-awsim-core = { path = "crates/awsim-core" }
-awsim-ec2 = { path = "crates/awsim-ec2" }
-awsim-ecr = { path = "crates/awsim-ecr" }
-awsim-ecs = { path = "crates/awsim-ecs" }
-awsim-eventbridge = { path = "crates/awsim-eventbridge" }
-awsim-elb = { path = "crates/awsim-elb" }
-awsim-glue = { path = "crates/awsim-glue" }
-awsim-dynamodb = { path = "crates/awsim-dynamodb" }
-awsim-iam = { path = "crates/awsim-iam" }
-awsim-iam-policy = { path = "crates/awsim-iam-policy" }
-awsim-rds = { path = "crates/awsim-rds" }
-awsim-kinesis = { path = "crates/awsim-kinesis" }
-awsim-kms = { path = "crates/awsim-kms" }
-awsim-lambda = { path = "crates/awsim-lambda" }
-awsim-route53 = { path = "crates/awsim-route53" }
-awsim-cloudwatch-metrics = { path = "crates/awsim-cloudwatch-metrics" }
-awsim-secretsmanager = { path = "crates/awsim-secretsmanager" }
-awsim-s3 = { path = "crates/awsim-s3" }
-awsim-ses = { path = "crates/awsim-ses" }
-awsim-sns = { path = "crates/awsim-sns" }
-awsim-sqs = { path = "crates/awsim-sqs" }
-awsim-ssm = { path = "crates/awsim-ssm" }
-awsim-sts = { path = "crates/awsim-sts" }
-awsim-stepfunctions = { path = "crates/awsim-stepfunctions" }
-awsim-acm = { path = "crates/awsim-acm" }
-awsim-waf = { path = "crates/awsim-waf" }
-awsim-scheduler = { path = "crates/awsim-scheduler" }
-awsim-comprehend = { path = "crates/awsim-comprehend" }
-awsim-kendra = { path = "crates/awsim-kendra" }
-awsim-opensearch = { path = "crates/awsim-opensearch" }
-awsim-organizations = { path = "crates/awsim-organizations" }
-awsim-cloudtrail = { path = "crates/awsim-cloudtrail" }
-awsim-eks = { path = "crates/awsim-eks" }
-awsim-firehose = { path = "crates/awsim-firehose" }
-awsim-batch = { path = "crates/awsim-batch" }
-awsim-sso-admin = { path = "crates/awsim-sso-admin" }
-awsim-datasync = { path = "crates/awsim-datasync" }
-awsim-polly = { path = "crates/awsim-polly" }
+awsim-apigateway = { path = "crates/awsim-apigateway", version = "0.1.0" }
+awsim-appsync = { path = "crates/awsim-appsync", version = "0.1.0" }
+awsim-athena = { path = "crates/awsim-athena", version = "0.1.0" }
+awsim-bedrock = { path = "crates/awsim-bedrock", version = "0.1.0" }
+awsim-cloudformation = { path = "crates/awsim-cloudformation", version = "0.1.0" }
+awsim-cloudfront = { path = "crates/awsim-cloudfront", version = "0.1.0" }
+awsim-cloudwatch-logs = { path = "crates/awsim-cloudwatch-logs", version = "0.1.0" }
+awsim-cognito = { path = "crates/awsim-cognito", version = "0.1.0" }
+awsim-core = { path = "crates/awsim-core", version = "0.1.0" }
+awsim-ec2 = { path = "crates/awsim-ec2", version = "0.1.0" }
+awsim-ecr = { path = "crates/awsim-ecr", version = "0.1.0" }
+awsim-ecs = { path = "crates/awsim-ecs", version = "0.1.0" }
+awsim-eventbridge = { path = "crates/awsim-eventbridge", version = "0.1.0" }
+awsim-elb = { path = "crates/awsim-elb", version = "0.1.0" }
+awsim-glue = { path = "crates/awsim-glue", version = "0.1.0" }
+awsim-dynamodb = { path = "crates/awsim-dynamodb", version = "0.1.0" }
+awsim-iam = { path = "crates/awsim-iam", version = "0.1.0" }
+awsim-iam-policy = { path = "crates/awsim-iam-policy", version = "0.1.0" }
+awsim-rds = { path = "crates/awsim-rds", version = "0.1.0" }
+awsim-kinesis = { path = "crates/awsim-kinesis", version = "0.1.0" }
+awsim-kms = { path = "crates/awsim-kms", version = "0.1.0" }
+awsim-lambda = { path = "crates/awsim-lambda", version = "0.1.0" }
+awsim-route53 = { path = "crates/awsim-route53", version = "0.1.0" }
+awsim-cloudwatch-metrics = { path = "crates/awsim-cloudwatch-metrics", version = "0.1.0" }
+awsim-secretsmanager = { path = "crates/awsim-secretsmanager", version = "0.1.0" }
+awsim-s3 = { path = "crates/awsim-s3", version = "0.1.0" }
+awsim-ses = { path = "crates/awsim-ses", version = "0.1.0" }
+awsim-sns = { path = "crates/awsim-sns", version = "0.1.0" }
+awsim-sqs = { path = "crates/awsim-sqs", version = "0.1.0" }
+awsim-ssm = { path = "crates/awsim-ssm", version = "0.1.0" }
+awsim-sts = { path = "crates/awsim-sts", version = "0.1.0" }
+awsim-stepfunctions = { path = "crates/awsim-stepfunctions", version = "0.1.0" }
+awsim-acm = { path = "crates/awsim-acm", version = "0.1.0" }
+awsim-waf = { path = "crates/awsim-waf", version = "0.1.0" }
+awsim-scheduler = { path = "crates/awsim-scheduler", version = "0.1.0" }
+awsim-comprehend = { path = "crates/awsim-comprehend", version = "0.1.0" }
+awsim-kendra = { path = "crates/awsim-kendra", version = "0.1.0" }
+awsim-opensearch = { path = "crates/awsim-opensearch", version = "0.1.0" }
+awsim-organizations = { path = "crates/awsim-organizations", version = "0.1.0" }
+awsim-cloudtrail = { path = "crates/awsim-cloudtrail", version = "0.1.0" }
+awsim-eks = { path = "crates/awsim-eks", version = "0.1.0" }
+awsim-firehose = { path = "crates/awsim-firehose", version = "0.1.0" }
+awsim-batch = { path = "crates/awsim-batch", version = "0.1.0" }
+awsim-sso-admin = { path = "crates/awsim-sso-admin", version = "0.1.0" }
+awsim-datasync = { path = "crates/awsim-datasync", version = "0.1.0" }
+awsim-polly = { path = "crates/awsim-polly", version = "0.1.0" }
 
 # Async
 tokio = { version = "1", features = ["full"] }
