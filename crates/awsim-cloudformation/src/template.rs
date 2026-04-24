@@ -45,15 +45,53 @@ pub fn parse_template_body(body: &str) -> Result<Value, AwsError> {
     let trimmed = body.trim();
 
     if trimmed.starts_with('{') {
-        // JSON
         serde_json::from_str(trimmed)
             .map_err(|e| invalid_template(format!("Invalid JSON template: {e}")))
     } else {
-        // YAML
-        let yaml_val: serde_yaml::Value = serde_yaml::from_str(trimmed)
+        use saphyr::{LoadableYamlNode, Yaml};
+        let docs = Yaml::load_from_str(trimmed)
             .map_err(|e| invalid_template(format!("Invalid YAML template: {e}")))?;
-        serde_json::to_value(yaml_val)
-            .map_err(|e| invalid_template(format!("Template conversion error: {e}")))
+        let doc = docs
+            .into_iter()
+            .next()
+            .ok_or_else(|| invalid_template("Empty YAML template"))?;
+        Ok(yaml_to_json(&doc))
+    }
+}
+
+fn yaml_to_json(yaml: &saphyr::Yaml) -> Value {
+    use saphyr::Yaml;
+    match yaml {
+        Yaml::Value(scalar) => scalar_to_json(scalar),
+        Yaml::Sequence(seq) => Value::Array(seq.iter().map(yaml_to_json).collect()),
+        Yaml::Mapping(map) => {
+            let mut obj = Map::new();
+            for (k, v) in map {
+                let key = match k {
+                    Yaml::Value(saphyr::Scalar::String(s)) => s.to_string(),
+                    Yaml::Value(saphyr::Scalar::Integer(i)) => i.to_string(),
+                    Yaml::Value(saphyr::Scalar::Boolean(b)) => b.to_string(),
+                    _ => continue,
+                };
+                obj.insert(key, yaml_to_json(v));
+            }
+            Value::Object(obj)
+        }
+        Yaml::Tagged(_, inner) => yaml_to_json(inner),
+        Yaml::Alias(_) | Yaml::BadValue | Yaml::Representation(_, _, _) => Value::Null,
+    }
+}
+
+fn scalar_to_json(scalar: &saphyr::Scalar) -> Value {
+    use saphyr::Scalar;
+    match scalar {
+        Scalar::Null => Value::Null,
+        Scalar::Boolean(b) => Value::Bool(*b),
+        Scalar::Integer(i) => Value::Number((*i).into()),
+        Scalar::FloatingPoint(f) => serde_json::Number::from_f64(f.into_inner())
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        Scalar::String(s) => Value::String(s.to_string()),
     }
 }
 
@@ -581,5 +619,30 @@ mod tests {
         let val = json!({ "Fn::Join": ["-", ["a", "b", "c"]] });
         let resolved = resolve_value(&val, &HashMap::new(), &HashMap::new(), &HashMap::new());
         assert_eq!(resolved, Value::String("a-b-c".to_string()));
+    }
+
+    #[test]
+    fn test_parse_yaml_template() {
+        let body = r#"
+AWSTemplateFormatVersion: "2010-09-09"
+Description: YAML test template
+Parameters:
+  BucketName:
+    Type: String
+    Default: my-bucket
+Resources:
+  MyBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+"#;
+        let result = validate_and_parse(body, &HashMap::new()).unwrap();
+        assert_eq!(result.description, Some("YAML test template".to_string()));
+        assert_eq!(result.resources.len(), 1);
+        assert_eq!(result.resources[0].logical_id, "MyBucket");
+        assert_eq!(result.resources[0].resource_type, "AWS::S3::Bucket");
+        assert_eq!(result.parameters.len(), 1);
+        assert_eq!(result.parameters[0].name, "BucketName");
+        assert_eq!(result.parameters[0].default, Some("my-bucket".to_string()));
     }
 }

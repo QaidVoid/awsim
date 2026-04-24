@@ -11,6 +11,6 @@ async-trait = { workspace = true }
 dashmap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+saphyr = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
