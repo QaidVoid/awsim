@@ -30,7 +30,7 @@ fn require_log_group<'a>(
 // ---------------------------------------------------------------------------
 
 /// Extract log group name from an ARN or return it as-is if it looks like a name.
-fn log_group_from_arn<'a>(arn: &'a str) -> &'a str {
+fn log_group_from_arn(arn: &str) -> &str {
     // arn:aws:logs:{region}:{account}:log-group:{name}
     if let Some(rest) = arn.strip_prefix("arn:aws:logs:") {
         // Find the "log-group:" segment
@@ -306,7 +306,7 @@ pub fn describe_metric_filters(
         .metric_filters
         .iter()
         .filter(|e| {
-            log_group_name.map_or(true, |lg| e.key().0 == lg)
+            log_group_name.is_none_or(|lg| e.key().0 == lg)
                 && e.filter_name.starts_with(filter_name_prefix)
         })
         .map(|e| {

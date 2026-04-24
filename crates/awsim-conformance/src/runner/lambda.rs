@@ -233,7 +233,7 @@ pub async fn test_lambda(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     ));
 
     // TagResource (Lambda)
-    let fn_arn = format!("arn:aws:lambda:us-east-1:000000000000:function:conformance-fn");
+    let fn_arn = "arn:aws:lambda:us-east-1:000000000000:function:conformance-fn".to_string();
     results.push(chk!(
         "TagResource",
         client

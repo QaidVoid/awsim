@@ -464,7 +464,7 @@ mod tests {
         let ctx = ctx();
         block_on(svc.handle("CreateEventBus", json!({ "Name": "tagged-bus" }), &ctx)).unwrap();
 
-        let arn = format!("arn:aws:events:us-east-1:000000000000:event-bus/tagged-bus");
+        let arn = "arn:aws:events:us-east-1:000000000000:event-bus/tagged-bus".to_string();
 
         block_on(svc.handle(
             "TagResource",

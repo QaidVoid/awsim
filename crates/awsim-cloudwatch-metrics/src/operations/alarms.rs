@@ -23,7 +23,7 @@ fn epoch_to_ymdhms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     let mut year = 1970u64;
     let mut remaining = days;
     loop {
-        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+        let leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
         let days_in_year = if leap { 366 } else { 365 };
         if remaining < days_in_year {
             break;
@@ -31,7 +31,7 @@ fn epoch_to_ymdhms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
         remaining -= days_in_year;
         year += 1;
     }
-    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
     let month_days: &[u64] = if leap {
         &[31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     } else {

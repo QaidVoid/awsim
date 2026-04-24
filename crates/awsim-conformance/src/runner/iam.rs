@@ -630,7 +630,7 @@ pub async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         "SimulatePrincipalPolicy",
         client
             .simulate_principal_policy()
-            .policy_source_arn(format!("arn:aws:iam::000000000000:user/conformance-user"))
+            .policy_source_arn("arn:aws:iam::000000000000:user/conformance-user".to_string())
             .action_names("s3:GetObject")
             .resource_arns("*")
             .send()
@@ -656,7 +656,7 @@ pub async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         "GetContextKeysForPrincipalPolicy",
         client
             .get_context_keys_for_principal_policy()
-            .policy_source_arn(format!("arn:aws:iam::000000000000:user/conformance-user"))
+            .policy_source_arn("arn:aws:iam::000000000000:user/conformance-user".to_string())
             .send()
             .await,
         verbose
@@ -1030,7 +1030,7 @@ pub async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
     // GetServiceLastAccessedDetails
     let glsad_r = client
         .generate_service_last_accessed_details()
-        .arn(format!("arn:aws:iam::000000000000:user/conformance-user"))
+        .arn("arn:aws:iam::000000000000:user/conformance-user".to_string())
         .send()
         .await;
     let job_id = glsad_r.as_ref().ok().and_then(|r| r.job_id.clone());
@@ -1091,7 +1091,7 @@ pub async fn test_iam(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         "ListPoliciesGrantingServiceAccess",
         client
             .list_policies_granting_service_access()
-            .arn(format!("arn:aws:iam::000000000000:user/conformance-user"))
+            .arn("arn:aws:iam::000000000000:user/conformance-user".to_string())
             .service_namespaces("s3")
             .send()
             .await,

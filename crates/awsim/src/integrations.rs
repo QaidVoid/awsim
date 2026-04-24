@@ -29,8 +29,8 @@ pub async fn poll_sqs_event_sources(services: &HashMap<String, Arc<dyn ServiceHa
         .handle("ListEventSourceMappings", serde_json::json!({}), &ctx)
         .await;
 
-    if let Ok(result) = mappings_result {
-        if let Some(mappings) = result["EventSourceMappings"].as_array() {
+    if let Ok(result) = mappings_result
+        && let Some(mappings) = result["EventSourceMappings"].as_array() {
             for mapping in mappings {
                 let enabled = mapping["State"].as_str() == Some("Enabled");
                 if !enabled {
@@ -68,8 +68,7 @@ pub async fn poll_sqs_event_sources(services: &HashMap<String, Arc<dyn ServiceHa
                 let sqs_ctx = RequestContext::new("sqs", region);
                 if let Ok(receive_result) =
                     sqs.handle("ReceiveMessage", receive_input, &sqs_ctx).await
-                {
-                    if let Some(messages) = receive_result["Messages"].as_array() {
+                    && let Some(messages) = receive_result["Messages"].as_array() {
                         if messages.is_empty() {
                             continue;
                         }
@@ -129,10 +128,8 @@ pub async fn poll_sqs_event_sources(services: &HashMap<String, Arc<dyn ServiceHa
                             );
                         }
                     }
-                }
             }
         }
-    }
 }
 
 /// Handle an S3 object event (ObjectCreated or ObjectRemoved) by routing it to
@@ -464,7 +461,7 @@ pub async fn handle_eventbridge_target(
                 )
             } else {
                 // Fallback: extract last segment as queue name
-                let queue_name = target_arn.split(':').last().unwrap_or("");
+                let queue_name = target_arn.split(':').next_back().unwrap_or("");
                 format!(
                     "http://sqs.{}.localhost:4566/000000000000/{}",
                     event.region, queue_name
@@ -524,8 +521,8 @@ pub async fn poll_kinesis_event_sources(services: &HashMap<String, Arc<dyn Servi
         .handle("ListEventSourceMappings", serde_json::json!({}), &ctx)
         .await;
 
-    if let Ok(result) = mappings_result {
-        if let Some(mappings) = result["EventSourceMappings"].as_array() {
+    if let Ok(result) = mappings_result
+        && let Some(mappings) = result["EventSourceMappings"].as_array() {
             for mapping in mappings {
                 if mapping["State"].as_str() != Some("Enabled") {
                     continue;
@@ -543,7 +540,7 @@ pub async fn poll_kinesis_event_sources(services: &HashMap<String, Arc<dyn Servi
                 let batch_size = mapping["BatchSize"].as_u64().unwrap_or(100);
 
                 // Extract stream name from ARN: arn:aws:kinesis:{region}:{account}:stream/{name}
-                let stream_name = event_source_arn.split('/').last().unwrap_or("");
+                let stream_name = event_source_arn.split('/').next_back().unwrap_or("");
                 if stream_name.is_empty() {
                     continue;
                 }
@@ -623,7 +620,6 @@ pub async fn poll_kinesis_event_sources(services: &HashMap<String, Arc<dyn Servi
                 }
             }
         }
-    }
 }
 
 /// Handle a `cloudformation:CreateResource` event by calling the appropriate

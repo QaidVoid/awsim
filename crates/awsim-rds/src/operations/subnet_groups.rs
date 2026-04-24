@@ -42,16 +42,10 @@ pub fn create_db_subnet_group(
                         .map(|s| s.to_string())
                         .collect(),
                 )
-            } else if let Some(s) = v.as_str() {
-                Some(
-                    s.split(',')
+            } else { v.as_str().map(|s| s.split(',')
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
-                        .collect(),
-                )
-            } else {
-                None
-            }
+                        .collect()) }
         })
         .unwrap_or_default();
 

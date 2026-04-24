@@ -223,17 +223,15 @@ pub fn list_tasks(
         .values()
         .filter(|task| {
             // Filter by service group if requested
-            if let Some(svc) = service_name_filter {
-                if !task.group.contains(svc) {
+            if let Some(svc) = service_name_filter
+                && !task.group.contains(svc) {
                     return false;
                 }
-            }
             // Filter by family if requested
-            if let Some(family) = family_filter {
-                if !task.task_definition_arn.contains(family) {
+            if let Some(family) = family_filter
+                && !task.task_definition_arn.contains(family) {
                     return false;
                 }
-            }
             true
         })
         .map(|task| json!(task.task_arn))

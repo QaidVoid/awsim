@@ -629,11 +629,10 @@ impl ServiceHandler for IamService {
             if let Ok(aliases) = state.account_aliases.lock() {
                 snapshot.account_aliases.extend(aliases.clone());
             }
-            if let Ok(policy) = state.account_password_policy.lock() {
-                if snapshot.account_password_policy.is_none() {
+            if let Ok(policy) = state.account_password_policy.lock()
+                && snapshot.account_password_policy.is_none() {
                     snapshot.account_password_policy = policy.clone();
                 }
-            }
             snapshot
                 .oidc_providers
                 .extend(state.oidc_providers.iter().map(|e| e.value().clone()));
@@ -699,11 +698,10 @@ impl ServiceHandler for IamService {
                 .instance_profiles
                 .insert(ip.instance_profile_name.clone(), ip);
         }
-        if !snapshot.account_aliases.is_empty() {
-            if let Ok(mut aliases) = state.account_aliases.lock() {
+        if !snapshot.account_aliases.is_empty()
+            && let Ok(mut aliases) = state.account_aliases.lock() {
                 *aliases = snapshot.account_aliases;
             }
-        }
         if let Ok(mut policy) = state.account_password_policy.lock() {
             *policy = snapshot.account_password_policy;
         }

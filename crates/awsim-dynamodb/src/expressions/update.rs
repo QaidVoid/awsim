@@ -86,7 +86,7 @@ fn parse_update_expression(
                 || upper
                     .chars()
                     .nth(abs_pos - 1)
-                    .map_or(true, |c| !c.is_alphanumeric() && c != '_');
+                    .is_none_or(|c| !c.is_alphanumeric() && c != '_');
             if is_word_boundary {
                 clauses.push((kw.trim().to_string(), abs_pos));
             }
@@ -160,9 +160,7 @@ fn split_actions(s: &str) -> Vec<String> {
                 current.push(c);
             }
             ')' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
+                depth = depth.saturating_sub(1);
                 current.push(c);
             }
             ',' if depth == 0 => {
@@ -288,9 +286,7 @@ fn find_top_level_arithmetic(expr: &str) -> Option<(String, char, String)> {
         match chars[i] {
             ')' => depth += 1,
             '(' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
+                depth = depth.saturating_sub(1);
             }
             '+' | '-' if depth == 0 && i > 0 => {
                 // Don't treat unary minus as binary op

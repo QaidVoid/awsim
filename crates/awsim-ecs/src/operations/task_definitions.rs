@@ -22,7 +22,7 @@ fn task_def_to_json(td: &TaskDefinition) -> Value {
 pub fn parse_task_definition_id(id: &str) -> (&str, Option<u32>) {
     // ARN: arn:aws:ecs:{region}:{account}:task-definition/{family}:{revision}
     let base = if id.starts_with("arn:") {
-        id.split('/').last().unwrap_or(id)
+        id.split('/').next_back().unwrap_or(id)
     } else {
         id
     };

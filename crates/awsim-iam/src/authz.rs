@@ -128,11 +128,10 @@ fn collect_identity_policies(state: &IamState, user: &crate::state::User) -> Vec
     }
 
     for arn in &user.attached_policies {
-        if let Some(policy) = state.policies.get(arn) {
-            if let Some(doc) = parse_policy_document(&policy.value().policy_document) {
+        if let Some(policy) = state.policies.get(arn)
+            && let Some(doc) = parse_policy_document(&policy.value().policy_document) {
                 docs.push(doc);
             }
-        }
     }
 
     for group_name in &user.groups {
@@ -144,11 +143,10 @@ fn collect_identity_policies(state: &IamState, user: &crate::state::User) -> Vec
                 }
             }
             for arn in &group.attached_policies {
-                if let Some(policy) = state.policies.get(arn) {
-                    if let Some(doc) = parse_policy_document(&policy.value().policy_document) {
+                if let Some(policy) = state.policies.get(arn)
+                    && let Some(doc) = parse_policy_document(&policy.value().policy_document) {
                         docs.push(doc);
                     }
-                }
             }
         }
     }
@@ -167,11 +165,10 @@ fn collect_role_identity_policies(
         }
     }
     for arn in &role.attached_policies {
-        if let Some(policy) = state.policies.get(arn) {
-            if let Some(doc) = parse_policy_document(&policy.value().policy_document) {
+        if let Some(policy) = state.policies.get(arn)
+            && let Some(doc) = parse_policy_document(&policy.value().policy_document) {
                 docs.push(doc);
             }
-        }
     }
     docs
 }

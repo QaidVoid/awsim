@@ -51,11 +51,10 @@ impl ScpLookup for OrganizationsScpLookup {
             }
             if let Some(attached) = state.policy_attachments.get(&node_id) {
                 for policy_id in attached.iter() {
-                    if let Some(p) = state.policies.get(policy_id) {
-                        if p.policy_type == "SERVICE_CONTROL_POLICY" {
+                    if let Some(p) = state.policies.get(policy_id)
+                        && p.policy_type == "SERVICE_CONTROL_POLICY" {
                             policy_contents.push(p.content.clone());
                         }
-                    }
                 }
             }
             match state.parents.get(&node_id) {

@@ -241,21 +241,19 @@ fn eval_condition_value(
     match val {
         Value::Object(map) => {
             if let Some(eq_args) = map.get("Fn::Equals") {
-                if let Value::Array(arr) = eq_args {
-                    if arr.len() == 2 {
+                if let Value::Array(arr) = eq_args
+                    && arr.len() == 2 {
                         let a = resolve_value(&arr[0], params, conditions, &HashMap::new());
                         let b = resolve_value(&arr[1], params, conditions, &HashMap::new());
                         return a == b;
                     }
-                }
                 return false;
             }
             if let Some(not_arg) = map.get("Fn::Not") {
-                if let Value::Array(arr) = not_arg {
-                    if let Some(first) = arr.first() {
+                if let Value::Array(arr) = not_arg
+                    && let Some(first) = arr.first() {
                         return !eval_condition_value(first, params, conditions);
                     }
-                }
                 return false;
             }
             if let Some(and_args) = map.get("Fn::And") {
@@ -291,11 +289,10 @@ pub fn resolve_value(
     match val {
         Value::Object(map) => {
             // Check for intrinsic function keys
-            if let Some(ref_val) = map.get("Ref") {
-                if let Some(s) = ref_val.as_str() {
+            if let Some(ref_val) = map.get("Ref")
+                && let Some(s) = ref_val.as_str() {
                     return resolve_ref(s, params, resources);
                 }
-            }
             if let Some(get_att) = map.get("Fn::GetAtt") {
                 return resolve_get_att(get_att, resources);
             }
@@ -371,21 +368,18 @@ fn resolve_get_att(val: &Value, resources: &HashMap<String, Value>) -> Value {
         Value::Array(arr) if arr.len() == 2 => {
             let logical_id = arr[0].as_str().unwrap_or("");
             let attr = arr[1].as_str().unwrap_or("");
-            if let Some(res) = resources.get(logical_id) {
-                if let Some(v) = res.get(attr) {
+            if let Some(res) = resources.get(logical_id)
+                && let Some(v) = res.get(attr) {
                     return v.clone();
                 }
-            }
             Value::String(format!("{logical_id}.{attr}"))
         }
         Value::String(s) => {
-            if let Some((logical_id, attr)) = s.split_once('.') {
-                if let Some(res) = resources.get(logical_id) {
-                    if let Some(v) = res.get(attr) {
+            if let Some((logical_id, attr)) = s.split_once('.')
+                && let Some(res) = resources.get(logical_id)
+                    && let Some(v) = res.get(attr) {
                         return v.clone();
                     }
-                }
-            }
             Value::String(s.clone())
         }
         _ => Value::Null,
@@ -419,8 +413,8 @@ fn resolve_sub(
     let bytes = template_str.as_bytes();
     let mut out = String::new();
     while i < bytes.len() {
-        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-            if let Some(end) = template_str[i + 2..].find('}') {
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{'
+            && let Some(end) = template_str[i + 2..].find('}') {
                 let var_name = &template_str[i + 2..i + 2 + end];
                 let replacement = if let Some(v) = extra_vars.get(var_name) {
                     v.clone()
@@ -443,7 +437,6 @@ fn resolve_sub(
                 i += 2 + end + 1; // skip past the closing `}`
                 continue;
             }
-        }
         out.push(bytes[i] as char);
         i += 1;
     }
@@ -457,8 +450,8 @@ fn resolve_join(
     conditions: &HashMap<String, bool>,
     resources: &HashMap<String, Value>,
 ) -> Value {
-    if let Value::Array(arr) = val {
-        if arr.len() == 2 {
+    if let Value::Array(arr) = val
+        && arr.len() == 2 {
             let delimiter = arr[0].as_str().unwrap_or("");
             let resolved = resolve_value(&arr[1], params, conditions, resources);
             let items: Vec<String> = match &resolved {
@@ -473,7 +466,6 @@ fn resolve_join(
             };
             return Value::String(items.join(delimiter));
         }
-    }
     Value::Null
 }
 
@@ -483,17 +475,15 @@ fn resolve_select(
     conditions: &HashMap<String, bool>,
     resources: &HashMap<String, Value>,
 ) -> Value {
-    if let Value::Array(arr) = val {
-        if arr.len() == 2 {
+    if let Value::Array(arr) = val
+        && arr.len() == 2 {
             let idx = arr[0].as_u64().unwrap_or(0) as usize;
             let resolved = resolve_value(&arr[1], params, conditions, resources);
-            if let Value::Array(items) = resolved {
-                if let Some(item) = items.get(idx) {
+            if let Value::Array(items) = resolved
+                && let Some(item) = items.get(idx) {
                     return item.clone();
                 }
-            }
         }
-    }
     Value::Null
 }
 
@@ -503,14 +493,13 @@ fn resolve_if(
     conditions: &HashMap<String, bool>,
     resources: &HashMap<String, Value>,
 ) -> Value {
-    if let Value::Array(arr) = val {
-        if arr.len() == 3 {
+    if let Value::Array(arr) = val
+        && arr.len() == 3 {
             let condition_name = arr[0].as_str().unwrap_or("");
             let is_true = conditions.get(condition_name).copied().unwrap_or(false);
             let branch = if is_true { &arr[1] } else { &arr[2] };
             return resolve_value(branch, params, conditions, resources);
         }
-    }
     Value::Null
 }
 
@@ -555,7 +544,7 @@ fn topological_sort(resources: Vec<ResourceDef>) -> Result<Vec<ResourceDef>, Str
         return Err("Circular dependency detected in resources".to_string());
     }
 
-    let mut result: Vec<Option<ResourceDef>> = resources.into_iter().map(|r| Some(r)).collect();
+    let mut result: Vec<Option<ResourceDef>> = resources.into_iter().map(Some).collect();
     Ok(order
         .into_iter()
         .map(|i| result[i].take().unwrap())

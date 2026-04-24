@@ -64,8 +64,8 @@ fn set_nested_recursive(map: &mut serde_json::Map<String, Value>, parts: &[&str]
     let rest = &parts[1..];
 
     // Check if next part is a number (array index)
-    if let Some(next) = rest.first() {
-        if next.parse::<usize>().is_ok() {
+    if let Some(next) = rest.first()
+        && next.parse::<usize>().is_ok() {
             // This is an array member pattern like "Tags.member.1.Key"
             let entry = map
                 .entry(key.to_string())
@@ -85,7 +85,6 @@ fn set_nested_recursive(map: &mut serde_json::Map<String, Value>, parts: &[&str]
             }
             return;
         }
-    }
 
     let entry = map
         .entry(key.to_string())

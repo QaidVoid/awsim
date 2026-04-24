@@ -217,8 +217,7 @@ fn find_table_by_stream_arn<'a>(
             entry
                 .value()
                 .stream_arn
-                .as_deref()
-                .map_or(false, |a| a == stream_arn)
+                .as_deref() == Some(stream_arn)
         })
         .map(|entry| {
             // Upgrade iter ref to a proper Ref by looking up by key.

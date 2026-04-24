@@ -453,18 +453,14 @@ pub fn list_users(
 
     // Apply Filter if provided
     if let Some(filter_str) = input["Filter"].as_str() {
-        users = users
-            .into_iter()
-            .filter(|u| evaluate_cognito_filter(u, filter_str))
-            .collect();
+        users.retain(|u| evaluate_cognito_filter(u, filter_str));
     }
 
     // Apply PaginationToken — skip users up to and including the token username
-    if let Some(token) = input["PaginationToken"].as_str() {
-        if let Some(pos) = users.iter().position(|u| u.username == token) {
+    if let Some(token) = input["PaginationToken"].as_str()
+        && let Some(pos) = users.iter().position(|u| u.username == token) {
             users = users.into_iter().skip(pos + 1).collect();
         }
-    }
 
     // Apply Limit
     let limit = input["Limit"].as_u64().unwrap_or(60) as usize;

@@ -78,11 +78,10 @@ pub fn id_token(
         "scope": scope_str
     });
 
-    if let Some(n) = nonce {
-        if !n.is_empty() {
+    if let Some(n) = nonce
+        && !n.is_empty() {
             payload["nonce"] = Value::String(n.to_string());
         }
-    }
 
     let obj = payload.as_object_mut().unwrap();
 

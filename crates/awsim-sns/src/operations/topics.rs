@@ -25,8 +25,8 @@ pub fn create_topic(
     let is_fifo = name.ends_with(".fifo");
 
     // If FifoTopic attribute present, validate consistency
-    if let Some(attrs) = input["Attributes"].as_object() {
-        if let Some(fifo_val) = attrs.get("FifoTopic") {
+    if let Some(attrs) = input["Attributes"].as_object()
+        && let Some(fifo_val) = attrs.get("FifoTopic") {
             let attr_fifo = fifo_val.as_str() == Some("true");
             if attr_fifo != is_fifo {
                 return Err(AwsError::bad_request(
@@ -35,7 +35,6 @@ pub fn create_topic(
                 ));
             }
         }
-    }
 
     let arn = format!("arn:aws:sns:{}:{}:{}", ctx.region, ctx.account_id, name);
 

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
@@ -22,7 +21,7 @@ pub fn tag_resource(
     let mut entry = state
         .resource_tags
         .entry(resource_arn.to_string())
-        .or_insert_with(HashMap::new);
+        .or_default();
 
     if let Some(tags_obj) = input["Tags"].as_object() {
         for (k, v) in tags_obj {

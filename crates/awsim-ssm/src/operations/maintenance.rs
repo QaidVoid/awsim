@@ -287,7 +287,7 @@ pub fn list_resource_data_sync(
     let items: Vec<Value> = state
         .resource_data_syncs
         .iter()
-        .filter(|e| sync_type.map_or(true, |t| e.value().sync_type == t))
+        .filter(|e| sync_type.is_none_or(|t| e.value().sync_type == t))
         .map(|e| {
             let s = e.value();
             json!({
@@ -823,7 +823,7 @@ pub fn list_command_invocations(
     let invocations: Vec<Value> = state
         .commands
         .iter()
-        .filter(|e| command_id.map_or(true, |id| e.command_id == id))
+        .filter(|e| command_id.is_none_or(|id| e.command_id == id))
         .map(|e| {
             let c = e.value();
             json!({

@@ -311,7 +311,7 @@ impl ServiceHandler for DynamoDbService {
                             attribute_definitions: t.attribute_definitions.clone(),
                             billing_mode: t.billing_mode.clone(),
                             status: t.status.clone(),
-                            created_at: t.created_at.clone(),
+                            created_at: t.created_at,
                             gsi: t.gsi.clone(),
                             lsi: t.lsi.clone(),
                             items: t.items.clone(),

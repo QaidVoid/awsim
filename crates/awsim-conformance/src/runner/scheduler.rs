@@ -99,7 +99,7 @@ pub async fn test_scheduler(endpoint: &str, verbose: bool) -> Vec<OpResult> {
 
     // TagResource (on schedule)
     let sched_arn =
-        format!("arn:aws:scheduler:us-east-1:000000000000:schedule/default/conformance-schedule");
+        "arn:aws:scheduler:us-east-1:000000000000:schedule/default/conformance-schedule".to_string();
     results.push(chk!(
         "TagResource",
         client

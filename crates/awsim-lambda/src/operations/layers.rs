@@ -61,7 +61,7 @@ pub fn publish_layer_version(
     let mut versions = state
         .layers
         .entry(layer_name.to_string())
-        .or_insert_with(Vec::new);
+        .or_default();
 
     let version_number = (versions.len() + 1) as u64;
     let version_arn = format!("{}:{}", layer_arn, version_number);

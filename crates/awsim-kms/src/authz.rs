@@ -30,15 +30,14 @@ impl ResourcePolicyLookup for KmsResourcePolicyLookup {
     fn lookup(&self, resource_arn: &str) -> Option<PolicyDocument> {
         let key_id = extract_key_id(resource_arn)?;
         for (_, state) in self.store.iter_all() {
-            if let Some(key) = state.keys.get(&key_id) {
-                if let Some(raw) = key
+            if let Some(key) = state.keys.get(&key_id)
+                && let Some(raw) = key
                     .policies
                     .get("default")
                     .or_else(|| key.policies.values().next())
                 {
                     return awsim_iam_policy::parse(raw).ok();
                 }
-            }
         }
         None
     }

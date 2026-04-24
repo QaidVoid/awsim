@@ -24,11 +24,10 @@ fn event_matches(filters: &[String], event_name: &str) -> bool {
         if filter == event_name {
             return true;
         }
-        if let Some(prefix) = filter.strip_suffix('*') {
-            if event_name.starts_with(prefix) {
+        if let Some(prefix) = filter.strip_suffix('*')
+            && event_name.starts_with(prefix) {
                 return true;
             }
-        }
     }
     false
 }
@@ -884,8 +883,8 @@ impl ServiceHandler for S3Service {
                 if let Some(bus) = &ctx.event_bus {
                     let bucket_name = input.get("Bucket").and_then(Value::as_str).unwrap_or("");
                     let key = input.get("Key").and_then(Value::as_str).unwrap_or("");
-                    if let Some(bucket) = state.buckets.get(bucket_name) {
-                        if !bucket.notification_config.destinations.is_empty() {
+                    if let Some(bucket) = state.buckets.get(bucket_name)
+                        && !bucket.notification_config.destinations.is_empty() {
                             let etag = result
                                 .get("ETag")
                                 .and_then(Value::as_str)
@@ -921,7 +920,6 @@ impl ServiceHandler for S3Service {
                                 });
                             }
                         }
-                    }
                 }
                 Ok(result)
             }
@@ -931,8 +929,8 @@ impl ServiceHandler for S3Service {
                 if let Some(bus) = &ctx.event_bus {
                     let bucket_name = input.get("Bucket").and_then(Value::as_str).unwrap_or("");
                     let key = input.get("Key").and_then(Value::as_str).unwrap_or("");
-                    if let Some(bucket) = state.buckets.get(bucket_name) {
-                        if !bucket.notification_config.destinations.is_empty() {
+                    if let Some(bucket) = state.buckets.get(bucket_name)
+                        && !bucket.notification_config.destinations.is_empty() {
                             let obj = bucket.objects.get(key);
                             let size = obj.as_ref().map(|o| o.content_length).unwrap_or(0);
                             let etag = obj.as_ref().map(|o| o.etag.clone()).unwrap_or_default();
@@ -964,7 +962,6 @@ impl ServiceHandler for S3Service {
                                 });
                             }
                         }
-                    }
                 }
                 Ok(result)
             }
@@ -996,8 +993,8 @@ impl ServiceHandler for S3Service {
                 let result = operations::object::delete_object(&state, &input)?;
 
                 // Emit s3:ObjectRemoved:Delete notification if configured
-                if let Some(bus) = &ctx.event_bus {
-                    if !configured_destinations.is_empty() {
+                if let Some(bus) = &ctx.event_bus
+                    && !configured_destinations.is_empty() {
                         bus.publish(InternalEvent {
                             source: "s3".to_string(),
                             event_type: "s3:ObjectRemoved:Delete".to_string(),
@@ -1015,7 +1012,6 @@ impl ServiceHandler for S3Service {
                             }),
                         });
                     }
-                }
                 Ok(result)
             }
             "GetObject" => operations::object::get_object(&state, &input, ctx),

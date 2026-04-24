@@ -576,7 +576,7 @@ mod tests {
         ))
         .unwrap();
         let signature = signed["Signature"].as_str().unwrap();
-        assert!(signature.len() > 0);
+        assert!(!signature.is_empty());
 
         let verified = block_on(svc.handle(
             "Verify",
@@ -589,7 +589,7 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        assert_eq!(verified["SignatureValid"].as_bool().unwrap(), true);
+        assert!(verified["SignatureValid"].as_bool().unwrap());
     }
 
     #[test]

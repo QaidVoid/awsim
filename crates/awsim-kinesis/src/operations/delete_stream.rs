@@ -34,7 +34,7 @@ pub(crate) fn resolve_stream_name(
         // arn:aws:kinesis:{region}:{account}:stream/{name}
         let name = arn
             .split('/')
-            .last()
+            .next_back()
             .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Invalid StreamARN"))?;
         return Ok(name.to_string());
     }

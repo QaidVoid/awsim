@@ -63,17 +63,16 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
             break;
         }
         // Skip delayed messages
-        if msg.delay_until.map_or(false, |d| d > now) {
+        if msg.delay_until.is_some_and(|d| d > now) {
             continue;
         }
 
         // Check if this message has exceeded maxReceiveCount — route to DLQ
-        if let Some(ref rp) = redrive_policy {
-            if msg.receive_count >= rp.max_receive_count {
+        if let Some(ref rp) = redrive_policy
+            && msg.receive_count >= rp.max_receive_count {
                 dlq_messages.push(msg.clone());
                 continue;
             }
-        }
 
         to_inflight.push(msg.message_id.clone());
     }
@@ -92,8 +91,8 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     // Move selected messages to inflight
     for msg_id in &to_inflight {
         // Find the message in the deque and remove it
-        if let Some(pos) = queue.messages.iter().position(|m| &m.message_id == msg_id) {
-            if let Some(mut msg) = queue.messages.remove(pos) {
+        if let Some(pos) = queue.messages.iter().position(|m| &m.message_id == msg_id)
+            && let Some(mut msg) = queue.messages.remove(pos) {
                 let receipt_handle = Uuid::new_v4().to_string();
                 let visible_at = now + Duration::from_secs(visibility_timeout);
                 let now_epoch = SystemTime::now()
@@ -170,24 +169,20 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                 };
                 queue.inflight.insert(receipt_handle, im);
             }
-        }
     }
 
     // Release the queue borrow before writing to DLQ (avoids deadlock on DashMap)
     drop(queue);
 
     // Move DLQ-bound messages to the dead-letter queue
-    if !dlq_messages.is_empty() {
-        if let Some(ref rp) = redrive_policy {
-            if let Some(dlq_name) = state.queue_name_by_arn(&rp.dead_letter_target_arn) {
-                if let Some(mut dlq) = state.queues.get_mut(&dlq_name) {
+    if !dlq_messages.is_empty()
+        && let Some(ref rp) = redrive_policy
+            && let Some(dlq_name) = state.queue_name_by_arn(&rp.dead_letter_target_arn)
+                && let Some(mut dlq) = state.queues.get_mut(&dlq_name) {
                     for msg in dlq_messages {
                         dlq.messages.push_back(msg);
                     }
                 }
-            }
-        }
-    }
 
     Ok(json!({ "Messages": messages_json }))
 }

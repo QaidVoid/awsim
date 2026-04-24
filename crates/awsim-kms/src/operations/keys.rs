@@ -49,7 +49,7 @@ pub fn create_key(
         key_state: "Enabled".to_string(),
         key_spec: key_spec.clone(),
         key_usage: key_usage.clone(),
-        creation_date: creation_date.clone(),
+        creation_date,
         secret,
         deletion_date: None,
         rotation_enabled: false,

@@ -77,7 +77,7 @@ pub fn send_custom_verification_email(
     let message_id = Uuid::new_v4().to_string();
     let entry = SentEmail {
         message_id: message_id.clone(),
-        from: format!("verification@awsim.local"),
+        from: "verification@awsim.local".to_string(),
         to: vec![email.to_string()],
         cc: vec![],
         bcc: vec![],

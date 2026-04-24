@@ -109,8 +109,8 @@ pub fn list_attributes(
         .map(|a| {
             a.iter()
                 .filter(|(name, value)| {
-                    attr_name_filter.map_or(true, |f| name.as_str() == f)
-                        && attr_value_filter.map_or(true, |f| value.as_str() == f)
+                    attr_name_filter.is_none_or(|f| name.as_str() == f)
+                        && attr_value_filter.is_none_or(|f| value.as_str() == f)
                 })
                 .map(|(name, value)| {
                     json!({

@@ -190,7 +190,7 @@ pub fn describe_rules(state: &ElbState, input: &Value) -> Result<Value, AwsError
             let r = e.value();
             let listener_ok = listener_arn_filter
                 .as_ref()
-                .map_or(true, |arn| &r.listener_arn == arn);
+                .is_none_or(|arn| &r.listener_arn == arn);
             let arn_ok = rule_arns.is_empty() || rule_arns.contains(&r.arn);
             listener_ok && arn_ok
         })

@@ -76,10 +76,10 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     };
 
     // FIFO deduplication check
-    if queue.is_fifo {
-        if let Some(ref did) = dedup_id {
-            if let Some((expiry, existing_id)) = queue.dedup_cache.get(did) {
-                if now < *expiry {
+    if queue.is_fifo
+        && let Some(ref did) = dedup_id
+            && let Some((expiry, existing_id)) = queue.dedup_cache.get(did)
+                && now < *expiry {
                     // Duplicate detected; return the original message ID
                     let seq = sequence_number();
                     debug!(dedup_id = %did, "FIFO dedup suppressed duplicate");
@@ -89,9 +89,6 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                         "SequenceNumber": seq,
                     }));
                 }
-            }
-        }
-    }
 
     // Determine sequence number for FIFO
     let sequence_number = if queue.is_fifo {
@@ -124,14 +121,13 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     }
 
     // Record dedup entry for FIFO
-    if queue.is_fifo {
-        if let Some(ref did) = dedup_id {
+    if queue.is_fifo
+        && let Some(ref did) = dedup_id {
             let expiry = now + Duration::from_secs(300);
             queue
                 .dedup_cache
                 .insert(did.clone(), (expiry, message_id.clone()));
         }
-    }
 
     let msg = Message {
         message_id: message_id.clone(),

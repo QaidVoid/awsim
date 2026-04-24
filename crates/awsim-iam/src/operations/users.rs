@@ -123,11 +123,10 @@ pub fn update_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     }
 
     // Check new name isn't already taken
-    if let Some(new_name) = new_user_name {
-        if new_name != user_name && state.users.contains_key(new_name) {
+    if let Some(new_name) = new_user_name
+        && new_name != user_name && state.users.contains_key(new_name) {
             return Err(entity_already_exists("User", new_name));
         }
-    }
 
     if new_user_name.is_none() && new_path.is_none() {
         // Nothing to do

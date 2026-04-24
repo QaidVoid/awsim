@@ -236,7 +236,7 @@ impl Queue {
         let expired: Vec<String> = self
             .inflight
             .values()
-            .filter(|m| m.visible_at.map_or(true, |v| v <= now))
+            .filter(|m| m.visible_at.is_none_or(|v| v <= now))
             .map(|m| m.receipt_handle.clone())
             .collect();
 
@@ -276,7 +276,7 @@ impl Queue {
         let now = Instant::now();
         self.messages
             .iter()
-            .filter(|m| m.delay_until.map_or(true, |d| d <= now))
+            .filter(|m| m.delay_until.is_none_or(|d| d <= now))
             .count()
     }
 
@@ -285,7 +285,7 @@ impl Queue {
         let now = Instant::now();
         self.messages
             .iter()
-            .filter(|m| m.delay_until.map_or(false, |d| d > now))
+            .filter(|m| m.delay_until.is_some_and(|d| d > now))
             .count()
     }
 

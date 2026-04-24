@@ -30,7 +30,7 @@ pub fn start_session(
 
     let session_id = format!(
         "session-{}",
-        Uuid::new_v4().to_string().replace('-', "")[..16].to_string()
+        &Uuid::new_v4().to_string().replace('-', "")[..16]
     );
     let now = now_epoch_secs();
 

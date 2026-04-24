@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use super::delete_stream::resolve_stream_name;
 use crate::state::KinesisState;
 
-fn require_resource_arn<'a>(input: &'a Value) -> Result<&'a str, AwsError> {
+fn require_resource_arn(input: &Value) -> Result<&str, AwsError> {
     input["ResourceARN"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "ResourceARN is required"))
@@ -77,15 +77,14 @@ pub fn untag_resource(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let arn = require_resource_arn(input)?;
-    if let Some(mut entry) = state.resource_tags.get_mut(arn) {
-        if let Some(keys) = input["TagKeys"].as_array() {
+    if let Some(mut entry) = state.resource_tags.get_mut(arn)
+        && let Some(keys) = input["TagKeys"].as_array() {
             for k in keys {
                 if let Some(s) = k.as_str() {
                     entry.remove(s);
                 }
             }
         }
-    }
     Ok(json!({}))
 }
 

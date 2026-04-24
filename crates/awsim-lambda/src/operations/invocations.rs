@@ -58,12 +58,11 @@ fn ensure_code_dir(
     // Check if already extracted with the same hash
     let stamp_path = cache_dir.join(".awsim_sha256");
     if cache_dir.exists() {
-        if let Ok(existing) = std::fs::read_to_string(&stamp_path) {
-            if existing.trim() == code_sha256 {
+        if let Ok(existing) = std::fs::read_to_string(&stamp_path)
+            && existing.trim() == code_sha256 {
                 debug!(function_name, "Using cached code directory");
                 return Ok(cache_dir);
             }
-        }
         // Hash mismatch — clear and re-extract
         std::fs::remove_dir_all(&cache_dir).map_err(|e| format!("remove stale cache: {e}"))?;
     }

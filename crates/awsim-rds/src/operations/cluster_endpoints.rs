@@ -45,7 +45,7 @@ pub fn describe_db_cluster_endpoints(
                 .value()
                 .iter()
                 .find(|ep| ep.endpoint_identifier == ep_id)
-                .map(|ep| endpoint_to_value(ep))
+                .map(endpoint_to_value)
         });
         if let Some(ep) = found {
             endpoints.push(ep);
@@ -58,11 +58,10 @@ pub fn describe_db_cluster_endpoints(
     } else {
         // Filter by cluster or return all
         for entry in state.cluster_endpoints.iter() {
-            if let Some(cluster_id) = filter_cluster {
-                if entry.key() != cluster_id {
+            if let Some(cluster_id) = filter_cluster
+                && entry.key() != cluster_id {
                     continue;
                 }
-            }
             for ep in entry.value() {
                 endpoints.push(endpoint_to_value(ep));
             }
@@ -71,11 +70,10 @@ pub fn describe_db_cluster_endpoints(
         // Also include the default writer/reader endpoints from existing clusters
         for cluster_entry in state.clusters.iter() {
             let cluster = cluster_entry.value();
-            if let Some(cluster_id) = filter_cluster {
-                if cluster.identifier != cluster_id {
+            if let Some(cluster_id) = filter_cluster
+                && cluster.identifier != cluster_id {
                     continue;
                 }
-            }
             // Default writer endpoint
             endpoints.push(json!({
                 "DBClusterEndpointIdentifier": format!("{}-writer", cluster.identifier),

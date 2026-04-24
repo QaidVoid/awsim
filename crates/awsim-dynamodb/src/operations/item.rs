@@ -155,13 +155,12 @@ pub fn put_item(
 
         // Validate key attributes exist
         let hash_key = table.hash_key().map(|s| s.to_string());
-        if let Some(ref hk) = hash_key {
-            if !item.contains_key(hk) {
+        if let Some(ref hk) = hash_key
+            && !item.contains_key(hk) {
                 return Err(AwsError::validation(format!(
                     "One or more parameter values were invalid: Missing the key {hk} in the item"
                 )));
             }
-        }
 
         let expr_attr_names = get_expr_attr_names(input);
         let expr_attr_values = get_expr_attr_values(input);
@@ -223,11 +222,10 @@ pub fn put_item(
     let _ = (composite_key, hash_key_name); // suppress unused warnings
 
     let mut result = json!({});
-    if return_values == "ALL_OLD" {
-        if let Some(old) = old_item {
+    if return_values == "ALL_OLD"
+        && let Some(old) = old_item {
             result["Attributes"] = item_to_json(&old);
         }
-    }
     Ok(result)
 }
 
@@ -328,11 +326,10 @@ pub fn delete_item(
     }
 
     let mut result = json!({});
-    if return_values == "ALL_OLD" {
-        if let Some(old) = old_item {
+    if return_values == "ALL_OLD"
+        && let Some(old) = old_item {
             result["Attributes"] = item_to_json(&old);
         }
-    }
     Ok(result)
 }
 

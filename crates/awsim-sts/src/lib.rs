@@ -212,7 +212,7 @@ impl StsService {
             .as_str()
             .ok_or_else(|| AwsError::validation("SAMLAssertion is required"))?;
 
-        let session_name = role_arn.split('/').last().unwrap_or("SAMLSession");
+        let session_name = role_arn.split('/').next_back().unwrap_or("SAMLSession");
 
         let duration = input["DurationSeconds"]
             .as_str()
@@ -378,7 +378,7 @@ fn generate_assumed_role_output(
 
     // Derive the assumed-role ARN from the role ARN.
     // role ARN format: arn:aws:iam::ACCOUNT:role/ROLE-NAME
-    let role_name = role_arn.split('/').last().unwrap_or("unknown-role");
+    let role_name = role_arn.split('/').next_back().unwrap_or("unknown-role");
     let assumed_role_arn =
         format!("arn:aws:sts::{account_id}:assumed-role/{role_name}/{session_name}");
 

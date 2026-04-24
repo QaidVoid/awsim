@@ -53,7 +53,7 @@ pub fn get_sms_attributes(
     // Provide defaults for the standard SMS attributes if not explicitly set.
     let defaults = default_sms_attributes();
     for (k, v) in &defaults {
-        if filter.as_ref().map_or(true, |f| f.contains(&k.as_str())) {
+        if filter.as_ref().is_none_or(|f| f.contains(&k.as_str())) {
             let val = attrs.get(k).cloned().unwrap_or_else(|| v.clone());
             result.insert(k.clone(), Value::String(val));
         }
@@ -61,11 +61,10 @@ pub fn get_sms_attributes(
 
     // Include any extra attributes stored beyond the defaults.
     for (k, v) in attrs.iter() {
-        if !defaults.contains_key(k) {
-            if filter.as_ref().map_or(true, |f| f.contains(&k.as_str())) {
+        if !defaults.contains_key(k)
+            && filter.as_ref().is_none_or(|f| f.contains(&k.as_str())) {
                 result.insert(k.clone(), Value::String(v.clone()));
             }
-        }
     }
 
     Ok(json!({ "attributes": result }))

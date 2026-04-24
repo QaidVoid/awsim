@@ -356,7 +356,7 @@ pub fn admin_link_provider_for_user(
         .users
         .keys()
         .find(|k| {
-            k.as_str() == dest_value || pool.users.get(*k).map_or(false, |u| u.sub == dest_value)
+            k.as_str() == dest_value || pool.users.get(*k).is_some_and(|u| u.sub == dest_value)
         })
         .cloned()
         .ok_or_else(|| {

@@ -23,7 +23,7 @@ fn key(function_name: &str, qualifier: Option<&str>) -> String {
     }
 }
 
-fn qualifier_of<'a>(input: &'a Value) -> Option<&'a str> {
+fn qualifier_of(input: &Value) -> Option<&str> {
     input.get("Qualifier").and_then(|v| v.as_str())
 }
 
@@ -125,7 +125,7 @@ pub fn list_function_event_invoke_configs(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "FunctionName")?;
-    let prefix = format!("{name}");
+    let prefix = name.to_string();
     let configs: Vec<Value> = state
         .event_invoke_configs
         .iter()

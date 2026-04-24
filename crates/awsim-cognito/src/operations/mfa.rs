@@ -288,21 +288,18 @@ fn apply_mfa_settings_to_user(user: &mut crate::state::CognitoUser, input: &Valu
 
     if let Some(enabled) = swt["Enabled"].as_bool() {
         user.mfa_enabled = enabled;
-        if let Some(preferred) = swt["PreferredMfa"].as_bool() {
-            if preferred {
+        if let Some(preferred) = swt["PreferredMfa"].as_bool()
+            && preferred {
                 user.mfa_preferred = Some("SOFTWARE_TOKEN_MFA".to_string());
             }
-        }
     }
 
-    if let Some(enabled) = sms["Enabled"].as_bool() {
-        if enabled {
+    if let Some(enabled) = sms["Enabled"].as_bool()
+        && enabled {
             user.mfa_enabled = true;
-            if let Some(preferred) = sms["PreferredMfa"].as_bool() {
-                if preferred {
+            if let Some(preferred) = sms["PreferredMfa"].as_bool()
+                && preferred {
                     user.mfa_preferred = Some("SMS_MFA".to_string());
                 }
-            }
         }
-    }
 }

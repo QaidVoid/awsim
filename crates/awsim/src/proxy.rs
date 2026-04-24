@@ -153,11 +153,10 @@ fn lambda_response_to_http(result: serde_json::Value) -> Response<Body> {
         // Apply response headers from Lambda.
         if let Some(resp_headers) = result.get("headers").and_then(|v| v.as_object()) {
             for (key, value) in resp_headers {
-                if let Some(v) = value.as_str() {
-                    if let Ok(header_value) = v.parse::<axum::http::HeaderValue>() {
+                if let Some(v) = value.as_str()
+                    && let Ok(header_value) = v.parse::<axum::http::HeaderValue>() {
                         builder = builder.header(key.as_str(), header_value);
                     }
-                }
             }
         }
 
@@ -208,7 +207,7 @@ fn lambda_response_to_http(result: serde_json::Value) -> Response<Body> {
 fn extract_function_name(uri: &str) -> String {
     if uri.starts_with("arn:aws:lambda:") {
         // ARN format: arn:aws:lambda:{region}:{account}:function:{name}
-        uri.split(':').last().unwrap_or(uri).to_string()
+        uri.split(':').next_back().unwrap_or(uri).to_string()
     } else {
         uri.to_string()
     }

@@ -110,7 +110,7 @@ pub fn add_role_to_instance_profile(state: &IamState, input: &Value) -> Result<V
         .get_mut(name)
         .ok_or_else(|| no_such_entity("InstanceProfile", name))?;
 
-    if ip.roles.len() >= 1 {
+    if !ip.roles.is_empty() {
         // AWS only allows one role per instance profile
         return Err(awsim_core::AwsError::conflict(
             "LimitExceeded",

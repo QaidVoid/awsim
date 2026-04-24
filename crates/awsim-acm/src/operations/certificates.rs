@@ -186,15 +186,14 @@ pub fn describe_certificate(
                 "ValidationMethod": cert.validation_method,
                 "ValidationStatus": "SUCCESS",
             });
-            if cert.validation_method == "DNS" {
-                if let Some(rec) = cert.dns_validation_records.get(domain) {
+            if cert.validation_method == "DNS"
+                && let Some(rec) = cert.dns_validation_records.get(domain) {
                     obj["ResourceRecord"] = json!({
                         "Name": rec.name,
                         "Type": rec.record_type,
                         "Value": rec.value,
                     });
                 }
-            }
             obj
         })
         .collect();

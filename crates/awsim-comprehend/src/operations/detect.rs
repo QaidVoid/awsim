@@ -187,7 +187,7 @@ fn extract_entities(text: &str) -> Vec<Value> {
 
         // Detect capitalized sequences (potential names/orgs)
         if word.len() > 1
-            && word.chars().next().map_or(false, |c| c.is_uppercase())
+            && word.chars().next().is_some_and(|c| c.is_uppercase())
             && !is_sentence_start(text, word_start)
         {
             // Collect consecutive capitalized words
@@ -195,7 +195,7 @@ fn extract_entities(text: &str) -> Vec<Value> {
             let mut entity_end = word_end;
             while end_idx + 1 < words.len() {
                 let next = words[end_idx + 1];
-                if next.len() > 1 && next.chars().next().map_or(false, |c| c.is_uppercase()) {
+                if next.len() > 1 && next.chars().next().is_some_and(|c| c.is_uppercase()) {
                     end_idx += 1;
                     let next_start = text[entity_end..]
                         .find(next)
@@ -252,7 +252,7 @@ fn extract_entities(text: &str) -> Vec<Value> {
 fn extract_key_phrases(text: &str) -> Vec<Value> {
     let mut phrases = Vec::new();
     let sentences: Vec<&str> = text
-        .split(|c: char| c == '.' || c == '!' || c == '?')
+        .split(['.', '!', '?'])
         .collect();
 
     let stop_words = [

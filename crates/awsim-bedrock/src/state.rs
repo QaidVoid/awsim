@@ -84,6 +84,7 @@ pub struct CustomizationJob {
 
 /// Model invocation logging configuration.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct LoggingConfig {
     pub cloud_watch_config: Option<serde_json::Value>,
     pub s3_config: Option<serde_json::Value>,
@@ -92,17 +93,6 @@ pub struct LoggingConfig {
     pub text_data_delivery_enabled: bool,
 }
 
-impl Default for LoggingConfig {
-    fn default() -> Self {
-        Self {
-            cloud_watch_config: None,
-            s3_config: None,
-            embedding_data_delivery_enabled: false,
-            image_data_delivery_enabled: false,
-            text_data_delivery_enabled: false,
-        }
-    }
-}
 
 pub fn now_iso() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};

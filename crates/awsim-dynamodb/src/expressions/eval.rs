@@ -47,11 +47,9 @@ pub fn evaluate_condition(
                     for candidate in values {
                         if let Some(c) =
                             resolve_operand(candidate, item, expr_attr_names, expr_attr_values)
-                        {
-                            if dynamo_values_equal(v, c) {
+                            && dynamo_values_equal(v, c) {
                                 return Ok(true);
                             }
-                        }
                     }
                     Ok(false)
                 }
@@ -296,15 +294,13 @@ fn dynamo_contains(container: &Value, needle: &Value) -> bool {
         return arr.iter().any(|el| dynamo_values_equal(el, needle));
     }
     // Set contains value
-    if let Some(ss) = container.get("SS").and_then(|v| v.as_array()) {
-        if let Some(ns) = needle.get("S").and_then(|v| v.as_str()) {
+    if let Some(ss) = container.get("SS").and_then(|v| v.as_array())
+        && let Some(ns) = needle.get("S").and_then(|v| v.as_str()) {
             return ss.iter().any(|el| el.as_str() == Some(ns));
         }
-    }
-    if let Some(ns_arr) = container.get("NS").and_then(|v| v.as_array()) {
-        if let Some(n) = needle.get("N").and_then(|v| v.as_str()) {
+    if let Some(ns_arr) = container.get("NS").and_then(|v| v.as_array())
+        && let Some(n) = needle.get("N").and_then(|v| v.as_str()) {
             return ns_arr.iter().any(|el| el.as_str() == Some(n));
         }
-    }
     false
 }

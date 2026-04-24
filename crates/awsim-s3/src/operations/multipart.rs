@@ -107,7 +107,7 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
 
     // Assemble parts in order.
     let mut combined_data: Vec<u8> = Vec::new();
-    for (_, part) in &upload.parts {
+    for part in upload.parts.values() {
         combined_data.extend_from_slice(&part.data);
     }
 

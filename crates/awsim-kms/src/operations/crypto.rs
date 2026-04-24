@@ -196,7 +196,7 @@ pub fn generate_random(
 ) -> Result<Value, AwsError> {
     let number_of_bytes = input["NumberOfBytes"].as_u64().unwrap_or(32) as usize;
 
-    if number_of_bytes < 1 || number_of_bytes > 1024 {
+    if !(1..=1024).contains(&number_of_bytes) {
         return Err(error::invalid_parameter(
             "NumberOfBytes must be between 1 and 1024",
         ));

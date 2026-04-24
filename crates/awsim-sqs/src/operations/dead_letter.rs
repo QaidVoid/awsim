@@ -37,7 +37,7 @@ pub fn list_dead_letter_source_queues(
                 .value()
                 .redrive_policy
                 .as_ref()
-                .map_or(false, |rp| rp.dead_letter_target_arn == dlq_arn)
+                .is_some_and(|rp| rp.dead_letter_target_arn == dlq_arn)
         })
         .map(|entry| Value::String(entry.value().url.clone()))
         .collect();

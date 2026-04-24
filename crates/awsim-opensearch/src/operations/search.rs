@@ -136,7 +136,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
                     .or_else(|| match_val.get("query").and_then(|q| q.as_str()))
                     .unwrap_or("");
                 if let Some(field_val) = get_nested_field(doc, field) {
-                    let field_str = value_to_string(&field_val);
+                    let field_str = value_to_string(field_val);
                     return text_match_score(query_text, &field_str);
                 }
             }
@@ -163,7 +163,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
                 };
 
                 if let Some(field_val) = get_nested_field(doc, field_name) {
-                    let field_str = value_to_string(&field_val);
+                    let field_str = value_to_string(field_val);
                     let score = text_match_score(query_text, &field_str) * boost;
                     if score > best_score {
                         best_score = score;
@@ -181,7 +181,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
                     .or_else(|| expected.get("value").and_then(|v| v.as_str()))
                     .unwrap_or("");
                 if let Some(field_val) = get_nested_field(doc, field) {
-                    let field_str = value_to_string(&field_val);
+                    let field_str = value_to_string(field_val);
                     if field_str == expected_str {
                         return 1.0;
                     }

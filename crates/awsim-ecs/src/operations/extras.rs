@@ -93,7 +93,7 @@ pub fn put_cluster_capacity_providers(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "cluster is required"))?;
 
     let name = if cluster_name.starts_with("arn:") {
-        cluster_name.split('/').last().unwrap_or(cluster_name)
+        cluster_name.split('/').next_back().unwrap_or(cluster_name)
     } else {
         cluster_name
     };
@@ -245,7 +245,7 @@ pub fn list_account_settings(
         // Return defaults merged with stored settings
         defaults
             .iter()
-            .filter(|(name, _)| filter_name.map_or(true, |f| **name == f))
+            .filter(|(name, _)| filter_name.is_none_or(|f| **name == f))
             .map(|(name, default_val)| {
                 let val = state
                     .account_settings
@@ -263,7 +263,7 @@ pub fn list_account_settings(
         state
             .account_settings
             .iter()
-            .filter(|e| filter_name.map_or(true, |f| e.key() == f))
+            .filter(|e| filter_name.is_none_or(|f| e.key() == f))
             .map(|e| {
                 json!({
                     "name": e.key(),
@@ -303,7 +303,7 @@ pub fn update_container_agent(
 ) -> Result<Value, AwsError> {
     let cluster_name = input["cluster"].as_str().unwrap_or("default");
     let name = if cluster_name.starts_with("arn:") {
-        cluster_name.split('/').last().unwrap_or(cluster_name)
+        cluster_name.split('/').next_back().unwrap_or(cluster_name)
     } else {
         cluster_name
     };

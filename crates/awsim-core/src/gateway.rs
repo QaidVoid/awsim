@@ -221,8 +221,8 @@ fn extract_service_info(
     uri: &Uri,
 ) -> (String, String, String, Option<String>) {
     // Try Authorization header first
-    if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        if let Some(creds) = auth::parse_authorization(auth_header) {
+    if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok())
+        && let Some(creds) = auth::parse_authorization(auth_header) {
             return (
                 creds.service,
                 creds.region,
@@ -230,11 +230,10 @@ fn extract_service_info(
                 Some(creds.access_key),
             );
         }
-    }
 
     // Try X-Amz-Target header (for awsJson services)
-    if let Some(target) = headers.get("x-amz-target").and_then(|v| v.to_str().ok()) {
-        if let Some(service) = resolve_service_from_target(target) {
+    if let Some(target) = headers.get("x-amz-target").and_then(|v| v.to_str().ok())
+        && let Some(service) = resolve_service_from_target(target) {
             return (
                 service,
                 state.default_region.clone(),
@@ -242,11 +241,10 @@ fn extract_service_info(
                 None,
             );
         }
-    }
 
     // Try Host header
-    if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok()) {
-        if let Some(service) = extract_service_from_host(host) {
+    if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok())
+        && let Some(service) = extract_service_from_host(host) {
             return (
                 service,
                 state.default_region.clone(),
@@ -254,12 +252,11 @@ fn extract_service_info(
                 None,
             );
         }
-    }
 
     // Check for pre-signed URL query parameters (SigV4 in query string)
-    if let Some(query) = uri.query() {
-        if query.contains("X-Amz-Credential") {
-            if let Some(cred_start) = query.find("X-Amz-Credential=") {
+    if let Some(query) = uri.query()
+        && query.contains("X-Amz-Credential")
+            && let Some(cred_start) = query.find("X-Amz-Credential=") {
                 let cred_val = &query[cred_start + 17..];
                 let cred_end = cred_val.find('&').unwrap_or(cred_val.len());
                 let cred = &cred_val[..cred_end];
@@ -274,8 +271,6 @@ fn extract_service_info(
                     );
                 }
             }
-        }
-    }
 
     // Try path-based detection as last resort (for REST services called without auth)
     let path = uri.path();

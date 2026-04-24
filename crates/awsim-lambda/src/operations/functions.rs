@@ -274,14 +274,13 @@ pub fn update_function_configuration(
     if let Some(mem) = input.get("MemorySize").and_then(|v| v.as_u64()) {
         f.memory_size = mem as u32;
     }
-    if let Some(env) = input.get("Environment") {
-        if let Some(vars) = env.get("Variables").and_then(|v| v.as_object()) {
+    if let Some(env) = input.get("Environment")
+        && let Some(vars) = env.get("Variables").and_then(|v| v.as_object()) {
             f.environment = vars
                 .iter()
                 .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                 .collect();
         }
-    }
     f.last_modified = now_iso8601();
 
     Ok(function_configuration(&f))

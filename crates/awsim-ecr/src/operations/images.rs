@@ -65,9 +65,9 @@ pub fn put_image(state: &EcrState, input: &Value, ctx: &RequestContext) -> Resul
     let digest = format!("sha256:{:x}", hasher.finalize());
 
     // If tag mutability is IMMUTABLE and tag already exists, error
-    if repo.image_tag_mutability == "IMMUTABLE" {
-        if let Some(ref tag) = image_tag {
-            if repo
+    if repo.image_tag_mutability == "IMMUTABLE"
+        && let Some(ref tag) = image_tag
+            && repo
                 .images
                 .iter()
                 .any(|img| img.image_tag.as_deref() == Some(tag))
@@ -79,8 +79,6 @@ pub fn put_image(state: &EcrState, input: &Value, ctx: &RequestContext) -> Resul
                     ),
                 ));
             }
-        }
-    }
 
     // Remove existing image with same tag (if mutable)
     if let Some(ref tag) = image_tag {

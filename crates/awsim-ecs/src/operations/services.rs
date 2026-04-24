@@ -104,7 +104,7 @@ pub fn delete_service(
 
     // service can be name or ARN
     let service_name = if service_id.starts_with("arn:") {
-        service_id.split('/').last().unwrap_or(service_id)
+        service_id.split('/').next_back().unwrap_or(service_id)
     } else {
         service_id
     };
@@ -157,7 +157,7 @@ pub fn describe_services(
     for id_val in service_ids {
         let id = id_val.as_str().unwrap_or("");
         let name = if id.starts_with("arn:") {
-            id.split('/').last().unwrap_or(id)
+            id.split('/').next_back().unwrap_or(id)
         } else {
             id
         };
@@ -222,7 +222,7 @@ pub fn update_service(
     let service_name = if service_id.starts_with("arn:") {
         service_id
             .split('/')
-            .last()
+            .next_back()
             .unwrap_or(service_id)
             .to_string()
     } else {

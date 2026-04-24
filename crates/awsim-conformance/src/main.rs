@@ -56,7 +56,7 @@ async fn main() {
     let mut entries: Vec<_> = std::fs::read_dir(model_dir)
         .expect("Failed to read models directory")
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
         .collect();
     entries.sort_by_key(|e| e.file_name());
 
@@ -69,11 +69,10 @@ async fn main() {
             .to_string();
 
         // Apply service filter if specified.
-        if let Some(ref filter) = filter {
-            if !filter.iter().any(|f| service_name.contains(f)) {
+        if let Some(ref filter) = filter
+            && !filter.iter().any(|f| service_name.contains(f)) {
                 continue;
             }
-        }
 
         println!("Testing service: {service_name}");
 

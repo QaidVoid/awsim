@@ -58,11 +58,10 @@ pub fn query(state: &KendraState, input: &Value) -> Result<Value, AwsError> {
 
         if score > 0.0 {
             // Apply AttributeFilter if present
-            if let Some(filter) = input.get("AttributeFilter") {
-                if !evaluate_attribute_filter(filter, &doc.attributes) {
+            if let Some(filter) = input.get("AttributeFilter")
+                && !evaluate_attribute_filter(filter, &doc.attributes) {
                     continue;
                 }
-            }
             scored.push(ScoredDoc { doc, score });
         }
     }
@@ -186,7 +185,7 @@ fn evaluate_attribute_filter(filter: &Value, attrs: &HashMap<String, DocumentAtt
     if let Some(gt) = obj.get("GreaterThan") {
         let key = gt["Key"].as_str().unwrap_or("");
         let val = gt["Value"]["LongValue"].as_i64().unwrap_or(0);
-        return attrs.get(key).map_or(false, |a| match &a.value {
+        return attrs.get(key).is_some_and(|a| match &a.value {
             DocumentAttributeValue::LongValue(v) => *v > val,
             _ => false,
         });
@@ -195,7 +194,7 @@ fn evaluate_attribute_filter(filter: &Value, attrs: &HashMap<String, DocumentAtt
     if let Some(lt) = obj.get("LessThan") {
         let key = lt["Key"].as_str().unwrap_or("");
         let val = lt["Value"]["LongValue"].as_i64().unwrap_or(0);
-        return attrs.get(key).map_or(false, |a| match &a.value {
+        return attrs.get(key).is_some_and(|a| match &a.value {
             DocumentAttributeValue::LongValue(v) => *v < val,
             _ => false,
         });
@@ -211,13 +210,13 @@ fn match_attribute_value(attr: Option<&DocumentAttribute>, expected: &Value) -> 
     };
     match &attr.value {
         DocumentAttributeValue::StringValue(s) => {
-            expected["StringValue"].as_str().map_or(false, |e| e == s)
+            expected["StringValue"].as_str().is_some_and(|e| e == s)
         }
         DocumentAttributeValue::LongValue(n) => {
-            expected["LongValue"].as_i64().map_or(false, |e| e == *n)
+            expected["LongValue"].as_i64() == Some(*n)
         }
         DocumentAttributeValue::DateValue(d) => {
-            expected["DateValue"].as_str().map_or(false, |e| e == d)
+            expected["DateValue"].as_str().is_some_and(|e| e == d)
         }
         DocumentAttributeValue::StringListValue(list) => {
             if let Some(arr) = expected["StringListValue"].as_array() {

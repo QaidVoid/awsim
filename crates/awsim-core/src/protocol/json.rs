@@ -18,7 +18,7 @@ pub fn parse_request(headers: &HeaderMap, body: &Bytes) -> Result<ParsedRequest,
 
     let operation = target
         .split('.')
-        .last()
+        .next_back()
         .ok_or_else(|| {
             AwsError::bad_request(
                 "InvalidHeader",

@@ -13,7 +13,7 @@ use crate::util::{new_version_id, now_epoch_f64, random_password, random_suffix}
 // ---------------------------------------------------------------------------
 
 /// Resolve a SecretId which may be a name or an ARN. Returns the canonical name key.
-fn resolve_name<'a>(state: &'a SecretsState, secret_id: &str) -> Result<String, AwsError> {
+fn resolve_name(state: &SecretsState, secret_id: &str) -> Result<String, AwsError> {
     // Direct name lookup
     if state.secrets.contains_key(secret_id) {
         return Ok(secret_id.to_string());
@@ -127,7 +127,7 @@ pub fn create_secret(
         secret_string,
         secret_binary,
         stages: vec!["AWSCURRENT".to_string()],
-        created_date: now.clone(),
+        created_date: now,
     };
 
     let mut versions = HashMap::new();
@@ -140,7 +140,7 @@ pub fn create_secret(
         versions,
         current_version_id: version_id.clone(),
         tags,
-        created_date: now.clone(),
+        created_date: now,
         last_changed_date: now,
         deleted_date: None,
         rotation_enabled: false,
@@ -283,7 +283,7 @@ pub fn put_secret_value(
         secret_string,
         secret_binary,
         stages: requested_stages,
-        created_date: now.clone(),
+        created_date: now,
     };
 
     secret
@@ -393,7 +393,7 @@ pub fn update_secret(
             secret_string,
             secret_binary,
             stages: vec!["AWSCURRENT".to_string()],
-            created_date: now.clone(),
+            created_date: now,
         };
         secret.versions.insert(new_vid.clone(), new_version);
         secret.current_version_id = new_vid;
@@ -602,11 +602,10 @@ pub fn rotate_secret(
     if let Some(lambda_arn) = input["RotationLambdaARN"].as_str() {
         secret.rotation_lambda_arn = Some(lambda_arn.to_string());
     }
-    if let Some(rules) = input["RotationRules"].as_object() {
-        if let Some(days) = rules.get("AutomaticallyAfterDays").and_then(|v| v.as_u64()) {
+    if let Some(rules) = input["RotationRules"].as_object()
+        && let Some(days) = rules.get("AutomaticallyAfterDays").and_then(|v| v.as_u64()) {
             secret.rotation_automatically_after_days = Some(days);
         }
-    }
     secret.rotation_enabled = true;
 
     // Simulate rotation: create a new AWSPENDING version then immediately promote it to AWSCURRENT.
@@ -716,7 +715,7 @@ pub fn get_random_password(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let length = input["PasswordLength"].as_u64().unwrap_or(32) as usize;
-    if length < 1 || length > 4096 {
+    if !(1..=4096).contains(&length) {
         return Err(error::invalid_parameter(
             "PasswordLength must be between 1 and 4096",
         ));
@@ -977,11 +976,10 @@ pub fn update_secret_version_stage(
     let arn = secret.arn.clone();
     let secret_name = secret.name.clone();
 
-    if let Some(remove_id) = remove_from {
-        if let Some(v) = secret.versions.get_mut(remove_id) {
+    if let Some(remove_id) = remove_from
+        && let Some(v) = secret.versions.get_mut(remove_id) {
             v.stages.retain(|s| s != version_stage);
         }
-    }
 
     if let Some(move_id) = move_to {
         if !secret.versions.contains_key(move_id) {
@@ -992,11 +990,10 @@ pub fn update_secret_version_stage(
                 v.stages.retain(|s| s != version_stage);
             }
         }
-        if let Some(v) = secret.versions.get_mut(move_id) {
-            if !v.stages.contains(&version_stage.to_string()) {
+        if let Some(v) = secret.versions.get_mut(move_id)
+            && !v.stages.contains(&version_stage.to_string()) {
                 v.stages.push(version_stage.to_string());
             }
-        }
         if version_stage == "AWSCURRENT" {
             secret.current_version_id = move_id.to_string();
         }

@@ -381,7 +381,7 @@ pub fn create_maintenance_window(
 
     let window_id = format!(
         "mw-{}",
-        Uuid::new_v4().to_string().replace('-', "")[..16].to_string()
+        &Uuid::new_v4().to_string().replace('-', "")[..16]
     );
     let now = now_epoch_secs();
 
@@ -468,7 +468,7 @@ pub fn create_ops_item(
 
     let ops_item_id = format!(
         "oi-{}",
-        Uuid::new_v4().to_string().replace('-', "")[..16].to_string()
+        &Uuid::new_v4().to_string().replace('-', "")[..16]
     );
     let now = now_epoch_secs();
 

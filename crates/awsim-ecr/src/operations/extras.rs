@@ -20,7 +20,7 @@ fn new_uuid() -> String {
     Uuid::new_v4().to_string()
 }
 
-fn require_repo_name<'a>(input: &'a Value) -> Result<&'a str, AwsError> {
+fn require_repo_name(input: &Value) -> Result<&str, AwsError> {
     input["repositoryName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "repositoryName is required")
     })

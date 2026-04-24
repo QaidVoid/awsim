@@ -184,14 +184,13 @@ pub fn sdk_err_is_access_denied<E>(
 where
     E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
 {
-    if let SdkError::ServiceError(ctx) = err {
-        if matches!(
+    if let SdkError::ServiceError(ctx) = err
+        && matches!(
             ctx.err().code(),
             Some("AccessDenied") | Some("AccessDeniedException")
         ) {
             return true;
         }
-    }
     err.raw_response()
         .map(|r| r.status().as_u16() == 403)
         .unwrap_or(false)

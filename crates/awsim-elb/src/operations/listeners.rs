@@ -110,7 +110,7 @@ pub fn describe_listeners(state: &ElbState, input: &Value) -> Result<Value, AwsE
             let l = e.value();
             let lb_ok = lb_arn_filter
                 .as_ref()
-                .map_or(true, |arn| &l.load_balancer_arn == arn);
+                .is_none_or(|arn| &l.load_balancer_arn == arn);
             let arn_ok = listener_arns.is_empty() || listener_arns.contains(&l.arn);
             lb_ok && arn_ok
         })
@@ -133,15 +133,14 @@ pub fn modify_listener(state: &ElbState, input: &Value) -> Result<Value, AwsErro
         .get_mut(arn)
         .ok_or_else(|| resource_not_found("listener", arn))?;
 
-    if let Some(port_val) = input.get("Port") {
-        if let Some(port) = match port_val {
+    if let Some(port_val) = input.get("Port")
+        && let Some(port) = match port_val {
             Value::Number(n) => n.as_u64().map(|n| n as u16),
             Value::String(s) => s.parse().ok(),
             _ => None,
         } {
             listener.port = port;
         }
-    }
 
     if let Some(proto) = input.get("Protocol").and_then(|v| v.as_str()) {
         listener.protocol = proto.to_string();
@@ -288,14 +287,14 @@ pub fn parse_actions(input: &Value, key: &str) -> Vec<ListenerAction> {
         let items: Vec<&Value> = match v {
             Value::Array(arr) => arr.iter().collect(),
             Value::Object(map) => {
-                let members = if let Some(Value::Object(m)) = map.get("member") {
+                
+                if let Some(Value::Object(m)) = map.get("member") {
                     m.values().collect()
                 } else {
                     let mut pairs: Vec<_> = map.iter().collect();
                     pairs.sort_by_key(|(k, _)| k.parse::<u64>().unwrap_or(u64::MAX));
                     pairs.into_iter().map(|(_, v)| v).collect()
-                };
-                members
+                }
             }
             _ => vec![],
         };

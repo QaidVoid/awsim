@@ -596,14 +596,14 @@ fn evaluate_rule(claim_value: &str, match_type: &str, expected: &str) -> bool {
 fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Option<String> {
     // Merge logins from the stored identity and the request input.
     let input_logins = input.get("Logins").and_then(|l| l.as_object());
-    let has_logins = !identity.logins.is_empty() || input_logins.map_or(false, |m| !m.is_empty());
+    let has_logins = !identity.logins.is_empty() || input_logins.is_some_and(|m| !m.is_empty());
 
     if has_logins {
         // Check provider-specific role mappings first.
         if let Some(logins_map) = input_logins {
             for (provider, _token) in logins_map {
-                if let Some(mapping) = pool.role_mappings.get(provider.as_str()) {
-                    if let Some(mapping_obj) = mapping.as_object() {
+                if let Some(mapping) = pool.role_mappings.get(provider.as_str())
+                    && let Some(mapping_obj) = mapping.as_object() {
                         let mapping_type = mapping_obj
                             .get("Type")
                             .and_then(|t| t.as_str())
@@ -621,8 +621,8 @@ fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Op
                                 // Rules-based: evaluate each rule against token claims.
                                 // Since we don't decode tokens, we evaluate rules against
                                 // the identity's stored login providers as a best-effort.
-                                if let Some(rules_config) = mapping_obj.get("RulesConfiguration") {
-                                    if let Some(rules) =
+                                if let Some(rules_config) = mapping_obj.get("RulesConfiguration")
+                                    && let Some(rules) =
                                         rules_config.get("Rules").and_then(|r| r.as_array())
                                     {
                                         for rule in rules {
@@ -650,21 +650,18 @@ fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Op
                                                 provider.as_str()
                                             };
 
-                                            if evaluate_rule(claim_value, match_type, expected) {
-                                                if let Some(role) =
+                                            if evaluate_rule(claim_value, match_type, expected)
+                                                && let Some(role) =
                                                     rule.get("RoleARN").and_then(|r| r.as_str())
                                                 {
                                                     return Some(role.to_string());
                                                 }
-                                            }
                                         }
                                     }
-                                }
                             }
                             _ => {}
                         }
                     }
-                }
             }
         }
 
@@ -694,7 +691,7 @@ fn generate_credentials_for_role(role_arn: &str, _identity_id: &str) -> Value {
     // Derive a short role identifier used as a token infix (truncated, URL-safe).
     let role_name = role_arn
         .split('/')
-        .last()
+        .next_back()
         .unwrap_or("role")
         .replace(|c: char| !c.is_alphanumeric(), "");
     let role_infix = &role_name[..role_name.len().min(16)];
@@ -1268,7 +1265,7 @@ fn delete_principal_tag_attribute_map(
 // Helper: pool id from ARN
 // ---------------------------------------------------------------------------
 
-fn pool_id_from_arn<'a>(arn: &'a str) -> Option<&'a str> {
+fn pool_id_from_arn(arn: &str) -> Option<&str> {
     // arn:aws:cognito-identity:region:account:identitypool/pool_id
     arn.split('/').nth(1)
 }

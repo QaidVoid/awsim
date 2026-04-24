@@ -84,7 +84,7 @@ fn parse_gsi(input: &Value) -> Vec<GlobalSecondaryIndex> {
                 .filter_map(|el| {
                     let index_name = el.get("IndexName")?.as_str()?.to_string();
                     let key_schema = parse_key_schema(&el["KeySchema"]);
-                    let projection = parse_projection(&el.get("Projection").unwrap_or(&json!({})));
+                    let projection = parse_projection(el.get("Projection").unwrap_or(&json!({})));
                     Some(GlobalSecondaryIndex {
                         index_name,
                         key_schema,
@@ -105,7 +105,7 @@ fn parse_lsi(input: &Value) -> Vec<LocalSecondaryIndex> {
                 .filter_map(|el| {
                     let index_name = el.get("IndexName")?.as_str()?.to_string();
                     let key_schema = parse_key_schema(&el["KeySchema"]);
-                    let projection = parse_projection(&el.get("Projection").unwrap_or(&json!({})));
+                    let projection = parse_projection(el.get("Projection").unwrap_or(&json!({})));
                     Some(LocalSecondaryIndex {
                         index_name,
                         key_schema,
@@ -232,12 +232,12 @@ pub fn create_table(
 
     let gsi = input
         .get("GlobalSecondaryIndexes")
-        .map(|v| parse_gsi(v))
+        .map(parse_gsi)
         .unwrap_or_default();
 
     let lsi = input
         .get("LocalSecondaryIndexes")
-        .map(|v| parse_lsi(v))
+        .map(parse_lsi)
         .unwrap_or_default();
 
     let arn = format!(
@@ -464,18 +464,17 @@ pub fn update_table(
                     .unwrap_or("")
                     .to_string();
                 let key_schema = parse_key_schema(&create["KeySchema"]);
-                let projection = parse_projection(&create.get("Projection").unwrap_or(&json!({})));
+                let projection = parse_projection(create.get("Projection").unwrap_or(&json!({})));
                 table.gsi.push(GlobalSecondaryIndex {
                     index_name: index_name.clone(),
                     key_schema,
                     projection,
                     status: "ACTIVE".to_string(),
                 });
-            } else if let Some(delete) = update.get("Delete") {
-                if let Some(index_name) = delete.get("IndexName").and_then(|v| v.as_str()) {
+            } else if let Some(delete) = update.get("Delete")
+                && let Some(index_name) = delete.get("IndexName").and_then(|v| v.as_str()) {
                     table.gsi.retain(|g| g.index_name != index_name);
                 }
-            }
         }
     }
 

@@ -121,16 +121,14 @@ pub fn describe_db_engine_versions(input: &Value) -> Result<Value, AwsError> {
     let versions: Vec<Value> = all_versions
         .into_iter()
         .filter(|v| {
-            if let Some(eng) = filter_engine {
-                if v["Engine"].as_str().unwrap_or("") != eng {
+            if let Some(eng) = filter_engine
+                && v["Engine"].as_str().unwrap_or("") != eng {
                     return false;
                 }
-            }
-            if let Some(ver) = filter_version {
-                if v["EngineVersion"].as_str().unwrap_or("") != ver {
+            if let Some(ver) = filter_version
+                && v["EngineVersion"].as_str().unwrap_or("") != ver {
                     return false;
                 }
-            }
             true
         })
         .collect();
@@ -162,7 +160,7 @@ pub fn describe_orderable_db_instance_options(input: &Value) -> Result<Value, Aw
         "db.r5.4xlarge",
     ];
 
-    let storage_types = vec!["gp2", "io1", "standard"];
+    let storage_types = ["gp2", "io1", "standard"];
 
     let options: Vec<Value> = classes
         .iter()

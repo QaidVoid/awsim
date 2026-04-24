@@ -162,8 +162,7 @@ pub fn create_platform_endpoint(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Token is required"))?;
 
     // Derive platform from ARN: arn:aws:sns:{region}:{account}:app/{platform}/{name}
-    let platform = platform_application_arn
-        .splitn(7, '/')
+    let platform = platform_application_arn.split('/')
         .nth(1)
         .unwrap_or("APNS");
 

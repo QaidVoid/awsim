@@ -110,7 +110,7 @@ pub fn list_commands(
     let commands: Vec<Value> = state
         .commands
         .iter()
-        .filter(|e| filter_command_id.map_or(true, |id| e.command_id == id))
+        .filter(|e| filter_command_id.is_none_or(|id| e.command_id == id))
         .map(|e| {
             json!({
                 "CommandId": e.command_id,

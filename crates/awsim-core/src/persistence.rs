@@ -74,11 +74,10 @@ impl PersistenceManager {
         services: &std::collections::HashMap<String, std::sync::Arc<dyn crate::ServiceHandler>>,
     ) {
         for (name, handler) in services {
-            if let Some(data) = handler.snapshot() {
-                if let Err(e) = self.save_snapshot(name, &data) {
+            if let Some(data) = handler.snapshot()
+                && let Err(e) = self.save_snapshot(name, &data) {
                     error!(service = %name, error = %e, "Failed to save snapshot");
                 }
-            }
         }
     }
 
@@ -88,11 +87,10 @@ impl PersistenceManager {
         services: &std::collections::HashMap<String, std::sync::Arc<dyn crate::ServiceHandler>>,
     ) {
         for (name, handler) in services {
-            if let Some(data) = self.load_snapshot(name) {
-                if let Err(e) = handler.restore(&data) {
+            if let Some(data) = self.load_snapshot(name)
+                && let Err(e) = handler.restore(&data) {
                     tracing::warn!(service = %name, error = %e, "Failed to restore snapshot");
                 }
-            }
         }
     }
 }

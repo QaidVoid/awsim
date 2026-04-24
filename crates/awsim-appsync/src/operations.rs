@@ -135,7 +135,7 @@ pub fn get_graphql_api(state: &AppSyncState, input: &Value) -> Result<Value, Aws
         )
     })?;
 
-    Ok(json!({ "graphqlApi": api_to_json(&*api) }))
+    Ok(json!({ "graphqlApi": api_to_json(&api) }))
 }
 
 pub fn list_graphql_apis(state: &AppSyncState) -> Result<Value, AwsError> {
@@ -178,7 +178,7 @@ pub fn update_graphql_api(state: &AppSyncState, input: &Value) -> Result<Value, 
         api.authentication_type = auth.to_string();
     }
 
-    Ok(json!({ "graphqlApi": api_to_json(&*api) }))
+    Ok(json!({ "graphqlApi": api_to_json(&api) }))
 }
 
 // ── Schema ────────────────────────────────────────────────────────────────────
@@ -1049,15 +1049,14 @@ pub fn untag_resource(state: &AppSyncState, input: &Value) -> Result<Value, AwsE
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "resourceArn is required"))?;
 
-    if let Some(mut entry) = state.tags.get_mut(resource_arn) {
-        if let Some(keys) = input["tagKeys"].as_array() {
+    if let Some(mut entry) = state.tags.get_mut(resource_arn)
+        && let Some(keys) = input["tagKeys"].as_array() {
             for k in keys {
                 if let Some(s) = k.as_str() {
                     entry.remove(s);
                 }
             }
         }
-    }
 
     Ok(json!({}))
 }
@@ -1143,7 +1142,7 @@ pub fn get_source_api_association(state: &AppSyncState, input: &Value) -> Result
             )
         })?;
 
-    Ok(json!({ "sourceApiAssociation": association_to_json(&*assoc) }))
+    Ok(json!({ "sourceApiAssociation": association_to_json(&assoc) }))
 }
 
 pub fn list_source_api_associations(

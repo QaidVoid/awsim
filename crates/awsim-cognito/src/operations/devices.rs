@@ -28,8 +28,8 @@ fn device_to_value(d: &DeviceInfo) -> Value {
     })
 }
 
-fn get_username_from_token<'a>(
-    state: &'a CognitoState,
+fn get_username_from_token(
+    state: &CognitoState,
     token: &str,
 ) -> Result<(String, String), AwsError> {
     let username = jwt::extract_username_from_access_token(token)

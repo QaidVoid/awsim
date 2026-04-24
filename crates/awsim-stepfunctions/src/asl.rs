@@ -134,7 +134,7 @@ impl InterpreterContext {
         let state_type = state["Type"].as_str().unwrap_or("Pass");
 
         self.push_event(
-            &format!("StateEntered"),
+            "StateEntered",
             json!({ "name": state_name, "type": state_type, "input": input }),
         );
 
@@ -294,8 +294,8 @@ impl InterpreterContext {
         // Stub: execute only the first branch
         let branches = state["Branches"].as_array();
 
-        if let Some(branch_list) = branches {
-            if let Some(first_branch) = branch_list.first() {
+        if let Some(branch_list) = branches
+            && let Some(first_branch) = branch_list.first() {
                 let branch_def = first_branch.to_string();
                 let branch_result = execute(&branch_def, &input.to_string(), &self.start_time);
 
@@ -313,7 +313,6 @@ impl InterpreterContext {
                     apply_result_path(&input, &parallel_output, state["ResultPath"].as_str());
                 return Ok((result_output, transition(state)));
             }
-        }
 
         // No branches — succeed with empty array
         let parallel_output = json!([]);

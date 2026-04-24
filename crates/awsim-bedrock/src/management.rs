@@ -464,7 +464,7 @@ pub fn get_knowledge_base(state: &BedrockState, input: &Value) -> Result<Value, 
         )
     })?;
 
-    Ok(json!({ "knowledgeBase": kb_to_json(&*kb) }))
+    Ok(json!({ "knowledgeBase": kb_to_json(&kb) }))
 }
 
 pub fn list_knowledge_bases(state: &BedrockState, _input: &Value) -> Result<Value, AwsError> {

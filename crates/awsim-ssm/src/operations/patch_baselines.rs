@@ -16,7 +16,7 @@ fn now_epoch_secs() -> u64 {
 fn new_baseline_id() -> String {
     format!(
         "pb-{}",
-        Uuid::new_v4().to_string().replace('-', "")[..17].to_string()
+        &Uuid::new_v4().to_string().replace('-', "")[..17]
     )
 }
 

@@ -11,14 +11,14 @@ fn parse_tags(input: &Value) -> Vec<(String, String)> {
         let items: Vec<&Value> = match t {
             Value::Array(arr) => arr.iter().collect(),
             Value::Object(map) => {
-                let members = if let Some(Value::Object(m)) = map.get("member") {
+                
+                if let Some(Value::Object(m)) = map.get("member") {
                     m.values().collect()
                 } else {
                     let mut pairs: Vec<_> = map.iter().collect();
                     pairs.sort_by_key(|(k, _)| k.parse::<u64>().unwrap_or(u64::MAX));
                     pairs.into_iter().map(|(_, v)| v).collect()
-                };
-                members
+                }
             }
             _ => vec![],
         };
