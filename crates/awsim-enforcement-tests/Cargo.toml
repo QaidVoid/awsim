@@ -3,6 +3,8 @@ name = "awsim-enforcement-tests"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+publish = false
 
 [lib]
 name = "awsim_enforcement_tests"
