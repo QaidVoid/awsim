@@ -4,7 +4,7 @@ AWS Lambda serverless compute for running code without provisioning or managing 
 
 **Protocol:** `RestJson1`
 **Signing name:** `lambda`
-**Persistent:** No (function code and configuration are lost on restart)
+**Persistent:** Yes (function configuration via `lambda.json`; function zip bytes under `{data_dir}/lambda/`) when `--data-dir` is set; in-memory only otherwise
 
 ## Quick Start
 
@@ -206,6 +206,6 @@ See [Lambda Execution](/guide/lambda-execution) for full runtime details and lim
 - `Invoke` always behaves synchronously even if `InvocationType: "Event"` is specified.
 - Function output (stdout/stderr) is captured and written to CloudWatch Logs at `/aws/lambda/{function-name}`.
 - Layers are stored as metadata but their contents are **not** merged into the function's execution environment.
-- Function code and configuration are **not** persisted — you must re-create functions after an AWSim restart.
+- Function configuration and zip bytes persist across restarts when `--data-dir` is set: configuration lives in `{data_dir}/snapshots/lambda.json` and zip bytes live at `{data_dir}/lambda/{function}/$LATEST` (plus `{data_dir}/lambda/{function}/{version}` for each published version). See [Persistence](/guide/persistence) for details.
 - Environment variables are injected as real OS environment variables during execution.
 - SQS event source mappings are actively polled every 2 seconds — messages received on the queue trigger the Lambda function automatically.

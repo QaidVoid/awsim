@@ -29,8 +29,9 @@ The following services write and restore snapshots:
 | WAF | `wafv2` |
 | Scheduler | `scheduler` |
 | SNS | `sns` |
+| Lambda | `lambda` |
 
-Services not in this list (e.g., Lambda, KMS, Secrets Manager) are always in-memory only.
+Services not in this list (e.g., KMS, Secrets Manager) are always in-memory only.
 
 **Note on S3:** S3 bucket metadata and object metadata are persisted via the JSON snapshot. Object bodies (the raw bytes) are persisted separately to disk under `{data_dir}/s3/` whenever `--data-dir` is supplied — see [S3 object bodies](#s3-object-bodies) below.
 
@@ -52,6 +53,25 @@ Object metadata still rides in the regular `s3.json` snapshot. On restore, each 
 If a body file is missing on disk after a restart (for example, the data directory was partially wiped), `GetObject` returns `NoSuchKey` for that object.
 
 When `--data-dir` is not supplied, the service stays fully in-memory and object bodies are lost on shutdown.
+
+## Lambda function code
+
+When `--data-dir` is set, the Lambda service writes each function's zip bytes to disk under `{data_dir}/lambda/`:
+
+```
+/var/lib/awsim/
+  lambda/
+    <function-name>/
+      $LATEST          # current editable code
+      1                # published version 1
+      2                # published version 2
+```
+
+`CreateFunction` and `UpdateFunctionCode` write the current code to `$LATEST`. `PublishVersion` snapshots the current bytes into a per-version file (named after the version number) so each published version keeps an immutable copy independent of further edits to `$LATEST`. `DeleteFunction` removes the entire `{function-name}` subtree on a best-effort basis.
+
+The `lambda.json` snapshot stores function metadata only (configuration, version metadata, aliases). On restore, each function's `code` field is rebound to its on-disk path; bytes are read lazily by `Invoke` rather than preloaded. Invocation history is intentionally not persisted.
+
+When `--data-dir` is not supplied, function code stays in memory and is lost on shutdown.
 
 ## Snapshot Format
 
