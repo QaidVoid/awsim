@@ -27,10 +27,7 @@ function eksHeaders(): Record<string, string> {
   };
 }
 
-async function eksFetch<T>(
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
+async function eksFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${ENDPOINT}${path}`, {
     headers: eksHeaders(),
     ...init,
@@ -264,7 +261,9 @@ export async function listFargateProfiles(
     fargateProfileNames?: string[];
     fargateProfiles?: string[];
   }>(`/clusters/${encodeURIComponent(clusterName)}/fargate-profiles`);
-  return { profileNames: data.fargateProfileNames ?? data.fargateProfiles ?? [] };
+  return {
+    profileNames: data.fargateProfileNames ?? data.fargateProfiles ?? [],
+  };
 }
 
 export async function describeFargateProfile(

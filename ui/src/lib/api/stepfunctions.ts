@@ -253,9 +253,7 @@ export async function listExecutions(
   };
 }
 
-export async function describeExecution(
-  arn: string,
-): Promise<ExecutionDetail> {
+export async function describeExecution(arn: string): Promise<ExecutionDetail> {
   const data = await sfnCall<
     RawExecution & {
       input?: string;

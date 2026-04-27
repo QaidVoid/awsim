@@ -236,9 +236,12 @@ export async function listClusters(): Promise<{ clusters: Cluster[] }> {
   const list = await ecsCall<{ clusterArns?: string[] }>("ListClusters");
   const arns = list.clusterArns ?? [];
   if (arns.length === 0) return { clusters: [] };
-  const detail = await ecsCall<{ clusters?: RawCluster[] }>("DescribeClusters", {
-    clusters: arns,
-  });
+  const detail = await ecsCall<{ clusters?: RawCluster[] }>(
+    "DescribeClusters",
+    {
+      clusters: arns,
+    },
+  );
   return { clusters: (detail.clusters ?? []).map(mapCluster) };
 }
 
@@ -258,10 +261,13 @@ export async function listServices(
   });
   const arns = list.serviceArns ?? [];
   if (arns.length === 0) return { services: [] };
-  const detail = await ecsCall<{ services?: RawService[] }>("DescribeServices", {
-    cluster: clusterArn,
-    services: arns,
-  });
+  const detail = await ecsCall<{ services?: RawService[] }>(
+    "DescribeServices",
+    {
+      cluster: clusterArn,
+      services: arns,
+    },
+  );
   return { services: (detail.services ?? []).map(mapService) };
 }
 
@@ -308,7 +314,9 @@ export async function describeTaskDefinition(
     "DescribeTaskDefinition",
     { taskDefinition: arn },
   );
-  return detail.taskDefinition ? mapTaskDefinition(detail.taskDefinition) : null;
+  return detail.taskDefinition
+    ? mapTaskDefinition(detail.taskDefinition)
+    : null;
 }
 
 export interface RunTaskInput {

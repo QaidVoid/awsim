@@ -83,9 +83,7 @@ function parseInstance(block: string): DBInstance {
   const port =
     xmlText(block, "Port") ||
     (() => {
-      const ep = new RegExp(
-        `<Endpoint>([\\s\\S]*?)<\\/Endpoint>`,
-      ).exec(block);
+      const ep = new RegExp(`<Endpoint>([\\s\\S]*?)<\\/Endpoint>`).exec(block);
       return ep ? xmlText(ep[1], "Port") : "";
     })();
   const address = (() => {
@@ -186,7 +184,9 @@ export async function createDBSnapshot(
   });
 }
 
-export async function deleteDBSnapshot(snapshotIdentifier: string): Promise<void> {
+export async function deleteDBSnapshot(
+  snapshotIdentifier: string,
+): Promise<void> {
   await rdsRequest("DeleteDBSnapshot", {
     DBSnapshotIdentifier: snapshotIdentifier,
   });
@@ -202,9 +202,15 @@ export function statusVariant(
 ): "default" | "secondary" | "destructive" | "outline" {
   const s = status.toLowerCase();
   if (s === "available") return "secondary";
-  if (s === "creating" || s === "modifying" || s === "starting" || s === "backing-up")
+  if (
+    s === "creating" ||
+    s === "modifying" ||
+    s === "starting" ||
+    s === "backing-up"
+  )
     return "outline";
-  if (s === "deleting" || s === "failed" || s === "stopped") return "destructive";
+  if (s === "deleting" || s === "failed" || s === "stopped")
+    return "destructive";
   return "outline";
 }
 

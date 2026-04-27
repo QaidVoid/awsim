@@ -198,8 +198,14 @@ export interface CreateTableParams {
 }
 
 export async function createTable(params: CreateTableParams): Promise<void> {
-  const attributeDefinitions: { AttributeName: string; AttributeType: string }[] = [
-    { AttributeName: params.partitionKey, AttributeType: params.partitionKeyType },
+  const attributeDefinitions: {
+    AttributeName: string;
+    AttributeType: string;
+  }[] = [
+    {
+      AttributeName: params.partitionKey,
+      AttributeType: params.partitionKeyType,
+    },
   ];
   const keySchema: { AttributeName: string; KeyType: string }[] = [
     { AttributeName: params.partitionKey, KeyType: "HASH" },
@@ -301,7 +307,10 @@ export async function query(params: QueryParams): Promise<ScanResult> {
   };
 }
 
-export async function getItem(tableName: string, key: Item): Promise<Item | null> {
+export async function getItem(
+  tableName: string,
+  key: Item,
+): Promise<Item | null> {
   const data = await request<{ Item?: Item }>("GetItem", {
     TableName: tableName,
     Key: key,
