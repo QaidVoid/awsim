@@ -36,6 +36,8 @@ Services not in this list (e.g., KMS, Secrets Manager) are always in-memory only
 
 **Note on S3:** S3 bucket metadata and object metadata are persisted via the JSON snapshot. Object bodies (the raw bytes) are persisted separately to disk under `{data_dir}/s3/` whenever `--data-dir` is supplied — see [S3 object bodies](#s3-object-bodies) below.
 
+**Note on SQS:** SQS queue metadata is persisted via the JSON snapshot. Message bodies are written separately to disk under `{data_dir}/sqs/` whenever `--data-dir` is supplied — see [SQS message bodies](#sqs-message-bodies) below.
+
 ## S3 object bodies
 
 When `--data-dir` is set, the S3 service writes each `PutObject`, `CopyObject`, and assembled multipart upload to disk through a body store rooted at `{data_dir}/s3/`:
@@ -73,6 +75,23 @@ When `--data-dir` is set, the Lambda service writes each function's zip bytes to
 The `lambda.json` snapshot stores function metadata only (configuration, version metadata, aliases). On restore, each function's `code` field is rebound to its on-disk path; bytes are read lazily by `Invoke` rather than preloaded. Invocation history is intentionally not persisted.
 
 When `--data-dir` is not supplied, function code stays in memory and is lost on shutdown.
+
+## SQS message bodies
+
+When `--data-dir` is set, the SQS service writes each accepted message body to disk under `{data_dir}/sqs/`:
+
+```
+/var/lib/awsim/
+  sqs/
+    <queue-name>/
+      <message-id>
+```
+
+`SendMessage` and `SendMessageBatch` write the body to `{data_dir}/sqs/{queue}/{message_id}` and store an on-disk reference on the in-memory message; `ReceiveMessage` reads the bytes back lazily when responding. `DeleteMessage` and `DeleteMessageBatch` remove the per-message blob; `PurgeQueue` and `DeleteQueue` drop the entire queue subtree. When a message is redriven to a configured DLQ, its blob is migrated from the source queue's bucket to the DLQ's bucket so it survives source-queue cleanup. All cleanup is best-effort and failures are logged via `tracing` rather than failing the API call.
+
+The `sqs.json` snapshot stores queue and message metadata only — body bytes for on-disk messages are omitted from the snapshot. On restore, each message's body is rebound to its on-disk path. If a body file is missing on disk after restart, `ReceiveMessage` returns an internal error for that message rather than fabricating an empty body.
+
+When `--data-dir` is not supplied, message bodies stay in memory and are lost on shutdown.
 
 ## ECR layers
 

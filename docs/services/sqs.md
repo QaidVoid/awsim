@@ -218,6 +218,7 @@ aws --endpoint-url http://localhost:4566 sqs set-queue-attributes \
 ## Behavior Notes
 
 - SQS is persistent: queues and messages survive AWSim restarts.
+- When `--data-dir` is set, message bodies are written to `{data_dir}/sqs/{queue}/{message_id}` on `SendMessage`/`SendMessageBatch`. `DeleteMessage`, `PurgeQueue`, and `DeleteQueue` remove the corresponding files. See [Persistence: SQS message bodies](../guide/persistence.md#sqs-message-bodies) for details.
 - Long polling (`WaitTimeSeconds > 0`) is accepted but returns immediately without actually waiting.
 - Message deduplication for FIFO queues is accepted but not strictly enforced.
 - Visibility timeout countdown is tracked but may not be perfectly precise at millisecond granularity.
