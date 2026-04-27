@@ -17,6 +17,7 @@ use crate::state::{
 pub struct EcrService {
     store: AccountRegionStore<EcrState>,
     body_store: Option<Arc<BodyStore>>,
+    port: u16,
 }
 
 impl EcrService {
@@ -24,6 +25,7 @@ impl EcrService {
         Self {
             store: AccountRegionStore::new(),
             body_store: None,
+            port: 4566,
         }
     }
 
@@ -31,7 +33,13 @@ impl EcrService {
         Self {
             store: AccountRegionStore::new(),
             body_store: Some(Arc::new(BodyStore::new(dir.as_ref().to_path_buf()))),
+            port: 4566,
         }
+    }
+
+    pub fn with_port(mut self, port: u16) -> Self {
+        self.port = port;
+        self
     }
 
     fn get_state(&self, ctx: &RequestContext) -> Arc<EcrState> {
@@ -39,6 +47,9 @@ impl EcrService {
         if let Some(bs) = &self.body_store {
             state.set_body_store(Arc::clone(bs));
         }
+        state
+            .port
+            .store(self.port, std::sync::atomic::Ordering::Relaxed);
         state
     }
 

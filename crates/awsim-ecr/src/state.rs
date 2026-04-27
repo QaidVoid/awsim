@@ -97,7 +97,7 @@ pub struct ReplicationConfiguration {
 }
 
 /// Per-account/region ECR state.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct EcrState {
     /// repositoryName → Repository
     pub repositories: DashMap<String, Repository>,
@@ -109,6 +109,25 @@ pub struct EcrState {
     pub replication_config: std::sync::RwLock<ReplicationConfiguration>,
     pub account_settings: DashMap<String, String>,
     pub body_store: OnceLock<Arc<BodyStore>>,
+    pub port: std::sync::atomic::AtomicU16,
+}
+
+impl Default for EcrState {
+    fn default() -> Self {
+        Self {
+            repositories: DashMap::new(),
+            layer_uploads: DashMap::new(),
+            pull_through_cache_rules: DashMap::new(),
+            registry_policy: DashMap::new(),
+            registry_scanning_config: std::sync::RwLock::new(
+                RegistryScanningConfiguration::default(),
+            ),
+            replication_config: std::sync::RwLock::new(ReplicationConfiguration::default()),
+            account_settings: DashMap::new(),
+            body_store: OnceLock::new(),
+            port: std::sync::atomic::AtomicU16::new(4566),
+        }
+    }
 }
 
 impl EcrState {

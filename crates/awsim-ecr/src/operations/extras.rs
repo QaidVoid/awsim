@@ -281,22 +281,30 @@ pub fn describe_image_scan_findings(
 pub fn get_download_url_for_layer(
     state: &EcrState,
     input: &Value,
-    ctx: &RequestContext,
+    _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let repo_name = require_repo_name(input)?;
     let layer_digest = input["layerDigest"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "layerDigest is required")
     })?;
 
-    let _repo = state
+    let repo = state
         .repositories
         .get(repo_name)
         .ok_or_else(|| repo_not_found(repo_name))?;
 
+    if !repo.layers.contains_key(layer_digest) {
+        return Err(AwsError::not_found(
+            "LayersNotFoundException",
+            format!("Layer with digest '{layer_digest}' does not exist in the repository"),
+        ));
+    }
+
+    let port = state.port.load(std::sync::atomic::Ordering::Relaxed);
+
     Ok(json!({
         "downloadUrl": format!(
-            "http://ecr.{}.amazonaws.com/download/{}/{}/{}",
-            ctx.region, ctx.account_id, repo_name, layer_digest
+            "http://localhost:{port}/v2/{repo_name}/blobs/{layer_digest}"
         ),
         "layerDigest": layer_digest,
     }))
