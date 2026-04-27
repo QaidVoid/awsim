@@ -3,7 +3,7 @@ use clap::Parser;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use awsim_core::{AppState, PersistenceManager, RequestContext};
+use awsim_core::{AppState, BlobInventory, BodyStore, PersistenceManager, RequestContext};
 
 mod admin;
 mod integrations;
@@ -34,6 +34,10 @@ struct Cli {
     /// Log level
     #[arg(short = 'v', long, default_value = "info", env = "AWSIM_LOG_LEVEL")]
     log_level: String,
+
+    /// Disable startup garbage collection of orphaned BodyStore blobs
+    #[arg(long, env = "AWSIM_NO_GC", default_value_t = false)]
+    no_gc: bool,
 }
 
 #[tokio::main]
@@ -60,6 +64,9 @@ async fn main() -> Result<()> {
         lambda_store,
         organizations_store,
         ecr_service,
+        s3_service,
+        lambda_service,
+        sqs_service,
     ) = register_services(
         &mut state,
         &cli.account_id,
@@ -101,6 +108,15 @@ async fn main() -> Result<()> {
         let pm = PersistenceManager::new(data_dir);
         info!(data_dir = %data_dir, "Persistence enabled — restoring snapshots");
         pm.restore_all(&state.services);
+
+        if !cli.no_gc {
+            run_startup_gc(
+                s3_service.as_ref(),
+                lambda_service.as_ref(),
+                sqs_service.as_ref(),
+                ecr_service.as_ref(),
+            );
+        }
 
         // Spawn graceful-shutdown handler that saves snapshots on SIGINT/SIGTERM.
         let services_for_shutdown = Arc::clone(&state.services);
@@ -417,6 +433,9 @@ type RegisteredServices = (
     awsim_core::AccountRegionStore<awsim_lambda::state::LambdaState>,
     awsim_core::AccountRegionStore<awsim_organizations::state::OrganizationsState>,
     Arc<awsim_ecr::EcrService>,
+    Arc<awsim_s3::S3Service>,
+    Arc<awsim_lambda::LambdaService>,
+    Arc<awsim_sqs::SqsService>,
 );
 
 /// Register all services and return handles needed by the router:
@@ -446,7 +465,9 @@ fn register_services(
         None => awsim_sqs::SqsService::new(),
     };
     let sqs_store = sqs.store();
-    state.register(Arc::new(sqs), vec![]);
+    let sqs_arc = Arc::new(sqs);
+    let sqs_clone = Arc::clone(&sqs_arc);
+    state.register(sqs_arc, vec![]);
 
     let dynamodb = Arc::new(awsim_dynamodb::DynamoDbService::new());
     state.register(dynamodb, vec![]);
@@ -460,7 +481,9 @@ fn register_services(
         use awsim_core::ServiceHandler;
         s3.routes()
     };
-    state.register(Arc::new(s3), s3_routes);
+    let s3_arc = Arc::new(s3);
+    let s3_clone = Arc::clone(&s3_arc);
+    state.register(s3_arc, s3_routes);
 
     let lambda = match data_dir {
         Some(dir) => awsim_lambda::LambdaService::with_data_dir(dir),
@@ -471,7 +494,9 @@ fn register_services(
         use awsim_core::ServiceHandler;
         lambda.routes()
     };
-    state.register(Arc::new(lambda), lambda_routes);
+    let lambda_arc = Arc::new(lambda);
+    let lambda_clone = Arc::clone(&lambda_arc);
+    state.register(lambda_arc, lambda_routes);
 
     let logs = Arc::new(awsim_cloudwatch_logs::CloudWatchLogsService::new());
     state.register(logs, vec![]);
@@ -654,5 +679,53 @@ fn register_services(
         lambda_store,
         organizations_store,
         ecr_clone,
+        s3_clone,
+        lambda_clone,
+        sqs_clone,
     )
+}
+
+fn run_startup_gc(
+    s3: &awsim_s3::S3Service,
+    lambda: &awsim_lambda::LambdaService,
+    sqs: &awsim_sqs::SqsService,
+    ecr: &awsim_ecr::EcrService,
+) {
+    gc_one("s3", s3.body_store(), awsim_s3::S3Service::GROUPS, s3);
+    gc_one(
+        "lambda",
+        lambda.body_store(),
+        awsim_lambda::LambdaService::GROUPS,
+        lambda,
+    );
+    gc_one("sqs", sqs.body_store(), awsim_sqs::SqsService::GROUPS, sqs);
+    gc_one("ecr", ecr.body_store(), awsim_ecr::EcrService::GROUPS, ecr);
+}
+
+fn gc_one(
+    service: &str,
+    body_store: Option<&Arc<BodyStore>>,
+    groups: &[&str],
+    inventory: &dyn BlobInventory,
+) {
+    let Some(bs) = body_store else {
+        return;
+    };
+    let known: std::collections::HashSet<(String, String, String)> =
+        inventory.known_blobs().into_iter().collect();
+    match bs.gc_orphaned(groups, &known) {
+        Ok((deleted, freed_bytes)) => {
+            if deleted > 0 {
+                info!(
+                    service,
+                    deleted, freed_bytes, "BodyStore GC reclaimed orphaned blobs"
+                );
+            } else {
+                info!(service, "BodyStore GC found no orphans");
+            }
+        }
+        Err(e) => {
+            warn!(service, error = %e, "BodyStore GC failed");
+        }
+    }
 }
