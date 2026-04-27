@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use awsim_core::{Body, BodyStore};
+use awsim_core::{Body, BodyStore, Snapshottable};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
@@ -120,6 +120,119 @@ impl EcrState {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EcrStateSnapshot {
     pub repositories: Vec<RepositorySnapshot>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EcrRegionSnapshot {
+    pub account_id: String,
+    pub region: String,
+    pub repositories: Vec<RepositorySnapshot>,
+}
+
+impl Snapshottable for EcrState {
+    type Snapshot = EcrRegionSnapshot;
+
+    fn to_snapshot(&self, account_id: &str, region: &str) -> Self::Snapshot {
+        let repositories = self
+            .repositories
+            .iter()
+            .map(|entry| {
+                let r = entry.value();
+                RepositorySnapshot {
+                    account_id: account_id.to_string(),
+                    region: region.to_string(),
+                    name: r.name.clone(),
+                    arn: r.arn.clone(),
+                    registry_id: r.registry_id.clone(),
+                    repository_uri: r.repository_uri.clone(),
+                    created_at: r.created_at.clone(),
+                    image_tag_mutability: r.image_tag_mutability.clone(),
+                    tags: r.tags.clone(),
+                    lifecycle_policy: r.lifecycle_policy.clone(),
+                    repository_policy: r.repository_policy.clone(),
+                    scan_on_push: r.scan_on_push,
+                    images: r
+                        .images
+                        .iter()
+                        .map(|i| ImageSnapshot {
+                            image_digest: i.image_digest.clone(),
+                            image_tag: i.image_tag.clone(),
+                            image_manifest: i.image_manifest.clone(),
+                            pushed_at: i.pushed_at.clone(),
+                            image_size_in_bytes: i.image_size_in_bytes,
+                        })
+                        .collect(),
+                    layers: r
+                        .layers
+                        .iter()
+                        .map(|le| {
+                            let l = le.value();
+                            LayerSnapshot {
+                                digest: l.digest.clone(),
+                                size: l.size,
+                                media_type: l.media_type.clone(),
+                            }
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+
+        EcrRegionSnapshot {
+            account_id: account_id.to_string(),
+            region: region.to_string(),
+            repositories,
+        }
+    }
+
+    fn from_snapshot(snapshot: Self::Snapshot) -> (String, String, Self) {
+        let state = EcrState::default();
+        for rs in snapshot.repositories {
+            let images: Vec<ContainerImage> = rs
+                .images
+                .into_iter()
+                .map(|i| ContainerImage {
+                    image_digest: i.image_digest,
+                    image_tag: i.image_tag,
+                    image_manifest: i.image_manifest,
+                    pushed_at: i.pushed_at,
+                    image_size_in_bytes: i.image_size_in_bytes,
+                })
+                .collect();
+
+            let layers = DashMap::new();
+            for ls in rs.layers {
+                layers.insert(
+                    ls.digest.clone(),
+                    Layer {
+                        digest: ls.digest,
+                        body: Body::InMemory(Vec::new()),
+                        size: ls.size,
+                        media_type: ls.media_type,
+                    },
+                );
+            }
+
+            let repo = Repository {
+                name: rs.name.clone(),
+                arn: rs.arn,
+                registry_id: rs.registry_id,
+                repository_uri: rs.repository_uri,
+                images,
+                layers,
+                created_at: rs.created_at,
+                image_tag_mutability: rs.image_tag_mutability,
+                tags: rs.tags,
+                lifecycle_policy: rs.lifecycle_policy,
+                lifecycle_policy_preview: None,
+                repository_policy: rs.repository_policy,
+                scan_on_push: rs.scan_on_push,
+            };
+
+            state.repositories.insert(rs.name, repo);
+        }
+        (snapshot.account_id, snapshot.region, state)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
