@@ -31,6 +31,7 @@ The following services write and restore snapshots:
 | SNS | `sns` |
 | Lambda | `lambda` |
 | ECR | `ecr` |
+| CloudWatch Logs | `logs` |
 
 Services not in this list (e.g., KMS, Secrets Manager) are always in-memory only.
 
@@ -112,6 +113,23 @@ In-progress upload buffers are kept in memory only; if AWSim crashes mid-upload 
 
 When `--data-dir` is not supplied, layer bodies stay in memory and are lost on shutdown.
 
+## CloudWatch Logs events
+
+When `--data-dir` is set, the CloudWatch Logs service appends each `PutLogEvents` batch to a per-stream JSON-lines file under `{data_dir}/cloudwatch-logs/`:
+
+```
+/var/lib/awsim/
+  cloudwatch-logs/
+    <log-group-name>/
+      <log-stream-name>      # JSONL: one event per line
+```
+
+Each line is a JSON object of the form `{"ts":<timestamp>,"msg":<message>,"ing":<ingestion-time>}`. A single `PutLogEvents` API call performs one `append`, regardless of batch size. Group and stream metadata still rides in the regular `logs.json` snapshot — the snapshot omits the events themselves. On restore, each stream's JSONL file is parsed and replayed into the in-memory `Vec<LogEvent>` (malformed lines are skipped with a warning). `DeleteLogStream` best-effort removes the per-stream file; `DeleteLogGroup` removes the entire log-group subtree. Append-write failures are logged via `tracing` and do not fail the API call.
+
+The in-memory event log still grows unbounded (the disk file is a durability layer, not a memory cap). Combine with `--max-blob-bytes` to bound the on-disk side; FIFO eviction may delete the JSONL file of the oldest stream, in which case its events disappear from disk but stay in memory until restart.
+
+When `--data-dir` is not supplied, log events stay in memory and are lost on shutdown.
+
 ## Snapshot Format
 
 Snapshots are written to `{data_dir}/snapshots/` as JSON files, one per service:
@@ -154,6 +172,7 @@ The GC walks only the directories it owns:
 | Lambda | `{data_dir}/` | `lambda` |
 | SQS | `{data_dir}/` | `sqs` |
 | ECR | `{data_dir}/` | `ecr` |
+| CloudWatch Logs | `{data_dir}/` | `cloudwatch-logs` |
 
 Each service's GC pass deletes any file under its groups whose `(group, bucket, key)` triple is not present in the restored in-memory inventory, then collapses any empty bucket and group directories. The `{data_dir}/snapshots/` directory and any other top-level paths are never touched.
 
@@ -183,7 +202,7 @@ Long-running services with high write volume — large S3 uploads, busy SQS queu
 ./awsim --data-dir /var/lib/awsim --max-blob-bytes 1073741824   # 1 GiB per service
 ```
 
-The cap is applied independently to S3, Lambda, SQS, and ECR — each service may use up to `N` bytes. When a `write_blob` would push a service over its cap, AWSim deletes the oldest files (by modification time) until the new write fits, then writes the new blob.
+The cap is applied independently to S3, Lambda, SQS, ECR, and CloudWatch Logs — each service may use up to `N` bytes. When a `write_blob` would push a service over its cap, AWSim deletes the oldest files (by modification time) until the new write fits, then writes the new blob.
 
 Eviction caveats:
 

@@ -9,7 +9,7 @@ Amazon CloudWatch Logs for collecting, storing, and querying log data from appli
 | Protocol | `AwsJson1_1` |
 | Signing Name | `logs` |
 | Target Prefix | `Logs_20140328` |
-| Persistence | No |
+| Persistence | Yes (events on disk, metadata via snapshot) |
 
 ## Quick Start
 
@@ -213,4 +213,4 @@ console.log('Error events:', events?.map(e => e.message));
 - Both the legacy (`TagLogGroup`) and newer ARN-based (`TagResource`) tagging APIs operate on the same tag store.
 - Lambda functions in AWSim automatically write their stdout/stderr to `/aws/lambda/{function-name}` log groups.
 - Timestamps must be in milliseconds (not seconds) since Unix epoch.
-- State is in-memory only and lost on restart.
+- When `--data-dir` is set, log events are appended to `{data_dir}/cloudwatch-logs/{group}/{stream}` as JSON-lines and replayed into memory on restart. `DeleteLogStream` and `DeleteLogGroup` also clean up their on-disk files. Without `--data-dir`, events stay in memory and are lost on restart.
