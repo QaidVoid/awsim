@@ -39,6 +39,8 @@
 	let storage = $state<StoragePayload | null>(null);
 	let pollTimer: ReturnType<typeof setInterval> | undefined;
 	let refreshing = $state(false);
+	let lastError = $state<string | null>(null);
+	let lastUpdated = $state<number | null>(null);
 
 	// Tick clock so the live RPS KPI re-renders smoothly.
 	let now = $state(Date.now() / 1000);
@@ -64,8 +66,10 @@
 			stats = s;
 			config = c;
 			storage = st;
-		} catch {
-			/* keep last-known values */
+			lastError = null;
+			lastUpdated = Date.now() / 1000;
+		} catch (err) {
+			lastError = err instanceof Error ? err.message : 'Failed to refresh';
 		} finally {
 			refreshing = false;
 		}
@@ -97,6 +101,13 @@
 			</p>
 		</div>
 		<div class="flex items-center gap-2">
+			{#if lastError}
+				<span class="text-[11px] text-rose-400" title={lastError}>offline</span>
+			{:else if lastUpdated}
+				<span class="hidden text-[11px] text-muted-foreground sm:inline">
+					updated {Math.max(0, Math.floor(now - lastUpdated))}s ago
+				</span>
+			{/if}
 			<Badge variant="outline" class="gap-1.5">
 				<span
 					class="size-1.5 rounded-full"

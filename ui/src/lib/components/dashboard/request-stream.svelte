@@ -14,6 +14,8 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Tabs, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
+	import { fly } from 'svelte/transition';
+	import { quintOut } from 'svelte/easing';
 	import Pause from '@lucide/svelte/icons/pause';
 	import Play from '@lucide/svelte/icons/play';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -171,6 +173,7 @@
 					<tbody>
 						{#each filtered as evt (evt.id)}
 							<tr
+								in:fly={{ y: -6, duration: 180, easing: quintOut }}
 								class="cursor-pointer border-b border-border/40 transition-colors hover:bg-muted/40"
 								onclick={() => openDetail(evt)}
 							>

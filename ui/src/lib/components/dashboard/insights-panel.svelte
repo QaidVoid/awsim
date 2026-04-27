@@ -21,6 +21,7 @@
 	import { bytesHuman } from '$lib/format';
 	import type { StoragePayload } from '$lib/events';
 	import type { Component } from 'svelte';
+	import { fade } from 'svelte/transition';
 
 	interface Props {
 		storage: StoragePayload | null;
@@ -173,6 +174,7 @@
 			<div class="flex flex-wrap gap-2">
 				{#each insights as ins (ins.key)}
 					<div
+						in:fade={{ duration: 150 }}
 						class={`group inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${toneClass(ins.tone)}`}
 					>
 						<ins.icon class="size-3.5 shrink-0" />

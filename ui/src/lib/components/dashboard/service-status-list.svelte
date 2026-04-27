@@ -99,6 +99,11 @@
 	</CardHeader>
 	<CardContent class="p-0">
 		<ScrollArea class="h-[480px]">
+			{#if rows.every((r) => r.recent === 0 && r.sizeBytes === 0)}
+				<p class="px-4 pt-3 text-[11px] text-muted-foreground">
+					No activity yet — list shows the full catalog ranked by future requests.
+				</p>
+			{/if}
 			<ul class="divide-y divide-border/40">
 				{#each rows as row (row.svc.id)}
 					<li>
