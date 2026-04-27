@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
@@ -77,6 +79,22 @@ impl BodyStore {
             }
         }
         atomic_write(&path, bytes)?;
+        Ok(path)
+    }
+
+    pub fn append_blob(
+        &self,
+        group: &str,
+        bucket: &str,
+        key: &str,
+        bytes: &[u8],
+    ) -> io::Result<PathBuf> {
+        let path = self.blob_path(group, bucket, key)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut f = OpenOptions::new().append(true).create(true).open(&path)?;
+        f.write_all(bytes)?;
         Ok(path)
     }
 
@@ -621,6 +639,19 @@ mod tests {
         assert_eq!(deleted, 1);
         assert_eq!(freed, 4);
         assert_eq!(store.total_size().unwrap(), 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn append_blob_concatenates_writes() {
+        let root = tmp_root("append");
+        let store = BodyStore::new(root.clone());
+        let path = store.append_blob("logs", "g", "s", b"a").unwrap();
+        store.append_blob("logs", "g", "s", b"bb").unwrap();
+        store.append_blob("logs", "g", "s", b"ccc").unwrap();
+        assert!(path.exists());
+        assert_eq!(store.read_blob("logs", "g", "s").unwrap(), b"abbccc");
+        assert_eq!(path, store.blob_path("logs", "g", "s").unwrap());
         let _ = fs::remove_dir_all(&root);
     }
 
