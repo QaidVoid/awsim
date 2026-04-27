@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use awsim_core::{
-    AccountRegionStore, AwsError, BodyStore, InternalEvent, Protocol, RequestContext,
-    RouteDefinition, ServiceHandler,
+    AccountRegionStore, AwsError, BlobInventory, BodyStore, InternalEvent, Protocol,
+    RequestContext, RouteDefinition, ServiceHandler,
 };
 use serde_json::Value;
 use tracing::debug;
@@ -66,11 +66,47 @@ impl S3Service {
     pub fn store(&self) -> AccountRegionStore<S3State> {
         self.store.clone()
     }
+
+    pub fn body_store(&self) -> Option<&Arc<BodyStore>> {
+        self.body_store.as_ref()
+    }
+
+    pub const GROUPS: &'static [&'static str] = &["objects", "multipart"];
 }
 
 impl Default for S3Service {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl BlobInventory for S3Service {
+    fn known_blobs(&self) -> Vec<(String, String, String)> {
+        let mut out = Vec::new();
+        for (_, state) in self.store.iter_all() {
+            for bucket_entry in state.buckets.iter() {
+                let bucket_name = bucket_entry.key().clone();
+                let bucket = bucket_entry.value();
+                for obj_entry in bucket.objects.iter() {
+                    out.push((
+                        "objects".to_string(),
+                        bucket_name.clone(),
+                        obj_entry.key().clone(),
+                    ));
+                }
+                for mp_entry in bucket.multipart_uploads.iter() {
+                    let upload_id = mp_entry.key().clone();
+                    for part_number in mp_entry.value().parts.keys() {
+                        out.push((
+                            "multipart".to_string(),
+                            bucket_name.clone(),
+                            format!("{upload_id}/{part_number}"),
+                        ));
+                    }
+                }
+            }
+        }
+        out
     }
 }
 
