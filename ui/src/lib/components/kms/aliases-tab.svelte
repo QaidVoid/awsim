@@ -49,6 +49,7 @@
 	<div class="min-h-0 flex-1 overflow-hidden">
 		<DataTable
 			rows={filtered}
+			{loading}
 			columns={[
 				{ key: 'aliasName', label: 'Alias', width: '35%', mono: true },
 				{ key: 'targetKeyId', label: 'Target key', width: '30%', mono: true },

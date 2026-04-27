@@ -1,6 +1,7 @@
 <script lang="ts" generics="T">
 	import type { Snippet } from 'svelte';
 	import { cn } from '$lib/utils';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 
 	interface Column<Row> {
 		key: string;
@@ -18,6 +19,7 @@
 		rowKey?: (row: T, idx: number) => string;
 		onRowClick?: (row: T) => void;
 		dense?: boolean;
+		loading?: boolean;
 		class?: string;
 	}
 
@@ -28,6 +30,7 @@
 		rowKey = (_r: T, i: number) => String(i),
 		onRowClick,
 		dense = false,
+		loading = false,
 		class: className
 	}: Props = $props();
 </script>
@@ -82,15 +85,30 @@
 						{/each}
 					</tr>
 				{:else}
-					<tr>
-						<td colspan={columns.length} class="px-4 py-12 text-center text-muted-foreground">
-							{#if empty}
-								{@render empty()}
-							{:else}
-								No data
-							{/if}
-						</td>
-					</tr>
+					{#if loading}
+						{#each Array(5) as _, i (i)}
+							<tr class="border-b border-border/40">
+								{#each columns as col (col.key)}
+									<td
+										class={cn('px-4', dense ? 'py-1.5' : 'py-2.5')}
+										style={col.width ? `width: ${col.width}` : undefined}
+									>
+										<Skeleton class="h-3.5 w-3/4" />
+									</td>
+								{/each}
+							</tr>
+						{/each}
+					{:else}
+						<tr>
+							<td colspan={columns.length} class="px-4 py-12 text-center text-muted-foreground">
+								{#if empty}
+									{@render empty()}
+								{:else}
+									No data
+								{/if}
+							</td>
+						</tr>
+					{/if}
 				{/each}
 			</tbody>
 		</table>
