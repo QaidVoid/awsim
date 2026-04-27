@@ -452,7 +452,10 @@ fn register_services(
     };
     state.register(Arc::new(s3), s3_routes);
 
-    let lambda = awsim_lambda::LambdaService::new();
+    let lambda = match data_dir {
+        Some(dir) => awsim_lambda::LambdaService::with_data_dir(dir),
+        None => awsim_lambda::LambdaService::new(),
+    };
     let lambda_store = lambda.store();
     let lambda_routes = {
         use awsim_core::ServiceHandler;
