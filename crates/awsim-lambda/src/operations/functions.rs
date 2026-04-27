@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::{
     error::{invalid_parameter, resource_conflict, resource_not_found},
-    state::{LambdaFunction, LambdaState},
+    state::{FunctionCode, LambdaFunction, LambdaState},
     util::{decode_zip, now_iso8601, opt_str, require_str, sha256_base64},
 };
 
@@ -107,6 +107,7 @@ pub fn create_function(
         .unwrap_or_default();
 
     let (code_data, code_sha256, code_size) = resolve_code(input)?;
+    let code = code_data.map(FunctionCode::InMemory);
 
     let arn = format!(
         "arn:aws:lambda:{}:{}:function:{}",
@@ -136,7 +137,7 @@ pub fn create_function(
         memory_size,
         code_sha256,
         code_size,
-        code_data,
+        code,
         environment,
         version: "$LATEST".to_string(),
         versions: vec![],
@@ -221,13 +222,13 @@ pub fn update_function_code(
     let name = require_str(input, "FunctionName")?;
 
     let (code_data, code_sha256, code_size) = resolve_code(input)?;
+    let code = code_data.map(FunctionCode::InMemory);
 
     let mut f = state
         .functions
         .get_mut(name)
         .ok_or_else(|| resource_not_found("function", name))?;
 
-    // Invalidate the on-disk code cache so the next invocation re-extracts.
     let cache_dir = std::env::temp_dir()
         .join("awsim-lambda")
         .join(name)
@@ -236,7 +237,7 @@ pub fn update_function_code(
         let _ = std::fs::remove_dir_all(&cache_dir);
     }
 
-    f.code_data = code_data;
+    f.code = code;
     f.code_sha256 = code_sha256;
     f.code_size = code_size;
     f.last_modified = now_iso8601();

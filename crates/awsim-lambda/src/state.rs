@@ -1,5 +1,28 @@
 use dashmap::DashMap;
 use std::collections::HashMap;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone)]
+pub enum FunctionCode {
+    InMemory(Vec<u8>),
+    OnDisk(PathBuf),
+}
+
+impl FunctionCode {
+    pub fn read_all(&self) -> std::io::Result<Vec<u8>> {
+        match self {
+            FunctionCode::InMemory(b) => Ok(b.clone()),
+            FunctionCode::OnDisk(p) => std::fs::read(p),
+        }
+    }
+
+    pub fn len_hint(&self) -> Option<u64> {
+        match self {
+            FunctionCode::InMemory(b) => Some(b.len() as u64),
+            FunctionCode::OnDisk(p) => std::fs::metadata(p).ok().map(|m| m.len()),
+        }
+    }
+}
 
 /// Lambda state — per account and region.
 #[derive(Debug, Default)]
@@ -35,7 +58,7 @@ pub struct LambdaFunction {
     pub memory_size: u32,
     pub code_sha256: String,
     pub code_size: u64,
-    pub code_data: Option<Vec<u8>>,
+    pub code: Option<FunctionCode>,
     pub environment: HashMap<String, String>,
     /// Always "$LATEST" for the live function.
     pub version: String,
@@ -72,6 +95,7 @@ pub struct FunctionVersion {
     pub description: String,
     pub code_sha256: String,
     pub code_size: u64,
+    pub code: Option<FunctionCode>,
     pub last_modified: String,
 }
 

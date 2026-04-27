@@ -28,6 +28,7 @@ pub fn publish_version(
         description: description.clone(),
         code_sha256: f.code_sha256.clone(),
         code_size: f.code_size,
+        code: f.code.clone(),
         last_modified: now.clone(),
     };
 

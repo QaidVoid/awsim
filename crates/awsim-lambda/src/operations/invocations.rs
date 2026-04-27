@@ -9,6 +9,10 @@ use crate::{
     util::{new_uuid, now_iso8601, opt_str, require_str},
 };
 
+fn map_io_err(e: std::io::Error) -> AwsError {
+    AwsError::internal(format!("read function code: {e}"))
+}
+
 /// Extract zip bytes to the given directory, returning an error string on failure.
 fn extract_zip(zip_bytes: &[u8], dest: &std::path::Path) -> Result<(), String> {
     use std::io::Read;
@@ -84,17 +88,23 @@ pub fn invoke(
     let invocation_type = opt_str(input, "InvocationType").unwrap_or("RequestResponse");
     let payload = input.get("Payload").cloned().unwrap_or(json!({}));
 
-    // Collect what we need from the DashMap before dropping the guard.
     let function_info = {
         let f = state
             .functions
             .get(name)
             .ok_or_else(|| resource_not_found("function", name))?;
 
+        let code_bytes = f
+            .code
+            .as_ref()
+            .map(|c| c.read_all())
+            .transpose()
+            .map_err(map_io_err)?;
+
         (
             f.runtime.clone(),
             f.handler.clone(),
-            f.code_data.clone(),
+            code_bytes,
             f.code_sha256.clone(),
             f.environment.clone(),
             f.timeout,
