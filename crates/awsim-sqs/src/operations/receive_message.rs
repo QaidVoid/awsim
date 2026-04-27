@@ -1,11 +1,11 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, Body, RequestContext};
 use serde_json::{Value, json};
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::state::{Message, MessageBody, SqsState};
+use crate::state::{Message, SqsState};
 use crate::util::queue_name_from_url;
 
 pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
@@ -146,7 +146,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
 
             let body_str = msg
                 .body
-                .read()
+                .read_string()
                 .map_err(|e| AwsError::internal(format!("failed to read message body: {e}")))?;
 
             let mut msg_json = json!({
@@ -186,8 +186,8 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         && let Some(mut dlq) = state.queues.get_mut(&dlq_name)
     {
         for mut msg in dlq_messages {
-            if let (MessageBody::OnDisk(_), Some(bs)) = (&msg.body, state.body_store()) {
-                match msg.body.read() {
+            if let (Body::OnDisk(_), Some(bs)) = (&msg.body, state.body_store()) {
+                match msg.body.read_string() {
                     Ok(bytes) => {
                         match bs.write_blob("sqs", &dlq_name, &msg.message_id, bytes.as_bytes()) {
                             Ok(new_path) => {
@@ -200,7 +200,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                                         "Failed to delete source blob after DLQ migration",
                                     );
                                 }
-                                msg.body = MessageBody::OnDisk(new_path);
+                                msg.body = Body::OnDisk(new_path);
                             }
                             Err(e) => {
                                 warn!(
@@ -209,7 +209,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                                     error = %e,
                                     "Failed to write DLQ blob; falling back to in-memory body",
                                 );
-                                msg.body = MessageBody::InMemory(bytes);
+                                msg.body = Body::from_string(bytes);
                             }
                         }
                     }

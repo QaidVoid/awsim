@@ -1,40 +1,36 @@
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use awsim_core::BodyStore;
+use awsim_core::{Body, BodyStore};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
-pub enum MessageBody {
-    InMemory(String),
-    OnDisk(PathBuf),
-}
+mod body_serde {
+    use awsim_core::Body;
+    use serde::{Deserialize, Deserializer, Serializer};
 
-impl MessageBody {
-    pub fn read(&self) -> std::io::Result<String> {
-        match self {
-            Self::InMemory(s) => Ok(s.clone()),
-            Self::OnDisk(p) => std::fs::read_to_string(p),
+    pub fn serialize<S: Serializer>(body: &Body, ser: S) -> Result<S::Ok, S::Error> {
+        match body {
+            Body::InMemory(b) => match std::str::from_utf8(b) {
+                Ok(s) => ser.serialize_some(s),
+                Err(_) => ser.serialize_none(),
+            },
+            Body::OnDisk(_) => ser.serialize_none(),
         }
     }
-}
 
-impl Serialize for MessageBody {
-    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::InMemory(s) => ser.serialize_some(s),
-            Self::OnDisk(_) => ser.serialize_none(),
+    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Body, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Legacy(Option<String>),
+            Body(Body),
         }
-    }
-}
-
-impl<'de> Deserialize<'de> for MessageBody {
-    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
-        let opt = Option::<String>::deserialize(de)?;
-        Ok(MessageBody::InMemory(opt.unwrap_or_default()))
+        match Wire::deserialize(de)? {
+            Wire::Legacy(opt) => Ok(Body::from_string(opt.unwrap_or_default())),
+            Wire::Body(b) => Ok(b),
+        }
     }
 }
 
@@ -59,7 +55,8 @@ pub struct MessageAttribute {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub message_id: String,
-    pub body: MessageBody,
+    #[serde(with = "body_serde")]
+    pub body: Body,
     pub md5_of_body: String,
     pub attributes: HashMap<String, String>,
     pub message_attributes: HashMap<String, MessageAttribute>,

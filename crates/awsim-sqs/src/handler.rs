@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use awsim_core::{
-    AccountRegionStore, AwsError, BodyStore, Protocol, RequestContext, ServiceHandler,
+    AccountRegionStore, AwsError, Body, BodyStore, Protocol, RequestContext, ServiceHandler,
 };
 use serde_json::Value;
 use tracing::debug;
@@ -15,7 +15,7 @@ use crate::operations::{
     send_message, tags,
 };
 use crate::state::{
-    InflightMessage, MessageBody, Queue, QueueSnapshot, SqsState, SqsStateSnapshot,
+    InflightMessage, Queue, QueueSnapshot, SqsState, SqsStateSnapshot,
     parse_redrive_policy_from_attrs,
 };
 
@@ -248,7 +248,7 @@ impl ServiceHandler for SqsService {
                 if let Some(bs) = &self.body_store
                     && let Ok(path) = bs.blob_path("sqs", &qs.name, &msg.message_id)
                 {
-                    msg.body = MessageBody::OnDisk(path);
+                    msg.body = Body::OnDisk(path);
                 }
             }
 
@@ -260,7 +260,7 @@ impl ServiceHandler for SqsService {
                 if let Some(bs) = &self.body_store
                     && let Ok(path) = bs.blob_path("sqs", &qs.name, &im.message.message_id)
                 {
-                    im.message.body = MessageBody::OnDisk(path);
+                    im.message.body = Body::OnDisk(path);
                 }
                 if im.visible_at_secs > now_epoch {
                     inflight.insert(im.receipt_handle.clone(), im);

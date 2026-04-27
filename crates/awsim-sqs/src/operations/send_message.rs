@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, Body, RequestContext};
 use serde_json::{Value, json};
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::state::{Message, MessageAttribute, MessageBody, SqsState};
+use crate::state::{Message, MessageAttribute, SqsState};
 use crate::util::{md5_of, queue_name_from_url};
 
 pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
@@ -135,9 +135,9 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         let path = bs
             .write_blob("sqs", &queue_name, &message_id, body.as_bytes())
             .map_err(|e| AwsError::internal(format!("failed to persist message body: {e}")))?;
-        MessageBody::OnDisk(path)
+        Body::OnDisk(path)
     } else {
-        MessageBody::InMemory(body.to_string())
+        Body::from_string(body.to_string())
     };
 
     let msg = Message {
