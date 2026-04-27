@@ -1,6 +1,6 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::state::SqsState;
 use crate::util::queue_name_from_url;
@@ -17,6 +17,12 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
             "AWS.SimpleQueueService.NonExistentQueue",
             format!("The specified queue does not exist: {queue_url}"),
         ));
+    }
+
+    if let Some(bs) = state.body_store()
+        && let Err(e) = bs.delete_bucket("sqs", &queue_name)
+    {
+        warn!(queue = %queue_name, error = %e, "Failed to delete persisted SQS message bodies");
     }
 
     info!(queue = %queue_name, "Deleted queue");

@@ -1,5 +1,6 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
+use tracing::warn;
 
 use crate::state::SqsState;
 use crate::util::queue_name_from_url;
@@ -15,15 +16,24 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
 
     let queue_name = queue_name_from_url(queue_url)?;
 
-    let mut queue = state.queues.get_mut(&queue_name).ok_or_else(|| {
-        AwsError::not_found(
-            "AWS.SimpleQueueService.NonExistentQueue",
-            format!("The specified queue does not exist: {queue_url}"),
-        )
-    })?;
+    let removed_id = {
+        let mut queue = state.queues.get_mut(&queue_name).ok_or_else(|| {
+            AwsError::not_found(
+                "AWS.SimpleQueueService.NonExistentQueue",
+                format!("The specified queue does not exist: {queue_url}"),
+            )
+        })?;
+        queue
+            .inflight
+            .remove(receipt_handle)
+            .map(|im| im.message.message_id)
+    };
 
-    // SQS silently ignores invalid/expired receipt handles per AWS spec
-    queue.inflight.remove(receipt_handle);
+    if let (Some(message_id), Some(bs)) = (removed_id, state.body_store())
+        && let Err(e) = bs.delete_blob("sqs", &queue_name, &message_id)
+    {
+        warn!(queue = %queue_name, message_id = %message_id, error = %e, "Failed to delete persisted SQS message body");
+    }
 
     Ok(json!({}))
 }
