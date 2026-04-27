@@ -1,6 +1,31 @@
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
+
+/// Storage backing for an object's bytes — either fully in memory, or a path on
+/// disk that the body store owns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ObjectBody {
+    InMemory(Vec<u8>),
+    OnDisk(PathBuf),
+}
+
+impl ObjectBody {
+    pub fn read_all(&self) -> std::io::Result<Vec<u8>> {
+        match self {
+            ObjectBody::InMemory(b) => Ok(b.clone()),
+            ObjectBody::OnDisk(p) => std::fs::read(p),
+        }
+    }
+
+    pub fn len_hint(&self) -> Option<u64> {
+        match self {
+            ObjectBody::InMemory(b) => Some(b.len() as u64),
+            ObjectBody::OnDisk(p) => std::fs::metadata(p).ok().map(|m| m.len()),
+        }
+    }
+}
 
 /// Versioning status for a bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -96,8 +121,8 @@ impl Bucket {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct S3Object {
     pub key: String,
-    /// Raw object content.
-    pub data: Vec<u8>,
+    /// Object body — either in memory or backed by disk.
+    pub body: ObjectBody,
     pub content_type: String,
     pub content_length: u64,
     /// MD5 hex digest wrapped in quotes, e.g. `"d41d8cd98f00b204e9800998ecf8427e"`.
@@ -126,7 +151,7 @@ pub struct MultipartUpload {
 /// Data for a single uploaded part.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartData {
-    pub data: Vec<u8>,
+    pub body: ObjectBody,
     pub etag: String,
 }
 

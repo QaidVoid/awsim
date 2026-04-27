@@ -92,10 +92,7 @@ impl BodyStore {
 fn join_safe(base: &Path, rel: &str) -> io::Result<PathBuf> {
     let trimmed = rel.trim_start_matches('/');
     if trimmed.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "empty key",
-        ));
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty key"));
     }
 
     let candidate = Path::new(trimmed);
@@ -160,7 +157,9 @@ mod tests {
     fn write_then_read_simple_key() {
         let root = tmp_root("simple");
         let store = BodyStore::new(root.clone());
-        store.write_object("buck", "hello.txt", b"hi there").unwrap();
+        store
+            .write_object("buck", "hello.txt", b"hi there")
+            .unwrap();
         let got = store.read_object("buck", "hello.txt").unwrap();
         assert_eq!(got, b"hi there");
         let _ = fs::remove_dir_all(&root);
@@ -208,9 +207,7 @@ mod tests {
         assert!(store.write_object("buck", "", b"x").is_err());
         assert!(store.write_object("buck", "/", b"x").is_err());
         store.write_object("buck", "/abs/path", b"x").unwrap();
-        let stored = store
-            .object_path("buck", "/abs/path")
-            .unwrap();
+        let stored = store.object_path("buck", "/abs/path").unwrap();
         assert!(stored.starts_with(store.objects_dir().join("buck")));
         let _ = fs::remove_dir_all(&root);
     }

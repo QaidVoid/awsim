@@ -1283,7 +1283,7 @@ impl ServiceHandler for S3Service {
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
         use dashmap::DashMap;
-        use state::S3Object;
+        use state::{ObjectBody, S3Object};
 
         let snapshot: S3StateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
 
@@ -1313,7 +1313,7 @@ impl ServiceHandler for S3Service {
                             meta.key.clone(),
                             S3Object {
                                 key: meta.key,
-                                data: Vec::new(), // not persisted
+                                body: ObjectBody::InMemory(Vec::new()),
                                 content_type: meta.content_type,
                                 content_length: meta.content_length,
                                 etag: meta.etag,

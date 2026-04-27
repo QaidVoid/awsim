@@ -5,7 +5,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::state::{MultipartUpload, PartData, S3Object, S3State};
+use crate::state::{MultipartUpload, ObjectBody, PartData, S3Object, S3State};
 use crate::util::{compute_etag, now_rfc7231};
 
 use super::bucket::no_such_bucket;
@@ -79,7 +79,7 @@ pub fn upload_part(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     upload.parts.insert(
         part_number,
         PartData {
-            data,
+            body: ObjectBody::InMemory(data),
             etag: etag.clone(),
         },
     );
@@ -105,10 +105,13 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         .remove(upload_id)
         .ok_or_else(|| no_such_upload(upload_id))?;
 
-    // Assemble parts in order.
     let mut combined_data: Vec<u8> = Vec::new();
     for part in upload.parts.values() {
-        combined_data.extend_from_slice(&part.data);
+        let bytes = part
+            .body
+            .read_all()
+            .map_err(|e| AwsError::internal(format!("read part body: {e}")))?;
+        combined_data.extend_from_slice(&bytes);
     }
 
     let etag = compute_etag(&combined_data);
@@ -117,7 +120,7 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
 
     let obj = S3Object {
         key: key.to_string(),
-        data: combined_data,
+        body: ObjectBody::InMemory(combined_data),
         content_type: "application/octet-stream".to_string(),
         content_length,
         etag: etag.clone(),
@@ -210,7 +213,7 @@ pub fn list_parts(state: &S3State, input: &Value) -> Result<Value, AwsError> {
             json!({
                 "PartNumber": num,
                 "ETag": part.etag,
-                "Size": part.data.len(),
+                "Size": part.body.len_hint().unwrap_or(0),
             })
         })
         .collect();

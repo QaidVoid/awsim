@@ -4,7 +4,7 @@ use awsim_core::{AwsError, RequestContext};
 use base64::Engine;
 use serde_json::{Value, json};
 
-use crate::state::{S3Object, S3State};
+use crate::state::{ObjectBody, S3Object, S3State};
 use crate::util::{compute_etag, now_iso8601, now_rfc7231};
 
 use super::bucket::no_such_bucket;
@@ -69,7 +69,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
 
         let obj = S3Object {
             key: key.to_string(),
-            data,
+            body: ObjectBody::InMemory(data),
             content_type,
             content_length,
             etag: etag.clone(),
@@ -104,7 +104,11 @@ pub fn get_object(
 
     let obj = bucket.objects.get(key).ok_or_else(|| no_such_key(key))?;
 
-    let (data_slice, content_range) = apply_range(&obj.data, range_header)?;
+    let body_bytes = obj
+        .body
+        .read_all()
+        .map_err(|e| AwsError::internal(format!("read object body: {e}")))?;
+    let (data_slice, content_range) = apply_range(&body_bytes, range_header)?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(data_slice);
 
     let mut result = json!({
@@ -194,7 +198,9 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
             .ok_or_else(|| no_such_key(src_key))?;
 
         (
-            obj.data.clone(),
+            obj.body
+                .read_all()
+                .map_err(|e| AwsError::internal(format!("read source body: {e}")))?,
             obj.content_type.clone(),
             obj.metadata.clone(),
         )
@@ -214,7 +220,7 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
 
     let new_obj = S3Object {
         key: dst_key.to_string(),
-        data,
+        body: ObjectBody::InMemory(data),
         content_type,
         content_length,
         etag: etag.clone(),
