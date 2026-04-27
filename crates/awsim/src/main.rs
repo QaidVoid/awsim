@@ -65,6 +65,7 @@ async fn main() -> Result<()> {
         &cli.account_id,
         &cli.region,
         cli.data_dir.as_deref(),
+        cli.port,
     );
 
     if let Some(authz) = Arc::get_mut(&mut state.authz) {
@@ -426,6 +427,7 @@ fn register_services(
     default_account_id: &str,
     default_region: &str,
     data_dir: Option<&str>,
+    port: u16,
 ) -> RegisteredServices {
     use std::sync::Arc;
 
@@ -506,7 +508,11 @@ fn register_services(
     let cognito_identity = Arc::new(awsim_cognito::CognitoIdentityService::new());
     state.register(cognito_identity, vec![]);
 
-    let ecr = Arc::new(awsim_ecr::EcrService::new());
+    let ecr = match data_dir {
+        Some(dir) => awsim_ecr::EcrService::with_data_dir(dir),
+        None => awsim_ecr::EcrService::new(),
+    };
+    let ecr = Arc::new(ecr.with_port(port));
     let ecr_clone = Arc::clone(&ecr);
     state.register(ecr, vec![]);
 
