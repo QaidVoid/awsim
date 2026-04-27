@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::extract::State;
@@ -15,6 +16,7 @@ use crate::body_store::BodyStore;
 use crate::error::AwsError;
 use crate::events::EventBus;
 use crate::protocol::{self, Protocol, RouteDefinition};
+use crate::request_event::{RequestEvent, RequestEventBus};
 
 #[derive(Clone)]
 pub struct BodyStoreHandle {
@@ -46,6 +48,8 @@ pub struct AppState {
     pub body_stores: Arc<Vec<BodyStoreHandle>>,
     /// Persistence root directory, when persistence is enabled.
     pub data_dir: Option<Arc<std::path::PathBuf>>,
+    /// Broadcast bus for per-request observability events (consumed by SSE).
+    pub events: RequestEventBus,
 }
 
 impl AppState {
@@ -61,6 +65,7 @@ impl AppState {
             authz: Arc::new(AuthzEngine::from_env()),
             body_stores: Arc::new(Vec::new()),
             data_dir: None,
+            events: RequestEventBus::new(),
         }
     }
 
@@ -89,6 +94,20 @@ impl AppState {
     }
 }
 
+struct ProcessOk {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: Bytes,
+    operation: String,
+}
+
+struct ProcessMeta {
+    service: String,
+    region: String,
+    account_id: String,
+    access_key: Option<String>,
+}
+
 /// Main request handler — all AWS API requests funnel through here.
 pub async fn handle_request(
     State(state): State<AppState>,
@@ -100,6 +119,8 @@ pub async fn handle_request(
     state.request_count.fetch_add(1, Ordering::Relaxed);
 
     let request_id = uuid::Uuid::new_v4().to_string();
+    let started = Instant::now();
+    let request_size = body.len() as u64;
 
     debug!(
         method = %method,
@@ -108,15 +129,46 @@ pub async fn handle_request(
         "Incoming request"
     );
 
-    match process_request(&state, &method, &uri, &headers, &body, &request_id).await {
-        Ok((status, mut resp_headers, resp_body)) => {
+    let mut meta = ProcessMeta {
+        service: String::new(),
+        region: state.default_region.clone(),
+        account_id: state.default_account_id.clone(),
+        access_key: None,
+    };
+
+    let outcome = process_request(
+        &state,
+        &method,
+        &uri,
+        &headers,
+        &body,
+        &request_id,
+        &mut meta,
+    )
+    .await;
+
+    let (response, status_code, response_size, operation, error_code) = match outcome {
+        Ok(ProcessOk {
+            status,
+            mut headers,
+            body,
+            operation,
+        }) => {
+            let response_size = body.len() as u64;
             let mut builder = Response::builder().status(status);
-            for (key, value) in resp_headers.drain() {
+            for (key, value) in headers.drain() {
                 if let Some(key) = key {
                     builder = builder.header(key, value);
                 }
             }
-            builder.body(Body::from(resp_body)).unwrap()
+            let response = builder.body(Body::from(body)).unwrap();
+            (
+                response,
+                status.as_u16(),
+                response_size,
+                Some(operation),
+                None,
+            )
         }
         Err((protocol, error)) => {
             warn!(
@@ -125,17 +177,56 @@ pub async fn handle_request(
                 request_id = %request_id,
                 "Request failed"
             );
+            let err_code = error.code.clone();
             let (status, mut resp_headers, resp_body) =
                 protocol::serialize_error(protocol, &error, &request_id);
+            let response_size = resp_body.len() as u64;
             let mut builder = Response::builder().status(status);
             for (key, value) in resp_headers.drain() {
                 if let Some(key) = key {
                     builder = builder.header(key, value);
                 }
             }
-            builder.body(Body::from(resp_body)).unwrap()
+            let response = builder.body(Body::from(resp_body)).unwrap();
+            (
+                response,
+                status.as_u16(),
+                response_size,
+                None,
+                Some(err_code),
+            )
         }
-    }
+    };
+
+    let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let principal_arn = meta
+        .access_key
+        .as_ref()
+        .map(|ak| format!("arn:aws:iam::{}:access-key/{}", meta.account_id, ak));
+
+    let event = RequestEvent {
+        id: request_id,
+        ts,
+        method: method.to_string(),
+        path: uri.path().to_string(),
+        service: meta.service,
+        operation,
+        account_id: meta.account_id,
+        region: meta.region,
+        principal_arn,
+        status_code,
+        duration_ms,
+        request_size,
+        response_size,
+        error_code,
+    };
+    state.events.publish(event);
+
+    response
 }
 
 async fn process_request(
@@ -145,9 +236,14 @@ async fn process_request(
     headers: &HeaderMap,
     body: &Bytes,
     request_id: &str,
-) -> Result<(StatusCode, HeaderMap, Bytes), (Protocol, AwsError)> {
+    meta: &mut ProcessMeta,
+) -> Result<ProcessOk, (Protocol, AwsError)> {
     // 1. Extract service identification from auth header
     let (service_name, region, account_id, access_key) = extract_service_info(state, headers, uri);
+    meta.service = service_name.clone();
+    meta.region = region.clone();
+    meta.account_id = account_id.clone();
+    meta.access_key = access_key.clone();
 
     // 2. Find the service handler
     let handler = state.services.get(&service_name).ok_or_else(|| {
@@ -210,6 +306,8 @@ async fn process_request(
         );
     }
 
+    let operation = parsed.operation.clone();
+
     // 7. Dispatch to service handler
     let result = handler
         .handle(&parsed.operation, parsed.input, &ctx)
@@ -220,12 +318,14 @@ async fn process_request(
     // format matches what the client expects.  A client that sends an
     // awsQuery (form-encoded) request expects an XML response, even if the
     // service declares AwsJson as its primary protocol.
-    Ok(protocol::serialize_response(
-        detected,
-        &parsed.operation,
-        &result,
-        request_id,
-    ))
+    let (status, headers, body) =
+        protocol::serialize_response(detected, &parsed.operation, &result, request_id);
+    Ok(ProcessOk {
+        status,
+        headers,
+        body,
+        operation,
+    })
 }
 
 /// Extract service name, region, account ID, and access key from the request.

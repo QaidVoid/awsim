@@ -296,6 +296,7 @@ async fn main() -> Result<()> {
         .route("/_awsim/services", axum::routing::get(admin::list_services))
         .route("/_awsim/config", axum::routing::get(admin::config))
         .route("/_awsim/stats", axum::routing::get(admin::stats))
+        .route("/_awsim/storage", axum::routing::get(admin::storage))
         .fallback(awsim_core::gateway::handle_request)
         .with_state(state);
 

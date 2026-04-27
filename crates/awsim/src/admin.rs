@@ -39,6 +39,80 @@ pub async fn config(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
+pub async fn storage(State(state): State<AppState>) -> Json<Value> {
+    let Some(data_dir) = state.data_dir.as_ref() else {
+        return Json(json!({
+            "data_dir": Value::Null,
+            "services": [],
+        }));
+    };
+
+    let mut services_json: Vec<Value> = Vec::with_capacity(state.body_stores.len());
+    let mut total: u64 = 0;
+    for handle in state.body_stores.iter() {
+        let mut size_bytes: u64 = 0;
+        let mut blob_count: usize = 0;
+        for group in &handle.groups {
+            size_bytes =
+                size_bytes.saturating_add(handle.body_store.group_size(group).unwrap_or(0));
+            blob_count =
+                blob_count.saturating_add(handle.body_store.group_blob_count(group).unwrap_or(0));
+        }
+        total = total.saturating_add(size_bytes);
+        services_json.push(json!({
+            "name": handle.service_name,
+            "groups": handle.groups,
+            "size_bytes": size_bytes,
+            "blob_count": blob_count,
+        }));
+    }
+
+    let snapshots_path = data_dir.join("snapshots");
+    let snapshots_size = dir_size(&snapshots_path).unwrap_or(0);
+
+    Json(json!({
+        "data_dir": data_dir.display().to_string(),
+        "snapshots": {
+            "path": snapshots_path.display().to_string(),
+            "size_bytes": snapshots_size,
+        },
+        "services": services_json,
+        "total_size_bytes": total,
+    }))
+}
+
+fn dir_size(path: &std::path::Path) -> std::io::Result<u64> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut total: u64 = 0;
+    let mut stack: Vec<std::path::PathBuf> = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        for entry in entries.flatten() {
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if ft.is_file()
+                && let Ok(meta) = entry.metadata()
+            {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    Ok(total)
+}
+
 pub async fn stats(State(state): State<AppState>) -> Json<Value> {
     let uptime = state.start_time.elapsed().as_secs();
     let requests = state.request_count.load(Ordering::Relaxed);
