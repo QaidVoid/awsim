@@ -1,5 +1,6 @@
 use awsim_core::BodyStore;
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -143,6 +144,54 @@ pub struct EventSourceMapping {
     pub enabled: bool,
     pub state: String,
     pub last_modified: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LambdaStateSnapshot {
+    pub functions: Vec<FunctionSnapshot>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FunctionSnapshot {
+    pub account_id: String,
+    pub region: String,
+    pub name: String,
+    pub arn: String,
+    pub runtime: Option<String>,
+    pub role: String,
+    pub handler: Option<String>,
+    pub description: String,
+    pub timeout: u32,
+    pub memory_size: u32,
+    pub code_sha256: String,
+    pub code_size: u64,
+    pub environment: HashMap<String, String>,
+    pub version: String,
+    pub versions: Vec<FunctionVersionSnapshot>,
+    pub aliases: HashMap<String, AliasSnapshot>,
+    pub last_modified: String,
+    pub state: String,
+    #[serde(default)]
+    pub policy_statements: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FunctionVersionSnapshot {
+    pub version: String,
+    pub description: String,
+    pub code_sha256: String,
+    pub code_size: u64,
+    pub last_modified: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AliasSnapshot {
+    pub name: String,
+    pub arn: String,
+    pub function_version: String,
+    pub description: String,
 }
 
 #[derive(Debug, Clone)]

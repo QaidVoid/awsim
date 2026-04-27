@@ -18,7 +18,10 @@ use awsim_core::{
 use serde_json::Value;
 use tracing::debug;
 
-use state::LambdaState;
+use state::{
+    Alias, AliasSnapshot, FunctionCode, FunctionSnapshot, FunctionVersion, FunctionVersionSnapshot,
+    LambdaFunction, LambdaState, LambdaStateSnapshot,
+};
 
 pub struct LambdaService {
     store: AccountRegionStore<LambdaState>,
@@ -435,6 +438,152 @@ impl ServiceHandler for LambdaService {
 
             _ => Err(AwsError::unknown_operation(operation)),
         }
+    }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let functions: Vec<FunctionSnapshot> = self
+            .store
+            .iter_all()
+            .into_iter()
+            .flat_map(|((account_id, region), state)| {
+                state
+                    .functions
+                    .iter()
+                    .map(|entry| {
+                        let f = entry.value();
+                        FunctionSnapshot {
+                            account_id: account_id.clone(),
+                            region: region.clone(),
+                            name: f.name.clone(),
+                            arn: f.arn.clone(),
+                            runtime: f.runtime.clone(),
+                            role: f.role.clone(),
+                            handler: f.handler.clone(),
+                            description: f.description.clone(),
+                            timeout: f.timeout,
+                            memory_size: f.memory_size,
+                            code_sha256: f.code_sha256.clone(),
+                            code_size: f.code_size,
+                            environment: f.environment.clone(),
+                            version: f.version.clone(),
+                            versions: f
+                                .versions
+                                .iter()
+                                .map(|v| FunctionVersionSnapshot {
+                                    version: v.version.clone(),
+                                    description: v.description.clone(),
+                                    code_sha256: v.code_sha256.clone(),
+                                    code_size: v.code_size,
+                                    last_modified: v.last_modified.clone(),
+                                })
+                                .collect(),
+                            aliases: f
+                                .aliases
+                                .iter()
+                                .map(|(k, a)| {
+                                    (
+                                        k.clone(),
+                                        AliasSnapshot {
+                                            name: a.name.clone(),
+                                            arn: a.arn.clone(),
+                                            function_version: a.function_version.clone(),
+                                            description: a.description.clone(),
+                                        },
+                                    )
+                                })
+                                .collect(),
+                            last_modified: f.last_modified.clone(),
+                            state: f.state.clone(),
+                            policy_statements: f.policy_statements.clone(),
+                            tags: f.tags.clone(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        serde_json::to_vec(&LambdaStateSnapshot { functions }).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let snapshot: LambdaStateSnapshot =
+            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+
+        for fs in snapshot.functions {
+            let state = self.store.get(&fs.account_id, &fs.region);
+            if let Some(bs) = &self.body_store {
+                state.set_body_store(Arc::clone(bs));
+            }
+
+            let code = self
+                .body_store
+                .as_ref()
+                .and_then(|bs| bs.blob_path("lambda", &fs.name, "$LATEST").ok())
+                .map(FunctionCode::OnDisk);
+
+            let versions: Vec<FunctionVersion> = fs
+                .versions
+                .into_iter()
+                .map(|v| {
+                    let version_code = self
+                        .body_store
+                        .as_ref()
+                        .and_then(|bs| bs.blob_path("lambda", &fs.name, &v.version).ok())
+                        .map(FunctionCode::OnDisk);
+                    FunctionVersion {
+                        version: v.version,
+                        description: v.description,
+                        code_sha256: v.code_sha256,
+                        code_size: v.code_size,
+                        code: version_code,
+                        last_modified: v.last_modified,
+                    }
+                })
+                .collect();
+
+            let aliases: std::collections::HashMap<String, Alias> = fs
+                .aliases
+                .into_iter()
+                .map(|(k, a)| {
+                    (
+                        k,
+                        Alias {
+                            name: a.name,
+                            arn: a.arn,
+                            function_version: a.function_version,
+                            description: a.description,
+                        },
+                    )
+                })
+                .collect();
+
+            let func = LambdaFunction {
+                name: fs.name.clone(),
+                arn: fs.arn,
+                runtime: fs.runtime,
+                role: fs.role,
+                handler: fs.handler,
+                description: fs.description,
+                timeout: fs.timeout,
+                memory_size: fs.memory_size,
+                code_sha256: fs.code_sha256,
+                code_size: fs.code_size,
+                code,
+                environment: fs.environment,
+                version: fs.version,
+                versions,
+                aliases,
+                last_modified: fs.last_modified,
+                state: fs.state,
+                invocations: Vec::new(),
+                policy_statements: fs.policy_statements,
+                tags: fs.tags,
+            };
+
+            state.functions.insert(fs.name, func);
+        }
+
+        Ok(())
     }
 
     fn iam_action(&self, operation: &str) -> Option<String> {
