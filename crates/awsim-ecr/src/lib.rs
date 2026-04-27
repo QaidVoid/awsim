@@ -1,8 +1,10 @@
 mod handler;
 mod operations;
+pub mod routes;
 mod state;
 
 pub use handler::EcrService;
+pub use routes::router;
 
 #[cfg(test)]
 mod tests {

@@ -59,6 +59,7 @@ async fn main() -> Result<()> {
         secrets_store,
         lambda_store,
         organizations_store,
+        ecr_service,
     ) = register_services(
         &mut state,
         &cli.account_id,
@@ -209,11 +210,14 @@ async fn main() -> Result<()> {
         awsim_opensearch::router(Arc::new(awsim_opensearch::state::OpenSearchState::default())),
     );
 
+    let ecr_router = awsim_ecr::router(ecr_service);
+
     // Merge all routers and add shared middleware.
     let app = cognito_oauth_router
         .merge(main_router)
         .merge(proxy_router)
         .merge(opensearch_nested)
+        .merge(ecr_router)
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB
         .layer(tower_http::cors::CorsLayer::permissive());
 
@@ -411,6 +415,7 @@ type RegisteredServices = (
     awsim_core::AccountRegionStore<awsim_secretsmanager::state::SecretsState>,
     awsim_core::AccountRegionStore<awsim_lambda::state::LambdaState>,
     awsim_core::AccountRegionStore<awsim_organizations::state::OrganizationsState>,
+    Arc<awsim_ecr::EcrService>,
 );
 
 /// Register all services and return handles needed by the router:
@@ -502,6 +507,7 @@ fn register_services(
     state.register(cognito_identity, vec![]);
 
     let ecr = Arc::new(awsim_ecr::EcrService::new());
+    let ecr_clone = Arc::clone(&ecr);
     state.register(ecr, vec![]);
 
     let ecs = Arc::new(awsim_ecs::EcsService::new());
@@ -638,5 +644,6 @@ fn register_services(
         secrets_store,
         lambda_store,
         organizations_store,
+        ecr_clone,
     )
 }
