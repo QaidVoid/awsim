@@ -141,3 +141,26 @@ Snapshots are written atomically: AWSim writes to a temporary file first, then r
 ## Restoring State
 
 On startup, AWSim reads each `{data_dir}/snapshots/{service}.json` file and restores the service state. If a snapshot file is missing or malformed, AWSim starts that service with empty state and logs a warning.
+
+## Garbage Collection
+
+After snapshot restore, AWSim sweeps each persisted service's body store for orphaned files — disk blobs that no longer correspond to anything in the in-memory state. Orphans typically appear after a process crash, an out-of-band file deletion, or any other abnormal shutdown that left the snapshot and the body store out of sync.
+
+The GC walks only the directories it owns:
+
+| Service | Body store root | Groups (top-level subdirs) |
+|---------|-----------------|----------------------------|
+| S3 | `{data_dir}/s3/` | `objects`, `multipart` |
+| Lambda | `{data_dir}/` | `lambda` |
+| SQS | `{data_dir}/` | `sqs` |
+| ECR | `{data_dir}/` | `ecr` |
+
+Each service's GC pass deletes any file under its groups whose `(group, bucket, key)` triple is not present in the restored in-memory inventory, then collapses any empty bucket and group directories. The `{data_dir}/snapshots/` directory and any other top-level paths are never touched.
+
+A short summary is logged for each service:
+
+```
+INFO BodyStore GC reclaimed orphaned blobs service="s3" deleted=70 freed_bytes=12345678
+```
+
+To opt out, pass `--no-gc` (or set `AWSIM_NO_GC=1`). Disabling GC leaves orphaned files in place; they accumulate until the next GC-enabled startup.
