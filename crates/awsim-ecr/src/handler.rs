@@ -1,4 +1,9 @@
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
+use std::path::Path;
+use std::sync::Arc;
+
+use awsim_core::{
+    AccountRegionStore, AwsError, BodyStore, Protocol, RequestContext, ServiceHandler,
+};
 use serde_json::Value;
 use tracing::debug;
 
@@ -8,13 +13,34 @@ use crate::state::EcrState;
 /// The ECR service handler.
 pub struct EcrService {
     store: AccountRegionStore<EcrState>,
+    body_store: Option<Arc<BodyStore>>,
 }
 
 impl EcrService {
     pub fn new() -> Self {
         Self {
             store: AccountRegionStore::new(),
+            body_store: None,
         }
+    }
+
+    pub fn with_data_dir(dir: impl AsRef<Path>) -> Self {
+        Self {
+            store: AccountRegionStore::new(),
+            body_store: Some(Arc::new(BodyStore::new(dir.as_ref().to_path_buf()))),
+        }
+    }
+
+    fn get_state(&self, ctx: &RequestContext) -> Arc<EcrState> {
+        let state = self.store.get(&ctx.account_id, &ctx.region);
+        if let Some(bs) = &self.body_store {
+            state.set_body_store(Arc::clone(bs));
+        }
+        state
+    }
+
+    pub fn store(&self) -> AccountRegionStore<EcrState> {
+        self.store.clone()
     }
 }
 
@@ -46,7 +72,7 @@ impl ServiceHandler for EcrService {
     ) -> Result<Value, AwsError> {
         debug!(operation = %operation, "ECR operation");
 
-        let state = self.store.get(&ctx.account_id, &ctx.region);
+        let state = self.get_state(ctx);
 
         match operation {
             // Repositories
