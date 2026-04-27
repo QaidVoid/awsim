@@ -1,6 +1,11 @@
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
+
+pub trait BlobInventory: Send + Sync {
+    fn known_blobs(&self) -> Vec<(String, String, String)>;
+}
 
 #[derive(Debug)]
 pub struct BodyStore {
@@ -59,6 +64,125 @@ impl BodyStore {
             Err(e) => Err(e),
         }
     }
+
+    pub fn gc_orphaned(
+        &self,
+        groups: &[&str],
+        known: &HashSet<(String, String, String)>,
+    ) -> io::Result<(usize, u64)> {
+        let mut deleted_files: usize = 0;
+        let mut freed_bytes: u64 = 0;
+
+        for group in groups {
+            let group_root = self.group_dir(group);
+            if !group_root.exists() {
+                continue;
+            }
+
+            let bucket_dirs = match fs::read_dir(&group_root) {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+
+            for bucket_entry in bucket_dirs.flatten() {
+                let bucket_path = bucket_entry.path();
+                let file_type = match bucket_entry.file_type() {
+                    Ok(ft) => ft,
+                    Err(_) => continue,
+                };
+                if !file_type.is_dir() {
+                    continue;
+                }
+                let bucket_name = match bucket_entry.file_name().into_string() {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                };
+
+                let mut files: Vec<(PathBuf, String)> = Vec::new();
+                collect_files(&bucket_path, &bucket_path, &mut files)?;
+
+                for (path, key) in files {
+                    let triple = ((*group).to_string(), bucket_name.clone(), key);
+                    if known.contains(&triple) {
+                        continue;
+                    }
+                    let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    match fs::remove_file(&path) {
+                        Ok(()) => {
+                            deleted_files += 1;
+                            freed_bytes += size;
+                        }
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+
+                remove_empty_dirs(&bucket_path, &bucket_path)?;
+                let _ = fs::remove_dir(&bucket_path);
+            }
+
+            let _ = fs::remove_dir(&group_root);
+        }
+
+        Ok((deleted_files, freed_bytes))
+    }
+}
+
+fn collect_files(base: &Path, dir: &Path, out: &mut Vec<(PathBuf, String)>) -> io::Result<()> {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        if file_type.is_dir() {
+            collect_files(base, &path, out)?;
+        } else if file_type.is_file() {
+            let rel = match path.strip_prefix(base) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let key = rel
+                .components()
+                .filter_map(|c| match c {
+                    Component::Normal(s) => s.to_str(),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("/");
+            if !key.is_empty() {
+                out.push((path, key));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn remove_empty_dirs(base: &Path, dir: &Path) -> io::Result<()> {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if let Ok(ft) = entry.file_type()
+            && ft.is_dir()
+        {
+            remove_empty_dirs(base, &path)?;
+            let _ = fs::remove_dir(&path);
+        }
+    }
+    if dir != base {
+        let _ = fs::remove_dir(dir);
+    }
+    Ok(())
 }
 
 fn join_safe(base: &Path, rel: &str) -> io::Result<PathBuf> {
@@ -221,6 +345,87 @@ mod tests {
             store.read_blob("multipart", "buck", "uid/2").unwrap(),
             b"part2"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn gc_orphaned_all_known_no_deletions() {
+        let root = tmp_root("gc-allknown");
+        let store = BodyStore::new(root.clone());
+        store.write_blob("objects", "b1", "k1", b"x").unwrap();
+        store.write_blob("objects", "b1", "k2", b"y").unwrap();
+        store.write_blob("objects", "b2", "deep/k3", b"z").unwrap();
+
+        let mut known = HashSet::new();
+        known.insert(("objects".to_string(), "b1".to_string(), "k1".to_string()));
+        known.insert(("objects".to_string(), "b1".to_string(), "k2".to_string()));
+        known.insert((
+            "objects".to_string(),
+            "b2".to_string(),
+            "deep/k3".to_string(),
+        ));
+
+        let (deleted, freed) = store.gc_orphaned(&["objects"], &known).unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(freed, 0);
+        assert_eq!(store.read_blob("objects", "b1", "k1").unwrap(), b"x");
+        assert_eq!(store.read_blob("objects", "b2", "deep/k3").unwrap(), b"z");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn gc_orphaned_none_known_deletes_everything() {
+        let root = tmp_root("gc-noknown");
+        let store = BodyStore::new(root.clone());
+        store.write_blob("objects", "b1", "k1", b"abcd").unwrap();
+        store.write_blob("objects", "b1", "k2", b"ef").unwrap();
+        store
+            .write_blob("objects", "b2", "deep/k3", b"hijk")
+            .unwrap();
+
+        let known: HashSet<(String, String, String)> = HashSet::new();
+        let (deleted, freed) = store.gc_orphaned(&["objects"], &known).unwrap();
+        assert_eq!(deleted, 3);
+        assert_eq!(freed, 4 + 2 + 4);
+        assert!(!store.group_dir("objects").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn gc_orphaned_mixed() {
+        let root = tmp_root("gc-mixed");
+        let store = BodyStore::new(root.clone());
+        store.write_blob("objects", "b1", "keep", b"K").unwrap();
+        store.write_blob("objects", "b1", "drop", b"DROP").unwrap();
+        store
+            .write_blob("objects", "b2", "x/y/z", b"orphan")
+            .unwrap();
+
+        let mut known = HashSet::new();
+        known.insert(("objects".to_string(), "b1".to_string(), "keep".to_string()));
+
+        let (deleted, freed) = store.gc_orphaned(&["objects"], &known).unwrap();
+        assert_eq!(deleted, 2);
+        assert_eq!(freed, 4 + 6);
+        assert_eq!(store.read_blob("objects", "b1", "keep").unwrap(), b"K");
+        assert!(!store.group_dir("objects").join("b2").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn gc_orphaned_groups_filter_protects_others() {
+        let root = tmp_root("gc-filter");
+        let store = BodyStore::new(root.clone());
+        store.write_blob("objects", "b", "a", b"A").unwrap();
+        store.write_blob("multipart", "b", "u/1", b"P").unwrap();
+        store.write_blob("ecr", "repo", "sha256:abc", b"L").unwrap();
+
+        let known: HashSet<(String, String, String)> = HashSet::new();
+        let (deleted, _freed) = store.gc_orphaned(&["objects"], &known).unwrap();
+        assert_eq!(deleted, 1);
+        assert!(!store.group_dir("objects").exists());
+        assert_eq!(store.read_blob("multipart", "b", "u/1").unwrap(), b"P");
+        assert_eq!(store.read_blob("ecr", "repo", "sha256:abc").unwrap(), b"L");
         let _ = fs::remove_dir_all(&root);
     }
 }
