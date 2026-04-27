@@ -25,6 +25,7 @@ AWSim exposes a lightweight admin API independent of the AWS wire protocol:
 | `/_awsim/config` | GET | Active configuration (port, region, account ID, data-dir) |
 | `/_awsim/stats` | GET | Runtime statistics |
 | `/_awsim/storage` | GET | Per-service `BodyStore` disk usage (when `--data-dir` is set) |
+| `/_awsim/events` | GET | Server-Sent Events stream of every gateway request |
 
 Example:
 
@@ -34,6 +35,7 @@ curl http://localhost:4566/_awsim/services
 curl http://localhost:4566/_awsim/config
 curl http://localhost:4566/_awsim/stats
 curl http://localhost:4566/_awsim/storage
+curl -N http://localhost:4566/_awsim/events
 ```
 
 ### `/_awsim/storage`
@@ -81,6 +83,53 @@ When AWSim is started without `--data-dir`, `data_dir` is `null` and the
 
 The handler walks each group directory using `metadata()` only (no file reads),
 so it returns quickly even with thousands of files.
+
+### `/_awsim/events`
+
+Opens a [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
+stream that emits one JSON-encoded event for every AWS API request that
+flows through the gateway. The connection stays open and pushes events
+in real time until the client disconnects.
+
+The broadcast channel has a capacity of 256 events; if a slow consumer
+falls behind, the oldest events are dropped.
+
+Event shape:
+
+```json
+{
+  "id": "req-uuid",
+  "ts": 1735041600.123,
+  "method": "POST",
+  "path": "/",
+  "service": "s3",
+  "operation": "PutObject",
+  "account_id": "000000000000",
+  "region": "us-east-1",
+  "principal_arn": "arn:aws:iam::000000000000:access-key/AKIA...",
+  "status_code": 200,
+  "duration_ms": 12.5,
+  "request_size": 1024,
+  "response_size": 256,
+  "error_code": null
+}
+```
+
+`error_code` is `null` for `2xx`/`3xx` responses and the AWS error code
+(e.g., `"AccessDenied"`, `"NoSuchBucket"`) when `status_code >= 400`.
+`principal_arn` is `null` for unauthenticated requests; `operation` is
+`null` only when the request failed before the operation could be
+parsed.
+
+Each event arrives over the wire as:
+
+```
+data: {"id":"...","ts":1735041600.123,"method":"POST","path":"/","service":"s3","operation":"PutObject","status_code":200,...}
+
+```
+
+The UI consumes this stream to power the dashboard activity feed and
+the live request log.
 
 ## Dashboard
 
