@@ -17,6 +17,8 @@
 	import LogGroupsPane from '$lib/components/cloudwatch-logs/log-groups-pane.svelte';
 	import LogStreamsPane from '$lib/components/cloudwatch-logs/log-streams-pane.svelte';
 	import LogEventsViewer from '$lib/components/cloudwatch-logs/log-events-viewer.svelte';
+	import InsightsQueryDialog from '$lib/components/cloudwatch-logs/insights-query-dialog.svelte';
+	import Sparkles from '@lucide/svelte/icons/sparkles';
 	import { toast } from 'svelte-sonner';
 
 	let groups = $state<LogGroup[]>([]);
@@ -25,6 +27,7 @@
 	let streamsLoading = $state(false);
 	let selectedGroup = $state<string | null>(null);
 	let selectedStream = $state<string | null>(null);
+	let insightsOpen = $state(false);
 
 	async function loadGroups() {
 		groupsLoading = true;
@@ -71,6 +74,16 @@
 
 <ServicePage title="CloudWatch Logs" description="Browse log groups, streams and events.">
 	{#snippet actions()}
+		<Button
+			size="sm"
+			variant="outline"
+			class="h-7 gap-1.5 px-2 text-xs"
+			disabled={!selectedGroup}
+			onclick={() => (insightsOpen = true)}
+		>
+			<Sparkles class="size-3.5" />
+			Insights
+		</Button>
 		<Button size="sm" variant="outline" class="h-7 px-2 text-xs" onclick={loadGroups}>
 			Refresh
 		</Button>
@@ -97,3 +110,9 @@
 		<LogEventsViewer group={selectedGroup} stream={selectedStream} />
 	</div>
 </ServicePage>
+
+<InsightsQueryDialog
+	open={insightsOpen}
+	group={selectedGroup}
+	onOpenChange={(o) => (insightsOpen = o)}
+/>
