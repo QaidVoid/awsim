@@ -5,13 +5,14 @@
 	import RolesTab from '$lib/components/iam/roles-tab.svelte';
 	import GroupsTab from '$lib/components/iam/groups-tab.svelte';
 	import PoliciesTab from '$lib/components/iam/policies-tab.svelte';
+	import SimulatorTab from '$lib/components/iam/simulator-tab.svelte';
 
 	let active = $state('users');
 </script>
 
 <ServicePage
 	title="IAM"
-	description="Identity and Access Management — users, roles, groups, and customer-managed policies."
+	description="Identity and Access Management — users, roles, groups, policies, and a working policy simulator."
 >
 	<Tabs bind:value={active} class="flex h-full min-h-0 flex-col">
 		<div class="border-b border-border px-6 pt-3">
@@ -20,6 +21,7 @@
 				<TabsTrigger value="roles">Roles</TabsTrigger>
 				<TabsTrigger value="groups">Groups</TabsTrigger>
 				<TabsTrigger value="policies">Policies</TabsTrigger>
+				<TabsTrigger value="simulator">Simulator</TabsTrigger>
 			</TabsList>
 		</div>
 
@@ -40,6 +42,12 @@
 			class="min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden"
 		>
 			<PoliciesTab />
+		</TabsContent>
+		<TabsContent
+			value="simulator"
+			class="min-h-0 flex-1 overflow-y-auto data-[state=inactive]:hidden"
+		>
+			<SimulatorTab />
 		</TabsContent>
 	</Tabs>
 </ServicePage>
