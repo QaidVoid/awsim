@@ -1,8 +1,12 @@
 use awsim_core::AppState;
 use axum::extract::State;
 use axum::response::Json;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use serde_json::{Value, json};
+use std::convert::Infallible;
 use std::sync::atomic::Ordering;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::{Stream, StreamExt};
 
 pub async fn health(State(state): State<AppState>) -> Json<Value> {
     let uptime = state.start_time.elapsed().as_secs();
@@ -123,6 +127,19 @@ pub async fn stats(State(state): State<AppState>) -> Json<Value> {
         "requestsPerSecond": requests.checked_div(uptime).unwrap_or(0),
         "services": state.services.len(),
     }))
+}
+
+pub async fn events(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let receiver = state.events.subscribe();
+    let stream = BroadcastStream::new(receiver)
+        .filter_map(|res| {
+            res.ok()
+                .and_then(|evt| Event::default().json_data(&evt).ok())
+        })
+        .map(Ok::<_, Infallible>);
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 fn format_duration(secs: u64) -> String {

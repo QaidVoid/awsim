@@ -79,6 +79,7 @@ async fn main() -> Result<()> {
         s3_service,
         lambda_service,
         sqs_service,
+        logs_service,
     ) = register_services(
         &mut state,
         &cli.account_id,
@@ -123,6 +124,16 @@ async fn main() -> Result<()> {
         body_stores.push(BodyStoreHandle {
             service_name: "ecr".to_string(),
             groups: awsim_ecr::EcrService::GROUPS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            body_store: Arc::clone(bs),
+        });
+    }
+    if let Some(bs) = logs_service.body_store() {
+        body_stores.push(BodyStoreHandle {
+            service_name: "cloudwatch-logs".to_string(),
+            groups: awsim_cloudwatch_logs::CloudWatchLogsService::GROUPS
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect(),
@@ -174,6 +185,7 @@ async fn main() -> Result<()> {
                 lambda_service.as_ref(),
                 sqs_service.as_ref(),
                 ecr_service.as_ref(),
+                logs_service.as_ref(),
             );
         }
 
@@ -182,6 +194,7 @@ async fn main() -> Result<()> {
             let lambda_gc = Arc::clone(&lambda_service);
             let sqs_gc = Arc::clone(&sqs_service);
             let ecr_gc = Arc::clone(&ecr_service);
+            let logs_gc = Arc::clone(&logs_service);
             let interval = std::time::Duration::from_secs(secs);
             info!(interval_secs = secs, "Periodic BodyStore GC enabled");
             tokio::spawn(async move {
@@ -192,6 +205,7 @@ async fn main() -> Result<()> {
                         lambda_gc.as_ref(),
                         sqs_gc.as_ref(),
                         ecr_gc.as_ref(),
+                        logs_gc.as_ref(),
                     );
                 }
             });
@@ -517,6 +531,7 @@ type RegisteredServices = (
     Arc<awsim_s3::S3Service>,
     Arc<awsim_lambda::LambdaService>,
     Arc<awsim_sqs::SqsService>,
+    Arc<awsim_cloudwatch_logs::CloudWatchLogsService>,
 );
 
 /// Register all services and return handles needed by the router:
@@ -598,8 +613,19 @@ fn register_services(
     let lambda_clone = Arc::clone(&lambda_arc);
     state.register(lambda_arc, lambda_routes);
 
-    let logs = Arc::new(awsim_cloudwatch_logs::CloudWatchLogsService::new());
-    state.register(logs, vec![]);
+    let logs = match data_dir {
+        Some(dir) => {
+            let svc = awsim_cloudwatch_logs::CloudWatchLogsService::with_data_dir(dir);
+            match max_blob_bytes {
+                Some(n) => svc.with_max_blob_bytes(n),
+                None => svc,
+            }
+        }
+        None => awsim_cloudwatch_logs::CloudWatchLogsService::new(),
+    };
+    let logs_arc = Arc::new(logs);
+    let logs_clone = Arc::clone(&logs_arc);
+    state.register(logs_arc, vec![]);
 
     let eventbridge = Arc::new(awsim_eventbridge::EventBridgeService::new());
     state.register(eventbridge, vec![]);
@@ -788,6 +814,7 @@ fn register_services(
         s3_clone,
         lambda_clone,
         sqs_clone,
+        logs_clone,
     )
 }
 
@@ -796,6 +823,7 @@ fn run_gc(
     lambda: &awsim_lambda::LambdaService,
     sqs: &awsim_sqs::SqsService,
     ecr: &awsim_ecr::EcrService,
+    logs: &awsim_cloudwatch_logs::CloudWatchLogsService,
 ) {
     gc_one("s3", s3.body_store(), awsim_s3::S3Service::GROUPS, s3);
     gc_one(
@@ -806,6 +834,12 @@ fn run_gc(
     );
     gc_one("sqs", sqs.body_store(), awsim_sqs::SqsService::GROUPS, sqs);
     gc_one("ecr", ecr.body_store(), awsim_ecr::EcrService::GROUPS, ecr);
+    gc_one(
+        "cloudwatch-logs",
+        logs.body_store(),
+        awsim_cloudwatch_logs::CloudWatchLogsService::GROUPS,
+        logs,
+    );
 }
 
 fn gc_one(
