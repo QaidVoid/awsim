@@ -76,10 +76,20 @@ pub fn upload_part(state: &S3State, input: &Value) -> Result<Value, AwsError> {
         .get_mut(upload_id)
         .ok_or_else(|| no_such_upload(upload_id))?;
 
+    let body = match state.body_store() {
+        Some(store) => {
+            let path = store
+                .write_part(bucket_name, upload_id, part_number, &data)
+                .map_err(|e| AwsError::internal(format!("persist part: {e}")))?;
+            ObjectBody::OnDisk(path)
+        }
+        None => ObjectBody::InMemory(data),
+    };
+
     upload.parts.insert(
         part_number,
         PartData {
-            body: ObjectBody::InMemory(data),
+            body,
             etag: etag.clone(),
         },
     );
@@ -118,9 +128,19 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
     let content_length = combined_data.len() as u64;
     let last_modified = now_rfc7231();
 
+    let body = match state.body_store() {
+        Some(store) => {
+            let path = store
+                .write_object(bucket_name, key, &combined_data)
+                .map_err(|e| AwsError::internal(format!("persist object: {e}")))?;
+            ObjectBody::OnDisk(path)
+        }
+        None => ObjectBody::InMemory(combined_data),
+    };
+
     let obj = S3Object {
         key: key.to_string(),
-        body: ObjectBody::InMemory(combined_data),
+        body,
         content_type: "application/octet-stream".to_string(),
         content_length,
         etag: etag.clone(),
@@ -131,6 +151,12 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
     };
 
     bucket.objects.insert(key.to_string(), obj);
+
+    if let Some(store) = state.body_store()
+        && let Err(e) = store.delete_multipart(bucket_name, upload_id)
+    {
+        tracing::warn!(bucket = %bucket_name, upload_id = %upload_id, error = %e, "delete multipart parts");
+    }
 
     Ok(json!({
         "__xml_root": "CompleteMultipartUploadResult",
@@ -152,9 +178,14 @@ pub fn abort_multipart_upload(state: &S3State, input: &Value) -> Result<Value, A
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    // S3 returns 404 if the upload doesn't exist.
     if bucket.multipart_uploads.remove(upload_id).is_none() {
         return Err(no_such_upload(upload_id));
+    }
+
+    if let Some(store) = state.body_store()
+        && let Err(e) = store.delete_multipart(bucket_name, upload_id)
+    {
+        tracing::warn!(bucket = %bucket_name, upload_id = %upload_id, error = %e, "delete multipart parts");
     }
 
     Ok(json!({}))
