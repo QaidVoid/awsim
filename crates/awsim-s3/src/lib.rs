@@ -1,9 +1,11 @@
 pub mod authz;
+pub mod body_store;
 mod operations;
 pub mod state;
 mod util;
 
 pub use authz::S3ResourcePolicyLookup;
+pub use body_store::BodyStore;
 
 use std::sync::Arc;
 
