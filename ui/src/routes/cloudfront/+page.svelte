@@ -1,175 +1,125 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
-    import {
-        listDistributions,
-        createDistribution,
-        deleteDistribution,
-        type CloudFrontDistribution,
-    } from '$lib/aws';
+	import { onMount } from 'svelte';
+	import { ServicePage } from '$lib/components/service';
+	import { Button } from '$lib/components/ui/button';
+	import {
+		Tabs,
+		TabsList,
+		TabsTrigger,
+		TabsContent,
+	} from '$lib/components/ui/tabs';
+	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+	import { toast } from 'svelte-sonner';
+	import { listDistributions, type Distribution } from '$lib/api/cloudfront';
+	import DistributionsTab from '$lib/components/cloudfront/distributions-tab.svelte';
+	import OaiTab from '$lib/components/cloudfront/oai-tab.svelte';
+	import CachePoliciesTab from '$lib/components/cloudfront/cache-policies-tab.svelte';
+	import OriginRequestPoliciesTab from '$lib/components/cloudfront/origin-request-policies-tab.svelte';
+	import KeyGroupsTab from '$lib/components/cloudfront/key-groups-tab.svelte';
+	import PublicKeysTab from '$lib/components/cloudfront/public-keys-tab.svelte';
+	import FunctionsTab from '$lib/components/cloudfront/functions-tab.svelte';
+	import DistributionDetailSheet from '$lib/components/cloudfront/distribution-detail-sheet.svelte';
+	import CreateDistributionDialog from '$lib/components/cloudfront/create-distribution-dialog.svelte';
 
-    let distributions = $state<CloudFrontDistribution[]>([]);
-    let loading = $state(false);
-    let error = $state<string | null>(null);
-    let showCreate = $state(false);
-    let newOriginDomain = $state('');
-    let newComment = $state('');
-    let creating = $state(false);
-    let createError = $state<string | null>(null);
-    let confirmDelete = $state<string | null>(null);
+	type Tab =
+		| 'distributions'
+		| 'oai'
+		| 'cache'
+		| 'origin'
+		| 'keyGroups'
+		| 'publicKeys'
+		| 'functions';
 
-    async function loadDistributions() {
-        loading = true;
-        error = null;
-        try {
-            const data = await listDistributions();
-            distributions = data.distributions;
-        } catch (e) {
-            error = e instanceof Error ? e.message : 'Failed to load distributions';
-        } finally {
-            loading = false;
-        }
-    }
+	let activeTab = $state<Tab>('distributions');
 
-    async function handleCreate() {
-        if (!newOriginDomain.trim()) return;
-        creating = true;
-        createError = null;
-        try {
-            await createDistribution(newOriginDomain.trim(), newComment.trim());
-            showCreate = false;
-            newOriginDomain = '';
-            newComment = '';
-            await loadDistributions();
-        } catch (e) {
-            createError = e instanceof Error ? e.message : 'Failed to create distribution';
-        } finally {
-            creating = false;
-        }
-    }
+	let distributions = $state<Distribution[]>([]);
+	let distLoading = $state(false);
 
-    async function handleDelete(id: string) {
-        try {
-            await deleteDistribution(id);
-            confirmDelete = null;
-            await loadDistributions();
-        } catch (e) {
-            error = e instanceof Error ? e.message : 'Failed to delete distribution';
-        }
-    }
+	let createOpen = $state(false);
+	let detailOpen = $state(false);
+	let selected = $state<Distribution | null>(null);
 
-    onMount(() => loadDistributions());
+	async function loadDistributions() {
+		distLoading = true;
+		try {
+			distributions = await listDistributions();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to load distributions');
+		} finally {
+			distLoading = false;
+		}
+	}
+
+	function openDetail(d: Distribution) {
+		selected = d;
+		detailOpen = true;
+	}
+
+	onMount(loadDistributions);
 </script>
 
-<div class="p-6">
-    <div class="flex items-center justify-between mb-6">
-        <div>
-            <h1 class="text-2xl font-bold">CloudFront — Content Delivery Network</h1>
-            <p class="text-zinc-500 mt-1">Manage CloudFront distributions and origin access controls.</p>
-        </div>
-        <button
-            onclick={() => { showCreate = !showCreate; createError = null; }}
-            class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 rounded text-sm font-medium transition-colors"
-        >
-            Create Distribution
-        </button>
-    </div>
+<ServicePage
+	title="CloudFront"
+	description="Edge-cached content delivery: distributions, policies, key management, and edge functions."
+>
+	{#snippet actions()}
+		<Button variant="outline" size="sm" onclick={loadDistributions} disabled={distLoading}>
+			<RefreshCwIcon class={distLoading ? 'animate-spin' : ''} />
+			Refresh
+		</Button>
+	{/snippet}
 
-    {#if showCreate}
-        <div class="bg-zinc-900 border border-zinc-700 rounded-lg p-4 mb-4">
-            <h3 class="font-semibold mb-3">Create Distribution</h3>
-            {#if createError}
-                <div class="bg-red-900/20 border border-red-800 rounded p-2 text-red-400 text-sm mb-3">{createError}</div>
-            {/if}
-            <div class="grid grid-cols-2 gap-3 mb-3">
-                <div>
-                    <label for="cf-origin" class="block text-xs text-zinc-400 mb-1">Origin Domain Name</label>
-                    <input
-                        id="cf-origin"
-                        type="text"
-                        bind:value={newOriginDomain}
-                        class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500"
-                        placeholder="my-bucket.s3.amazonaws.com"
-                    />
-                </div>
-                <div>
-                    <label for="cf-comment" class="block text-xs text-zinc-400 mb-1">Comment (optional)</label>
-                    <input
-                        id="cf-comment"
-                        type="text"
-                        bind:value={newComment}
-                        class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-orange-500"
-                        placeholder="My distribution"
-                    />
-                </div>
-            </div>
-            <div class="flex gap-2">
-                <button
-                    onclick={handleCreate}
-                    disabled={creating || !newOriginDomain.trim()}
-                    class="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
-                >
-                    {creating ? 'Creating...' : 'Create'}
-                </button>
-                <button
-                    onclick={() => { showCreate = false; createError = null; newOriginDomain = ''; newComment = ''; }}
-                    class="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-sm transition-colors"
-                >
-                    Cancel
-                </button>
-            </div>
-        </div>
-    {/if}
+	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+		<TabsList variant="line" class="border-b border-border px-4">
+			<TabsTrigger value="distributions">Distributions</TabsTrigger>
+			<TabsTrigger value="cache">Cache policies</TabsTrigger>
+			<TabsTrigger value="origin">Origin request</TabsTrigger>
+			<TabsTrigger value="oai">Origin access</TabsTrigger>
+			<TabsTrigger value="keyGroups">Key groups</TabsTrigger>
+			<TabsTrigger value="publicKeys">Public keys</TabsTrigger>
+			<TabsTrigger value="functions">Functions</TabsTrigger>
+		</TabsList>
 
-    {#if loading}
-        <div class="text-zinc-500">Loading distributions...</div>
-    {:else if error}
-        <div class="bg-red-900/20 border border-red-800 rounded-lg p-4 text-red-400">{error}</div>
-    {:else if distributions.length === 0}
-        <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-8 text-center">
-            <p class="text-zinc-500">No distributions found.</p>
-            <button onclick={() => showCreate = true} class="mt-3 px-3 py-1.5 bg-orange-600 hover:bg-orange-500 rounded text-sm font-medium">
-                Create your first distribution
-            </button>
-        </div>
-    {:else}
-        <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
-            <table class="w-full text-sm">
-                <thead>
-                    <tr class="border-b border-zinc-800 text-left text-zinc-500">
-                        <th class="px-4 py-3">ID</th>
-                        <th class="px-4 py-3">Domain Name</th>
-                        <th class="px-4 py-3">Status</th>
-                        <th class="px-4 py-3">Comment</th>
-                        <th class="px-4 py-3">Enabled</th>
-                        <th class="px-4 py-3"></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {#each distributions as dist}
-                        <tr class="border-b border-zinc-800/50 hover:bg-zinc-800/30">
-                            <td class="px-4 py-3 font-mono text-orange-400 text-xs">{dist.id}</td>
-                            <td class="px-4 py-3 font-mono text-zinc-300 text-xs">{dist.domainName}</td>
-                            <td class="px-4 py-3">
-                                <span class="px-2 py-0.5 rounded text-xs {dist.status === 'Deployed' ? 'bg-green-900/40 text-green-400' : 'bg-yellow-900/40 text-yellow-400'}">{dist.status}</span>
-                            </td>
-                            <td class="px-4 py-3 text-zinc-400 text-xs">{dist.comment || '-'}</td>
-                            <td class="px-4 py-3">
-                                <span class="px-2 py-0.5 rounded text-xs {dist.enabled ? 'bg-green-900/40 text-green-400' : 'bg-zinc-800 text-zinc-400'}">{dist.enabled ? 'Yes' : 'No'}</span>
-                            </td>
-                            <td class="px-4 py-3">
-                                {#if confirmDelete === dist.id}
-                                    <div class="flex items-center gap-1">
-                                        <button onclick={() => handleDelete(dist.id)} class="px-2 py-0.5 bg-red-700 hover:bg-red-600 rounded text-xs">Confirm</button>
-                                        <button onclick={() => confirmDelete = null} class="px-2 py-0.5 bg-zinc-700 hover:bg-zinc-600 rounded text-xs">Cancel</button>
-                                    </div>
-                                {:else}
-                                    <button onclick={() => confirmDelete = dist.id} class="px-2 py-1 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded text-xs transition-colors">Delete</button>
-                                {/if}
-                            </td>
-                        </tr>
-                    {/each}
-                </tbody>
-            </table>
-        </div>
-    {/if}
-</div>
+		<div class="min-h-0 flex-1 overflow-y-auto">
+			<TabsContent value="distributions" class="m-0">
+				<DistributionsTab
+					{distributions}
+					loading={distLoading}
+					onRefresh={loadDistributions}
+					onSelect={openDetail}
+					onCreate={() => (createOpen = true)}
+				/>
+			</TabsContent>
+			<TabsContent value="cache" class="m-0">
+				<CachePoliciesTab />
+			</TabsContent>
+			<TabsContent value="origin" class="m-0">
+				<OriginRequestPoliciesTab />
+			</TabsContent>
+			<TabsContent value="oai" class="m-0">
+				<OaiTab />
+			</TabsContent>
+			<TabsContent value="keyGroups" class="m-0">
+				<KeyGroupsTab />
+			</TabsContent>
+			<TabsContent value="publicKeys" class="m-0">
+				<PublicKeysTab />
+			</TabsContent>
+			<TabsContent value="functions" class="m-0">
+				<FunctionsTab />
+			</TabsContent>
+		</div>
+	</Tabs>
+</ServicePage>
+
+<CreateDistributionDialog
+	open={createOpen}
+	onOpenChange={(o) => (createOpen = o)}
+	onCreated={loadDistributions}
+/>
+
+<DistributionDetailSheet
+	distribution={selected}
+	open={detailOpen}
+	onOpenChange={(o) => (detailOpen = o)}
+/>
