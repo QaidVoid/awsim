@@ -1300,8 +1300,10 @@ impl ServiceHandler for S3Service {
 
         let snapshot: S3StateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
 
-        // S3 state is global per account — always use "global" region.
         let state = self.store.get("000000000000", "global");
+        if let Some(bs) = &self.body_store {
+            state.set_body_store(Arc::clone(bs));
+        }
 
         for bs in snapshot.buckets {
             let bucket = Bucket {
@@ -1321,12 +1323,26 @@ impl ServiceHandler for S3Service {
                 objects: {
                     let dm = DashMap::new();
                     for meta in bs.objects {
-                        // Restore metadata; data is empty — object data is not persisted
+                        let body = match state.body_store() {
+                            Some(store) => match store.object_path(&bs.name, &meta.key) {
+                                Ok(path) => ObjectBody::OnDisk(path),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        bucket = %bs.name,
+                                        key = %meta.key,
+                                        error = %e,
+                                        "resolve object path on restore"
+                                    );
+                                    ObjectBody::InMemory(Vec::new())
+                                }
+                            },
+                            None => ObjectBody::InMemory(Vec::new()),
+                        };
                         dm.insert(
                             meta.key.clone(),
                             S3Object {
                                 key: meta.key,
-                                body: ObjectBody::InMemory(Vec::new()),
+                                body,
                                 content_type: meta.content_type,
                                 content_length: meta.content_length,
                                 etag: meta.etag,
@@ -1339,7 +1355,7 @@ impl ServiceHandler for S3Service {
                     }
                     dm
                 },
-                multipart_uploads: DashMap::new(), // not persisted
+                multipart_uploads: DashMap::new(),
             };
             state.buckets.insert(bs.name, bucket);
         }

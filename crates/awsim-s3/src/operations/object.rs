@@ -114,10 +114,13 @@ pub fn get_object(
 
     let obj = bucket.objects.get(key).ok_or_else(|| no_such_key(key))?;
 
-    let body_bytes = obj
-        .body
-        .read_all()
-        .map_err(|e| AwsError::internal(format!("read object body: {e}")))?;
+    let body_bytes = obj.body.read_all().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            no_such_key(key)
+        } else {
+            AwsError::internal(format!("read object body: {e}"))
+        }
+    })?;
     let (data_slice, content_range) = apply_range(&body_bytes, range_header)?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(data_slice);
 
