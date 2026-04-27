@@ -2,9 +2,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
+use tracing::warn;
 use uuid::Uuid;
 
-use crate::state::{Message, SqsState};
+use crate::state::{Message, MessageBody, SqsState};
 use crate::util::queue_name_from_url;
 
 pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
@@ -184,7 +185,44 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         && let Some(dlq_name) = state.queue_name_by_arn(&rp.dead_letter_target_arn)
         && let Some(mut dlq) = state.queues.get_mut(&dlq_name)
     {
-        for msg in dlq_messages {
+        for mut msg in dlq_messages {
+            if let (MessageBody::OnDisk(_), Some(bs)) = (&msg.body, state.body_store()) {
+                match msg.body.read() {
+                    Ok(bytes) => {
+                        match bs.write_blob("sqs", &dlq_name, &msg.message_id, bytes.as_bytes()) {
+                            Ok(new_path) => {
+                                if let Err(e) = bs.delete_blob("sqs", &queue_name, &msg.message_id)
+                                {
+                                    warn!(
+                                        queue = %queue_name,
+                                        message_id = %msg.message_id,
+                                        error = %e,
+                                        "Failed to delete source blob after DLQ migration",
+                                    );
+                                }
+                                msg.body = MessageBody::OnDisk(new_path);
+                            }
+                            Err(e) => {
+                                warn!(
+                                    dlq = %dlq_name,
+                                    message_id = %msg.message_id,
+                                    error = %e,
+                                    "Failed to write DLQ blob; falling back to in-memory body",
+                                );
+                                msg.body = MessageBody::InMemory(bytes);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            queue = %queue_name,
+                            message_id = %msg.message_id,
+                            error = %e,
+                            "Failed to read message body during DLQ migration",
+                        );
+                    }
+                }
+            }
             dlq.messages.push_back(msg);
         }
     }
