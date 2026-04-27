@@ -2,7 +2,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use awsim_core::{
-    AccountRegionStore, AwsError, BodyStore, Protocol, RequestContext, ServiceHandler,
+    AccountRegionStore, AwsError, BlobInventory, BodyStore, Protocol, RequestContext,
+    ServiceHandler,
 };
 use serde_json::Value;
 use tracing::{debug, warn};
@@ -136,6 +137,31 @@ impl CloudWatchLogsService {
 impl Default for CloudWatchLogsService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl BlobInventory for CloudWatchLogsService {
+    fn known_blobs(&self) -> Vec<(String, String, String)> {
+        let mut out = Vec::new();
+        for (_, state) in self.store.iter_all() {
+            for group_entry in state.log_groups.iter() {
+                let group_name = group_entry.key().clone();
+                let group = group_entry.value();
+                for stream_entry in group.streams.iter() {
+                    let stream_name = stream_entry.key().clone();
+                    let stream = stream_entry.value();
+                    let has_events = !stream.events.read().unwrap().is_empty();
+                    if has_events {
+                        out.push((
+                            "cloudwatch-logs".to_string(),
+                            group_name.clone(),
+                            stream_name,
+                        ));
+                    }
+                }
+            }
+        }
+        out
     }
 }
 
