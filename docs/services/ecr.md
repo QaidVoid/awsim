@@ -9,7 +9,7 @@ Amazon Elastic Container Registry for storing and managing Docker container imag
 | Protocol | `AwsJson1_1` |
 | Signing Name | `ecr` |
 | Target Prefix | `AmazonEC2ContainerRegistry_V20150921` |
-| Persistence | No |
+| Persistence | Yes (with `--data-dir`) |
 
 ## Quick Start
 
@@ -108,13 +108,14 @@ curl -s http://localhost:4566 \
   - Returns: `imageScanFindings` with empty `findings` list
 
 ### Layer Operations
-- `GetDownloadUrlForLayer` — return a download URL for a layer (stub URL)
+- `GetDownloadUrlForLayer` — return a working download URL for a stored layer
   - Input: `repositoryName`, `layerDigest`
-  - Returns: `downloadUrl`, `layerDigest`
+  - Returns: `downloadUrl` of the form `http://localhost:{port}/v2/{repo}/blobs/{digest}`, `layerDigest`
+  - Errors with `LayersNotFoundException` if the layer is not present
 
-- `BatchCheckLayerAvailability` — check if layers exist (returns all as AVAILABLE)
+- `BatchCheckLayerAvailability` — check if specific layers exist in the repository
   - Input: `repositoryName`, `layerDigests`
-  - Returns: `layers` list with `layerAvailability: "AVAILABLE"`
+  - Returns: `layers` list with `layerAvailability: "AVAILABLE"` and the real `layerSize`/`mediaType`; missing digests appear in `failures` with `failureCode: "MissingLayerDigest"`
 
 - `InitiateLayerUpload` — start a layer upload session
   - Input: `repositoryName`
@@ -197,7 +198,9 @@ console.log('Repositories:', repositories?.map(r => r.repositoryName));
 ## Behavior Notes
 
 - The authorization token returned by `GetAuthorizationToken` is a valid base64-encoded string in `AWS:token` format but does not perform real authentication against a Docker registry.
-- Image manifests are stored as JSON strings; no image layer validation, decompression, or content-addressable storage occurs.
-- ECR does not integrate with a real Docker registry — `docker push/pull` commands require a real registry endpoint.
+- Image manifests are stored as JSON strings.
+- Completed layer uploads are stored under the repository: `BatchCheckLayerAvailability` reports real availability and `GetDownloadUrlForLayer` returns a working URL pointing to the local `/v2/{repo}/blobs/{digest}` endpoint.
+- The `/v2/{repo}/blobs/{digest}` endpoint streams stored layer bytes with `Content-Type: application/vnd.docker.image.rootfs.diff.tar.gzip` and `Docker-Content-Digest: <digest>` headers.
+- `BatchDeleteImage` parses each removed image manifest and best-effort cleans up its referenced layers (memory + on-disk blobs); `DeleteRepository` best-effort removes the entire on-disk layer bucket.
+- With `--data-dir`, completed layer bodies are persisted under `{data_dir}/ecr/{repository}/{digest}` and metadata (digest, size, media type) rides in the `ecr.json` snapshot. In-progress upload buffers are kept in memory only.
 - `repositoryUri` follows the real AWS format: `{accountId}.dkr.ecr.{region}.amazonaws.com/{name}`.
-- State is in-memory only and lost on restart.

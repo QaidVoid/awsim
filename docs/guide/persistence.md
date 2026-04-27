@@ -30,6 +30,7 @@ The following services write and restore snapshots:
 | Scheduler | `scheduler` |
 | SNS | `sns` |
 | Lambda | `lambda` |
+| ECR | `ecr` |
 
 Services not in this list (e.g., KMS, Secrets Manager) are always in-memory only.
 
@@ -72,6 +73,25 @@ When `--data-dir` is set, the Lambda service writes each function's zip bytes to
 The `lambda.json` snapshot stores function metadata only (configuration, version metadata, aliases). On restore, each function's `code` field is rebound to its on-disk path; bytes are read lazily by `Invoke` rather than preloaded. Invocation history is intentionally not persisted.
 
 When `--data-dir` is not supplied, function code stays in memory and is lost on shutdown.
+
+## ECR layers
+
+When `--data-dir` is set, the ECR service writes each completed layer's bytes to disk under `{data_dir}/ecr/`:
+
+```
+/var/lib/awsim/
+  ecr/
+    <repository>/
+      sha256:abc...    # layer body, named by digest
+```
+
+`CompleteLayerUpload` finalizes an upload, hashes the buffered bytes into a sha256 digest, and writes them to `{data_dir}/ecr/{repository}/{digest}`. Repository and image metadata still ride in the regular `ecr.json` snapshot — the snapshot only stores layer digest, size, and media type, never the bytes. On restore, each layer is rebound to its on-disk path; bytes are read lazily by the `/v2/{repo}/blobs/{digest}` HTTP endpoint.
+
+`BatchDeleteImage` parses each removed image manifest and best-effort deletes any referenced layer blobs. `DeleteRepository` best-effort removes the entire `{repository}/` subtree.
+
+In-progress upload buffers are kept in memory only; if AWSim crashes mid-upload the partial data is lost (the client retries from `InitiateLayerUpload`).
+
+When `--data-dir` is not supplied, layer bodies stay in memory and are lost on shutdown.
 
 ## Snapshot Format
 
