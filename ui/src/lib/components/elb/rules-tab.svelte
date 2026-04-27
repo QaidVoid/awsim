@@ -11,7 +11,7 @@
 		describeRules,
 		type Listener,
 		type LoadBalancer,
-		type Rule,
+		type Rule
 	} from '$lib/api/elb';
 
 	interface Props {
@@ -70,65 +70,71 @@
 </script>
 
 <div class="flex flex-col gap-3 p-4">
-	<div class="flex flex-wrap items-end gap-3">
-		<div class="flex flex-col gap-1">
-			<Label for="elb-rules-lb">Load balancer</Label>
-			<select
-				id="elb-rules-lb"
-				bind:value={selectedLbArn}
-				class="border-input dark:bg-input/30 h-9 min-w-[260px] rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3"
+	{#if loadBalancers.length === 0}
+		<EmptyState
+			icon={GitBranchIcon}
+			title="No load balancers"
+			description="Create a load balancer and listener first — rules attach to listeners."
+		/>
+	{:else}
+		<div class="flex flex-wrap items-end gap-3">
+			<div class="flex flex-col gap-1">
+				<Label for="elb-rules-lb">Load balancer</Label>
+				<select
+					id="elb-rules-lb"
+					bind:value={selectedLbArn}
+					class="border-input dark:bg-input/30 h-9 min-w-[260px] rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3"
+				>
+					{#each loadBalancers as lb (lb.arn)}
+						<option value={lb.arn}>{lb.name}</option>
+					{/each}
+				</select>
+			</div>
+			<div class="flex flex-col gap-1">
+				<Label for="elb-rules-listener">Listener</Label>
+				<select
+					id="elb-rules-listener"
+					bind:value={selectedListenerArn}
+					disabled={loadingListeners || listeners.length === 0}
+					class="border-input dark:bg-input/30 h-9 min-w-[260px] rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3 disabled:opacity-50"
+				>
+					{#each listeners as l (l.arn)}
+						<option value={l.arn}>{l.protocol}:{l.port}</option>
+					{:else}
+						<option value="">No listeners</option>
+					{/each}
+				</select>
+			</div>
+			<Button
+				variant="ghost"
+				size="sm"
+				onclick={loadRules}
+				disabled={loadingRules || !selectedListenerArn}
 			>
-				{#each loadBalancers as lb (lb.arn)}
-					<option value={lb.arn}>{lb.name}</option>
-				{:else}
-					<option value="">No load balancers</option>
-				{/each}
-			</select>
+				<RefreshCwIcon class={loadingRules ? 'animate-spin' : ''} />
+				Refresh
+			</Button>
 		</div>
-		<div class="flex flex-col gap-1">
-			<Label for="elb-rules-listener">Listener</Label>
-			<select
-				id="elb-rules-listener"
-				bind:value={selectedListenerArn}
-				disabled={loadingListeners || listeners.length === 0}
-				class="border-input dark:bg-input/30 h-9 min-w-[260px] rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3 disabled:opacity-50"
-			>
-				{#each listeners as l (l.arn)}
-					<option value={l.arn}>{l.protocol}:{l.port}</option>
-				{:else}
-					<option value="">No listeners</option>
-				{/each}
-			</select>
-		</div>
-		<Button
-			variant="ghost"
-			size="sm"
-			onclick={loadRules}
-			disabled={loadingRules || !selectedListenerArn}
-		>
-			<RefreshCwIcon class={loadingRules ? 'animate-spin' : ''} />
-			Refresh
-		</Button>
-	</div>
 
-	<DataTable
-		rows={rules}
-		loading={loadingRules}
-		rowKey={(r) => r.arn || r.priority}
-		columns={[
-			{ key: 'priority', label: 'Priority', width: '110px', cell: priorityCell },
-			{ key: 'conditions', label: 'Conditions', cell: condCell },
-			{ key: 'actions', label: 'Actions', width: '180px', cell: actionsCell },
-		]}
-	>
-		{#snippet empty()}
-			<EmptyState
-				icon={GitBranchIcon}
-				title="No rules"
-				description="Listener rules forward, redirect, or authenticate based on conditions like host or path."
-			/>
-		{/snippet}
-	</DataTable>
+		<DataTable
+			rows={rules}
+			loading={loadingRules}
+			rowKey={(r) => r.arn || r.priority}
+			columns={[
+				{ key: 'priority', label: 'Priority', width: '110px', cell: priorityCell },
+				{ key: 'conditions', label: 'Conditions', cell: condCell },
+				{ key: 'actions', label: 'Actions', width: '180px', cell: actionsCell }
+			]}
+		>
+			{#snippet empty()}
+				<EmptyState
+					icon={GitBranchIcon}
+					title="No rules"
+					description="Listener rules forward, redirect, or authenticate based on conditions like host or path."
+				/>
+			{/snippet}
+		</DataTable>
+	{/if}
 </div>
 
 {#snippet priorityCell(r: Rule)}

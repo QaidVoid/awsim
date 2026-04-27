@@ -43,46 +43,52 @@
 </script>
 
 <div class="flex flex-col gap-3 p-4">
-	<div class="flex flex-wrap items-end gap-3">
-		<div class="flex flex-col gap-1">
-			<Label for="elb-listener-lb">Load balancer</Label>
-			<select
-				id="elb-listener-lb"
-				bind:value={selectedLbArn}
-				class="border-input dark:bg-input/30 h-9 min-w-[260px] rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3"
-			>
-				{#each loadBalancers as lb (lb.arn)}
-					<option value={lb.arn}>{lb.name}</option>
-				{:else}
-					<option value="">No load balancers</option>
-				{/each}
-			</select>
+	{#if loadBalancers.length === 0}
+		<EmptyState
+			icon={EarIcon}
+			title="No load balancers"
+			description="Create a load balancer first — listeners attach to a load balancer."
+		/>
+	{:else}
+		<div class="flex flex-wrap items-end gap-3">
+			<div class="flex flex-col gap-1">
+				<Label for="elb-listener-lb">Load balancer</Label>
+				<select
+					id="elb-listener-lb"
+					bind:value={selectedLbArn}
+					class="border-input dark:bg-input/30 h-9 min-w-[260px] rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3"
+				>
+					{#each loadBalancers as lb (lb.arn)}
+						<option value={lb.arn}>{lb.name}</option>
+					{/each}
+				</select>
+			</div>
+			<Button variant="ghost" size="sm" onclick={load} disabled={loading || !selectedLbArn}>
+				<RefreshCwIcon class={loading ? 'animate-spin' : ''} />
+				Refresh
+			</Button>
 		</div>
-		<Button variant="ghost" size="sm" onclick={load} disabled={loading || !selectedLbArn}>
-			<RefreshCwIcon class={loading ? 'animate-spin' : ''} />
-			Refresh
-		</Button>
-	</div>
 
-	<DataTable
-		rows={listeners}
-		{loading}
-		rowKey={(l) => l.arn}
-		columns={[
-			{ key: 'protocol', label: 'Protocol', width: '110px' },
-			{ key: 'port', label: 'Port', width: '90px', align: 'right' },
-			{ key: 'defaultActions', label: 'Default actions', cell: actionsCell },
-			{ key: 'arn', label: 'ARN', mono: true },
-		]}
-	>
-		{#snippet empty()}
-			<EmptyState
-				icon={EarIcon}
-				title="No listeners"
-				description="Listeners check for connection requests using the protocol and port you configure."
-			/>
-		{/snippet}
-	</DataTable>
+		<DataTable
+			rows={listeners}
+			{loading}
+			rowKey={(l) => l.arn}
+			columns={[
+				{ key: 'protocol', label: 'Protocol', width: '110px' },
+				{ key: 'port', label: 'Port', width: '90px', align: 'right' },
+				{ key: 'defaultActions', label: 'Default actions', cell: actionsCell },
+				{ key: 'arn', label: 'ARN', mono: true }
+			]}
+		>
+			{#snippet empty()}
+				<EmptyState
+					icon={EarIcon}
+					title="No listeners"
+					description="Listeners check for connection requests using the protocol and port you configure."
+				/>
+			{/snippet}
+		</DataTable>
+	{/if}
 </div>
 
 {#snippet actionsCell(l: Listener)}
