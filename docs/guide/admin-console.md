@@ -24,6 +24,7 @@ AWSim exposes a lightweight admin API independent of the AWS wire protocol:
 | `/_awsim/services` | GET | List all registered services with their signing names and protocols |
 | `/_awsim/config` | GET | Active configuration (port, region, account ID, data-dir) |
 | `/_awsim/stats` | GET | Runtime statistics |
+| `/_awsim/storage` | GET | Per-service `BodyStore` disk usage (when `--data-dir` is set) |
 
 Example:
 
@@ -32,7 +33,54 @@ curl http://localhost:4566/_awsim/health
 curl http://localhost:4566/_awsim/services
 curl http://localhost:4566/_awsim/config
 curl http://localhost:4566/_awsim/stats
+curl http://localhost:4566/_awsim/storage
 ```
+
+### `/_awsim/storage`
+
+Reports on-disk byte counts for each service that has a `BodyStore` enabled.
+When AWSim is started without `--data-dir`, `data_dir` is `null` and the
+`services` array is empty.
+
+```json
+{
+  "data_dir": "/var/awsim/data",
+  "snapshots": {
+    "path": "/var/awsim/data/snapshots",
+    "size_bytes": 12345
+  },
+  "services": [
+    {
+      "name": "s3",
+      "groups": ["objects", "multipart"],
+      "size_bytes": 1048576,
+      "blob_count": 42
+    },
+    {
+      "name": "lambda",
+      "groups": ["lambda"],
+      "size_bytes": 512000,
+      "blob_count": 3
+    },
+    {
+      "name": "ecr",
+      "groups": ["ecr"],
+      "size_bytes": 0,
+      "blob_count": 0
+    },
+    {
+      "name": "sqs",
+      "groups": ["sqs"],
+      "size_bytes": 256,
+      "blob_count": 12
+    }
+  ],
+  "total_size_bytes": 1573577
+}
+```
+
+The handler walks each group directory using `metadata()` only (no file reads),
+so it returns quickly even with thousands of files.
 
 ## Dashboard
 
