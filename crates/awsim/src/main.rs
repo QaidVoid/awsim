@@ -43,6 +43,11 @@ struct Cli {
     /// Applied independently to S3, Lambda, SQS, ECR. Unset = unbounded.
     #[arg(long, env = "AWSIM_MAX_BLOB_BYTES")]
     max_blob_bytes: Option<u64>,
+
+    /// Re-run BodyStore orphan GC every N seconds (in addition to startup).
+    /// Unset = startup-only GC.
+    #[arg(long, env = "AWSIM_GC_INTERVAL_SECS")]
+    gc_interval_secs: Option<u64>,
 }
 
 #[tokio::main]
@@ -116,12 +121,32 @@ async fn main() -> Result<()> {
         pm.restore_all(&state.services);
 
         if !cli.no_gc {
-            run_startup_gc(
+            run_gc(
                 s3_service.as_ref(),
                 lambda_service.as_ref(),
                 sqs_service.as_ref(),
                 ecr_service.as_ref(),
             );
+        }
+
+        if let Some(secs) = cli.gc_interval_secs {
+            let s3_gc = Arc::clone(&s3_service);
+            let lambda_gc = Arc::clone(&lambda_service);
+            let sqs_gc = Arc::clone(&sqs_service);
+            let ecr_gc = Arc::clone(&ecr_service);
+            let interval = std::time::Duration::from_secs(secs);
+            info!(interval_secs = secs, "Periodic BodyStore GC enabled");
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(interval).await;
+                    run_gc(
+                        s3_gc.as_ref(),
+                        lambda_gc.as_ref(),
+                        sqs_gc.as_ref(),
+                        ecr_gc.as_ref(),
+                    );
+                }
+            });
         }
 
         // Spawn graceful-shutdown handler that saves snapshots on SIGINT/SIGTERM.
@@ -716,7 +741,7 @@ fn register_services(
     )
 }
 
-fn run_startup_gc(
+fn run_gc(
     s3: &awsim_s3::S3Service,
     lambda: &awsim_lambda::LambdaService,
     sqs: &awsim_sqs::SqsService,
