@@ -313,27 +313,37 @@ pub fn batch_check_layer_availability(
         AwsError::bad_request("InvalidParameterException", "layerDigests is required")
     })?;
 
-    let _repo = state
+    let repo = state
         .repositories
         .get(repo_name)
         .ok_or_else(|| repo_not_found(repo_name))?;
 
-    let layers: Vec<Value> = layer_digests
-        .iter()
-        .filter_map(|d| d.as_str())
-        .map(|digest| {
-            json!({
-                "layerDigest": digest,
-                "layerAvailability": "AVAILABLE",
-                "layerSize": 1024u64,
-                "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
-            })
-        })
-        .collect();
+    let mut layers: Vec<Value> = Vec::new();
+    let mut failures: Vec<Value> = Vec::new();
+
+    for d in layer_digests.iter().filter_map(|d| d.as_str()) {
+        match repo.layers.get(d) {
+            Some(layer) => {
+                layers.push(json!({
+                    "layerDigest": d,
+                    "layerAvailability": "AVAILABLE",
+                    "layerSize": layer.size,
+                    "mediaType": layer.media_type,
+                }));
+            }
+            None => {
+                failures.push(json!({
+                    "layerDigest": d,
+                    "failureCode": "MissingLayerDigest",
+                    "failureReason": "Layer not found",
+                }));
+            }
+        }
+    }
 
     Ok(json!({
         "layers": layers,
-        "failures": [],
+        "failures": failures,
         "registryId": ctx.account_id,
         "repositoryName": repo_name,
     }))
