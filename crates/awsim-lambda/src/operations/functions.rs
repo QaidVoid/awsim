@@ -217,6 +217,11 @@ pub fn delete_function(state: &LambdaState, input: &Value) -> Result<Value, AwsE
         .functions
         .remove(name)
         .ok_or_else(|| resource_not_found("function", name))?;
+    if let Some(store) = state.body_store()
+        && let Err(e) = store.delete_bucket("lambda", name)
+    {
+        tracing::warn!(function_name = name, error = %e, "delete persisted function code");
+    }
     Ok(json!({}))
 }
 
