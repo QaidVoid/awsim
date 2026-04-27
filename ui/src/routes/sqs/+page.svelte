@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ServicePage, EmptyState } from '$lib/components/service';
+	import { ServicePage, EmptyState, ListSkeleton } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
@@ -134,7 +134,9 @@
 	{#if error}
 		<div class="px-6 py-4 text-sm text-destructive">{error}</div>
 	{:else if loading && queues.length === 0}
-		<div class="px-6 py-4 text-sm text-muted-foreground">Loading queues…</div>
+		<div class="px-6 py-6">
+			<ListSkeleton rows={6} />
+		</div>
 	{:else if queues.length === 0}
 		<div class="px-6 py-12">
 			<EmptyState

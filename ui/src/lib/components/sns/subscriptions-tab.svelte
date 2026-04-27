@@ -3,7 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
-	import { EmptyState } from '$lib/components/service';
+	import { EmptyState, ListSkeleton } from '$lib/components/service';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import UsersIcon from '@lucide/svelte/icons/users';
@@ -133,7 +133,7 @@
 		</div>
 
 		{#if loading && subs.length === 0}
-			<p class="text-xs text-muted-foreground">Loading…</p>
+			<ListSkeleton rows={3} />
 		{:else if subs.length === 0}
 			<EmptyState
 				icon={UsersIcon}

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ServicePage, EmptyState } from '$lib/components/service';
+	import { ServicePage, EmptyState, ListSkeleton } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		Dialog,
@@ -125,7 +125,9 @@
 	{#if error}
 		<div class="px-6 py-4 text-sm text-destructive">{error}</div>
 	{:else if loading && streams.length === 0}
-		<div class="px-6 py-4 text-sm text-muted-foreground">Loading delivery streams…</div>
+		<div class="px-6 py-6">
+			<ListSkeleton rows={5} />
+		</div>
 	{:else if streams.length === 0}
 		<div class="px-6 py-12">
 			<EmptyState

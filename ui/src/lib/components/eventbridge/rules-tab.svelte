@@ -4,7 +4,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { Textarea } from '$lib/components/ui/textarea';
-	import { EmptyState } from '$lib/components/service';
+	import { EmptyState, ListSkeleton } from '$lib/components/service';
 	import {
 		Dialog,
 		DialogContent,
@@ -115,7 +115,9 @@
 		</div>
 	</div>
 
-	{#if rules.length === 0 && !loading}
+	{#if loading && rules.length === 0}
+		<ListSkeleton rows={4} />
+	{:else if rules.length === 0}
 		<EmptyState
 			icon={FilterIcon}
 			title="No rules"

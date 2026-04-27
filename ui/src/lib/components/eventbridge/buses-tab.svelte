@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
-	import { EmptyState } from '$lib/components/service';
+	import { EmptyState, ListSkeleton } from '$lib/components/service';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import RouteIcon from '@lucide/svelte/icons/route';
 	import SendIcon from '@lucide/svelte/icons/send';
@@ -47,7 +47,9 @@
 		</Button>
 	</div>
 
-	{#if buses.length === 0 && !loading}
+	{#if loading && buses.length === 0}
+		<ListSkeleton rows={3} />
+	{:else if buses.length === 0}
 		<EmptyState
 			icon={RouteIcon}
 			title="No event buses"
