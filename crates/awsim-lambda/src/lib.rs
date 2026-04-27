@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use awsim_core::{
-    AccountRegionStore, AwsError, Body, BodyStore, Protocol, RequestContext, RouteDefinition,
-    ServiceHandler,
+    AccountRegionStore, AwsError, BlobInventory, Body, BodyStore, Protocol, RequestContext,
+    RouteDefinition, ServiceHandler,
 };
 use serde_json::Value;
 use tracing::debug;
@@ -52,6 +52,12 @@ impl LambdaService {
         self.store.clone()
     }
 
+    pub fn body_store(&self) -> Option<&Arc<BodyStore>> {
+        self.body_store.as_ref()
+    }
+
+    pub const GROUPS: &'static [&'static str] = &["lambda"];
+
     fn rebind_bodies(&self) {
         let Some(bs) = &self.body_store else {
             return;
@@ -77,6 +83,22 @@ impl LambdaService {
 impl Default for LambdaService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl BlobInventory for LambdaService {
+    fn known_blobs(&self) -> Vec<(String, String, String)> {
+        let mut out = Vec::new();
+        for (_, state) in self.store.iter_all() {
+            for func_entry in state.functions.iter() {
+                let name = func_entry.key().clone();
+                out.push(("lambda".to_string(), name.clone(), "$LATEST".to_string()));
+                for v in func_entry.value().versions.iter() {
+                    out.push(("lambda".to_string(), name.clone(), v.version.clone()));
+                }
+            }
+        }
+        out
     }
 }
 
