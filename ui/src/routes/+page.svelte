@@ -91,8 +91,9 @@
 	<title>AWSim · Dashboard</title>
 </svelte:head>
 
-<div class="space-y-4">
-	<!-- 1. Header strip -->
+<div class="h-full overflow-y-auto">
+	<div class="mx-auto w-full max-w-[1400px] space-y-4 p-4 sm:p-6">
+		<!-- 1. Header strip -->
 	<header class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-semibold tracking-tight">Dashboard</h1>
@@ -176,6 +177,7 @@
 		</div>
 	</section>
 
-	<!-- 4. Insights row -->
-	<InsightsPanel {storage} {config} />
+		<!-- 4. Insights row -->
+		<InsightsPanel {storage} {config} />
+	</div>
 </div>

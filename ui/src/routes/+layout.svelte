@@ -93,11 +93,9 @@
 				</SheetContent>
 			</Sheet>
 
-			<!-- Main content -->
-			<main class="flex-1 overflow-y-auto">
-				<div class="mx-auto w-full max-w-[1400px] px-4 py-4 sm:px-6">
-					{@render children()}
-				</div>
+			<!-- Main content — pages own their scroll containment via ServicePage -->
+			<main class="flex min-h-0 flex-1 flex-col overflow-hidden">
+				{@render children()}
 			</main>
 
 			<!-- Optional context drawer slot — hidden by default, future-use. -->
