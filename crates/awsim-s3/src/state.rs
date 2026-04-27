@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, OnceLock};
 
-use awsim_core::{Body, BodyStore};
+use awsim_core::{Body, BodyStore, Snapshottable};
 
 /// Versioning status for a bucket.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -191,6 +191,13 @@ pub struct S3StateSnapshot {
     pub buckets: Vec<BucketSnapshot>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct S3RegionSnapshot {
+    pub account_id: String,
+    pub region: String,
+    pub buckets: Vec<BucketSnapshot>,
+}
+
 /// Global S3 state — all buckets are stored here.
 #[derive(Debug, Default)]
 pub struct S3State {
@@ -207,5 +214,89 @@ impl S3State {
 
     pub fn set_body_store(&self, store: Arc<BodyStore>) {
         let _ = self.body_store.set(store);
+    }
+}
+
+impl Snapshottable for S3State {
+    type Snapshot = S3RegionSnapshot;
+
+    fn to_snapshot(&self, account_id: &str, region: &str) -> Self::Snapshot {
+        let buckets = self
+            .buckets
+            .iter()
+            .map(|entry| {
+                let b = entry.value();
+                BucketSnapshot {
+                    name: b.name.clone(),
+                    region: b.region.clone(),
+                    created_at: b.created_at.clone(),
+                    versioning: b.versioning.clone(),
+                    tags: b.tags.clone(),
+                    policy: b.policy.clone(),
+                    cors: b.cors.clone(),
+                    notification_config: b.notification_config.clone(),
+                    acl: b.acl.clone(),
+                    lifecycle: b.lifecycle.clone(),
+                    encryption: b.encryption.clone(),
+                    logging: b.logging.clone(),
+                    configs: b.configs.clone(),
+                    objects: b
+                        .objects
+                        .iter()
+                        .map(|oe| S3ObjectMetadata::from(oe.value()))
+                        .collect(),
+                }
+            })
+            .collect();
+
+        S3RegionSnapshot {
+            account_id: account_id.to_string(),
+            region: region.to_string(),
+            buckets,
+        }
+    }
+
+    fn from_snapshot(snapshot: Self::Snapshot) -> (String, String, Self) {
+        let state = S3State::default();
+        for bs in snapshot.buckets {
+            let bucket = Bucket {
+                name: bs.name.clone(),
+                region: bs.region.clone(),
+                created_at: bs.created_at.clone(),
+                versioning: bs.versioning,
+                tags: bs.tags,
+                policy: bs.policy,
+                cors: bs.cors,
+                notification_config: bs.notification_config,
+                acl: bs.acl,
+                lifecycle: bs.lifecycle,
+                encryption: bs.encryption,
+                logging: bs.logging,
+                configs: bs.configs,
+                objects: {
+                    let dm = DashMap::new();
+                    for meta in bs.objects {
+                        dm.insert(
+                            meta.key.clone(),
+                            S3Object {
+                                key: meta.key,
+                                body: Body::InMemory(Vec::new()),
+                                content_type: meta.content_type,
+                                content_length: meta.content_length,
+                                etag: meta.etag,
+                                last_modified: meta.last_modified,
+                                metadata: meta.metadata,
+                                version_id: meta.version_id,
+                                tags: Default::default(),
+                            },
+                        );
+                    }
+                    dm
+                },
+                multipart_uploads: DashMap::new(),
+            };
+            state.buckets.insert(bs.name, bucket);
+        }
+        (snapshot.account_id, snapshot.region, state)
     }
 }

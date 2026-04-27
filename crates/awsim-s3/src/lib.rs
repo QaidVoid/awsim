@@ -15,7 +15,7 @@ use awsim_core::{
 use serde_json::Value;
 use tracing::debug;
 
-use state::{Bucket, S3State, S3StateSnapshot};
+use state::{S3State, S3StateSnapshot};
 
 /// Check whether an event name matches any of the configured event filters.
 /// Supports wildcard suffixes, e.g. "s3:ObjectCreated:*" matches any ObjectCreated event.
@@ -1057,45 +1057,7 @@ impl ServiceHandler for S3Service {
     }
 
     fn snapshot(&self) -> Option<Vec<u8>> {
-        use state::{BucketSnapshot, S3ObjectMetadata};
-
-        let buckets: Vec<BucketSnapshot> = self
-            .store
-            .iter_all()
-            .into_iter()
-            .flat_map(|(_, state)| {
-                state
-                    .buckets
-                    .iter()
-                    .map(|entry| {
-                        let b = entry.value();
-                        BucketSnapshot {
-                            name: b.name.clone(),
-                            region: b.region.clone(),
-                            created_at: b.created_at.clone(),
-                            versioning: b.versioning.clone(),
-                            tags: b.tags.clone(),
-                            policy: b.policy.clone(),
-                            cors: b.cors.clone(),
-                            notification_config: b.notification_config.clone(),
-                            acl: b.acl.clone(),
-                            lifecycle: b.lifecycle.clone(),
-                            encryption: b.encryption.clone(),
-                            logging: b.logging.clone(),
-                            configs: b.configs.clone(),
-                            // Persist object metadata only — no data bytes
-                            objects: b
-                                .objects
-                                .iter()
-                                .map(|oe| S3ObjectMetadata::from(oe.value()))
-                                .collect(),
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
-        serde_json::to_vec(&S3StateSnapshot { buckets }).ok()
+        self.store.snapshot_to_bytes()
     }
 
     fn iam_action(&self, operation: &str) -> Option<String> {
@@ -1293,72 +1255,52 @@ impl ServiceHandler for S3Service {
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
-        use awsim_core::Body;
-        use dashmap::DashMap;
-        use state::S3Object;
+        use awsim_core::Snapshottable;
+        use state::S3RegionSnapshot;
 
-        let snapshot: S3StateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
-
-        let state = self.store.get("000000000000", "global");
-        if let Some(bs) = &self.body_store {
-            state.set_body_store(Arc::clone(bs));
+        if let Ok(()) = self.store.restore_from_bytes(data) {
+            self.rebind_bodies();
+            return Ok(());
         }
 
-        for bs in snapshot.buckets {
-            let bucket = Bucket {
-                name: bs.name.clone(),
-                region: bs.region.clone(),
-                created_at: bs.created_at.clone(),
-                versioning: bs.versioning,
-                tags: bs.tags,
-                policy: bs.policy,
-                cors: bs.cors,
-                notification_config: bs.notification_config,
-                acl: bs.acl,
-                lifecycle: bs.lifecycle,
-                encryption: bs.encryption,
-                logging: bs.logging,
-                configs: bs.configs,
-                objects: {
-                    let dm = DashMap::new();
-                    for meta in bs.objects {
-                        let body = match state.body_store() {
-                            Some(store) => match store.blob_path("objects", &bs.name, &meta.key) {
-                                Ok(path) => Body::OnDisk(path),
-                                Err(e) => {
-                                    tracing::warn!(
-                                        bucket = %bs.name,
-                                        key = %meta.key,
-                                        error = %e,
-                                        "resolve object path on restore"
-                                    );
-                                    Body::InMemory(Vec::new())
-                                }
-                            },
-                            None => Body::InMemory(Vec::new()),
-                        };
-                        dm.insert(
-                            meta.key.clone(),
-                            S3Object {
-                                key: meta.key,
-                                body,
-                                content_type: meta.content_type,
-                                content_length: meta.content_length,
-                                etag: meta.etag,
-                                last_modified: meta.last_modified,
-                                metadata: meta.metadata,
-                                version_id: meta.version_id,
-                                tags: Default::default(),
-                            },
-                        );
-                    }
-                    dm
-                },
-                multipart_uploads: DashMap::new(),
-            };
-            state.buckets.insert(bs.name, bucket);
-        }
-
+        let legacy: S3StateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        let region_snap = S3RegionSnapshot {
+            account_id: "000000000000".to_string(),
+            region: "global".to_string(),
+            buckets: legacy.buckets,
+        };
+        let (acct, region, state) = S3State::from_snapshot(region_snap);
+        self.store.clear();
+        self.store.set(&acct, &region, state);
+        self.rebind_bodies();
         Ok(())
+    }
+}
+
+impl S3Service {
+    fn rebind_bodies(&self) {
+        use awsim_core::Body;
+
+        let Some(bs) = &self.body_store else {
+            return;
+        };
+        for (_, state) in self.store.iter_all() {
+            state.set_body_store(Arc::clone(bs));
+            for mut bucket_entry in state.buckets.iter_mut() {
+                let bucket_name = bucket_entry.key().clone();
+                for mut obj_entry in bucket_entry.value_mut().objects.iter_mut() {
+                    let key = obj_entry.key().clone();
+                    match bs.blob_path("objects", &bucket_name, &key) {
+                        Ok(path) => obj_entry.value_mut().body = Body::OnDisk(path),
+                        Err(e) => tracing::warn!(
+                            bucket = %bucket_name,
+                            key = %key,
+                            error = %e,
+                            "resolve object path on restore"
+                        ),
+                    }
+                }
+            }
+        }
     }
 }
