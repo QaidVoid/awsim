@@ -59,7 +59,12 @@ async fn main() -> Result<()> {
         secrets_store,
         lambda_store,
         organizations_store,
-    ) = register_services(&mut state, &cli.account_id, &cli.region);
+    ) = register_services(
+        &mut state,
+        &cli.account_id,
+        &cli.region,
+        cli.data_dir.as_deref(),
+    );
 
     if let Some(authz) = Arc::get_mut(&mut state.authz) {
         authz.principal_lookup = Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store));
@@ -415,6 +420,7 @@ fn register_services(
     state: &mut AppState,
     default_account_id: &str,
     default_region: &str,
+    data_dir: Option<&str>,
 ) -> RegisteredServices {
     use std::sync::Arc;
 
@@ -435,7 +441,10 @@ fn register_services(
     let dynamodb = Arc::new(awsim_dynamodb::DynamoDbService::new());
     state.register(dynamodb, vec![]);
 
-    let s3 = awsim_s3::S3Service::new();
+    let s3 = match data_dir {
+        Some(dir) => awsim_s3::S3Service::with_data_dir(dir),
+        None => awsim_s3::S3Service::new(),
+    };
     let s3_store = s3.store();
     let s3_routes = {
         use awsim_core::ServiceHandler;
