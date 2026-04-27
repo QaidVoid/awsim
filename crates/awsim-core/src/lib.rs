@@ -22,7 +22,7 @@ pub use gateway::AppState;
 pub use persistence::PersistenceManager;
 pub use protocol::{Protocol, RouteDefinition};
 pub use router::RequestContext;
-pub use state::AccountRegionStore;
+pub use state::{AccountRegionStore, Snapshottable};
 
 use serde_json::Value;
 
