@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
-	import { EmptyState } from '$lib/components/service';
+	import { EmptyState, ListSkeleton } from '$lib/components/service';
 	import {
 		Dialog,
 		DialogContent,
@@ -96,10 +96,11 @@
 			description="Select an Identity Center instance to view its permission sets."
 		/>
 	{:else}
+		{#if loading && permissionSets.length === 0}
+			<ListSkeleton rows={4} />
+		{:else}
 		<ul class="flex flex-col gap-2">
-			{#if loading && permissionSets.length === 0}
-				<li class="text-xs text-muted-foreground">Loading…</li>
-			{:else if permissionSets.length === 0}
+			{#if permissionSets.length === 0}
 				<EmptyState
 					icon={KeyRoundIcon}
 					title="No permission sets"
@@ -144,6 +145,7 @@
 				{/each}
 			{/if}
 		</ul>
+		{/if}
 	{/if}
 </div>
 

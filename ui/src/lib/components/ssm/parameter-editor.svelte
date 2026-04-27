@@ -12,6 +12,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Label } from '$lib/components/ui/label';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EyeIcon from '@lucide/svelte/icons/eye';
 	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
 	import { toast } from 'svelte-sonner';
@@ -121,7 +122,11 @@
 
 		<div class="flex flex-col gap-3 px-6 pb-6">
 			{#if loading}
-				<p class="text-xs text-muted-foreground">Loading…</p>
+				<div class="flex flex-col gap-3">
+					<Skeleton class="h-9 w-full" />
+					<Skeleton class="h-9 w-1/3" />
+					<Skeleton class="h-24 w-full" />
+				</div>
 			{:else}
 				<div class="flex flex-col gap-1">
 					<Label for="ssm-name">Name</Label>

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SlidersIcon from '@lucide/svelte/icons/sliders-horizontal';
@@ -80,7 +81,11 @@
 			{#if !detailFor}
 				<p class="text-muted-foreground">Click a configuration set to inspect its settings.</p>
 			{:else if detail === null}
-				<p class="text-muted-foreground">Loading…</p>
+				<div class="flex flex-col gap-2">
+					<Skeleton class="h-3 w-2/3" />
+					<Skeleton class="h-3 w-1/2" />
+					<Skeleton class="h-3 w-3/4" />
+				</div>
 			{:else}
 				<dl class="grid grid-cols-3 gap-x-2 gap-y-1.5">
 					<dt class="text-muted-foreground">Name</dt>

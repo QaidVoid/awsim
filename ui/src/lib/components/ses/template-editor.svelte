@@ -12,6 +12,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Label } from '$lib/components/ui/label';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { toast } from 'svelte-sonner';
 	import { getTemplate, createTemplate } from '$lib/api/ses';
 
@@ -95,7 +96,11 @@
 
 		<div class="flex flex-col gap-3 px-6 pb-6">
 			{#if loading}
-				<p class="text-xs text-muted-foreground">Loading…</p>
+				<div class="flex flex-col gap-3">
+					<Skeleton class="h-9 w-full" />
+					<Skeleton class="h-9 w-full" />
+					<Skeleton class="h-32 w-full" />
+				</div>
 			{:else}
 				<div class="flex flex-col gap-1">
 					<Label for="ses-tpl-name">Template name</Label>

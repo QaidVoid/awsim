@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
-	import { DataTable, EmptyState } from '$lib/components/service';
+	import { DataTable, EmptyState, ListSkeleton } from '$lib/components/service';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import ContactIcon from '@lucide/svelte/icons/contact';
 	import { toast } from 'svelte-sonner';
@@ -83,7 +83,7 @@
 			{#if !selected}
 				<p class="text-xs text-muted-foreground">Select a list to view its contacts.</p>
 			{:else if contactsLoading}
-				<p class="text-xs text-muted-foreground">Loading…</p>
+				<ListSkeleton rows={3} />
 			{:else if contacts.length === 0}
 				<p class="text-xs text-muted-foreground">No contacts in this list.</p>
 			{:else}

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import UserCheckIcon from '@lucide/svelte/icons/user-check';
 	import { toast } from 'svelte-sonner';
@@ -37,7 +38,11 @@
 	</header>
 
 	{#if loading && !identity}
-		<p class="text-xs text-muted-foreground">Loading…</p>
+		<div class="flex flex-col gap-2">
+			<Skeleton class="h-4 w-32" />
+			<Skeleton class="h-3 w-2/3" />
+			<Skeleton class="h-3 w-1/2" />
+		</div>
 	{:else if identity}
 		<dl class="grid grid-cols-3 gap-x-3 gap-y-2 text-xs">
 			<dt class="text-muted-foreground">Account</dt>
