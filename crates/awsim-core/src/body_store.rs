@@ -11,11 +11,24 @@ pub trait BlobInventory: Send + Sync {
 #[derive(Debug)]
 pub struct BodyStore {
     root: PathBuf,
+    max_size: Option<u64>,
 }
 
 impl BodyStore {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            max_size: None,
+        }
+    }
+
+    pub fn with_max_size(mut self, bytes: u64) -> Self {
+        self.max_size = Some(bytes);
+        self
+    }
+
+    pub fn max_size(&self) -> Option<u64> {
+        self.max_size
     }
 
     pub fn root(&self) -> &Path {
@@ -39,6 +52,30 @@ impl BodyStore {
         bytes: &[u8],
     ) -> io::Result<PathBuf> {
         let path = self.blob_path(group, bucket, key)?;
+        let needed = bytes.len() as u64;
+        if let Some(cap) = self.max_size {
+            if needed > cap {
+                return Err(io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    format!("blob size {needed} exceeds max_size {cap}"),
+                ));
+            }
+            let existing = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let current = self.total_size().unwrap_or(0);
+            let projected = current.saturating_sub(existing).saturating_add(needed);
+            if projected > cap {
+                let to_free = projected - cap;
+                self.evict_to_fit(to_free)?;
+                let after = self.total_size().unwrap_or(0);
+                let final_projected = after.saturating_sub(existing).saturating_add(needed);
+                if final_projected > cap {
+                    return Err(io::Error::new(
+                        io::ErrorKind::OutOfMemory,
+                        format!("could not free enough space for blob ({final_projected} > {cap})"),
+                    ));
+                }
+            }
+        }
         atomic_write(&path, bytes)?;
         Ok(path)
     }
@@ -536,6 +573,42 @@ mod tests {
         let (deleted, freed) = store.evict_to_fit(100).unwrap();
         assert_eq!(deleted, 0);
         assert_eq!(freed, 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_blob_under_cap_succeeds() {
+        let root = tmp_root("cap-under");
+        let store = BodyStore::new(root.clone()).with_max_size(100);
+        store.write_blob("g", "b", "a", b"hello").unwrap();
+        assert_eq!(store.read_blob("g", "b", "a").unwrap(), b"hello");
+        assert_eq!(store.total_size().unwrap(), 5);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_blob_evicts_oldest_when_over_cap() {
+        let root = tmp_root("cap-evict");
+        let store = BodyStore::new(root.clone()).with_max_size(10);
+        store.write_blob("g", "b", "a", b"AAAAA").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        store.write_blob("g", "b", "b", b"BBBBB").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        store.write_blob("g", "b", "c", b"CCCCC").unwrap();
+
+        assert!(!store.blob_path("g", "b", "a").unwrap().exists());
+        assert_eq!(store.read_blob("g", "b", "b").unwrap(), b"BBBBB");
+        assert_eq!(store.read_blob("g", "b", "c").unwrap(), b"CCCCC");
+        assert!(store.total_size().unwrap() <= 10);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_blob_larger_than_cap_fails() {
+        let root = tmp_root("cap-toobig");
+        let store = BodyStore::new(root.clone()).with_max_size(4);
+        let err = store.write_blob("g", "b", "x", b"AAAAA").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::OutOfMemory);
         let _ = fs::remove_dir_all(&root);
     }
 
