@@ -82,9 +82,10 @@ pub fn id_token(
     });
 
     if let Some(n) = nonce
-        && !n.is_empty() {
-            payload["nonce"] = Value::String(n.to_string());
-        }
+        && !n.is_empty()
+    {
+        payload["nonce"] = Value::String(n.to_string());
+    }
 
     let obj = payload.as_object_mut().unwrap();
 

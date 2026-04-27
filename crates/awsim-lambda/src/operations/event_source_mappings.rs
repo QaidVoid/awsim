@@ -103,13 +103,15 @@ pub fn list_event_source_mappings(
         .iter()
         .filter(|m| {
             if let Some(arn) = filter_source_arn
-                && !m.event_source_arn.contains(arn) {
-                    return false;
-                }
+                && !m.event_source_arn.contains(arn)
+            {
+                return false;
+            }
             if let Some(fn_name) = filter_function
-                && !m.function_arn.contains(fn_name) {
-                    return false;
-                }
+                && !m.function_arn.contains(fn_name)
+            {
+                return false;
+            }
             true
         })
         .map(|m| mapping_to_value(&m))

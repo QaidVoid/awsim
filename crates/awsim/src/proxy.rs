@@ -154,9 +154,10 @@ fn lambda_response_to_http(result: serde_json::Value) -> Response<Body> {
         if let Some(resp_headers) = result.get("headers").and_then(|v| v.as_object()) {
             for (key, value) in resp_headers {
                 if let Some(v) = value.as_str()
-                    && let Ok(header_value) = v.parse::<axum::http::HeaderValue>() {
-                        builder = builder.header(key.as_str(), header_value);
-                    }
+                    && let Ok(header_value) = v.parse::<axum::http::HeaderValue>()
+                {
+                    builder = builder.header(key.as_str(), header_value);
+                }
             }
         }
 

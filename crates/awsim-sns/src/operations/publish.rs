@@ -82,9 +82,10 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
             // Apply filter policy if set
             if let Some(filter_str) = &filter_policy
                 && let Ok(filter_val) = serde_json::from_str::<Value>(filter_str)
-                    && !filter::matches_filter(&filter_val, &filter_attrs) {
-                        continue; // Skip this subscription
-                    }
+                && !filter::matches_filter(&filter_val, &filter_attrs)
+            {
+                continue; // Skip this subscription
+            }
 
             let event = InternalEvent {
                 source: "sns".to_string(),

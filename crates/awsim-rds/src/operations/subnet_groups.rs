@@ -42,10 +42,14 @@ pub fn create_db_subnet_group(
                         .map(|s| s.to_string())
                         .collect(),
                 )
-            } else { v.as_str().map(|s| s.split(',')
+            } else {
+                v.as_str().map(|s| {
+                    s.split(',')
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
-                        .collect()) }
+                        .collect()
+                })
+            }
         })
         .unwrap_or_default();
 

@@ -188,9 +188,10 @@ where
         && matches!(
             ctx.err().code(),
             Some("AccessDenied") | Some("AccessDeniedException")
-        ) {
-            return true;
-        }
+        )
+    {
+        return true;
+    }
     err.raw_response()
         .map(|r| r.status().as_u16() == 403)
         .unwrap_or(false)

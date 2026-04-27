@@ -244,43 +244,46 @@ fn apply_script(doc: &mut serde_json::Value, source: &str, params: &serde_json::
 
         // ctx._source.field = ...
         if let Some(rest) = stmt.strip_prefix("ctx._source.")
-            && let Some(eq_pos) = rest.find('=') {
-                let field = rest[..eq_pos].trim().to_string();
-                let rhs = rest[eq_pos + 1..].trim();
+            && let Some(eq_pos) = rest.find('=')
+        {
+            let field = rest[..eq_pos].trim().to_string();
+            let rhs = rest[eq_pos + 1..].trim();
 
-                // params.paramName
-                if let Some(param_path) = rhs.strip_prefix("params.") {
-                    let param_name = param_path.trim();
-                    if let Some(val) = params.get(param_name)
-                        && let Some(obj) = doc.as_object_mut() {
-                            obj.insert(field, val.clone());
-                        }
-                    continue;
-                }
-
-                // String literal 'value' or "value"
-                if (rhs.starts_with('\'') && rhs.ends_with('\''))
-                    || (rhs.starts_with('"') && rhs.ends_with('"'))
+            // params.paramName
+            if let Some(param_path) = rhs.strip_prefix("params.") {
+                let param_name = param_path.trim();
+                if let Some(val) = params.get(param_name)
+                    && let Some(obj) = doc.as_object_mut()
                 {
-                    let literal = &rhs[1..rhs.len() - 1];
-                    if let Some(obj) = doc.as_object_mut() {
-                        obj.insert(field, serde_json::json!(literal));
-                    }
-                    continue;
+                    obj.insert(field, val.clone());
                 }
-
-                // Numeric literal
-                if let Ok(n) = rhs.parse::<i64>() {
-                    if let Some(obj) = doc.as_object_mut() {
-                        obj.insert(field, serde_json::json!(n));
-                    }
-                    continue;
-                }
-                if let Ok(f) = rhs.parse::<f64>()
-                    && let Some(obj) = doc.as_object_mut() {
-                        obj.insert(field, serde_json::json!(f));
-                    }
+                continue;
             }
+
+            // String literal 'value' or "value"
+            if (rhs.starts_with('\'') && rhs.ends_with('\''))
+                || (rhs.starts_with('"') && rhs.ends_with('"'))
+            {
+                let literal = &rhs[1..rhs.len() - 1];
+                if let Some(obj) = doc.as_object_mut() {
+                    obj.insert(field, serde_json::json!(literal));
+                }
+                continue;
+            }
+
+            // Numeric literal
+            if let Ok(n) = rhs.parse::<i64>() {
+                if let Some(obj) = doc.as_object_mut() {
+                    obj.insert(field, serde_json::json!(n));
+                }
+                continue;
+            }
+            if let Ok(f) = rhs.parse::<f64>()
+                && let Some(obj) = doc.as_object_mut()
+            {
+                obj.insert(field, serde_json::json!(f));
+            }
+        }
     }
 }
 

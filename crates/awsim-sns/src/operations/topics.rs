@@ -26,15 +26,16 @@ pub fn create_topic(
 
     // If FifoTopic attribute present, validate consistency
     if let Some(attrs) = input["Attributes"].as_object()
-        && let Some(fifo_val) = attrs.get("FifoTopic") {
-            let attr_fifo = fifo_val.as_str() == Some("true");
-            if attr_fifo != is_fifo {
-                return Err(AwsError::bad_request(
-                    "InvalidParameter",
-                    "FifoTopic attribute must be consistent with .fifo suffix",
-                ));
-            }
+        && let Some(fifo_val) = attrs.get("FifoTopic")
+    {
+        let attr_fifo = fifo_val.as_str() == Some("true");
+        if attr_fifo != is_fifo {
+            return Err(AwsError::bad_request(
+                "InvalidParameter",
+                "FifoTopic attribute must be consistent with .fifo suffix",
+            ));
         }
+    }
 
     let arn = format!("arn:aws:sns:{}:{}:{}", ctx.region, ctx.account_id, name);
 

@@ -364,9 +364,10 @@ pub fn describe_stacks(state: &CloudFormationState, input: &Value) -> Result<Val
         .collect();
 
     if let Some(name) = filter_name
-        && stacks.is_empty() {
-            return Err(stack_not_found(name));
-        }
+        && stacks.is_empty()
+    {
+        return Err(stack_not_found(name));
+    }
 
     Ok(json!({ "Stacks": { "member": stacks } }))
 }

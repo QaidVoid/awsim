@@ -85,14 +85,15 @@ pub fn remove_permission(
     })?;
 
     if let Some(raw_policy) = queue.attributes.get("Policy").cloned()
-        && let Ok(mut policy) = serde_json::from_str::<Value>(&raw_policy) {
-            if let Some(stmts) = policy["Statement"].as_array_mut() {
-                stmts.retain(|s| s["Sid"].as_str() != Some(label));
-            }
-            queue
-                .attributes
-                .insert("Policy".to_string(), policy.to_string());
+        && let Ok(mut policy) = serde_json::from_str::<Value>(&raw_policy)
+    {
+        if let Some(stmts) = policy["Statement"].as_array_mut() {
+            stmts.retain(|s| s["Sid"].as_str() != Some(label));
         }
+        queue
+            .attributes
+            .insert("Policy".to_string(), policy.to_string());
+    }
 
     Ok(json!({}))
 }

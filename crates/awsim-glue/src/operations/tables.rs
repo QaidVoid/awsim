@@ -169,9 +169,10 @@ pub fn update_table(
     })?;
 
     if let Some(sd) = input["TableInput"].get("StorageDescriptor")
-        && !sd.is_null() {
-            table.storage_descriptor = Some(sd.clone());
-        }
+        && !sd.is_null()
+    {
+        table.storage_descriptor = Some(sd.clone());
+    }
     if let Some(desc) = input["TableInput"]["Description"].as_str() {
         table.description = Some(desc.to_string());
     }

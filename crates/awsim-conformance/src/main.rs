@@ -70,9 +70,10 @@ async fn main() {
 
         // Apply service filter if specified.
         if let Some(ref filter) = filter
-            && !filter.iter().any(|f| service_name.contains(f)) {
-                continue;
-            }
+            && !filter.iter().any(|f| service_name.contains(f))
+        {
+            continue;
+        }
 
         println!("Testing service: {service_name}");
 
@@ -150,7 +151,9 @@ async fn main() {
     }
 
     println!("{}", "-".repeat(70));
-    let total_pct = (total_tested * 100).checked_div(total_smithy_ops).unwrap_or(0);
+    let total_pct = (total_tested * 100)
+        .checked_div(total_smithy_ops)
+        .unwrap_or(0);
     println!("Total: {total_tested}/{total_smithy_ops} operations covered ({total_pct}%)");
     println!("Passed: {total_passed}  Failed: {total_failed}");
 

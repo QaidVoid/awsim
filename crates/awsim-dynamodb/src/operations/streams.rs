@@ -213,12 +213,7 @@ fn find_table_by_stream_arn<'a>(
     state
         .tables
         .iter()
-        .find(|entry| {
-            entry
-                .value()
-                .stream_arn
-                .as_deref() == Some(stream_arn)
-        })
+        .find(|entry| entry.value().stream_arn.as_deref() == Some(stream_arn))
         .and_then(|entry| {
             // Upgrade iter ref to a proper Ref by looking up by key.
             let key = entry.key().clone();

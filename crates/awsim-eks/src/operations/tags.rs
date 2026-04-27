@@ -31,13 +31,14 @@ pub fn untag_resource(
         AwsError::bad_request("InvalidParameterException", "resourceArn is required")
     })?;
     if let Some(mut t) = state.resource_tags.get_mut(arn)
-        && let Some(keys) = input["tagKeys"].as_array() {
-            for k in keys {
-                if let Some(s) = k.as_str() {
-                    t.remove(s);
-                }
+        && let Some(keys) = input["tagKeys"].as_array()
+    {
+        for k in keys {
+            if let Some(s) = k.as_str() {
+                t.remove(s);
             }
         }
+    }
     Ok(json!({}))
 }
 

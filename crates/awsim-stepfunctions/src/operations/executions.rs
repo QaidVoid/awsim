@@ -206,13 +206,15 @@ pub fn list_executions(
         .filter(|entry| {
             let exec = entry.value();
             if let Some(arn) = sm_arn
-                && exec.state_machine_arn != arn {
-                    return false;
-                }
+                && exec.state_machine_arn != arn
+            {
+                return false;
+            }
             if let Some(status) = status_filter
-                && exec.status != status {
-                    return false;
-                }
+                && exec.status != status
+            {
+                return false;
+            }
             true
         })
         .map(|entry| {

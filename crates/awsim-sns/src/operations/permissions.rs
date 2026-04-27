@@ -85,14 +85,15 @@ pub fn remove_permission(
         .ok_or_else(|| AwsError::not_found("NotFound", format!("Topic not found: {topic_arn}")))?;
 
     if let Some(raw_policy) = topic.attributes.get("Policy").cloned()
-        && let Ok(mut policy) = serde_json::from_str::<Value>(&raw_policy) {
-            if let Some(stmts) = policy["Statement"].as_array_mut() {
-                stmts.retain(|s| s["Sid"].as_str() != Some(label));
-            }
-            topic
-                .attributes
-                .insert("Policy".to_string(), policy.to_string());
+        && let Ok(mut policy) = serde_json::from_str::<Value>(&raw_policy)
+    {
+        if let Some(stmts) = policy["Statement"].as_array_mut() {
+            stmts.retain(|s| s["Sid"].as_str() != Some(label));
         }
+        topic
+            .attributes
+            .insert("Policy".to_string(), policy.to_string());
+    }
 
     Ok(json!({}))
 }

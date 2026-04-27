@@ -372,18 +372,20 @@ async fn authorize_get(
     // Validate redirect_uri against client's callback_urls.
     if let Some(pool_ref) = oauth_state.cognito.user_pools.get(&pool_id)
         && let Some(client) = pool_ref.clients.get(&params.client_id)
-            && !client.callback_urls.is_empty() && !client.callback_urls.contains(&redirect_uri) {
-                warn!(
-                    client_id = %params.client_id,
-                    redirect_uri = %redirect_uri,
-                    "OAuth authorize: redirect_uri not in callback_urls"
-                );
-                return (
-                    StatusCode::BAD_REQUEST,
-                    "redirect_uri does not match any registered callback URL",
-                )
-                    .into_response();
-            }
+        && !client.callback_urls.is_empty()
+        && !client.callback_urls.contains(&redirect_uri)
+    {
+        warn!(
+            client_id = %params.client_id,
+            redirect_uri = %redirect_uri,
+            "OAuth authorize: redirect_uri not in callback_urls"
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            "redirect_uri does not match any registered callback URL",
+        )
+            .into_response();
+    }
 
     login_page_html(
         &pool_id,
@@ -471,13 +473,15 @@ async fn authorize_post(
 
     // Validate redirect_uri against client callback_urls.
     if let Some(client) = pool_ref.clients.get(&client_id)
-        && !client.callback_urls.is_empty() && !client.callback_urls.contains(&redirect_uri) {
-            return (
-                StatusCode::BAD_REQUEST,
-                "redirect_uri does not match any registered callback URL",
-            )
-                .into_response();
-        }
+        && !client.callback_urls.is_empty()
+        && !client.callback_urls.contains(&redirect_uri)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "redirect_uri does not match any registered callback URL",
+        )
+            .into_response();
+    }
 
     // Authenticate user.
     let user = pool_ref.users.get(&username).cloned();
@@ -713,13 +717,15 @@ async fn token(
 
             // Validate redirect_uri if provided.
             if let Some(req_redirect) = &form.redirect_uri
-                && !req_redirect.is_empty() && *req_redirect != entry.redirect_uri {
-                    return error_response(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_grant",
-                        "redirect_uri mismatch",
-                    );
-                }
+                && !req_redirect.is_empty()
+                && *req_redirect != entry.redirect_uri
+            {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "redirect_uri mismatch",
+                );
+            }
 
             // Look up the pool and client for secret validation.
             let pool = match cognito.user_pools.get(&pool_id) {
@@ -735,28 +741,29 @@ async fn token(
 
             // Validate client_secret for confidential clients.
             if let Some(client) = pool.clients.get(&effective_client_id)
-                && let Some(expected_secret) = &client.client_secret {
-                    match &client_secret_provided {
-                        Some(provided) if provided == expected_secret => {
-                            // OK
-                        }
-                        Some(_) => {
-                            return error_response(
-                                StatusCode::UNAUTHORIZED,
-                                "invalid_client",
-                                "Invalid client_secret",
-                            );
-                        }
-                        None => {
-                            return error_response(
-                                StatusCode::UNAUTHORIZED,
-                                "invalid_client",
-                                "client_secret is required for this client",
-                            );
-                        }
+                && let Some(expected_secret) = &client.client_secret
+            {
+                match &client_secret_provided {
+                    Some(provided) if provided == expected_secret => {
+                        // OK
+                    }
+                    Some(_) => {
+                        return error_response(
+                            StatusCode::UNAUTHORIZED,
+                            "invalid_client",
+                            "Invalid client_secret",
+                        );
+                    }
+                    None => {
+                        return error_response(
+                            StatusCode::UNAUTHORIZED,
+                            "invalid_client",
+                            "client_secret is required for this client",
+                        );
                     }
                 }
-                // Public clients (no client_secret) don't require it.
+            }
+            // Public clients (no client_secret) don't require it.
 
             // PKCE verification.
             if let Some(challenge) = &entry.code_challenge {

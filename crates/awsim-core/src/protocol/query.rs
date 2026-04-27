@@ -65,26 +65,27 @@ fn set_nested_recursive(map: &mut serde_json::Map<String, Value>, parts: &[&str]
 
     // Check if next part is a number (array index)
     if let Some(next) = rest.first()
-        && next.parse::<usize>().is_ok() {
-            // This is an array member pattern like "Tags.member.1.Key"
-            let entry = map
-                .entry(key.to_string())
-                .or_insert_with(|| Value::Array(Vec::new()));
-            if let Value::Array(arr) = entry {
-                let idx: usize = next.parse::<usize>().unwrap() - 1; // 1-based → 0-based
-                while arr.len() <= idx {
-                    arr.push(Value::Object(serde_json::Map::new()));
-                }
-                if rest.len() > 1 {
-                    if let Value::Object(ref mut inner) = arr[idx] {
-                        set_nested_recursive(inner, &rest[1..], value);
-                    }
-                } else {
-                    arr[idx] = Value::String(value.to_string());
-                }
+        && next.parse::<usize>().is_ok()
+    {
+        // This is an array member pattern like "Tags.member.1.Key"
+        let entry = map
+            .entry(key.to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if let Value::Array(arr) = entry {
+            let idx: usize = next.parse::<usize>().unwrap() - 1; // 1-based → 0-based
+            while arr.len() <= idx {
+                arr.push(Value::Object(serde_json::Map::new()));
             }
-            return;
+            if rest.len() > 1 {
+                if let Value::Object(ref mut inner) = arr[idx] {
+                    set_nested_recursive(inner, &rest[1..], value);
+                }
+            } else {
+                arr[idx] = Value::String(value.to_string());
+            }
         }
+        return;
+    }
 
     let entry = map
         .entry(key.to_string())

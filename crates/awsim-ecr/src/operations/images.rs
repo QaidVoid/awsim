@@ -67,18 +67,16 @@ pub fn put_image(state: &EcrState, input: &Value, ctx: &RequestContext) -> Resul
     // If tag mutability is IMMUTABLE and tag already exists, error
     if repo.image_tag_mutability == "IMMUTABLE"
         && let Some(ref tag) = image_tag
-            && repo
-                .images
-                .iter()
-                .any(|img| img.image_tag.as_deref() == Some(tag))
-            {
-                return Err(AwsError::conflict(
-                    "ImageTagAlreadyExistsException",
-                    format!(
-                        "An image with tag '{tag}' already exists in the repository '{repo_name}'"
-                    ),
-                ));
-            }
+        && repo
+            .images
+            .iter()
+            .any(|img| img.image_tag.as_deref() == Some(tag))
+    {
+        return Err(AwsError::conflict(
+            "ImageTagAlreadyExistsException",
+            format!("An image with tag '{tag}' already exists in the repository '{repo_name}'"),
+        ));
+    }
 
     // Remove existing image with same tag (if mutable)
     if let Some(ref tag) = image_tag {

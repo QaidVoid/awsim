@@ -161,11 +161,13 @@ fn match_route(
 
         let method_matches = route_method == "ANY" || route_method.eq_ignore_ascii_case(method);
 
-        if method_matches && path_matches(route_path, path)
-            && let Some(ref target) = route.target {
-                let integration_id = extract_integration_id(target)?;
-                return Some((route.route_key.clone(), integration_id));
-            }
+        if method_matches
+            && path_matches(route_path, path)
+            && let Some(ref target) = route.target
+        {
+            let integration_id = extract_integration_id(target)?;
+            return Some((route.route_key.clone(), integration_id));
+        }
     }
 
     default_route
@@ -174,8 +176,7 @@ fn match_route(
 /// Parse a route key like "GET /items/{id}" into ("GET", "/items/{id}").
 fn parse_route_key(route_key: &str) -> Option<(&str, &str)> {
     let (method, path) = route_key.split_once(' ')?;
-    
-    
+
     Some((method, path))
 }
 

@@ -24,9 +24,10 @@ pub fn list_service_specific_credentials(
 ) -> Result<Value, AwsError> {
     let user_name = input.get("UserName").and_then(|v| v.as_str());
     if let Some(name) = user_name
-        && !state.users.contains_key(name) {
-            return Err(crate::error::no_such_entity("User", name));
-        }
+        && !state.users.contains_key(name)
+    {
+        return Err(crate::error::no_such_entity("User", name));
+    }
     let service_filter = opt_str(input, "ServiceName");
 
     let creds: Vec<Value> = state
@@ -61,9 +62,10 @@ pub fn list_service_specific_credentials(
 pub fn list_signing_certificates(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = input.get("UserName").and_then(|v| v.as_str());
     if let Some(name) = user_name
-        && !state.users.contains_key(name) {
-            return Err(crate::error::no_such_entity("User", name));
-        }
+        && !state.users.contains_key(name)
+    {
+        return Err(crate::error::no_such_entity("User", name));
+    }
 
     let certs: Vec<Value> = state
         .signing_certificates

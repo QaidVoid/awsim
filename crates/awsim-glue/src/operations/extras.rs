@@ -208,13 +208,15 @@ pub fn update_job(
         job.role = role.to_string();
     }
     if let Some(cmd) = updates.get("Command")
-        && !cmd.is_null() {
-            job.command = Some(cmd.clone());
-        }
+        && !cmd.is_null()
+    {
+        job.command = Some(cmd.clone());
+    }
     if let Some(args) = updates.get("DefaultArguments")
-        && !args.is_null() {
-            job.default_arguments = Some(args.clone());
-        }
+        && !args.is_null()
+    {
+        job.default_arguments = Some(args.clone());
+    }
 
     Ok(json!({ "JobName": name }))
 }

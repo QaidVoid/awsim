@@ -60,9 +60,7 @@ pub fn query(state: &DynamoState, input: &Value, _ctx: &RequestContext) -> Resul
     let key_condition = parse_condition(key_condition_expr)?;
     let filter_condition = filter_expr.map(parse_condition).transpose()?;
 
-    let projection_paths: Vec<String> = projection_expr
-        .map(parse_projection)
-        .unwrap_or_default();
+    let projection_paths: Vec<String> = projection_expr.map(parse_projection).unwrap_or_default();
 
     // Extract partition key value from key condition for efficient lookup
     let hash_key_name = table.hash_key().unwrap_or("").to_string();
@@ -141,9 +139,10 @@ pub fn query(state: &DynamoState, input: &Value, _ctx: &RequestContext) -> Resul
         // Skip until past the exclusive start key
         if !past_start {
             if let Some(ref start) = start_after
-                && &composite_key == start {
-                    past_start = true;
-                }
+                && &composite_key == start
+            {
+                past_start = true;
+            }
             continue;
         }
 
@@ -157,9 +156,10 @@ pub fn query(state: &DynamoState, input: &Value, _ctx: &RequestContext) -> Resul
 
         // Apply filter expression
         if let Some(ref filter) = filter_condition
-            && !evaluate_condition(filter, &item, &expr_attr_names, &expr_attr_values)? {
-                continue;
-            }
+            && !evaluate_condition(filter, &item, &expr_attr_names, &expr_attr_values)?
+        {
+            continue;
+        }
 
         // Apply projection
         let projected = if select == "COUNT" {
@@ -172,19 +172,21 @@ pub fn query(state: &DynamoState, input: &Value, _ctx: &RequestContext) -> Resul
 
         // Check limit
         if let Some(lim) = limit
-            && items.len() >= lim {
-                // Build LastEvaluatedKey
-                let mut lek = DynamoItem::new();
-                if let Some(hk_val) = item.get(&hash_key_name) {
-                    lek.insert(hash_key_name.clone(), hk_val.clone());
-                }
-                if let Some(ref rk) = range_key_name
-                    && let Some(sk_val) = item.get(rk) {
-                        lek.insert(rk.clone(), sk_val.clone());
-                    }
-                last_evaluated_key = Some(lek);
-                break;
+            && items.len() >= lim
+        {
+            // Build LastEvaluatedKey
+            let mut lek = DynamoItem::new();
+            if let Some(hk_val) = item.get(&hash_key_name) {
+                lek.insert(hash_key_name.clone(), hk_val.clone());
             }
+            if let Some(ref rk) = range_key_name
+                && let Some(sk_val) = item.get(rk)
+            {
+                lek.insert(rk.clone(), sk_val.clone());
+            }
+            last_evaluated_key = Some(lek);
+            break;
+        }
     }
 
     let count = items.len();
@@ -230,9 +232,7 @@ pub fn scan(state: &DynamoState, input: &Value, _ctx: &RequestContext) -> Result
 
     let filter_condition = filter_expr.map(parse_condition).transpose()?;
 
-    let projection_paths: Vec<String> = projection_expr
-        .map(parse_projection)
-        .unwrap_or_default();
+    let projection_paths: Vec<String> = projection_expr.map(parse_projection).unwrap_or_default();
 
     let hash_key_name = table.hash_key().unwrap_or("").to_string();
     let range_key_name = table.range_key().map(|s| s.to_string());
@@ -263,9 +263,10 @@ pub fn scan(state: &DynamoState, input: &Value, _ctx: &RequestContext) -> Result
     for (composite_key, item) in table.items.iter() {
         if !past_start {
             if let Some(ref start) = start_after
-                && composite_key == start {
-                    past_start = true;
-                }
+                && composite_key == start
+            {
+                past_start = true;
+            }
             continue;
         }
 
@@ -273,9 +274,10 @@ pub fn scan(state: &DynamoState, input: &Value, _ctx: &RequestContext) -> Result
 
         // Apply filter expression
         if let Some(ref filter) = filter_condition
-            && !evaluate_condition(filter, item, &expr_attr_names, &expr_attr_values)? {
-                continue;
-            }
+            && !evaluate_condition(filter, item, &expr_attr_names, &expr_attr_values)?
+        {
+            continue;
+        }
 
         let projected = if select == "COUNT" {
             DynamoItem::new()
@@ -286,18 +288,20 @@ pub fn scan(state: &DynamoState, input: &Value, _ctx: &RequestContext) -> Result
         items.push(projected);
 
         if let Some(lim) = limit
-            && items.len() >= lim {
-                let mut lek = DynamoItem::new();
-                if let Some(hk_val) = item.get(&hash_key_name) {
-                    lek.insert(hash_key_name.clone(), hk_val.clone());
-                }
-                if let Some(ref rk) = range_key_name
-                    && let Some(sk_val) = item.get(rk) {
-                        lek.insert(rk.clone(), sk_val.clone());
-                    }
-                last_evaluated_key = Some(lek);
-                break;
+            && items.len() >= lim
+        {
+            let mut lek = DynamoItem::new();
+            if let Some(hk_val) = item.get(&hash_key_name) {
+                lek.insert(hash_key_name.clone(), hk_val.clone());
             }
+            if let Some(ref rk) = range_key_name
+                && let Some(sk_val) = item.get(rk)
+            {
+                lek.insert(rk.clone(), sk_val.clone());
+            }
+            last_evaluated_key = Some(lek);
+            break;
+        }
     }
 
     let count = items.len();

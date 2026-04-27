@@ -25,9 +25,10 @@ fn event_matches(filters: &[String], event_name: &str) -> bool {
             return true;
         }
         if let Some(prefix) = filter.strip_suffix('*')
-            && event_name.starts_with(prefix) {
-                return true;
-            }
+            && event_name.starts_with(prefix)
+        {
+            return true;
+        }
     }
     false
 }
@@ -884,42 +885,43 @@ impl ServiceHandler for S3Service {
                     let bucket_name = input.get("Bucket").and_then(Value::as_str).unwrap_or("");
                     let key = input.get("Key").and_then(Value::as_str).unwrap_or("");
                     if let Some(bucket) = state.buckets.get(bucket_name)
-                        && !bucket.notification_config.destinations.is_empty() {
-                            let etag = result
-                                .get("ETag")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string();
-                            let obj = bucket.objects.get(key);
-                            let size = obj.as_ref().map(|o| o.content_length).unwrap_or(0);
-                            let configured_destinations: Vec<serde_json::Value> = bucket
-                                .notification_config
-                                .destinations
-                                .iter()
-                                .filter(|d| event_matches(&d.events, "s3:ObjectCreated:Put"))
-                                .map(|d| serde_json::json!({ "type": d.dest_type, "arn": d.arn }))
-                                .collect();
-                            if !configured_destinations.is_empty() {
-                                bus.publish(InternalEvent {
-                                    source: "s3".to_string(),
-                                    event_type: "s3:ObjectCreated:Put".to_string(),
-                                    region: ctx.region.clone(),
-                                    account_id: ctx.account_id.clone(),
-                                    detail: serde_json::json!({
-                                        "bucket": {
-                                            "name": bucket_name,
-                                            "arn": format!("arn:aws:s3:::{}", bucket_name),
-                                        },
-                                        "object": {
-                                            "key": key,
-                                            "size": size,
-                                            "eTag": etag,
-                                        },
-                                        "configuredDestinations": configured_destinations,
-                                    }),
-                                });
-                            }
+                        && !bucket.notification_config.destinations.is_empty()
+                    {
+                        let etag = result
+                            .get("ETag")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        let obj = bucket.objects.get(key);
+                        let size = obj.as_ref().map(|o| o.content_length).unwrap_or(0);
+                        let configured_destinations: Vec<serde_json::Value> = bucket
+                            .notification_config
+                            .destinations
+                            .iter()
+                            .filter(|d| event_matches(&d.events, "s3:ObjectCreated:Put"))
+                            .map(|d| serde_json::json!({ "type": d.dest_type, "arn": d.arn }))
+                            .collect();
+                        if !configured_destinations.is_empty() {
+                            bus.publish(InternalEvent {
+                                source: "s3".to_string(),
+                                event_type: "s3:ObjectCreated:Put".to_string(),
+                                region: ctx.region.clone(),
+                                account_id: ctx.account_id.clone(),
+                                detail: serde_json::json!({
+                                    "bucket": {
+                                        "name": bucket_name,
+                                        "arn": format!("arn:aws:s3:::{}", bucket_name),
+                                    },
+                                    "object": {
+                                        "key": key,
+                                        "size": size,
+                                        "eTag": etag,
+                                    },
+                                    "configuredDestinations": configured_destinations,
+                                }),
+                            });
                         }
+                    }
                 }
                 Ok(result)
             }
@@ -930,38 +932,39 @@ impl ServiceHandler for S3Service {
                     let bucket_name = input.get("Bucket").and_then(Value::as_str).unwrap_or("");
                     let key = input.get("Key").and_then(Value::as_str).unwrap_or("");
                     if let Some(bucket) = state.buckets.get(bucket_name)
-                        && !bucket.notification_config.destinations.is_empty() {
-                            let obj = bucket.objects.get(key);
-                            let size = obj.as_ref().map(|o| o.content_length).unwrap_or(0);
-                            let etag = obj.as_ref().map(|o| o.etag.clone()).unwrap_or_default();
-                            let configured_destinations: Vec<serde_json::Value> = bucket
-                                .notification_config
-                                .destinations
-                                .iter()
-                                .filter(|d| event_matches(&d.events, "s3:ObjectCreated:Copy"))
-                                .map(|d| serde_json::json!({ "type": d.dest_type, "arn": d.arn }))
-                                .collect();
-                            if !configured_destinations.is_empty() {
-                                bus.publish(InternalEvent {
-                                    source: "s3".to_string(),
-                                    event_type: "s3:ObjectCreated:Copy".to_string(),
-                                    region: ctx.region.clone(),
-                                    account_id: ctx.account_id.clone(),
-                                    detail: serde_json::json!({
-                                        "bucket": {
-                                            "name": bucket_name,
-                                            "arn": format!("arn:aws:s3:::{}", bucket_name),
-                                        },
-                                        "object": {
-                                            "key": key,
-                                            "size": size,
-                                            "eTag": etag,
-                                        },
-                                        "configuredDestinations": configured_destinations,
-                                    }),
-                                });
-                            }
+                        && !bucket.notification_config.destinations.is_empty()
+                    {
+                        let obj = bucket.objects.get(key);
+                        let size = obj.as_ref().map(|o| o.content_length).unwrap_or(0);
+                        let etag = obj.as_ref().map(|o| o.etag.clone()).unwrap_or_default();
+                        let configured_destinations: Vec<serde_json::Value> = bucket
+                            .notification_config
+                            .destinations
+                            .iter()
+                            .filter(|d| event_matches(&d.events, "s3:ObjectCreated:Copy"))
+                            .map(|d| serde_json::json!({ "type": d.dest_type, "arn": d.arn }))
+                            .collect();
+                        if !configured_destinations.is_empty() {
+                            bus.publish(InternalEvent {
+                                source: "s3".to_string(),
+                                event_type: "s3:ObjectCreated:Copy".to_string(),
+                                region: ctx.region.clone(),
+                                account_id: ctx.account_id.clone(),
+                                detail: serde_json::json!({
+                                    "bucket": {
+                                        "name": bucket_name,
+                                        "arn": format!("arn:aws:s3:::{}", bucket_name),
+                                    },
+                                    "object": {
+                                        "key": key,
+                                        "size": size,
+                                        "eTag": etag,
+                                    },
+                                    "configuredDestinations": configured_destinations,
+                                }),
+                            });
                         }
+                    }
                 }
                 Ok(result)
             }
@@ -994,24 +997,25 @@ impl ServiceHandler for S3Service {
 
                 // Emit s3:ObjectRemoved:Delete notification if configured
                 if let Some(bus) = &ctx.event_bus
-                    && !configured_destinations.is_empty() {
-                        bus.publish(InternalEvent {
-                            source: "s3".to_string(),
-                            event_type: "s3:ObjectRemoved:Delete".to_string(),
-                            region: ctx.region.clone(),
-                            account_id: ctx.account_id.clone(),
-                            detail: serde_json::json!({
-                                "bucket": {
-                                    "name": bucket_name,
-                                    "arn": format!("arn:aws:s3:::{}", bucket_name),
-                                },
-                                "object": {
-                                    "key": key,
-                                },
-                                "configuredDestinations": configured_destinations,
-                            }),
-                        });
-                    }
+                    && !configured_destinations.is_empty()
+                {
+                    bus.publish(InternalEvent {
+                        source: "s3".to_string(),
+                        event_type: "s3:ObjectRemoved:Delete".to_string(),
+                        region: ctx.region.clone(),
+                        account_id: ctx.account_id.clone(),
+                        detail: serde_json::json!({
+                            "bucket": {
+                                "name": bucket_name,
+                                "arn": format!("arn:aws:s3:::{}", bucket_name),
+                            },
+                            "object": {
+                                "key": key,
+                            },
+                            "configuredDestinations": configured_destinations,
+                        }),
+                    });
+                }
                 Ok(result)
             }
             "GetObject" => operations::object::get_object(&state, &input, ctx),

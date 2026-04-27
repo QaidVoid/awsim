@@ -222,55 +222,59 @@ fn extract_service_info(
 ) -> (String, String, String, Option<String>) {
     // Try Authorization header first
     if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok())
-        && let Some(creds) = auth::parse_authorization(auth_header) {
-            return (
-                creds.service,
-                creds.region,
-                state.default_account_id.clone(),
-                Some(creds.access_key),
-            );
-        }
+        && let Some(creds) = auth::parse_authorization(auth_header)
+    {
+        return (
+            creds.service,
+            creds.region,
+            state.default_account_id.clone(),
+            Some(creds.access_key),
+        );
+    }
 
     // Try X-Amz-Target header (for awsJson services)
     if let Some(target) = headers.get("x-amz-target").and_then(|v| v.to_str().ok())
-        && let Some(service) = resolve_service_from_target(target) {
-            return (
-                service,
-                state.default_region.clone(),
-                state.default_account_id.clone(),
-                None,
-            );
-        }
+        && let Some(service) = resolve_service_from_target(target)
+    {
+        return (
+            service,
+            state.default_region.clone(),
+            state.default_account_id.clone(),
+            None,
+        );
+    }
 
     // Try Host header
     if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok())
-        && let Some(service) = extract_service_from_host(host) {
-            return (
-                service,
-                state.default_region.clone(),
-                state.default_account_id.clone(),
-                None,
-            );
-        }
+        && let Some(service) = extract_service_from_host(host)
+    {
+        return (
+            service,
+            state.default_region.clone(),
+            state.default_account_id.clone(),
+            None,
+        );
+    }
 
     // Check for pre-signed URL query parameters (SigV4 in query string)
     if let Some(query) = uri.query()
         && query.contains("X-Amz-Credential")
-            && let Some(cred_start) = query.find("X-Amz-Credential=") {
-                let cred_val = &query[cred_start + 17..];
-                let cred_end = cred_val.find('&').unwrap_or(cred_val.len());
-                let cred = &cred_val[..cred_end];
-                let cred_decoded = cred.replace("%2F", "/");
-                let parts: Vec<&str> = cred_decoded.split('/').collect();
-                if parts.len() >= 4 {
-                    return (
-                        parts[3].to_string(),
-                        parts[2].to_string(),
-                        state.default_account_id.clone(),
-                        Some(parts[0].to_string()),
-                    );
-                }
-            }
+        && let Some(cred_start) = query.find("X-Amz-Credential=")
+    {
+        let cred_val = &query[cred_start + 17..];
+        let cred_end = cred_val.find('&').unwrap_or(cred_val.len());
+        let cred = &cred_val[..cred_end];
+        let cred_decoded = cred.replace("%2F", "/");
+        let parts: Vec<&str> = cred_decoded.split('/').collect();
+        if parts.len() >= 4 {
+            return (
+                parts[3].to_string(),
+                parts[2].to_string(),
+                state.default_account_id.clone(),
+                Some(parts[0].to_string()),
+            );
+        }
+    }
 
     // Try path-based detection as last resort (for REST services called without auth)
     let path = uri.path();

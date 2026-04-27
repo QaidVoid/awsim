@@ -69,10 +69,11 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
 
         // Check if this message has exceeded maxReceiveCount — route to DLQ
         if let Some(ref rp) = redrive_policy
-            && msg.receive_count >= rp.max_receive_count {
-                dlq_messages.push(msg.clone());
-                continue;
-            }
+            && msg.receive_count >= rp.max_receive_count
+        {
+            dlq_messages.push(msg.clone());
+            continue;
+        }
 
         to_inflight.push(msg.message_id.clone());
     }
@@ -92,83 +93,81 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     for msg_id in &to_inflight {
         // Find the message in the deque and remove it
         if let Some(pos) = queue.messages.iter().position(|m| &m.message_id == msg_id)
-            && let Some(mut msg) = queue.messages.remove(pos) {
-                let receipt_handle = Uuid::new_v4().to_string();
-                let visible_at = now + Duration::from_secs(visibility_timeout);
-                let now_epoch = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let visible_at_secs = now_epoch + visibility_timeout;
+            && let Some(mut msg) = queue.messages.remove(pos)
+        {
+            let receipt_handle = Uuid::new_v4().to_string();
+            let visible_at = now + Duration::from_secs(visibility_timeout);
+            let now_epoch = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let visible_at_secs = now_epoch + visibility_timeout;
 
-                // Increment receive_count now
-                msg.receive_count += 1;
+            // Increment receive_count now
+            msg.receive_count += 1;
 
-                // Build attributes subset
-                let mut attrs = serde_json::Map::new();
-                for (k, v) in &msg.attributes {
-                    if want_all_attrs || attribute_names.contains(&k.as_str()) {
-                        attrs.insert(k.clone(), Value::String(v.clone()));
-                    }
+            // Build attributes subset
+            let mut attrs = serde_json::Map::new();
+            for (k, v) in &msg.attributes {
+                if want_all_attrs || attribute_names.contains(&k.as_str()) {
+                    attrs.insert(k.clone(), Value::String(v.clone()));
                 }
-                // Update receive count in the attribute map for the response
-                msg.attributes.insert(
-                    "ApproximateReceiveCount".to_string(),
-                    msg.receive_count.to_string(),
-                );
+            }
+            // Update receive count in the attribute map for the response
+            msg.attributes.insert(
+                "ApproximateReceiveCount".to_string(),
+                msg.receive_count.to_string(),
+            );
 
-                // Build message attributes subset
-                let mut msg_attrs = serde_json::Map::new();
-                if want_all_msg_attrs {
-                    for (k, ma) in &msg.message_attributes {
+            // Build message attributes subset
+            let mut msg_attrs = serde_json::Map::new();
+            if want_all_msg_attrs {
+                for (k, ma) in &msg.message_attributes {
+                    let mut entry = serde_json::Map::new();
+                    entry.insert("DataType".to_string(), Value::String(ma.data_type.clone()));
+                    if let Some(ref sv) = ma.string_value {
+                        entry.insert("StringValue".to_string(), Value::String(sv.clone()));
+                    }
+                    msg_attrs.insert(k.clone(), Value::Object(entry));
+                }
+            } else {
+                for name in &message_attribute_names {
+                    if let Some(ma) = msg.message_attributes.get(*name) {
                         let mut entry = serde_json::Map::new();
                         entry.insert("DataType".to_string(), Value::String(ma.data_type.clone()));
                         if let Some(ref sv) = ma.string_value {
                             entry.insert("StringValue".to_string(), Value::String(sv.clone()));
                         }
-                        msg_attrs.insert(k.clone(), Value::Object(entry));
-                    }
-                } else {
-                    for name in &message_attribute_names {
-                        if let Some(ma) = msg.message_attributes.get(*name) {
-                            let mut entry = serde_json::Map::new();
-                            entry.insert(
-                                "DataType".to_string(),
-                                Value::String(ma.data_type.clone()),
-                            );
-                            if let Some(ref sv) = ma.string_value {
-                                entry.insert("StringValue".to_string(), Value::String(sv.clone()));
-                            }
-                            msg_attrs.insert(name.to_string(), Value::Object(entry));
-                        }
+                        msg_attrs.insert(name.to_string(), Value::Object(entry));
                     }
                 }
-
-                let mut msg_json = json!({
-                    "MessageId": msg.message_id,
-                    "ReceiptHandle": receipt_handle,
-                    "Body": msg.body,
-                    "MD5OfBody": msg.md5_of_body,
-                });
-
-                if !attrs.is_empty() {
-                    msg_json["Attributes"] = Value::Object(attrs);
-                }
-                if !msg_attrs.is_empty() {
-                    msg_json["MessageAttributes"] = Value::Object(msg_attrs);
-                }
-
-                messages_json.push(msg_json);
-
-                // Move to inflight
-                let im = crate::state::InflightMessage {
-                    message: msg,
-                    visible_at: Some(visible_at),
-                    visible_at_secs,
-                    receipt_handle: receipt_handle.clone(),
-                };
-                queue.inflight.insert(receipt_handle, im);
             }
+
+            let mut msg_json = json!({
+                "MessageId": msg.message_id,
+                "ReceiptHandle": receipt_handle,
+                "Body": msg.body,
+                "MD5OfBody": msg.md5_of_body,
+            });
+
+            if !attrs.is_empty() {
+                msg_json["Attributes"] = Value::Object(attrs);
+            }
+            if !msg_attrs.is_empty() {
+                msg_json["MessageAttributes"] = Value::Object(msg_attrs);
+            }
+
+            messages_json.push(msg_json);
+
+            // Move to inflight
+            let im = crate::state::InflightMessage {
+                message: msg,
+                visible_at: Some(visible_at),
+                visible_at_secs,
+                receipt_handle: receipt_handle.clone(),
+            };
+            queue.inflight.insert(receipt_handle, im);
+        }
     }
 
     // Release the queue borrow before writing to DLQ (avoids deadlock on DashMap)
@@ -177,12 +176,13 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     // Move DLQ-bound messages to the dead-letter queue
     if !dlq_messages.is_empty()
         && let Some(ref rp) = redrive_policy
-            && let Some(dlq_name) = state.queue_name_by_arn(&rp.dead_letter_target_arn)
-                && let Some(mut dlq) = state.queues.get_mut(&dlq_name) {
-                    for msg in dlq_messages {
-                        dlq.messages.push_back(msg);
-                    }
-                }
+        && let Some(dlq_name) = state.queue_name_by_arn(&rp.dead_letter_target_arn)
+        && let Some(mut dlq) = state.queues.get_mut(&dlq_name)
+    {
+        for msg in dlq_messages {
+            dlq.messages.push_back(msg);
+        }
+    }
 
     Ok(json!({ "Messages": messages_json }))
 }

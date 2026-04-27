@@ -23,7 +23,8 @@ fn epoch_to_ymdhms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     let mut year = 1970u64;
     let mut remaining = days;
     loop {
-        let leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
+        let leap =
+            (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
         let days_in_year = if leap { 366 } else { 365 };
         if remaining < days_in_year {
             break;
@@ -134,14 +135,16 @@ pub fn list_metrics(
     for entry in state.metrics.iter() {
         let ns = entry.key().clone();
         if let Some(fn_) = filter_namespace
-            && ns != fn_ {
-                continue;
-            }
+            && ns != fn_
+        {
+            continue;
+        }
         for datum in entry.value() {
             if let Some(fmn) = filter_metric_name
-                && datum.metric_name != fmn {
-                    continue;
-                }
+                && datum.metric_name != fmn
+            {
+                continue;
+            }
             let key = (ns.clone(), datum.metric_name.clone());
             if seen.insert(key) {
                 metrics.push(json!({

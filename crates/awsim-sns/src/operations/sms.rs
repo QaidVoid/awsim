@@ -61,10 +61,9 @@ pub fn get_sms_attributes(
 
     // Include any extra attributes stored beyond the defaults.
     for (k, v) in attrs.iter() {
-        if !defaults.contains_key(k)
-            && filter.as_ref().is_none_or(|f| f.contains(&k.as_str())) {
-                result.insert(k.clone(), Value::String(v.clone()));
-            }
+        if !defaults.contains_key(k) && filter.as_ref().is_none_or(|f| f.contains(&k.as_str())) {
+            result.insert(k.clone(), Value::String(v.clone()));
+        }
     }
 
     Ok(json!({ "attributes": result }))

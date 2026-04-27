@@ -78,11 +78,11 @@ pub fn update_health_check(
     // Merge any provided fields into the config
     if let Some(new_config) = input.get("HealthCheckConfig")
         && let (Some(existing), Some(updates)) = (hc.config.as_object_mut(), new_config.as_object())
-        {
-            for (k, v) in updates {
-                existing.insert(k.clone(), v.clone());
-            }
+    {
+        for (k, v) in updates {
+            existing.insert(k.clone(), v.clone());
         }
+    }
     hc.health_check_version += 1;
     let version = hc.health_check_version;
     let config = hc.config.clone();

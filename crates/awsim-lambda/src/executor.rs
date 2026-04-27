@@ -211,7 +211,8 @@ fn run_command(mut cmd: Command, _timeout_secs: u32) -> ExecutionResult {
 
             // Last non-empty line of stdout is the response payload
             let payload = stdout
-                .lines().rfind(|l| !l.trim().is_empty())
+                .lines()
+                .rfind(|l| !l.trim().is_empty())
                 .unwrap_or("null")
                 .to_string();
 
@@ -225,7 +226,8 @@ fn run_command(mut cmd: Command, _timeout_secs: u32) -> ExecutionResult {
             } else {
                 // On failure, last line of stderr is the error payload
                 let error_payload = stderr
-                    .lines().rfind(|l| !l.trim().is_empty())
+                    .lines()
+                    .rfind(|l| !l.trim().is_empty())
                     .unwrap_or(r#"{"errorMessage":"Function failed","errorType":"Unhandled"}"#)
                     .to_string();
                 ExecutionResult {

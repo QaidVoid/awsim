@@ -78,13 +78,14 @@ pub fn untag_resource(
 ) -> Result<Value, AwsError> {
     let arn = require_resource_arn(input)?;
     if let Some(mut entry) = state.resource_tags.get_mut(arn)
-        && let Some(keys) = input["TagKeys"].as_array() {
-            for k in keys {
-                if let Some(s) = k.as_str() {
-                    entry.remove(s);
-                }
+        && let Some(keys) = input["TagKeys"].as_array()
+    {
+        for k in keys {
+            if let Some(s) = k.as_str() {
+                entry.remove(s);
             }
         }
+    }
     Ok(json!({}))
 }
 

@@ -232,15 +232,16 @@ impl Parser {
         let mut left = self.parse_and()?;
         loop {
             if let Token::Word(w) = self.peek().clone()
-                && w.eq_ignore_ascii_case("OR") {
-                    self.advance();
-                    let right = self.parse_and()?;
-                    left = ConditionExpr::Logical {
-                        op: LogicalOp::Or,
-                        children: vec![left, right],
-                    };
-                    continue;
-                }
+                && w.eq_ignore_ascii_case("OR")
+            {
+                self.advance();
+                let right = self.parse_and()?;
+                left = ConditionExpr::Logical {
+                    op: LogicalOp::Or,
+                    children: vec![left, right],
+                };
+                continue;
+            }
             break;
         }
         Ok(left)
@@ -251,15 +252,16 @@ impl Parser {
         let mut left = self.parse_not()?;
         loop {
             if let Token::Word(w) = self.peek().clone()
-                && w.eq_ignore_ascii_case("AND") {
-                    self.advance();
-                    let right = self.parse_not()?;
-                    left = ConditionExpr::Logical {
-                        op: LogicalOp::And,
-                        children: vec![left, right],
-                    };
-                    continue;
-                }
+                && w.eq_ignore_ascii_case("AND")
+            {
+                self.advance();
+                let right = self.parse_not()?;
+                left = ConditionExpr::Logical {
+                    op: LogicalOp::And,
+                    children: vec![left, right],
+                };
+                continue;
+            }
             break;
         }
         Ok(left)
@@ -268,11 +270,12 @@ impl Parser {
     /// Parse NOT expression.
     fn parse_not(&mut self) -> Result<ConditionExpr, AwsError> {
         if let Token::Word(w) = self.peek().clone()
-            && w.eq_ignore_ascii_case("NOT") {
-                self.advance();
-                let inner = self.parse_primary()?;
-                return Ok(ConditionExpr::Not(Box::new(inner)));
-            }
+            && w.eq_ignore_ascii_case("NOT")
+        {
+            self.advance();
+            let inner = self.parse_primary()?;
+            return Ok(ConditionExpr::Not(Box::new(inner)));
+        }
         self.parse_primary()
     }
 
@@ -296,62 +299,57 @@ impl Parser {
         if let Operand::Path(ref name) = operand {
             let name_lc = name.to_lowercase();
 
-            if name_lc == "attribute_exists"
-                && self.peek() == &Token::LParen {
+            if name_lc == "attribute_exists" && self.peek() == &Token::LParen {
+                self.advance();
+                let path = self.read_path()?;
+                if self.peek() == &Token::RParen {
                     self.advance();
-                    let path = self.read_path()?;
-                    if self.peek() == &Token::RParen {
-                        self.advance();
-                    }
-                    return Ok(ConditionExpr::AttributeExists(path));
                 }
-            if name_lc == "attribute_not_exists"
-                && self.peek() == &Token::LParen {
+                return Ok(ConditionExpr::AttributeExists(path));
+            }
+            if name_lc == "attribute_not_exists" && self.peek() == &Token::LParen {
+                self.advance();
+                let path = self.read_path()?;
+                if self.peek() == &Token::RParen {
                     self.advance();
-                    let path = self.read_path()?;
-                    if self.peek() == &Token::RParen {
-                        self.advance();
-                    }
-                    return Ok(ConditionExpr::AttributeNotExists(path));
                 }
-            if name_lc == "begins_with"
-                && self.peek() == &Token::LParen {
+                return Ok(ConditionExpr::AttributeNotExists(path));
+            }
+            if name_lc == "begins_with" && self.peek() == &Token::LParen {
+                self.advance();
+                let path = self.parse_operand()?;
+                if self.peek() == &Token::Comma {
                     self.advance();
-                    let path = self.parse_operand()?;
-                    if self.peek() == &Token::Comma {
-                        self.advance();
-                    }
-                    let val = self.parse_operand()?;
-                    if self.peek() == &Token::RParen {
-                        self.advance();
-                    }
-                    return Ok(ConditionExpr::BeginsWith(path, val));
                 }
-            if name_lc == "contains"
-                && self.peek() == &Token::LParen {
+                let val = self.parse_operand()?;
+                if self.peek() == &Token::RParen {
                     self.advance();
-                    let path = self.parse_operand()?;
-                    if self.peek() == &Token::Comma {
-                        self.advance();
-                    }
-                    let val = self.parse_operand()?;
-                    if self.peek() == &Token::RParen {
-                        self.advance();
-                    }
-                    return Ok(ConditionExpr::Contains(path, val));
                 }
-            if name_lc == "size"
-                && self.peek() == &Token::LParen {
+                return Ok(ConditionExpr::BeginsWith(path, val));
+            }
+            if name_lc == "contains" && self.peek() == &Token::LParen {
+                self.advance();
+                let path = self.parse_operand()?;
+                if self.peek() == &Token::Comma {
                     self.advance();
-                    let path = self.read_path()?;
-                    if self.peek() == &Token::RParen {
-                        self.advance();
-                    }
-                    // Expect comparison op
-                    let op = self.parse_compare_op()?;
-                    let right = self.parse_operand()?;
-                    return Ok(ConditionExpr::SizeComparison { path, op, right });
                 }
+                let val = self.parse_operand()?;
+                if self.peek() == &Token::RParen {
+                    self.advance();
+                }
+                return Ok(ConditionExpr::Contains(path, val));
+            }
+            if name_lc == "size" && self.peek() == &Token::LParen {
+                self.advance();
+                let path = self.read_path()?;
+                if self.peek() == &Token::RParen {
+                    self.advance();
+                }
+                // Expect comparison op
+                let op = self.parse_compare_op()?;
+                let right = self.parse_operand()?;
+                return Ok(ConditionExpr::SizeComparison { path, op, right });
+            }
         }
 
         // Comparison: operand op operand
@@ -362,9 +360,10 @@ impl Parser {
                 let low = self.parse_operand()?;
                 // consume AND
                 if let Token::Word(w2) = self.peek().clone()
-                    && w2.eq_ignore_ascii_case("AND") {
-                        self.advance();
-                    }
+                    && w2.eq_ignore_ascii_case("AND")
+                {
+                    self.advance();
+                }
                 let high = self.parse_operand()?;
                 return Ok(ConditionExpr::Between { operand, low, high });
             }

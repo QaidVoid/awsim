@@ -122,13 +122,15 @@ pub fn describe_db_engine_versions(input: &Value) -> Result<Value, AwsError> {
         .into_iter()
         .filter(|v| {
             if let Some(eng) = filter_engine
-                && v["Engine"].as_str().unwrap_or("") != eng {
-                    return false;
-                }
+                && v["Engine"].as_str().unwrap_or("") != eng
+            {
+                return false;
+            }
             if let Some(ver) = filter_version
-                && v["EngineVersion"].as_str().unwrap_or("") != ver {
-                    return false;
-                }
+                && v["EngineVersion"].as_str().unwrap_or("") != ver
+            {
+                return false;
+            }
             true
         })
         .collect();

@@ -28,9 +28,10 @@ impl ResourcePolicyLookup for S3ResourcePolicyLookup {
         let bucket_name = extract_bucket(resource_arn)?;
         for (_, state) in self.store.iter_all() {
             if let Some(bucket) = state.buckets.get(bucket_name)
-                && let Some(policy) = bucket.policy.as_deref() {
-                    return awsim_iam_policy::parse(policy).ok();
-                }
+                && let Some(policy) = bucket.policy.as_deref()
+            {
+                return awsim_iam_policy::parse(policy).ok();
+            }
         }
         None
     }

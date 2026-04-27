@@ -11,7 +11,6 @@ fn parse_tags(input: &Value) -> Vec<(String, String)> {
         let items: Vec<&Value> = match t {
             Value::Array(arr) => arr.iter().collect(),
             Value::Object(map) => {
-                
                 if let Some(Value::Object(m)) = map.get("member") {
                     m.values().collect()
                 } else {

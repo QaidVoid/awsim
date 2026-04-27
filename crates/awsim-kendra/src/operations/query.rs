@@ -59,9 +59,10 @@ pub fn query(state: &KendraState, input: &Value) -> Result<Value, AwsError> {
         if score > 0.0 {
             // Apply AttributeFilter if present
             if let Some(filter) = input.get("AttributeFilter")
-                && !evaluate_attribute_filter(filter, &doc.attributes) {
-                    continue;
-                }
+                && !evaluate_attribute_filter(filter, &doc.attributes)
+            {
+                continue;
+            }
             scored.push(ScoredDoc { doc, score });
         }
     }
@@ -212,9 +213,7 @@ fn match_attribute_value(attr: Option<&DocumentAttribute>, expected: &Value) -> 
         DocumentAttributeValue::StringValue(s) => {
             expected["StringValue"].as_str().is_some_and(|e| e == s)
         }
-        DocumentAttributeValue::LongValue(n) => {
-            expected["LongValue"].as_i64() == Some(*n)
-        }
+        DocumentAttributeValue::LongValue(n) => expected["LongValue"].as_i64() == Some(*n),
         DocumentAttributeValue::DateValue(d) => {
             expected["DateValue"].as_str().is_some_and(|e| e == d)
         }

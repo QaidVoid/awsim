@@ -14,10 +14,7 @@ fn now_epoch_secs() -> u64 {
 }
 
 fn new_baseline_id() -> String {
-    format!(
-        "pb-{}",
-        &Uuid::new_v4().to_string().replace('-', "")[..17]
-    )
+    format!("pb-{}", &Uuid::new_v4().to_string().replace('-', "")[..17])
 }
 
 fn baseline_identity(b: &SsmPatchBaseline) -> Value {

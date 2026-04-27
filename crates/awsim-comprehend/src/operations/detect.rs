@@ -251,9 +251,7 @@ fn extract_entities(text: &str) -> Vec<Value> {
 
 fn extract_key_phrases(text: &str) -> Vec<Value> {
     let mut phrases = Vec::new();
-    let sentences: Vec<&str> = text
-        .split(['.', '!', '?'])
-        .collect();
+    let sentences: Vec<&str> = text.split(['.', '!', '?']).collect();
 
     let stop_words = [
         "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",

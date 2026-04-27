@@ -550,15 +550,12 @@ pub fn list_entities_for_policy(state: &IamState, input: &Value) -> Result<Value
         return Err(no_such_entity("Policy", policy_arn));
     }
 
-    let include_users = entity_filter.is_none_or(|f| {
-        f == "User" || f == "LocalManagedPolicy" || f == "AWSManagedPolicy"
-    });
-    let include_roles = entity_filter.is_none_or(|f| {
-        f == "Role" || f == "LocalManagedPolicy" || f == "AWSManagedPolicy"
-    });
-    let include_groups = entity_filter.is_none_or(|f| {
-        f == "Group" || f == "LocalManagedPolicy" || f == "AWSManagedPolicy"
-    });
+    let include_users = entity_filter
+        .is_none_or(|f| f == "User" || f == "LocalManagedPolicy" || f == "AWSManagedPolicy");
+    let include_roles = entity_filter
+        .is_none_or(|f| f == "Role" || f == "LocalManagedPolicy" || f == "AWSManagedPolicy");
+    let include_groups = entity_filter
+        .is_none_or(|f| f == "Group" || f == "LocalManagedPolicy" || f == "AWSManagedPolicy");
 
     // With explicit User/Role/Group filters:
     let include_users = include_users || entity_filter == Some("User");

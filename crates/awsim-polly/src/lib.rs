@@ -112,9 +112,10 @@ impl ServiceHandler for PollyService {
 
         let mut input = input;
         if let Value::Object(map) = &mut input
-            && let Some(name) = map.remove("LexiconName") {
-                map.insert("Name".to_string(), name);
-            }
+            && let Some(name) = map.remove("LexiconName")
+        {
+            map.insert("Name".to_string(), name);
+        }
 
         match operation {
             "ListVoices" | "DescribeVoices" => operations::voices::list_voices(&input, ctx),

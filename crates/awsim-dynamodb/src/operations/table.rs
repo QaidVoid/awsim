@@ -472,9 +472,10 @@ pub fn update_table(
                     status: "ACTIVE".to_string(),
                 });
             } else if let Some(delete) = update.get("Delete")
-                && let Some(index_name) = delete.get("IndexName").and_then(|v| v.as_str()) {
-                    table.gsi.retain(|g| g.index_name != index_name);
-                }
+                && let Some(index_name) = delete.get("IndexName").and_then(|v| v.as_str())
+            {
+                table.gsi.retain(|g| g.index_name != index_name);
+            }
         }
     }
 

@@ -220,9 +220,10 @@ pub fn update_crawler(
         crawler.schedule = Some(schedule.to_string());
     }
     if let Some(targets) = input.get("Targets")
-        && !targets.is_null() {
-            crawler.targets = Some(targets.clone());
-        }
+        && !targets.is_null()
+    {
+        crawler.targets = Some(targets.clone());
+    }
 
     info!(name = %name, "Updated Glue crawler");
     Ok(json!({}))

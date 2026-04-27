@@ -59,9 +59,10 @@ pub fn describe_db_cluster_endpoints(
         // Filter by cluster or return all
         for entry in state.cluster_endpoints.iter() {
             if let Some(cluster_id) = filter_cluster
-                && entry.key() != cluster_id {
-                    continue;
-                }
+                && entry.key() != cluster_id
+            {
+                continue;
+            }
             for ep in entry.value() {
                 endpoints.push(endpoint_to_value(ep));
             }
@@ -71,9 +72,10 @@ pub fn describe_db_cluster_endpoints(
         for cluster_entry in state.clusters.iter() {
             let cluster = cluster_entry.value();
             if let Some(cluster_id) = filter_cluster
-                && cluster.identifier != cluster_id {
-                    continue;
-                }
+                && cluster.identifier != cluster_id
+            {
+                continue;
+            }
             // Default writer endpoint
             endpoints.push(json!({
                 "DBClusterEndpointIdentifier": format!("{}-writer", cluster.identifier),

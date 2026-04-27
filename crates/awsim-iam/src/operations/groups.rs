@@ -144,9 +144,10 @@ pub fn add_user_to_group(state: &IamState, input: &Value) -> Result<Value, AwsEr
 
     // Add group to user's group list
     if let Some(mut user) = state.users.get_mut(user_name)
-        && !user.groups.contains(&group_name.to_string()) {
-            user.groups.push(group_name.to_string());
-        }
+        && !user.groups.contains(&group_name.to_string())
+    {
+        user.groups.push(group_name.to_string());
+    }
 
     Ok(json!({}))
 }
@@ -250,9 +251,11 @@ pub fn update_group(state: &IamState, input: &Value) -> Result<Value, AwsError> 
     }
 
     if let Some(new_name) = new_group_name
-        && new_name != group_name && state.groups.contains_key(new_name) {
-            return Err(entity_already_exists("Group", new_name));
-        }
+        && new_name != group_name
+        && state.groups.contains_key(new_name)
+    {
+        return Err(entity_already_exists("Group", new_name));
+    }
 
     if new_group_name.is_none() && new_path.is_none() {
         return Ok(json!({}));

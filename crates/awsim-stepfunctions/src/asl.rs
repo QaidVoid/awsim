@@ -295,24 +295,25 @@ impl InterpreterContext {
         let branches = state["Branches"].as_array();
 
         if let Some(branch_list) = branches
-            && let Some(first_branch) = branch_list.first() {
-                let branch_def = first_branch.to_string();
-                let branch_result = execute(&branch_def, &input.to_string(), &self.start_time);
+            && let Some(first_branch) = branch_list.first()
+        {
+            let branch_def = first_branch.to_string();
+            let branch_result = execute(&branch_def, &input.to_string(), &self.start_time);
 
-                if branch_result.status == "FAILED" {
-                    return Err(StateFailed {
-                        error: branch_result.error.unwrap_or_default(),
-                        cause: branch_result.cause.unwrap_or_default(),
-                    });
-                }
-
-                let output_str = branch_result.output.unwrap_or_else(|| "null".to_string());
-                let output: Value = serde_json::from_str(&output_str).unwrap_or(Value::Null);
-                let parallel_output = json!([output]);
-                let result_output =
-                    apply_result_path(&input, &parallel_output, state["ResultPath"].as_str());
-                return Ok((result_output, transition(state)));
+            if branch_result.status == "FAILED" {
+                return Err(StateFailed {
+                    error: branch_result.error.unwrap_or_default(),
+                    cause: branch_result.cause.unwrap_or_default(),
+                });
             }
+
+            let output_str = branch_result.output.unwrap_or_else(|| "null".to_string());
+            let output: Value = serde_json::from_str(&output_str).unwrap_or(Value::Null);
+            let parallel_output = json!([output]);
+            let result_output =
+                apply_result_path(&input, &parallel_output, state["ResultPath"].as_str());
+            return Ok((result_output, transition(state)));
+        }
 
         // No branches — succeed with empty array
         let parallel_output = json!([]);

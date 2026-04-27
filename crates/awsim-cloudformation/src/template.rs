@@ -242,18 +242,20 @@ fn eval_condition_value(
         Value::Object(map) => {
             if let Some(eq_args) = map.get("Fn::Equals") {
                 if let Value::Array(arr) = eq_args
-                    && arr.len() == 2 {
-                        let a = resolve_value(&arr[0], params, conditions, &HashMap::new());
-                        let b = resolve_value(&arr[1], params, conditions, &HashMap::new());
-                        return a == b;
-                    }
+                    && arr.len() == 2
+                {
+                    let a = resolve_value(&arr[0], params, conditions, &HashMap::new());
+                    let b = resolve_value(&arr[1], params, conditions, &HashMap::new());
+                    return a == b;
+                }
                 return false;
             }
             if let Some(not_arg) = map.get("Fn::Not") {
                 if let Value::Array(arr) = not_arg
-                    && let Some(first) = arr.first() {
-                        return !eval_condition_value(first, params, conditions);
-                    }
+                    && let Some(first) = arr.first()
+                {
+                    return !eval_condition_value(first, params, conditions);
+                }
                 return false;
             }
             if let Some(and_args) = map.get("Fn::And") {
@@ -290,9 +292,10 @@ pub fn resolve_value(
         Value::Object(map) => {
             // Check for intrinsic function keys
             if let Some(ref_val) = map.get("Ref")
-                && let Some(s) = ref_val.as_str() {
-                    return resolve_ref(s, params, resources);
-                }
+                && let Some(s) = ref_val.as_str()
+            {
+                return resolve_ref(s, params, resources);
+            }
             if let Some(get_att) = map.get("Fn::GetAtt") {
                 return resolve_get_att(get_att, resources);
             }
@@ -369,17 +372,19 @@ fn resolve_get_att(val: &Value, resources: &HashMap<String, Value>) -> Value {
             let logical_id = arr[0].as_str().unwrap_or("");
             let attr = arr[1].as_str().unwrap_or("");
             if let Some(res) = resources.get(logical_id)
-                && let Some(v) = res.get(attr) {
-                    return v.clone();
-                }
+                && let Some(v) = res.get(attr)
+            {
+                return v.clone();
+            }
             Value::String(format!("{logical_id}.{attr}"))
         }
         Value::String(s) => {
             if let Some((logical_id, attr)) = s.split_once('.')
                 && let Some(res) = resources.get(logical_id)
-                    && let Some(v) = res.get(attr) {
-                        return v.clone();
-                    }
+                && let Some(v) = res.get(attr)
+            {
+                return v.clone();
+            }
             Value::String(s.clone())
         }
         _ => Value::Null,
@@ -413,30 +418,33 @@ fn resolve_sub(
     let bytes = template_str.as_bytes();
     let mut out = String::new();
     while i < bytes.len() {
-        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{'
-            && let Some(end) = template_str[i + 2..].find('}') {
-                let var_name = &template_str[i + 2..i + 2 + end];
-                let replacement = if let Some(v) = extra_vars.get(var_name) {
-                    v.clone()
-                } else if let Some(v) = params.get(var_name) {
-                    v.as_str().unwrap_or("").to_string()
-                } else if let Some(res) = resources.get(var_name) {
-                    res.get("PhysicalResourceId")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(var_name)
-                        .to_string()
-                } else {
-                    // Pseudo-parameters
-                    match var_name {
-                        "AWS::AccountId" => "000000000000".to_string(),
-                        "AWS::Region" => "us-east-1".to_string(),
-                        _ => var_name.to_string(),
-                    }
-                };
-                out.push_str(&replacement);
-                i += 2 + end + 1; // skip past the closing `}`
-                continue;
-            }
+        if bytes[i] == b'$'
+            && i + 1 < bytes.len()
+            && bytes[i + 1] == b'{'
+            && let Some(end) = template_str[i + 2..].find('}')
+        {
+            let var_name = &template_str[i + 2..i + 2 + end];
+            let replacement = if let Some(v) = extra_vars.get(var_name) {
+                v.clone()
+            } else if let Some(v) = params.get(var_name) {
+                v.as_str().unwrap_or("").to_string()
+            } else if let Some(res) = resources.get(var_name) {
+                res.get("PhysicalResourceId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(var_name)
+                    .to_string()
+            } else {
+                // Pseudo-parameters
+                match var_name {
+                    "AWS::AccountId" => "000000000000".to_string(),
+                    "AWS::Region" => "us-east-1".to_string(),
+                    _ => var_name.to_string(),
+                }
+            };
+            out.push_str(&replacement);
+            i += 2 + end + 1; // skip past the closing `}`
+            continue;
+        }
         out.push(bytes[i] as char);
         i += 1;
     }
@@ -451,21 +459,22 @@ fn resolve_join(
     resources: &HashMap<String, Value>,
 ) -> Value {
     if let Value::Array(arr) = val
-        && arr.len() == 2 {
-            let delimiter = arr[0].as_str().unwrap_or("");
-            let resolved = resolve_value(&arr[1], params, conditions, resources);
-            let items: Vec<String> = match &resolved {
-                Value::Array(items) => items
-                    .iter()
-                    .map(|v| match v {
-                        Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    })
-                    .collect(),
-                _ => return Value::String(String::new()),
-            };
-            return Value::String(items.join(delimiter));
-        }
+        && arr.len() == 2
+    {
+        let delimiter = arr[0].as_str().unwrap_or("");
+        let resolved = resolve_value(&arr[1], params, conditions, resources);
+        let items: Vec<String> = match &resolved {
+            Value::Array(items) => items
+                .iter()
+                .map(|v| match v {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+                .collect(),
+            _ => return Value::String(String::new()),
+        };
+        return Value::String(items.join(delimiter));
+    }
     Value::Null
 }
 
@@ -476,14 +485,16 @@ fn resolve_select(
     resources: &HashMap<String, Value>,
 ) -> Value {
     if let Value::Array(arr) = val
-        && arr.len() == 2 {
-            let idx = arr[0].as_u64().unwrap_or(0) as usize;
-            let resolved = resolve_value(&arr[1], params, conditions, resources);
-            if let Value::Array(items) = resolved
-                && let Some(item) = items.get(idx) {
-                    return item.clone();
-                }
+        && arr.len() == 2
+    {
+        let idx = arr[0].as_u64().unwrap_or(0) as usize;
+        let resolved = resolve_value(&arr[1], params, conditions, resources);
+        if let Value::Array(items) = resolved
+            && let Some(item) = items.get(idx)
+        {
+            return item.clone();
         }
+    }
     Value::Null
 }
 
@@ -494,12 +505,13 @@ fn resolve_if(
     resources: &HashMap<String, Value>,
 ) -> Value {
     if let Value::Array(arr) = val
-        && arr.len() == 3 {
-            let condition_name = arr[0].as_str().unwrap_or("");
-            let is_true = conditions.get(condition_name).copied().unwrap_or(false);
-            let branch = if is_true { &arr[1] } else { &arr[2] };
-            return resolve_value(branch, params, conditions, resources);
-        }
+        && arr.len() == 3
+    {
+        let condition_name = arr[0].as_str().unwrap_or("");
+        let is_true = conditions.get(condition_name).copied().unwrap_or(false);
+        let branch = if is_true { &arr[1] } else { &arr[2] };
+        return resolve_value(branch, params, conditions, resources);
+    }
     Value::Null
 }
 

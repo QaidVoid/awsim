@@ -30,51 +30,51 @@ pub async fn poll_sqs_event_sources(services: &HashMap<String, Arc<dyn ServiceHa
         .await;
 
     if let Ok(result) = mappings_result
-        && let Some(mappings) = result["EventSourceMappings"].as_array() {
-            for mapping in mappings {
-                let enabled = mapping["State"].as_str() == Some("Enabled");
-                if !enabled {
+        && let Some(mappings) = result["EventSourceMappings"].as_array()
+    {
+        for mapping in mappings {
+            let enabled = mapping["State"].as_str() == Some("Enabled");
+            if !enabled {
+                continue;
+            }
+
+            let event_source_arn = match mapping["EventSourceArn"].as_str() {
+                Some(arn) if arn.contains(":sqs:") => arn,
+                _ => continue,
+            };
+            let function_name = match mapping["FunctionName"].as_str() {
+                Some(n) => n,
+                None => continue,
+            };
+            let batch_size = mapping["BatchSize"].as_u64().unwrap_or(10) as u32;
+
+            // Extract queue URL from ARN
+            // ARN format: arn:aws:sqs:{region}:{account}:{queue_name}
+            let parts: Vec<&str> = event_source_arn.split(':').collect();
+            if parts.len() < 6 {
+                continue;
+            }
+            let region = parts[3];
+            let account = parts[4];
+            let queue_name = parts[5];
+            let queue_url = format!("http://sqs.{region}.localhost:4566/{account}/{queue_name}");
+
+            // Receive messages from SQS
+            let receive_input = serde_json::json!({
+                "QueueUrl": queue_url,
+                "MaxNumberOfMessages": batch_size,
+                "WaitTimeSeconds": 0,
+            });
+            let sqs_ctx = RequestContext::new("sqs", region);
+            if let Ok(receive_result) = sqs.handle("ReceiveMessage", receive_input, &sqs_ctx).await
+                && let Some(messages) = receive_result["Messages"].as_array()
+            {
+                if messages.is_empty() {
                     continue;
                 }
 
-                let event_source_arn = match mapping["EventSourceArn"].as_str() {
-                    Some(arn) if arn.contains(":sqs:") => arn,
-                    _ => continue,
-                };
-                let function_name = match mapping["FunctionName"].as_str() {
-                    Some(n) => n,
-                    None => continue,
-                };
-                let batch_size = mapping["BatchSize"].as_u64().unwrap_or(10) as u32;
-
-                // Extract queue URL from ARN
-                // ARN format: arn:aws:sqs:{region}:{account}:{queue_name}
-                let parts: Vec<&str> = event_source_arn.split(':').collect();
-                if parts.len() < 6 {
-                    continue;
-                }
-                let region = parts[3];
-                let account = parts[4];
-                let queue_name = parts[5];
-                let queue_url =
-                    format!("http://sqs.{region}.localhost:4566/{account}/{queue_name}");
-
-                // Receive messages from SQS
-                let receive_input = serde_json::json!({
-                    "QueueUrl": queue_url,
-                    "MaxNumberOfMessages": batch_size,
-                    "WaitTimeSeconds": 0,
-                });
-                let sqs_ctx = RequestContext::new("sqs", region);
-                if let Ok(receive_result) =
-                    sqs.handle("ReceiveMessage", receive_input, &sqs_ctx).await
-                    && let Some(messages) = receive_result["Messages"].as_array() {
-                        if messages.is_empty() {
-                            continue;
-                        }
-
-                        // Build SQS event for Lambda
-                        let records: Vec<serde_json::Value> = messages.iter().map(|msg| {
+                // Build SQS event for Lambda
+                let records: Vec<serde_json::Value> = messages.iter().map(|msg| {
                             serde_json::json!({
                                 "messageId": msg["MessageId"],
                                 "receiptHandle": msg["ReceiptHandle"],
@@ -88,48 +88,47 @@ pub async fn poll_sqs_event_sources(services: &HashMap<String, Arc<dyn ServiceHa
                             })
                         }).collect();
 
-                        let lambda_event = serde_json::json!({ "Records": records });
+                let lambda_event = serde_json::json!({ "Records": records });
 
-                        // Invoke Lambda
-                        let invoke_input = serde_json::json!({
-                            "FunctionName": function_name,
-                            "Payload": serde_json::to_string(&lambda_event).unwrap_or_default(),
-                            "InvocationType": "Event",
-                        });
-                        let lambda_ctx = RequestContext::new("lambda", region);
-                        if lambda
-                            .handle("Invoke", invoke_input, &lambda_ctx)
-                            .await
-                            .is_ok()
-                        {
-                            // Delete messages on successful invocation
-                            for msg in messages {
-                                if let Some(receipt) = msg["ReceiptHandle"].as_str() {
-                                    let delete_input = serde_json::json!({
-                                        "QueueUrl": queue_url,
-                                        "ReceiptHandle": receipt,
-                                    });
-                                    let _ =
-                                        sqs.handle("DeleteMessage", delete_input, &sqs_ctx).await;
-                                }
-                            }
-
-                            debug!(
-                                function = function_name,
-                                queue = queue_name,
-                                count = messages.len(),
-                                "SQS->Lambda: delivered batch"
-                            );
-                        } else {
-                            warn!(
-                                function = function_name,
-                                queue = queue_name,
-                                "SQS->Lambda: Lambda invocation failed, messages remain in queue"
-                            );
+                // Invoke Lambda
+                let invoke_input = serde_json::json!({
+                    "FunctionName": function_name,
+                    "Payload": serde_json::to_string(&lambda_event).unwrap_or_default(),
+                    "InvocationType": "Event",
+                });
+                let lambda_ctx = RequestContext::new("lambda", region);
+                if lambda
+                    .handle("Invoke", invoke_input, &lambda_ctx)
+                    .await
+                    .is_ok()
+                {
+                    // Delete messages on successful invocation
+                    for msg in messages {
+                        if let Some(receipt) = msg["ReceiptHandle"].as_str() {
+                            let delete_input = serde_json::json!({
+                                "QueueUrl": queue_url,
+                                "ReceiptHandle": receipt,
+                            });
+                            let _ = sqs.handle("DeleteMessage", delete_input, &sqs_ctx).await;
                         }
                     }
+
+                    debug!(
+                        function = function_name,
+                        queue = queue_name,
+                        count = messages.len(),
+                        "SQS->Lambda: delivered batch"
+                    );
+                } else {
+                    warn!(
+                        function = function_name,
+                        queue = queue_name,
+                        "SQS->Lambda: Lambda invocation failed, messages remain in queue"
+                    );
+                }
             }
         }
+    }
 }
 
 /// Handle an S3 object event (ObjectCreated or ObjectRemoved) by routing it to
@@ -522,104 +521,105 @@ pub async fn poll_kinesis_event_sources(services: &HashMap<String, Arc<dyn Servi
         .await;
 
     if let Ok(result) = mappings_result
-        && let Some(mappings) = result["EventSourceMappings"].as_array() {
-            for mapping in mappings {
-                if mapping["State"].as_str() != Some("Enabled") {
+        && let Some(mappings) = result["EventSourceMappings"].as_array()
+    {
+        for mapping in mappings {
+            if mapping["State"].as_str() != Some("Enabled") {
+                continue;
+            }
+
+            let event_source_arn = match mapping["EventSourceArn"].as_str() {
+                Some(arn) if arn.contains(":kinesis:") => arn,
+                _ => continue,
+            };
+
+            let function_name = match mapping["FunctionName"].as_str() {
+                Some(f) => f,
+                None => continue,
+            };
+            let batch_size = mapping["BatchSize"].as_u64().unwrap_or(100);
+
+            // Extract stream name from ARN: arn:aws:kinesis:{region}:{account}:stream/{name}
+            let stream_name = event_source_arn.split('/').next_back().unwrap_or("");
+            if stream_name.is_empty() {
+                continue;
+            }
+
+            // Derive the region from the ARN if possible
+            let parts: Vec<&str> = event_source_arn.splitn(6, ':').collect();
+            let region = if parts.len() >= 4 {
+                parts[3]
+            } else {
+                "us-east-1"
+            };
+
+            let kinesis_ctx = RequestContext::new("kinesis", region);
+
+            // Get shard iterator (TRIM_HORIZON to pick up unread records)
+            let iter_input = serde_json::json!({
+                "StreamName": stream_name,
+                "ShardId": "shardId-000000000000",
+                "ShardIteratorType": "TRIM_HORIZON",
+            });
+            let iter_result = match kinesis
+                .handle("GetShardIterator", iter_input, &kinesis_ctx)
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(stream = %stream_name, error = %e.message, "Kinesis->Lambda: GetShardIterator failed");
                     continue;
                 }
+            };
 
-                let event_source_arn = match mapping["EventSourceArn"].as_str() {
-                    Some(arn) if arn.contains(":kinesis:") => arn,
-                    _ => continue,
-                };
+            let iterator = match iter_result["ShardIterator"].as_str() {
+                Some(i) => i.to_string(),
+                None => continue,
+            };
 
-                let function_name = match mapping["FunctionName"].as_str() {
-                    Some(f) => f,
-                    None => continue,
-                };
-                let batch_size = mapping["BatchSize"].as_u64().unwrap_or(100);
-
-                // Extract stream name from ARN: arn:aws:kinesis:{region}:{account}:stream/{name}
-                let stream_name = event_source_arn.split('/').next_back().unwrap_or("");
-                if stream_name.is_empty() {
+            let records_input = serde_json::json!({
+                "ShardIterator": iterator,
+                "Limit": batch_size,
+            });
+            let records_result = match kinesis
+                .handle("GetRecords", records_input, &kinesis_ctx)
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(stream = %stream_name, error = %e.message, "Kinesis->Lambda: GetRecords failed");
                     continue;
                 }
+            };
 
-                // Derive the region from the ARN if possible
-                let parts: Vec<&str> = event_source_arn.splitn(6, ':').collect();
-                let region = if parts.len() >= 4 {
-                    parts[3]
-                } else {
-                    "us-east-1"
-                };
+            let records = match records_result["Records"].as_array() {
+                Some(r) if !r.is_empty() => r.clone(),
+                _ => continue,
+            };
 
-                let kinesis_ctx = RequestContext::new("kinesis", region);
-
-                // Get shard iterator (TRIM_HORIZON to pick up unread records)
-                let iter_input = serde_json::json!({
-                    "StreamName": stream_name,
-                    "ShardId": "shardId-000000000000",
-                    "ShardIteratorType": "TRIM_HORIZON",
-                });
-                let iter_result = match kinesis
-                    .handle("GetShardIterator", iter_input, &kinesis_ctx)
-                    .await
-                {
-                    Ok(r) => r,
-                    Err(e) => {
-                        warn!(stream = %stream_name, error = %e.message, "Kinesis->Lambda: GetShardIterator failed");
-                        continue;
-                    }
-                };
-
-                let iterator = match iter_result["ShardIterator"].as_str() {
-                    Some(i) => i.to_string(),
-                    None => continue,
-                };
-
-                let records_input = serde_json::json!({
-                    "ShardIterator": iterator,
-                    "Limit": batch_size,
-                });
-                let records_result = match kinesis
-                    .handle("GetRecords", records_input, &kinesis_ctx)
-                    .await
-                {
-                    Ok(r) => r,
-                    Err(e) => {
-                        warn!(stream = %stream_name, error = %e.message, "Kinesis->Lambda: GetRecords failed");
-                        continue;
-                    }
-                };
-
-                let records = match records_result["Records"].as_array() {
-                    Some(r) if !r.is_empty() => r.clone(),
-                    _ => continue,
-                };
-
-                let lambda_event = serde_json::json!({ "Records": records });
-                let invoke_input = serde_json::json!({
-                    "FunctionName": function_name,
-                    "Payload": serde_json::to_string(&lambda_event).unwrap_or_default(),
-                    "InvocationType": "Event",
-                });
-                let lambda_ctx = RequestContext::new("lambda", region);
-                match lambda.handle("Invoke", invoke_input, &lambda_ctx).await {
-                    Ok(_) => debug!(
-                        function = %function_name,
-                        stream = %stream_name,
-                        count = records.len(),
-                        "Kinesis->Lambda: delivered batch"
-                    ),
-                    Err(e) => warn!(
-                        function = %function_name,
-                        stream = %stream_name,
-                        error = %e.message,
-                        "Kinesis->Lambda: Lambda invocation failed"
-                    ),
-                }
+            let lambda_event = serde_json::json!({ "Records": records });
+            let invoke_input = serde_json::json!({
+                "FunctionName": function_name,
+                "Payload": serde_json::to_string(&lambda_event).unwrap_or_default(),
+                "InvocationType": "Event",
+            });
+            let lambda_ctx = RequestContext::new("lambda", region);
+            match lambda.handle("Invoke", invoke_input, &lambda_ctx).await {
+                Ok(_) => debug!(
+                    function = %function_name,
+                    stream = %stream_name,
+                    count = records.len(),
+                    "Kinesis->Lambda: delivered batch"
+                ),
+                Err(e) => warn!(
+                    function = %function_name,
+                    stream = %stream_name,
+                    error = %e.message,
+                    "Kinesis->Lambda: Lambda invocation failed"
+                ),
             }
         }
+    }
 }
 
 /// Handle a `cloudformation:CreateResource` event by calling the appropriate

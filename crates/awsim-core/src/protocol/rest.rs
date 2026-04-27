@@ -97,11 +97,13 @@ pub fn parse_xml_request(
         // Extract relevant headers (x-amz-*)
         for (name, value) in headers.iter() {
             let name_str = name.as_str();
-            if name_str.starts_with("x-amz-") && name_str != "x-amz-target"
-                && let Ok(v) = value.to_str() {
-                    let key = header_to_param_name(name_str);
-                    map.entry(key).or_insert(Value::String(v.to_string()));
-                }
+            if name_str.starts_with("x-amz-")
+                && name_str != "x-amz-target"
+                && let Ok(v) = value.to_str()
+            {
+                let key = header_to_param_name(name_str);
+                map.entry(key).or_insert(Value::String(v.to_string()));
+            }
         }
     }
 

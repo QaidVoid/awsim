@@ -46,13 +46,14 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
         for (k, v) in obj {
             // Look for keys that start with "Meta" (from x-amz-meta-* headers).
             if k.starts_with("Meta")
-                && let Some(val) = v.as_str() {
-                    let meta_key = format!(
-                        "x-amz-meta-{}",
-                        to_kebab(k.strip_prefix("Meta").unwrap_or(k))
-                    );
-                    metadata.insert(meta_key, val.to_string());
-                }
+                && let Some(val) = v.as_str()
+            {
+                let meta_key = format!(
+                    "x-amz-meta-{}",
+                    to_kebab(k.strip_prefix("Meta").unwrap_or(k))
+                );
+                metadata.insert(meta_key, val.to_string());
+            }
         }
     }
 

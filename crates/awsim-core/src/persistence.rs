@@ -75,9 +75,10 @@ impl PersistenceManager {
     ) {
         for (name, handler) in services {
             if let Some(data) = handler.snapshot()
-                && let Err(e) = self.save_snapshot(name, &data) {
-                    error!(service = %name, error = %e, "Failed to save snapshot");
-                }
+                && let Err(e) = self.save_snapshot(name, &data)
+            {
+                error!(service = %name, error = %e, "Failed to save snapshot");
+            }
         }
     }
 
@@ -88,9 +89,10 @@ impl PersistenceManager {
     ) {
         for (name, handler) in services {
             if let Some(data) = self.load_snapshot(name)
-                && let Err(e) = handler.restore(&data) {
-                    tracing::warn!(service = %name, error = %e, "Failed to restore snapshot");
-                }
+                && let Err(e) = handler.restore(&data)
+            {
+                tracing::warn!(service = %name, error = %e, "Failed to restore snapshot");
+            }
         }
     }
 }

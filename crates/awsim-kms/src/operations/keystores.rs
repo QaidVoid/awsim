@@ -29,10 +29,7 @@ pub fn create_custom_key_store(
         }
     }
 
-    let id = format!(
-        "cks-{}",
-        &Uuid::new_v4().to_string().replace('-', "")[..16]
-    );
+    let id = format!("cks-{}", &Uuid::new_v4().to_string().replace('-', "")[..16]);
 
     let cloud_hsm_cluster_id = input["CloudHsmClusterId"].as_str().map(|s| s.to_string());
     let trust_anchor_certificate = input["TrustAnchorCertificate"]

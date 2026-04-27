@@ -80,9 +80,9 @@ pub fn put_log_events(
         && stream
             .first_event_timestamp
             .is_none_or(|existing| ts < existing)
-        {
-            stream.first_event_timestamp = Some(ts);
-        }
+    {
+        stream.first_event_timestamp = Some(ts);
+    }
     if let Some(ts) = new_last_ts {
         stream.last_event_timestamp = Some(ts);
     }
@@ -142,13 +142,15 @@ pub fn get_log_events(
         .iter()
         .filter(|e| {
             if let Some(start) = start_time
-                && e.timestamp < start {
-                    return false;
-                }
+                && e.timestamp < start
+            {
+                return false;
+            }
             if let Some(end) = end_time
-                && e.timestamp > end {
-                    return false;
-                }
+                && e.timestamp > end
+            {
+                return false;
+            }
             true
         })
         .collect();
@@ -230,9 +232,10 @@ pub fn filter_log_events(
 
         // Filter by logStreamNames if provided
         if let Some(ref names) = stream_names
-            && !names.contains(&sname) {
-                continue;
-            }
+            && !names.contains(&sname)
+        {
+            continue;
+        }
 
         let stream = stream_entry.value();
         let events = stream.events.read().unwrap();
@@ -244,13 +247,15 @@ pub fn filter_log_events(
             .iter()
             .filter(|e| {
                 if let Some(start) = start_time
-                    && e.timestamp < start {
-                        return false;
-                    }
+                    && e.timestamp < start
+                {
+                    return false;
+                }
                 if let Some(end) = end_time
-                    && e.timestamp > end {
-                        return false;
-                    }
+                    && e.timestamp > end
+                {
+                    return false;
+                }
                 // Simple substring match for filter pattern
                 if filter_pattern.is_empty() || e.message.contains(filter_pattern) {
                     has_match = true;

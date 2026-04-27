@@ -145,9 +145,10 @@ pub fn update_user_pool_domain(
     // Update domain_pool_map — remove old mapping if any
     let old_domain = state.user_pools.get(pool_id).and_then(|p| p.domain.clone());
     if let Some(old) = old_domain
-        && old != domain {
-            state.domain_pool_map.remove(&old);
-        }
+        && old != domain
+    {
+        state.domain_pool_map.remove(&old);
+    }
 
     let mut pool_mut = state.user_pools.get_mut(pool_id).unwrap();
     pool_mut.domain = Some(domain.to_string());

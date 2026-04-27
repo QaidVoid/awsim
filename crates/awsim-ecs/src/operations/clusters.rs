@@ -35,7 +35,10 @@ fn cluster_to_json(cluster: &Cluster) -> Value {
 pub fn resolve_cluster_name(input_cluster: &str) -> &str {
     // ARN format: arn:aws:ecs:{region}:{account}:cluster/{name}
     if input_cluster.starts_with("arn:") {
-        input_cluster.split('/').next_back().unwrap_or(input_cluster)
+        input_cluster
+            .split('/')
+            .next_back()
+            .unwrap_or(input_cluster)
     } else {
         input_cluster
     }

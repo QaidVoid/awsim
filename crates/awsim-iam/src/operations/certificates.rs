@@ -146,9 +146,11 @@ pub fn update_server_certificate(state: &IamState, input: &Value) -> Result<Valu
         return Err(no_such_entity("ServerCertificate", name));
     }
     if let Some(nn) = new_name
-        && nn != name && state.server_certificates.contains_key(nn) {
-            return Err(entity_already_exists("ServerCertificate", nn));
-        }
+        && nn != name
+        && state.server_certificates.contains_key(nn)
+    {
+        return Err(entity_already_exists("ServerCertificate", nn));
+    }
     if new_name.is_none() && new_path.is_none() {
         return Ok(json!({}));
     }

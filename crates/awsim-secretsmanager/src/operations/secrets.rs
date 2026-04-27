@@ -603,9 +603,10 @@ pub fn rotate_secret(
         secret.rotation_lambda_arn = Some(lambda_arn.to_string());
     }
     if let Some(rules) = input["RotationRules"].as_object()
-        && let Some(days) = rules.get("AutomaticallyAfterDays").and_then(|v| v.as_u64()) {
-            secret.rotation_automatically_after_days = Some(days);
-        }
+        && let Some(days) = rules.get("AutomaticallyAfterDays").and_then(|v| v.as_u64())
+    {
+        secret.rotation_automatically_after_days = Some(days);
+    }
     secret.rotation_enabled = true;
 
     // Simulate rotation: create a new AWSPENDING version then immediately promote it to AWSCURRENT.
@@ -977,9 +978,10 @@ pub fn update_secret_version_stage(
     let secret_name = secret.name.clone();
 
     if let Some(remove_id) = remove_from
-        && let Some(v) = secret.versions.get_mut(remove_id) {
-            v.stages.retain(|s| s != version_stage);
-        }
+        && let Some(v) = secret.versions.get_mut(remove_id)
+    {
+        v.stages.retain(|s| s != version_stage);
+    }
 
     if let Some(move_id) = move_to {
         if !secret.versions.contains_key(move_id) {
@@ -991,9 +993,10 @@ pub fn update_secret_version_stage(
             }
         }
         if let Some(v) = secret.versions.get_mut(move_id)
-            && !v.stages.contains(&version_stage.to_string()) {
-                v.stages.push(version_stage.to_string());
-            }
+            && !v.stages.contains(&version_stage.to_string())
+        {
+            v.stages.push(version_stage.to_string());
+        }
         if version_stage == "AWSCURRENT" {
             secret.current_version_id = move_id.to_string();
         }

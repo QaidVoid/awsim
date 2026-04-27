@@ -35,9 +35,9 @@ impl ResourcePolicyLookup for KmsResourcePolicyLookup {
                     .policies
                     .get("default")
                     .or_else(|| key.policies.values().next())
-                {
-                    return awsim_iam_policy::parse(raw).ok();
-                }
+            {
+                return awsim_iam_policy::parse(raw).ok();
+            }
         }
         None
     }

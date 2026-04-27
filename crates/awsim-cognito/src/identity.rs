@@ -603,65 +603,62 @@ fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Op
         if let Some(logins_map) = input_logins {
             for (provider, _token) in logins_map {
                 if let Some(mapping) = pool.role_mappings.get(provider.as_str())
-                    && let Some(mapping_obj) = mapping.as_object() {
-                        let mapping_type = mapping_obj
-                            .get("Type")
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("");
+                    && let Some(mapping_obj) = mapping.as_object()
+                {
+                    let mapping_type = mapping_obj
+                        .get("Type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
 
-                        match mapping_type {
-                            "Token" => {
-                                // Token-based: role comes from cognito:preferred_role claim
-                                // in the decoded ID token. We cannot decode the token here
-                                // without the JWKS, so fall through to the default role.
-                                // Real implementations would decode the JWT and extract the
-                                // cognito:preferred_role claim.
-                            }
-                            "Rules" => {
-                                // Rules-based: evaluate each rule against token claims.
-                                // Since we don't decode tokens, we evaluate rules against
-                                // the identity's stored login providers as a best-effort.
-                                if let Some(rules_config) = mapping_obj.get("RulesConfiguration")
-                                    && let Some(rules) =
-                                        rules_config.get("Rules").and_then(|r| r.as_array())
-                                    {
-                                        for rule in rules {
-                                            let claim = rule
-                                                .get("Claim")
-                                                .and_then(|c| c.as_str())
-                                                .unwrap_or("");
-                                            let match_type = rule
-                                                .get("MatchType")
-                                                .and_then(|m| m.as_str())
-                                                .unwrap_or("");
-                                            let expected = rule
-                                                .get("Value")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("");
-
-                                            // For the "iss" claim, match against the provider name.
-                                            // For other claims we use the provider name as a
-                                            // proxy since we don't decode tokens here.
-                                            let claim_value = if claim == "iss" {
-                                                provider.as_str()
-                                            } else {
-                                                // Best-effort: use provider as the claim value.
-                                                // Real implementations decode the JWT payload.
-                                                provider.as_str()
-                                            };
-
-                                            if evaluate_rule(claim_value, match_type, expected)
-                                                && let Some(role) =
-                                                    rule.get("RoleARN").and_then(|r| r.as_str())
-                                                {
-                                                    return Some(role.to_string());
-                                                }
-                                        }
-                                    }
-                            }
-                            _ => {}
+                    match mapping_type {
+                        "Token" => {
+                            // Token-based: role comes from cognito:preferred_role claim
+                            // in the decoded ID token. We cannot decode the token here
+                            // without the JWKS, so fall through to the default role.
+                            // Real implementations would decode the JWT and extract the
+                            // cognito:preferred_role claim.
                         }
+                        "Rules" => {
+                            // Rules-based: evaluate each rule against token claims.
+                            // Since we don't decode tokens, we evaluate rules against
+                            // the identity's stored login providers as a best-effort.
+                            if let Some(rules_config) = mapping_obj.get("RulesConfiguration")
+                                && let Some(rules) =
+                                    rules_config.get("Rules").and_then(|r| r.as_array())
+                            {
+                                for rule in rules {
+                                    let claim =
+                                        rule.get("Claim").and_then(|c| c.as_str()).unwrap_or("");
+                                    let match_type = rule
+                                        .get("MatchType")
+                                        .and_then(|m| m.as_str())
+                                        .unwrap_or("");
+                                    let expected =
+                                        rule.get("Value").and_then(|v| v.as_str()).unwrap_or("");
+
+                                    // For the "iss" claim, match against the provider name.
+                                    // For other claims we use the provider name as a
+                                    // proxy since we don't decode tokens here.
+                                    let claim_value = if claim == "iss" {
+                                        provider.as_str()
+                                    } else {
+                                        // Best-effort: use provider as the claim value.
+                                        // Real implementations decode the JWT payload.
+                                        provider.as_str()
+                                    };
+
+                                    if evaluate_rule(claim_value, match_type, expected)
+                                        && let Some(role) =
+                                            rule.get("RoleARN").and_then(|r| r.as_str())
+                                    {
+                                        return Some(role.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
                     }
+                }
             }
         }
 

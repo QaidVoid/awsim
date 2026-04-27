@@ -58,10 +58,7 @@ pub fn publish_layer_version(
         ctx.region, ctx.account_id, layer_name
     );
 
-    let mut versions = state
-        .layers
-        .entry(layer_name.to_string())
-        .or_default();
+    let mut versions = state.layers.entry(layer_name.to_string()).or_default();
 
     let version_number = (versions.len() + 1) as u64;
     let version_arn = format!("{}:{}", layer_arn, version_number);

@@ -138,9 +138,10 @@ pub fn modify_listener(state: &ElbState, input: &Value) -> Result<Value, AwsErro
             Value::Number(n) => n.as_u64().map(|n| n as u16),
             Value::String(s) => s.parse().ok(),
             _ => None,
-        } {
-            listener.port = port;
         }
+    {
+        listener.port = port;
+    }
 
     if let Some(proto) = input.get("Protocol").and_then(|v| v.as_str()) {
         listener.protocol = proto.to_string();
@@ -287,7 +288,6 @@ pub fn parse_actions(input: &Value, key: &str) -> Vec<ListenerAction> {
         let items: Vec<&Value> = match v {
             Value::Array(arr) => arr.iter().collect(),
             Value::Object(map) => {
-                
                 if let Some(Value::Object(m)) = map.get("member") {
                     m.values().collect()
                 } else {
