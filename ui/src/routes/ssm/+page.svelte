@@ -4,8 +4,11 @@
 	import ParametersTab from '$lib/components/ssm/parameters-tab.svelte';
 	import DocumentsTab from '$lib/components/ssm/documents-tab.svelte';
 	import ActivationsTab from '$lib/components/ssm/activations-tab.svelte';
+	import MaintenanceWindowsTab from '$lib/components/ssm/maintenance-windows-tab.svelte';
+	import OpsItemsTab from '$lib/components/ssm/ops-items-tab.svelte';
 
-	let activeTab = $state<'parameters' | 'documents' | 'activations'>('parameters');
+	type TabId = 'parameters' | 'documents' | 'activations' | 'windows' | 'ops';
+	let activeTab = $state<TabId>('parameters');
 </script>
 
 <ServicePage
@@ -17,6 +20,8 @@
 			<TabsTrigger value="parameters">Parameters</TabsTrigger>
 			<TabsTrigger value="documents">Documents</TabsTrigger>
 			<TabsTrigger value="activations">Activations</TabsTrigger>
+			<TabsTrigger value="windows">Maintenance windows</TabsTrigger>
+			<TabsTrigger value="ops">OpsItems</TabsTrigger>
 		</TabsList>
 
 		<div class="min-h-0 flex-1 overflow-y-auto">
@@ -28,6 +33,12 @@
 			</TabsContent>
 			<TabsContent value="activations" class="m-0">
 				<ActivationsTab />
+			</TabsContent>
+			<TabsContent value="windows" class="m-0">
+				<MaintenanceWindowsTab />
+			</TabsContent>
+			<TabsContent value="ops" class="m-0">
+				<OpsItemsTab />
 			</TabsContent>
 		</div>
 	</Tabs>
