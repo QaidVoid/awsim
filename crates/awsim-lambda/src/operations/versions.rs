@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 
 use crate::{
     error::resource_not_found,
+    operations::functions::persist_code,
     state::{FunctionVersion, LambdaState},
     util::{now_iso8601, opt_str, require_str},
 };
@@ -15,6 +16,18 @@ pub fn publish_version(
     let name = require_str(input, "FunctionName")?;
     let description = opt_str(input, "Description").unwrap_or("").to_string();
 
+    let current_bytes = {
+        let f = state
+            .functions
+            .get(name)
+            .ok_or_else(|| resource_not_found("function", name))?;
+        f.code
+            .as_ref()
+            .map(|c| c.read_all())
+            .transpose()
+            .map_err(|e| AwsError::internal(format!("read function code: {e}")))?
+    };
+
     let mut f = state
         .functions
         .get_mut(name)
@@ -23,12 +36,14 @@ pub fn publish_version(
     let version_number = (f.versions.len() + 1).to_string();
     let now = now_iso8601();
 
+    let version_code = persist_code(state, name, &version_number, current_bytes)?;
+
     let ver = FunctionVersion {
         version: version_number.clone(),
         description: description.clone(),
         code_sha256: f.code_sha256.clone(),
         code_size: f.code_size,
-        code: f.code.clone(),
+        code: version_code,
         last_modified: now.clone(),
     };
 
