@@ -7,11 +7,13 @@ mod util;
 
 pub use authz::LambdaResourcePolicyLookup;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use awsim_core::{
-    AccountRegionStore, AwsError, Protocol, RequestContext, RouteDefinition, ServiceHandler,
+    AccountRegionStore, AwsError, BodyStore, Protocol, RequestContext, RouteDefinition,
+    ServiceHandler,
 };
 use serde_json::Value;
 use tracing::debug;
@@ -20,17 +22,31 @@ use state::LambdaState;
 
 pub struct LambdaService {
     store: AccountRegionStore<LambdaState>,
+    body_store: Option<Arc<BodyStore>>,
 }
 
 impl LambdaService {
     pub fn new() -> Self {
         Self {
             store: AccountRegionStore::new(),
+            body_store: None,
+        }
+    }
+
+    pub fn with_data_dir(dir: impl AsRef<Path>) -> Self {
+        let root = dir.as_ref().join("lambda");
+        Self {
+            store: AccountRegionStore::new(),
+            body_store: Some(Arc::new(BodyStore::new(root))),
         }
     }
 
     fn get_state(&self, ctx: &RequestContext) -> Arc<LambdaState> {
-        self.store.get(&ctx.account_id, &ctx.region)
+        let state = self.store.get(&ctx.account_id, &ctx.region);
+        if let Some(bs) = &self.body_store {
+            state.set_body_store(Arc::clone(bs));
+        }
+        state
     }
 
     pub fn store(&self) -> AccountRegionStore<LambdaState> {

@@ -1,6 +1,8 @@
+use awsim_core::BodyStore;
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug, Clone)]
 pub enum FunctionCode {
@@ -34,6 +36,17 @@ pub struct LambdaState {
     pub url_configs: DashMap<String, FunctionUrlConfig>,
     /// function_name[:qualifier] → EventInvokeConfig
     pub event_invoke_configs: DashMap<String, EventInvokeConfig>,
+    pub body_store: OnceLock<Arc<BodyStore>>,
+}
+
+impl LambdaState {
+    pub fn body_store(&self) -> Option<&Arc<BodyStore>> {
+        self.body_store.get()
+    }
+
+    pub fn set_body_store(&self, store: Arc<BodyStore>) {
+        let _ = self.body_store.set(store);
+    }
 }
 
 #[derive(Debug, Clone, Default)]
