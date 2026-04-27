@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::state::{LogGroup, LogsState};
 
@@ -66,6 +66,16 @@ pub fn delete_log_group(
             format!("Log group not found: {name}"),
         )
     })?;
+
+    if let Some(bs) = state.body_store()
+        && let Err(e) = bs.delete_bucket("cloudwatch-logs", name)
+    {
+        warn!(
+            log_group = %name,
+            error = %e,
+            "Failed to remove persisted log group directory"
+        );
+    }
 
     info!(log_group = %name, "Deleted log group");
     Ok(json!({}))

@@ -1,6 +1,6 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::state::{LogStream, LogsState};
 
@@ -77,6 +77,17 @@ pub fn delete_log_stream(
             format!("Log stream not found: {stream_name}"),
         )
     })?;
+
+    if let Some(bs) = state.body_store()
+        && let Err(e) = bs.delete_blob("cloudwatch-logs", group_name, stream_name)
+    {
+        warn!(
+            log_group = %group_name,
+            log_stream = %stream_name,
+            error = %e,
+            "Failed to remove persisted log stream blob"
+        );
+    }
 
     info!(log_group = %group_name, log_stream = %stream_name, "Deleted log stream");
     Ok(json!({}))
