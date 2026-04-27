@@ -79,7 +79,12 @@ pub fn upload_part(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let body = match state.body_store() {
         Some(store) => {
             let path = store
-                .write_part(bucket_name, upload_id, part_number, &data)
+                .write_blob(
+                    "multipart",
+                    bucket_name,
+                    &format!("{upload_id}/{part_number}"),
+                    &data,
+                )
                 .map_err(|e| AwsError::internal(format!("persist part: {e}")))?;
             ObjectBody::OnDisk(path)
         }
@@ -131,7 +136,7 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
     let body = match state.body_store() {
         Some(store) => {
             let path = store
-                .write_object(bucket_name, key, &combined_data)
+                .write_blob("objects", bucket_name, key, &combined_data)
                 .map_err(|e| AwsError::internal(format!("persist object: {e}")))?;
             ObjectBody::OnDisk(path)
         }
@@ -153,7 +158,7 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
     bucket.objects.insert(key.to_string(), obj);
 
     if let Some(store) = state.body_store()
-        && let Err(e) = store.delete_multipart(bucket_name, upload_id)
+        && let Err(e) = store.delete_bucket("multipart", &format!("{bucket_name}/{upload_id}"))
     {
         tracing::warn!(bucket = %bucket_name, upload_id = %upload_id, error = %e, "delete multipart parts");
     }
@@ -183,7 +188,7 @@ pub fn abort_multipart_upload(state: &S3State, input: &Value) -> Result<Value, A
     }
 
     if let Some(store) = state.body_store()
-        && let Err(e) = store.delete_multipart(bucket_name, upload_id)
+        && let Err(e) = store.delete_bucket("multipart", &format!("{bucket_name}/{upload_id}"))
     {
         tracing::warn!(bucket = %bucket_name, upload_id = %upload_id, error = %e, "delete multipart parts");
     }

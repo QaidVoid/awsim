@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use crate::body_store::BodyStore;
+use awsim_core::BodyStore;
 
 /// Storage backing for an object's bytes — either fully in memory, or a path on
 /// disk that the body store owns.

@@ -70,7 +70,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
         let body = match state.body_store() {
             Some(store) => {
                 let path = store
-                    .write_object(bucket_name, key, &data)
+                    .write_blob("objects", bucket_name, key, &data)
                     .map_err(|e| AwsError::internal(format!("persist object: {e}")))?;
                 ObjectBody::OnDisk(path)
             }
@@ -180,7 +180,7 @@ pub fn delete_object(state: &S3State, input: &Value) -> Result<Value, AwsError> 
     bucket.objects.remove(key);
 
     if let Some(store) = state.body_store()
-        && let Err(e) = store.delete_object(bucket_name, key)
+        && let Err(e) = store.delete_blob("objects", bucket_name, key)
     {
         tracing::warn!(bucket = %bucket_name, key = %key, error = %e, "delete object body");
     }
@@ -239,7 +239,7 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
     let body = match state.body_store() {
         Some(store) => {
             let path = store
-                .write_object(dst_bucket, dst_key, &data)
+                .write_blob("objects", dst_bucket, dst_key, &data)
                 .map_err(|e| AwsError::internal(format!("persist object: {e}")))?;
             ObjectBody::OnDisk(path)
         }

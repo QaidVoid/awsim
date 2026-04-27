@@ -1,18 +1,16 @@
 pub mod authz;
-pub mod body_store;
 mod operations;
 pub mod state;
 mod util;
 
 pub use authz::S3ResourcePolicyLookup;
-pub use body_store::BodyStore;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use awsim_core::{
-    AccountRegionStore, AwsError, InternalEvent, Protocol, RequestContext, RouteDefinition,
-    ServiceHandler,
+    AccountRegionStore, AwsError, BodyStore, InternalEvent, Protocol, RequestContext,
+    RouteDefinition, ServiceHandler,
 };
 use serde_json::Value;
 use tracing::debug;
@@ -1324,7 +1322,7 @@ impl ServiceHandler for S3Service {
                     let dm = DashMap::new();
                     for meta in bs.objects {
                         let body = match state.body_store() {
-                            Some(store) => match store.object_path(&bs.name, &meta.key) {
+                            Some(store) => match store.blob_path("objects", &bs.name, &meta.key) {
                                 Ok(path) => ObjectBody::OnDisk(path),
                                 Err(e) => {
                                     tracing::warn!(
