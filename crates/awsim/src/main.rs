@@ -441,9 +441,12 @@ fn register_services(
     let sns = Arc::new(awsim_sns::SnsService::new());
     state.register(sns, vec![]);
 
-    let sqs = Arc::new(awsim_sqs::SqsService::new());
+    let sqs = match data_dir {
+        Some(dir) => awsim_sqs::SqsService::with_data_dir(dir),
+        None => awsim_sqs::SqsService::new(),
+    };
     let sqs_store = sqs.store();
-    state.register(sqs, vec![]);
+    state.register(Arc::new(sqs), vec![]);
 
     let dynamodb = Arc::new(awsim_dynamodb::DynamoDbService::new());
     state.register(dynamodb, vec![]);
