@@ -32,7 +32,26 @@ The following services write and restore snapshots:
 
 Services not in this list (e.g., Lambda, KMS, Secrets Manager) are always in-memory only.
 
-**Note on S3:** S3 bucket metadata and object metadata are persisted, but object data (the actual bytes) is not. After a restart, the bucket and object listings will be restored but `GetObject` will return empty content for previously stored objects.
+**Note on S3:** S3 bucket metadata and object metadata are persisted via the JSON snapshot. Object bodies (the raw bytes) are persisted separately to disk under `{data_dir}/s3/` whenever `--data-dir` is supplied — see [S3 object bodies](#s3-object-bodies) below.
+
+## S3 object bodies
+
+When `--data-dir` is set, the S3 service writes each `PutObject`, `CopyObject`, and assembled multipart upload to disk through a body store rooted at `{data_dir}/s3/`:
+
+```
+/var/lib/awsim/
+  s3/
+    objects/
+      <bucket>/<key>
+    multipart/
+      <bucket>/<upload-id>/<part-number>
+```
+
+Object metadata still rides in the regular `s3.json` snapshot. On restore, each object is wired up to its on-disk path and bytes are read lazily by `GetObject` rather than preloaded — keeping startup cheap even for large datasets. `DeleteObject`, `DeleteBucket`, `AbortMultipartUpload`, and `CompleteMultipartUpload` clean up their files on a best-effort basis (failures are logged via `tracing`).
+
+If a body file is missing on disk after a restart (for example, the data directory was partially wiped), `GetObject` returns `NoSuchKey` for that object.
+
+When `--data-dir` is not supplied, the service stays fully in-memory and object bodies are lost on shutdown.
 
 ## Snapshot Format
 
