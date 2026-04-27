@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::BodyStore;
 use dashmap::DashMap;
 use serde_json::Value;
 
@@ -128,4 +129,15 @@ pub struct LogsState {
     pub query_definitions: DashMap<String, QueryDefinition>,
     /// queryId → InsightsQuery
     pub insights_queries: DashMap<String, InsightsQuery>,
+    pub body_store: OnceLock<Arc<BodyStore>>,
+}
+
+impl LogsState {
+    pub fn body_store(&self) -> Option<&Arc<BodyStore>> {
+        self.body_store.get()
+    }
+
+    pub fn set_body_store(&self, store: Arc<BodyStore>) {
+        let _ = self.body_store.set(store);
+    }
 }

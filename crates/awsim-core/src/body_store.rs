@@ -129,6 +129,22 @@ impl BodyStore {
         Ok(total)
     }
 
+    pub fn group_size(&self, group: &str) -> io::Result<u64> {
+        let mut total: u64 = 0;
+        walk_files(&self.group_dir(group), &mut |_path, meta| {
+            total = total.saturating_add(meta.len());
+        })?;
+        Ok(total)
+    }
+
+    pub fn group_blob_count(&self, group: &str) -> io::Result<usize> {
+        let mut count: usize = 0;
+        walk_files(&self.group_dir(group), &mut |_path, _meta| {
+            count += 1;
+        })?;
+        Ok(count)
+    }
+
     pub fn evict_to_fit(&self, reserve: u64) -> io::Result<(usize, u64)> {
         let mut entries: Vec<(PathBuf, u64, SystemTime)> = Vec::new();
         walk_files(&self.root, &mut |path, meta| {
@@ -652,6 +668,34 @@ mod tests {
         assert!(path.exists());
         assert_eq!(store.read_blob("logs", "g", "s").unwrap(), b"abbccc");
         assert_eq!(path, store.blob_path("logs", "g", "s").unwrap());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn group_size_sums_only_target_group() {
+        let root = tmp_root("groupsize");
+        let store = BodyStore::new(root.clone());
+        store.write_blob("A", "b", "k1", b"abc").unwrap();
+        store.write_blob("A", "b", "k2", b"defg").unwrap();
+        store.write_blob("A", "b2", "k3", b"hi").unwrap();
+        store.write_blob("B", "b", "k1", b"ZZZZZZZZZZ").unwrap();
+        assert_eq!(store.group_size("A").unwrap(), 3 + 4 + 2);
+        assert_eq!(store.group_size("B").unwrap(), 10);
+        assert_eq!(store.group_size("missing").unwrap(), 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn group_blob_count_counts_only_target_group() {
+        let root = tmp_root("groupcount");
+        let store = BodyStore::new(root.clone());
+        store.write_blob("A", "b", "k1", b"x").unwrap();
+        store.write_blob("A", "b", "k2", b"y").unwrap();
+        store.write_blob("A", "b2", "deep/k3", b"z").unwrap();
+        store.write_blob("B", "b", "k1", b"q").unwrap();
+        assert_eq!(store.group_blob_count("A").unwrap(), 3);
+        assert_eq!(store.group_blob_count("B").unwrap(), 1);
+        assert_eq!(store.group_blob_count("missing").unwrap(), 0);
         let _ = fs::remove_dir_all(&root);
     }
 
