@@ -15,7 +15,7 @@ use crate::operations::{
     send_message, tags,
 };
 use crate::state::{
-    InflightMessage, Queue, QueueSnapshot, SqsState, SqsStateSnapshot,
+    InflightMessage, MessageBody, Queue, QueueSnapshot, SqsState, SqsStateSnapshot,
     parse_redrive_policy_from_attrs,
 };
 
@@ -224,6 +224,9 @@ impl ServiceHandler for SqsService {
             };
 
             let state = self.store.get(&account_id, &region);
+            if let Some(bs) = &self.body_store {
+                state.set_body_store(Arc::clone(bs));
+            }
 
             // Convert dedup_cache: epoch secs → Instant
             let dedup_cache: HashMap<String, (Instant, String)> = qs
@@ -239,9 +242,14 @@ impl ServiceHandler for SqsService {
                 })
                 .collect();
 
-            // Reinit instants on messages
+            // Reinit instants on messages and rebind on-disk bodies if persistence is on.
             for msg in qs.messages.iter_mut() {
                 msg.reinit_instants();
+                if let Some(bs) = &self.body_store
+                    && let Ok(path) = bs.blob_path("sqs", &qs.name, &msg.message_id)
+                {
+                    msg.body = MessageBody::OnDisk(path);
+                }
             }
 
             // Inflight messages: restore those whose visibility timeout hasn't expired yet;
@@ -249,6 +257,11 @@ impl ServiceHandler for SqsService {
             let mut inflight: HashMap<String, InflightMessage> = HashMap::new();
             for mut im in qs.inflight {
                 im.reinit_instants();
+                if let Some(bs) = &self.body_store
+                    && let Ok(path) = bs.blob_path("sqs", &qs.name, &im.message.message_id)
+                {
+                    im.message.body = MessageBody::OnDisk(path);
+                }
                 if im.visible_at_secs > now_epoch {
                     inflight.insert(im.receipt_handle.clone(), im);
                 } else {
