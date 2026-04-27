@@ -4,6 +4,7 @@ use std::sync::{Arc, OnceLock};
 
 use awsim_core::BodyStore;
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 
 /// A single image stored in a repository.
 #[derive(Debug, Clone)]
@@ -116,8 +117,52 @@ impl EcrState {
         self.body_store.get()
     }
 
-    #[allow(dead_code)]
     pub fn set_body_store(&self, store: Arc<BodyStore>) {
         let _ = self.body_store.set(store);
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EcrStateSnapshot {
+    pub repositories: Vec<RepositorySnapshot>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RepositorySnapshot {
+    pub account_id: String,
+    pub region: String,
+    pub name: String,
+    pub arn: String,
+    pub registry_id: String,
+    pub repository_uri: String,
+    pub created_at: String,
+    pub image_tag_mutability: String,
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
+    #[serde(default)]
+    pub lifecycle_policy: Option<String>,
+    #[serde(default)]
+    pub repository_policy: Option<String>,
+    #[serde(default)]
+    pub scan_on_push: bool,
+    #[serde(default)]
+    pub images: Vec<ImageSnapshot>,
+    #[serde(default)]
+    pub layers: Vec<LayerSnapshot>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ImageSnapshot {
+    pub image_digest: String,
+    pub image_tag: Option<String>,
+    pub image_manifest: String,
+    pub pushed_at: String,
+    pub image_size_in_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LayerSnapshot {
+    pub digest: String,
+    pub size: u64,
+    pub media_type: String,
 }

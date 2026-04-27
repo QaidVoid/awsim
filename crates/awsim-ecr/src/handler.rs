@@ -8,7 +8,10 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::operations::{auth, extras, images, registry, repositories, tags};
-use crate::state::EcrState;
+use crate::state::{
+    ContainerImage, EcrState, EcrStateSnapshot, ImageSnapshot, Layer, LayerBody, LayerSnapshot,
+    Repository, RepositorySnapshot,
+};
 
 /// The ECR service handler.
 pub struct EcrService {
@@ -160,5 +163,124 @@ impl ServiceHandler for EcrService {
 
             _ => Err(AwsError::unknown_operation(operation)),
         }
+    }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let repositories: Vec<RepositorySnapshot> = self
+            .store
+            .iter_all()
+            .into_iter()
+            .flat_map(|((account_id, region), state)| {
+                state
+                    .repositories
+                    .iter()
+                    .map(|entry| {
+                        let r = entry.value();
+                        RepositorySnapshot {
+                            account_id: account_id.clone(),
+                            region: region.clone(),
+                            name: r.name.clone(),
+                            arn: r.arn.clone(),
+                            registry_id: r.registry_id.clone(),
+                            repository_uri: r.repository_uri.clone(),
+                            created_at: r.created_at.clone(),
+                            image_tag_mutability: r.image_tag_mutability.clone(),
+                            tags: r.tags.clone(),
+                            lifecycle_policy: r.lifecycle_policy.clone(),
+                            repository_policy: r.repository_policy.clone(),
+                            scan_on_push: r.scan_on_push,
+                            images: r
+                                .images
+                                .iter()
+                                .map(|i| ImageSnapshot {
+                                    image_digest: i.image_digest.clone(),
+                                    image_tag: i.image_tag.clone(),
+                                    image_manifest: i.image_manifest.clone(),
+                                    pushed_at: i.pushed_at.clone(),
+                                    image_size_in_bytes: i.image_size_in_bytes,
+                                })
+                                .collect(),
+                            layers: r
+                                .layers
+                                .iter()
+                                .map(|entry| {
+                                    let l = entry.value();
+                                    LayerSnapshot {
+                                        digest: l.digest.clone(),
+                                        size: l.size,
+                                        media_type: l.media_type.clone(),
+                                    }
+                                })
+                                .collect(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        serde_json::to_vec(&EcrStateSnapshot { repositories }).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let snapshot: EcrStateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+
+        for rs in snapshot.repositories {
+            let state = self.store.get(&rs.account_id, &rs.region);
+            if let Some(bs) = &self.body_store {
+                state.set_body_store(Arc::clone(bs));
+            }
+
+            let images: Vec<ContainerImage> = rs
+                .images
+                .into_iter()
+                .map(|i| ContainerImage {
+                    image_digest: i.image_digest,
+                    image_tag: i.image_tag,
+                    image_manifest: i.image_manifest,
+                    pushed_at: i.pushed_at,
+                    image_size_in_bytes: i.image_size_in_bytes,
+                })
+                .collect();
+
+            let layers = dashmap::DashMap::new();
+            for ls in rs.layers {
+                let body = match self.body_store.as_ref() {
+                    Some(bs) => match bs.blob_path("ecr", &rs.name, &ls.digest) {
+                        Ok(p) => LayerBody::OnDisk(p),
+                        Err(_) => continue,
+                    },
+                    None => continue,
+                };
+                layers.insert(
+                    ls.digest.clone(),
+                    Layer {
+                        digest: ls.digest,
+                        body,
+                        size: ls.size,
+                        media_type: ls.media_type,
+                    },
+                );
+            }
+
+            let repo = Repository {
+                name: rs.name.clone(),
+                arn: rs.arn,
+                registry_id: rs.registry_id,
+                repository_uri: rs.repository_uri,
+                images,
+                layers,
+                created_at: rs.created_at,
+                image_tag_mutability: rs.image_tag_mutability,
+                tags: rs.tags,
+                lifecycle_policy: rs.lifecycle_policy,
+                lifecycle_policy_preview: None,
+                repository_policy: rs.repository_policy,
+                scan_on_push: rs.scan_on_push,
+            };
+
+            state.repositories.insert(rs.name, repo);
+        }
+
+        Ok(())
     }
 }
