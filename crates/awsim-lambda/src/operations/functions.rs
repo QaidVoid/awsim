@@ -1,10 +1,10 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, Body, RequestContext};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use crate::{
     error::{invalid_parameter, resource_conflict, resource_not_found},
-    state::{FunctionCode, LambdaFunction, LambdaState},
+    state::{LambdaFunction, LambdaState},
     util::{decode_zip, now_iso8601, opt_str, require_str, sha256_base64},
 };
 
@@ -79,7 +79,7 @@ pub(crate) fn persist_code(
     function_name: &str,
     key: &str,
     bytes: Option<Vec<u8>>,
-) -> Result<Option<FunctionCode>, AwsError> {
+) -> Result<Option<Body>, AwsError> {
     let Some(bytes) = bytes else {
         return Ok(None);
     };
@@ -88,9 +88,9 @@ pub(crate) fn persist_code(
             let path = store
                 .write_blob("lambda", function_name, key, &bytes)
                 .map_err(|e| AwsError::internal(format!("persist function code: {e}")))?;
-            Ok(Some(FunctionCode::OnDisk(path)))
+            Ok(Some(Body::OnDisk(path)))
         }
-        None => Ok(Some(FunctionCode::InMemory(bytes))),
+        None => Ok(Some(Body::InMemory(bytes))),
     }
 }
 

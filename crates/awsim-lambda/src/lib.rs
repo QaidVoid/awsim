@@ -12,14 +12,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use awsim_core::{
-    AccountRegionStore, AwsError, BodyStore, Protocol, RequestContext, RouteDefinition,
+    AccountRegionStore, AwsError, Body, BodyStore, Protocol, RequestContext, RouteDefinition,
     ServiceHandler,
 };
 use serde_json::Value;
 use tracing::debug;
 
 use state::{
-    Alias, AliasSnapshot, FunctionCode, FunctionSnapshot, FunctionVersion, FunctionVersionSnapshot,
+    Alias, AliasSnapshot, FunctionSnapshot, FunctionVersion, FunctionVersionSnapshot,
     LambdaFunction, LambdaState, LambdaStateSnapshot,
 };
 
@@ -518,7 +518,7 @@ impl ServiceHandler for LambdaService {
                 .body_store
                 .as_ref()
                 .and_then(|bs| bs.blob_path("lambda", &fs.name, "$LATEST").ok())
-                .map(FunctionCode::OnDisk);
+                .map(Body::OnDisk);
 
             let versions: Vec<FunctionVersion> = fs
                 .versions
@@ -528,7 +528,7 @@ impl ServiceHandler for LambdaService {
                         .body_store
                         .as_ref()
                         .and_then(|bs| bs.blob_path("lambda", &fs.name, &v.version).ok())
-                        .map(FunctionCode::OnDisk);
+                        .map(Body::OnDisk);
                     FunctionVersion {
                         version: v.version,
                         description: v.description,
