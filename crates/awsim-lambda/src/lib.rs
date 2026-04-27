@@ -37,10 +37,9 @@ impl LambdaService {
     }
 
     pub fn with_data_dir(dir: impl AsRef<Path>) -> Self {
-        let root = dir.as_ref().join("lambda");
         Self {
             store: AccountRegionStore::new(),
-            body_store: Some(Arc::new(BodyStore::new(root))),
+            body_store: Some(Arc::new(BodyStore::new(dir.as_ref().to_path_buf()))),
         }
     }
 
