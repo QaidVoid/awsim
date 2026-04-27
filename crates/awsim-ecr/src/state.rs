@@ -25,7 +25,6 @@ pub struct LayerUpload {
     pub part_data: Vec<u8>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum LayerBody {
     InMemory(Vec<u8>),
@@ -49,9 +48,9 @@ impl LayerBody {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Layer {
+    #[allow(dead_code)]
     pub digest: String,
     pub body: LayerBody,
     pub size: u64,
@@ -66,7 +65,6 @@ pub struct Repository {
     pub registry_id: String,
     pub repository_uri: String,
     pub images: Vec<ContainerImage>,
-    #[allow(dead_code)]
     pub layers: DashMap<String, Layer>,
     pub created_at: String,
     pub image_tag_mutability: String,

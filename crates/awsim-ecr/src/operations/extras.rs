@@ -5,8 +5,9 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::state::EcrState;
-use crate::state::LayerUpload;
+use crate::state::{EcrState, Layer, LayerBody, LayerUpload};
+
+const DEFAULT_LAYER_MEDIA_TYPE: &str = "application/vnd.docker.image.rootfs.diff.tar.gzip";
 
 fn now_epoch_str() -> String {
     SystemTime::now()
@@ -413,20 +414,31 @@ pub fn complete_layer_upload(
         AwsError::bad_request("InvalidParameterException", "uploadId is required")
     })?;
 
-    let upload = state.layer_uploads.get(upload_id).ok_or_else(|| {
+    let repo = state
+        .repositories
+        .get(repo_name)
+        .ok_or_else(|| repo_not_found(repo_name))?;
+
+    let (_, upload) = state.layer_uploads.remove(upload_id).ok_or_else(|| {
         AwsError::not_found(
             "UploadNotFoundException",
             format!("Upload session '{upload_id}' not found"),
         )
     })?;
 
-    // Compute a digest for the layer
+    let bytes = upload.part_data;
     let mut hasher = Sha256::new();
-    hasher.update(&upload.part_data);
+    hasher.update(&bytes);
     let layer_digest = format!("sha256:{:x}", hasher.finalize());
+    let size = bytes.len() as u64;
 
-    drop(upload);
-    state.layer_uploads.remove(upload_id);
+    let layer = Layer {
+        digest: layer_digest.clone(),
+        body: LayerBody::InMemory(bytes),
+        size,
+        media_type: DEFAULT_LAYER_MEDIA_TYPE.to_string(),
+    };
+    repo.layers.insert(layer_digest.clone(), layer);
 
     Ok(json!({
         "registryId": ctx.account_id,
