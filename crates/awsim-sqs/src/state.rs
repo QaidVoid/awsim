@@ -1,8 +1,40 @@
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone)]
+pub enum MessageBody {
+    InMemory(String),
+    OnDisk(PathBuf),
+}
+
+impl MessageBody {
+    pub fn read(&self) -> std::io::Result<String> {
+        match self {
+            Self::InMemory(s) => Ok(s.clone()),
+            Self::OnDisk(p) => std::fs::read_to_string(p),
+        }
+    }
+}
+
+impl Serialize for MessageBody {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::InMemory(s) => ser.serialize_some(s),
+            Self::OnDisk(_) => ser.serialize_none(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MessageBody {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let opt = Option::<String>::deserialize(de)?;
+        Ok(MessageBody::InMemory(opt.unwrap_or_default()))
+    }
+}
 
 /// RedrivePolicy parsed from a queue attribute.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +57,7 @@ pub struct MessageAttribute {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub message_id: String,
-    pub body: String,
+    pub body: MessageBody,
     pub md5_of_body: String,
     pub attributes: HashMap<String, String>,
     pub message_attributes: HashMap<String, MessageAttribute>,

@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::state::{Message, MessageAttribute, SqsState};
+use crate::state::{Message, MessageAttribute, MessageBody, SqsState};
 use crate::util::{md5_of, queue_name_from_url};
 
 pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
@@ -133,7 +133,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
 
     let msg = Message {
         message_id: message_id.clone(),
-        body: body.to_string(),
+        body: MessageBody::InMemory(body.to_string()),
         md5_of_body: md5.clone(),
         attributes,
         message_attributes,

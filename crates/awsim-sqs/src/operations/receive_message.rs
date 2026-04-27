@@ -143,10 +143,15 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                 }
             }
 
+            let body_str = msg
+                .body
+                .read()
+                .map_err(|e| AwsError::internal(format!("failed to read message body: {e}")))?;
+
             let mut msg_json = json!({
                 "MessageId": msg.message_id,
                 "ReceiptHandle": receipt_handle,
-                "Body": msg.body,
+                "Body": body_str,
                 "MD5OfBody": msg.md5_of_body,
             });
 
