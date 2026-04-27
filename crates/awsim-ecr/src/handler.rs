@@ -2,15 +2,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use awsim_core::{
-    AccountRegionStore, AwsError, BodyStore, Protocol, RequestContext, ServiceHandler,
+    AccountRegionStore, AwsError, Body, BodyStore, Protocol, RequestContext, ServiceHandler,
 };
 use serde_json::Value;
 use tracing::debug;
 
 use crate::operations::{auth, extras, images, registry, repositories, tags};
 use crate::state::{
-    ContainerImage, EcrState, EcrStateSnapshot, ImageSnapshot, Layer, LayerBody, LayerSnapshot,
-    Repository, RepositorySnapshot,
+    ContainerImage, EcrState, EcrStateSnapshot, ImageSnapshot, Layer, LayerSnapshot, Repository,
+    RepositorySnapshot,
 };
 
 /// The ECR service handler.
@@ -257,7 +257,7 @@ impl ServiceHandler for EcrService {
             for ls in rs.layers {
                 let body = match self.body_store.as_ref() {
                     Some(bs) => match bs.blob_path("ecr", &rs.name, &ls.digest) {
-                        Ok(p) => LayerBody::OnDisk(p),
+                        Ok(p) => Body::OnDisk(p),
                         Err(_) => continue,
                     },
                     None => continue,

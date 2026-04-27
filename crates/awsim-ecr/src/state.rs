@@ -1,8 +1,7 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use awsim_core::BodyStore;
+use awsim_core::{Body, BodyStore};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
@@ -27,33 +26,10 @@ pub struct LayerUpload {
 }
 
 #[derive(Debug, Clone)]
-pub enum LayerBody {
-    InMemory(Vec<u8>),
-    OnDisk(PathBuf),
-}
-
-#[allow(dead_code)]
-impl LayerBody {
-    pub fn read_all(&self) -> std::io::Result<Vec<u8>> {
-        match self {
-            LayerBody::InMemory(b) => Ok(b.clone()),
-            LayerBody::OnDisk(p) => std::fs::read(p),
-        }
-    }
-
-    pub fn len_hint(&self) -> Option<u64> {
-        match self {
-            LayerBody::InMemory(b) => Some(b.len() as u64),
-            LayerBody::OnDisk(p) => std::fs::metadata(p).ok().map(|m| m.len()),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct Layer {
     #[allow(dead_code)]
     pub digest: String,
-    pub body: LayerBody,
+    pub body: Body,
     pub size: u64,
     pub media_type: String,
 }

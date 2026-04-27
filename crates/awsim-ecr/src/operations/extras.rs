@@ -1,13 +1,13 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, Body, RequestContext};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use tracing::warn;
 
-use crate::state::{EcrState, Layer, LayerBody, LayerUpload};
+use crate::state::{EcrState, Layer, LayerUpload};
 
 const DEFAULT_LAYER_MEDIA_TYPE: &str = "application/vnd.docker.image.rootfs.diff.tar.gzip";
 const ECR_LAYER_GROUP: &str = "ecr";
@@ -455,13 +455,13 @@ pub fn complete_layer_upload(
 
     let body = match state.body_store() {
         Some(bs) => match bs.write_blob(ECR_LAYER_GROUP, repo_name, &layer_digest, &bytes) {
-            Ok(path) => LayerBody::OnDisk(path),
+            Ok(path) => Body::OnDisk(path),
             Err(e) => {
                 warn!(repo = repo_name, digest = %layer_digest, error = %e, "Failed to persist ECR layer; falling back to in-memory");
-                LayerBody::InMemory(bytes)
+                Body::InMemory(bytes)
             }
         },
-        None => LayerBody::InMemory(bytes),
+        None => Body::InMemory(bytes),
     };
 
     let layer = Layer {
