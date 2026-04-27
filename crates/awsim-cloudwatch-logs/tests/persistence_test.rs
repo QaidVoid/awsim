@@ -1,0 +1,187 @@
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use awsim_cloudwatch_logs::CloudWatchLogsService;
+use awsim_core::{RequestContext, ServiceHandler};
+use serde_json::json;
+
+static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn tmp_dir(label: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("awsim-logs-persist-{label}-{nanos}-{n}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn ctx() -> RequestContext {
+    RequestContext::new("logs", "us-east-1")
+}
+
+#[tokio::test]
+async fn put_then_restart_then_get_round_trips_events() {
+    let dir = tmp_dir("round-trip");
+    let group = "persist-group";
+    let stream = "stream-1";
+
+    let snapshot = {
+        let svc = CloudWatchLogsService::with_data_dir(&dir);
+        svc.handle("CreateLogGroup", json!({ "logGroupName": group }), &ctx())
+            .await
+            .unwrap();
+        svc.handle(
+            "CreateLogStream",
+            json!({ "logGroupName": group, "logStreamName": stream }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "PutLogEvents",
+            json!({
+                "logGroupName": group,
+                "logStreamName": stream,
+                "logEvents": [
+                    { "timestamp": 1000u64, "message": "first" },
+                    { "timestamp": 2000u64, "message": "second" },
+                    { "timestamp": 3000u64, "message": "third" },
+                    { "timestamp": 4000u64, "message": "fourth" },
+                    { "timestamp": 5000u64, "message": "fifth" },
+                ],
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.snapshot().expect("snapshot bytes")
+    };
+
+    let blob_path = dir.join("cloudwatch-logs").join(group).join(stream);
+    assert!(
+        blob_path.exists(),
+        "JSONL file should exist at {blob_path:?}"
+    );
+    let raw = std::fs::read_to_string(&blob_path).unwrap();
+    assert_eq!(raw.lines().count(), 5);
+
+    let svc2 = CloudWatchLogsService::with_data_dir(&dir);
+    svc2.restore(&snapshot).expect("restore");
+
+    let got = svc2
+        .handle(
+            "GetLogEvents",
+            json!({
+                "logGroupName": group,
+                "logStreamName": stream,
+                "startFromHead": true,
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+
+    let events = got["events"].as_array().expect("events array");
+    assert_eq!(events.len(), 5);
+    let want: Vec<(u64, &str)> = vec![
+        (1000, "first"),
+        (2000, "second"),
+        (3000, "third"),
+        (4000, "fourth"),
+        (5000, "fifth"),
+    ];
+    for (i, (ts, msg)) in want.into_iter().enumerate() {
+        assert_eq!(events[i]["timestamp"].as_u64(), Some(ts), "ts at idx {i}");
+        assert_eq!(events[i]["message"].as_str(), Some(msg), "msg at idx {i}");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn delete_log_stream_removes_persisted_blob() {
+    let dir = tmp_dir("delete-stream");
+    let group = "persist-del-stream";
+    let stream = "to-delete";
+
+    let svc = CloudWatchLogsService::with_data_dir(&dir);
+    svc.handle("CreateLogGroup", json!({ "logGroupName": group }), &ctx())
+        .await
+        .unwrap();
+    svc.handle(
+        "CreateLogStream",
+        json!({ "logGroupName": group, "logStreamName": stream }),
+        &ctx(),
+    )
+    .await
+    .unwrap();
+    svc.handle(
+        "PutLogEvents",
+        json!({
+            "logGroupName": group,
+            "logStreamName": stream,
+            "logEvents": [{ "timestamp": 1u64, "message": "x" }],
+        }),
+        &ctx(),
+    )
+    .await
+    .unwrap();
+
+    let blob_path = dir.join("cloudwatch-logs").join(group).join(stream);
+    assert!(blob_path.exists());
+
+    svc.handle(
+        "DeleteLogStream",
+        json!({ "logGroupName": group, "logStreamName": stream }),
+        &ctx(),
+    )
+    .await
+    .unwrap();
+    assert!(!blob_path.exists());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn delete_log_group_removes_persisted_directory() {
+    let dir = tmp_dir("delete-group");
+    let group = "persist-del-group";
+    let stream = "s";
+
+    let svc = CloudWatchLogsService::with_data_dir(&dir);
+    svc.handle("CreateLogGroup", json!({ "logGroupName": group }), &ctx())
+        .await
+        .unwrap();
+    svc.handle(
+        "CreateLogStream",
+        json!({ "logGroupName": group, "logStreamName": stream }),
+        &ctx(),
+    )
+    .await
+    .unwrap();
+    svc.handle(
+        "PutLogEvents",
+        json!({
+            "logGroupName": group,
+            "logStreamName": stream,
+            "logEvents": [{ "timestamp": 1u64, "message": "y" }],
+        }),
+        &ctx(),
+    )
+    .await
+    .unwrap();
+
+    let group_dir = dir.join("cloudwatch-logs").join(group);
+    assert!(group_dir.exists());
+
+    svc.handle("DeleteLogGroup", json!({ "logGroupName": group }), &ctx())
+        .await
+        .unwrap();
+    assert!(!group_dir.exists());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
