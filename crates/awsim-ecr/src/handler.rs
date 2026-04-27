@@ -2,7 +2,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use awsim_core::{
-    AccountRegionStore, AwsError, Body, BodyStore, Protocol, RequestContext, ServiceHandler,
+    AccountRegionStore, AwsError, BlobInventory, Body, BodyStore, Protocol, RequestContext,
+    ServiceHandler,
 };
 use serde_json::Value;
 use tracing::debug;
@@ -54,6 +55,12 @@ impl EcrService {
         self.store.clone()
     }
 
+    pub fn body_store(&self) -> Option<&Arc<BodyStore>> {
+        self.body_store.as_ref()
+    }
+
+    pub const GROUPS: &'static [&'static str] = &["ecr"];
+
     fn rebind_layer_bodies(&self) {
         for (_, state) in self.store.iter_all() {
             if let Some(bs) = &self.body_store {
@@ -85,6 +92,21 @@ impl EcrService {
 impl Default for EcrService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl BlobInventory for EcrService {
+    fn known_blobs(&self) -> Vec<(String, String, String)> {
+        let mut out = Vec::new();
+        for (_, state) in self.store.iter_all() {
+            for repo_entry in state.repositories.iter() {
+                let name = repo_entry.key().clone();
+                for layer_entry in repo_entry.value().layers.iter() {
+                    out.push(("ecr".to_string(), name.clone(), layer_entry.key().clone()));
+                }
+            }
+        }
+        out
     }
 }
 
