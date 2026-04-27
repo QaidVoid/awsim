@@ -11,9 +11,17 @@ use tracing::{debug, info, warn};
 use crate::ServiceHandler;
 use crate::auth;
 use crate::authz::AuthzEngine;
+use crate::body_store::BodyStore;
 use crate::error::AwsError;
 use crate::events::EventBus;
 use crate::protocol::{self, Protocol, RouteDefinition};
+
+#[derive(Clone)]
+pub struct BodyStoreHandle {
+    pub service_name: String,
+    pub groups: Vec<String>,
+    pub body_store: Arc<BodyStore>,
+}
 
 /// Shared application state passed to all request handlers.
 #[derive(Clone)]
@@ -34,6 +42,10 @@ pub struct AppState {
     pub start_time: std::time::Instant,
     /// IAM authorization engine — opt-in via AWSIM_IAM_ENFORCE=true.
     pub authz: Arc<AuthzEngine>,
+    /// Per-service `BodyStore` handles, populated when persistence is enabled.
+    pub body_stores: Arc<Vec<BodyStoreHandle>>,
+    /// Persistence root directory, when persistence is enabled.
+    pub data_dir: Option<Arc<std::path::PathBuf>>,
 }
 
 impl AppState {
@@ -47,6 +59,8 @@ impl AppState {
             request_count: Arc::new(AtomicU64::new(0)),
             start_time: std::time::Instant::now(),
             authz: Arc::new(AuthzEngine::from_env()),
+            body_stores: Arc::new(Vec::new()),
+            data_dir: None,
         }
     }
 

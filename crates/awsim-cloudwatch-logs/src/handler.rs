@@ -5,10 +5,10 @@ use awsim_core::{
     AccountRegionStore, AwsError, BodyStore, Protocol, RequestContext, ServiceHandler,
 };
 use serde_json::Value;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::operations::{filters, log_events, log_groups, log_streams};
-use crate::state::LogsState;
+use crate::state::{LogEvent, LogsState};
 
 /// The CloudWatch Logs service handler.
 pub struct CloudWatchLogsService {
@@ -55,6 +55,81 @@ impl CloudWatchLogsService {
             state.set_body_store(Arc::clone(bs));
         }
         state
+    }
+
+    fn rebind_and_replay(&self) {
+        let Some(bs) = &self.body_store else {
+            return;
+        };
+        for (_, state) in self.store.iter_all() {
+            state.set_body_store(Arc::clone(bs));
+            for group_entry in state.log_groups.iter() {
+                let group_name = group_entry.key().clone();
+                let group = group_entry.value();
+                for stream_entry in group.streams.iter() {
+                    let stream_name = stream_entry.key().clone();
+                    let stream = stream_entry.value();
+                    let events = match bs.read_blob("cloudwatch-logs", &group_name, &stream_name) {
+                        Ok(b) => b,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(e) => {
+                            warn!(
+                                log_group = %group_name,
+                                log_stream = %stream_name,
+                                error = %e,
+                                "Failed to read persisted log stream during restore"
+                            );
+                            continue;
+                        }
+                    };
+                    let text = match std::str::from_utf8(&events) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(
+                                log_group = %group_name,
+                                log_stream = %stream_name,
+                                error = %e,
+                                "Persisted log stream is not valid utf-8"
+                            );
+                            continue;
+                        }
+                    };
+                    let mut restored: Vec<LogEvent> = Vec::new();
+                    for (lineno, line) in text.lines().enumerate() {
+                        if line.trim().is_empty() {
+                            continue;
+                        }
+                        match serde_json::from_str::<Value>(line) {
+                            Ok(v) => {
+                                let ts = v.get("ts").and_then(|x| x.as_u64()).unwrap_or(0);
+                                let msg = v
+                                    .get("msg")
+                                    .and_then(|x| x.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let ing = v.get("ing").and_then(|x| x.as_u64()).unwrap_or(0);
+                                restored.push(LogEvent {
+                                    timestamp: ts,
+                                    message: msg,
+                                    ingestion_time: ing,
+                                });
+                            }
+                            Err(e) => {
+                                warn!(
+                                    log_group = %group_name,
+                                    log_stream = %stream_name,
+                                    line = lineno,
+                                    error = %e,
+                                    "Skipping malformed JSONL line during restore"
+                                );
+                            }
+                        }
+                    }
+                    restored.sort_by_key(|e| e.timestamp);
+                    *stream.events.write().unwrap() = restored;
+                }
+            }
+        }
     }
 }
 
@@ -138,5 +213,15 @@ impl ServiceHandler for CloudWatchLogsService {
 
             _ => Err(AwsError::unknown_operation(operation)),
         }
+    }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        self.store.snapshot_to_bytes()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        self.store.restore_from_bytes(data)?;
+        self.rebind_and_replay();
+        Ok(())
     }
 }

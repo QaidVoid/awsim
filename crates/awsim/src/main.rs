@@ -3,7 +3,9 @@ use clap::Parser;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use awsim_core::{AppState, BlobInventory, BodyStore, PersistenceManager, RequestContext};
+use awsim_core::{
+    AppState, BlobInventory, BodyStore, BodyStoreHandle, PersistenceManager, RequestContext,
+};
 
 mod admin;
 mod integrations;
@@ -85,6 +87,52 @@ async fn main() -> Result<()> {
         cli.port,
         cli.max_blob_bytes,
     );
+
+    let mut body_stores: Vec<BodyStoreHandle> = Vec::new();
+    if let Some(bs) = s3_service.body_store() {
+        body_stores.push(BodyStoreHandle {
+            service_name: "s3".to_string(),
+            groups: awsim_s3::S3Service::GROUPS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            body_store: Arc::clone(bs),
+        });
+    }
+    if let Some(bs) = lambda_service.body_store() {
+        body_stores.push(BodyStoreHandle {
+            service_name: "lambda".to_string(),
+            groups: awsim_lambda::LambdaService::GROUPS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            body_store: Arc::clone(bs),
+        });
+    }
+    if let Some(bs) = sqs_service.body_store() {
+        body_stores.push(BodyStoreHandle {
+            service_name: "sqs".to_string(),
+            groups: awsim_sqs::SqsService::GROUPS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            body_store: Arc::clone(bs),
+        });
+    }
+    if let Some(bs) = ecr_service.body_store() {
+        body_stores.push(BodyStoreHandle {
+            service_name: "ecr".to_string(),
+            groups: awsim_ecr::EcrService::GROUPS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            body_store: Arc::clone(bs),
+        });
+    }
+    state.body_stores = Arc::new(body_stores);
+    if let Some(ref dir) = cli.data_dir {
+        state.data_dir = Some(Arc::new(std::path::PathBuf::from(dir)));
+    }
 
     if let Some(authz) = Arc::get_mut(&mut state.authz) {
         authz.principal_lookup = Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store));
