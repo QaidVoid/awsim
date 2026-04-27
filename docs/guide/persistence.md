@@ -164,3 +164,31 @@ INFO BodyStore GC reclaimed orphaned blobs service="s3" deleted=70 freed_bytes=1
 ```
 
 To opt out, pass `--no-gc` (or set `AWSIM_NO_GC=1`). Disabling GC leaves orphaned files in place; they accumulate until the next GC-enabled startup.
+
+### Periodic GC
+
+By default, the orphan sweep runs only at startup. Pass `--gc-interval-secs <N>` (or set `AWSIM_GC_INTERVAL_SECS=N`) to also re-run it every `N` seconds in the background:
+
+```bash
+./awsim --data-dir /var/lib/awsim --gc-interval-secs 300
+```
+
+Each iteration walks the same per-service inventories as the startup sweep and logs a one-line summary per service. The flag is opt-in; leaving it unset preserves the current "startup only" behavior.
+
+## Disk space limit
+
+Long-running services with high write volume — large S3 uploads, busy SQS queues, frequent Lambda code updates, and pushes to ECR — can grow the body store unbounded. Pass `--max-blob-bytes <N>` (or set `AWSIM_MAX_BLOB_BYTES=N`) to cap each persisted service's body store at `N` bytes:
+
+```bash
+./awsim --data-dir /var/lib/awsim --max-blob-bytes 1073741824   # 1 GiB per service
+```
+
+The cap is applied independently to S3, Lambda, SQS, and ECR — each service may use up to `N` bytes. When a `write_blob` would push a service over its cap, AWSim deletes the oldest files (by modification time) until the new write fits, then writes the new blob.
+
+Eviction caveats:
+
+- Evicted blobs are removed from disk but their metadata still lives in the in-memory inventory (and the next snapshot). Subsequent `GetObject`, `ReceiveMessage`, `Invoke`, or layer-blob fetches for an evicted blob return `NoSuchKey` / "missing body" errors. The cap takes precedence over data integrity.
+- A single write larger than the cap fails immediately with an out-of-space error after attempting eviction.
+- The cap is per-service, not global. To bound the total directory, divide your overall budget across services and set the smallest reasonable `--max-blob-bytes`.
+
+When the flag is unset, body stores grow without limit (the current default).
