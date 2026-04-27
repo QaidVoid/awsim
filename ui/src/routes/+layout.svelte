@@ -1,78 +1,110 @@
 <script lang="ts">
 	import '../app.css';
-
-	const services = [
-		{ name: 'S3', href: '/s3', icon: '📦' },
-		{ name: 'DynamoDB', href: '/dynamodb', icon: '🗄️' },
-		{ name: 'SQS', href: '/sqs', icon: '📬' },
-		{ name: 'SNS', href: '/sns', icon: '📢' },
-		{ name: 'Lambda', href: '/lambda', icon: 'λ' },
-		{ name: 'IAM', href: '/iam', icon: '🔑' },
-		{ name: 'CloudWatch', href: '/cloudwatch', icon: '📊' },
-		{ name: 'EventBridge', href: '/eventbridge', icon: '⚡' },
-		{ name: 'KMS', href: '/kms', icon: '🔐' },
-		{ name: 'Secrets', href: '/secrets', icon: '🤫' },
-		{ name: 'SSM', href: '/ssm', icon: '⚙️' },
-		{ name: 'STS', href: '/sts', icon: '🎫' },
-		{ name: 'Kinesis', href: '/kinesis', icon: '🌊' },
-		{ name: 'Step Functions', href: '/stepfunctions', icon: '🔄' },
-		{ name: 'SES', href: '/ses', icon: '✉️' },
-		{ name: 'Cognito', href: '/cognito', icon: '👤' },
-		{ name: 'EC2', href: '/ec2', icon: '🖥️' },
-		{ name: 'RDS', href: '/rds', icon: '🗃️' },
-		{ name: 'ECS', href: '/ecs', icon: '🐳' },
-		{ name: 'ECR', href: '/ecr', icon: '📋' },
-		{ name: 'CloudFormation', href: '/cloudformation', icon: '🏗️' },
-		{ name: 'ELB', href: '/elb', icon: '⚖️' },
-		{ name: 'CloudFront', href: '/cloudfront', icon: '🌍' },
-		{ name: 'API Gateway', href: '/apigateway', icon: '🌐' },
-		{ name: 'AppSync', href: '/appsync', icon: '🔗' },
-		{ name: 'Bedrock', href: '/bedrock', icon: '🪨' },
-		{ name: 'Route53', href: '/route53', icon: '🌐' },
-		{ name: 'CloudWatch Metrics', href: '/monitoring', icon: '📈' },
-		{ name: 'Athena', href: '/athena', icon: '🔍' },
-		{ name: 'Batch', href: '/batch', icon: '🧪' },
-		{ name: 'CloudTrail', href: '/cloudtrail', icon: '🪵' },
-		{ name: 'DataSync', href: '/datasync', icon: '🔄' },
-		{ name: 'EKS', href: '/eks', icon: '☸️' },
-		{ name: 'Firehose', href: '/firehose', icon: '🚒' },
-		{ name: 'Glue', href: '/glue', icon: '🗂️' },
-		{ name: 'ACM', href: '/acm', icon: '🔏' },
-		{ name: 'Organizations', href: '/organizations', icon: '🏢' },
-		{ name: 'Polly', href: '/polly', icon: '🗣️' },
-		{ name: 'SSO Admin', href: '/sso', icon: '🔐' },
-		{ name: 'WAF', href: '/waf', icon: '🛡️' },
-		{ name: 'Scheduler', href: '/scheduler', icon: '🕒' },
-		{ name: 'Request Log', href: '/logs', icon: '📋' },
-	];
+	import { onMount } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
+	import { page } from '$app/state';
+	import { Sheet, SheetContent } from '$lib/components/ui/sheet';
+	import { Toaster } from '$lib/components/ui/sonner';
+	import { TooltipProvider } from '$lib/components/ui/tooltip';
+	import AppSidebar from '$lib/components/app-sidebar.svelte';
+	import AppTopbar from '$lib/components/app-topbar.svelte';
+	import CommandPalette from '$lib/components/command-palette.svelte';
+	import { fetchConfig } from '$lib/api';
+	import { recent } from '$lib/recent.svelte';
 
 	let { children } = $props();
+
+	// Sidebar collapse persistence
+	const COLLAPSE_KEY = 'awsim-sidebar-collapsed';
+	let sidebarCollapsed = $state(false);
+	let mobileOpen = $state(false);
+	let paletteOpen = $state(false);
+	let config = $state<{ region?: string; accountId?: string } | null>(null);
+
+	onMount(() => {
+		try {
+			sidebarCollapsed = localStorage.getItem(COLLAPSE_KEY) === '1';
+		} catch {
+			/* ignore */
+		}
+		fetchConfig()
+			.then((c) => (config = c))
+			.catch(() => {
+				/* leave defaults */
+			});
+
+		const onKey = (e: KeyboardEvent) => {
+			if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+				e.preventDefault();
+				paletteOpen = !paletteOpen;
+			}
+		};
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+	});
+
+	function toggleCollapse() {
+		sidebarCollapsed = !sidebarCollapsed;
+		try {
+			localStorage.setItem(COLLAPSE_KEY, sidebarCollapsed ? '1' : '0');
+		} catch {
+			/* ignore */
+		}
+	}
+
+	// Track recent paths for the command palette.
+	afterNavigate(() => {
+		const path = page.url?.pathname;
+		if (path && path !== '/') recent.push(path);
+		mobileOpen = false;
+	});
 </script>
 
-<!-- Dark theme with zinc colors -->
-<div class="flex h-screen bg-zinc-950 text-zinc-100">
-	<!-- Sidebar -->
-	<aside class="w-56 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 overflow-y-auto">
-		<div class="p-4 border-b border-zinc-800">
-			<a href="/" class="text-xl font-bold text-orange-400 hover:text-orange-300">AWSim</a>
-			<p class="text-xs text-zinc-500 mt-1">Local AWS Emulator</p>
-		</div>
-		<nav class="flex-1 py-2">
-			{#each services as svc}
-				<a href={svc.href}
-				   class="flex items-center gap-2 px-4 py-1.5 text-sm text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors">
-					<span class="w-5 text-center text-xs">{svc.icon}</span>
-					{svc.name}
-				</a>
-			{/each}
-		</nav>
-		<div class="p-3 border-t border-zinc-800 text-xs text-zinc-600">
-			v0.1.0
-		</div>
-	</aside>
+<TooltipProvider delayDuration={150}>
+	<div class="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
+		<AppTopbar
+			region={config?.region}
+			accountId={config?.accountId}
+			onOpenPalette={() => (paletteOpen = true)}
+			onOpenMobileNav={() => (mobileOpen = true)}
+		/>
 
-	<!-- Main content -->
-	<main class="flex-1 overflow-y-auto">
-		{@render children()}
-	</main>
-</div>
+		<div class="flex min-h-0 flex-1">
+			<!-- Desktop sidebar -->
+			<aside class="hidden h-full md:block">
+				<AppSidebar
+					collapsed={sidebarCollapsed}
+					onCollapseToggle={toggleCollapse}
+				/>
+			</aside>
+
+			<!-- Mobile sidebar via sheet -->
+			<Sheet bind:open={mobileOpen}>
+				<SheetContent
+					side="left"
+					class="w-[260px] border-sidebar-border bg-sidebar p-0"
+					showCloseButton={false}
+				>
+					<AppSidebar
+						collapsed={false}
+						onCollapseToggle={() => (mobileOpen = false)}
+						onNavigate={() => (mobileOpen = false)}
+					/>
+				</SheetContent>
+			</Sheet>
+
+			<!-- Main content -->
+			<main class="flex-1 overflow-y-auto">
+				<div class="mx-auto w-full max-w-[1400px] px-4 py-4 sm:px-6">
+					{@render children()}
+				</div>
+			</main>
+
+			<!-- Optional context drawer slot — hidden by default, future-use. -->
+			<aside class="hidden w-[320px] shrink-0 border-l border-border bg-card xl:hidden"></aside>
+		</div>
+	</div>
+
+	<CommandPalette bind:open={paletteOpen} />
+	<Toaster />
+</TooltipProvider>
