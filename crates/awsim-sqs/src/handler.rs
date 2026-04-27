@@ -2,7 +2,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use awsim_core::{
-    AccountRegionStore, AwsError, Body, BodyStore, Protocol, RequestContext, ServiceHandler,
+    AccountRegionStore, AwsError, BlobInventory, Body, BodyStore, Protocol, RequestContext,
+    ServiceHandler,
 };
 use serde_json::Value;
 use tracing::debug;
@@ -47,6 +48,12 @@ impl SqsService {
         self.store.clone()
     }
 
+    pub fn body_store(&self) -> Option<&Arc<BodyStore>> {
+        self.body_store.as_ref()
+    }
+
+    pub const GROUPS: &'static [&'static str] = &["sqs"];
+
     fn rebind_bodies(&self) {
         let Some(bs) = &self.body_store else {
             return;
@@ -74,6 +81,37 @@ impl SqsService {
 impl Default for SqsService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl BlobInventory for SqsService {
+    fn known_blobs(&self) -> Vec<(String, String, String)> {
+        let mut out = Vec::new();
+        for (_, state) in self.store.iter_all() {
+            for queue_entry in state.queues.iter() {
+                let queue_name = queue_entry.key().clone();
+                let queue = queue_entry.value();
+                for msg in queue.messages.iter() {
+                    if matches!(msg.body, Body::OnDisk(_)) {
+                        out.push((
+                            "sqs".to_string(),
+                            queue_name.clone(),
+                            msg.message_id.clone(),
+                        ));
+                    }
+                }
+                for im in queue.inflight.values() {
+                    if matches!(im.message.body, Body::OnDisk(_)) {
+                        out.push((
+                            "sqs".to_string(),
+                            queue_name.clone(),
+                            im.message.message_id.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+        out
     }
 }
 
