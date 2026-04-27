@@ -1,4 +1,4 @@
-use awsim_core::{Body, BodyStore};
+use awsim_core::{Body, BodyStore, Snapshottable};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -24,6 +24,131 @@ impl LambdaState {
 
     pub fn set_body_store(&self, store: Arc<BodyStore>) {
         let _ = self.body_store.set(store);
+    }
+}
+
+impl Snapshottable for LambdaState {
+    type Snapshot = LambdaRegionSnapshot;
+
+    fn to_snapshot(&self, account_id: &str, region: &str) -> Self::Snapshot {
+        let functions = self
+            .functions
+            .iter()
+            .map(|entry| {
+                let f = entry.value();
+                FunctionSnapshot {
+                    account_id: account_id.to_string(),
+                    region: region.to_string(),
+                    name: f.name.clone(),
+                    arn: f.arn.clone(),
+                    runtime: f.runtime.clone(),
+                    role: f.role.clone(),
+                    handler: f.handler.clone(),
+                    description: f.description.clone(),
+                    timeout: f.timeout,
+                    memory_size: f.memory_size,
+                    code_sha256: f.code_sha256.clone(),
+                    code_size: f.code_size,
+                    environment: f.environment.clone(),
+                    version: f.version.clone(),
+                    versions: f
+                        .versions
+                        .iter()
+                        .map(|v| FunctionVersionSnapshot {
+                            version: v.version.clone(),
+                            description: v.description.clone(),
+                            code_sha256: v.code_sha256.clone(),
+                            code_size: v.code_size,
+                            last_modified: v.last_modified.clone(),
+                        })
+                        .collect(),
+                    aliases: f
+                        .aliases
+                        .iter()
+                        .map(|(k, a)| {
+                            (
+                                k.clone(),
+                                AliasSnapshot {
+                                    name: a.name.clone(),
+                                    arn: a.arn.clone(),
+                                    function_version: a.function_version.clone(),
+                                    description: a.description.clone(),
+                                },
+                            )
+                        })
+                        .collect(),
+                    last_modified: f.last_modified.clone(),
+                    state: f.state.clone(),
+                    policy_statements: f.policy_statements.clone(),
+                    tags: f.tags.clone(),
+                }
+            })
+            .collect();
+
+        LambdaRegionSnapshot {
+            account_id: account_id.to_string(),
+            region: region.to_string(),
+            functions,
+        }
+    }
+
+    fn from_snapshot(snapshot: Self::Snapshot) -> (String, String, Self) {
+        let state = LambdaState::default();
+        for fs in snapshot.functions {
+            let versions: Vec<FunctionVersion> = fs
+                .versions
+                .into_iter()
+                .map(|v| FunctionVersion {
+                    version: v.version,
+                    description: v.description,
+                    code_sha256: v.code_sha256,
+                    code_size: v.code_size,
+                    code: None,
+                    last_modified: v.last_modified,
+                })
+                .collect();
+
+            let aliases: HashMap<String, Alias> = fs
+                .aliases
+                .into_iter()
+                .map(|(k, a)| {
+                    (
+                        k,
+                        Alias {
+                            name: a.name,
+                            arn: a.arn,
+                            function_version: a.function_version,
+                            description: a.description,
+                        },
+                    )
+                })
+                .collect();
+
+            let func = LambdaFunction {
+                name: fs.name.clone(),
+                arn: fs.arn,
+                runtime: fs.runtime,
+                role: fs.role,
+                handler: fs.handler,
+                description: fs.description,
+                timeout: fs.timeout,
+                memory_size: fs.memory_size,
+                code_sha256: fs.code_sha256,
+                code_size: fs.code_size,
+                code: None,
+                environment: fs.environment,
+                version: fs.version,
+                versions,
+                aliases,
+                last_modified: fs.last_modified,
+                state: fs.state,
+                invocations: Vec::new(),
+                policy_statements: fs.policy_statements,
+                tags: fs.tags,
+            };
+            state.functions.insert(fs.name, func);
+        }
+        (snapshot.account_id, snapshot.region, state)
     }
 }
 
@@ -125,6 +250,13 @@ pub struct EventSourceMapping {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LambdaStateSnapshot {
+    pub functions: Vec<FunctionSnapshot>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LambdaRegionSnapshot {
+    pub account_id: String,
+    pub region: String,
     pub functions: Vec<FunctionSnapshot>,
 }
 

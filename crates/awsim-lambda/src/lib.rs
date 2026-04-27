@@ -18,10 +18,7 @@ use awsim_core::{
 use serde_json::Value;
 use tracing::debug;
 
-use state::{
-    Alias, AliasSnapshot, FunctionSnapshot, FunctionVersion, FunctionVersionSnapshot,
-    LambdaFunction, LambdaState, LambdaStateSnapshot,
-};
+use state::{LambdaState, LambdaStateSnapshot};
 
 pub struct LambdaService {
     store: AccountRegionStore<LambdaState>,
@@ -53,6 +50,27 @@ impl LambdaService {
 
     pub fn store(&self) -> AccountRegionStore<LambdaState> {
         self.store.clone()
+    }
+
+    fn rebind_bodies(&self) {
+        let Some(bs) = &self.body_store else {
+            return;
+        };
+        for (_, state) in self.store.iter_all() {
+            state.set_body_store(Arc::clone(bs));
+            for mut entry in state.functions.iter_mut() {
+                let name = entry.key().clone();
+                let func = entry.value_mut();
+                if let Ok(path) = bs.blob_path("lambda", &name, "$LATEST") {
+                    func.code = Some(Body::OnDisk(path));
+                }
+                for v in func.versions.iter_mut() {
+                    if let Ok(path) = bs.blob_path("lambda", &name, &v.version) {
+                        v.code = Some(Body::OnDisk(path));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -440,148 +458,39 @@ impl ServiceHandler for LambdaService {
     }
 
     fn snapshot(&self) -> Option<Vec<u8>> {
-        let functions: Vec<FunctionSnapshot> = self
-            .store
-            .iter_all()
-            .into_iter()
-            .flat_map(|((account_id, region), state)| {
-                state
-                    .functions
-                    .iter()
-                    .map(|entry| {
-                        let f = entry.value();
-                        FunctionSnapshot {
-                            account_id: account_id.clone(),
-                            region: region.clone(),
-                            name: f.name.clone(),
-                            arn: f.arn.clone(),
-                            runtime: f.runtime.clone(),
-                            role: f.role.clone(),
-                            handler: f.handler.clone(),
-                            description: f.description.clone(),
-                            timeout: f.timeout,
-                            memory_size: f.memory_size,
-                            code_sha256: f.code_sha256.clone(),
-                            code_size: f.code_size,
-                            environment: f.environment.clone(),
-                            version: f.version.clone(),
-                            versions: f
-                                .versions
-                                .iter()
-                                .map(|v| FunctionVersionSnapshot {
-                                    version: v.version.clone(),
-                                    description: v.description.clone(),
-                                    code_sha256: v.code_sha256.clone(),
-                                    code_size: v.code_size,
-                                    last_modified: v.last_modified.clone(),
-                                })
-                                .collect(),
-                            aliases: f
-                                .aliases
-                                .iter()
-                                .map(|(k, a)| {
-                                    (
-                                        k.clone(),
-                                        AliasSnapshot {
-                                            name: a.name.clone(),
-                                            arn: a.arn.clone(),
-                                            function_version: a.function_version.clone(),
-                                            description: a.description.clone(),
-                                        },
-                                    )
-                                })
-                                .collect(),
-                            last_modified: f.last_modified.clone(),
-                            state: f.state.clone(),
-                            policy_statements: f.policy_statements.clone(),
-                            tags: f.tags.clone(),
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
-        serde_json::to_vec(&LambdaStateSnapshot { functions }).ok()
+        self.store.snapshot_to_bytes()
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
-        let snapshot: LambdaStateSnapshot =
-            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        use awsim_core::Snapshottable;
+        use state::LambdaRegionSnapshot;
 
-        for fs in snapshot.functions {
-            let state = self.store.get(&fs.account_id, &fs.region);
-            if let Some(bs) = &self.body_store {
-                state.set_body_store(Arc::clone(bs));
-            }
-
-            let code = self
-                .body_store
-                .as_ref()
-                .and_then(|bs| bs.blob_path("lambda", &fs.name, "$LATEST").ok())
-                .map(Body::OnDisk);
-
-            let versions: Vec<FunctionVersion> = fs
-                .versions
-                .into_iter()
-                .map(|v| {
-                    let version_code = self
-                        .body_store
-                        .as_ref()
-                        .and_then(|bs| bs.blob_path("lambda", &fs.name, &v.version).ok())
-                        .map(Body::OnDisk);
-                    FunctionVersion {
-                        version: v.version,
-                        description: v.description,
-                        code_sha256: v.code_sha256,
-                        code_size: v.code_size,
-                        code: version_code,
-                        last_modified: v.last_modified,
-                    }
-                })
-                .collect();
-
-            let aliases: std::collections::HashMap<String, Alias> = fs
-                .aliases
-                .into_iter()
-                .map(|(k, a)| {
-                    (
-                        k,
-                        Alias {
-                            name: a.name,
-                            arn: a.arn,
-                            function_version: a.function_version,
-                            description: a.description,
-                        },
-                    )
-                })
-                .collect();
-
-            let func = LambdaFunction {
-                name: fs.name.clone(),
-                arn: fs.arn,
-                runtime: fs.runtime,
-                role: fs.role,
-                handler: fs.handler,
-                description: fs.description,
-                timeout: fs.timeout,
-                memory_size: fs.memory_size,
-                code_sha256: fs.code_sha256,
-                code_size: fs.code_size,
-                code,
-                environment: fs.environment,
-                version: fs.version,
-                versions,
-                aliases,
-                last_modified: fs.last_modified,
-                state: fs.state,
-                invocations: Vec::new(),
-                policy_statements: fs.policy_statements,
-                tags: fs.tags,
-            };
-
-            state.functions.insert(fs.name, func);
+        if let Ok(()) = self.store.restore_from_bytes(data) {
+            self.rebind_bodies();
+            return Ok(());
         }
 
+        let legacy: LambdaStateSnapshot =
+            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        let mut by_region: std::collections::HashMap<(String, String), Vec<_>> =
+            std::collections::HashMap::new();
+        for fs in legacy.functions {
+            by_region
+                .entry((fs.account_id.clone(), fs.region.clone()))
+                .or_default()
+                .push(fs);
+        }
+        self.store.clear();
+        for ((account_id, region), functions) in by_region {
+            let snap = LambdaRegionSnapshot {
+                account_id: account_id.clone(),
+                region: region.clone(),
+                functions,
+            };
+            let (acct, reg, state) = LambdaState::from_snapshot(snap);
+            self.store.set(&acct, &reg, state);
+        }
+        self.rebind_bodies();
         Ok(())
     }
 
