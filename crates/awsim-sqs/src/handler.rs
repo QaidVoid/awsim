@@ -1,7 +1,11 @@
 use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
+use awsim_core::{
+    AccountRegionStore, AwsError, BodyStore, Protocol, RequestContext, ServiceHandler,
+};
 use serde_json::Value;
 use tracing::debug;
 
@@ -18,13 +22,30 @@ use crate::state::{
 /// The SQS service handler.
 pub struct SqsService {
     store: AccountRegionStore<SqsState>,
+    body_store: Option<Arc<BodyStore>>,
 }
 
 impl SqsService {
     pub fn new() -> Self {
         Self {
             store: AccountRegionStore::new(),
+            body_store: None,
         }
+    }
+
+    pub fn with_data_dir(dir: impl AsRef<Path>) -> Self {
+        Self {
+            store: AccountRegionStore::new(),
+            body_store: Some(Arc::new(BodyStore::new(dir.as_ref().to_path_buf()))),
+        }
+    }
+
+    fn get_state(&self, ctx: &RequestContext) -> Arc<SqsState> {
+        let state = self.store.get(&ctx.account_id, &ctx.region);
+        if let Some(bs) = &self.body_store {
+            state.set_body_store(Arc::clone(bs));
+        }
+        state
     }
 
     pub fn store(&self) -> AccountRegionStore<SqsState> {
@@ -56,7 +77,7 @@ impl ServiceHandler for SqsService {
     ) -> Result<Value, AwsError> {
         debug!(operation = %operation, "SQS operation");
 
-        let state = self.store.get(&ctx.account_id, &ctx.region);
+        let state = self.get_state(ctx);
 
         match operation {
             "CreateQueue" => create_queue::handle(&state, &input, ctx),

@@ -1,7 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
+use awsim_core::BodyStore;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
@@ -154,6 +156,7 @@ pub struct SqsState {
     pub queues: DashMap<String, Queue>,
     /// Task handle → MessageMoveTask
     pub move_tasks: DashMap<String, MessageMoveTask>,
+    pub body_store: OnceLock<Arc<BodyStore>>,
 }
 
 impl SqsState {
@@ -165,6 +168,14 @@ impl SqsState {
             }
         }
         None
+    }
+
+    pub fn body_store(&self) -> Option<&Arc<BodyStore>> {
+        self.body_store.get()
+    }
+
+    pub fn set_body_store(&self, store: Arc<BodyStore>) {
+        let _ = self.body_store.set(store);
     }
 }
 
