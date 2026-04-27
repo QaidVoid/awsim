@@ -80,6 +80,12 @@ pub fn delete_bucket(state: &S3State, input: &Value) -> Result<Value, AwsError> 
     drop(bucket);
     state.buckets.remove(bucket_name);
 
+    if let Some(store) = state.body_store()
+        && let Err(e) = store.delete_bucket(bucket_name)
+    {
+        tracing::warn!(bucket = %bucket_name, error = %e, "delete bucket bodies");
+    }
+
     Ok(json!({}))
 }
 

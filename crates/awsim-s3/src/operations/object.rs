@@ -67,9 +67,19 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
             .get(bucket_name)
             .ok_or_else(|| no_such_bucket(bucket_name))?;
 
+        let body = match state.body_store() {
+            Some(store) => {
+                let path = store
+                    .write_object(bucket_name, key, &data)
+                    .map_err(|e| AwsError::internal(format!("persist object: {e}")))?;
+                ObjectBody::OnDisk(path)
+            }
+            None => ObjectBody::InMemory(data),
+        };
+
         let obj = S3Object {
             key: key.to_string(),
-            body: ObjectBody::InMemory(data),
+            body,
             content_type,
             content_length,
             etag: etag.clone(),
@@ -164,8 +174,13 @@ pub fn delete_object(state: &S3State, input: &Value) -> Result<Value, AwsError> 
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    // S3 does not error if the key doesn't exist — it's idempotent.
     bucket.objects.remove(key);
+
+    if let Some(store) = state.body_store()
+        && let Err(e) = store.delete_object(bucket_name, key)
+    {
+        tracing::warn!(bucket = %bucket_name, key = %key, error = %e, "delete object body");
+    }
 
     Ok(json!({}))
 }
@@ -218,9 +233,19 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
         .get(dst_bucket)
         .ok_or_else(|| no_such_bucket(dst_bucket))?;
 
+    let body = match state.body_store() {
+        Some(store) => {
+            let path = store
+                .write_object(dst_bucket, dst_key, &data)
+                .map_err(|e| AwsError::internal(format!("persist object: {e}")))?;
+            ObjectBody::OnDisk(path)
+        }
+        None => ObjectBody::InMemory(data),
+    };
+
     let new_obj = S3Object {
         key: dst_key.to_string(),
-        body: ObjectBody::InMemory(data),
+        body,
         content_type,
         content_length,
         etag: etag.clone(),
