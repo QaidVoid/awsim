@@ -131,9 +131,18 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
             .insert(did.clone(), (expiry, message_id.clone()));
     }
 
+    let body_field = if let Some(bs) = state.body_store() {
+        let path = bs
+            .write_blob("sqs", &queue_name, &message_id, body.as_bytes())
+            .map_err(|e| AwsError::internal(format!("failed to persist message body: {e}")))?;
+        MessageBody::OnDisk(path)
+    } else {
+        MessageBody::InMemory(body.to_string())
+    };
+
     let msg = Message {
         message_id: message_id.clone(),
-        body: MessageBody::InMemory(body.to_string()),
+        body: body_field,
         md5_of_body: md5.clone(),
         attributes,
         message_attributes,
