@@ -1,171 +1,131 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+	import { ServicePage } from '$lib/components/service';
+	import {
+		Tabs,
+		TabsList,
+		TabsTrigger,
+		TabsContent,
+	} from '$lib/components/ui/tabs';
+	import DatabasesTab from '$lib/components/glue/databases-tab.svelte';
+	import TablesTab from '$lib/components/glue/tables-tab.svelte';
+	import CrawlersTab from '$lib/components/glue/crawlers-tab.svelte';
+	import JobsTab from '$lib/components/glue/jobs-tab.svelte';
+	import ConnectionsTab from '$lib/components/glue/connections-tab.svelte';
+	import DatabaseDetailSheet from '$lib/components/glue/database-detail-sheet.svelte';
+	import TableDetailSheet from '$lib/components/glue/table-detail-sheet.svelte';
+	import CrawlerDetailSheet from '$lib/components/glue/crawler-detail-sheet.svelte';
+	import JobDetailSheet from '$lib/components/glue/job-detail-sheet.svelte';
+	import ConnectionDetailSheet from '$lib/components/glue/connection-detail-sheet.svelte';
+	import type {
+		GlueDatabase,
+		GlueTable,
+		GlueCrawler,
+		GlueJob,
+		GlueConnection,
+	} from '$lib/api/glue';
 
-    const BASE = 'http://localhost:4566';
+	type TabKey = 'databases' | 'tables' | 'crawlers' | 'jobs' | 'connections';
+	let activeTab = $state<TabKey>('databases');
 
-    interface GlueDatabase {
-        Name: string;
-        Description?: string;
-        CreateTime?: string;
-    }
+	let dbSheetOpen = $state(false);
+	let dbName = $state<string | null>(null);
 
-    interface Crawler {
-        Name: string;
-        Role: string;
-        State: string;
-        DatabaseName?: string;
-    }
+	let tableSheetOpen = $state(false);
+	let tableDb = $state<string | null>(null);
+	let tableName = $state<string | null>(null);
 
-    interface GlueJob {
-        Name: string;
-        Role: string;
-    }
+	let crawlerSheetOpen = $state(false);
+	let crawlerName = $state<string | null>(null);
 
-    let databases = $state<GlueDatabase[]>([]);
-    let crawlers = $state<Crawler[]>([]);
-    let jobs = $state<GlueJob[]>([]);
-    let loading = $state(true);
-    let error = $state<string | null>(null);
+	let jobSheetOpen = $state(false);
+	let jobName = $state<string | null>(null);
 
-    async function glueRequest(target: string, body: Record<string, unknown> = {}) {
-        const res = await fetch(BASE, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-amz-json-1.1',
-                'X-Amz-Target': `AWSGlue.${target}`,
-                'Authorization': 'AWS4-HMAC-SHA256 Credential=test/20260421/us-east-1/glue/aws4_request, SignedHeaders=host, Signature=fake',
-            },
-            body: JSON.stringify(body),
-        });
-        if (!res.ok) throw new Error(await res.text());
-        return res.json();
-    }
+	let connSheetOpen = $state(false);
+	let connName = $state<string | null>(null);
 
-    onMount(async () => {
-        try {
-            const [dbData, crawlerData, jobData] = await Promise.all([
-                glueRequest('GetDatabases'),
-                glueRequest('GetCrawlers'),
-                glueRequest('GetJobs'),
-            ]);
-            databases = dbData.DatabaseList ?? [];
-            crawlers = crawlerData.Crawlers ?? [];
-            jobs = jobData.Jobs ?? [];
-        } catch {
-            error = 'Could not connect to AWSim. Is it running on port 4566?';
-        } finally {
-            loading = false;
-        }
-    });
+	function openDatabase(db: GlueDatabase) {
+		dbName = db.name;
+		dbSheetOpen = true;
+	}
+
+	function openTable(t: GlueTable) {
+		tableDb = t.databaseName;
+		tableName = t.name;
+		tableSheetOpen = true;
+	}
+
+	function openCrawler(c: GlueCrawler) {
+		crawlerName = c.name;
+		crawlerSheetOpen = true;
+	}
+
+	function openJob(j: GlueJob) {
+		jobName = j.name;
+		jobSheetOpen = true;
+	}
+
+	function openConnection(c: GlueConnection) {
+		connName = c.name;
+		connSheetOpen = true;
+	}
 </script>
 
-<div class="p-6">
-    <div class="flex items-center justify-between mb-6">
-        <div>
-            <h1 class="text-2xl font-bold">Glue</h1>
-            <p class="text-zinc-500 mt-1">Managed ETL service and Data Catalog.</p>
-        </div>
-    </div>
+<ServicePage
+	title="Glue"
+	description="Managed ETL service and Data Catalog: databases, tables, crawlers, jobs, and connections."
+>
+	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+		<TabsList variant="line" class="border-b border-border px-4">
+			<TabsTrigger value="databases">Databases</TabsTrigger>
+			<TabsTrigger value="tables">Tables</TabsTrigger>
+			<TabsTrigger value="crawlers">Crawlers</TabsTrigger>
+			<TabsTrigger value="jobs">Jobs</TabsTrigger>
+			<TabsTrigger value="connections">Connections</TabsTrigger>
+		</TabsList>
 
-    {#if loading}
-        <div class="text-zinc-500">Loading...</div>
-    {:else if error}
-        <div class="bg-red-900/20 border border-red-800 rounded-lg p-4 text-red-400">{error}</div>
-    {:else}
-        <!-- Databases -->
-        <h2 class="text-lg font-semibold mb-3">Databases ({databases.length})</h2>
-        {#if databases.length === 0}
-            <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-6 text-center mb-6">
-                <p class="text-zinc-500">No Glue databases yet. Create one:</p>
-                <code class="block mt-3 text-sm text-orange-400 font-mono">
-                    aws --endpoint-url http://localhost:4566 glue create-database --database-input Name=mydb
-                </code>
-            </div>
-        {:else}
-            <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden mb-6">
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr class="border-b border-zinc-800 text-left text-zinc-500">
-                            <th class="px-4 py-3">Name</th>
-                            <th class="px-4 py-3">Description</th>
-                            <th class="px-4 py-3">Created</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {#each databases as db}
-                            <tr class="border-b border-zinc-800/50 hover:bg-zinc-800/30">
-                                <td class="px-4 py-3 font-mono text-orange-400">{db.Name}</td>
-                                <td class="px-4 py-3 text-zinc-500">{db.Description ?? ''}</td>
-                                <td class="px-4 py-3 text-zinc-500 text-xs">{db.CreateTime ?? ''}</td>
-                            </tr>
-                        {/each}
-                    </tbody>
-                </table>
-            </div>
-        {/if}
+		<div class="min-h-0 flex-1 overflow-y-auto">
+			<TabsContent value="databases" class="m-0">
+				<DatabasesTab onSelect={openDatabase} />
+			</TabsContent>
+			<TabsContent value="tables" class="m-0">
+				<TablesTab onSelect={openTable} />
+			</TabsContent>
+			<TabsContent value="crawlers" class="m-0">
+				<CrawlersTab onSelect={openCrawler} />
+			</TabsContent>
+			<TabsContent value="jobs" class="m-0">
+				<JobsTab onSelect={openJob} />
+			</TabsContent>
+			<TabsContent value="connections" class="m-0">
+				<ConnectionsTab onSelect={openConnection} />
+			</TabsContent>
+		</div>
+	</Tabs>
+</ServicePage>
 
-        <!-- Crawlers -->
-        <h2 class="text-lg font-semibold mb-3">Crawlers ({crawlers.length})</h2>
-        {#if crawlers.length === 0}
-            <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-6 text-center mb-6">
-                <p class="text-zinc-500">No crawlers yet. Create one:</p>
-                <code class="block mt-3 text-sm text-orange-400 font-mono">
-                    aws --endpoint-url http://localhost:4566 glue create-crawler --name my-crawler --role arn:aws:iam::000000000000:role/glue-role --targets S3Targets=[&#123;Path=s3://my-bucket&#125;]
-                </code>
-            </div>
-        {:else}
-            <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden mb-6">
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr class="border-b border-zinc-800 text-left text-zinc-500">
-                            <th class="px-4 py-3">Name</th>
-                            <th class="px-4 py-3">State</th>
-                            <th class="px-4 py-3">Role</th>
-                            <th class="px-4 py-3">Database</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {#each crawlers as crawler}
-                            <tr class="border-b border-zinc-800/50 hover:bg-zinc-800/30">
-                                <td class="px-4 py-3 font-mono text-orange-400">{crawler.Name}</td>
-                                <td class="px-4 py-3 text-zinc-300">{crawler.State}</td>
-                                <td class="px-4 py-3 text-zinc-500 text-xs truncate max-w-xs">{crawler.Role}</td>
-                                <td class="px-4 py-3 text-zinc-500">{crawler.DatabaseName ?? ''}</td>
-                            </tr>
-                        {/each}
-                    </tbody>
-                </table>
-            </div>
-        {/if}
-
-        <!-- Jobs -->
-        <h2 class="text-lg font-semibold mb-3">Jobs ({jobs.length})</h2>
-        {#if jobs.length === 0}
-            <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-6 text-center">
-                <p class="text-zinc-500">No Glue jobs yet. Create one:</p>
-                <code class="block mt-3 text-sm text-orange-400 font-mono">
-                    aws --endpoint-url http://localhost:4566 glue create-job --name my-job --role arn:aws:iam::000000000000:role/glue-role --command ScriptLocation=s3://my-bucket/script.py
-                </code>
-            </div>
-        {:else}
-            <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden">
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr class="border-b border-zinc-800 text-left text-zinc-500">
-                            <th class="px-4 py-3">Name</th>
-                            <th class="px-4 py-3">Role</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {#each jobs as job}
-                            <tr class="border-b border-zinc-800/50 hover:bg-zinc-800/30">
-                                <td class="px-4 py-3 font-mono text-orange-400">{job.Name}</td>
-                                <td class="px-4 py-3 text-zinc-500 text-xs truncate max-w-xs">{job.Role}</td>
-                            </tr>
-                        {/each}
-                    </tbody>
-                </table>
-            </div>
-        {/if}
-    {/if}
-</div>
+<DatabaseDetailSheet
+	open={dbSheetOpen}
+	name={dbName}
+	onOpenChange={(o) => (dbSheetOpen = o)}
+/>
+<TableDetailSheet
+	open={tableSheetOpen}
+	databaseName={tableDb}
+	name={tableName}
+	onOpenChange={(o) => (tableSheetOpen = o)}
+/>
+<CrawlerDetailSheet
+	open={crawlerSheetOpen}
+	name={crawlerName}
+	onOpenChange={(o) => (crawlerSheetOpen = o)}
+/>
+<JobDetailSheet
+	open={jobSheetOpen}
+	name={jobName}
+	onOpenChange={(o) => (jobSheetOpen = o)}
+/>
+<ConnectionDetailSheet
+	open={connSheetOpen}
+	name={connName}
+	onOpenChange={(o) => (connSheetOpen = o)}
+/>
