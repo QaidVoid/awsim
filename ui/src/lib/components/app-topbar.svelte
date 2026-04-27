@@ -119,7 +119,7 @@
 		<Button
 			variant="ghost"
 			size="icon"
-			href="https://github.com/qaidvoid/aws"
+			href="https://github.com/QaidVoid/awsim"
 			target="_blank"
 			rel="noopener"
 			aria-label="Source repository"
