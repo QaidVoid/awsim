@@ -209,6 +209,12 @@
 						</div>
 					</div>
 				{/each}
+				{#if busy}
+					<div class="flex items-center gap-2 text-xs text-muted-foreground">
+						<SparklesIcon class="size-4 animate-pulse text-primary" />
+						<span>Waiting for response…</span>
+					</div>
+				{/if}
 			</div>
 		{/if}
 	</div>

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { listFoundationModels, type FoundationModel } from '$lib/api/bedrock';
-	import { DataTable, EmptyState, ListSkeleton } from '$lib/components/service';
+	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -102,28 +102,25 @@
 		</Button>
 	</div>
 
-	{#if loading && models.length === 0}
-		<ListSkeleton rows={6} />
-	{:else}
-		<DataTable
-			rows={filtered}
-			columns={[
-				{ key: 'modelId', label: 'Model ID', mono: true },
-				{ key: 'modelName', label: 'Name' },
-				{ key: 'providerName', label: 'Provider', cell: providerCell },
-				{ key: 'modalities', label: 'Input', cell: modalitiesCell },
-				{ key: 'streaming', label: 'Streaming', cell: streamingCell }
-			]}
-			rowKey={(r) => r.modelArn || r.modelId}
-			onRowClick={onSelect}
-		>
-			{#snippet empty()}
-				<EmptyState
-					icon={SparklesIcon}
-					title="No foundation models"
-					description="No models match the current filter."
-				/>
-			{/snippet}
-		</DataTable>
-	{/if}
+	<DataTable
+		rows={filtered}
+		{loading}
+		columns={[
+			{ key: 'modelId', label: 'Model ID', mono: true },
+			{ key: 'modelName', label: 'Name' },
+			{ key: 'providerName', label: 'Provider', cell: providerCell },
+			{ key: 'modalities', label: 'Input', cell: modalitiesCell },
+			{ key: 'streaming', label: 'Streaming', cell: streamingCell },
+		]}
+		rowKey={(r) => r.modelArn || r.modelId}
+		onRowClick={onSelect}
+	>
+		{#snippet empty()}
+			<EmptyState
+				icon={SparklesIcon}
+				title="No foundation models"
+				description="No models match the current filter."
+			/>
+		{/snippet}
+	</DataTable>
 </div>

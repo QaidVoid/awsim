@@ -163,6 +163,12 @@
 		{/if}
 	{/if}
 
+	{#if busy && exec}
+		<p class="text-xs text-muted-foreground">
+			Polling execution status… current state: {exec.status.state || 'SUBMITTED'}
+		</p>
+	{/if}
+
 	{#if results}
 		<div class="overflow-auto rounded-md border border-border">
 			<table class="w-full border-collapse text-xs">

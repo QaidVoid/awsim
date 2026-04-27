@@ -109,6 +109,10 @@
 		</Button>
 	</div>
 
+	{#if busy}
+		<p class="text-xs text-muted-foreground">Synthesizing…</p>
+	{/if}
+
 	{#if audioUrl}
 		<div class="flex flex-col gap-2 rounded-md border border-border bg-muted/20 p-3">
 			<div class="flex items-center justify-between">
