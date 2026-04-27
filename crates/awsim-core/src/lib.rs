@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod authz;
+pub mod body;
 pub mod body_store;
 pub mod error;
 pub mod events;
@@ -13,6 +14,7 @@ pub use authz::{
     AuthzEngine, NoopPrincipalLookup, PrincipalLookup, ResolvedPrincipal, ResourcePolicyLookup,
     ScpLookup,
 };
+pub use body::Body;
 pub use body_store::BodyStore;
 pub use error::AwsError;
 pub use events::{EventBus, InternalEvent};
