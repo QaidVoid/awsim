@@ -1,5 +1,8 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 
+use awsim_core::BodyStore;
 use dashmap::DashMap;
 
 /// A single image stored in a repository.
@@ -22,6 +25,39 @@ pub struct LayerUpload {
     pub part_data: Vec<u8>,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub enum LayerBody {
+    InMemory(Vec<u8>),
+    OnDisk(PathBuf),
+}
+
+#[allow(dead_code)]
+impl LayerBody {
+    pub fn read_all(&self) -> std::io::Result<Vec<u8>> {
+        match self {
+            LayerBody::InMemory(b) => Ok(b.clone()),
+            LayerBody::OnDisk(p) => std::fs::read(p),
+        }
+    }
+
+    pub fn len_hint(&self) -> Option<u64> {
+        match self {
+            LayerBody::InMemory(b) => Some(b.len() as u64),
+            LayerBody::OnDisk(p) => std::fs::metadata(p).ok().map(|m| m.len()),
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Layer {
+    pub digest: String,
+    pub body: LayerBody,
+    pub size: u64,
+    pub media_type: String,
+}
+
 /// An ECR repository.
 #[derive(Debug)]
 pub struct Repository {
@@ -30,6 +66,8 @@ pub struct Repository {
     pub registry_id: String,
     pub repository_uri: String,
     pub images: Vec<ContainerImage>,
+    #[allow(dead_code)]
+    pub layers: DashMap<String, Layer>,
     pub created_at: String,
     pub image_tag_mutability: String,
     pub tags: HashMap<String, String>,
@@ -71,4 +109,17 @@ pub struct EcrState {
     pub registry_scanning_config: std::sync::RwLock<RegistryScanningConfiguration>,
     pub replication_config: std::sync::RwLock<ReplicationConfiguration>,
     pub account_settings: DashMap<String, String>,
+    pub body_store: OnceLock<Arc<BodyStore>>,
+}
+
+impl EcrState {
+    #[allow(dead_code)]
+    pub fn body_store(&self) -> Option<&Arc<BodyStore>> {
+        self.body_store.get()
+    }
+
+    #[allow(dead_code)]
+    pub fn set_body_store(&self, store: Arc<BodyStore>) {
+        let _ = self.body_store.set(store);
+    }
 }

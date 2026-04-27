@@ -87,6 +87,7 @@ pub fn create_repository(
         registry_id: ctx.account_id.clone(),
         repository_uri,
         images: Vec::new(),
+        layers: dashmap::DashMap::new(),
         created_at: now_epoch_str(),
         image_tag_mutability,
         tags,
