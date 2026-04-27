@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::time::SystemTime;
 
 pub trait BlobInventory: Send + Sync {
     fn known_blobs(&self) -> Vec<(String, String, String)>;
@@ -63,6 +64,49 @@ impl BodyStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e),
         }
+    }
+
+    pub fn total_size(&self) -> io::Result<u64> {
+        let mut total: u64 = 0;
+        walk_files(&self.root, &mut |_path, meta| {
+            total = total.saturating_add(meta.len());
+        })?;
+        Ok(total)
+    }
+
+    pub fn evict_to_fit(&self, reserve: u64) -> io::Result<(usize, u64)> {
+        let mut entries: Vec<(PathBuf, u64, SystemTime)> = Vec::new();
+        walk_files(&self.root, &mut |path, meta| {
+            let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            entries.push((path.to_path_buf(), meta.len(), mtime));
+        })?;
+
+        entries.sort_by_key(|e| e.2);
+
+        let mut current: u64 = entries.iter().map(|(_, len, _)| *len).sum();
+        let target = current.saturating_sub(reserve);
+
+        let mut deleted: usize = 0;
+        let mut freed: u64 = 0;
+
+        for (path, len, _) in entries {
+            if current <= target {
+                break;
+            }
+            match fs::remove_file(&path) {
+                Ok(()) => {
+                    deleted += 1;
+                    freed = freed.saturating_add(len);
+                    current = current.saturating_sub(len);
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "BodyStore eviction skipping file");
+                }
+            }
+        }
+
+        Ok((deleted, freed))
     }
 
     pub fn gc_orphaned(
@@ -127,6 +171,44 @@ impl BodyStore {
 
         Ok((deleted_files, freed_bytes))
     }
+}
+
+fn walk_files(root: &Path, visit: &mut dyn FnMut(&Path, &fs::Metadata)) -> io::Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                tracing::warn!(path = %dir.display(), error = %e, "BodyStore walk skipping dir");
+                continue;
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() {
+                match fs::metadata(&path) {
+                    Ok(meta) => visit(&path, &meta),
+                    Err(e) => {
+                        tracing::warn!(path = %path.display(), error = %e, "BodyStore walk skipping file");
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn collect_files(base: &Path, dir: &Path, out: &mut Vec<(PathBuf, String)>) -> io::Result<()> {
@@ -409,6 +491,63 @@ mod tests {
         assert_eq!(freed, 4 + 6);
         assert_eq!(store.read_blob("objects", "b1", "keep").unwrap(), b"K");
         assert!(!store.group_dir("objects").join("b2").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn total_size_sums_all_files() {
+        let root = tmp_root("totalsize");
+        let store = BodyStore::new(root.clone());
+        store.write_blob("g1", "b1", "a", b"abc").unwrap();
+        store.write_blob("g1", "b1", "b/c", b"defgh").unwrap();
+        store.write_blob("g2", "b2", "x", b"y").unwrap();
+        let total = store.total_size().unwrap();
+        assert_eq!(total, 3 + 5 + 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn evict_to_fit_deletes_oldest_first() {
+        let root = tmp_root("evictold");
+        let store = BodyStore::new(root.clone());
+        store.write_blob("g", "b", "a", b"AAAA").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        store.write_blob("g", "b", "b", b"BBBB").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        store.write_blob("g", "b", "c", b"CCCC").unwrap();
+
+        let path_a = store.blob_path("g", "b", "a").unwrap();
+        let path_b = store.blob_path("g", "b", "b").unwrap();
+        let path_c = store.blob_path("g", "b", "c").unwrap();
+
+        let (deleted, freed) = store.evict_to_fit(8).unwrap();
+        assert_eq!(deleted, 2);
+        assert_eq!(freed, 8);
+        assert!(!path_a.exists());
+        assert!(!path_b.exists());
+        assert!(path_c.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn evict_to_fit_returns_zero_when_already_empty() {
+        let root = tmp_root("evictempty");
+        let store = BodyStore::new(root.clone());
+        let (deleted, freed) = store.evict_to_fit(100).unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(freed, 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn evict_to_fit_cannot_free_more_than_present() {
+        let root = tmp_root("evictover");
+        let store = BodyStore::new(root.clone());
+        store.write_blob("g", "b", "a", b"AAAA").unwrap();
+        let (deleted, freed) = store.evict_to_fit(1_000_000).unwrap();
+        assert_eq!(deleted, 1);
+        assert_eq!(freed, 4);
+        assert_eq!(store.total_size().unwrap(), 0);
         let _ = fs::remove_dir_all(&root);
     }
 
