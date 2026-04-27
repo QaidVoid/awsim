@@ -36,6 +36,14 @@ impl SqsService {
         }
     }
 
+    pub fn with_max_blob_bytes(mut self, bytes: u64) -> Self {
+        if let Some(bs) = self.body_store.take() {
+            let root = bs.root().to_path_buf();
+            self.body_store = Some(Arc::new(BodyStore::new(root).with_max_size(bytes)));
+        }
+        self
+    }
+
     fn get_state(&self, ctx: &RequestContext) -> Arc<SqsState> {
         let state = self.store.get(&ctx.account_id, &ctx.region);
         if let Some(bs) = &self.body_store {

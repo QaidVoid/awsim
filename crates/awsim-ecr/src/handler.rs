@@ -35,6 +35,14 @@ impl EcrService {
         }
     }
 
+    pub fn with_max_blob_bytes(mut self, bytes: u64) -> Self {
+        if let Some(bs) = self.body_store.take() {
+            let root = bs.root().to_path_buf();
+            self.body_store = Some(Arc::new(BodyStore::new(root).with_max_size(bytes)));
+        }
+        self
+    }
+
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = port;
         self

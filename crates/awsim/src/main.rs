@@ -38,6 +38,11 @@ struct Cli {
     /// Disable startup garbage collection of orphaned BodyStore blobs
     #[arg(long, env = "AWSIM_NO_GC", default_value_t = false)]
     no_gc: bool,
+
+    /// Per-service on-disk blob cap in bytes (FIFO eviction by mtime when exceeded).
+    /// Applied independently to S3, Lambda, SQS, ECR. Unset = unbounded.
+    #[arg(long, env = "AWSIM_MAX_BLOB_BYTES")]
+    max_blob_bytes: Option<u64>,
 }
 
 #[tokio::main]
@@ -73,6 +78,7 @@ async fn main() -> Result<()> {
         &cli.region,
         cli.data_dir.as_deref(),
         cli.port,
+        cli.max_blob_bytes,
     );
 
     if let Some(authz) = Arc::get_mut(&mut state.authz) {
@@ -447,6 +453,7 @@ fn register_services(
     default_region: &str,
     data_dir: Option<&str>,
     port: u16,
+    max_blob_bytes: Option<u64>,
 ) -> RegisteredServices {
     use std::sync::Arc;
 
@@ -461,7 +468,13 @@ fn register_services(
     state.register(sns, vec![]);
 
     let sqs = match data_dir {
-        Some(dir) => awsim_sqs::SqsService::with_data_dir(dir),
+        Some(dir) => {
+            let svc = awsim_sqs::SqsService::with_data_dir(dir);
+            match max_blob_bytes {
+                Some(n) => svc.with_max_blob_bytes(n),
+                None => svc,
+            }
+        }
         None => awsim_sqs::SqsService::new(),
     };
     let sqs_store = sqs.store();
@@ -473,7 +486,13 @@ fn register_services(
     state.register(dynamodb, vec![]);
 
     let s3 = match data_dir {
-        Some(dir) => awsim_s3::S3Service::with_data_dir(dir),
+        Some(dir) => {
+            let svc = awsim_s3::S3Service::with_data_dir(dir);
+            match max_blob_bytes {
+                Some(n) => svc.with_max_blob_bytes(n),
+                None => svc,
+            }
+        }
         None => awsim_s3::S3Service::new(),
     };
     let s3_store = s3.store();
@@ -486,7 +505,13 @@ fn register_services(
     state.register(s3_arc, s3_routes);
 
     let lambda = match data_dir {
-        Some(dir) => awsim_lambda::LambdaService::with_data_dir(dir),
+        Some(dir) => {
+            let svc = awsim_lambda::LambdaService::with_data_dir(dir);
+            match max_blob_bytes {
+                Some(n) => svc.with_max_blob_bytes(n),
+                None => svc,
+            }
+        }
         None => awsim_lambda::LambdaService::new(),
     };
     let lambda_store = lambda.store();
@@ -537,7 +562,13 @@ fn register_services(
     state.register(cognito_identity, vec![]);
 
     let ecr = match data_dir {
-        Some(dir) => awsim_ecr::EcrService::with_data_dir(dir),
+        Some(dir) => {
+            let svc = awsim_ecr::EcrService::with_data_dir(dir);
+            match max_blob_bytes {
+                Some(n) => svc.with_max_blob_bytes(n),
+                None => svc,
+            }
+        }
         None => awsim_ecr::EcrService::new(),
     };
     let ecr = Arc::new(ecr.with_port(port));
