@@ -1,6 +1,6 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::state::{LogEvent, LogsState, now_millis};
 
@@ -64,6 +64,30 @@ pub fn put_log_events(
     }
 
     let seq_token = stream.next_sequence_token();
+
+    if let Some(bs) = state.body_store()
+        && !new_events.is_empty()
+    {
+        let mut buf = String::new();
+        for ev in &new_events {
+            let line = serde_json::to_string(&json!({
+                "ts": ev.timestamp,
+                "msg": ev.message,
+                "ing": ev.ingestion_time,
+            }))
+            .unwrap_or_default();
+            buf.push_str(&line);
+            buf.push('\n');
+        }
+        if let Err(e) = bs.append_blob("cloudwatch-logs", group_name, stream_name, buf.as_bytes()) {
+            warn!(
+                log_group = %group_name,
+                log_stream = %stream_name,
+                error = %e,
+                "Failed to persist log events"
+            );
+        }
+    }
 
     // Merge and sort events by timestamp; extract metadata before releasing the write lock
     let (new_first_ts, new_last_ts) = {
