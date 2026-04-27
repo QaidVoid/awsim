@@ -74,6 +74,26 @@ fn resolve_code(input: &Value) -> Result<(Option<Vec<u8>>, String, u64), AwsErro
     ))
 }
 
+pub(crate) fn persist_code(
+    state: &LambdaState,
+    function_name: &str,
+    key: &str,
+    bytes: Option<Vec<u8>>,
+) -> Result<Option<FunctionCode>, AwsError> {
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+    match state.body_store() {
+        Some(store) => {
+            let path = store
+                .write_blob("lambda", function_name, key, &bytes)
+                .map_err(|e| AwsError::internal(format!("persist function code: {e}")))?;
+            Ok(Some(FunctionCode::OnDisk(path)))
+        }
+        None => Ok(Some(FunctionCode::InMemory(bytes))),
+    }
+}
+
 pub fn create_function(
     state: &LambdaState,
     input: &Value,
@@ -107,7 +127,7 @@ pub fn create_function(
         .unwrap_or_default();
 
     let (code_data, code_sha256, code_size) = resolve_code(input)?;
-    let code = code_data.map(FunctionCode::InMemory);
+    let code = persist_code(state, name, "$LATEST", code_data)?;
 
     let arn = format!(
         "arn:aws:lambda:{}:{}:function:{}",
@@ -222,7 +242,7 @@ pub fn update_function_code(
     let name = require_str(input, "FunctionName")?;
 
     let (code_data, code_sha256, code_size) = resolve_code(input)?;
-    let code = code_data.map(FunctionCode::InMemory);
+    let code = persist_code(state, name, "$LATEST", code_data)?;
 
     let mut f = state
         .functions
