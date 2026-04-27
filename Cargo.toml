@@ -120,7 +120,7 @@ bytes = "1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 saphyr = "0.0.6"
 quick-xml = { version = "0.37", features = ["serialize"] }
 serde_urlencoded = "0.7"
