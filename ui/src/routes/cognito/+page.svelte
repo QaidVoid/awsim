@@ -4,6 +4,7 @@
 	import UserPoolList from '$lib/components/cognito/user-pool-list.svelte';
 	import IdentityPoolList from '$lib/components/cognito/identity-pool-list.svelte';
 	import PoolDetail from '$lib/components/cognito/pool-detail.svelte';
+	import JwtDecoder from '$lib/components/cognito/jwt-decoder.svelte';
 	import type { UserPool } from '$lib/api/cognito';
 
 	let active = $state('userpools');
@@ -25,6 +26,7 @@
 			<TabsList variant="line">
 				<TabsTrigger value="userpools">User Pools</TabsTrigger>
 				<TabsTrigger value="identitypools">Identity Pools</TabsTrigger>
+				<TabsTrigger value="jwt">JWT decoder</TabsTrigger>
 			</TabsList>
 		</div>
 
@@ -39,6 +41,9 @@
 			class="min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden"
 		>
 			<IdentityPoolList />
+		</TabsContent>
+		<TabsContent value="jwt" class="min-h-0 flex-1 overflow-y-auto data-[state=inactive]:hidden">
+			<JwtDecoder />
 		</TabsContent>
 	</Tabs>
 </ServicePage>
