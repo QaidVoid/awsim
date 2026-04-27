@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use awsim_core::{Body, BodyStore};
+use awsim_core::{Body, BodyStore, Snapshottable};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
@@ -180,6 +180,130 @@ impl SqsState {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SqsStateSnapshot {
     pub queues: Vec<QueueSnapshot>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SqsRegionSnapshot {
+    pub account_id: String,
+    pub region: String,
+    pub queues: Vec<QueueSnapshot>,
+}
+
+impl Snapshottable for SqsState {
+    type Snapshot = SqsRegionSnapshot;
+
+    fn to_snapshot(&self, account_id: &str, region: &str) -> Self::Snapshot {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        let now_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let queues: Vec<QueueSnapshot> = self
+            .queues
+            .iter()
+            .map(|queue_entry| {
+                let q = queue_entry.value();
+                let dedup_cache: HashMap<String, (u64, String)> = q
+                    .dedup_cache
+                    .iter()
+                    .map(|(k, (expiry, msg_id))| {
+                        let secs_remaining = expiry
+                            .checked_duration_since(Instant::now())
+                            .unwrap_or(Duration::ZERO)
+                            .as_secs();
+                        (k.clone(), (now_epoch + secs_remaining, msg_id.clone()))
+                    })
+                    .collect();
+
+                let inflight: Vec<InflightMessage> = q.inflight.values().cloned().collect();
+
+                QueueSnapshot {
+                    name: q.name.clone(),
+                    url: q.url.clone(),
+                    arn: q.arn.clone(),
+                    attributes: q.attributes.clone(),
+                    tags: q.tags.clone(),
+                    messages: q.messages.clone(),
+                    inflight,
+                    is_fifo: q.is_fifo,
+                    created_at: q.created_at.clone(),
+                    dedup_cache,
+                    redrive_policy: q.redrive_policy.clone(),
+                }
+            })
+            .collect();
+
+        SqsRegionSnapshot {
+            account_id: account_id.to_string(),
+            region: region.to_string(),
+            queues,
+        }
+    }
+
+    fn from_snapshot(snapshot: Self::Snapshot) -> (String, String, Self) {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        let now_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let now_instant = Instant::now();
+
+        let state = SqsState::default();
+        for mut qs in snapshot.queues {
+            let dedup_cache: HashMap<String, (Instant, String)> = qs
+                .dedup_cache
+                .iter()
+                .filter_map(|(k, (expiry_secs, msg_id))| {
+                    if *expiry_secs > now_epoch {
+                        let remaining = Duration::from_secs(expiry_secs - now_epoch);
+                        Some((k.clone(), (now_instant + remaining, msg_id.clone())))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            for msg in qs.messages.iter_mut() {
+                msg.reinit_instants();
+            }
+
+            let mut inflight: HashMap<String, InflightMessage> = HashMap::new();
+            for mut im in qs.inflight {
+                im.reinit_instants();
+                if im.visible_at_secs > now_epoch {
+                    inflight.insert(im.receipt_handle.clone(), im);
+                } else {
+                    let mut msg = im.message;
+                    msg.receive_count += 1;
+                    qs.messages.push_front(msg);
+                }
+            }
+
+            let redrive_policy = qs
+                .redrive_policy
+                .or_else(|| parse_redrive_policy_from_attrs(&qs.attributes));
+
+            let queue = Queue {
+                name: qs.name.clone(),
+                url: qs.url,
+                arn: qs.arn,
+                attributes: qs.attributes,
+                tags: qs.tags,
+                messages: qs.messages,
+                inflight,
+                is_fifo: qs.is_fifo,
+                created_at: qs.created_at,
+                dedup_cache,
+                redrive_policy,
+            };
+            state.queues.insert(qs.name, queue);
+        }
+
+        (snapshot.account_id, snapshot.region, state)
+    }
 }
 
 /// Serializable snapshot of a single queue.

@@ -1,7 +1,5 @@
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use awsim_core::{
     AccountRegionStore, AwsError, Body, BodyStore, Protocol, RequestContext, ServiceHandler,
@@ -14,10 +12,7 @@ use crate::operations::{
     get_queue_url, list_queues, message_move, permissions, purge_queue, receive_message,
     send_message, tags,
 };
-use crate::state::{
-    InflightMessage, Queue, QueueSnapshot, SqsState, SqsStateSnapshot,
-    parse_redrive_policy_from_attrs,
-};
+use crate::state::{SqsState, SqsStateSnapshot};
 
 /// The SQS service handler.
 pub struct SqsService {
@@ -50,6 +45,29 @@ impl SqsService {
 
     pub fn store(&self) -> AccountRegionStore<SqsState> {
         self.store.clone()
+    }
+
+    fn rebind_bodies(&self) {
+        let Some(bs) = &self.body_store else {
+            return;
+        };
+        for (_, state) in self.store.iter_all() {
+            state.set_body_store(Arc::clone(bs));
+            for mut queue_entry in state.queues.iter_mut() {
+                let queue_name = queue_entry.key().clone();
+                let queue = queue_entry.value_mut();
+                for msg in queue.messages.iter_mut() {
+                    if let Ok(path) = bs.blob_path("sqs", &queue_name, &msg.message_id) {
+                        msg.body = Body::OnDisk(path);
+                    }
+                }
+                for im in queue.inflight.values_mut() {
+                    if let Ok(path) = bs.blob_path("sqs", &queue_name, &im.message.message_id) {
+                        im.message.body = Body::OnDisk(path);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -155,145 +173,41 @@ impl ServiceHandler for SqsService {
     }
 
     fn snapshot(&self) -> Option<Vec<u8>> {
-        let now_epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        let mut queue_snapshots: Vec<QueueSnapshot> = Vec::new();
-
-        for ((_account_id, _region), state) in self.store.iter_all() {
-            for queue_entry in state.queues.iter() {
-                let q = queue_entry.value();
-
-                // Convert dedup_cache: Instant → epoch secs
-                let dedup_cache: HashMap<String, (u64, String)> = q
-                    .dedup_cache
-                    .iter()
-                    .map(|(k, (expiry, msg_id))| {
-                        // Approximate expiry as epoch seconds
-                        let secs_remaining = expiry
-                            .checked_duration_since(Instant::now())
-                            .unwrap_or(Duration::ZERO)
-                            .as_secs();
-                        (k.clone(), (now_epoch + secs_remaining, msg_id.clone()))
-                    })
-                    .collect();
-
-                let inflight: Vec<InflightMessage> = q.inflight.values().cloned().collect();
-
-                queue_snapshots.push(QueueSnapshot {
-                    name: q.name.clone(),
-                    url: q.url.clone(),
-                    arn: q.arn.clone(),
-                    attributes: q.attributes.clone(),
-                    tags: q.tags.clone(),
-                    messages: q.messages.clone(),
-                    inflight,
-                    is_fifo: q.is_fifo,
-                    created_at: q.created_at.clone(),
-                    dedup_cache,
-                    redrive_policy: q.redrive_policy.clone(),
-                });
-            }
-        }
-
-        let snapshot = SqsStateSnapshot {
-            queues: queue_snapshots,
-        };
-        serde_json::to_vec(&snapshot).ok()
+        self.store.snapshot_to_bytes()
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
-        let snapshot: SqsStateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        use crate::state::SqsRegionSnapshot;
+        use awsim_core::Snapshottable;
 
-        let now_epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let now_instant = Instant::now();
+        if let Ok(()) = self.store.restore_from_bytes(data) {
+            self.rebind_bodies();
+            return Ok(());
+        }
 
-        for mut qs in snapshot.queues {
-            // Derive account and region from the queue ARN.
-            // ARN format: arn:aws:sqs:{region}:{account}:{name}
+        let legacy: SqsStateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        let mut by_region: std::collections::HashMap<(String, String), Vec<_>> =
+            std::collections::HashMap::new();
+        for qs in legacy.queues {
             let parts: Vec<&str> = qs.arn.splitn(6, ':').collect();
-            let (account_id, region) = if parts.len() == 6 {
+            let key = if parts.len() == 6 {
                 (parts[4].to_string(), parts[3].to_string())
             } else {
                 ("000000000000".to_string(), "us-east-1".to_string())
             };
-
-            let state = self.store.get(&account_id, &region);
-            if let Some(bs) = &self.body_store {
-                state.set_body_store(Arc::clone(bs));
-            }
-
-            // Convert dedup_cache: epoch secs → Instant
-            let dedup_cache: HashMap<String, (Instant, String)> = qs
-                .dedup_cache
-                .iter()
-                .filter_map(|(k, (expiry_secs, msg_id))| {
-                    if *expiry_secs > now_epoch {
-                        let remaining = Duration::from_secs(expiry_secs - now_epoch);
-                        Some((k.clone(), (now_instant + remaining, msg_id.clone())))
-                    } else {
-                        None // expired; skip
-                    }
-                })
-                .collect();
-
-            // Reinit instants on messages and rebind on-disk bodies if persistence is on.
-            for msg in qs.messages.iter_mut() {
-                msg.reinit_instants();
-                if let Some(bs) = &self.body_store
-                    && let Ok(path) = bs.blob_path("sqs", &qs.name, &msg.message_id)
-                {
-                    msg.body = Body::OnDisk(path);
-                }
-            }
-
-            // Inflight messages: restore those whose visibility timeout hasn't expired yet;
-            // otherwise re-enqueue them so they're immediately receivable.
-            let mut inflight: HashMap<String, InflightMessage> = HashMap::new();
-            for mut im in qs.inflight {
-                im.reinit_instants();
-                if let Some(bs) = &self.body_store
-                    && let Ok(path) = bs.blob_path("sqs", &qs.name, &im.message.message_id)
-                {
-                    im.message.body = Body::OnDisk(path);
-                }
-                if im.visible_at_secs > now_epoch {
-                    inflight.insert(im.receipt_handle.clone(), im);
-                } else {
-                    // Visibility expired — return to queue
-                    let mut msg = im.message;
-                    msg.receive_count += 1;
-                    qs.messages.push_front(msg);
-                }
-            }
-
-            // Re-derive redrive_policy from attributes (covers old snapshots without the field)
-            let redrive_policy = qs
-                .redrive_policy
-                .or_else(|| parse_redrive_policy_from_attrs(&qs.attributes));
-
-            let queue = Queue {
-                name: qs.name.clone(),
-                url: qs.url.clone(),
-                arn: qs.arn.clone(),
-                attributes: qs.attributes,
-                tags: qs.tags,
-                messages: qs.messages,
-                inflight,
-                is_fifo: qs.is_fifo,
-                created_at: qs.created_at,
-                dedup_cache,
-                redrive_policy,
-            };
-
-            state.queues.insert(qs.name, queue);
+            by_region.entry(key).or_default().push(qs);
         }
-
+        self.store.clear();
+        for ((account_id, region), queues) in by_region {
+            let snap = SqsRegionSnapshot {
+                account_id: account_id.clone(),
+                region: region.clone(),
+                queues,
+            };
+            let (acct, reg, state) = SqsState::from_snapshot(snap);
+            self.store.set(&acct, &reg, state);
+        }
+        self.rebind_bodies();
         Ok(())
     }
 }
