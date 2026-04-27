@@ -2,9 +2,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::state::{EcrState, Repository};
+
+const ECR_LAYER_GROUP: &str = "ecr";
 
 pub fn now_epoch_str() -> String {
     SystemTime::now()
@@ -137,6 +139,13 @@ pub fn delete_repository(
     drop(repo);
 
     state.repositories.remove(name);
+
+    if let Some(bs) = state.body_store()
+        && let Err(e) = bs.delete_bucket(ECR_LAYER_GROUP, name)
+    {
+        warn!(repository = %name, error = %e, "Failed to delete ECR layer bucket on disk");
+    }
+
     info!(repository = %name, "Deleted ECR repository");
 
     Ok(json!({ "repository": repo_json }))

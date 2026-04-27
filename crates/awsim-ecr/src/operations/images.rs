@@ -1,10 +1,38 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::operations::repositories::now_epoch_str;
 use crate::state::{ContainerImage, EcrState};
+
+const ECR_LAYER_GROUP: &str = "ecr";
+
+fn extract_layer_digests(manifest: &str) -> Vec<String> {
+    let parsed: Value = match serde_json::from_str(manifest) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut digests: Vec<String> = Vec::new();
+    if let Some(layers) = parsed.get("layers").and_then(|v| v.as_array()) {
+        for layer in layers {
+            if let Some(d) = layer.get("digest").and_then(|v| v.as_str()) {
+                digests.push(d.to_string());
+            } else if let Some(d) = layer.get("blobSum").and_then(|v| v.as_str()) {
+                digests.push(d.to_string());
+            }
+        }
+    }
+    if let Some(fs_layers) = parsed.get("fsLayers").and_then(|v| v.as_array()) {
+        for layer in fs_layers {
+            if let Some(d) = layer.get("blobSum").and_then(|v| v.as_str()) {
+                digests.push(d.to_string());
+            }
+        }
+    }
+    digests
+}
 
 fn image_to_json(img: &ContainerImage, repo_name: &str, registry_id: &str) -> Value {
     let mut id = json!({
@@ -183,11 +211,13 @@ pub fn batch_delete_image(
 
     let mut deleted_ids = Vec::new();
     let mut failures = Vec::new();
+    let mut removed_manifests: Vec<String> = Vec::new();
 
     for id in image_ids {
         let tag = id["imageTag"].as_str();
         let digest = id["imageDigest"].as_str();
 
+        let mut removed_here: Vec<String> = Vec::new();
         let before_len = repo.images.len();
         repo.images.retain(|img| {
             let matches = if let Some(t) = tag {
@@ -197,17 +227,41 @@ pub fn batch_delete_image(
             } else {
                 false
             };
+            if matches {
+                removed_here.push(img.image_manifest.clone());
+            }
             !matches
         });
 
         if repo.images.len() < before_len {
             deleted_ids.push(id.clone());
+            removed_manifests.extend(removed_here);
         } else {
             failures.push(json!({
                 "imageId": id,
                 "failureCode": "ImageNotFound",
                 "failureReason": "Requested image not found"
             }));
+        }
+    }
+
+    let mut digests_to_remove: Vec<String> = Vec::new();
+    for manifest in &removed_manifests {
+        digests_to_remove.extend(extract_layer_digests(manifest));
+    }
+    for digest in &digests_to_remove {
+        repo.layers.remove(digest);
+    }
+
+    drop(repo);
+
+    if !digests_to_remove.is_empty()
+        && let Some(bs) = state.body_store()
+    {
+        for digest in &digests_to_remove {
+            if let Err(e) = bs.delete_blob(ECR_LAYER_GROUP, repo_name, digest) {
+                warn!(repo = repo_name, digest = %digest, error = %e, "Failed to delete ECR layer blob");
+            }
         }
     }
 
