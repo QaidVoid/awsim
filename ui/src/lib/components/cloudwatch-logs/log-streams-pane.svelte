@@ -8,6 +8,7 @@
 	import { type LogStream } from '$lib/api/cloudwatch-logs';
 	import { bytesHuman, relativeTime } from '$lib/format';
 	import { EmptyState } from '$lib/components/service';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { cn } from '$lib/utils';
 
 	interface Props {
@@ -48,6 +49,12 @@
 					title="No log group selected"
 					description="Pick a log group on the left to see its streams."
 				/>
+			</div>
+		{:else if loading && streams.length === 0}
+			<div class="space-y-2 p-3">
+				{#each Array(4) as _, i (i)}
+					<Skeleton class="h-10 w-full" />
+				{/each}
 			</div>
 		{:else if streams.length === 0 && !loading}
 			<div class="p-4">

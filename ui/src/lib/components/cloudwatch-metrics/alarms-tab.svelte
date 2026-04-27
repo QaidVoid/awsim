@@ -7,6 +7,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { describeAlarms, type Alarm } from '$lib/api/cloudwatch-metrics';
 	import { EmptyState } from '$lib/components/service';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import BellRing from '@lucide/svelte/icons/bell-ring';
 	import { toast } from 'svelte-sonner';
 
@@ -57,7 +58,13 @@
 </script>
 
 <div class="h-full overflow-auto">
-	{#if !loading && alarms.length === 0}
+	{#if loading && alarms.length === 0}
+		<div class="space-y-2 p-4">
+			{#each Array(4) as _, i (i)}
+				<Skeleton class="h-9 w-full" />
+			{/each}
+		</div>
+	{:else if !loading && alarms.length === 0}
 		<div class="p-6">
 			<EmptyState
 				icon={BellRing}

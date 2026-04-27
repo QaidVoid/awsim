@@ -14,6 +14,7 @@
 		type TrailEvent,
 	} from '$lib/api/cloudtrail';
 	import { EmptyState } from '$lib/components/service';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EventFilterPopover from './event-filter-popover.svelte';
 	import EventDetailSheet from './event-detail-sheet.svelte';
 	import { toast } from 'svelte-sonner';
@@ -71,7 +72,13 @@
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-auto">
-		{#if !loading && events.length === 0}
+		{#if loading && events.length === 0}
+			<div class="space-y-2 p-4">
+				{#each Array(6) as _, i (i)}
+					<Skeleton class="h-7 w-full" />
+				{/each}
+			</div>
+		{:else if !loading && events.length === 0}
 			<div class="p-6">
 				<EmptyState
 					icon={History}

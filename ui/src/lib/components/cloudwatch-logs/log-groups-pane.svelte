@@ -16,6 +16,7 @@
 	} from '$lib/api/cloudwatch-logs';
 	import { bytesHuman } from '$lib/format';
 	import { EmptyState } from '$lib/components/service';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { cn } from '$lib/utils';
 
 	interface Props {
@@ -120,7 +121,13 @@
 	{/if}
 
 	<div class="min-h-0 flex-1 overflow-y-auto">
-		{#if groups.length === 0 && !loading}
+		{#if loading && groups.length === 0}
+			<div class="space-y-2 p-3">
+				{#each Array(5) as _, i (i)}
+					<Skeleton class="h-10 w-full" />
+				{/each}
+			</div>
+		{:else if groups.length === 0 && !loading}
 			<div class="p-4">
 				<EmptyState
 					icon={ScrollText}

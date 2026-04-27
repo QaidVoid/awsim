@@ -12,6 +12,7 @@
 	import FileText from '@lucide/svelte/icons/file-text';
 	import { getLogEvents, type LogEvent } from '$lib/api/cloudwatch-logs';
 	import { EmptyState } from '$lib/components/service';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { cn } from '$lib/utils';
 
 	interface Props {
@@ -141,6 +142,12 @@
 		{:else if error}
 			<div class="m-4 rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-400">
 				{error}
+			</div>
+		{:else if loading && events.length === 0}
+			<div class="space-y-2 p-4">
+				{#each Array(8) as _, i (i)}
+					<Skeleton class="h-4 w-full" />
+				{/each}
 			</div>
 		{:else if visible.length === 0 && !loading}
 			<div class="p-6">

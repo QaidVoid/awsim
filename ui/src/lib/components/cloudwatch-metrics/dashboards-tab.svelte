@@ -13,6 +13,7 @@
 		type DashboardDetail,
 	} from '$lib/api/cloudwatch-metrics';
 	import { EmptyState } from '$lib/components/service';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import LayoutDashboard from '@lucide/svelte/icons/layout-dashboard';
 	import { toast } from 'svelte-sonner';
 
@@ -57,7 +58,13 @@
 
 <div class="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] divide-x divide-border">
 	<div class="min-h-0 overflow-auto">
-		{#if !loading && dashboards.length === 0}
+		{#if loading && dashboards.length === 0}
+			<div class="space-y-2 p-4">
+				{#each Array(4) as _, i (i)}
+					<Skeleton class="h-9 w-full" />
+				{/each}
+			</div>
+		{:else if !loading && dashboards.length === 0}
 			<div class="p-6">
 				<EmptyState
 					icon={LayoutDashboard}

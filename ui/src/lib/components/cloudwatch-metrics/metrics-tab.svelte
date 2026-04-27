@@ -15,6 +15,7 @@
 		type Metric,
 	} from '$lib/api/cloudwatch-metrics';
 	import { EmptyState } from '$lib/components/service';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import BarChart from '@lucide/svelte/icons/bar-chart-3';
 	import Sparkline from './sparkline.svelte';
 	import { toast } from 'svelte-sonner';
@@ -100,7 +101,13 @@
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-auto">
-		{#if !loading && metrics.length === 0}
+		{#if loading && metrics.length === 0}
+			<div class="space-y-2 p-4">
+				{#each Array(6) as _, i (i)}
+					<Skeleton class="h-8 w-full" />
+				{/each}
+			</div>
+		{:else if !loading && metrics.length === 0}
 			<div class="p-6">
 				<EmptyState
 					icon={BarChart}

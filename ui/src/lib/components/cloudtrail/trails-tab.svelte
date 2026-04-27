@@ -18,6 +18,7 @@
 		type Trail,
 	} from '$lib/api/cloudtrail';
 	import { EmptyState } from '$lib/components/service';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import Radar from '@lucide/svelte/icons/radar';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -135,7 +136,13 @@
 	{/if}
 
 	<div class="min-h-0 flex-1 overflow-auto">
-		{#if !loading && trails.length === 0}
+		{#if loading && trails.length === 0}
+			<div class="space-y-2 p-4">
+				{#each Array(3) as _, i (i)}
+					<Skeleton class="h-10 w-full" />
+				{/each}
+			</div>
+		{:else if !loading && trails.length === 0}
 			<div class="p-6">
 				<EmptyState
 					icon={Radar}
