@@ -5,7 +5,9 @@ use base64::Engine;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::state::{MultipartUpload, ObjectBody, PartData, S3Object, S3State};
+use awsim_core::Body;
+
+use crate::state::{MultipartUpload, PartData, S3Object, S3State};
 use crate::util::{compute_etag, now_rfc7231};
 
 use super::bucket::no_such_bucket;
@@ -86,9 +88,9 @@ pub fn upload_part(state: &S3State, input: &Value) -> Result<Value, AwsError> {
                     &data,
                 )
                 .map_err(|e| AwsError::internal(format!("persist part: {e}")))?;
-            ObjectBody::OnDisk(path)
+            Body::OnDisk(path)
         }
-        None => ObjectBody::InMemory(data),
+        None => Body::InMemory(data),
     };
 
     upload.parts.insert(
@@ -138,9 +140,9 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
             let path = store
                 .write_blob("objects", bucket_name, key, &combined_data)
                 .map_err(|e| AwsError::internal(format!("persist object: {e}")))?;
-            ObjectBody::OnDisk(path)
+            Body::OnDisk(path)
         }
-        None => ObjectBody::InMemory(combined_data),
+        None => Body::InMemory(combined_data),
     };
 
     let obj = S3Object {

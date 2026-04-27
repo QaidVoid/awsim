@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, Body, RequestContext};
 use base64::Engine;
 use serde_json::{Value, json};
 
-use crate::state::{ObjectBody, S3Object, S3State};
+use crate::state::{S3Object, S3State};
 use crate::util::{compute_etag, now_iso8601, now_rfc7231};
 
 use super::bucket::no_such_bucket;
@@ -72,9 +72,9 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
                 let path = store
                     .write_blob("objects", bucket_name, key, &data)
                     .map_err(|e| AwsError::internal(format!("persist object: {e}")))?;
-                ObjectBody::OnDisk(path)
+                Body::OnDisk(path)
             }
-            None => ObjectBody::InMemory(data),
+            None => Body::InMemory(data),
         };
 
         let obj = S3Object {
@@ -241,9 +241,9 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
             let path = store
                 .write_blob("objects", dst_bucket, dst_key, &data)
                 .map_err(|e| AwsError::internal(format!("persist object: {e}")))?;
-            ObjectBody::OnDisk(path)
+            Body::OnDisk(path)
         }
-        None => ObjectBody::InMemory(data),
+        None => Body::InMemory(data),
     };
 
     let new_obj = S3Object {

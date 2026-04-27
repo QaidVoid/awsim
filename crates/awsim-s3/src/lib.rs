@@ -1293,8 +1293,9 @@ impl ServiceHandler for S3Service {
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
+        use awsim_core::Body;
         use dashmap::DashMap;
-        use state::{ObjectBody, S3Object};
+        use state::S3Object;
 
         let snapshot: S3StateSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
 
@@ -1323,7 +1324,7 @@ impl ServiceHandler for S3Service {
                     for meta in bs.objects {
                         let body = match state.body_store() {
                             Some(store) => match store.blob_path("objects", &bs.name, &meta.key) {
-                                Ok(path) => ObjectBody::OnDisk(path),
+                                Ok(path) => Body::OnDisk(path),
                                 Err(e) => {
                                     tracing::warn!(
                                         bucket = %bs.name,
@@ -1331,10 +1332,10 @@ impl ServiceHandler for S3Service {
                                         error = %e,
                                         "resolve object path on restore"
                                     );
-                                    ObjectBody::InMemory(Vec::new())
+                                    Body::InMemory(Vec::new())
                                 }
                             },
-                            None => ObjectBody::InMemory(Vec::new()),
+                            None => Body::InMemory(Vec::new()),
                         };
                         dm.insert(
                             meta.key.clone(),
