@@ -5,9 +5,12 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use tracing::warn;
+
 use crate::state::{EcrState, Layer, LayerBody, LayerUpload};
 
 const DEFAULT_LAYER_MEDIA_TYPE: &str = "application/vnd.docker.image.rootfs.diff.tar.gzip";
+const ECR_LAYER_GROUP: &str = "ecr";
 
 fn now_epoch_str() -> String {
     SystemTime::now()
@@ -442,9 +445,20 @@ pub fn complete_layer_upload(
     let layer_digest = format!("sha256:{:x}", hasher.finalize());
     let size = bytes.len() as u64;
 
+    let body = match state.body_store() {
+        Some(bs) => match bs.write_blob(ECR_LAYER_GROUP, repo_name, &layer_digest, &bytes) {
+            Ok(path) => LayerBody::OnDisk(path),
+            Err(e) => {
+                warn!(repo = repo_name, digest = %layer_digest, error = %e, "Failed to persist ECR layer; falling back to in-memory");
+                LayerBody::InMemory(bytes)
+            }
+        },
+        None => LayerBody::InMemory(bytes),
+    };
+
     let layer = Layer {
         digest: layer_digest.clone(),
-        body: LayerBody::InMemory(bytes),
+        body,
         size,
         media_type: DEFAULT_LAYER_MEDIA_TYPE.to_string(),
     };
