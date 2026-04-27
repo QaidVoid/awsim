@@ -2,6 +2,7 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+#[derive(Debug)]
 pub struct BodyStore {
     root: PathBuf,
 }

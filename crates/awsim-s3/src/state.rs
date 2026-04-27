@@ -2,6 +2,9 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
+
+use crate::body_store::BodyStore;
 
 /// Storage backing for an object's bytes — either fully in memory, or a path on
 /// disk that the body store owns.
@@ -218,4 +221,16 @@ pub struct S3StateSnapshot {
 pub struct S3State {
     /// Buckets keyed by bucket name.
     pub buckets: DashMap<String, Bucket>,
+    /// Optional disk-backed body store, set once at service construction.
+    pub body_store: OnceLock<Arc<BodyStore>>,
+}
+
+impl S3State {
+    pub fn body_store(&self) -> Option<&Arc<BodyStore>> {
+        self.body_store.get()
+    }
+
+    pub fn set_body_store(&self, store: Arc<BodyStore>) {
+        let _ = self.body_store.set(store);
+    }
 }

@@ -38,18 +38,31 @@ fn event_matches(filters: &[String], event_name: &str) -> bool {
 /// The AWSim S3 service handler.
 pub struct S3Service {
     store: AccountRegionStore<S3State>,
+    body_store: Option<Arc<BodyStore>>,
 }
 
 impl S3Service {
     pub fn new() -> Self {
         Self {
             store: AccountRegionStore::new(),
+            body_store: None,
+        }
+    }
+
+    pub fn with_data_dir(dir: impl AsRef<std::path::Path>) -> Self {
+        let root = dir.as_ref().join("s3");
+        Self {
+            store: AccountRegionStore::new(),
+            body_store: Some(Arc::new(BodyStore::new(root))),
         }
     }
 
     fn get_state(&self, ctx: &RequestContext) -> Arc<S3State> {
-        // S3 state is global per account — region is not used for state namespacing.
-        self.store.get(&ctx.account_id, "global")
+        let state = self.store.get(&ctx.account_id, "global");
+        if let Some(bs) = &self.body_store {
+            state.set_body_store(Arc::clone(bs));
+        }
+        state
     }
 
     pub fn store(&self) -> AccountRegionStore<S3State> {
