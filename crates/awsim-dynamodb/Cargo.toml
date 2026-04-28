@@ -14,3 +14,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+
+# SQLite-backed item storage. `bundled` ships sqlite C source so we don't
+# depend on the system library — important for distributable awsim builds.
+# Sync API; we cross the async boundary with `tokio::task::spawn_blocking`
+# at the operation handler layer.
+rusqlite = { version = "0.32", features = ["bundled", "serde_json"] }
+refinery = { version = "0.8", features = ["rusqlite"] }
+tokio = { workspace = true }

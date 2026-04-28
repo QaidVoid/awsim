@@ -1,6 +1,9 @@
 mod expressions;
 mod operations;
+mod sqlite_store;
 mod state;
+
+pub use sqlite_store::{MAX_GSI_SLOTS, SqliteStore};
 
 use std::sync::Arc;
 
