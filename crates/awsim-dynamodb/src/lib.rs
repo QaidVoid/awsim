@@ -533,17 +533,11 @@ impl ServiceHandler for DynamoDbService {
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
-        // Deserialize through the legacy shape so older snapshots — which
-        // still carry items inside Table — round-trip cleanly. The
-        // `serde(default)` on `legacy_items` means current snapshots
-        // (without an `items` field) parse just as well, with the field
-        // defaulting to an empty BTreeMap.
-        let snapshot: state::LegacyDynamoStateSnapshot =
+        let snapshot: DynamoStateSnapshot =
             serde_json::from_slice(data).map_err(|e| e.to_string())?;
 
-        for legacy in snapshot.tables {
+        for table in snapshot.tables {
             // DynamoDB ARN: arn:aws:dynamodb:{region}:{account}:table/{name}
-            let (table, legacy_items) = legacy.into_parts();
             let parts: Vec<&str> = table.arn.splitn(6, ':').collect();
             let (account, region) = if parts.len() == 6 {
                 (parts[4].to_string(), parts[3].to_string())
@@ -551,25 +545,8 @@ impl ServiceHandler for DynamoDbService {
                 ("000000000000".to_string(), "us-east-1".to_string())
             };
 
-            for (_composite, item) in legacy_items {
-                if let Some(keys) = keys::extract_item_keys(&table, &item) {
-                    let attrs = keys::item_to_storage_value(&item);
-                    self.sqlite
-                        .put_item(
-                            &account,
-                            &region,
-                            &table.name,
-                            &keys.pk,
-                            &keys.sk,
-                            &attrs,
-                            &keys.gsi,
-                        )
-                        .map_err(|e| format!("DynamoDB legacy item migrate failed: {e}"))?;
-                }
-            }
-
-            // Mirror the schema row so a fresh process without a snapshot
-            // can still bootstrap from SQLite alone.
+            // Mirror the schema row so a fresh process can still bootstrap
+            // from SQLite alone if the snapshot file goes missing.
             if let Ok(schema_value) = serde_json::to_value(&table) {
                 let _ = self
                     .sqlite

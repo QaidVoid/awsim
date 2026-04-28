@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -131,75 +131,6 @@ pub struct Table {
 #[derive(Serialize, Deserialize)]
 pub struct DynamoStateSnapshot {
     pub tables: Vec<Table>,
-}
-
-/// Legacy snapshot shape — kept around so we can deserialize JSON files
-/// written before stage 4 (when items lived inside `Table.items`). The
-/// restore path drains `legacy_items` into the SQLite mirror, then
-/// upgrades the data to the current schema.
-///
-/// `serde(default)` on `legacy_items` means new snapshots (which omit
-/// the field via `Table` above) round-trip cleanly through this type
-/// too — it parses an empty BTreeMap.
-#[derive(Deserialize)]
-pub struct LegacyTableSnapshot {
-    pub name: String,
-    pub arn: String,
-    pub key_schema: Vec<KeySchemaElement>,
-    pub attribute_definitions: Vec<AttributeDefinition>,
-    pub billing_mode: String,
-    pub status: String,
-    pub created_at: f64,
-    pub gsi: Vec<GlobalSecondaryIndex>,
-    pub lsi: Vec<LocalSecondaryIndex>,
-    /// Items as written by pre-stage-4 snapshots. Always empty going forward.
-    #[serde(default, rename = "items")]
-    pub legacy_items: BTreeMap<String, DynamoItem>,
-    #[serde(default)]
-    pub stream_enabled: bool,
-    #[serde(default)]
-    pub stream_arn: Option<String>,
-    #[serde(default)]
-    pub stream_view_type: Option<String>,
-    #[serde(default)]
-    pub stream_records: Vec<StreamRecord>,
-    #[serde(default)]
-    pub stream_sequence: u64,
-    #[serde(default)]
-    pub ttl: TtlSpecification,
-    #[serde(default)]
-    pub tags: HashMap<String, String>,
-}
-
-#[derive(Deserialize)]
-pub struct LegacyDynamoStateSnapshot {
-    pub tables: Vec<LegacyTableSnapshot>,
-}
-
-impl LegacyTableSnapshot {
-    /// Strip the `items` field and return the runtime `Table` plus the
-    /// legacy items so the caller can migrate them into SQLite.
-    pub fn into_parts(self) -> (Table, BTreeMap<String, DynamoItem>) {
-        let table = Table {
-            name: self.name,
-            arn: self.arn,
-            key_schema: self.key_schema,
-            attribute_definitions: self.attribute_definitions,
-            billing_mode: self.billing_mode,
-            status: self.status,
-            created_at: self.created_at,
-            gsi: self.gsi,
-            lsi: self.lsi,
-            stream_enabled: self.stream_enabled,
-            stream_arn: self.stream_arn,
-            stream_view_type: self.stream_view_type,
-            stream_records: self.stream_records,
-            stream_sequence: self.stream_sequence,
-            ttl: self.ttl,
-            tags: self.tags,
-        };
-        (table, self.legacy_items)
-    }
 }
 
 impl Table {
