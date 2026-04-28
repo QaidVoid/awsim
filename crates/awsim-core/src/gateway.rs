@@ -120,8 +120,36 @@ pub async fn handle_request(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
+    // Short-circuit common browser probes (favicon, devtools well-known
+    // path) before the AWS dispatch pipeline runs. They are not API
+    // calls — silently 204'ing keeps them out of the request log and
+    // out of the inspect drawer.
+    if is_browser_probe(&method, uri.path()) {
+        return Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .body(Body::empty())
+            .unwrap();
+    }
     let (response, _id) = dispatch_request(&state, method, uri, headers, body).await;
     response
+}
+
+/// Recognise the handful of unsolicited paths browsers hit when you point
+/// them at AWSim's port — they're not AWS requests and shouldn't appear
+/// in logs or stats. Conservative on purpose: only paths we've actually
+/// seen in real traces are listed.
+fn is_browser_probe(method: &Method, path: &str) -> bool {
+    if method != Method::GET {
+        return false;
+    }
+    matches!(
+        path,
+        "/favicon.ico"
+            | "/apple-touch-icon.png"
+            | "/apple-touch-icon-precomposed.png"
+            | "/robots.txt"
+            | "/.well-known/appspecific/com.chrome.devtools.json"
+    )
 }
 
 /// Same as `handle_request`, but takes the state by reference and returns
@@ -556,4 +584,34 @@ fn resolve_service_from_path(path: &str) -> Option<String> {
         _ => return None,
     };
     Some(service.to_string())
+}
+
+#[cfg(test)]
+mod browser_probe_tests {
+    use super::*;
+
+    #[test]
+    fn matches_known_probes() {
+        assert!(is_browser_probe(&Method::GET, "/favicon.ico"));
+        assert!(is_browser_probe(
+            &Method::GET,
+            "/.well-known/appspecific/com.chrome.devtools.json"
+        ));
+        assert!(is_browser_probe(&Method::GET, "/robots.txt"));
+        assert!(is_browser_probe(&Method::GET, "/apple-touch-icon.png"));
+    }
+
+    #[test]
+    fn ignores_non_get_methods() {
+        // S3 PutObject to /favicon.ico would be a real (if weird) call.
+        assert!(!is_browser_probe(&Method::PUT, "/favicon.ico"));
+        assert!(!is_browser_probe(&Method::POST, "/favicon.ico"));
+    }
+
+    #[test]
+    fn ignores_unknown_paths() {
+        assert!(!is_browser_probe(&Method::GET, "/"));
+        assert!(!is_browser_probe(&Method::GET, "/some-bucket/key"));
+        assert!(!is_browser_probe(&Method::GET, "/_awsim/stats"));
+    }
 }
