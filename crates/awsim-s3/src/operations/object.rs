@@ -3,12 +3,23 @@ use std::collections::HashMap;
 use awsim_core::{AwsError, Body, RequestContext};
 use base64::Engine;
 use serde_json::{Value, json};
+use uuid::Uuid;
 
-use crate::state::{S3Object, S3State};
+use crate::state::{S3Object, S3State, VersioningStatus};
 use crate::util::{compute_etag, now_iso8601, now_rfc7231};
 
 use super::bucket::no_such_bucket;
 use super::{opt_str, require_str};
+
+/// When the bucket has versioning Enabled, generate a fresh opaque version ID;
+/// otherwise leave the object un-versioned. (Suspended buckets emit `null` for
+/// new puts, matching AWS behaviour.)
+fn next_version_id(versioning: &VersioningStatus) -> Option<String> {
+    match versioning {
+        VersioningStatus::Enabled => Some(Uuid::new_v4().simple().to_string()),
+        VersioningStatus::Suspended | VersioningStatus::Disabled => None,
+    }
+}
 
 /// PUT /{Bucket}/{Key+} — store an object.
 /// If `x-amz-copy-source` header is present, this is a CopyObject.
@@ -61,7 +72,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     let etag = compute_etag(&data);
     let last_modified = now_rfc7231();
 
-    {
+    let version_id = {
         let bucket = state
             .buckets
             .get(bucket_name)
@@ -77,6 +88,8 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
             None => Body::InMemory(data),
         };
 
+        let version_id = next_version_id(&bucket.versioning);
+
         let obj = S3Object {
             key: key.to_string(),
             body,
@@ -85,16 +98,21 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
             etag: etag.clone(),
             last_modified,
             metadata,
-            version_id: None,
+            version_id: version_id.clone(),
             tags: Default::default(),
         };
 
         bucket.objects.insert(key.to_string(), obj);
-    }
+        version_id
+    };
 
-    Ok(json!({
-        "ETag": etag,
-    }))
+    let mut result = json!({ "ETag": etag });
+    if let Some(vid) = version_id
+        && let Some(map) = result.as_object_mut()
+    {
+        map.insert("VersionId".to_string(), Value::String(vid));
+    }
+    Ok(result)
 }
 
 /// GET /{Bucket}/{Key+} — retrieve object data.
@@ -137,6 +155,10 @@ pub fn get_object(
         result["ContentRange"] = json!(range);
     }
 
+    if let Some(vid) = &obj.version_id {
+        result["VersionId"] = Value::String(vid.clone());
+    }
+
     // Add user metadata.
     for (k, v) in &obj.metadata {
         if let Some(obj_map) = result.as_object_mut() {
@@ -159,12 +181,16 @@ pub fn head_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
 
     let obj = bucket.objects.get(key).ok_or_else(|| no_such_key(key))?;
 
-    Ok(json!({
+    let mut result = json!({
         "ContentType": obj.content_type,
         "ContentLength": obj.content_length,
         "ETag": obj.etag,
         "LastModified": obj.last_modified,
-    }))
+    });
+    if let Some(vid) = &obj.version_id {
+        result["VersionId"] = Value::String(vid.clone());
+    }
+    Ok(result)
 }
 
 /// DELETE /{Bucket}/{Key+} — delete a single object.
@@ -246,6 +272,8 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
         None => Body::InMemory(data),
     };
 
+    let version_id = next_version_id(&dst_bucket_ref.versioning);
+
     let new_obj = S3Object {
         key: dst_key.to_string(),
         body,
@@ -254,18 +282,24 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
         etag: etag.clone(),
         last_modified: last_modified_http,
         metadata,
-        version_id: None,
+        version_id: version_id.clone(),
         tags: Default::default(),
     };
 
     dst_bucket_ref.objects.insert(dst_key.to_string(), new_obj);
 
-    Ok(json!({
+    let mut result = json!({
         "CopyObjectResult": {
             "ETag": etag,
             "LastModified": last_modified_iso,
         }
-    }))
+    });
+    if let Some(vid) = version_id
+        && let Some(map) = result.as_object_mut()
+    {
+        map.insert("VersionId".to_string(), Value::String(vid));
+    }
+    Ok(result)
 }
 
 // ─── Range handling ──────────────────────────────────────────────────────────
@@ -352,4 +386,60 @@ fn to_kebab(s: &str) -> String {
         result.push(c.to_lowercase().next().unwrap_or(c));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{Bucket, S3State};
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("s3", "us-east-1")
+    }
+
+    fn state_with(bucket: Bucket) -> S3State {
+        let state = S3State::default();
+        state.buckets.insert(bucket.name.clone(), bucket);
+        state
+    }
+
+    #[test]
+    fn put_object_assigns_version_id_only_when_versioning_enabled() {
+        // Versioning Disabled — no VersionId in response.
+        let mut bucket = Bucket::new("plain", "us-east-1", "now");
+        bucket.versioning = VersioningStatus::Disabled;
+        let state = state_with(bucket);
+        let resp = put_object(
+            &state,
+            &json!({ "Bucket": "plain", "Key": "k", "Body": "hi" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(resp.get("VersionId").is_none(), "expected no VersionId");
+
+        // Versioning Enabled — distinct VersionId per put.
+        let mut bucket = Bucket::new("vbucket", "us-east-1", "now");
+        bucket.versioning = VersioningStatus::Enabled;
+        let state = state_with(bucket);
+        let r1 = put_object(
+            &state,
+            &json!({ "Bucket": "vbucket", "Key": "k", "Body": "v1" }),
+            &ctx(),
+        )
+        .unwrap();
+        let r2 = put_object(
+            &state,
+            &json!({ "Bucket": "vbucket", "Key": "k", "Body": "v2" }),
+            &ctx(),
+        )
+        .unwrap();
+        let v1 = r1["VersionId"].as_str().expect("v1 has VersionId");
+        let v2 = r2["VersionId"].as_str().expect("v2 has VersionId");
+        assert_ne!(v1, v2, "successive puts must produce distinct VersionIds");
+
+        // GetObject and HeadObject surface the current VersionId.
+        let head =
+            head_object(&state, &json!({ "Bucket": "vbucket", "Key": "k" })).unwrap();
+        assert_eq!(head["VersionId"].as_str(), Some(v2));
+    }
 }

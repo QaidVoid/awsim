@@ -145,6 +145,11 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         None => Body::InMemory(combined_data),
     };
 
+    let version_id = match bucket.versioning {
+        crate::state::VersioningStatus::Enabled => Some(uuid::Uuid::new_v4().simple().to_string()),
+        _ => None,
+    };
+
     let obj = S3Object {
         key: key.to_string(),
         body,
@@ -153,7 +158,7 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         etag: etag.clone(),
         last_modified,
         metadata: Default::default(),
-        version_id: None,
+        version_id: version_id.clone(),
         tags: Default::default(),
     };
 
@@ -165,13 +170,19 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         tracing::warn!(bucket = %bucket_name, upload_id = %upload_id, error = %e, "delete multipart parts");
     }
 
-    Ok(json!({
+    let mut result = json!({
         "__xml_root": "CompleteMultipartUploadResult",
         "Location": format!("/{}/{}", bucket_name, key),
         "Bucket": bucket_name,
         "Key": key,
         "ETag": etag,
-    }))
+    });
+    if let Some(vid) = version_id
+        && let Some(map) = result.as_object_mut()
+    {
+        map.insert("VersionId".to_string(), Value::String(vid));
+    }
+    Ok(result)
 }
 
 /// DELETE /{Bucket}/{Key+}?uploadId={id} — abort a multipart upload.
