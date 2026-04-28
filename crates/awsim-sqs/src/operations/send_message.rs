@@ -65,6 +65,20 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                 .to_string(),
         )
     } else {
+        // Real AWS rejects MessageGroupId / MessageDeduplicationId on
+        // standard queues with InvalidParameterValue. Mirror that —
+        // silently dropping these makes test divergences hard to find.
+        if input
+            .get("MessageGroupId")
+            .and_then(Value::as_str)
+            .is_some()
+        {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValue",
+                "The request includes a parameter that is not valid for this queue type. \
+                 MessageGroupId is only valid for FIFO queues",
+            ));
+        }
         None
     };
 
@@ -73,6 +87,17 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
             .as_str()
             .map(|s| s.to_string())
     } else {
+        if input
+            .get("MessageDeduplicationId")
+            .and_then(Value::as_str)
+            .is_some()
+        {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValue",
+                "The request includes a parameter that is not valid for this queue type. \
+                 MessageDeduplicationId is only valid for FIFO queues",
+            ));
+        }
         None
     };
 
@@ -277,6 +302,57 @@ fn unix_epoch_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::{Queue, SqsState};
+
+    fn standard_queue() -> SqsState {
+        let state = SqsState::default();
+        let q = Queue::new(
+            "std".to_string(),
+            "http://localhost/queue/std".to_string(),
+            "arn:aws:sqs:us-east-1:000000000000:std".to_string(),
+            false,
+            "now".to_string(),
+            HashMap::new(),
+        );
+        state.queues.insert("std".to_string(), q);
+        state
+    }
+
+    #[test]
+    fn standard_queue_rejects_message_deduplication_id() {
+        let state = standard_queue();
+        let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
+        let err = handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/std",
+                "MessageBody": "hi",
+                "MessageDeduplicationId": "x",
+            }),
+            &ctx,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+        assert!(err.message.contains("MessageDeduplicationId"));
+    }
+
+    #[test]
+    fn standard_queue_rejects_message_group_id() {
+        let state = standard_queue();
+        let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
+        let err = handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/std",
+                "MessageBody": "hi",
+                "MessageGroupId": "g",
+            }),
+            &ctx,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+        assert!(err.message.contains("MessageGroupId"));
+    }
 
     #[test]
     fn parse_message_attributes_decodes_binary_value() {
