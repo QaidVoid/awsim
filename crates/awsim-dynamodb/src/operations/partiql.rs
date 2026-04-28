@@ -177,7 +177,7 @@ fn run_select(
     // Confirm the table exists; we don't need anything else from the
     // schema for this minimal SELECT subset.
     if !state.tables.contains_key(&table_name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Table '{table_name}' not found"),
         ));
@@ -241,7 +241,7 @@ fn run_insert(
 
     let sqlite_keys = {
         let table = state.tables.get(&table_name).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Table '{table_name}' not found"),
             )
@@ -287,7 +287,7 @@ fn run_update(
     let assignments = set_clause[..set_end].trim();
 
     if !state.tables.contains_key(&table_name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Table '{table_name}' not found"),
         ));
@@ -322,7 +322,7 @@ fn run_update(
 
     let sqlite_keys = {
         let table = state.tables.get(&table_name).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Table '{table_name}' not found"),
             )
@@ -356,7 +356,7 @@ fn run_delete(
     let (table_name, where_key, where_val) = parse_from_where(stmt, params)?;
 
     if !state.tables.contains_key(&table_name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Table '{table_name}' not found"),
         ));

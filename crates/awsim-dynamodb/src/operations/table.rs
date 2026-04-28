@@ -345,7 +345,7 @@ pub fn truncate_table(
     let table_name = require_str(input, "TableName")?;
 
     if !state.tables.contains_key(table_name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Cannot do operations on a non-existent table: {table_name}"),
         ));
@@ -368,7 +368,7 @@ pub fn delete_table(
     let table_name = require_str(input, "TableName")?;
 
     let (_, table) = state.tables.remove(table_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Cannot do operations on a non-existent table: {table_name}"),
         )
@@ -395,7 +395,7 @@ pub fn describe_table(
     let table_name = require_str(input, "TableName")?;
 
     let table = state.tables.get(table_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Cannot do operations on a non-existent table: {table_name}"),
         )
@@ -457,7 +457,7 @@ pub fn update_table(
     let table_name = require_str(input, "TableName")?;
 
     let mut table = state.tables.get_mut(table_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Cannot do operations on a non-existent table: {table_name}"),
         )
@@ -571,7 +571,7 @@ pub fn describe_time_to_live(
     let table_name = require_str(input, "TableName")?;
 
     let table = state.tables.get(table_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Cannot do operations on a non-existent table: {table_name}"),
         )
@@ -614,7 +614,7 @@ pub fn update_time_to_live(
         .to_string();
 
     let mut table = state.tables.get_mut(table_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Cannot do operations on a non-existent table: {table_name}"),
         )
@@ -645,7 +645,7 @@ pub fn describe_continuous_backups(
 
     // Verify the table exists.
     if !state.tables.contains_key(table_name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "TableNotFoundException",
             format!("Table '{table_name}' not found"),
         ));
@@ -678,7 +678,7 @@ pub fn tag_resource(
         .find(|e| e.value().arn == resource_arn)
         .map(|e| e.key().clone())
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Resource not found: {resource_arn}"),
             )
@@ -719,7 +719,7 @@ pub fn untag_resource(
         .find(|e| e.value().arn == resource_arn)
         .map(|e| e.key().clone())
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Resource not found: {resource_arn}"),
             )
@@ -757,7 +757,7 @@ pub fn list_tags_of_resource(
         .iter()
         .find(|e| e.value().arn == resource_arn)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Resource not found: {resource_arn}"),
             )
@@ -800,7 +800,7 @@ pub fn describe_global_table(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "GlobalTableName")?;
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "GlobalTableNotFoundException",
         format!("Global table '{name}' not found"),
     ))
@@ -824,7 +824,7 @@ pub fn describe_export(
 ) -> Result<Value, AwsError> {
     let export_arn = require_str(input, "ExportArn")?;
     let record = state.exports.get(export_arn).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ExportNotFoundException",
             format!("Export not found: {export_arn}"),
         )
@@ -852,7 +852,7 @@ pub fn export_table_to_point_in_time(
     let table_arn = require_str(input, "TableArn")?;
     let exists = state.tables.iter().any(|e| e.value().arn == table_arn);
     if !exists {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "TableNotFoundException",
             format!("Table not found: {table_arn}"),
         ));
@@ -930,7 +930,7 @@ pub fn describe_import(
 ) -> Result<Value, AwsError> {
     let import_arn = require_str(input, "ImportArn")?;
     let record = state.imports.get(import_arn).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ImportNotFoundException",
             format!("Import not found: {import_arn}"),
         )
@@ -1059,7 +1059,7 @@ pub fn describe_contributor_insights(
     let table_name = require_str(input, "TableName")?;
 
     if !state.tables.contains_key(table_name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Table '{table_name}' not found"),
         ));
@@ -1082,7 +1082,7 @@ pub fn update_contributor_insights(
     let table_name = require_str(input, "TableName")?;
 
     if !state.tables.contains_key(table_name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Table '{table_name}' not found"),
         ));

@@ -14,7 +14,7 @@ pub fn enable_kinesis_streaming_destination(
     let stream_arn = require_str(input, "StreamArn")?;
 
     if !state.tables.contains_key(table_name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Table '{table_name}' not found"),
         ));
@@ -58,7 +58,7 @@ pub fn disable_kinesis_streaming_destination(
     let stream_arn = require_str(input, "StreamArn")?;
 
     if !state.tables.contains_key(table_name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Table '{table_name}' not found"),
         ));
@@ -83,7 +83,7 @@ pub fn describe_kinesis_streaming_destination(
     let table_name = require_str(input, "TableName")?;
 
     if !state.tables.contains_key(table_name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Table '{table_name}' not found"),
         ));

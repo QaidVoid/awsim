@@ -60,7 +60,7 @@ pub fn transact_get_items(
 
         let (pk, sk) = {
             let table = state.tables.get(table_name).ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::service_not_found(
                     "ResourceNotFoundException",
                     format!("Cannot do operations on a non-existent table: {table_name}"),
                 )
@@ -162,7 +162,7 @@ pub fn transact_write_items(
                 .ok_or_else(|| AwsError::validation("Item is required in Put"))?;
             let sqlite_keys = {
                 let table = state.tables.get(&table_name).ok_or_else(|| {
-                    AwsError::not_found(
+                    AwsError::service_not_found(
                         "ResourceNotFoundException",
                         format!("Table not found: {table_name}"),
                     )
@@ -192,7 +192,7 @@ pub fn transact_write_items(
                 .ok_or_else(|| AwsError::validation("Key is required in Delete"))?;
             let (pk, sk) = {
                 let table = state.tables.get(&table_name).ok_or_else(|| {
-                    AwsError::not_found(
+                    AwsError::service_not_found(
                         "ResourceNotFoundException",
                         format!("Table not found: {table_name}"),
                     )
@@ -223,7 +223,7 @@ pub fn transact_write_items(
                 .to_string();
             let (pk, sk) = {
                 let table = state.tables.get(&table_name).ok_or_else(|| {
-                    AwsError::not_found(
+                    AwsError::service_not_found(
                         "ResourceNotFoundException",
                         format!("Table not found: {table_name}"),
                     )
@@ -253,7 +253,7 @@ pub fn transact_write_items(
                 .ok_or_else(|| AwsError::validation("Key is required in ConditionCheck"))?;
             let (pk, sk) = {
                 let table = state.tables.get(&table_name).ok_or_else(|| {
-                    AwsError::not_found(
+                    AwsError::service_not_found(
                         "ResourceNotFoundException",
                         format!("Table not found: {table_name}"),
                     )
@@ -283,7 +283,7 @@ pub fn transact_write_items(
     for m in &mutations {
         if !schema_cache.contains_key(&m.table_name) {
             let table = state.tables.get(&m.table_name).ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::service_not_found(
                     "ResourceNotFoundException",
                     format!("Table not found: {}", m.table_name),
                 )

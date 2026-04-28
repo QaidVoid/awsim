@@ -35,7 +35,7 @@ pub fn batch_get_item(
             let table = match state.tables.get(table_name) {
                 Some(t) => t,
                 None => {
-                    return Err(AwsError::not_found(
+                    return Err(AwsError::service_not_found(
                         "ResourceNotFoundException",
                         format!("Cannot do operations on a non-existent table: {table_name}"),
                     ));
@@ -114,7 +114,7 @@ pub fn batch_write_item(
         let table = match state.tables.get(table_name.as_str()) {
             Some(t) => t,
             None => {
-                return Err(AwsError::not_found(
+                return Err(AwsError::service_not_found(
                     "ResourceNotFoundException",
                     format!("Cannot do operations on a non-existent table: {table_name}"),
                 ));

@@ -59,7 +59,7 @@ pub fn query(
     // Schema still comes from the in-memory cache during stage 3 — table
     // metadata moves to SQLite in stage 4.
     let table = state.tables.get(table_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Cannot do operations on a non-existent table: {table_name}"),
         )
@@ -220,7 +220,7 @@ pub fn scan(
     let table_name = require_str(input, "TableName")?;
 
     let table = state.tables.get(table_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Cannot do operations on a non-existent table: {table_name}"),
         )

@@ -221,7 +221,7 @@ fn find_table_by_stream_arn<'a>(
             state.tables.get(&key)
         })
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Stream not found: {stream_arn}"),
             )

@@ -30,7 +30,7 @@ pub fn get_resource_policy(
     let resource_arn = require_str(input, "ResourceArn")?;
 
     let policy = state.resource_policies.get(resource_arn).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "PolicyNotFoundException",
             format!("No resource policy attached to: {resource_arn}"),
         )

@@ -34,6 +34,22 @@ impl AwsError {
         }
     }
 
+    /// Service-level "resource not found" error returned with HTTP 400.
+    ///
+    /// Many JSON-protocol services (DynamoDB, KMS, SecretsManager, Cognito, ...)
+    /// model `ResourceNotFoundException` and friends as client-side validation
+    /// errors and respond with `400 Bad Request` rather than `404 Not Found`.
+    /// Use this constructor for those cases; reserve [`Self::not_found`] for
+    /// REST-style 404s such as S3's `NoSuchBucket` / `NoSuchKey`.
+    pub fn service_not_found(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: code.into(),
+            message: message.into(),
+            error_type: ErrorType::Sender,
+        }
+    }
+
     pub fn bad_request(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,

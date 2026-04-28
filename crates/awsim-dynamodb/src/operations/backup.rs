@@ -24,7 +24,7 @@ pub fn create_backup(
 
     let table_arn = {
         let t = state.tables.get(table_name).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "TableNotFoundException",
                 format!("Table '{table_name}' not found"),
             )
@@ -120,7 +120,7 @@ pub fn describe_backup(
     let backup_arn = require_str(input, "BackupArn")?;
 
     let record = state.backups.get(backup_arn).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "BackupNotFoundException",
             format!("Backup not found: {backup_arn}"),
         )
@@ -195,7 +195,7 @@ pub fn restore_table_from_backup(
     let backup_arn = require_str(input, "BackupArn")?;
 
     let backup = state.backups.get(backup_arn).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "BackupNotFoundException",
             format!("Backup not found: {backup_arn}"),
         )
@@ -286,7 +286,7 @@ pub fn restore_table_to_point_in_time(
     };
 
     let source = state.tables.get(&source_key).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "TableNotFoundException",
             format!("Source table not found: {source_key}"),
         )
@@ -342,7 +342,7 @@ pub fn update_continuous_backups(
     let table_name = require_str(input, "TableName")?;
 
     if !state.tables.contains_key(table_name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "TableNotFoundException",
             format!("Table '{table_name}' not found"),
         ));

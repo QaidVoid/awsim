@@ -172,7 +172,7 @@ pub fn put_item(
     // we never hold it across SQLite IO.
     let (sqlite_keys, keys_item) = {
         let table = state.tables.get(&table_name).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Cannot do operations on a non-existent table: {table_name}"),
             )
@@ -263,7 +263,7 @@ pub fn get_item(
     let table_name = require_str(input, "TableName")?;
 
     let table = state.tables.get(table_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Cannot do operations on a non-existent table: {table_name}"),
         )
@@ -304,7 +304,7 @@ pub fn delete_item(
 
     let (sqlite_pk_sk, keys_item) = {
         let table = state.tables.get(&table_name).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Cannot do operations on a non-existent table: {table_name}"),
             )
@@ -385,7 +385,7 @@ pub fn update_item(
 
     let (sqlite_pk_sk, keys_item) = {
         let table = state.tables.get(&table_name).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Cannot do operations on a non-existent table: {table_name}"),
             )
@@ -442,7 +442,7 @@ pub fn update_item(
     // have introduced or changed GSI key attributes.
     let sqlite_keys = {
         let table = state.tables.get(&table_name).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Cannot do operations on a non-existent table: {table_name}"),
             )
