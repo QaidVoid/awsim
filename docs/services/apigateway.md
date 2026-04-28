@@ -195,7 +195,7 @@ Deployed REST APIs are reachable at `http://localhost:4566/restapis/{apiId}/{sta
 
 - `MOCK` — returns `200 {}`.
 - `AWS` / `AWS_PROXY` with a Lambda ARN — invokes the function via AWSim's Lambda service and forwards the response.
-- `HTTP` / `HTTP_PROXY` — currently returns `501 Not Implemented` (an outbound HTTP client is not yet wired).
+- `HTTP` / `HTTP_PROXY` — fetches the integration URI (with the original method, headers, query and body), then streams the upstream's status, headers and body back to the caller. `Host`, `Content-Length`, `Transfer-Encoding`, and `Connection` headers are filtered to avoid double-framing.
 
 ```bash
 # End-to-end: create a REST API with a MOCK GET / and hit it

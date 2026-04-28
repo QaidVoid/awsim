@@ -357,10 +357,9 @@
 				Add method on {methodResource?.path ?? '/'}
 			</DialogTitle>
 			<DialogDescription>
-				Configure the HTTP method and a backend integration. MOCK and
-				AWS_PROXY (Lambda) are dispatched at runtime via the Route Tester
-				tab; HTTP / HTTP_PROXY return 501 until an outbound HTTP client is
-				wired.
+				Configure the HTTP method and a backend integration. MOCK,
+				AWS_PROXY (Lambda) and HTTP_PROXY (outbound fetch) are all
+				dispatched at runtime via the Route Tester tab.
 			</DialogDescription>
 		</DialogHeader>
 		<form onsubmit={submitMethod} class="space-y-3">

@@ -277,10 +277,15 @@ async fn main() -> Result<()> {
     // Build the API Gateway proxy state using the concrete Arc returned from register_services.
     let lambda_arc = state.services.get("lambda").cloned();
 
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(29)) // matches AWS API Gateway max
+        .build()
+        .expect("build reqwest client for HTTP integrations");
     let proxy_state = proxy::ProxyState {
         apigw: apigw_service,
         apigw_v1: apigw_v1_service,
         lambda: lambda_arc,
+        http_client,
         default_account_id: cli.account_id.clone(),
         default_region: cli.region.clone(),
     };

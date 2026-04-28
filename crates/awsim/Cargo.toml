@@ -69,6 +69,7 @@ anyhow = { workspace = true }
 uuid = { workspace = true }
 bytes = { workspace = true }
 base64 = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 
 [dev-dependencies]
 aws-config = "1"
