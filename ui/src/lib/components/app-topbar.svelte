@@ -9,12 +9,14 @@
 	import BookOpen from '@lucide/svelte/icons/book-open';
 	import Search from '@lucide/svelte/icons/search';
 	import Menu from '@lucide/svelte/icons/menu';
+	import Keyboard from '@lucide/svelte/icons/keyboard';
 
 	interface Props {
 		region?: string;
 		accountId?: string;
 		version?: string;
 		onOpenPalette: () => void;
+		onOpenHelp?: () => void;
 		onOpenMobileNav?: () => void;
 	}
 
@@ -23,6 +25,7 @@
 		accountId = '000000000000',
 		version = '0.1.0',
 		onOpenPalette,
+		onOpenHelp,
 		onOpenMobileNav,
 	}: Props = $props();
 </script>
@@ -115,6 +118,19 @@
 				<Moon class="size-4" />
 			{/if}
 		</Button>
+
+		{#if onOpenHelp}
+			<Button
+				type="button"
+				variant="ghost"
+				size="icon"
+				onclick={onOpenHelp}
+				aria-label="Keyboard shortcuts"
+				class="hidden sm:inline-flex"
+			>
+				<Keyboard class="size-4" />
+			</Button>
+		{/if}
 
 		<Button
 			variant="ghost"
