@@ -255,8 +255,9 @@ pub fn put_item(
 
 pub fn get_item(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?;
 
@@ -269,17 +270,22 @@ pub fn get_item(
 
     let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 
-    let composite_key = table
-        .composite_key(&key)
+    let (pk, sk) = extract_pk_sk(&table, &key)
         .ok_or_else(|| AwsError::validation("Could not construct item key"))?;
 
     let expr_attr_names = get_expr_attr_names(input);
     let projection_expr = opt_str(input, "ProjectionExpression");
 
-    match table.items.get(&composite_key) {
+    // Drop the dashmap guard before SQLite IO to avoid pinning the shard.
+    drop(table);
+
+    let raw = sqlite.get_item(&ctx.account_id, &ctx.region, table_name, &pk, &sk)?;
+    match raw {
         None => Ok(json!({})),
-        Some(item) => {
-            let projected = apply_projection(item, projection_expr, &expr_attr_names);
+        Some(stored) => {
+            let item = crate::keys::storage_value_to_item(stored)
+                .ok_or_else(|| AwsError::internal("DynamoDB stored attrs is not an object"))?;
+            let projected = apply_projection(&item, projection_expr, &expr_attr_names);
             Ok(json!({ "Item": item_to_json(&projected) }))
         }
     }
@@ -603,6 +609,28 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn get_item_reads_from_sqlite_after_put() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let ctx = ctx();
+
+        // Seed via put_item (dual-writes), then read via get_item
+        // (sqlite-only) — proves the read path picks up the mirror.
+        let put = json!({
+            "TableName": "t",
+            "Item": {"pk": {"S": "u"}, "sk": {"S": "p"}, "n": {"S": "Bob"}}
+        });
+        put_item(&state, &sqlite, &put, &ctx).unwrap();
+
+        let get = json!({
+            "TableName": "t",
+            "Key": {"pk": {"S": "u"}, "sk": {"S": "p"}}
+        });
+        let res = get_item(&state, &sqlite, &get, &ctx).unwrap();
+        assert_eq!(res["Item"]["n"], json!({"S": "Bob"}));
     }
 
     #[test]

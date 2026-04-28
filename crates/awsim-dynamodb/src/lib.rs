@@ -166,7 +166,14 @@ impl ServiceHandler for DynamoDbService {
                 run_blocking(move || operations::item::put_item(&state, &sqlite, &input, &ctx))
                     .await
             }
-            "GetItem" => operations::item::get_item(&state, &input, ctx),
+            "GetItem" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || operations::item::get_item(&state, &sqlite, &input, &ctx))
+                    .await
+            }
             "DeleteItem" => {
                 let state = state.clone();
                 let sqlite = self.sqlite.clone();
@@ -188,12 +195,35 @@ impl ServiceHandler for DynamoDbService {
                 .await
             }
 
-            // Query & Scan
-            "Query" => operations::query::query(&state, &input, ctx),
-            "Scan" => operations::query::scan(&state, &input, ctx),
+            // Query & Scan — read items from SQLite, evaluate filters in Rust.
+            "Query" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || operations::query::query(&state, &sqlite, &input, &ctx))
+                    .await
+            }
+            "Scan" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || operations::query::scan(&state, &sqlite, &input, &ctx))
+                    .await
+            }
 
             // Batch operations
-            "BatchGetItem" => operations::batch::batch_get_item(&state, &input, ctx),
+            "BatchGetItem" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::batch::batch_get_item(&state, &sqlite, &input, &ctx)
+                })
+                .await
+            }
             "BatchWriteItem" => {
                 let state = state.clone();
                 let sqlite = self.sqlite.clone();

@@ -2,7 +2,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::{
-    keys::{extract_item_keys, extract_pk_sk, item_to_storage_value},
+    keys::{extract_item_keys, extract_pk_sk, item_to_storage_value, storage_value_to_item},
     sqlite_store::SqliteStore,
     state::DynamoState,
 };
@@ -11,8 +11,9 @@ use super::item::{item_to_json, parse_item};
 
 pub fn batch_get_item(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let request_items = input
         .get("RequestItems")
@@ -28,31 +29,33 @@ pub fn batch_get_item(
             .and_then(|v| v.as_array())
             .ok_or_else(|| AwsError::validation(format!("Keys required for table {table_name}")))?;
 
-        let table = match state.tables.get(table_name) {
-            Some(t) => t,
-            None => {
-                return Err(AwsError::not_found(
-                    "ResourceNotFoundException",
-                    format!("Cannot do operations on a non-existent table: {table_name}"),
-                ));
-            }
+        // Resolve the composite (pk, sk) pairs while holding the schema
+        // guard, then drop it before SQLite IO.
+        let pk_sk_pairs: Vec<(String, String)> = {
+            let table = match state.tables.get(table_name) {
+                Some(t) => t,
+                None => {
+                    return Err(AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Cannot do operations on a non-existent table: {table_name}"),
+                    ));
+                }
+            };
+            keys.iter()
+                .filter_map(|key_val| {
+                    let key = parse_item(key_val)?;
+                    extract_pk_sk(&table, &key)
+                })
+                .collect()
         };
 
         let mut table_items: Vec<Value> = Vec::new();
-
-        for key_val in keys {
-            let key = match parse_item(key_val) {
-                Some(k) => k,
-                None => continue,
-            };
-
-            let composite_key = match table.composite_key(&key) {
-                Some(ck) => ck,
-                None => continue,
-            };
-
-            if let Some(item) = table.items.get(&composite_key) {
-                table_items.push(item_to_json(item));
+        for (pk, sk) in pk_sk_pairs {
+            if let Some(stored) =
+                sqlite.get_item(&ctx.account_id, &ctx.region, table_name, &pk, &sk)?
+                && let Some(item) = storage_value_to_item(stored)
+            {
+                table_items.push(item_to_json(&item));
             }
         }
 

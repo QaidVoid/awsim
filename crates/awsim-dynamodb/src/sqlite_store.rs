@@ -194,6 +194,124 @@ impl SqliteStore {
         Ok(n as u64)
     }
 
+    /// Stream items in a single partition (Query). The visitor sees each
+    /// row in (sk asc) or (sk desc) order and may stop iteration by
+    /// returning `Ok(false)`. Filter and projection evaluation happens in
+    /// the caller — pushing them down to SQL is impractical because
+    /// DynamoDB filter expressions touch typed AttributeValues, not raw
+    /// strings.
+    ///
+    /// `start_after_sk` is the `ExclusiveStartKey`'s sort key value; rows
+    /// with that exact sk are skipped. (For tables without a sort key it
+    /// is meaningless and should be `None`.)
+    pub fn query_partition<F>(
+        &self,
+        account: &str,
+        region: &str,
+        table: &str,
+        pk: &str,
+        forward: bool,
+        start_after_sk: Option<&str>,
+        mut visit: F,
+    ) -> Result<(), AwsError>
+    where
+        F: FnMut(&str, Value) -> Result<bool, AwsError>,
+    {
+        let conn = self.conn()?;
+        let order = if forward { "ASC" } else { "DESC" };
+
+        // Two query shapes — with vs. without an exclusive-start sort key.
+        // Splitting the SQL keeps the parameter list straightforward and
+        // avoids fiddling with NULL bindings on the comparator branch.
+        let sql = match start_after_sk {
+            Some(_) => {
+                let cmp = if forward { ">" } else { "<" };
+                format!(
+                    "SELECT sk, attrs_json FROM items
+                     WHERE account = ?1 AND region = ?2 AND table_name = ?3
+                       AND pk = ?4 AND sk {cmp} ?5
+                     ORDER BY sk {order}"
+                )
+            }
+            None => format!(
+                "SELECT sk, attrs_json FROM items
+                 WHERE account = ?1 AND region = ?2 AND table_name = ?3
+                   AND pk = ?4
+                 ORDER BY sk {order}"
+            ),
+        };
+
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_err)?;
+        let mut rows = match start_after_sk {
+            Some(start) => stmt.query(params![account, region, table, pk, start]),
+            None => stmt.query(params![account, region, table, pk]),
+        }
+        .map_err(sqlite_err)?;
+
+        while let Some(row) = rows.next().map_err(sqlite_err)? {
+            let sk: String = row.get(0).map_err(sqlite_err)?;
+            let attrs_json: String = row.get(1).map_err(sqlite_err)?;
+            let attrs: Value = serde_json::from_str(&attrs_json).map_err(json_err)?;
+            if !visit(&sk, attrs)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Stream every item in a table (Scan). Items arrive in `(pk, sk)`
+    /// ascending order. Returning `Ok(false)` from the visitor stops the
+    /// scan; otherwise it runs to completion.
+    ///
+    /// `start_after` lets a caller resume from the `ExclusiveStartKey` of
+    /// a prior page — rows are returned where `(pk, sk) > (start_pk,
+    /// start_sk)` lexicographically.
+    pub fn scan_table<F>(
+        &self,
+        account: &str,
+        region: &str,
+        table: &str,
+        start_after: Option<(&str, &str)>,
+        mut visit: F,
+    ) -> Result<(), AwsError>
+    where
+        F: FnMut(&str, &str, Value) -> Result<bool, AwsError>,
+    {
+        let conn = self.conn()?;
+        let sql = match start_after {
+            Some(_) => {
+                "SELECT pk, sk, attrs_json FROM items
+                 WHERE account = ?1 AND region = ?2 AND table_name = ?3
+                   AND (pk > ?4 OR (pk = ?4 AND sk > ?5))
+                 ORDER BY pk ASC, sk ASC"
+            }
+            None => {
+                "SELECT pk, sk, attrs_json FROM items
+                 WHERE account = ?1 AND region = ?2 AND table_name = ?3
+                 ORDER BY pk ASC, sk ASC"
+            }
+        };
+
+        let mut stmt = conn.prepare(sql).map_err(sqlite_err)?;
+        let mut rows = if let Some((spk, ssk)) = start_after {
+            stmt.query(params![account, region, table, spk, ssk])
+        } else {
+            stmt.query(params![account, region, table])
+        }
+        .map_err(sqlite_err)?;
+
+        while let Some(row) = rows.next().map_err(sqlite_err)? {
+            let pk: String = row.get(0).map_err(sqlite_err)?;
+            let sk: String = row.get(1).map_err(sqlite_err)?;
+            let attrs_json: String = row.get(2).map_err(sqlite_err)?;
+            let attrs: Value = serde_json::from_str(&attrs_json).map_err(json_err)?;
+            if !visit(&pk, &sk, attrs)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// Drop every row for a table — used by `DeleteTable`.
     pub fn drop_table(
         &self,
@@ -389,6 +507,86 @@ mod tests {
         assert_eq!(dropped, 1);
         assert_eq!(store.count_items("a", "r", "t1").unwrap(), 0);
         assert_eq!(store.count_items("a", "r", "t2").unwrap(), 1);
+    }
+
+    #[test]
+    fn query_partition_orders_and_paginates() {
+        let store = SqliteStore::in_memory().unwrap();
+        for i in 0..5 {
+            store
+                .put_item("a", "r", "t", "p", &format!("sk{i}"), &json!({"i": i}), &empty_gsi())
+                .unwrap();
+        }
+        // Forward, no start: all 5 in ascending order.
+        let mut got: Vec<String> = vec![];
+        store
+            .query_partition("a", "r", "t", "p", true, None, |sk, _v| {
+                got.push(sk.to_string());
+                Ok(true)
+            })
+            .unwrap();
+        assert_eq!(got, vec!["sk0", "sk1", "sk2", "sk3", "sk4"]);
+
+        // Reverse, start after sk2: returns sk1, sk0.
+        let mut rev: Vec<String> = vec![];
+        store
+            .query_partition("a", "r", "t", "p", false, Some("sk2"), |sk, _v| {
+                rev.push(sk.to_string());
+                Ok(true)
+            })
+            .unwrap();
+        assert_eq!(rev, vec!["sk1", "sk0"]);
+
+        // Visitor early-stops after collecting 2 forward.
+        let mut limited: Vec<String> = vec![];
+        store
+            .query_partition("a", "r", "t", "p", true, None, |sk, _v| {
+                limited.push(sk.to_string());
+                Ok(limited.len() < 2)
+            })
+            .unwrap();
+        assert_eq!(limited, vec!["sk0", "sk1"]);
+    }
+
+    #[test]
+    fn scan_table_streams_in_order_and_resumes() {
+        let store = SqliteStore::in_memory().unwrap();
+        for pk in &["p1", "p2"] {
+            for sk in &["s1", "s2"] {
+                store
+                    .put_item("a", "r", "t", pk, sk, &json!({}), &empty_gsi())
+                    .unwrap();
+            }
+        }
+        let mut got: Vec<(String, String)> = vec![];
+        store
+            .scan_table("a", "r", "t", None, |pk, sk, _v| {
+                got.push((pk.to_string(), sk.to_string()));
+                Ok(true)
+            })
+            .unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ("p1".into(), "s1".into()),
+                ("p1".into(), "s2".into()),
+                ("p2".into(), "s1".into()),
+                ("p2".into(), "s2".into()),
+            ]
+        );
+
+        // Resume after (p1, s2): expect (p2, s1), (p2, s2).
+        let mut resumed: Vec<(String, String)> = vec![];
+        store
+            .scan_table("a", "r", "t", Some(("p1", "s2")), |pk, sk, _v| {
+                resumed.push((pk.to_string(), sk.to_string()));
+                Ok(true)
+            })
+            .unwrap();
+        assert_eq!(
+            resumed,
+            vec![("p2".into(), "s1".into()), ("p2".into(), "s2".into())]
+        );
     }
 
     #[test]
