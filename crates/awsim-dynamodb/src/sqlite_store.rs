@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::Value;
 
 use awsim_core::AwsError;
@@ -403,6 +403,194 @@ impl SqliteStore {
             .query_map(params![account, region], |r| r.get::<_, String>(0))
             .map_err(sqlite_err)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_err)
+    }
+
+    // -----------------------------------------------------------------
+    // Transactional execution. The two `with_*_transaction` helpers
+    // open a fresh connection, begin a sqlite transaction, hand the
+    // caller a small `WriteTx` / `ReadTx` wrapper, and commit (or roll
+    // back on error) when the closure returns. Any panic inside the
+    // closure aborts the transaction via `Drop`.
+    // -----------------------------------------------------------------
+
+    /// Run `f` inside a single sqlite write transaction. We open with
+    /// `BEGIN IMMEDIATE` so the connection acquires a RESERVED lock up
+    /// front — that way a concurrent writer can't slip in between the
+    /// closure's reads and writes (TransactWriteItems' phase-1/phase-2
+    /// split would otherwise be racy).
+    pub fn with_write_transaction<F, T>(&self, f: F) -> Result<T, AwsError>
+    where
+        F: FnOnce(&WriteTx<'_>) -> Result<T, AwsError>,
+    {
+        let mut conn = self.conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_err)?;
+        let result = {
+            let wtx = WriteTx { conn: &tx };
+            f(&wtx)
+        };
+        match result {
+            Ok(val) => {
+                tx.commit().map_err(sqlite_err)?;
+                Ok(val)
+            }
+            Err(e) => {
+                // `tx`'s Drop runs ROLLBACK automatically.
+                Err(e)
+            }
+        }
+    }
+
+    /// Run `f` inside a deferred read transaction so a series of reads
+    /// see a consistent snapshot. Used by TransactGetItems.
+    pub fn with_read_transaction<F, T>(&self, f: F) -> Result<T, AwsError>
+    where
+        F: FnOnce(&ReadTx<'_>) -> Result<T, AwsError>,
+    {
+        let mut conn = self.conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(sqlite_err)?;
+        let result = {
+            let rtx = ReadTx { conn: &tx };
+            f(&rtx)
+        };
+        // Read txn doesn't need an explicit commit (no writes), but
+        // calling commit() releases locks promptly instead of waiting
+        // for Drop.
+        let _ = tx.commit();
+        result
+    }
+}
+
+/// Read+write handle bound to an open sqlite transaction.
+///
+/// Mirrors a subset of `SqliteStore`'s methods so callers can do
+/// `tx.put_item(...)` / `tx.delete_item(...)` and get atomic semantics.
+/// Operates on the same `Connection` the transaction was started on, so
+/// every statement runs against the same in-flight transaction.
+pub struct WriteTx<'tx> {
+    conn: &'tx Connection,
+}
+
+impl<'tx> WriteTx<'tx> {
+    pub fn get_item(
+        &self,
+        account: &str,
+        region: &str,
+        table: &str,
+        pk: &str,
+        sk: &str,
+    ) -> Result<Option<Value>, AwsError> {
+        let row: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT attrs_json FROM items
+                 WHERE account = ?1 AND region = ?2 AND table_name = ?3
+                   AND pk = ?4 AND sk = ?5",
+                params![account, region, table, pk, sk],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(sqlite_err)?;
+        row.map(|s| serde_json::from_str(&s).map_err(json_err))
+            .transpose()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_item(
+        &self,
+        account: &str,
+        region: &str,
+        table: &str,
+        pk: &str,
+        sk: &str,
+        attrs: &Value,
+        gsi_keys: &[(Option<String>, Option<String>); MAX_GSI_SLOTS],
+    ) -> Result<(), AwsError> {
+        let attrs_json = serde_json::to_string(attrs).map_err(json_err)?;
+        self.conn
+            .execute(
+                "INSERT INTO items (
+                    account, region, table_name, pk, sk, attrs_json,
+                    gsi1_pk, gsi1_sk, gsi2_pk, gsi2_sk, gsi3_pk, gsi3_sk,
+                    gsi4_pk, gsi4_sk, gsi5_pk, gsi5_sk
+                 ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6,
+                    ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
+                 )
+                 ON CONFLICT(account, region, table_name, pk, sk) DO UPDATE SET
+                    attrs_json = excluded.attrs_json,
+                    gsi1_pk = excluded.gsi1_pk, gsi1_sk = excluded.gsi1_sk,
+                    gsi2_pk = excluded.gsi2_pk, gsi2_sk = excluded.gsi2_sk,
+                    gsi3_pk = excluded.gsi3_pk, gsi3_sk = excluded.gsi3_sk,
+                    gsi4_pk = excluded.gsi4_pk, gsi4_sk = excluded.gsi4_sk,
+                    gsi5_pk = excluded.gsi5_pk, gsi5_sk = excluded.gsi5_sk",
+                params![
+                    account, region, table, pk, sk, attrs_json,
+                    gsi_keys[0].0, gsi_keys[0].1,
+                    gsi_keys[1].0, gsi_keys[1].1,
+                    gsi_keys[2].0, gsi_keys[2].1,
+                    gsi_keys[3].0, gsi_keys[3].1,
+                    gsi_keys[4].0, gsi_keys[4].1,
+                ],
+            )
+            .map_err(sqlite_err)?;
+        Ok(())
+    }
+
+    pub fn delete_item(
+        &self,
+        account: &str,
+        region: &str,
+        table: &str,
+        pk: &str,
+        sk: &str,
+    ) -> Result<bool, AwsError> {
+        let n = self
+            .conn
+            .execute(
+                "DELETE FROM items
+                 WHERE account = ?1 AND region = ?2 AND table_name = ?3
+                   AND pk = ?4 AND sk = ?5",
+                params![account, region, table, pk, sk],
+            )
+            .map_err(sqlite_err)?;
+        Ok(n > 0)
+    }
+}
+
+/// Read-only handle bound to a deferred sqlite transaction. Provides
+/// snapshot-consistent reads across multiple `get_item` calls so
+/// TransactGetItems can return a coherent view even under concurrent
+/// writes.
+pub struct ReadTx<'tx> {
+    conn: &'tx Connection,
+}
+
+impl<'tx> ReadTx<'tx> {
+    pub fn get_item(
+        &self,
+        account: &str,
+        region: &str,
+        table: &str,
+        pk: &str,
+        sk: &str,
+    ) -> Result<Option<Value>, AwsError> {
+        let row: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT attrs_json FROM items
+                 WHERE account = ?1 AND region = ?2 AND table_name = ?3
+                   AND pk = ?4 AND sk = ?5",
+                params![account, region, table, pk, sk],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(sqlite_err)?;
+        row.map(|s| serde_json::from_str(&s).map_err(json_err))
+            .transpose()
     }
 }
 
