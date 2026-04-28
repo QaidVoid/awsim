@@ -24,6 +24,15 @@ pub trait ResourcePolicyLookup: Send + Sync {
     fn lookup(&self, resource_arn: &str) -> Option<PolicyDocument>;
 }
 
+/// Service-specific authorization side-channel. Used by KMS grants today —
+/// a grant is an out-of-band Allow that lets a principal perform listed
+/// operations on a resource even if the identity policy and key policy
+/// would otherwise deny. Returns `true` when at least one grant matches the
+/// principal + action + resource.
+pub trait GrantLookup: Send + Sync {
+    fn allows(&self, principal_arn: &str, action: &str, resource_arn: &str) -> bool;
+}
+
 pub trait ScpLookup: Send + Sync {
     fn lookup(&self, principal_arn: &str) -> Vec<PolicyDocument>;
 }
@@ -39,6 +48,7 @@ impl PrincipalLookup for NoopPrincipalLookup {
 pub struct AuthzEngine {
     pub principal_lookup: Arc<dyn PrincipalLookup>,
     pub resource_policy_lookups: HashMap<String, Arc<dyn ResourcePolicyLookup>>,
+    pub grant_lookups: HashMap<String, Arc<dyn GrantLookup>>,
     pub scp_lookup: Option<Arc<dyn ScpLookup>>,
     pub enabled: bool,
 }
@@ -48,6 +58,7 @@ impl AuthzEngine {
         Self {
             principal_lookup: Arc::new(NoopPrincipalLookup),
             resource_policy_lookups: HashMap::new(),
+            grant_lookups: HashMap::new(),
             scp_lookup: None,
             enabled,
         }
@@ -121,7 +132,23 @@ impl AuthzEngine {
 
         match evaluate(&req, &eval_ctx) {
             Decision::Allow => Ok(()),
-            Decision::ExplicitDeny | Decision::ImplicitDeny => Err(AwsError::access_denied_for(
+            // Implicit deny is the natural outcome when neither the identity
+            // policy nor the resource policy explicitly allows. KMS grants
+            // are an out-of-band Allow path — give them a chance before we
+            // actually fail the request. Explicit deny still wins absolutely.
+            Decision::ImplicitDeny => {
+                if let Some(lookup) = self.grant_lookups.get(&ctx.service)
+                    && lookup.allows(&principal.arn, action, resource)
+                {
+                    return Ok(());
+                }
+                Err(AwsError::access_denied_for(
+                    action,
+                    &principal.arn,
+                    resource,
+                ))
+            }
+            Decision::ExplicitDeny => Err(AwsError::access_denied_for(
                 action,
                 &principal.arn,
                 resource,

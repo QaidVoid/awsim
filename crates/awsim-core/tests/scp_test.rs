@@ -54,6 +54,7 @@ fn engine(principal: ResolvedPrincipal, scp: Option<Arc<dyn ScpLookup>>) -> Auth
     AuthzEngine {
         principal_lookup: Arc::new(StubPrincipal { principal }),
         resource_policy_lookups: Default::default(),
+        grant_lookups: Default::default(),
         scp_lookup: scp,
         enabled: true,
     }

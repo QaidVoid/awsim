@@ -13,8 +13,8 @@ pub mod router;
 pub mod state;
 
 pub use authz::{
-    AuthzEngine, NoopPrincipalLookup, PrincipalLookup, ResolvedPrincipal, ResourcePolicyLookup,
-    ScpLookup,
+    AuthzEngine, GrantLookup, NoopPrincipalLookup, PrincipalLookup, ResolvedPrincipal,
+    ResourcePolicyLookup, ScpLookup,
 };
 pub use body::Body;
 pub use body_store::{BlobInventory, BodyStore};

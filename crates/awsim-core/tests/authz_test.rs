@@ -47,6 +47,7 @@ fn enforcement_off_passes() {
     let engine = AuthzEngine {
         principal_lookup: Arc::new(NoopPrincipalLookup),
         resource_policy_lookups: Default::default(),
+        grant_lookups: Default::default(),
         scp_lookup: None,
         enabled: false,
     };
@@ -63,6 +64,7 @@ fn enforcement_on_anonymous_denied() {
     let engine = AuthzEngine {
         principal_lookup: Arc::new(NoopPrincipalLookup),
         resource_policy_lookups: Default::default(),
+        grant_lookups: Default::default(),
         scp_lookup: None,
         enabled: true,
     };
@@ -94,6 +96,7 @@ fn enforcement_on_allow_passes() {
             principal: Some(principal),
         }),
         resource_policy_lookups: Default::default(),
+        grant_lookups: Default::default(),
         scp_lookup: None,
         enabled: true,
     };
@@ -133,6 +136,7 @@ fn enforcement_on_deny_blocks() {
             principal: Some(principal),
         }),
         resource_policy_lookups: Default::default(),
+        grant_lookups: Default::default(),
         scp_lookup: None,
         enabled: true,
     };
@@ -157,6 +161,7 @@ fn enforcement_on_root_bypass() {
             principal: Some(principal),
         }),
         resource_policy_lookups: Default::default(),
+        grant_lookups: Default::default(),
         scp_lookup: None,
         enabled: true,
     };

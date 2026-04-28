@@ -171,7 +171,11 @@ async fn main() -> Result<()> {
         );
         authz.resource_policy_lookups.insert(
             "kms".to_string(),
-            Arc::new(awsim_kms::KmsResourcePolicyLookup::new(kms_store)),
+            Arc::new(awsim_kms::KmsResourcePolicyLookup::new(kms_store.clone())),
+        );
+        authz.grant_lookups.insert(
+            "kms".to_string(),
+            Arc::new(awsim_kms::KmsGrantLookup::new(kms_store)),
         );
         authz.resource_policy_lookups.insert(
             "sqs".to_string(),

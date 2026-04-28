@@ -69,6 +69,7 @@ pub async fn start_server_with_scp(
             );
             m
         },
+        grant_lookups: std::collections::HashMap::new(),
         scp_lookup: scp,
     };
     state.authz = Arc::new(authz);
