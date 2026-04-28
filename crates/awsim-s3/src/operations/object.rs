@@ -438,8 +438,7 @@ mod tests {
         assert_ne!(v1, v2, "successive puts must produce distinct VersionIds");
 
         // GetObject and HeadObject surface the current VersionId.
-        let head =
-            head_object(&state, &json!({ "Bucket": "vbucket", "Key": "k" })).unwrap();
+        let head = head_object(&state, &json!({ "Bucket": "vbucket", "Key": "k" })).unwrap();
         assert_eq!(head["VersionId"].as_str(), Some(v2));
     }
 }

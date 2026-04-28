@@ -1088,7 +1088,16 @@ impl ServiceHandler for S3Service {
             "CreateMultipartUpload" => {
                 operations::multipart::create_multipart_upload(&state, &input)
             }
-            "UploadPart" => operations::multipart::upload_part(&state, &input),
+            "UploadPart" => {
+                // x-amz-copy-source disambiguates UploadPart vs UploadPartCopy
+                // (both are PUT /{Bucket}/{Key+}?partNumber=&uploadId=).
+                if input.get("CopySource").is_some() {
+                    operations::multipart::upload_part_copy(&state, &input)
+                } else {
+                    operations::multipart::upload_part(&state, &input)
+                }
+            }
+            "UploadPartCopy" => operations::multipart::upload_part_copy(&state, &input),
             "CompleteMultipartUpload" => {
                 operations::multipart::complete_multipart_upload(&state, &input)
             }
