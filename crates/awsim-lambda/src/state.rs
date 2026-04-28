@@ -145,6 +145,8 @@ impl Snapshottable for LambdaState {
                 invocations: Vec::new(),
                 policy_statements: fs.policy_statements,
                 tags: fs.tags,
+                reserved_concurrent_executions: None,
+                provisioned_concurrency: HashMap::new(),
             };
             state.functions.insert(fs.name, func);
         }
@@ -189,6 +191,27 @@ pub struct LambdaFunction {
     pub policy_statements: HashMap<String, serde_json::Value>,
     /// Tags attached to this function.
     pub tags: HashMap<String, String>,
+    /// Reserved concurrent executions ceiling per PutFunctionConcurrency.
+    /// `None` means unreserved — the function shares the account pool.
+    pub reserved_concurrent_executions: Option<u32>,
+    /// Provisioned concurrency configurations keyed by qualifier (alias name
+    /// or function version). Each entry tracks the requested capacity along
+    /// with a simulated state machine that flips IN_PROGRESS -> READY.
+    pub provisioned_concurrency: HashMap<String, ProvisionedConcurrencyConfig>,
+}
+
+/// Provisioned concurrency configuration for a single (function, qualifier)
+/// pair. Real Lambda transitions IN_PROGRESS -> READY asynchronously; we
+/// flip immediately because the emulator never has provisioning latency.
+#[derive(Debug, Clone)]
+pub struct ProvisionedConcurrencyConfig {
+    pub qualifier: String,
+    pub requested_provisioned_concurrent_executions: u32,
+    pub allocated_provisioned_concurrent_executions: u32,
+    pub available_provisioned_concurrent_executions: u32,
+    pub status: String, // IN_PROGRESS | READY | FAILED
+    pub status_reason: Option<String>,
+    pub last_modified: String,
 }
 
 /// A function URL configuration.

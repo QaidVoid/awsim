@@ -288,6 +288,51 @@ impl ServiceHandler for LambdaService {
                 operation: "ListFunctionUrlConfigs",
                 required_query_param: None,
             },
+            // Reserved concurrency
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/2017-10-31/functions/{FunctionName}/concurrency",
+                operation: "PutFunctionConcurrency",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2019-09-30/functions/{FunctionName}/concurrency",
+                operation: "GetFunctionConcurrency",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2017-10-31/functions/{FunctionName}/concurrency",
+                operation: "DeleteFunctionConcurrency",
+                required_query_param: None,
+            },
+            // Provisioned concurrency — single config (Get/Put/Delete) keys
+            // off the Qualifier query param; List omits it.
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/2019-09-30/functions/{FunctionName}/provisioned-concurrency",
+                operation: "PutProvisionedConcurrencyConfig",
+                required_query_param: Some("Qualifier"),
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2019-09-30/functions/{FunctionName}/provisioned-concurrency",
+                operation: "GetProvisionedConcurrencyConfig",
+                required_query_param: Some("Qualifier"),
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2019-09-30/functions/{FunctionName}/provisioned-concurrency",
+                operation: "DeleteProvisionedConcurrencyConfig",
+                required_query_param: Some("Qualifier"),
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2019-09-30/functions/{FunctionName}/provisioned-concurrency",
+                operation: "ListProvisionedConcurrencyConfigs",
+                required_query_param: None,
+            },
             // Tags
             RouteDefinition {
                 method: "GET",
@@ -483,6 +528,29 @@ impl ServiceHandler for LambdaService {
                 )
             }
 
+            // Reserved + provisioned concurrency
+            "PutFunctionConcurrency" => {
+                operations::concurrency::put_function_concurrency(&state, &input, ctx)
+            }
+            "GetFunctionConcurrency" => {
+                operations::concurrency::get_function_concurrency(&state, &input, ctx)
+            }
+            "DeleteFunctionConcurrency" => {
+                operations::concurrency::delete_function_concurrency(&state, &input, ctx)
+            }
+            "PutProvisionedConcurrencyConfig" => {
+                operations::concurrency::put_provisioned_concurrency_config(&state, &input, ctx)
+            }
+            "GetProvisionedConcurrencyConfig" => {
+                operations::concurrency::get_provisioned_concurrency_config(&state, &input, ctx)
+            }
+            "DeleteProvisionedConcurrencyConfig" => {
+                operations::concurrency::delete_provisioned_concurrency_config(&state, &input, ctx)
+            }
+            "ListProvisionedConcurrencyConfigs" => {
+                operations::concurrency::list_provisioned_concurrency_configs(&state, &input, ctx)
+            }
+
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
@@ -569,7 +637,14 @@ impl ServiceHandler for LambdaService {
             | "GetFunctionEventInvokeConfig"
             | "UpdateFunctionEventInvokeConfig"
             | "DeleteFunctionEventInvokeConfig"
-            | "ListFunctionEventInvokeConfigs" => Some(format!("lambda:{operation}")),
+            | "ListFunctionEventInvokeConfigs"
+            | "PutFunctionConcurrency"
+            | "GetFunctionConcurrency"
+            | "DeleteFunctionConcurrency"
+            | "PutProvisionedConcurrencyConfig"
+            | "GetProvisionedConcurrencyConfig"
+            | "DeleteProvisionedConcurrencyConfig"
+            | "ListProvisionedConcurrencyConfigs" => Some(format!("lambda:{operation}")),
             _ => None,
         }
     }

@@ -167,6 +167,8 @@ pub fn create_function(
         invocations: vec![],
         policy_statements: HashMap::new(),
         tags,
+        reserved_concurrent_executions: None,
+        provisioned_concurrency: HashMap::new(),
     };
 
     let config = function_configuration(&func);
