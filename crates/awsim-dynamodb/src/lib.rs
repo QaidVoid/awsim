@@ -132,9 +132,27 @@ impl ServiceHandler for DynamoDbService {
                 })
                 .await
             }
-            "DescribeTable" => operations::table::describe_table(&state, &input, ctx),
+            "DescribeTable" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::table::describe_table(&state, &sqlite, &input, &ctx)
+                })
+                .await
+            }
             "ListTables" => operations::table::list_tables(&state, &input, ctx),
-            "UpdateTable" => operations::table::update_table(&state, &input, ctx),
+            "UpdateTable" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::table::update_table(&state, &sqlite, &input, &ctx)
+                })
+                .await
+            }
 
             // Endpoint discovery
             "DescribeEndpoints" => operations::table::describe_endpoints(&state, &input, ctx),
@@ -474,10 +492,10 @@ impl ServiceHandler for DynamoDbService {
     }
 
     fn snapshot(&self) -> Option<Vec<u8>> {
-        // Items live in SQLite now. The snapshot only carries the schema
-        // pieces the AccountRegionStore can't reconstruct on its own —
-        // table.items is intentionally left empty so the JSON snapshot
-        // stays cheap regardless of how many rows exist.
+        // Items live in SQLite. This snapshot only persists the schema
+        // pieces the AccountRegionStore can't reconstruct itself; the
+        // serialised `Table` no longer has an `items` field at all so
+        // the JSON stays cheap regardless of row count.
         let tables: Vec<Table> = self
             .store
             .iter_all()
@@ -498,7 +516,6 @@ impl ServiceHandler for DynamoDbService {
                             created_at: t.created_at,
                             gsi: t.gsi.clone(),
                             lsi: t.lsi.clone(),
-                            items: std::collections::BTreeMap::new(),
                             stream_enabled: t.stream_enabled,
                             stream_arn: t.stream_arn.clone(),
                             stream_view_type: t.stream_view_type.clone(),
@@ -516,11 +533,17 @@ impl ServiceHandler for DynamoDbService {
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
-        let snapshot: DynamoStateSnapshot =
+        // Deserialize through the legacy shape so older snapshots — which
+        // still carry items inside Table — round-trip cleanly. The
+        // `serde(default)` on `legacy_items` means current snapshots
+        // (without an `items` field) parse just as well, with the field
+        // defaulting to an empty BTreeMap.
+        let snapshot: state::LegacyDynamoStateSnapshot =
             serde_json::from_slice(data).map_err(|e| e.to_string())?;
 
-        for mut table in snapshot.tables {
+        for legacy in snapshot.tables {
             // DynamoDB ARN: arn:aws:dynamodb:{region}:{account}:table/{name}
+            let (table, legacy_items) = legacy.into_parts();
             let parts: Vec<&str> = table.arn.splitn(6, ':').collect();
             let (account, region) = if parts.len() == 6 {
                 (parts[4].to_string(), parts[3].to_string())
@@ -528,9 +551,6 @@ impl ServiceHandler for DynamoDbService {
                 ("000000000000".to_string(), "us-east-1".to_string())
             };
 
-            // Drain any items the legacy snapshot still carries into the
-            // SQLite mirror. Subsequent snapshots emit empty Table.items.
-            let legacy_items = std::mem::take(&mut table.items);
             for (_composite, item) in legacy_items {
                 if let Some(keys) = keys::extract_item_keys(&table, &item) {
                     let attrs = keys::item_to_storage_value(&item);
@@ -549,7 +569,7 @@ impl ServiceHandler for DynamoDbService {
             }
 
             // Mirror the schema row so a fresh process without a snapshot
-            // can still bootstrap from SQLite alone in stage 4b+.
+            // can still bootstrap from SQLite alone.
             if let Ok(schema_value) = serde_json::to_value(&table) {
                 let _ = self
                     .sqlite

@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use awsim_core::{AwsError, RequestContext};
@@ -118,7 +117,13 @@ fn parse_lsi(input: &Value) -> Vec<LocalSecondaryIndex> {
         .unwrap_or_default()
 }
 
-pub fn table_description(table: &Table) -> Value {
+/// Build a DynamoDB `TableDescription` JSON shape.
+///
+/// `item_count` is the live row count from the SQLite store. We pass it
+/// explicitly instead of querying inside `table_description` so the caller
+/// can choose whether to pay the count query (it's cheap — covered by the
+/// PRIMARY KEY index — but `ListTables` etc. don't need it).
+pub fn table_description(table: &Table, item_count: u64) -> Value {
     let key_schema: Vec<Value> = table
         .key_schema
         .iter()
@@ -181,7 +186,7 @@ pub fn table_description(table: &Table) -> Value {
         "KeySchema": key_schema,
         "AttributeDefinitions": attr_defs,
         "BillingModeSummary": { "BillingMode": table.billing_mode },
-        "ItemCount": table.item_count(),
+        "ItemCount": item_count,
         "TableSizeBytes": 0,
         "ProvisionedThroughput": { "ReadCapacityUnits": 0, "WriteCapacityUnits": 0 }
     });
@@ -303,7 +308,6 @@ pub fn create_table(
         created_at: now_epoch_f64(),
         gsi,
         lsi,
-        items: BTreeMap::new(),
         stream_enabled,
         stream_arn,
         stream_view_type,
@@ -313,7 +317,8 @@ pub fn create_table(
         tags,
     };
 
-    let desc = table_description(&table);
+    // Brand new table — item count is always 0, no need to query SQLite.
+    let desc = table_description(&table, 0);
 
     // Mirror the schema to SQLite so future reads (and a process restart
     // after stage 4) can repopulate the in-memory state.
@@ -342,18 +347,23 @@ pub fn delete_table(
         )
     })?;
 
-    // Mirror the table drop to SQLite (clears items + schema row).
+    // Capture the row count BEFORE dropping the SQLite mirror so the
+    // returned TableDescription reports the right ItemCount.
+    let count = sqlite
+        .count_items(&ctx.account_id, &ctx.region, table_name)
+        .unwrap_or(0);
     let _ = sqlite.drop_table(&ctx.account_id, &ctx.region, table_name)?;
 
-    let desc = table_description(&table);
+    let desc = table_description(&table, count);
     info!(table = %table_name, "Deleted DynamoDB table");
     Ok(json!({ "TableDescription": desc }))
 }
 
 pub fn describe_table(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?;
 
@@ -364,7 +374,10 @@ pub fn describe_table(
         )
     })?;
 
-    Ok(json!({ "Table": table_description(&table) }))
+    let count = sqlite
+        .count_items(&ctx.account_id, &ctx.region, table_name)
+        .unwrap_or(0);
+    Ok(json!({ "Table": table_description(&table, count) }))
 }
 
 pub fn list_tables(
@@ -410,8 +423,9 @@ pub fn list_tables(
 
 pub fn update_table(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?;
 
@@ -492,7 +506,10 @@ pub fn update_table(
         }
     }
 
-    let desc = table_description(&table);
+    let count = sqlite
+        .count_items(&ctx.account_id, &ctx.region, table_name)
+        .unwrap_or(0);
+    let desc = table_description(&table, count);
     Ok(json!({ "TableDescription": desc }))
 }
 

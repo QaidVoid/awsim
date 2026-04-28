@@ -556,7 +556,6 @@ mod tests {
             created_at: 0.0,
             gsi: vec![],
             lsi: vec![],
-            items: std::collections::BTreeMap::new(),
             stream_enabled: false,
             stream_arn: None,
             stream_view_type: None,
@@ -572,7 +571,8 @@ mod tests {
     #[test]
     fn put_item_does_not_grow_in_memory_store() {
         // Bulk insert proves the memory-pressure regression that motivated
-        // this whole refactor: 1k rows in, in-memory items.len() stays 0.
+        // this whole refactor: 1k rows in, sqlite carries them all and
+        // there's no in-memory items map left to grow.
         let state = make_state_with_table();
         let sqlite = SqliteStore::in_memory().unwrap();
         let ctx = ctx();
@@ -589,8 +589,6 @@ mod tests {
             put_item(&state, &sqlite, &input, &ctx).unwrap();
         }
 
-        // The whole point of stage 4: items live exclusively in SQLite.
-        assert_eq!(state.tables.get("t").unwrap().items.len(), 0);
         assert_eq!(sqlite.count_items(&ctx.account_id, &ctx.region, "t").unwrap(), 1000);
     }
 
@@ -610,10 +608,6 @@ mod tests {
         });
 
         put_item(&state, &sqlite, &input, &ctx).unwrap();
-
-        // After stage 4 items live only in SQLite — the in-memory map
-        // stays empty.
-        assert_eq!(state.tables.get("t").unwrap().items.len(), 0);
 
         let stored = sqlite
             .get_item(&ctx.account_id, &ctx.region, "t", "user-1", "profile")

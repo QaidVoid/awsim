@@ -87,7 +87,11 @@ pub struct TtlSpecification {
     pub attribute_name: String,
 }
 
-/// A DynamoDB Table.
+/// A DynamoDB Table — schema + stream config only.
+///
+/// Items live in SQLite (see `SqliteStore`); this struct holds the
+/// metadata that operation handlers need to answer DescribeTable,
+/// resolve key schemas for indexing, and run stream emission.
 #[derive(Serialize, Deserialize)]
 pub struct Table {
     pub name: String,
@@ -100,8 +104,6 @@ pub struct Table {
     pub created_at: f64,
     pub gsi: Vec<GlobalSecondaryIndex>,
     pub lsi: Vec<LocalSecondaryIndex>,
-    /// Composite key (pk\0sk or pk alone) → item.
-    pub items: BTreeMap<String, DynamoItem>,
     /// Whether DynamoDB Streams is enabled for this table.
     #[serde(default)]
     pub stream_enabled: bool,
@@ -131,11 +133,76 @@ pub struct DynamoStateSnapshot {
     pub tables: Vec<Table>,
 }
 
-impl Table {
-    pub fn item_count(&self) -> usize {
-        self.items.len()
-    }
+/// Legacy snapshot shape — kept around so we can deserialize JSON files
+/// written before stage 4 (when items lived inside `Table.items`). The
+/// restore path drains `legacy_items` into the SQLite mirror, then
+/// upgrades the data to the current schema.
+///
+/// `serde(default)` on `legacy_items` means new snapshots (which omit
+/// the field via `Table` above) round-trip cleanly through this type
+/// too — it parses an empty BTreeMap.
+#[derive(Deserialize)]
+pub struct LegacyTableSnapshot {
+    pub name: String,
+    pub arn: String,
+    pub key_schema: Vec<KeySchemaElement>,
+    pub attribute_definitions: Vec<AttributeDefinition>,
+    pub billing_mode: String,
+    pub status: String,
+    pub created_at: f64,
+    pub gsi: Vec<GlobalSecondaryIndex>,
+    pub lsi: Vec<LocalSecondaryIndex>,
+    /// Items as written by pre-stage-4 snapshots. Always empty going forward.
+    #[serde(default, rename = "items")]
+    pub legacy_items: BTreeMap<String, DynamoItem>,
+    #[serde(default)]
+    pub stream_enabled: bool,
+    #[serde(default)]
+    pub stream_arn: Option<String>,
+    #[serde(default)]
+    pub stream_view_type: Option<String>,
+    #[serde(default)]
+    pub stream_records: Vec<StreamRecord>,
+    #[serde(default)]
+    pub stream_sequence: u64,
+    #[serde(default)]
+    pub ttl: TtlSpecification,
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
+}
 
+#[derive(Deserialize)]
+pub struct LegacyDynamoStateSnapshot {
+    pub tables: Vec<LegacyTableSnapshot>,
+}
+
+impl LegacyTableSnapshot {
+    /// Strip the `items` field and return the runtime `Table` plus the
+    /// legacy items so the caller can migrate them into SQLite.
+    pub fn into_parts(self) -> (Table, BTreeMap<String, DynamoItem>) {
+        let table = Table {
+            name: self.name,
+            arn: self.arn,
+            key_schema: self.key_schema,
+            attribute_definitions: self.attribute_definitions,
+            billing_mode: self.billing_mode,
+            status: self.status,
+            created_at: self.created_at,
+            gsi: self.gsi,
+            lsi: self.lsi,
+            stream_enabled: self.stream_enabled,
+            stream_arn: self.stream_arn,
+            stream_view_type: self.stream_view_type,
+            stream_records: self.stream_records,
+            stream_sequence: self.stream_sequence,
+            ttl: self.ttl,
+            tags: self.tags,
+        };
+        (table, self.legacy_items)
+    }
+}
+
+impl Table {
     /// Return the hash (partition) key attribute name.
     pub fn hash_key(&self) -> Option<&str> {
         self.key_schema
@@ -150,32 +217,6 @@ impl Table {
             .iter()
             .find(|k| k.key_type == "RANGE")
             .map(|k| k.attribute_name.as_str())
-    }
-
-    /// Build the composite storage key from an item or key map.
-    ///
-    /// Unused after the SQLite refactor — kept around because tests and
-    /// future stages (transactional ranges, GSI projection) still want the
-    /// `pk\0sk` form for in-memory comparisons.
-    #[allow(dead_code)]
-    pub fn composite_key(&self, item: &DynamoItem) -> Option<String> {
-        let hk = self.hash_key()?;
-        let pk_val = extract_scalar_str(item.get(hk)?)?;
-        if let Some(rk) = self.range_key() {
-            let sk_val = extract_scalar_str(item.get(rk)?)?;
-            Some(format!("{pk_val}\0{sk_val}"))
-        } else {
-            Some(pk_val.to_string())
-        }
-    }
-
-    /// Return the partition key value as string from a composite key.
-    #[allow(dead_code)]
-    pub fn pk_from_composite<'a>(&self, composite: &'a str) -> &'a str {
-        match composite.find('\0') {
-            Some(idx) => &composite[..idx],
-            None => composite,
-        }
     }
 }
 
@@ -253,7 +294,6 @@ impl std::fmt::Debug for Table {
         f.debug_struct("Table")
             .field("name", &self.name)
             .field("status", &self.status)
-            .field("item_count", &self.items.len())
             .finish()
     }
 }

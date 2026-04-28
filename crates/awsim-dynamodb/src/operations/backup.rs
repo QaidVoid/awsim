@@ -226,7 +226,6 @@ pub fn restore_table_from_backup(
             created_at: now,
             gsi: src.gsi.clone(),
             lsi: src.lsi.clone(),
-            items: src.items.clone(),
             stream_enabled: false,
             stream_arn: None,
             stream_view_type: None,
@@ -246,7 +245,6 @@ pub fn restore_table_from_backup(
             created_at: now,
             gsi: Vec::new(),
             lsi: Vec::new(),
-            items: std::collections::BTreeMap::new(),
             stream_enabled: false,
             stream_arn: None,
             stream_view_type: None,
@@ -257,7 +255,9 @@ pub fn restore_table_from_backup(
         }
     };
 
-    let desc = crate::operations::table::table_description(&new_table);
+    // Restored tables start empty — actual point-in-time replay isn't
+    // implemented (it never was; this op was always a stub).
+    let desc = crate::operations::table::table_description(&new_table, 0);
     state.tables.insert(target_name.to_string(), new_table);
 
     Ok(json!({
@@ -315,7 +315,6 @@ pub fn restore_table_to_point_in_time(
         created_at: now,
         gsi: source.gsi.clone(),
         lsi: source.lsi.clone(),
-        items: source.items.clone(),
         stream_enabled: false,
         stream_arn: None,
         stream_view_type: None,
@@ -325,7 +324,9 @@ pub fn restore_table_to_point_in_time(
         tags: source.tags.clone(),
     };
 
-    let desc = crate::operations::table::table_description(&new_table);
+    // Restored tables start empty — actual point-in-time replay isn't
+    // implemented (it never was; this op was always a stub).
+    let desc = crate::operations::table::table_description(&new_table, 0);
     state.tables.insert(target_name.to_string(), new_table);
 
     Ok(json!({

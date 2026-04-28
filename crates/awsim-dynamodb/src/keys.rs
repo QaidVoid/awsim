@@ -122,7 +122,6 @@ mod tests {
                 status: "ACTIVE".into(),
             }],
             lsi: vec![],
-            items: Default::default(),
             stream_enabled: false,
             stream_arn: None,
             stream_view_type: None,
