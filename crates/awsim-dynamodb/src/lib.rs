@@ -55,12 +55,8 @@ impl DynamoDbService {
     /// write does the create — sqlite can't.
     pub fn with_data_dir(dir: impl AsRef<Path>) -> Self {
         let dir = dir.as_ref();
-        std::fs::create_dir_all(dir).unwrap_or_else(|e| {
-            panic!(
-                "creating DynamoDB data dir {} failed: {e}",
-                dir.display()
-            )
-        });
+        std::fs::create_dir_all(dir)
+            .unwrap_or_else(|e| panic!("creating DynamoDB data dir {} failed: {e}", dir.display()));
         let path = dir.join("dynamodb.db");
         let sqlite = SqliteStore::open(&path).unwrap_or_else(|e| {
             panic!(

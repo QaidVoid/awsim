@@ -37,19 +37,20 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         .as_u64()
         .unwrap_or_else(|| queue.visibility_timeout_secs());
 
-    // Determine which attributes the caller wants
+    // Determine which attributes the caller wants. Per the SQS spec, omitting
+    // AttributeNames / MessageAttributeNames returns no attributes — only an
+    // explicit ["All"] expands to every attribute.
     let attribute_names: Vec<&str> = input["AttributeNames"]
         .as_array()
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_default();
-    let want_all_attrs = attribute_names.contains(&"All") || attribute_names.is_empty();
+    let want_all_attrs = attribute_names.contains(&"All");
 
     let message_attribute_names: Vec<&str> = input["MessageAttributeNames"]
         .as_array()
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_default();
-    let want_all_msg_attrs =
-        message_attribute_names.contains(&"All") || message_attribute_names.is_empty();
+    let want_all_msg_attrs = message_attribute_names.contains(&"All");
 
     // Snapshot the redrive policy so we can release the queue borrow later.
     let redrive_policy = queue.redrive_policy.clone();
