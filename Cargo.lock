@@ -1587,6 +1587,7 @@ dependencies = [
  "awsim-organizations",
  "awsim-polly",
  "awsim-rds",
+ "awsim-resourcegroupstagging",
  "awsim-route53",
  "awsim-s3",
  "awsim-scheduler",
@@ -2227,6 +2228,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "awsim-resourcegroupstagging"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "base64",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "awsim-route53"
 version = "0.1.0"
 dependencies = [
@@ -2317,6 +2332,7 @@ dependencies = [
  "async-trait",
  "awsim-core",
  "awsim-iam-policy",
+ "base64",
  "dashmap",
  "md-5",
  "serde",

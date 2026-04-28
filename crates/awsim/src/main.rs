@@ -998,6 +998,10 @@ fn register_services(
     };
     state.register(Arc::new(polly), polly_routes);
 
+    let resourcegroupstagging =
+        Arc::new(awsim_resourcegroupstagging::ResourceGroupsTaggingService::new());
+    state.register(resourcegroupstagging, vec![]);
+
     // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());

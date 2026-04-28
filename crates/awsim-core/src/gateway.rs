@@ -494,6 +494,8 @@ fn resolve_service_from_target(target: &str) -> Option<String> {
         p if p.starts_with("CloudTrail_") => "cloudtrail",
         // Streaming
         p if p.starts_with("Firehose_") => "firehose",
+        // Cross-service tagging
+        p if p.starts_with("ResourceGroupsTaggingAPI") => "tagging",
         _ => return None,
     };
     Some(service.to_string())
@@ -527,6 +529,7 @@ fn extract_service_from_host(host: &str) -> Option<String> {
                 "execute-api",
                 "cognito-idp",
                 "cognito-identity",
+                "tagging",
             ]
             .contains(&first)
         {
