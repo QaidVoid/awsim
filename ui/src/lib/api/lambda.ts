@@ -1,7 +1,7 @@
 /**
  * Lambda API client.
  *
- * Thin typed wrappers over the LocalStack-compatible Lambda HTTP REST API
+ * Thin typed wrappers over the AWSim Lambda HTTP REST API
  * (`/2015-03-31/functions/...`) plus a CloudWatch Logs pull for the
  * `/aws/lambda/{name}` log group used by the logs tab.
  *

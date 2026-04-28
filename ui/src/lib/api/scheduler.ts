@@ -1,7 +1,7 @@
 /**
  * Typed EventBridge Scheduler API client.
  *
- * Wraps LocalStack's REST scheduler endpoints. The Scheduler API is REST/JSON
+ * Wraps AWSim's REST scheduler endpoints. The Scheduler API is REST/JSON
  * (not AWS-JSON), so we hit `/schedules` and `/schedule-groups` with HTTP verbs.
  */
 

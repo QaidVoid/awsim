@@ -80,7 +80,7 @@
 			<header class="border-b border-border px-4 py-3">
 				<h3 class="text-sm font-medium">File listing</h3>
 				<p class="mt-0.5 text-xs text-muted-foreground">
-					LocalStack does not expose ZIP contents over the API. Download to inspect.
+					AWSim does not expose ZIP contents over the API. Download to inspect.
 				</p>
 			</header>
 			<div class="px-4 py-6 text-center text-xs text-muted-foreground">

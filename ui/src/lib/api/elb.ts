@@ -1,7 +1,7 @@
 /**
  * ELBv2 (Elastic Load Balancing v2) API client.
  *
- * Wraps the LocalStack-compatible elasticloadbalancingv2 query API
+ * Wraps the AWSim elasticloadbalancingv2 query API
  * (`Action=…&Version=2015-12-01`) with strongly typed camel-cased shapes
  * for load balancers, target groups, listeners, rules, and tag operations.
  */

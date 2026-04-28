@@ -1,7 +1,7 @@
 /**
  * Typed SSO Admin (IAM Identity Center) API client.
  *
- * Wraps the LocalStack-style AWS JSON 1.1 SWBExternalService API used for
+ * Wraps the AWS JSON 1.1 SWBExternalService API used for
  * `sso-admin`. Names map to AWS SDK SSO Admin operations.
  */
 

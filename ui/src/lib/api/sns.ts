@@ -1,7 +1,7 @@
 /**
  * Typed SNS API client.
  *
- * Wraps the LocalStack-style AWS Query API (XML responses) for SNS.
+ * Wraps the AWS Query API (XML responses) for SNS.
  */
 
 import { ENDPOINT, amzDate, authHeader, loggedFetch } from "$lib/aws";

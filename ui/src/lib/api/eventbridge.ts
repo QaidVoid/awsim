@@ -1,7 +1,7 @@
 /**
  * Typed EventBridge API client.
  *
- * Wraps the LocalStack-style AWS JSON 1.1 Events API with strong types.
+ * Wraps the AWS JSON 1.1 Events API with strong types.
  */
 
 import { ENDPOINT, amzDate, authHeader, loggedFetch } from "$lib/aws";

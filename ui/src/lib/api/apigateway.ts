@@ -1,7 +1,7 @@
 /**
  * API Gateway (REST APIs) typed client.
  *
- * Wraps the LocalStack-compatible API Gateway HTTP REST endpoints
+ * Wraps the AWSim API Gateway HTTP REST endpoints
  * (`/restapis/...`) with typed, camel-cased shapes so the UI never has to
  * touch fetch headers or AWS-cased payloads directly.
  */
@@ -390,9 +390,9 @@ export async function getAuthorizers(restApiId: string): Promise<Authorizer[]> {
 }
 
 /**
- * Build the public stage invoke URL for a REST API on this LocalStack host.
+ * Build the public stage invoke URL for a REST API on this AWSim host.
  * AWS standard form: https://{id}.execute-api.{region}.amazonaws.com/{stage}
- * LocalStack form:   {endpoint}/restapis/{id}/{stage}/_user_request_/
+ * AWSim form:   {endpoint}/restapis/{id}/{stage}/_user_request_/
  */
 export function stageInvokeUrl(restApiId: string, stage: string): string {
   return `${ENDPOINT}/restapis/${restApiId}/${stage}/_user_request_`;

@@ -1,7 +1,7 @@
 /**
  * Typed DynamoDB API client.
  *
- * Wraps the LocalStack DynamoDB JSON-RPC API behind strongly typed
+ * Wraps the AWSim DynamoDB JSON-RPC API behind strongly typed
  * helpers. Item attribute values use AWS' attribute-value tagged
  * encoding, exposed here as a discriminated union.
  */

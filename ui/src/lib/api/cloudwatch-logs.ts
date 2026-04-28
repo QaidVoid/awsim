@@ -1,7 +1,7 @@
 /**
  * CloudWatch Logs API client.
  *
- * Thin typed wrappers over the LocalStack-compatible Logs JSON 1.1
+ * Thin typed wrappers over the AWSim Logs JSON 1.1
  * protocol (`X-Amz-Target: Logs_20140328.<Action>`). Every operation is
  * normalised into camel-cased, `undefined`-safe shapes so the UI never
  * has to reason about the AWS wire format.

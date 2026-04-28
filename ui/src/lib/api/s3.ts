@@ -1,7 +1,7 @@
 /**
  * Typed S3 API client.
  *
- * Wraps the LocalStack-style S3 REST API with strong TypeScript types so
+ * Wraps AWSim's S3 REST API with strong TypeScript types so
  * callers in components never have to think about XML or fetch headers.
  */
 
@@ -294,7 +294,7 @@ export async function getBucketPolicy(bucket: string): Promise<BucketPolicy> {
       `GetBucketPolicy failed: HTTP ${res.status}: ${await res.text()}`,
     );
   const text = await res.text();
-  // LocalStack returns the policy JSON directly.
+  // GetBucketPolicy returns the policy JSON directly in the response body.
   return { policy: text };
 }
 

@@ -1,7 +1,7 @@
 /**
  * CloudTrail API client.
  *
- * Wraps the LocalStack-compatible CloudTrail JSON 1.1 protocol
+ * Wraps the AWSim CloudTrail JSON 1.1 protocol
  * (`X-Amz-Target: CloudTrail_20131101.<Action>`). Returns shapes already
  * normalised to camelCase + sane defaults.
  */

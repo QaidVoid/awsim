@@ -1,7 +1,7 @@
 /**
  * AWS DataSync API client.
  *
- * LocalStack uses the JSON-1.1 protocol with `X-Amz-Target:
+ * AWSim uses the JSON-1.1 protocol with `X-Amz-Target:
  * FmrsService.<Action>` for DataSync. All shapes are normalised to the
  * camel-cased forms consumed by the UI components.
  */

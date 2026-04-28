@@ -1,7 +1,7 @@
 /**
  * AWS Batch API client.
  *
- * LocalStack exposes Batch via REST endpoints under `/v1/<action>` with
+ * AWSim exposes Batch via REST endpoints under `/v1/<action>` with
  * camel-cased JSON bodies. This module wraps the operations consumed by
  * the UI and normalises shapes.
  */

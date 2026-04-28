@@ -1,7 +1,7 @@
 /**
  * CloudFront API client.
  *
- * Wraps the LocalStack-compatible CloudFront REST/XML API
+ * Wraps the AWSim CloudFront REST/XML API
  * (`/2020-05-31/...`) with strongly typed camel-cased shapes for
  * distributions, origin access identities, cache and origin-request
  * policies, key groups, public keys, and functions.

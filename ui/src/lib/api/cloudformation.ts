@@ -1,7 +1,7 @@
 /**
  * CloudFormation API client.
  *
- * Wraps the LocalStack-compatible CloudFormation Query API
+ * Wraps the AWSim CloudFormation Query API
  * (`Action=<action>&Version=2010-05-15`). All XML responses are parsed
  * into camel-cased shapes consumed directly by the UI.
  */

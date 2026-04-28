@@ -1,7 +1,7 @@
 /**
  * Typed SSM (Systems Manager) API client.
  *
- * Wraps the LocalStack-style AWS JSON 1.1 AmazonSSM API with strong types.
+ * Wraps the AWS JSON 1.1 AmazonSSM API with strong types.
  * Names map directly to the AWS SDK SSM operations.
  */
 

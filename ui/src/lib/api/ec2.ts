@@ -1,7 +1,7 @@
 /**
  * EC2 API client.
  *
- * Wraps the LocalStack-compatible EC2 query API
+ * Wraps the AWSim EC2 query API
  * (`Action=...&Version=2016-11-15`) with strongly typed camel-cased
  * shapes for instance / vpc / subnet / security-group / key-pair /
  * volume operations used by the UI.

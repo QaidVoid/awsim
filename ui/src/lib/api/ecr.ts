@@ -1,7 +1,7 @@
 /**
  * ECR API client.
  *
- * Wraps the LocalStack-compatible ECR JSON-1.1 API
+ * Wraps the AWSim ECR JSON-1.1 API
  * (`AmazonEC2ContainerRegistry_V20150921.<Action>`) with strongly typed
  * camel-cased shapes for repository / image operations used by the UI.
  */

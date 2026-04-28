@@ -1,7 +1,7 @@
 /**
  * Step Functions API client.
  *
- * Wraps the LocalStack-compatible Step Functions JSON-1.0 API
+ * Wraps the AWSim Step Functions JSON-1.0 API
  * (`AWSStepFunctions.<Action>`) with typed, camel-cased shapes for
  * state machines, executions, and history events.
  */

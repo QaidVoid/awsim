@@ -178,7 +178,7 @@ const { repository } = await ecr.send(new CreateRepositoryCommand({
 }));
 
 console.log('Registry URI:', repository?.repositoryUri);
-// e.g., 000000000000.dkr.ecr.us-east-1.localhost.localstack.cloud:4566/my-app
+// e.g., 000000000000.dkr.ecr.us-east-1.localhost:4566/my-app
 
 // Get login token
 const { authorizationData } = await ecr.send(new GetAuthorizationTokenCommand({}));

@@ -1,7 +1,7 @@
 /**
  * ECS API client.
  *
- * Wraps the LocalStack-compatible ECS JSON-1.1 API
+ * Wraps the AWSim ECS JSON-1.1 API
  * (`AmazonEC2ContainerServiceV20141113.<Action>`) with strongly typed
  * camel-cased shapes for cluster / service / task / task definition
  * operations used by the UI.
@@ -97,7 +97,7 @@ export interface TaskDefinition {
   containers: { name: string; image: string }[];
 }
 
-// -- Raw types (subset of LocalStack response shapes) --
+// -- Raw types (subset of API response shapes) --
 
 interface RawCluster {
   clusterArn?: string;

@@ -1,7 +1,7 @@
 /**
  * EKS API client.
  *
- * Wraps the LocalStack-compatible EKS REST endpoints
+ * Wraps the AWSim EKS REST endpoints
  * (`/clusters`, `/clusters/{name}`, `/clusters/{name}/node-groups`,
  * `/clusters/{name}/fargate-profiles`).
  *

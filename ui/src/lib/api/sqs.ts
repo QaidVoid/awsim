@@ -1,7 +1,7 @@
 /**
  * Typed SQS API client.
  *
- * Wraps the LocalStack-style AWS JSON 1.0 SQS API with strong TypeScript
+ * Wraps the AWS JSON 1.0 SQS API with strong TypeScript
  * types so component code never has to touch fetch headers or raw payloads.
  */
 

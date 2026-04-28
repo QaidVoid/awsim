@@ -1,7 +1,7 @@
 /**
  * Typed RDS API client.
  *
- * Wraps LocalStack's RDS XML query protocol with strongly typed
+ * Wraps AWSim's RDS XML query protocol with strongly typed
  * helpers for instances, snapshots, and clusters.
  */
 

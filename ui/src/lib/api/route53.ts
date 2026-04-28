@@ -1,7 +1,7 @@
 /**
  * Route53 API client.
  *
- * Wraps the LocalStack-compatible Route53 REST/XML API
+ * Wraps the AWSim Route53 REST/XML API
  * (`/2013-04-01/...`) with strongly typed camel-cased shapes for hosted
  * zones, resource record sets, and health checks.
  */

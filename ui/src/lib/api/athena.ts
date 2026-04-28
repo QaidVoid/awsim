@@ -2,7 +2,7 @@
  * Typed Athena API client.
  *
  * Uses the AWS JSON RPC protocol with `X-Amz-Target: AmazonAthena.<Op>`
- * targeting LocalStack-style endpoints.
+ * targeting AWSim endpoints.
  */
 
 import { ENDPOINT, amzDate, authHeader, loggedFetch } from "$lib/aws";

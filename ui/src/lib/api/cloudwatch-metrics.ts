@@ -1,7 +1,7 @@
 /**
  * CloudWatch (Metrics + Alarms + Dashboards) API client.
  *
- * Wraps the LocalStack-compatible monitoring query-protocol endpoints
+ * Wraps the AWSim monitoring query-protocol endpoints
  * (Action=… form-encoded XML responses). Every result is normalised to
  * a small camel-cased object so the UI does not have to parse XML.
  */

@@ -1,7 +1,7 @@
 /**
  * AWS Organizations API client.
  *
- * LocalStack uses the JSON-1.1 protocol with `X-Amz-Target:
+ * AWSim uses the JSON-1.1 protocol with `X-Amz-Target:
  * AWSOrganizationsV20161128.<Action>`. Shapes are normalised to
  * camel-cased forms used directly by the UI.
  */
