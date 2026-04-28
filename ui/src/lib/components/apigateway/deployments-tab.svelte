@@ -2,14 +2,16 @@
 	import {
 		getDeployments,
 		createDeployment,
+		deleteDeployment,
 		type Deployment,
 	} from '$lib/api/apigateway';
-	import { DataTable } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { toast } from 'svelte-sonner';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import Loader2 from '@lucide/svelte/icons/loader-2';
 
 	interface Props {
 		restApiId: string;
@@ -70,19 +72,16 @@
 		}
 	}
 
-	const columns = [
-		{ key: 'id', label: 'ID', mono: true, width: '180px' },
-		{ key: 'description', label: 'Description' },
-		{ key: 'createdDate', label: 'Created', width: '180px' },
-	];
-
-	let rows = $derived(
-		deployments.map((d) => ({
-			id: d.id,
-			description: d.description || '—',
-			createdDate: formatDate(d.createdDate),
-		}))
-	);
+	async function remove(d: Deployment) {
+		if (!confirm(`Delete deployment ${d.id}?`)) return;
+		try {
+			await deleteDeployment(restApiId, d.id);
+			toast.success(`Deployment ${d.id} deleted`);
+			await load();
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Delete failed');
+		}
+	}
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
@@ -115,11 +114,36 @@
 		</Button>
 	</form>
 
-	<div class="min-h-0 flex-1">
-		{#if error}
-			<div class="px-4 py-4 text-sm text-destructive">{error}</div>
+	<div class="min-h-0 flex-1 overflow-y-auto p-4">
+		{#if loading}
+			<div class="flex h-32 items-center justify-center text-muted-foreground">
+				<Loader2 class="size-4 animate-spin" />
+			</div>
+		{:else if error}
+			<div class="text-sm text-destructive">{error}</div>
+		{:else if deployments.length === 0}
+			<div class="text-sm text-muted-foreground">No deployments yet.</div>
 		{:else}
-			<DataTable {rows} {columns} {loading} dense rowKey={(_r, i) => String(i)} />
+			<ul class="flex flex-col gap-2">
+				{#each deployments as d (d.id)}
+					<li class="flex items-center gap-3 rounded-md border border-border bg-card/40 p-3 text-xs">
+						<code class="font-mono">{d.id}</code>
+						<span class="flex-1 truncate text-muted-foreground">
+							{d.description || '—'}
+						</span>
+						<span class="text-muted-foreground">{formatDate(d.createdDate)}</span>
+						<Button
+							size="sm"
+							variant="ghost"
+							class="h-6 gap-1 px-1.5 text-destructive"
+							onclick={() => remove(d)}
+							aria-label="Delete deployment"
+						>
+							<Trash2 class="size-3.5" />
+						</Button>
+					</li>
+				{/each}
+			</ul>
 		{/if}
 	</div>
 </div>

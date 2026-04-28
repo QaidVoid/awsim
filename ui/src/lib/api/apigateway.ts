@@ -381,12 +381,162 @@ export async function createDeployment(
   return mapDeployment(data);
 }
 
+export async function createResource(
+  restApiId: string,
+  parentId: string,
+  pathPart: string,
+): Promise<Resource> {
+  const data = await apigwFetch<RawResource>(
+    "POST",
+    `/restapis/${encodeURIComponent(restApiId)}/resources/${encodeURIComponent(parentId)}`,
+    { pathPart },
+  );
+  return mapResource(data);
+}
+
+export async function deleteResource(
+  restApiId: string,
+  resourceId: string,
+): Promise<void> {
+  await apigwFetch<unknown>(
+    "DELETE",
+    `/restapis/${encodeURIComponent(restApiId)}/resources/${encodeURIComponent(resourceId)}`,
+  );
+}
+
+export async function putMethod(
+  restApiId: string,
+  resourceId: string,
+  httpMethod: string,
+  input: { authorizationType?: string; apiKeyRequired?: boolean; authorizerId?: string },
+): Promise<Method> {
+  const body: Record<string, unknown> = {
+    authorizationType: input.authorizationType ?? "NONE",
+    apiKeyRequired: input.apiKeyRequired ?? false,
+  };
+  if (input.authorizerId) body["authorizerId"] = input.authorizerId;
+  const data = await apigwFetch<RawMethod>(
+    "PUT",
+    `/restapis/${encodeURIComponent(restApiId)}/resources/${encodeURIComponent(resourceId)}/methods/${encodeURIComponent(httpMethod)}`,
+    body,
+  );
+  return mapMethod(data);
+}
+
+export async function deleteMethod(
+  restApiId: string,
+  resourceId: string,
+  httpMethod: string,
+): Promise<void> {
+  await apigwFetch<unknown>(
+    "DELETE",
+    `/restapis/${encodeURIComponent(restApiId)}/resources/${encodeURIComponent(resourceId)}/methods/${encodeURIComponent(httpMethod)}`,
+  );
+}
+
+export async function putIntegration(
+  restApiId: string,
+  resourceId: string,
+  httpMethod: string,
+  input: { type: string; uri?: string; httpMethod?: string },
+): Promise<Integration> {
+  const body: Record<string, unknown> = { type: input.type };
+  if (input.uri !== undefined) body["uri"] = input.uri;
+  if (input.httpMethod) body["httpMethod"] = input.httpMethod;
+  const data = await apigwFetch<RawIntegration>(
+    "PUT",
+    `/restapis/${encodeURIComponent(restApiId)}/resources/${encodeURIComponent(resourceId)}/methods/${encodeURIComponent(httpMethod)}/integration`,
+    body,
+  );
+  return mapIntegration(data) as Integration;
+}
+
+export async function deleteIntegration(
+  restApiId: string,
+  resourceId: string,
+  httpMethod: string,
+): Promise<void> {
+  await apigwFetch<unknown>(
+    "DELETE",
+    `/restapis/${encodeURIComponent(restApiId)}/resources/${encodeURIComponent(resourceId)}/methods/${encodeURIComponent(httpMethod)}/integration`,
+  );
+}
+
+export async function createStage(
+  restApiId: string,
+  input: { stageName: string; deploymentId: string; description?: string },
+): Promise<Stage> {
+  const body: Record<string, unknown> = {
+    stageName: input.stageName,
+    deploymentId: input.deploymentId,
+  };
+  if (input.description) body["description"] = input.description;
+  const data = await apigwFetch<RawStage>(
+    "POST",
+    `/restapis/${encodeURIComponent(restApiId)}/stages`,
+    body,
+  );
+  return mapStage(data);
+}
+
+export async function deleteStage(restApiId: string, stageName: string): Promise<void> {
+  await apigwFetch<unknown>(
+    "DELETE",
+    `/restapis/${encodeURIComponent(restApiId)}/stages/${encodeURIComponent(stageName)}`,
+  );
+}
+
+export async function deleteDeployment(
+  restApiId: string,
+  deploymentId: string,
+): Promise<void> {
+  await apigwFetch<unknown>(
+    "DELETE",
+    `/restapis/${encodeURIComponent(restApiId)}/deployments/${encodeURIComponent(deploymentId)}`,
+  );
+}
+
 export async function getAuthorizers(restApiId: string): Promise<Authorizer[]> {
   const data = await apigwFetch<RawListAuthorizers>(
     "GET",
     `/restapis/${encodeURIComponent(restApiId)}/authorizers`,
   );
   return (data.items ?? []).map(mapAuthorizer);
+}
+
+export async function createAuthorizer(
+  restApiId: string,
+  input: {
+    name: string;
+    type: string;
+    authType?: string;
+    authorizerUri?: string;
+    identitySource?: string;
+  },
+): Promise<Authorizer> {
+  const body: Record<string, unknown> = {
+    name: input.name,
+    type: input.type,
+  };
+  if (input.authType) body["authType"] = input.authType;
+  if (input.authorizerUri) body["authorizerUri"] = input.authorizerUri;
+  if (input.identitySource) body["identitySource"] = input.identitySource;
+  const data = await apigwFetch<RawAuthorizer>(
+    "POST",
+    `/restapis/${encodeURIComponent(restApiId)}/authorizers`,
+    body,
+  );
+  return mapAuthorizer(data);
+}
+
+export async function deleteAuthorizer(
+  restApiId: string,
+  authorizerId: string,
+): Promise<void> {
+  await apigwFetch<unknown>(
+    "DELETE",
+    `/restapis/${encodeURIComponent(restApiId)}/authorizers/${encodeURIComponent(authorizerId)}`,
+  );
 }
 
 /**

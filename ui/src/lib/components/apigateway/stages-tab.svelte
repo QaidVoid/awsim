@@ -1,10 +1,11 @@
 <script lang="ts">
-	import { getStages, stageInvokeUrl, type Stage } from '$lib/api/apigateway';
+	import { getStages, deleteStage, stageInvokeUrl, type Stage } from '$lib/api/apigateway';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { toast } from 'svelte-sonner';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import Copy from '@lucide/svelte/icons/copy';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
 
 	interface Props {
 		restApiId: string;
@@ -42,6 +43,17 @@
 		}
 	}
 
+	async function removeStage(stage: Stage) {
+		if (!confirm(`Delete stage ${stage.stageName}?`)) return;
+		try {
+			await deleteStage(restApiId, stage.stageName);
+			toast.success(`Stage ${stage.stageName} deleted`);
+			await load();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		}
+	}
+
 	function formatDate(iso: string): string {
 		if (!iso) return '—';
 		try {
@@ -70,6 +82,15 @@
 						{#if stage.cacheClusterEnabled}
 							<Badge variant="outline" class="h-4 px-1 text-[10px]">cache</Badge>
 						{/if}
+						<Button
+							size="sm"
+							variant="ghost"
+							class="ml-auto h-6 gap-1 px-1.5 text-destructive"
+							onclick={() => removeStage(stage)}
+							aria-label="Delete stage"
+						>
+							<Trash2 class="size-3.5" />
+						</Button>
 					</div>
 					<div class="grid grid-cols-[110px_1fr] gap-x-2 gap-y-0.5 text-xs">
 						<span class="text-muted-foreground">Deployment</span>

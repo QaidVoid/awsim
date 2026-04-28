@@ -27,15 +27,36 @@ pub struct ProxyState {
     pub default_region: String,
 }
 
-/// Axum handler for `/restapis/{api_id}/{stage}/{*path}`.
+/// Axum handler for `/restapis/{api_id}/{stage}/_user_request_/{*path}`
+/// and the bare `/restapis/{api_id}/{stage}/_user_request_` (no path).
+///
+/// The literal `_user_request_` segment is required so management routes
+/// like `/restapis/{id}/resources/...` and `/restapis/{id}/authorizers`
+/// don't get accidentally swallowed by this proxy.
 pub async fn handle_proxy(
     State(state): State<ProxyState>,
-    Path((api_id, stage, path)): Path<(String, String, String)>,
+    Path(params): Path<Vec<(String, String)>>,
     method: Method,
     headers: HeaderMap,
     uri: Uri,
     body: Bytes,
 ) -> impl IntoResponse {
+    let api_id = params
+        .iter()
+        .find(|(k, _)| k == "api_id")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    let stage = params
+        .iter()
+        .find(|(k, _)| k == "stage")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    let path = params
+        .iter()
+        .find(|(k, _)| k == "path")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+
     debug!(
         api_id = %api_id,
         stage = %stage,
@@ -50,7 +71,11 @@ pub async fn handle_proxy(
         .store()
         .get(&state.default_account_id, &state.default_region);
 
-    let path_with_slash = format!("/{path}");
+    let path_with_slash = if path.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{path}")
+    };
     let query_string = uri.query().unwrap_or("");
 
     // Route the request through the API Gateway proxy logic.

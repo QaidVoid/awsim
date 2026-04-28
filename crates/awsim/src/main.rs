@@ -284,9 +284,16 @@ async fn main() -> Result<()> {
     };
 
     // Build the proxy sub-router (finalized with its own state).
+    // Proxy routes are scoped under the literal `_user_request_` segment so
+    // they never shadow the v1 management API (`/restapis/{id}/resources/...`,
+    // `/restapis/{id}/authorizers`, etc.).
     let proxy_router: axum::Router<()> = axum::Router::new()
         .route(
-            "/restapis/{api_id}/{stage}/{*path}",
+            "/restapis/{api_id}/{stage}/_user_request_",
+            axum::routing::any(proxy::handle_proxy),
+        )
+        .route(
+            "/restapis/{api_id}/{stage}/_user_request_/{*path}",
             axum::routing::any(proxy::handle_proxy),
         )
         .with_state(proxy_state);

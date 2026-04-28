@@ -179,6 +179,18 @@ impl ServiceHandler for ApiGatewayV1Service {
                 operation: "GetResources",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/restapis/{restapi_id}/resources/{parent_id}",
+                operation: "CreateResource",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/restapis/{restapi_id}/resources/{resource_id}",
+                operation: "DeleteResource",
+                required_query_param: None,
+            },
             // Methods + integrations (per-resource)
             RouteDefinition {
                 method: "GET",
@@ -187,9 +199,33 @@ impl ServiceHandler for ApiGatewayV1Service {
                 required_query_param: None,
             },
             RouteDefinition {
+                method: "PUT",
+                path_pattern: "/restapis/{restapi_id}/resources/{resource_id}/methods/{http_method}",
+                operation: "PutMethod",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/restapis/{restapi_id}/resources/{resource_id}/methods/{http_method}",
+                operation: "DeleteMethod",
+                required_query_param: None,
+            },
+            RouteDefinition {
                 method: "GET",
                 path_pattern: "/restapis/{restapi_id}/resources/{resource_id}/methods/{http_method}/integration",
                 operation: "GetIntegration",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/restapis/{restapi_id}/resources/{resource_id}/methods/{http_method}/integration",
+                operation: "PutIntegration",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/restapis/{restapi_id}/resources/{resource_id}/methods/{http_method}/integration",
+                operation: "DeleteIntegration",
                 required_query_param: None,
             },
             // Stages
@@ -197,6 +233,18 @@ impl ServiceHandler for ApiGatewayV1Service {
                 method: "GET",
                 path_pattern: "/restapis/{restapi_id}/stages",
                 operation: "GetStages",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/restapis/{restapi_id}/stages",
+                operation: "CreateStage",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/restapis/{restapi_id}/stages/{stage_name}",
+                operation: "DeleteStage",
                 required_query_param: None,
             },
             // Deployments
@@ -212,11 +260,29 @@ impl ServiceHandler for ApiGatewayV1Service {
                 operation: "CreateDeployment",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/restapis/{restapi_id}/deployments/{deployment_id}",
+                operation: "DeleteDeployment",
+                required_query_param: None,
+            },
             // Authorizers
             RouteDefinition {
                 method: "GET",
                 path_pattern: "/restapis/{restapi_id}/authorizers",
                 operation: "GetAuthorizers",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/restapis/{restapi_id}/authorizers",
+                operation: "CreateAuthorizer",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/restapis/{restapi_id}/authorizers/{authorizer_id}",
+                operation: "DeleteAuthorizer",
                 required_query_param: None,
             },
         ]
@@ -237,12 +303,23 @@ impl ServiceHandler for ApiGatewayV1Service {
             "GetRestApi" => get_rest_api(&state, &input),
             "DeleteRestApi" => delete_rest_api(&state, &input),
             "GetResources" => get_resources(&state, &input),
+            "CreateResource" => create_resource(&state, &input),
+            "DeleteResource" => delete_resource(&state, &input),
             "GetMethod" => get_method(&state, &input),
+            "PutMethod" => put_method(&state, &input),
+            "DeleteMethod" => delete_method(&state, &input),
             "GetIntegration" => get_integration(&state, &input),
+            "PutIntegration" => put_integration(&state, &input),
+            "DeleteIntegration" => delete_integration(&state, &input),
             "GetStages" => get_stages(&state, &input),
+            "CreateStage" => create_stage(&state, &input),
+            "DeleteStage" => delete_stage(&state, &input),
             "GetDeployments" => get_deployments(&state, &input),
             "CreateDeployment" => create_deployment(&state, &input),
+            "DeleteDeployment" => delete_deployment(&state, &input),
             "GetAuthorizers" => get_authorizers(&state, &input),
+            "CreateAuthorizer" => create_authorizer(&state, &input),
+            "DeleteAuthorizer" => delete_authorizer(&state, &input),
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
@@ -545,6 +622,356 @@ fn get_authorizers(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aw
     Ok(json!({ "items": items }))
 }
 
+// --- Mutating operations -------------------------------------------------
+
+fn short_id() -> String {
+    Uuid::new_v4()
+        .to_string()
+        .replace('-', "")
+        .chars()
+        .take(10)
+        .collect()
+}
+
+fn with_api_mut<F, R>(state: &ApiGatewayV1State, id: &str, f: F) -> Result<R, AwsError>
+where
+    F: FnOnce(&mut RestApi) -> Result<R, AwsError>,
+{
+    let mut entry = state.apis.get_mut(id).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("RestApi {id} not found"))
+    })?;
+    f(entry.value_mut())
+}
+
+fn create_resource(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let parent_id = require_str(input, "parent_id")?.to_string();
+    let path_part = require_str(input, "pathPart")?.to_string();
+    if path_part.is_empty() {
+        return Err(AwsError::bad_request(
+            "BadRequestException",
+            "pathPart must be non-empty",
+        ));
+    }
+    with_api_mut(state, &api_id, |api| {
+        let parent = api.resources.get(&parent_id).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Parent resource {parent_id} not found"),
+            )
+        })?;
+        let parent_path = parent.path.clone();
+        // Reject duplicates at the same parent + same pathPart.
+        if api
+            .resources
+            .values()
+            .any(|r| r.parent_id == parent_id && r.path_part == path_part)
+        {
+            return Err(AwsError::conflict(
+                "ConflictException",
+                format!("Resource {path_part} already exists under parent {parent_id}"),
+            ));
+        }
+        let new_path = if parent_path == "/" {
+            format!("/{path_part}")
+        } else {
+            format!("{parent_path}/{path_part}")
+        };
+        let resource = Resource {
+            id: short_id(),
+            parent_id,
+            path_part,
+            path: new_path,
+            methods: HashMap::new(),
+        };
+        let json = resource_to_json(&resource);
+        api.resources.insert(resource.id.clone(), resource);
+        Ok(json)
+    })
+}
+
+fn delete_resource(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let resource_id = require_str(input, "resource_id")?.to_string();
+    with_api_mut(state, &api_id, |api| {
+        let target = api.resources.get(&resource_id).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Resource {resource_id} not found"),
+            )
+        })?;
+        if target.path == "/" {
+            return Err(AwsError::bad_request(
+                "BadRequestException",
+                "Cannot delete the root resource",
+            ));
+        }
+        // Refuse if any other resource lists this one as parent — keeps the
+        // tree consistent and matches the AWS behaviour.
+        if api.resources.values().any(|r| r.parent_id == resource_id) {
+            return Err(AwsError::conflict(
+                "ConflictException",
+                "Resource has children; delete those first",
+            ));
+        }
+        api.resources.remove(&resource_id);
+        Ok(json!({}))
+    })
+}
+
+fn put_method(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let resource_id = require_str(input, "resource_id")?.to_string();
+    let http_method = require_str(input, "http_method")?.to_uppercase();
+    let auth_type = input["authorizationType"]
+        .as_str()
+        .unwrap_or("NONE")
+        .to_string();
+    let authorizer_id = input["authorizerId"].as_str().unwrap_or("").to_string();
+    let api_key_required = input["apiKeyRequired"].as_bool().unwrap_or(false);
+    let request_parameters = input["requestParameters"]
+        .as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_bool().map(|b| (k.clone(), b)))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    with_api_mut(state, &api_id, |api| {
+        let resource = api.resources.get_mut(&resource_id).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Resource {resource_id} not found"),
+            )
+        })?;
+        let method = Method {
+            http_method: http_method.clone(),
+            authorization_type: auth_type,
+            authorizer_id,
+            api_key_required,
+            request_parameters,
+            integration: None,
+        };
+        let json = method_to_json(&method);
+        resource.methods.insert(http_method, method);
+        Ok(json)
+    })
+}
+
+fn delete_method(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let resource_id = require_str(input, "resource_id")?.to_string();
+    let http_method = require_str(input, "http_method")?.to_uppercase();
+    with_api_mut(state, &api_id, |api| {
+        let resource = api.resources.get_mut(&resource_id).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Resource {resource_id} not found"),
+            )
+        })?;
+        if resource.methods.remove(&http_method).is_none() {
+            return Err(AwsError::not_found(
+                "NotFoundException",
+                format!("Method {http_method} not configured"),
+            ));
+        }
+        Ok(json!({}))
+    })
+}
+
+fn put_integration(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let resource_id = require_str(input, "resource_id")?.to_string();
+    let http_method = require_str(input, "http_method")?.to_uppercase();
+    let integration = Integration {
+        r#type: input["type"].as_str().unwrap_or("AWS_PROXY").to_string(),
+        http_method: input["httpMethod"]
+            .as_str()
+            .unwrap_or(&http_method)
+            .to_string(),
+        uri: input["uri"].as_str().unwrap_or("").to_string(),
+        connection_type: input["connectionType"]
+            .as_str()
+            .unwrap_or("INTERNET")
+            .to_string(),
+        passthrough_behavior: input["passthroughBehavior"]
+            .as_str()
+            .unwrap_or("WHEN_NO_MATCH")
+            .to_string(),
+        timeout_in_millis: input["timeoutInMillis"].as_u64().unwrap_or(29000) as u32,
+        cache_namespace: input["cacheNamespace"].as_str().unwrap_or("").to_string(),
+    };
+    with_api_mut(state, &api_id, |api| {
+        let resource = api.resources.get_mut(&resource_id).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Resource {resource_id} not found"),
+            )
+        })?;
+        let method = resource.methods.get_mut(&http_method).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Method {http_method} not configured — call PutMethod first"),
+            )
+        })?;
+        let json = integration_to_json(&integration);
+        method.integration = Some(integration);
+        Ok(json)
+    })
+}
+
+fn delete_integration(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let resource_id = require_str(input, "resource_id")?.to_string();
+    let http_method = require_str(input, "http_method")?.to_uppercase();
+    with_api_mut(state, &api_id, |api| {
+        let resource = api.resources.get_mut(&resource_id).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Resource {resource_id} not found"),
+            )
+        })?;
+        let method = resource.methods.get_mut(&http_method).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Method {http_method} not configured"),
+            )
+        })?;
+        if method.integration.take().is_none() {
+            return Err(AwsError::not_found(
+                "NotFoundException",
+                "No integration configured",
+            ));
+        }
+        Ok(json!({}))
+    })
+}
+
+fn create_stage(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let stage_name = require_str(input, "stageName")?.to_string();
+    let deployment_id = require_str(input, "deploymentId")?.to_string();
+    let description = input["description"].as_str().unwrap_or("").to_string();
+    let cache_cluster_enabled = input["cacheClusterEnabled"].as_bool().unwrap_or(false);
+    let variables = input["variables"]
+        .as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    with_api_mut(state, &api_id, |api| {
+        if !api.deployments.iter().any(|d| d.id == deployment_id) {
+            return Err(AwsError::not_found(
+                "NotFoundException",
+                format!("Deployment {deployment_id} not found"),
+            ));
+        }
+        if api.stages.contains_key(&stage_name) {
+            return Err(AwsError::conflict(
+                "ConflictException",
+                format!("Stage {stage_name} already exists"),
+            ));
+        }
+        let stage = Stage {
+            stage_name: stage_name.clone(),
+            deployment_id,
+            description,
+            cache_cluster_enabled,
+            created_date: now_epoch(),
+            last_updated_date: now_epoch(),
+            variables,
+        };
+        let json = stage_to_json(&stage);
+        api.stages.insert(stage_name, stage);
+        Ok(json)
+    })
+}
+
+fn delete_stage(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let stage_name = require_str(input, "stage_name")?.to_string();
+    with_api_mut(state, &api_id, |api| {
+        if api.stages.remove(&stage_name).is_none() {
+            return Err(AwsError::not_found(
+                "NotFoundException",
+                format!("Stage {stage_name} not found"),
+            ));
+        }
+        Ok(json!({}))
+    })
+}
+
+fn delete_deployment(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let deployment_id = require_str(input, "deployment_id")?.to_string();
+    with_api_mut(state, &api_id, |api| {
+        // AWS rejects deletion when any stage still points at this deployment.
+        if api
+            .stages
+            .values()
+            .any(|s| s.deployment_id == deployment_id)
+        {
+            return Err(AwsError::conflict(
+                "ConflictException",
+                "Deployment is still referenced by one or more stages",
+            ));
+        }
+        let before = api.deployments.len();
+        api.deployments.retain(|d| d.id != deployment_id);
+        if api.deployments.len() == before {
+            return Err(AwsError::not_found(
+                "NotFoundException",
+                format!("Deployment {deployment_id} not found"),
+            ));
+        }
+        Ok(json!({}))
+    })
+}
+
+fn create_authorizer(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let name = require_str(input, "name")?.to_string();
+    let r#type = input["type"].as_str().unwrap_or("TOKEN").to_string();
+    let auth_type = input["authType"].as_str().unwrap_or("custom").to_string();
+    let authorizer_uri = input["authorizerUri"].as_str().unwrap_or("").to_string();
+    let identity_source = input["identitySource"]
+        .as_str()
+        .unwrap_or("method.request.header.Authorization")
+        .to_string();
+
+    with_api_mut(state, &api_id, |api| {
+        let authorizer = Authorizer {
+            id: short_id(),
+            name,
+            r#type,
+            auth_type,
+            authorizer_uri,
+            identity_source,
+        };
+        let json = authorizer_to_json(&authorizer);
+        api.authorizers.insert(authorizer.id.clone(), authorizer);
+        Ok(json)
+    })
+}
+
+fn delete_authorizer(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let authorizer_id = require_str(input, "authorizer_id")?.to_string();
+    with_api_mut(state, &api_id, |api| {
+        if api.authorizers.remove(&authorizer_id).is_none() {
+            return Err(AwsError::not_found(
+                "NotFoundException",
+                format!("Authorizer {authorizer_id} not found"),
+            ));
+        }
+        Ok(json!({}))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -641,5 +1068,200 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(deployments["items"].as_array().unwrap().len(), 1);
+    }
+
+    async fn make_api(svc: &ApiGatewayV1Service) -> (String, String) {
+        let api = svc
+            .handle("CreateRestApi", json!({"name": "demo"}), &ctx())
+            .await
+            .unwrap();
+        let api_id = api["id"].as_str().unwrap().to_string();
+        let resources = svc
+            .handle(
+                "GetResources",
+                json!({"restapi_id": api_id.clone()}),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let root_id = resources["items"][0]["id"].as_str().unwrap().to_string();
+        (api_id, root_id)
+    }
+
+    #[tokio::test]
+    async fn create_resource_appends_path_to_parent() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        let users = svc
+            .handle(
+                "CreateResource",
+                json!({"restapi_id": api_id, "parent_id": root_id, "pathPart": "users"}),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(users["path"], "/users");
+        assert_eq!(users["pathPart"], "users");
+    }
+
+    #[tokio::test]
+    async fn create_resource_rejects_duplicates_under_same_parent() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        svc.handle(
+            "CreateResource",
+            json!({"restapi_id": api_id.clone(), "parent_id": root_id.clone(), "pathPart": "users"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        let err = svc
+            .handle(
+                "CreateResource",
+                json!({"restapi_id": api_id, "parent_id": root_id, "pathPart": "users"}),
+                &ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "ConflictException");
+    }
+
+    #[tokio::test]
+    async fn delete_resource_refuses_root() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        let err = svc
+            .handle(
+                "DeleteResource",
+                json!({"restapi_id": api_id, "resource_id": root_id}),
+                &ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
+    }
+
+    #[tokio::test]
+    async fn put_method_then_put_integration_then_get() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        svc.handle(
+            "PutMethod",
+            json!({
+                "restapi_id": api_id.clone(),
+                "resource_id": root_id.clone(),
+                "http_method": "GET",
+                "authorizationType": "NONE",
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "PutIntegration",
+            json!({
+                "restapi_id": api_id.clone(),
+                "resource_id": root_id.clone(),
+                "http_method": "GET",
+                "type": "MOCK",
+                "uri": "",
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        let method = svc
+            .handle(
+                "GetMethod",
+                json!({"restapi_id": api_id, "resource_id": root_id, "http_method": "GET"}),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(method["httpMethod"], "GET");
+        assert_eq!(method["methodIntegration"]["type"], "MOCK");
+    }
+
+    #[tokio::test]
+    async fn delete_deployment_refuses_when_referenced_by_stage() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, _root) = make_api(&svc).await;
+        let dep = svc
+            .handle(
+                "CreateDeployment",
+                json!({"restapi_id": api_id.clone(), "stageName": "prod"}),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let dep_id = dep["id"].as_str().unwrap().to_string();
+        let err = svc
+            .handle(
+                "DeleteDeployment",
+                json!({"restapi_id": api_id.clone(), "deployment_id": dep_id.clone()}),
+                &ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "ConflictException");
+
+        // After deleting the stage, deployment delete succeeds.
+        svc.handle(
+            "DeleteStage",
+            json!({"restapi_id": api_id.clone(), "stage_name": "prod"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "DeleteDeployment",
+            json!({"restapi_id": api_id, "deployment_id": dep_id}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_authorizer_round_trips() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, _root) = make_api(&svc).await;
+        let auth = svc
+            .handle(
+                "CreateAuthorizer",
+                json!({
+                    "restapi_id": api_id.clone(),
+                    "name": "lambda-auth",
+                    "type": "REQUEST",
+                    "authorizerUri": "arn:aws:lambda:us-east-1:000:function:auth",
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let auth_id = auth["id"].as_str().unwrap().to_string();
+
+        let listed = svc
+            .handle(
+                "GetAuthorizers",
+                json!({"restapi_id": api_id.clone()}),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed["items"].as_array().unwrap().len(), 1);
+
+        svc.handle(
+            "DeleteAuthorizer",
+            json!({"restapi_id": api_id.clone(), "authorizer_id": auth_id}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        let listed = svc
+            .handle("GetAuthorizers", json!({"restapi_id": api_id}), &ctx())
+            .await
+            .unwrap();
+        assert_eq!(listed["items"].as_array().unwrap().len(), 0);
     }
 }
