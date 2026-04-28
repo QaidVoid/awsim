@@ -5,6 +5,8 @@ use uuid::Uuid;
 
 use crate::{
     expressions::{evaluate_condition, parse_condition},
+    keys::{extract_item_keys, extract_pk_sk, item_to_storage_value},
+    sqlite_store::SqliteStore,
     state::{DynamoItem, DynamoState, StreamRecord, StreamRecordData},
 };
 
@@ -137,6 +139,7 @@ pub fn item_to_json(item: &DynamoItem) -> Value {
 
 pub fn put_item(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
@@ -145,7 +148,9 @@ pub fn put_item(
     let item = parse_item(&input["Item"])
         .ok_or_else(|| AwsError::validation("Item is required and must be a map"))?;
 
-    let (composite_key, old_item, keys_item, hash_key_name) = {
+    // Extracted SQLite keys (pk/sk + per-GSI key columns) computed inside
+    // the lock so we get them while we hold the canonical schema view.
+    let (composite_key, old_item, keys_item, hash_key_name, sqlite_keys) = {
         let mut table = state.tables.get_mut(&table_name).ok_or_else(|| {
             AwsError::not_found(
                 "ResourceNotFoundException",
@@ -188,6 +193,9 @@ pub fn put_item(
             .composite_key(&item)
             .ok_or_else(|| AwsError::validation("Could not construct item key"))?;
 
+        let sqlite_keys = extract_item_keys(&table, &item)
+            .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
+
         // Build keys sub-item for the stream record.
         let mut keys_item = DynamoItem::new();
         for k in table.key_schema.iter().map(|k| k.attribute_name.as_str()) {
@@ -199,8 +207,22 @@ pub fn put_item(
         let old_item = table.items.remove(&composite_key);
         table.items.insert(composite_key.clone(), item.clone());
 
-        (composite_key, old_item, keys_item, hash_key)
+        (composite_key, old_item, keys_item, hash_key, sqlite_keys)
     };
+
+    // Mirror the write to SQLite. In stage 2 the in-memory map is still
+    // authoritative for reads; this builds up the parallel store for
+    // future read migration.
+    let attrs_value = item_to_storage_value(&item);
+    sqlite.put_item(
+        &ctx.account_id,
+        &ctx.region,
+        &table_name,
+        &sqlite_keys.pk,
+        &sqlite_keys.sk,
+        &attrs_value,
+        &sqlite_keys.gsi,
+    )?;
 
     let return_values = opt_str(input, "ReturnValues").unwrap_or("NONE");
 
@@ -265,6 +287,7 @@ pub fn get_item(
 
 pub fn delete_item(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
@@ -272,7 +295,7 @@ pub fn delete_item(
 
     let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 
-    let (old_item, keys_item) = {
+    let (old_item, keys_item, sqlite_pk_sk) = {
         let mut table = state.tables.get_mut(&table_name).ok_or_else(|| {
             AwsError::not_found(
                 "ResourceNotFoundException",
@@ -300,6 +323,9 @@ pub fn delete_item(
             }
         }
 
+        let sqlite_pk_sk = extract_pk_sk(&table, &key)
+            .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
+
         // Collect key attributes for the stream record.
         let mut keys_item = DynamoItem::new();
         for k in table.key_schema.iter().map(|k| k.attribute_name.as_str()) {
@@ -309,8 +335,19 @@ pub fn delete_item(
         }
 
         let old_item = table.items.remove(&composite_key);
-        (old_item, keys_item)
+        (old_item, keys_item, sqlite_pk_sk)
     };
+
+    // Mirror the delete to SQLite. Idempotent — the dual-write may run
+    // even when no in-memory row existed (stage 2 keeps in-memory
+    // authoritative for now).
+    let _ = sqlite.delete_item(
+        &ctx.account_id,
+        &ctx.region,
+        &table_name,
+        &sqlite_pk_sk.0,
+        &sqlite_pk_sk.1,
+    )?;
 
     let return_values = opt_str(input, "ReturnValues").unwrap_or("NONE");
 
@@ -338,6 +375,7 @@ pub fn delete_item(
 
 pub fn update_item(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
@@ -345,7 +383,7 @@ pub fn update_item(
 
     let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 
-    let (old_item, new_item, keys_item) = {
+    let (old_item, new_item, keys_item, sqlite_keys) = {
         let mut table = state.tables.get_mut(&table_name).ok_or_else(|| {
             AwsError::not_found(
                 "ResourceNotFoundException",
@@ -392,6 +430,9 @@ pub fn update_item(
             item.insert(k.clone(), v.clone());
         }
 
+        let sqlite_keys = extract_item_keys(&table, &item)
+            .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
+
         // Collect key attributes for the stream record.
         let mut keys_item = DynamoItem::new();
         for k in table.key_schema.iter().map(|k| k.attribute_name.as_str()) {
@@ -403,8 +444,20 @@ pub fn update_item(
         let new_item = item.clone();
         table.items.insert(composite_key, item);
 
-        (old_item, new_item, keys_item)
+        (old_item, new_item, keys_item, sqlite_keys)
     };
+
+    // Mirror to SQLite (upsert).
+    let attrs_value = item_to_storage_value(&new_item);
+    sqlite.put_item(
+        &ctx.account_id,
+        &ctx.region,
+        &table_name,
+        &sqlite_keys.pk,
+        &sqlite_keys.sk,
+        &attrs_value,
+        &sqlite_keys.gsi,
+    )?;
 
     debug!(table = %table_name, "Updated item");
 
@@ -449,4 +502,129 @@ pub fn update_item(
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{KeySchemaElement, Table};
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("dynamodb", "us-east-1")
+    }
+
+    fn make_state_with_table() -> DynamoState {
+        let state = DynamoState::default();
+        let table = Table {
+            name: "t".into(),
+            arn: "arn:aws:dynamodb:us-east-1:000000000000:table/t".into(),
+            key_schema: vec![
+                KeySchemaElement {
+                    attribute_name: "pk".into(),
+                    key_type: "HASH".into(),
+                },
+                KeySchemaElement {
+                    attribute_name: "sk".into(),
+                    key_type: "RANGE".into(),
+                },
+            ],
+            attribute_definitions: vec![],
+            billing_mode: "PAY_PER_REQUEST".into(),
+            status: "ACTIVE".into(),
+            created_at: 0.0,
+            gsi: vec![],
+            lsi: vec![],
+            items: std::collections::BTreeMap::new(),
+            stream_enabled: false,
+            stream_arn: None,
+            stream_view_type: None,
+            stream_records: Vec::new(),
+            stream_sequence: 0,
+            ttl: Default::default(),
+            tags: Default::default(),
+        };
+        state.tables.insert("t".into(), table);
+        state
+    }
+
+    #[test]
+    fn put_item_dual_writes_to_sqlite() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let ctx = ctx();
+
+        let input = json!({
+            "TableName": "t",
+            "Item": {
+                "pk": {"S": "user-1"},
+                "sk": {"S": "profile"},
+                "name": {"S": "Alice"},
+            }
+        });
+
+        put_item(&state, &sqlite, &input, &ctx).unwrap();
+
+        // In-memory state has the item (composite key uses NUL separator).
+        let table = state.tables.get("t").unwrap();
+        assert_eq!(table.items.len(), 1);
+
+        // SQLite mirror has the same item under the storage keys.
+        let stored = sqlite
+            .get_item(&ctx.account_id, &ctx.region, "t", "user-1", "profile")
+            .unwrap()
+            .expect("sqlite mirror");
+        assert_eq!(stored["name"], json!({"S": "Alice"}));
+    }
+
+    #[test]
+    fn delete_item_dual_writes_to_sqlite() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let ctx = ctx();
+
+        let put_input = json!({
+            "TableName": "t",
+            "Item": {"pk": {"S": "x"}, "sk": {"S": "y"}, "v": {"N": "1"}}
+        });
+        put_item(&state, &sqlite, &put_input, &ctx).unwrap();
+
+        let del_input = json!({
+            "TableName": "t",
+            "Key": {"pk": {"S": "x"}, "sk": {"S": "y"}}
+        });
+        delete_item(&state, &sqlite, &del_input, &ctx).unwrap();
+
+        // Both stores should be empty.
+        assert_eq!(state.tables.get("t").unwrap().items.len(), 0);
+        assert_eq!(
+            sqlite
+                .get_item(&ctx.account_id, &ctx.region, "t", "x", "y")
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn update_item_dual_writes_to_sqlite() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let ctx = ctx();
+
+        let input = json!({
+            "TableName": "t",
+            "Key": {"pk": {"S": "p"}, "sk": {"S": "s"}},
+            "UpdateExpression": "SET #v = :v",
+            "ExpressionAttributeNames": {"#v": "value"},
+            "ExpressionAttributeValues": {":v": {"S": "hello"}}
+        });
+
+        update_item(&state, &sqlite, &input, &ctx).unwrap();
+
+        let stored = sqlite
+            .get_item(&ctx.account_id, &ctx.region, "t", "p", "s")
+            .unwrap()
+            .expect("sqlite mirror");
+        assert_eq!(stored["value"], json!({"S": "hello"}));
+    }
 }

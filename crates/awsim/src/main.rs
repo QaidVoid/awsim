@@ -776,7 +776,10 @@ fn register_services(
     let sqs_clone = Arc::clone(&sqs_arc);
     state.register(sqs_arc, vec![]);
 
-    let dynamodb = Arc::new(awsim_dynamodb::DynamoDbService::new());
+    let dynamodb = Arc::new(match data_dir {
+        Some(dir) => awsim_dynamodb::DynamoDbService::with_data_dir(dir),
+        None => awsim_dynamodb::DynamoDbService::new(),
+    });
     state.register(dynamodb, vec![]);
 
     let s3 = match data_dir {

@@ -1,28 +1,60 @@
 mod expressions;
+mod keys;
 mod operations;
 mod sqlite_store;
 mod state;
 
 pub use sqlite_store::{MAX_GSI_SLOTS, SqliteStore};
 
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
 use serde_json::Value;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use state::{DynamoState, DynamoStateSnapshot, Table};
 
 /// The AWSim DynamoDB service handler.
+///
+/// Holds two stores during the in-memory → SQLite transition:
+///   * `store` — the legacy in-memory `DashMap` per (account, region).
+///     Reads still go here; writes are mirrored to SQLite (stage 2 dual-write).
+///   * `sqlite` — the persistent backing store that Query/Scan/etc. will
+///     migrate to in subsequent stages. When AWSim is started without
+///     `--data-dir` we open it on a per-process temp file so behaviour
+///     is consistent in tests and ephemeral runs.
 pub struct DynamoDbService {
     store: AccountRegionStore<DynamoState>,
+    sqlite: Arc<SqliteStore>,
 }
 
 impl DynamoDbService {
+    /// Ephemeral in-process store. Useful for tests and `awsim` runs
+    /// that don't pass `--data-dir` (the SQLite file goes under
+    /// `std::env::temp_dir()` and is cleaned up by the OS).
     pub fn new() -> Self {
+        let id = uuid::Uuid::new_v4();
+        let path = std::env::temp_dir().join(format!("awsim-ddb-{id}.db"));
+        let sqlite = SqliteStore::open(path)
+            .expect("opening ephemeral DynamoDB sqlite store should not fail");
         Self {
             store: AccountRegionStore::new(),
+            sqlite: Arc::new(sqlite),
+        }
+    }
+
+    /// Persistent store rooted at `{dir}/dynamodb.db`. Mirrors the
+    /// `with_data_dir` convention used by the other AWSim services so
+    /// the `awsim` binary can wire it the same way.
+    pub fn with_data_dir(dir: impl AsRef<Path>) -> Self {
+        let path = dir.as_ref().join("dynamodb.db");
+        let sqlite = SqliteStore::open(path)
+            .expect("opening persistent DynamoDB sqlite store should not fail");
+        Self {
+            store: AccountRegionStore::new(),
+            sqlite: Arc::new(sqlite),
         }
     }
 
@@ -34,6 +66,24 @@ impl DynamoDbService {
 impl Default for DynamoDbService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Run a sync DynamoDB op (which may touch SQLite) on tokio's blocking
+/// pool so we don't stall worker threads on rusqlite IO. Cheap when no
+/// IO actually happens — the blocking pool reuses threads.
+async fn run_blocking<F>(f: F) -> Result<Value, AwsError>
+where
+    F: FnOnce() -> Result<Value, AwsError> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(res) => res,
+        Err(join_err) => {
+            warn!(error = %join_err, "DynamoDB blocking task panicked");
+            Err(AwsError::internal(format!(
+                "DynamoDB worker join error: {join_err}"
+            )))
+        }
     }
 }
 
@@ -62,8 +112,26 @@ impl ServiceHandler for DynamoDbService {
 
         match operation {
             // Table management
-            "CreateTable" => operations::table::create_table(&state, &input, ctx),
-            "DeleteTable" => operations::table::delete_table(&state, &input, ctx),
+            "CreateTable" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::table::create_table(&state, &sqlite, &input, &ctx)
+                })
+                .await
+            }
+            "DeleteTable" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::table::delete_table(&state, &sqlite, &input, &ctx)
+                })
+                .await
+            }
             "DescribeTable" => operations::table::describe_table(&state, &input, ctx),
             "ListTables" => operations::table::list_tables(&state, &input, ctx),
             "UpdateTable" => operations::table::update_table(&state, &input, ctx),
@@ -88,11 +156,37 @@ impl ServiceHandler for DynamoDbService {
             "UntagResource" => operations::table::untag_resource(&state, &input, ctx),
             "ListTagsOfResource" => operations::table::list_tags_of_resource(&state, &input, ctx),
 
-            // Item operations
-            "PutItem" => operations::item::put_item(&state, &input, ctx),
+            // Item operations — dual-write to SQLite, so they go through
+            // the blocking pool to avoid stalling tokio workers on rusqlite IO.
+            "PutItem" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || operations::item::put_item(&state, &sqlite, &input, &ctx))
+                    .await
+            }
             "GetItem" => operations::item::get_item(&state, &input, ctx),
-            "DeleteItem" => operations::item::delete_item(&state, &input, ctx),
-            "UpdateItem" => operations::item::update_item(&state, &input, ctx),
+            "DeleteItem" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::item::delete_item(&state, &sqlite, &input, &ctx)
+                })
+                .await
+            }
+            "UpdateItem" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::item::update_item(&state, &sqlite, &input, &ctx)
+                })
+                .await
+            }
 
             // Query & Scan
             "Query" => operations::query::query(&state, &input, ctx),
@@ -100,7 +194,16 @@ impl ServiceHandler for DynamoDbService {
 
             // Batch operations
             "BatchGetItem" => operations::batch::batch_get_item(&state, &input, ctx),
-            "BatchWriteItem" => operations::batch::batch_write_item(&state, &input, ctx),
+            "BatchWriteItem" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::batch::batch_write_item(&state, &sqlite, &input, &ctx)
+                })
+                .await
+            }
 
             // Transactions
             "TransactGetItems" => operations::transact::transact_get_items(&state, &input, ctx),

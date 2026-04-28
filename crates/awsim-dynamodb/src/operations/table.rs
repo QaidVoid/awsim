@@ -5,6 +5,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
 
+use crate::sqlite_store::SqliteStore;
 use crate::state::{
     AttributeDefinition, DynamoState, GlobalSecondaryIndex, KeySchemaElement, LocalSecondaryIndex,
     Projection, Table, TtlSpecification,
@@ -208,6 +209,7 @@ pub fn table_description(table: &Table) -> Value {
 
 pub fn create_table(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
@@ -312,6 +314,13 @@ pub fn create_table(
     };
 
     let desc = table_description(&table);
+
+    // Mirror the schema to SQLite so future reads (and a process restart
+    // after stage 4) can repopulate the in-memory state.
+    let schema_value = serde_json::to_value(&table)
+        .map_err(|e| AwsError::internal(format!("DynamoDB schema serialize failed: {e}")))?;
+    sqlite.put_table_schema(&ctx.account_id, &ctx.region, table_name, &schema_value)?;
+
     state.tables.insert(table_name.to_string(), table);
     info!(table = %table_name, "Created DynamoDB table");
 
@@ -320,8 +329,9 @@ pub fn create_table(
 
 pub fn delete_table(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?;
 
@@ -331,6 +341,9 @@ pub fn delete_table(
             format!("Cannot do operations on a non-existent table: {table_name}"),
         )
     })?;
+
+    // Mirror the table drop to SQLite (clears items + schema row).
+    let _ = sqlite.drop_table(&ctx.account_id, &ctx.region, table_name)?;
 
     let desc = table_description(&table);
     info!(table = %table_name, "Deleted DynamoDB table");

@@ -1,7 +1,11 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-use crate::state::DynamoState;
+use crate::{
+    keys::{extract_item_keys, extract_pk_sk, item_to_storage_value},
+    sqlite_store::SqliteStore,
+    state::DynamoState,
+};
 
 use super::item::{item_to_json, parse_item};
 
@@ -63,8 +67,9 @@ pub fn batch_get_item(
 
 pub fn batch_write_item(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let request_items = input
         .get("RequestItems")
@@ -72,6 +77,25 @@ pub fn batch_write_item(
         .ok_or_else(|| AwsError::validation("RequestItems is required"))?;
 
     let unprocessed_items = serde_json::Map::new();
+
+    // Collect SQLite mirror operations while we hold each table lock,
+    // then apply them after the lock is released so we don't hold the
+    // DashMap entry across blocking sqlite IO.
+    enum SqliteOp {
+        Put {
+            table: String,
+            pk: String,
+            sk: String,
+            attrs: Value,
+            gsi: [(Option<String>, Option<String>); crate::sqlite_store::MAX_GSI_SLOTS],
+        },
+        Delete {
+            table: String,
+            pk: String,
+            sk: String,
+        },
+    }
+    let mut sqlite_ops: Vec<SqliteOp> = Vec::new();
 
     for (table_name, requests) in request_items {
         let requests_arr = requests.as_array().ok_or_else(|| {
@@ -95,6 +119,16 @@ pub fn batch_write_item(
                     None => continue,
                 };
                 if let Some(ck) = table.composite_key(&item) {
+                    if let Some(keys) = extract_item_keys(&table, &item) {
+                        let attrs = item_to_storage_value(&item);
+                        sqlite_ops.push(SqliteOp::Put {
+                            table: table_name.clone(),
+                            pk: keys.pk,
+                            sk: keys.sk,
+                            attrs,
+                            gsi: keys.gsi,
+                        });
+                    }
                     table.items.insert(ck, item);
                 }
             } else if let Some(delete_req) = req.get("DeleteRequest") {
@@ -103,8 +137,40 @@ pub fn batch_write_item(
                     None => continue,
                 };
                 if let Some(ck) = table.composite_key(&key) {
+                    if let Some((pk, sk)) = extract_pk_sk(&table, &key) {
+                        sqlite_ops.push(SqliteOp::Delete {
+                            table: table_name.clone(),
+                            pk,
+                            sk,
+                        });
+                    }
                     table.items.remove(&ck);
                 }
+            }
+        }
+    }
+
+    for op in sqlite_ops {
+        match op {
+            SqliteOp::Put {
+                table,
+                pk,
+                sk,
+                attrs,
+                gsi,
+            } => {
+                sqlite.put_item(
+                    &ctx.account_id,
+                    &ctx.region,
+                    &table,
+                    &pk,
+                    &sk,
+                    &attrs,
+                    &gsi,
+                )?;
+            }
+            SqliteOp::Delete { table, pk, sk } => {
+                sqlite.delete_item(&ctx.account_id, &ctx.region, &table, &pk, &sk)?;
             }
         }
     }
