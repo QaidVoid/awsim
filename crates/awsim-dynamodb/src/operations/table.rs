@@ -790,29 +790,233 @@ pub fn describe_limits(
     }))
 }
 
-// ─── Global Table stubs ───────────────────────────────────────────────────────
+// ─── Global Tables ────────────────────────────────────────────────────────────
+//
+// AWSim doesn't perform cross-region replication. The global-table object is
+// metadata only — the source-of-truth for "does my Terraform / CDK think this
+// global table exists" — but reads and writes to the underlying tables stay
+// per-region. That matches what `awslocal` style emulators do.
 
-/// DescribeGlobalTable — Always returns not-found.
-/// Terraform checks for global table existence before creating.
+/// CreateGlobalTable — register a logical Global Table over per-region
+/// replicas. Each named replica region must already host a table with the
+/// same name (real DynamoDB requires this), but for emulator ergonomics we
+/// only fail when the source region's table is missing.
+pub fn create_global_table(
+    state: &DynamoState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    use crate::state::{GlobalTable, GlobalTableReplica};
+
+    let name = require_str(input, "GlobalTableName")?;
+    if state.global_tables.contains_key(name) {
+        return Err(AwsError::conflict(
+            "GlobalTableAlreadyExistsException",
+            format!("Global table '{name}' already exists"),
+        ));
+    }
+    if !state.tables.contains_key(name) {
+        return Err(AwsError::service_not_found(
+            "TableNotFoundException",
+            format!(
+                "Cannot create global table '{name}': no table with that name exists in this region"
+            ),
+        ));
+    }
+
+    let replicas: Vec<GlobalTableReplica> = input
+        .get("ReplicationGroup")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| {
+                    v.get("RegionName")
+                        .and_then(Value::as_str)
+                        .map(|r| GlobalTableReplica {
+                            region_name: r.to_string(),
+                            replica_status: "ACTIVE".to_string(),
+                        })
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| {
+            // Default to a single replica in the request region.
+            vec![GlobalTableReplica {
+                region_name: ctx.region.clone(),
+                replica_status: "ACTIVE".to_string(),
+            }]
+        });
+
+    let arn = format!("arn:aws:dynamodb::{}:global-table/{}", ctx.account_id, name);
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+
+    let global_table = GlobalTable {
+        global_table_name: name.to_string(),
+        global_table_arn: arn.clone(),
+        creation_date: now,
+        global_table_status: "ACTIVE".to_string(),
+        replication_group: replicas.clone(),
+    };
+    state.global_tables.insert(name.to_string(), global_table);
+
+    Ok(json!({
+        "GlobalTableDescription": global_table_to_json(&state.global_tables.get(name).unwrap()),
+    }))
+}
+
+/// UpdateGlobalTable — apply Create / Delete replica updates in a single
+/// request, mirroring the AWS shape where the caller posts a list of
+/// `ReplicaUpdates` containing `{Create: {RegionName}}` and / or
+/// `{Delete: {RegionName}}` entries.
+pub fn update_global_table(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    use crate::state::GlobalTableReplica;
+
+    let name = require_str(input, "GlobalTableName")?;
+    let mut global = state.global_tables.get_mut(name).ok_or_else(|| {
+        AwsError::service_not_found(
+            "GlobalTableNotFoundException",
+            format!("Global table '{name}' not found"),
+        )
+    })?;
+
+    let updates = input
+        .get("ReplicaUpdates")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AwsError::validation("ReplicaUpdates is required"))?;
+
+    for update in updates {
+        if let Some(region) = update
+            .get("Create")
+            .and_then(|c| c.get("RegionName"))
+            .and_then(Value::as_str)
+        {
+            if global
+                .replication_group
+                .iter()
+                .any(|r| r.region_name == region)
+            {
+                continue;
+            }
+            global.replication_group.push(GlobalTableReplica {
+                region_name: region.to_string(),
+                replica_status: "ACTIVE".to_string(),
+            });
+        } else if let Some(region) = update
+            .get("Delete")
+            .and_then(|d| d.get("RegionName"))
+            .and_then(Value::as_str)
+        {
+            global.replication_group.retain(|r| r.region_name != region);
+        }
+    }
+
+    let snapshot = global.clone();
+    drop(global);
+    Ok(json!({
+        "GlobalTableDescription": global_table_to_json(&snapshot),
+    }))
+}
+
+/// DescribeGlobalTable — return the stored metadata or
+/// GlobalTableNotFoundException.
 pub fn describe_global_table(
-    _state: &DynamoState,
+    state: &DynamoState,
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "GlobalTableName")?;
-    Err(AwsError::service_not_found(
-        "GlobalTableNotFoundException",
-        format!("Global table '{name}' not found"),
-    ))
+    let global = state.global_tables.get(name).ok_or_else(|| {
+        AwsError::service_not_found(
+            "GlobalTableNotFoundException",
+            format!("Global table '{name}' not found"),
+        )
+    })?;
+    Ok(json!({
+        "GlobalTableDescription": global_table_to_json(&global),
+    }))
 }
 
-/// ListGlobalTables — Return an empty list.
+/// ListGlobalTables — paginated by GlobalTableName, optionally filtered by
+/// region (emulator returns only globals that include the given RegionName).
 pub fn list_global_tables(
-    _state: &DynamoState,
-    _input: &Value,
+    state: &DynamoState,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    Ok(json!({ "GlobalTables": [], "LastEvaluatedGlobalTableName": null }))
+    let limit = input
+        .get("Limit")
+        .and_then(Value::as_u64)
+        .map(|n| n.clamp(1, 100) as usize)
+        .unwrap_or(100);
+    let region_filter = input.get("RegionName").and_then(Value::as_str);
+    let exclusive = input
+        .get("ExclusiveStartGlobalTableName")
+        .and_then(Value::as_str);
+
+    let mut names: Vec<String> = state
+        .global_tables
+        .iter()
+        .filter(|e| match region_filter {
+            None => true,
+            Some(region) => e
+                .value()
+                .replication_group
+                .iter()
+                .any(|r| r.region_name == region),
+        })
+        .map(|e| e.key().clone())
+        .collect();
+    names.sort();
+
+    let after_idx = exclusive
+        .and_then(|name| names.iter().position(|n| n.as_str() == name))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let page: Vec<&String> = names.iter().skip(after_idx).take(limit).collect();
+    let last = if names.len() > after_idx + page.len() {
+        page.last().map(|s| s.to_string())
+    } else {
+        None
+    };
+
+    let global_tables: Vec<Value> = page
+        .iter()
+        .filter_map(|name| state.global_tables.get(name.as_str()))
+        .map(|g| {
+            json!({
+                "GlobalTableName": g.global_table_name,
+                "ReplicationGroup": g.replication_group.iter().map(|r| json!({
+                    "RegionName": r.region_name,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "GlobalTables": global_tables,
+        "LastEvaluatedGlobalTableName": last,
+    }))
+}
+
+fn global_table_to_json(g: &crate::state::GlobalTable) -> Value {
+    json!({
+        "GlobalTableName": g.global_table_name,
+        "GlobalTableArn": g.global_table_arn,
+        "GlobalTableStatus": g.global_table_status,
+        "CreationDateTime": g.creation_date,
+        "ReplicationGroup": g.replication_group.iter().map(|r| json!({
+            "RegionName": r.region_name,
+            "ReplicaStatus": r.replica_status,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 // ─── Export ───────────────────────────────────────────────────────────────────
@@ -1112,4 +1316,195 @@ pub fn list_contributor_insights(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     Ok(json!({ "ContributorInsightsSummaries": [] }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{KeySchemaElement, Table};
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("dynamodb", "us-east-1")
+    }
+
+    fn state_with_table(name: &str) -> DynamoState {
+        let state = DynamoState::default();
+        state.tables.insert(
+            name.to_string(),
+            Table {
+                name: name.to_string(),
+                arn: format!("arn:aws:dynamodb:us-east-1:000000000000:table/{name}"),
+                key_schema: vec![KeySchemaElement {
+                    attribute_name: "pk".into(),
+                    key_type: "HASH".into(),
+                }],
+                attribute_definitions: vec![],
+                billing_mode: "PAY_PER_REQUEST".into(),
+                status: "ACTIVE".into(),
+                created_at: 0.0,
+                gsi: vec![],
+                lsi: vec![],
+                stream_enabled: false,
+                stream_arn: None,
+                stream_view_type: None,
+                stream_records: Vec::new(),
+                stream_sequence: 0,
+                ttl: Default::default(),
+                tags: Default::default(),
+            },
+        );
+        state
+    }
+
+    #[test]
+    fn create_describe_round_trip_with_default_replica() {
+        let state = state_with_table("orders");
+        create_global_table(&state, &json!({ "GlobalTableName": "orders" }), &ctx()).unwrap();
+        let desc =
+            describe_global_table(&state, &json!({ "GlobalTableName": "orders" }), &ctx()).unwrap();
+        let regions: Vec<String> = desc["GlobalTableDescription"]["ReplicationGroup"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v["RegionName"].as_str().map(String::from))
+            .collect();
+        assert_eq!(regions, vec!["us-east-1".to_string()]);
+    }
+
+    #[test]
+    fn update_global_table_creates_and_deletes_replicas() {
+        let state = state_with_table("inventory");
+        create_global_table(
+            &state,
+            &json!({
+                "GlobalTableName": "inventory",
+                "ReplicationGroup": [{ "RegionName": "us-east-1" }],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        update_global_table(
+            &state,
+            &json!({
+                "GlobalTableName": "inventory",
+                "ReplicaUpdates": [
+                    { "Create": { "RegionName": "eu-west-1" } },
+                    { "Create": { "RegionName": "ap-south-1" } },
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let desc =
+            describe_global_table(&state, &json!({ "GlobalTableName": "inventory" }), &ctx())
+                .unwrap();
+        let mut regions: Vec<String> = desc["GlobalTableDescription"]["ReplicationGroup"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v["RegionName"].as_str().map(String::from))
+            .collect();
+        regions.sort();
+        assert_eq!(
+            regions,
+            vec![
+                "ap-south-1".to_string(),
+                "eu-west-1".to_string(),
+                "us-east-1".to_string(),
+            ]
+        );
+
+        update_global_table(
+            &state,
+            &json!({
+                "GlobalTableName": "inventory",
+                "ReplicaUpdates": [
+                    { "Delete": { "RegionName": "ap-south-1" } },
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let desc =
+            describe_global_table(&state, &json!({ "GlobalTableName": "inventory" }), &ctx())
+                .unwrap();
+        let mut regions: Vec<String> = desc["GlobalTableDescription"]["ReplicationGroup"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v["RegionName"].as_str().map(String::from))
+            .collect();
+        regions.sort();
+        assert_eq!(
+            regions,
+            vec!["eu-west-1".to_string(), "us-east-1".to_string()]
+        );
+    }
+
+    #[test]
+    fn create_global_table_requires_underlying_table() {
+        let state = DynamoState::default();
+        let err = create_global_table(&state, &json!({ "GlobalTableName": "ghost" }), &ctx())
+            .unwrap_err();
+        assert_eq!(err.code, "TableNotFoundException");
+    }
+
+    #[test]
+    fn list_global_tables_filters_by_region() {
+        let state = state_with_table("a");
+        state.tables.insert(
+            "b".to_string(),
+            Table {
+                name: "b".into(),
+                arn: "arn:aws:dynamodb:us-east-1:000000000000:table/b".into(),
+                key_schema: vec![KeySchemaElement {
+                    attribute_name: "pk".into(),
+                    key_type: "HASH".into(),
+                }],
+                attribute_definitions: vec![],
+                billing_mode: "PAY_PER_REQUEST".into(),
+                status: "ACTIVE".into(),
+                created_at: 0.0,
+                gsi: vec![],
+                lsi: vec![],
+                stream_enabled: false,
+                stream_arn: None,
+                stream_view_type: None,
+                stream_records: Vec::new(),
+                stream_sequence: 0,
+                ttl: Default::default(),
+                tags: Default::default(),
+            },
+        );
+        create_global_table(
+            &state,
+            &json!({
+                "GlobalTableName": "a",
+                "ReplicationGroup": [{ "RegionName": "us-east-1" }],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        create_global_table(
+            &state,
+            &json!({
+                "GlobalTableName": "b",
+                "ReplicationGroup": [{ "RegionName": "eu-west-1" }],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp =
+            list_global_tables(&state, &json!({ "RegionName": "eu-west-1" }), &ctx()).unwrap();
+        let names: Vec<String> = resp["GlobalTables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v["GlobalTableName"].as_str().map(String::from))
+            .collect();
+        assert_eq!(names, vec!["b".to_string()]);
+    }
 }

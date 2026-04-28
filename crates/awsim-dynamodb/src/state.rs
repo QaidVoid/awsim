@@ -209,6 +209,28 @@ pub struct KinesisStreamingDestination {
     pub approximate_creation_date_time_precision: String,
 }
 
+/// One regional replica of a DynamoDB Global Table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalTableReplica {
+    pub region_name: String,
+    /// "CREATING" | "UPDATING" | "DELETING" | "ACTIVE"
+    pub replica_status: String,
+}
+
+/// A DynamoDB Global Table — a logical group of regional replicas that share
+/// a single name. We don't actually replicate data; the Global Table object
+/// is just metadata that satisfies tooling (Terraform, CDK) which consults
+/// existence + replica list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalTable {
+    pub global_table_name: String,
+    pub global_table_arn: String,
+    pub creation_date: f64,
+    /// "ACTIVE" | "CREATING" | "UPDATING" | "DELETING"
+    pub global_table_status: String,
+    pub replication_group: Vec<GlobalTableReplica>,
+}
+
 #[derive(Debug, Default)]
 pub struct DynamoState {
     pub tables: DashMap<String, Table>,
@@ -218,6 +240,9 @@ pub struct DynamoState {
     pub kinesis_destinations: DashMap<String, Vec<KinesisStreamingDestination>>,
     pub pitr_enabled: DashMap<String, bool>,
     pub resource_policies: DashMap<String, String>,
+    /// Global tables keyed by GlobalTableName. The implementation models
+    /// the metadata only — there's no cross-region data replication.
+    pub global_tables: DashMap<String, GlobalTable>,
 }
 
 impl std::fmt::Debug for Table {

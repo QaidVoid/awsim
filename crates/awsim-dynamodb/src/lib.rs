@@ -309,6 +309,8 @@ impl ServiceHandler for DynamoDbService {
             }
 
             // Global Tables
+            "CreateGlobalTable" => operations::table::create_global_table(&state, &input, ctx),
+            "UpdateGlobalTable" => operations::table::update_global_table(&state, &input, ctx),
             "DescribeGlobalTable" => operations::table::describe_global_table(&state, &input, ctx),
             "ListGlobalTables" => operations::table::list_global_tables(&state, &input, ctx),
 
@@ -432,6 +434,8 @@ impl ServiceHandler for DynamoDbService {
             | "ListBackups"
             | "RestoreTableFromBackup"
             | "RestoreTableToPointInTime"
+            | "CreateGlobalTable"
+            | "UpdateGlobalTable"
             | "DescribeGlobalTable"
             | "ListGlobalTables"
             | "DescribeExport"
