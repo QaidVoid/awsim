@@ -117,6 +117,11 @@ pub fn put_metric_data(
         });
     }
 
+    // Drop the entry borrow before re-evaluating alarms — the evaluator
+    // takes its own DashMap borrows on `state.metrics`.
+    drop(entry);
+    super::alarms::evaluate_alarms(state);
+
     Ok(json!({}))
 }
 

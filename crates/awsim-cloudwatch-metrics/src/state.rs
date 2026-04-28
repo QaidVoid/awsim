@@ -35,6 +35,14 @@ pub struct MetricAlarm {
     pub actions_enabled: bool,
     pub alarm_actions: Vec<String>,
     pub created_at: String,
+    /// Updated each time the evaluator transitions the alarm.
+    #[serde(default)]
+    pub state_updated_at: Option<String>,
+    /// Dimension filter — only metric data points carrying these dimensions
+    /// participate in evaluation. When empty the alarm matches any datum
+    /// for the (Namespace, MetricName) pair.
+    #[serde(default)]
+    pub dimensions: Vec<Dimension>,
 }
 
 /// A stored CloudWatch dashboard.
