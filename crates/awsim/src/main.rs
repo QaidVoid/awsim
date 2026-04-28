@@ -60,6 +60,8 @@ async fn main() -> Result<()> {
         .with_env_filter(&cli.log_level)
         .init();
 
+    raise_nofile_limit();
+
     let mut state = AppState::new(cli.region.clone(), cli.account_id.clone());
 
     // Register all services; get back the ApiGateway Arc for proxy routing and
@@ -246,7 +248,19 @@ async fn main() -> Result<()> {
             let interval = std::time::Duration::from_secs(30);
             loop {
                 tokio::time::sleep(interval).await;
-                pm_autosave.save_all(&services_for_autosave);
+                // `save_all` serialises every service's state to JSON
+                // (potentially hundreds of MB after a bulk import) and
+                // writes it to disk via blocking `std::fs::write`. If we
+                // ran it on the async runtime it would freeze every
+                // worker thread for the duration of the snapshot, so
+                // requests would time out / error during each save.
+                // `spawn_blocking` parks the work on the dedicated
+                // blocking pool instead.
+                let pm = Arc::clone(&pm_autosave);
+                let services = Arc::clone(&services_for_autosave);
+                if let Err(e) = tokio::task::spawn_blocking(move || pm.save_all(&services)).await {
+                    warn!(error = %e, "Snapshot save_all task panicked");
+                }
             }
         });
     }
@@ -364,8 +378,21 @@ async fn main() -> Result<()> {
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB
         .layer(tower_http::cors::CorsLayer::permissive());
 
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], cli.port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    // Bind to the IPv6 unspecified address (`[::]`) so we accept both
+    // IPv6 and IPv4-mapped connections on a single socket. Node 20+
+    // resolves `localhost` to `::1` first, so an IPv4-only bind on
+    // `0.0.0.0` makes the SDK fail with ECONNREFUSED before any request
+    // ever reaches us. If the OS has `net.ipv6.bindv6only=1` (uncommon
+    // on dev machines) or IPv6 is disabled, fall back to plain v4.
+    let addr_v6 = std::net::SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, cli.port));
+    let listener = match tokio::net::TcpListener::bind(addr_v6).await {
+        Ok(l) => l,
+        Err(e) => {
+            warn!(error = %e, "Could not bind on [::] — falling back to 0.0.0.0");
+            let addr_v4 = std::net::SocketAddr::from(([0, 0, 0, 0], cli.port));
+            tokio::net::TcpListener::bind(addr_v4).await?
+        }
+    };
 
     // Startup banner
     println!();
@@ -400,6 +427,46 @@ async fn main() -> Result<()> {
 /// Handles:
 ///   sns:Publish                    → sqs  — enqueues the SNS message body into the target queue
 ///   sns:Publish                    → lambda — (future) invokes the target Lambda function
+/// Bump the open-files soft limit toward the hard limit (capped at 65,536).
+///
+/// Default Linux distros ship a 1024 soft limit, which a heavy bulk-import
+/// workload (millions of rows × parallel connections × per-row writes)
+/// blows through in seconds — leaving axum logging "Too many open files"
+/// on every accept. Raising the soft limit at startup means users don't
+/// have to remember to `ulimit -n` before launching the binary.
+///
+/// No-op on Windows (the rlimit crate's NOFILE doesn't exist there).
+fn raise_nofile_limit() {
+    const TARGET: u64 = 65_536;
+    let (soft, hard) = match rlimit::getrlimit(rlimit::Resource::NOFILE) {
+        Ok(pair) => pair,
+        Err(e) => {
+            warn!(error = %e, "Could not read NOFILE rlimit; skipping bump");
+            return;
+        }
+    };
+    let desired = TARGET.min(hard);
+    if soft >= desired {
+        return;
+    }
+    if let Err(e) = rlimit::setrlimit(rlimit::Resource::NOFILE, desired, hard) {
+        warn!(
+            from = soft,
+            to = desired,
+            hard = hard,
+            error = %e,
+            "Could not raise NOFILE rlimit; bulk imports may hit fd exhaustion",
+        );
+        return;
+    }
+    info!(
+        from = soft,
+        to = desired,
+        hard = hard,
+        "Raised NOFILE rlimit"
+    );
+}
+
 ///   cloudformation:CreateResource  — provisions the resource in the target service
 ///   cloudformation:DeleteResource  — deprovisions the resource from the target service
 fn spawn_event_router(state: &AppState) {
