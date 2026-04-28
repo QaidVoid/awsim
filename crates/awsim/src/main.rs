@@ -67,6 +67,7 @@ async fn main() -> Result<()> {
     // can share user-pool state with the CognitoService.
     let (
         apigw_service,
+        apigw_v1_service,
         cognito_state,
         iam_store,
         s3_store,
@@ -278,6 +279,7 @@ async fn main() -> Result<()> {
 
     let proxy_state = proxy::ProxyState {
         apigw: apigw_service,
+        apigw_v1: apigw_v1_service,
         lambda: lambda_arc,
         default_account_id: cli.account_id.clone(),
         default_region: cli.region.clone(),
@@ -286,10 +288,15 @@ async fn main() -> Result<()> {
     // Build the proxy sub-router (finalized with its own state).
     // Proxy routes are scoped under the literal `_user_request_` segment so
     // they never shadow the v1 management API (`/restapis/{id}/resources/...`,
-    // `/restapis/{id}/authorizers`, etc.).
+    // `/restapis/{id}/authorizers`, etc.). Three variants handle the bare
+    // path (no slash), the trailing-slash root, and any nested path.
     let proxy_router: axum::Router<()> = axum::Router::new()
         .route(
             "/restapis/{api_id}/{stage}/_user_request_",
+            axum::routing::any(proxy::handle_proxy),
+        )
+        .route(
+            "/restapis/{api_id}/{stage}/_user_request_/",
             axum::routing::any(proxy::handle_proxy),
         )
         .route(
@@ -538,6 +545,7 @@ fn arn_to_sqs_url(arn: &str, default_region: &str, default_account: &str) -> Str
 /// Bundle of handles returned by [`register_services`] for use by the router and OAuth layer.
 type RegisteredServices = (
     Arc<awsim_apigateway::ApiGatewayService>,
+    Arc<awsim_apigateway::ApiGatewayV1Service>,
     Arc<awsim_cognito::CognitoState>,
     awsim_core::AccountRegionStore<awsim_iam::state::IamState>,
     awsim_core::AccountRegionStore<awsim_s3::state::S3State>,
@@ -825,10 +833,12 @@ fn register_services(
         use awsim_core::ServiceHandler;
         apigw_v1.routes()
     };
+    let apigw_v1_clone = Arc::clone(&apigw_v1);
     state.register(apigw_v1, apigw_v1_routes);
 
     (
         apigw_clone,
+        apigw_v1_clone,
         cognito_arc_state,
         iam_store,
         s3_store,

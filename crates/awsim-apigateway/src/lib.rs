@@ -17,7 +17,7 @@ use state::ApiGatewayState;
 
 pub use proxy::{ProxyResponse, proxy_request};
 pub use state::ApiGatewayState as State;
-pub use v1::{ApiGatewayV1Service, ApiGatewayV1State};
+pub use v1::{ApiGatewayV1Service, ApiGatewayV1State, V1ProxyMatch};
 
 pub struct ApiGatewayService {
     store: AccountRegionStore<ApiGatewayState>,

@@ -13,14 +13,16 @@ use bytes::Bytes;
 use serde_json::json;
 use tracing::{debug, warn};
 
-use awsim_apigateway::ApiGatewayService;
+use awsim_apigateway::{ApiGatewayService, ApiGatewayV1Service};
 use awsim_core::{RequestContext, ServiceHandler};
 
 /// State provided to the proxy handler.
 #[derive(Clone)]
 pub struct ProxyState {
-    /// The API Gateway service (used to look up routes and integrations).
+    /// The API Gateway v2 (HTTP APIs) service.
     pub apigw: Arc<ApiGatewayService>,
+    /// The API Gateway v1 (REST APIs) service.
+    pub apigw_v1: Arc<ApiGatewayV1Service>,
     /// The Lambda service (used to invoke functions).
     pub lambda: Option<Arc<dyn ServiceHandler>>,
     pub default_account_id: String,
@@ -91,67 +93,128 @@ pub async fn handle_proxy(
     )
     .await;
 
-    match proxy_result {
+    if let Some(proxy) = proxy_result {
+        return invoke_lambda(&state, &method, &uri, &proxy.integration_uri, proxy.event).await;
+    }
+
+    // No v2 match — try v1 (REST APIs). Same id namespace from the
+    // caller's perspective; we check both stores in turn.
+    let v1_state = state
+        .apigw_v1
+        .store()
+        .get(&state.default_account_id, &state.default_region);
+    let headers_map: std::collections::HashMap<String, String> = headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|v| (name.as_str().to_string(), v.to_string()))
+        })
+        .collect();
+    let v1_match = awsim_apigateway::v1::proxy_request(
+        &v1_state,
+        &api_id,
+        &stage,
+        method.as_str(),
+        &path_with_slash,
+        query_string,
+        &headers_map,
+        &body,
+    );
+
+    match v1_match {
+        Some(m) => dispatch_v1(&state, &method, &uri, m).await,
         None => {
             warn!(
                 api_id = %api_id,
                 path = %path_with_slash,
                 method = %method,
-                "No matching route found in API Gateway"
+                "No matching route found in API Gateway (tried both v1 and v2)"
             );
             error_response(
                 StatusCode::NOT_FOUND,
                 &format!("No route found for {method} {path_with_slash} in API {api_id}"),
             )
         }
-        Some(proxy) => {
-            // Find the Lambda handler.
-            let lambda_handler = match &state.lambda {
-                Some(h) => Arc::clone(h),
-                None => {
-                    warn!("Lambda service not registered — cannot invoke function");
-                    return error_response(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "Lambda service not registered",
-                    );
-                }
-            };
+    }
+}
 
-            // Extract the function name from the integration URI (Lambda ARN or plain name).
-            let function_name = extract_function_name(&proxy.integration_uri);
+/// Dispatch a matched v1 (REST APIs) integration. MOCK and AWS/AWS_PROXY
+/// are supported; HTTP and HTTP_PROXY return 501 until an outbound HTTP
+/// client is wired up.
+async fn dispatch_v1(
+    state: &ProxyState,
+    method: &Method,
+    uri: &Uri,
+    m: awsim_apigateway::V1ProxyMatch,
+) -> Response<Body> {
+    debug!(
+        integration_type = %m.integration_type,
+        resource = %m.matched_resource_path,
+        "v1 stage invocation matched"
+    );
+    match m.integration_type.as_str() {
+        "MOCK" => Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+        "AWS" | "AWS_PROXY" => invoke_lambda(state, method, uri, &m.integration_uri, m.event).await,
+        other => error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            &format!("Integration type {other} is not yet supported by AWSim"),
+        ),
+    }
+}
 
-            let ctx = RequestContext {
-                account_id: state.default_account_id.clone(),
-                region: state.default_region.clone(),
-                service: "lambda".to_string(),
-                access_key: None,
-                request_id: uuid::Uuid::new_v4().to_string(),
-                method: method.to_string(),
-                uri: uri.to_string(),
-                event_bus: None,
-            };
+async fn invoke_lambda(
+    state: &ProxyState,
+    method: &Method,
+    uri: &Uri,
+    integration_uri: &str,
+    event: serde_json::Value,
+) -> Response<Body> {
+    let lambda_handler = match &state.lambda {
+        Some(h) => Arc::clone(h),
+        None => {
+            warn!("Lambda service not registered — cannot invoke function");
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Lambda service not registered",
+            );
+        }
+    };
 
-            // Build the Lambda Invoke input.
-            let invoke_input = json!({
-                "FunctionName": function_name,
-                "InvocationType": "RequestResponse",
-                "Payload": proxy.event,
-            });
+    let function_name = extract_function_name(integration_uri);
+    let ctx = RequestContext {
+        account_id: state.default_account_id.clone(),
+        region: state.default_region.clone(),
+        service: "lambda".to_string(),
+        access_key: None,
+        request_id: uuid::Uuid::new_v4().to_string(),
+        method: method.to_string(),
+        uri: uri.to_string(),
+        event_bus: None,
+    };
+    let invoke_input = json!({
+        "FunctionName": function_name,
+        "InvocationType": "RequestResponse",
+        "Payload": event,
+    });
 
-            match lambda_handler.handle("Invoke", invoke_input, &ctx).await {
-                Ok(result) => lambda_response_to_http(result),
-                Err(e) => {
-                    warn!(
-                        function = %function_name,
-                        error = %e.message,
-                        "Lambda invocation failed"
-                    );
-                    error_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        &format!("Lambda invocation error: {}", e.message),
-                    )
-                }
-            }
+    match lambda_handler.handle("Invoke", invoke_input, &ctx).await {
+        Ok(result) => lambda_response_to_http(result),
+        Err(e) => {
+            warn!(
+                function = %function_name,
+                error = %e.message,
+                "Lambda invocation failed"
+            );
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Lambda invocation error: {}", e.message),
+            )
         }
     }
 }

@@ -123,6 +123,11 @@ impl ApiGatewayV1Service {
     fn get_state(&self, ctx: &RequestContext) -> Arc<ApiGatewayV1State> {
         self.store.get(&ctx.account_id, &ctx.region)
     }
+
+    /// Expose the underlying state store for proxy routing in main.rs.
+    pub fn store(&self) -> &AccountRegionStore<ApiGatewayV1State> {
+        &self.store
+    }
 }
 
 impl Default for ApiGatewayV1Service {
@@ -972,6 +977,160 @@ fn delete_authorizer(state: &ApiGatewayV1State, input: &Value) -> Result<Value, 
     })
 }
 
+// --- Stage proxy routing -------------------------------------------------
+
+/// Result of matching a stage-invocation request against a REST API's
+/// configured resources + methods. The caller (the binary's proxy
+/// handler) consumes this to dispatch by integration type.
+pub struct V1ProxyMatch {
+    pub integration_type: String,
+    pub integration_uri: String,
+    /// Lambda-style v1 proxy event (`apiGateway1.0` payload format).
+    /// The caller can pass this verbatim as the Lambda Invoke `Payload`.
+    pub event: Value,
+    /// Path of the matched resource — used purely for diagnostics.
+    pub matched_resource_path: String,
+}
+
+/// Look up a stage-invocation against the REST API's resources, returning
+/// enough info for the caller to dispatch the request to the right
+/// integration.
+///
+/// Path matching supports `{param}` placeholders. Returns `None` when:
+///   * the API doesn't exist, or
+///   * no resource path matches, or
+///   * the matched resource has no method for the HTTP verb, or
+///   * the matched method has no integration attached.
+// SAFETY: each parameter is a distinct piece of the incoming HTTP
+// request needed to build the API Gateway event payload.
+#[allow(clippy::too_many_arguments)]
+pub fn proxy_request(
+    state: &Arc<ApiGatewayV1State>,
+    api_id: &str,
+    stage: &str,
+    method: &str,
+    path: &str,
+    query_string: &str,
+    headers: &std::collections::HashMap<String, String>,
+    body: &[u8],
+) -> Option<V1ProxyMatch> {
+    let api = state.apis.get(api_id)?;
+    let resource = match_resource(&api.resources, path)?;
+    let http_method_upper = method.to_uppercase();
+    let m = resource
+        .methods
+        .get(&http_method_upper)
+        .or_else(|| resource.methods.get("ANY"))?;
+    let integration = m.integration.as_ref()?;
+
+    let body_str = std::str::from_utf8(body).ok().map(|s| s.to_string());
+    let path_params = extract_path_params(&resource.path, path);
+    let query_params = parse_query_params(query_string);
+
+    let event = json!({
+        "resource": resource.path,
+        "path": path,
+        "httpMethod": http_method_upper,
+        "headers": headers,
+        "queryStringParameters": query_params,
+        "pathParameters": path_params,
+        "stageVariables": null,
+        "requestContext": {
+            "apiId": api_id,
+            "httpMethod": http_method_upper,
+            "path": path,
+            "stage": stage,
+            "requestId": Uuid::new_v4().to_string(),
+            "identity": {
+                "sourceIp": "127.0.0.1",
+            },
+        },
+        "body": body_str,
+        "isBase64Encoded": false,
+    });
+
+    Some(V1ProxyMatch {
+        integration_type: integration.r#type.clone(),
+        integration_uri: integration.uri.clone(),
+        event,
+        matched_resource_path: resource.path.clone(),
+    })
+}
+
+fn match_resource<'a>(
+    resources: &'a HashMap<String, Resource>,
+    path: &str,
+) -> Option<&'a Resource> {
+    // Exact-path match wins over a path-with-params match (so a resource
+    // configured at `/users/me` shadows `/users/{id}` when the user hits
+    // `/users/me`).
+    let mut param_match: Option<&Resource> = None;
+    for r in resources.values() {
+        if r.path == path {
+            return Some(r);
+        }
+        if path_matches(&r.path, path) {
+            param_match = Some(r);
+        }
+    }
+    param_match
+}
+
+fn path_matches(pattern: &str, actual: &str) -> bool {
+    let pat: Vec<&str> = pattern.split('/').collect();
+    let act: Vec<&str> = actual.split('/').collect();
+    if pat.len() != act.len() {
+        return false;
+    }
+    for (p, a) in pat.iter().zip(act.iter()) {
+        if p.starts_with('{') && p.ends_with('}') {
+            continue;
+        }
+        if p != a {
+            return false;
+        }
+    }
+    true
+}
+
+fn extract_path_params(pattern: &str, actual: &str) -> Value {
+    let pat: Vec<&str> = pattern.split('/').collect();
+    let act: Vec<&str> = actual.split('/').collect();
+    if pat.len() != act.len() {
+        return Value::Null;
+    }
+    let mut out = serde_json::Map::new();
+    for (p, a) in pat.iter().zip(act.iter()) {
+        if p.starts_with('{') && p.ends_with('}') {
+            let name = &p[1..p.len() - 1];
+            out.insert(name.to_string(), Value::String((*a).to_string()));
+        }
+    }
+    if out.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(out)
+    }
+}
+
+fn parse_query_params(qs: &str) -> Value {
+    if qs.is_empty() {
+        return Value::Null;
+    }
+    let mut out = serde_json::Map::new();
+    for pair in qs.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let Some(k) = parts.next() else { continue };
+        let v = parts.next().unwrap_or("").to_string();
+        out.insert(k.to_string(), Value::String(v));
+    }
+    if out.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1220,6 +1379,85 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[test]
+    fn path_matches_handles_params_and_exact() {
+        assert!(path_matches("/users", "/users"));
+        assert!(!path_matches("/users", "/posts"));
+        assert!(path_matches("/users/{id}", "/users/42"));
+        assert!(!path_matches("/users/{id}", "/users/42/extra"));
+        assert!(path_matches("/u/{id}/c/{cid}", "/u/1/c/2"));
+    }
+
+    #[test]
+    fn extract_path_params_pulls_named_segments() {
+        let v = extract_path_params("/u/{id}/c/{cid}", "/u/1/c/2");
+        assert_eq!(v["id"], "1");
+        assert_eq!(v["cid"], "2");
+    }
+
+    #[tokio::test]
+    async fn proxy_match_resolves_method_and_integration() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root) = make_api(&svc).await;
+        let users = svc
+            .handle(
+                "CreateResource",
+                json!({"restapi_id": api_id.clone(), "parent_id": root, "pathPart": "users"}),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let users_id = users["id"].as_str().unwrap().to_string();
+        let by_id = svc
+            .handle(
+                "CreateResource",
+                json!({"restapi_id": api_id.clone(), "parent_id": users_id, "pathPart": "{id}"}),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let by_id_rid = by_id["id"].as_str().unwrap().to_string();
+        svc.handle(
+            "PutMethod",
+            json!({
+                "restapi_id": api_id.clone(),
+                "resource_id": by_id_rid.clone(),
+                "http_method": "GET",
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "PutIntegration",
+            json!({
+                "restapi_id": api_id.clone(),
+                "resource_id": by_id_rid,
+                "http_method": "GET",
+                "type": "MOCK",
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+
+        let store = svc.store.get("000000000000", "us-east-1");
+        let m = proxy_request(
+            &store,
+            &api_id,
+            "prod",
+            "GET",
+            "/users/42",
+            "",
+            &HashMap::new(),
+            &[],
+        )
+        .expect("match");
+        assert_eq!(m.matched_resource_path, "/users/{id}");
+        assert_eq!(m.integration_type, "MOCK");
+        assert_eq!(m.event["pathParameters"]["id"], "42");
     }
 
     #[tokio::test]
