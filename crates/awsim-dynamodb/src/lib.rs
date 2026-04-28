@@ -48,10 +48,26 @@ impl DynamoDbService {
     /// Persistent store rooted at `{dir}/dynamodb.db`. Mirrors the
     /// `with_data_dir` convention used by the other AWSim services so
     /// the `awsim` binary can wire it the same way.
+    ///
+    /// SQLite needs the parent directory to exist before `open()`, so we
+    /// create it here. Other services that lazily write files (S3 body
+    /// store, lambda code) get away without this because their first
+    /// write does the create — sqlite can't.
     pub fn with_data_dir(dir: impl AsRef<Path>) -> Self {
-        let path = dir.as_ref().join("dynamodb.db");
-        let sqlite = SqliteStore::open(path)
-            .expect("opening persistent DynamoDB sqlite store should not fail");
+        let dir = dir.as_ref();
+        std::fs::create_dir_all(dir).unwrap_or_else(|e| {
+            panic!(
+                "creating DynamoDB data dir {} failed: {e}",
+                dir.display()
+            )
+        });
+        let path = dir.join("dynamodb.db");
+        let sqlite = SqliteStore::open(&path).unwrap_or_else(|e| {
+            panic!(
+                "opening persistent DynamoDB sqlite store at {} failed: {e}",
+                path.display()
+            )
+        });
         Self {
             store: AccountRegionStore::new(),
             sqlite: Arc::new(sqlite),
