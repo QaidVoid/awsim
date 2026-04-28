@@ -105,7 +105,9 @@ pub fn batch_write_item(
             AwsError::validation(format!("Requests for {table_name} must be an array"))
         })?;
 
-        let mut table = match state.tables.get_mut(table_name.as_str()) {
+        // Hold the read guard only long enough to extract storage keys —
+        // the write path is sqlite-only after stage 4.
+        let table = match state.tables.get(table_name.as_str()) {
             Some(t) => t,
             None => {
                 return Err(AwsError::not_found(
@@ -121,33 +123,27 @@ pub fn batch_write_item(
                     Some(i) => i,
                     None => continue,
                 };
-                if let Some(ck) = table.composite_key(&item) {
-                    if let Some(keys) = extract_item_keys(&table, &item) {
-                        let attrs = item_to_storage_value(&item);
-                        sqlite_ops.push(SqliteOp::Put {
-                            table: table_name.clone(),
-                            pk: keys.pk,
-                            sk: keys.sk,
-                            attrs,
-                            gsi: keys.gsi,
-                        });
-                    }
-                    table.items.insert(ck, item);
+                if let Some(keys) = extract_item_keys(&table, &item) {
+                    let attrs = item_to_storage_value(&item);
+                    sqlite_ops.push(SqliteOp::Put {
+                        table: table_name.clone(),
+                        pk: keys.pk,
+                        sk: keys.sk,
+                        attrs,
+                        gsi: keys.gsi,
+                    });
                 }
             } else if let Some(delete_req) = req.get("DeleteRequest") {
                 let key = match parse_item(&delete_req["Key"]) {
                     Some(k) => k,
                     None => continue,
                 };
-                if let Some(ck) = table.composite_key(&key) {
-                    if let Some((pk, sk)) = extract_pk_sk(&table, &key) {
-                        sqlite_ops.push(SqliteOp::Delete {
-                            table: table_name.clone(),
-                            pk,
-                            sk,
-                        });
-                    }
-                    table.items.remove(&ck);
+                if let Some((pk, sk)) = extract_pk_sk(&table, &key) {
+                    sqlite_ops.push(SqliteOp::Delete {
+                        table: table_name.clone(),
+                        pk,
+                        sk,
+                    });
                 }
             }
         }

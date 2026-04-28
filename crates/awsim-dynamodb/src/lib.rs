@@ -235,9 +235,28 @@ impl ServiceHandler for DynamoDbService {
                 .await
             }
 
-            // Transactions
-            "TransactGetItems" => operations::transact::transact_get_items(&state, &input, ctx),
-            "TransactWriteItems" => operations::transact::transact_write_items(&state, &input, ctx),
+            // Transactions — sqlite-backed (best-effort consistency for now;
+            // stage 5 wraps writes in a single sqlite transaction).
+            "TransactGetItems" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::transact::transact_get_items(&state, &sqlite, &input, &ctx)
+                })
+                .await
+            }
+            "TransactWriteItems" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::transact::transact_write_items(&state, &sqlite, &input, &ctx)
+                })
+                .await
+            }
 
             // DynamoDB Streams (target prefix DynamoDBStreams_20120810)
             "DescribeStream" => operations::streams::describe_stream(&state, &input, ctx),
@@ -287,12 +306,37 @@ impl ServiceHandler for DynamoDbService {
                 operations::table::list_contributor_insights(&state, &input, ctx)
             }
 
-            // PartiQL
-            "ExecuteStatement" => operations::partiql::execute_statement(&state, &input, ctx),
-            "BatchExecuteStatement" => {
-                operations::partiql::batch_execute_statement(&state, &input, ctx)
+            // PartiQL — sqlite-backed.
+            "ExecuteStatement" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::partiql::execute_statement(&state, &sqlite, &input, &ctx)
+                })
+                .await
             }
-            "ExecuteTransaction" => operations::partiql::execute_transaction(&state, &input, ctx),
+            "BatchExecuteStatement" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::partiql::batch_execute_statement(&state, &sqlite, &input, &ctx)
+                })
+                .await
+            }
+            "ExecuteTransaction" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::partiql::execute_transaction(&state, &sqlite, &input, &ctx)
+                })
+                .await
+            }
 
             // Kinesis Streaming Destination
             "EnableKinesisStreamingDestination" => {
@@ -430,6 +474,10 @@ impl ServiceHandler for DynamoDbService {
     }
 
     fn snapshot(&self) -> Option<Vec<u8>> {
+        // Items live in SQLite now. The snapshot only carries the schema
+        // pieces the AccountRegionStore can't reconstruct on its own —
+        // table.items is intentionally left empty so the JSON snapshot
+        // stays cheap regardless of how many rows exist.
         let tables: Vec<Table> = self
             .store
             .iter_all()
@@ -450,7 +498,7 @@ impl ServiceHandler for DynamoDbService {
                             created_at: t.created_at,
                             gsi: t.gsi.clone(),
                             lsi: t.lsi.clone(),
-                            items: t.items.clone(),
+                            items: std::collections::BTreeMap::new(),
                             stream_enabled: t.stream_enabled,
                             stream_arn: t.stream_arn.clone(),
                             stream_view_type: t.stream_view_type.clone(),
@@ -471,8 +519,7 @@ impl ServiceHandler for DynamoDbService {
         let snapshot: DynamoStateSnapshot =
             serde_json::from_slice(data).map_err(|e| e.to_string())?;
 
-        for table in snapshot.tables {
-            // Derive account+region from table ARN.
+        for mut table in snapshot.tables {
             // DynamoDB ARN: arn:aws:dynamodb:{region}:{account}:table/{name}
             let parts: Vec<&str> = table.arn.splitn(6, ':').collect();
             let (account, region) = if parts.len() == 6 {
@@ -480,6 +527,34 @@ impl ServiceHandler for DynamoDbService {
             } else {
                 ("000000000000".to_string(), "us-east-1".to_string())
             };
+
+            // Drain any items the legacy snapshot still carries into the
+            // SQLite mirror. Subsequent snapshots emit empty Table.items.
+            let legacy_items = std::mem::take(&mut table.items);
+            for (_composite, item) in legacy_items {
+                if let Some(keys) = keys::extract_item_keys(&table, &item) {
+                    let attrs = keys::item_to_storage_value(&item);
+                    self.sqlite
+                        .put_item(
+                            &account,
+                            &region,
+                            &table.name,
+                            &keys.pk,
+                            &keys.sk,
+                            &attrs,
+                            &keys.gsi,
+                        )
+                        .map_err(|e| format!("DynamoDB legacy item migrate failed: {e}"))?;
+                }
+            }
+
+            // Mirror the schema row so a fresh process without a snapshot
+            // can still bootstrap from SQLite alone in stage 4b+.
+            if let Ok(schema_value) = serde_json::to_value(&table) {
+                let _ = self
+                    .sqlite
+                    .put_table_schema(&account, &region, &table.name, &schema_value);
+            }
 
             let state = self.store.get(&account, &region);
             state.tables.insert(table.name.clone(), table);

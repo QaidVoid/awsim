@@ -5,10 +5,28 @@ use uuid::Uuid;
 
 use crate::{
     expressions::{evaluate_condition, parse_condition},
-    keys::{extract_item_keys, extract_pk_sk, item_to_storage_value},
+    keys::{extract_item_keys, extract_pk_sk, item_to_storage_value, storage_value_to_item},
     sqlite_store::SqliteStore,
     state::{DynamoItem, DynamoState, StreamRecord, StreamRecordData},
 };
+
+/// Look up an item by `(pk, sk)` in SQLite and decode it back to a
+/// `DynamoItem`. Used by the conditional-check + update-expression paths
+/// now that items live only in the SQLite mirror.
+fn fetch_existing(
+    sqlite: &SqliteStore,
+    ctx: &RequestContext,
+    table_name: &str,
+    pk: &str,
+    sk: &str,
+) -> Result<Option<DynamoItem>, AwsError> {
+    let raw = sqlite.get_item(&ctx.account_id, &ctx.region, table_name, pk, sk)?;
+    raw.map(|stored| {
+        storage_value_to_item(stored)
+            .ok_or_else(|| AwsError::internal("DynamoDB stored attrs is not an object"))
+    })
+    .transpose()
+}
 
 use super::{get_expr_attr_names, get_expr_attr_values, opt_str, require_str};
 
@@ -150,17 +168,18 @@ pub fn put_item(
 
     // Extracted SQLite keys (pk/sk + per-GSI key columns) computed inside
     // the lock so we get them while we hold the canonical schema view.
-    let (composite_key, old_item, keys_item, hash_key_name, sqlite_keys) = {
-        let mut table = state.tables.get_mut(&table_name).ok_or_else(|| {
+    // Pull schema-derived bits up front, then drop the dashmap guard so
+    // we never hold it across SQLite IO.
+    let (sqlite_keys, keys_item) = {
+        let table = state.tables.get(&table_name).ok_or_else(|| {
             AwsError::not_found(
                 "ResourceNotFoundException",
                 format!("Cannot do operations on a non-existent table: {table_name}"),
             )
         })?;
 
-        // Validate key attributes exist
-        let hash_key = table.hash_key().map(|s| s.to_string());
-        if let Some(ref hk) = hash_key
+        // Validate the hash key attribute is present in the inbound item.
+        if let Some(hk) = table.hash_key()
             && !item.contains_key(hk)
         {
             return Err(AwsError::validation(format!(
@@ -168,51 +187,42 @@ pub fn put_item(
             )));
         }
 
-        let expr_attr_names = get_expr_attr_names(input);
-        let expr_attr_values = get_expr_attr_values(input);
-
-        // Evaluate condition expression if present
-        if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
-            let condition = parse_condition(cond_expr)?;
-            let composite_key = table.composite_key(&item);
-
-            let existing = composite_key.as_deref().and_then(|ck| table.items.get(ck));
-
-            let empty_item: DynamoItem = DynamoItem::new();
-            let check_item = existing.unwrap_or(&empty_item);
-
-            if !evaluate_condition(&condition, check_item, &expr_attr_names, &expr_attr_values)? {
-                return Err(AwsError::conflict(
-                    "ConditionalCheckFailedException",
-                    "The conditional request failed",
-                ));
-            }
-        }
-
-        let composite_key = table
-            .composite_key(&item)
-            .ok_or_else(|| AwsError::validation("Could not construct item key"))?;
-
         let sqlite_keys = extract_item_keys(&table, &item)
             .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
 
-        // Build keys sub-item for the stream record.
         let mut keys_item = DynamoItem::new();
         for k in table.key_schema.iter().map(|k| k.attribute_name.as_str()) {
             if let Some(v) = item.get(k) {
                 keys_item.insert(k.to_string(), v.clone());
             }
         }
-
-        let old_item = table.items.remove(&composite_key);
-        table.items.insert(composite_key.clone(), item.clone());
-
-        (composite_key, old_item, keys_item, hash_key, sqlite_keys)
+        (sqlite_keys, keys_item)
     };
 
-    // Mirror the write to SQLite. In stage 2 the in-memory map is still
-    // authoritative for reads; this builds up the parallel store for
-    // future read migration.
+    let expr_attr_names = get_expr_attr_names(input);
+    let expr_attr_values = get_expr_attr_values(input);
+
+    // Conditional check + old-image lookup against the SQLite mirror.
+    let old_item = fetch_existing(
+        sqlite,
+        ctx,
+        &table_name,
+        &sqlite_keys.pk,
+        &sqlite_keys.sk,
+    )?;
+
+    if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
+        let condition = parse_condition(cond_expr)?;
+        let empty_item: DynamoItem = DynamoItem::new();
+        let check_item = old_item.as_ref().unwrap_or(&empty_item);
+        if !evaluate_condition(&condition, check_item, &expr_attr_names, &expr_attr_values)? {
+            return Err(AwsError::conflict(
+                "ConditionalCheckFailedException",
+                "The conditional request failed",
+            ));
+        }
+    }
+
     let attrs_value = item_to_storage_value(&item);
     sqlite.put_item(
         &ctx.account_id,
@@ -226,7 +236,6 @@ pub fn put_item(
 
     let return_values = opt_str(input, "ReturnValues").unwrap_or("NONE");
 
-    // Emit stream record after lock is released.
     let event_name = if old_item.is_some() {
         "MODIFY"
     } else {
@@ -241,8 +250,6 @@ pub fn put_item(
         old_item.clone(),
         ctx,
     );
-
-    let _ = (composite_key, hash_key_name); // suppress unused warnings
 
     let mut result = json!({});
     if return_values == "ALL_OLD"
@@ -301,52 +308,51 @@ pub fn delete_item(
 
     let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 
-    let (old_item, keys_item, sqlite_pk_sk) = {
-        let mut table = state.tables.get_mut(&table_name).ok_or_else(|| {
+    let (sqlite_pk_sk, keys_item) = {
+        let table = state.tables.get(&table_name).ok_or_else(|| {
             AwsError::not_found(
                 "ResourceNotFoundException",
                 format!("Cannot do operations on a non-existent table: {table_name}"),
             )
         })?;
 
-        let composite_key = table
-            .composite_key(&key)
-            .ok_or_else(|| AwsError::validation("Could not construct item key"))?;
-
-        let expr_attr_names = get_expr_attr_names(input);
-        let expr_attr_values = get_expr_attr_values(input);
-
-        // Evaluate condition expression if present
-        if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
-            let condition = parse_condition(cond_expr)?;
-            let empty_item: DynamoItem = DynamoItem::new();
-            let existing = table.items.get(&composite_key).unwrap_or(&empty_item);
-            if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
-                return Err(AwsError::conflict(
-                    "ConditionalCheckFailedException",
-                    "The conditional request failed",
-                ));
-            }
-        }
-
         let sqlite_pk_sk = extract_pk_sk(&table, &key)
             .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
 
-        // Collect key attributes for the stream record.
         let mut keys_item = DynamoItem::new();
         for k in table.key_schema.iter().map(|k| k.attribute_name.as_str()) {
             if let Some(v) = key.get(k) {
                 keys_item.insert(k.to_string(), v.clone());
             }
         }
-
-        let old_item = table.items.remove(&composite_key);
-        (old_item, keys_item, sqlite_pk_sk)
+        (sqlite_pk_sk, keys_item)
     };
 
-    // Mirror the delete to SQLite. Idempotent — the dual-write may run
-    // even when no in-memory row existed (stage 2 keeps in-memory
-    // authoritative for now).
+    let expr_attr_names = get_expr_attr_names(input);
+    let expr_attr_values = get_expr_attr_values(input);
+
+    // Snapshot the existing item before delete — needed for both
+    // ConditionExpression evaluation and the REMOVE stream record.
+    let old_item = fetch_existing(
+        sqlite,
+        ctx,
+        &table_name,
+        &sqlite_pk_sk.0,
+        &sqlite_pk_sk.1,
+    )?;
+
+    if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
+        let condition = parse_condition(cond_expr)?;
+        let empty_item: DynamoItem = DynamoItem::new();
+        let existing = old_item.as_ref().unwrap_or(&empty_item);
+        if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
+            return Err(AwsError::conflict(
+                "ConditionalCheckFailedException",
+                "The conditional request failed",
+            ));
+        }
+    }
+
     let _ = sqlite.delete_item(
         &ctx.account_id,
         &ctx.region,
@@ -389,71 +395,80 @@ pub fn update_item(
 
     let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 
-    let (old_item, new_item, keys_item, sqlite_keys) = {
-        let mut table = state.tables.get_mut(&table_name).ok_or_else(|| {
+    let (sqlite_pk_sk, keys_item) = {
+        let table = state.tables.get(&table_name).ok_or_else(|| {
             AwsError::not_found(
                 "ResourceNotFoundException",
                 format!("Cannot do operations on a non-existent table: {table_name}"),
             )
         })?;
 
-        let composite_key = table
-            .composite_key(&key)
-            .ok_or_else(|| AwsError::validation("Could not construct item key"))?;
-
-        let expr_attr_names = get_expr_attr_names(input);
-        let expr_attr_values = get_expr_attr_values(input);
-
-        // Evaluate condition expression if present
-        if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
-            let condition = parse_condition(cond_expr)?;
-            let empty_item: DynamoItem = DynamoItem::new();
-            let existing = table.items.get(&composite_key).unwrap_or(&empty_item);
-            if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
-                return Err(AwsError::conflict(
-                    "ConditionalCheckFailedException",
-                    "The conditional request failed",
-                ));
-            }
-        }
-
-        // Get or create the item (upsert semantics)
-        let old_item = table.items.get(&composite_key).cloned();
-        let mut item = old_item.clone().unwrap_or_else(|| key.clone());
-
-        // Apply UpdateExpression
-        if let Some(update_expr) = opt_str(input, "UpdateExpression") {
-            crate::expressions::apply_update_expression(
-                &mut item,
-                update_expr,
-                &expr_attr_names,
-                &expr_attr_values,
-            )?;
-        }
-
-        // Ensure key attributes are preserved
-        for (k, v) in &key {
-            item.insert(k.clone(), v.clone());
-        }
-
-        let sqlite_keys = extract_item_keys(&table, &item)
+        let sqlite_pk_sk = extract_pk_sk(&table, &key)
             .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
 
-        // Collect key attributes for the stream record.
         let mut keys_item = DynamoItem::new();
         for k in table.key_schema.iter().map(|k| k.attribute_name.as_str()) {
             if let Some(v) = key.get(k) {
                 keys_item.insert(k.to_string(), v.clone());
             }
         }
-
-        let new_item = item.clone();
-        table.items.insert(composite_key, item);
-
-        (old_item, new_item, keys_item, sqlite_keys)
+        (sqlite_pk_sk, keys_item)
     };
 
-    // Mirror to SQLite (upsert).
+    let expr_attr_names = get_expr_attr_names(input);
+    let expr_attr_values = get_expr_attr_values(input);
+
+    // Load the existing item (upsert semantics — Update creates the row
+    // when it doesn't yet exist, with just the key attributes populated).
+    let old_item = fetch_existing(
+        sqlite,
+        ctx,
+        &table_name,
+        &sqlite_pk_sk.0,
+        &sqlite_pk_sk.1,
+    )?;
+
+    if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
+        let condition = parse_condition(cond_expr)?;
+        let empty_item: DynamoItem = DynamoItem::new();
+        let existing = old_item.as_ref().unwrap_or(&empty_item);
+        if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
+            return Err(AwsError::conflict(
+                "ConditionalCheckFailedException",
+                "The conditional request failed",
+            ));
+        }
+    }
+
+    let mut new_item = old_item.clone().unwrap_or_else(|| key.clone());
+
+    if let Some(update_expr) = opt_str(input, "UpdateExpression") {
+        crate::expressions::apply_update_expression(
+            &mut new_item,
+            update_expr,
+            &expr_attr_names,
+            &expr_attr_values,
+        )?;
+    }
+
+    // Key attributes always survive an UpdateExpression (DynamoDB semantics).
+    for (k, v) in &key {
+        new_item.insert(k.clone(), v.clone());
+    }
+
+    // Re-extract SQLite keys from the merged item — UpdateExpression may
+    // have introduced or changed GSI key attributes.
+    let sqlite_keys = {
+        let table = state.tables.get(&table_name).ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Cannot do operations on a non-existent table: {table_name}"),
+            )
+        })?;
+        extract_item_keys(&table, &new_item)
+            .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?
+    };
+
     let attrs_value = item_to_storage_value(&new_item);
     sqlite.put_item(
         &ctx.account_id,
@@ -555,7 +570,32 @@ mod tests {
     }
 
     #[test]
-    fn put_item_dual_writes_to_sqlite() {
+    fn put_item_does_not_grow_in_memory_store() {
+        // Bulk insert proves the memory-pressure regression that motivated
+        // this whole refactor: 1k rows in, in-memory items.len() stays 0.
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let ctx = ctx();
+
+        for i in 0..1000 {
+            let input = json!({
+                "TableName": "t",
+                "Item": {
+                    "pk": {"S": "tenant"},
+                    "sk": {"S": format!("row-{i:04}")},
+                    "n": {"N": i.to_string()},
+                }
+            });
+            put_item(&state, &sqlite, &input, &ctx).unwrap();
+        }
+
+        // The whole point of stage 4: items live exclusively in SQLite.
+        assert_eq!(state.tables.get("t").unwrap().items.len(), 0);
+        assert_eq!(sqlite.count_items(&ctx.account_id, &ctx.region, "t").unwrap(), 1000);
+    }
+
+    #[test]
+    fn put_item_writes_only_to_sqlite() {
         let state = make_state_with_table();
         let sqlite = SqliteStore::in_memory().unwrap();
         let ctx = ctx();
@@ -571,20 +611,19 @@ mod tests {
 
         put_item(&state, &sqlite, &input, &ctx).unwrap();
 
-        // In-memory state has the item (composite key uses NUL separator).
-        let table = state.tables.get("t").unwrap();
-        assert_eq!(table.items.len(), 1);
+        // After stage 4 items live only in SQLite — the in-memory map
+        // stays empty.
+        assert_eq!(state.tables.get("t").unwrap().items.len(), 0);
 
-        // SQLite mirror has the same item under the storage keys.
         let stored = sqlite
             .get_item(&ctx.account_id, &ctx.region, "t", "user-1", "profile")
             .unwrap()
-            .expect("sqlite mirror");
+            .expect("sqlite store");
         assert_eq!(stored["name"], json!({"S": "Alice"}));
     }
 
     #[test]
-    fn delete_item_dual_writes_to_sqlite() {
+    fn delete_item_writes_only_to_sqlite() {
         let state = make_state_with_table();
         let sqlite = SqliteStore::in_memory().unwrap();
         let ctx = ctx();
@@ -601,8 +640,7 @@ mod tests {
         });
         delete_item(&state, &sqlite, &del_input, &ctx).unwrap();
 
-        // Both stores should be empty.
-        assert_eq!(state.tables.get("t").unwrap().items.len(), 0);
+        // Items live only in SQLite — verify the row is gone there.
         assert_eq!(
             sqlite
                 .get_item(&ctx.account_id, &ctx.region, "t", "x", "y")
@@ -634,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn update_item_dual_writes_to_sqlite() {
+    fn update_item_writes_only_to_sqlite() {
         let state = make_state_with_table();
         let sqlite = SqliteStore::in_memory().unwrap();
         let ctx = ctx();

@@ -8,19 +8,26 @@
 ///   DELETE FROM "TableName" WHERE "pk" = 'val'
 ///
 /// Parameters (`?`) are substituted from the `Parameters` list in order.
+///
+/// Stage 4: backed by SqliteStore — items live only in SQLite.
 use std::collections::HashMap;
 
-use awsim_core::AwsError;
+use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-use crate::state::{DynamoItem, DynamoState};
+use crate::{
+    keys::{extract_item_keys, item_to_storage_value, storage_value_to_item},
+    sqlite_store::SqliteStore,
+    state::{DynamoItem, DynamoState},
+};
 
 // ─── Public entry points ──────────────────────────────────────────────────────
 
 pub fn execute_statement(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
-    _ctx: &awsim_core::RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let stmt = input
         .get("Statement")
@@ -29,7 +36,7 @@ pub fn execute_statement(
 
     let params = input.get("Parameters").cloned().unwrap_or(json!([]));
 
-    let items = run_statement(state, stmt, &params)?;
+    let items = run_statement(state, sqlite, ctx, stmt, &params)?;
 
     Ok(json!({
         "Items": items,
@@ -39,8 +46,9 @@ pub fn execute_statement(
 
 pub fn batch_execute_statement(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
-    _ctx: &awsim_core::RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let stmts = input
         .get("Statements")
@@ -57,7 +65,7 @@ pub fn batch_execute_statement(
             .unwrap_or("");
         let params = stmt_obj.get("Parameters").cloned().unwrap_or(json!([]));
 
-        match run_statement(state, stmt, &params) {
+        match run_statement(state, sqlite, ctx, stmt, &params) {
             Ok(items) => {
                 let first = items.into_iter().next().unwrap_or(json!(null));
                 responses.push(json!({ "Item": first }));
@@ -78,8 +86,9 @@ pub fn batch_execute_statement(
 
 pub fn execute_transaction(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
-    _ctx: &awsim_core::RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let stmts = input
         .get("TransactStatements")
@@ -98,7 +107,7 @@ pub fn execute_transaction(
             .unwrap_or("");
         let params = stmt_obj.get("Parameters").cloned().unwrap_or(json!([]));
 
-        match run_statement(state, stmt, &params) {
+        match run_statement(state, sqlite, ctx, stmt, &params) {
             Ok(items) => {
                 let first = items.into_iter().next().unwrap_or(json!(null));
                 responses.push(json!({ "Item": first }));
@@ -117,6 +126,8 @@ pub fn execute_transaction(
 
 fn run_statement(
     state: &DynamoState,
+    sqlite: &SqliteStore,
+    ctx: &RequestContext,
     raw_stmt: &str,
     params: &Value,
 ) -> Result<Vec<Value>, AwsError> {
@@ -124,15 +135,15 @@ fn run_statement(
     let upper = stmt.to_uppercase();
 
     if upper.starts_with("SELECT") {
-        run_select(state, stmt, params)
+        run_select(state, sqlite, ctx, stmt, params)
     } else if upper.starts_with("INSERT") {
-        run_insert(state, stmt, params)?;
+        run_insert(state, sqlite, ctx, stmt, params)?;
         Ok(vec![])
     } else if upper.starts_with("UPDATE") {
-        run_update(state, stmt, params)?;
+        run_update(state, sqlite, ctx, stmt, params)?;
         Ok(vec![])
     } else if upper.starts_with("DELETE") {
-        run_delete(state, stmt, params)?;
+        run_delete(state, sqlite, ctx, stmt, params)?;
         Ok(vec![])
     } else {
         Err(AwsError::bad_request(
@@ -145,38 +156,63 @@ fn run_statement(
     }
 }
 
+/// Decode a stored row into a `DynamoItem` plus a JSON value suitable for
+/// the SELECT response shape (just the inner attribute map).
+fn decode_row(stored: Value) -> Result<DynamoItem, AwsError> {
+    storage_value_to_item(stored)
+        .ok_or_else(|| AwsError::internal("DynamoDB stored attrs is not an object"))
+}
+
 // ─── SELECT ──────────────────────────────────────────────────────────────────
 
-fn run_select(state: &DynamoState, stmt: &str, params: &Value) -> Result<Vec<Value>, AwsError> {
-    // Minimal parse: SELECT ... FROM "TableName" [WHERE "key" = val]
+fn run_select(
+    state: &DynamoState,
+    sqlite: &SqliteStore,
+    ctx: &RequestContext,
+    stmt: &str,
+    params: &Value,
+) -> Result<Vec<Value>, AwsError> {
     let (table_name, where_key, where_val) = parse_from_where(stmt, params)?;
 
-    let table = state.tables.get(&table_name).ok_or_else(|| {
-        AwsError::not_found(
+    // Confirm the table exists; we don't need anything else from the
+    // schema for this minimal SELECT subset.
+    if !state.tables.contains_key(&table_name) {
+        return Err(AwsError::not_found(
             "ResourceNotFoundException",
             format!("Table '{table_name}' not found"),
-        )
-    })?;
+        ));
+    }
 
-    let items: Vec<Value> = table
-        .items
-        .values()
-        .filter(|item| {
-            if let (Some(key), Some(val)) = (&where_key, &where_val) {
-                item.get(key).map(|attr| attr == val).unwrap_or(false)
-            } else {
-                true
+    let mut items: Vec<Value> = Vec::new();
+    sqlite.scan_table(
+        &ctx.account_id,
+        &ctx.region,
+        &table_name,
+        None,
+        |_pk, _sk, attrs| {
+            let item = decode_row(attrs)?;
+            let keep = match (&where_key, &where_val) {
+                (Some(key), Some(val)) => item.get(key).map(|attr| attr == val).unwrap_or(false),
+                _ => true,
+            };
+            if keep {
+                items.push(json!(item));
             }
-        })
-        .map(|item| json!(item))
-        .collect();
-
+            Ok(true)
+        },
+    )?;
     Ok(items)
 }
 
 // ─── INSERT ───────────────────────────────────────────────────────────────────
 
-fn run_insert(state: &DynamoState, stmt: &str, _params: &Value) -> Result<(), AwsError> {
+fn run_insert(
+    state: &DynamoState,
+    sqlite: &SqliteStore,
+    ctx: &RequestContext,
+    stmt: &str,
+    _params: &Value,
+) -> Result<(), AwsError> {
     // INSERT INTO "TableName" VALUE {'key': 'val', ...}
     let upper = stmt.to_uppercase();
     let into_pos = upper.find("INTO").ok_or_else(|| {
@@ -196,34 +232,47 @@ fn run_insert(state: &DynamoState, stmt: &str, _params: &Value) -> Result<(), Aw
     })?;
     let json_str = stmt[value_pos + 5..].trim();
 
-    // Parse the inline JSON object (single-quoted strings → double-quoted).
     let normalized = normalize_partiql_json(json_str);
     let plain_item: Value = serde_json::from_str(&normalized).map_err(|e| {
         AwsError::bad_request("ValidationException", format!("Invalid INSERT VALUE: {e}"))
     })?;
 
-    // Wrap each scalar into a DynamoDB attribute-value form.
     let ddb_item: DynamoItem = plain_to_ddb_item(&plain_item);
 
-    let mut table = state.tables.get_mut(&table_name).ok_or_else(|| {
-        AwsError::not_found(
-            "ResourceNotFoundException",
-            format!("Table '{table_name}' not found"),
-        )
-    })?;
+    let sqlite_keys = {
+        let table = state.tables.get(&table_name).ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Table '{table_name}' not found"),
+            )
+        })?;
+        extract_item_keys(&table, &ddb_item).ok_or_else(|| {
+            AwsError::bad_request("ValidationException", "Item missing primary key")
+        })?
+    };
 
-    let composite = table
-        .composite_key(&ddb_item)
-        .ok_or_else(|| AwsError::bad_request("ValidationException", "Item missing primary key"))?;
-
-    table.items.insert(composite, ddb_item);
-
+    let attrs = item_to_storage_value(&ddb_item);
+    sqlite.put_item(
+        &ctx.account_id,
+        &ctx.region,
+        &table_name,
+        &sqlite_keys.pk,
+        &sqlite_keys.sk,
+        &attrs,
+        &sqlite_keys.gsi,
+    )?;
     Ok(())
 }
 
 // ─── UPDATE ───────────────────────────────────────────────────────────────────
 
-fn run_update(state: &DynamoState, stmt: &str, params: &Value) -> Result<(), AwsError> {
+fn run_update(
+    state: &DynamoState,
+    sqlite: &SqliteStore,
+    ctx: &RequestContext,
+    stmt: &str,
+    params: &Value,
+) -> Result<(), AwsError> {
     // UPDATE "TableName" SET attr = val WHERE "pk" = val
     let upper = stmt.to_uppercase();
     let (table_name, where_key, where_val) = parse_from_where(stmt, params)?;
@@ -237,53 +286,108 @@ fn run_update(state: &DynamoState, stmt: &str, params: &Value) -> Result<(), Aws
     let set_end = where_upper.find(" WHERE ").unwrap_or(set_clause.len());
     let assignments = set_clause[..set_end].trim();
 
-    let mut table = state.tables.get_mut(&table_name).ok_or_else(|| {
-        AwsError::not_found(
+    if !state.tables.contains_key(&table_name) {
+        return Err(AwsError::not_found(
             "ResourceNotFoundException",
             format!("Table '{table_name}' not found"),
-        )
-    })?;
-
-    if let (Some(key), Some(val)) = (where_key, where_val) {
-        for item in table.items.values_mut() {
-            if item.get(&key).map(|v| v == &val).unwrap_or(false) {
-                apply_set_clause(item, assignments, params);
-                break;
-            }
-        }
+        ));
     }
 
+    let (Some(key), Some(val)) = (where_key, where_val) else {
+        return Ok(());
+    };
+
+    // Find the first matching row (PartiQL's UPDATE on this subset is
+    // single-row by intent, mirroring the prior in-memory behaviour).
+    let mut hit: Option<DynamoItem> = None;
+    sqlite.scan_table(
+        &ctx.account_id,
+        &ctx.region,
+        &table_name,
+        None,
+        |_pk, _sk, attrs| {
+            let item = decode_row(attrs)?;
+            if item.get(&key).map(|v| v == &val).unwrap_or(false) {
+                hit = Some(item);
+                return Ok(false);
+            }
+            Ok(true)
+        },
+    )?;
+
+    let Some(mut item) = hit else {
+        return Ok(());
+    };
+    apply_set_clause(&mut item, assignments, params);
+
+    let sqlite_keys = {
+        let table = state.tables.get(&table_name).ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Table '{table_name}' not found"),
+            )
+        })?;
+        extract_item_keys(&table, &item)
+            .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?
+    };
+
+    let attrs = item_to_storage_value(&item);
+    sqlite.put_item(
+        &ctx.account_id,
+        &ctx.region,
+        &table_name,
+        &sqlite_keys.pk,
+        &sqlite_keys.sk,
+        &attrs,
+        &sqlite_keys.gsi,
+    )?;
     Ok(())
 }
 
 // ─── DELETE ───────────────────────────────────────────────────────────────────
 
-fn run_delete(state: &DynamoState, stmt: &str, params: &Value) -> Result<(), AwsError> {
+fn run_delete(
+    state: &DynamoState,
+    sqlite: &SqliteStore,
+    ctx: &RequestContext,
+    stmt: &str,
+    params: &Value,
+) -> Result<(), AwsError> {
     let (table_name, where_key, where_val) = parse_from_where(stmt, params)?;
 
-    let mut table = state.tables.get_mut(&table_name).ok_or_else(|| {
-        AwsError::not_found(
+    if !state.tables.contains_key(&table_name) {
+        return Err(AwsError::not_found(
             "ResourceNotFoundException",
             format!("Table '{table_name}' not found"),
-        )
-    })?;
-
-    if let (Some(key), Some(val)) = (where_key, where_val) {
-        // Collect matching composite keys first, then remove.
-        let matching: Vec<String> = table
-            .items
-            .iter()
-            .filter(|(_, item)| item.get(&key).map(|v| v == &val).unwrap_or(false))
-            .map(|(k, _)| k.clone())
-            .collect();
-
-        for k in matching {
-            table.items.remove(&k);
-        }
-    } else {
-        table.items.clear();
+        ));
     }
 
+    // Collect matching (pk, sk) pairs first, then delete — keeps the
+    // sqlite read iterator from being invalidated by concurrent writes.
+    let mut targets: Vec<(String, String)> = Vec::new();
+    sqlite.scan_table(
+        &ctx.account_id,
+        &ctx.region,
+        &table_name,
+        None,
+        |pk, sk, attrs| {
+            let keep = match (&where_key, &where_val) {
+                (Some(key), Some(val)) => {
+                    let item = decode_row(attrs)?;
+                    item.get(key).map(|v| v == val).unwrap_or(false)
+                }
+                _ => true, // No WHERE → DELETE all (matches the legacy behaviour).
+            };
+            if keep {
+                targets.push((pk.to_string(), sk.to_string()));
+            }
+            Ok(true)
+        },
+    )?;
+
+    for (pk, sk) in targets {
+        sqlite.delete_item(&ctx.account_id, &ctx.region, &table_name, &pk, &sk)?;
+    }
     Ok(())
 }
 
@@ -304,7 +408,6 @@ fn parse_from_where(
     let after_from = stmt[from_pos + 4..].trim();
     let table_name = extract_quoted_identifier(after_from)?;
 
-    // Look for WHERE clause.
     if let Some(wp) = upper.find(" WHERE ") {
         let where_clause = stmt[wp + 7..].trim();
         if let Some((key, val)) = parse_simple_eq(where_clause, params) {

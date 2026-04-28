@@ -153,6 +153,11 @@ impl Table {
     }
 
     /// Build the composite storage key from an item or key map.
+    ///
+    /// Unused after the SQLite refactor — kept around because tests and
+    /// future stages (transactional ranges, GSI projection) still want the
+    /// `pk\0sk` form for in-memory comparisons.
+    #[allow(dead_code)]
     pub fn composite_key(&self, item: &DynamoItem) -> Option<String> {
         let hk = self.hash_key()?;
         let pk_val = extract_scalar_str(item.get(hk)?)?;

@@ -3,6 +3,8 @@ use serde_json::{Value, json};
 
 use crate::{
     expressions::{apply_update_expression, evaluate_condition, parse_condition},
+    keys::{extract_item_keys, extract_pk_sk, item_to_storage_value, storage_value_to_item},
+    sqlite_store::{MAX_GSI_SLOTS, SqliteStore},
     state::{DynamoItem, DynamoState},
 };
 
@@ -12,10 +14,29 @@ use super::{
     opt_str,
 };
 
+/// Convenience: load `(pk, sk)` for a key map and read the existing
+/// item from SQLite. `None` means the row doesn't exist.
+fn fetch_existing(
+    sqlite: &SqliteStore,
+    ctx: &RequestContext,
+    table_name: &str,
+    pk: &str,
+    sk: &str,
+) -> Result<Option<DynamoItem>, AwsError> {
+    sqlite
+        .get_item(&ctx.account_id, &ctx.region, table_name, pk, sk)?
+        .map(|stored| {
+            storage_value_to_item(stored)
+                .ok_or_else(|| AwsError::internal("DynamoDB stored attrs is not an object"))
+        })
+        .transpose()
+}
+
 pub fn transact_get_items(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let transact_items = input
         .get("TransactItems")
@@ -34,25 +55,23 @@ pub fn transact_get_items(
             .and_then(|v| v.as_str())
             .ok_or_else(|| AwsError::validation("TableName is required in Get"))?;
 
-        let table = state.tables.get(table_name).ok_or_else(|| {
-            AwsError::not_found(
-                "ResourceNotFoundException",
-                format!("Cannot do operations on a non-existent table: {table_name}"),
-            )
-        })?;
-
         let key = parse_item(&get["Key"])
             .ok_or_else(|| AwsError::validation("Key is required in Get"))?;
 
-        let composite_key = table
-            .composite_key(&key)
-            .ok_or_else(|| AwsError::validation("Could not construct item key"))?;
+        let (pk, sk) = {
+            let table = state.tables.get(table_name).ok_or_else(|| {
+                AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("Cannot do operations on a non-existent table: {table_name}"),
+                )
+            })?;
+            extract_pk_sk(&table, &key)
+                .ok_or_else(|| AwsError::validation("Could not construct item key"))?
+        };
 
-        match table.items.get(&composite_key) {
+        match fetch_existing(sqlite, ctx, table_name, &pk, &sk)? {
             None => responses.push(json!({})),
-            Some(item) => {
-                responses.push(json!({ "Item": item_to_json(item) }));
-            }
+            Some(item) => responses.push(json!({ "Item": item_to_json(&item) })),
         }
     }
 
@@ -61,33 +80,43 @@ pub fn transact_get_items(
 
 pub fn transact_write_items(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let transact_items = input
         .get("TransactItems")
         .and_then(|v| v.as_array())
         .ok_or_else(|| AwsError::validation("TransactItems is required"))?;
 
-    // Phase 1: Validate all conditions before making any changes
-    // We collect all mutations to apply atomically.
-    struct Mutation {
-        table_name: String,
-        composite_key: String,
-        kind: MutationKind,
-    }
-
-    enum MutationKind {
-        Put(DynamoItem),
-        Delete,
+    // Phase 1: validate every condition. We collect resolved storage
+    // keys + parsed action descriptors so phase 2 doesn't need to
+    // re-touch the in-memory schema cache.
+    enum Action {
+        Put {
+            pk: String,
+            sk: String,
+            attrs: Value,
+            gsi: [(Option<String>, Option<String>); MAX_GSI_SLOTS],
+        },
+        Delete {
+            pk: String,
+            sk: String,
+        },
         Update {
+            pk: String,
+            sk: String,
             update_expr: String,
             expr_attr_names: std::collections::HashMap<String, String>,
             expr_attr_values: serde_json::Map<String, Value>,
+            key: DynamoItem,
         },
-        ConditionCheck, // No-op mutation; just validates
+        ConditionCheck,
     }
-
+    struct Mutation {
+        table_name: String,
+        action: Action,
+    }
     let mut mutations: Vec<Mutation> = Vec::new();
 
     for tx_item in transact_items {
@@ -98,28 +127,29 @@ pub fn transact_write_items(
                 .ok_or_else(|| AwsError::validation("TableName required in Put"))?
                 .to_string();
 
-            let table = state.tables.get(&table_name).ok_or_else(|| {
-                AwsError::not_found(
-                    "ResourceNotFoundException",
-                    format!("Table not found: {table_name}"),
-                )
-            })?;
-
             let item = parse_item(&put["Item"])
                 .ok_or_else(|| AwsError::validation("Item is required in Put"))?;
-
             let expr_attr_names = get_expr_attr_names(put);
             let expr_attr_values = get_expr_attr_values(put);
 
-            // Check condition
+            let sqlite_keys = {
+                let table = state.tables.get(&table_name).ok_or_else(|| {
+                    AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Table not found: {table_name}"),
+                    )
+                })?;
+                extract_item_keys(&table, &item)
+                    .ok_or_else(|| AwsError::validation("Could not construct key"))?
+            };
+
             if let Some(cond_expr) = opt_str(put, "ConditionExpression") {
                 let condition = parse_condition(cond_expr)?;
-                let composite_key = table
-                    .composite_key(&item)
-                    .ok_or_else(|| AwsError::validation("Could not construct key"))?;
-                let empty: DynamoItem = DynamoItem::new();
-                let existing = table.items.get(&composite_key).unwrap_or(&empty);
-                if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
+                let existing =
+                    fetch_existing(sqlite, ctx, &table_name, &sqlite_keys.pk, &sqlite_keys.sk)?
+                        .unwrap_or_default();
+                if !evaluate_condition(&condition, &existing, &expr_attr_names, &expr_attr_values)?
+                {
                     return Err(AwsError::conflict(
                         "TransactionCanceledException",
                         "Transaction cancelled, please refer cancellation reasons for specific reasons [ConditionalCheckFailed]",
@@ -127,14 +157,14 @@ pub fn transact_write_items(
                 }
             }
 
-            let composite_key = table
-                .composite_key(&item)
-                .ok_or_else(|| AwsError::validation("Could not construct key"))?;
-
             mutations.push(Mutation {
                 table_name,
-                composite_key,
-                kind: MutationKind::Put(item),
+                action: Action::Put {
+                    pk: sqlite_keys.pk,
+                    sk: sqlite_keys.sk,
+                    attrs: item_to_storage_value(&item),
+                    gsi: sqlite_keys.gsi,
+                },
             });
         } else if let Some(delete) = tx_item.get("Delete") {
             let table_name = delete
@@ -143,29 +173,28 @@ pub fn transact_write_items(
                 .ok_or_else(|| AwsError::validation("TableName required in Delete"))?
                 .to_string();
 
-            let table = state.tables.get(&table_name).ok_or_else(|| {
-                AwsError::not_found(
-                    "ResourceNotFoundException",
-                    format!("Table not found: {table_name}"),
-                )
-            })?;
-
             let key = parse_item(&delete["Key"])
                 .ok_or_else(|| AwsError::validation("Key is required in Delete"))?;
-
             let expr_attr_names = get_expr_attr_names(delete);
             let expr_attr_values = get_expr_attr_values(delete);
 
-            let composite_key = table
-                .composite_key(&key)
-                .ok_or_else(|| AwsError::validation("Could not construct key"))?;
+            let (pk, sk) = {
+                let table = state.tables.get(&table_name).ok_or_else(|| {
+                    AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Table not found: {table_name}"),
+                    )
+                })?;
+                extract_pk_sk(&table, &key)
+                    .ok_or_else(|| AwsError::validation("Could not construct key"))?
+            };
 
-            // Check condition
             if let Some(cond_expr) = opt_str(delete, "ConditionExpression") {
                 let condition = parse_condition(cond_expr)?;
-                let empty: DynamoItem = DynamoItem::new();
-                let existing = table.items.get(&composite_key).unwrap_or(&empty);
-                if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
+                let existing = fetch_existing(sqlite, ctx, &table_name, &pk, &sk)?
+                    .unwrap_or_default();
+                if !evaluate_condition(&condition, &existing, &expr_attr_names, &expr_attr_values)?
+                {
                     return Err(AwsError::conflict(
                         "TransactionCanceledException",
                         "Transaction cancelled, please refer cancellation reasons for specific reasons [ConditionalCheckFailed]",
@@ -175,8 +204,7 @@ pub fn transact_write_items(
 
             mutations.push(Mutation {
                 table_name,
-                composite_key,
-                kind: MutationKind::Delete,
+                action: Action::Delete { pk, sk },
             });
         } else if let Some(update) = tx_item.get("Update") {
             let table_name = update
@@ -185,32 +213,31 @@ pub fn transact_write_items(
                 .ok_or_else(|| AwsError::validation("TableName required in Update"))?
                 .to_string();
 
-            let table = state.tables.get(&table_name).ok_or_else(|| {
-                AwsError::not_found(
-                    "ResourceNotFoundException",
-                    format!("Table not found: {table_name}"),
-                )
-            })?;
-
             let key = parse_item(&update["Key"])
                 .ok_or_else(|| AwsError::validation("Key is required in Update"))?;
-
             let expr_attr_names = get_expr_attr_names(update);
             let expr_attr_values = get_expr_attr_values(update);
             let update_expr = opt_str(update, "UpdateExpression")
                 .ok_or_else(|| AwsError::validation("UpdateExpression required in Update"))?
                 .to_string();
 
-            let composite_key = table
-                .composite_key(&key)
-                .ok_or_else(|| AwsError::validation("Could not construct key"))?;
+            let (pk, sk) = {
+                let table = state.tables.get(&table_name).ok_or_else(|| {
+                    AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Table not found: {table_name}"),
+                    )
+                })?;
+                extract_pk_sk(&table, &key)
+                    .ok_or_else(|| AwsError::validation("Could not construct key"))?
+            };
 
-            // Check condition
             if let Some(cond_expr) = opt_str(update, "ConditionExpression") {
                 let condition = parse_condition(cond_expr)?;
-                let empty: DynamoItem = DynamoItem::new();
-                let existing = table.items.get(&composite_key).unwrap_or(&empty);
-                if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
+                let existing = fetch_existing(sqlite, ctx, &table_name, &pk, &sk)?
+                    .unwrap_or_default();
+                if !evaluate_condition(&condition, &existing, &expr_attr_names, &expr_attr_values)?
+                {
                     return Err(AwsError::conflict(
                         "TransactionCanceledException",
                         "Transaction cancelled, please refer cancellation reasons for specific reasons [ConditionalCheckFailed]",
@@ -220,11 +247,13 @@ pub fn transact_write_items(
 
             mutations.push(Mutation {
                 table_name,
-                composite_key,
-                kind: MutationKind::Update {
+                action: Action::Update {
+                    pk,
+                    sk,
                     update_expr,
                     expr_attr_names,
                     expr_attr_values,
+                    key,
                 },
             });
         } else if let Some(condition_check) = tx_item.get("ConditionCheck") {
@@ -234,28 +263,28 @@ pub fn transact_write_items(
                 .ok_or_else(|| AwsError::validation("TableName required in ConditionCheck"))?
                 .to_string();
 
-            let table = state.tables.get(&table_name).ok_or_else(|| {
-                AwsError::not_found(
-                    "ResourceNotFoundException",
-                    format!("Table not found: {table_name}"),
-                )
-            })?;
-
             let key = parse_item(&condition_check["Key"])
                 .ok_or_else(|| AwsError::validation("Key is required in ConditionCheck"))?;
-
             let expr_attr_names = get_expr_attr_names(condition_check);
             let expr_attr_values = get_expr_attr_values(condition_check);
 
-            let composite_key = table
-                .composite_key(&key)
-                .ok_or_else(|| AwsError::validation("Could not construct key"))?;
+            let (pk, sk) = {
+                let table = state.tables.get(&table_name).ok_or_else(|| {
+                    AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Table not found: {table_name}"),
+                    )
+                })?;
+                extract_pk_sk(&table, &key)
+                    .ok_or_else(|| AwsError::validation("Could not construct key"))?
+            };
 
             if let Some(cond_expr) = opt_str(condition_check, "ConditionExpression") {
                 let condition = parse_condition(cond_expr)?;
-                let empty: DynamoItem = DynamoItem::new();
-                let existing = table.items.get(&composite_key).unwrap_or(&empty);
-                if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
+                let existing = fetch_existing(sqlite, ctx, &table_name, &pk, &sk)?
+                    .unwrap_or_default();
+                if !evaluate_condition(&condition, &existing, &expr_attr_names, &expr_attr_values)?
+                {
                     return Err(AwsError::conflict(
                         "TransactionCanceledException",
                         "Transaction cancelled, please refer cancellation reasons for specific reasons [ConditionalCheckFailed]",
@@ -265,45 +294,83 @@ pub fn transact_write_items(
 
             mutations.push(Mutation {
                 table_name,
-                composite_key,
-                kind: MutationKind::ConditionCheck,
+                action: Action::ConditionCheck,
             });
         }
     }
 
-    // Phase 2: Apply all mutations
+    // Phase 2: apply each mutation. This isn't truly atomic against the
+    // SQLite layer yet — stage 5 wraps it in a single sqlite transaction.
     for mutation in mutations {
-        match state.tables.get_mut(&mutation.table_name) {
-            None => continue,
-            Some(mut table) => match mutation.kind {
-                MutationKind::Put(item) => {
-                    table.items.insert(mutation.composite_key, item);
+        match mutation.action {
+            Action::Put {
+                pk,
+                sk,
+                attrs,
+                gsi,
+            } => {
+                sqlite.put_item(
+                    &ctx.account_id,
+                    &ctx.region,
+                    &mutation.table_name,
+                    &pk,
+                    &sk,
+                    &attrs,
+                    &gsi,
+                )?;
+            }
+            Action::Delete { pk, sk } => {
+                sqlite.delete_item(
+                    &ctx.account_id,
+                    &ctx.region,
+                    &mutation.table_name,
+                    &pk,
+                    &sk,
+                )?;
+            }
+            Action::Update {
+                pk,
+                sk,
+                update_expr,
+                expr_attr_names,
+                expr_attr_values,
+                key,
+            } => {
+                let mut item = fetch_existing(sqlite, ctx, &mutation.table_name, &pk, &sk)?
+                    .unwrap_or_else(|| key.clone());
+                apply_update_expression(
+                    &mut item,
+                    &update_expr,
+                    &expr_attr_names,
+                    &expr_attr_values,
+                )?;
+                for (k, v) in &key {
+                    item.insert(k.clone(), v.clone());
                 }
-                MutationKind::Delete => {
-                    table.items.remove(&mutation.composite_key);
-                }
-                MutationKind::Update {
-                    update_expr,
-                    expr_attr_names,
-                    expr_attr_values,
-                } => {
-                    let mut item = table
-                        .items
-                        .get(&mutation.composite_key)
-                        .cloned()
-                        .unwrap_or_default();
-                    apply_update_expression(
-                        &mut item,
-                        &update_expr,
-                        &expr_attr_names,
-                        &expr_attr_values,
-                    )?;
-                    table.items.insert(mutation.composite_key, item);
-                }
-                MutationKind::ConditionCheck => {
-                    // No mutation needed
-                }
-            },
+                let sqlite_keys = {
+                    let table = state.tables.get(&mutation.table_name).ok_or_else(|| {
+                        AwsError::not_found(
+                            "ResourceNotFoundException",
+                            format!("Table not found: {}", mutation.table_name),
+                        )
+                    })?;
+                    extract_item_keys(&table, &item)
+                        .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?
+                };
+                let attrs = item_to_storage_value(&item);
+                sqlite.put_item(
+                    &ctx.account_id,
+                    &ctx.region,
+                    &mutation.table_name,
+                    &sqlite_keys.pk,
+                    &sqlite_keys.sk,
+                    &attrs,
+                    &sqlite_keys.gsi,
+                )?;
+            }
+            Action::ConditionCheck => {
+                // No mutation needed — the validation ran in phase 1.
+            }
         }
     }
 
