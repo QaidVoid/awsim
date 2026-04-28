@@ -46,7 +46,8 @@ curl -s http://localhost:4566 \
 |-----------|-------------|
 | `CreateTable` | Create a table with key schema, billing mode, and optional streams. Returns `TableDescription` with `TableStatus: "ACTIVE"` immediately |
 | `DeleteTable` | Delete a table and all its data. Returns `TableDescription` with `TableStatus: "DELETING"` |
-| `DescribeTable` | Get table metadata: key schema, attribute definitions, item count, table size, stream ARN |
+| `TruncateTable` | **awsim-only.** Wipe every item in a table while keeping the schema, indexes, and stream config. No equivalent in real DynamoDB. Input: `TableName`. Returns `{ TableName, DeletedItemCount }` |
+| `DescribeTable` | Get table metadata: key schema, attribute definitions, item count (live count from SQLite), table size, stream ARN |
 | `ListTables` | List all tables; supports `ExclusiveStartTableName` and `Limit` for pagination |
 | `UpdateTable` | Update billing mode (`PAY_PER_REQUEST` or `PROVISIONED`) or stream specification |
 | `DescribeEndpoints` | Return the regional DynamoDB endpoint. Used by SDK endpoint discovery; returns a single endpoint entry |
@@ -259,12 +260,14 @@ aws --endpoint-url http://localhost:4566 dynamodb scan \
 
 ## Behavior Notes
 
-- DynamoDB is persistent: tables and items survive AWSim restarts.
-- Global Secondary Indexes (GSI) and Local Secondary Indexes (LSI) are accepted in `CreateTable` but queries with `IndexName` are not supported — they fall back to a full table scan.
-- Conditional expressions (`ConditionExpression` on `PutItem`, `UpdateItem`, `DeleteItem`) are stored but not enforced — operations always succeed.
+- DynamoDB is persistent: tables and items survive AWSim restarts. Items live in a SQLite database (`{data_dir}/dynamodb.db`) — see [DynamoDB SQLite store](../guide/persistence.md#dynamodb-sqlite-store) for details.
+- Global Secondary Indexes (GSI) and Local Secondary Indexes (LSI) are accepted in `CreateTable` but queries with `IndexName` are not yet pushed down to the GSI key columns — they fall back to a full table scan. (The SQLite store materializes up to 5 GSI key column pairs per item, so the data is there; the planner just hasn't been wired to use them yet.)
+- Conditional expressions (`ConditionExpression` on `PutItem`, `UpdateItem`, `DeleteItem`) are evaluated against the existing item — failed checks return `ConditionalCheckFailedException`.
+- `TransactWriteItems` is genuinely atomic: phase 1 (validate every condition) and phase 2 (apply every mutation) run inside a single SQLite write transaction. A failing condition anywhere in the batch rolls back every mutation that had already been applied. `TransactGetItems` reads see a single consistent snapshot.
 - TTL (Time to Live) configuration (`UpdateTimeToLive`) is accepted and stored but items are not automatically expired.
 - `DescribeContinuousBackups` returns a stub response indicating PITR is disabled — no actual backups are made.
 - `DescribeEndpoints` returns a single endpoint entry for SDK endpoint discovery compatibility.
 - Table tags (`TagResource`, `UntagResource`, `ListTagsOfResource`) are stored and returned correctly.
 - PartiQL (`ExecuteStatement`, `BatchExecuteStatement`, `ExecuteTransaction`) supports basic `SELECT * FROM "Table" WHERE "key" = 'value'`, `INSERT INTO "Table" VALUE {...}`, `UPDATE "Table" SET attr = val WHERE "key" = 'val'`, and `DELETE FROM "Table" WHERE "key" = 'val'`. Full PartiQL expressions, nested paths, and `?` parameter binding (with `Parameters` list) are partially supported.
-- Streams store change records in memory; use `GetShardIterator` with `TRIM_HORIZON` to read from the beginning.
+- Streams store change records in a bounded in-memory ring buffer (last 1 000 per table); use `GetShardIterator` with `TRIM_HORIZON` to read from the beginning. Items themselves live in SQLite.
+- `TruncateTable` is awsim-only and does not exist in real DynamoDB — guard your code with a feature flag if you also target the real service.

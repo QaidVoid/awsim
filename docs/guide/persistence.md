@@ -39,6 +39,8 @@ Services not in this list (e.g., KMS, Secrets Manager) are always in-memory only
 
 **Note on SQS:** SQS queue metadata is persisted via the JSON snapshot. Message bodies are written separately to disk under `{data_dir}/sqs/` whenever `--data-dir` is supplied — see [SQS message bodies](#sqs-message-bodies) below.
 
+**Note on DynamoDB:** Only table schema metadata rides in the JSON snapshot. Items live in a dedicated SQLite database at `{data_dir}/dynamodb.db` — see [DynamoDB SQLite store](#dynamodb-sqlite-store) below.
+
 ## S3 object bodies
 
 When `--data-dir` is set, the S3 service writes each `PutObject`, `CopyObject`, and assembled multipart upload to disk through a body store rooted at `{data_dir}/s3/`:
@@ -57,6 +59,38 @@ Object metadata still rides in the regular `s3.json` snapshot. On restore, each 
 If a body file is missing on disk after a restart (for example, the data directory was partially wiped), `GetObject` returns `NoSuchKey` for that object.
 
 When `--data-dir` is not supplied, the service stays fully in-memory and object bodies are lost on shutdown.
+
+## DynamoDB SQLite store
+
+Unlike the other services, DynamoDB does not persist its items through the JSON snapshot. Items are written directly to a single SQLite database at `{data_dir}/dynamodb.db` (or a per-process tempfile when `--data-dir` is unset). One database serves every account/region — partitioning is handled by `(account, region, table_name)` columns on the `items` table.
+
+```
+/var/lib/awsim/
+  dynamodb.db          # WAL-mode sqlite, items + table-schema rows
+  dynamodb.db-wal
+  dynamodb.db-shm
+  snapshots/
+    dynamodb.json      # only table schemas / stream config / tags
+```
+
+### Why SQLite
+
+The original implementation stored every item in an in-memory `BTreeMap` per table; bulk imports of millions of rows pushed the AWSim process well past 10 GiB of resident memory. SQLite gives us:
+
+- **Bounded memory.** Items are never loaded into the process; reads stream a single partition at a time.
+- **Indexed lookups for GSIs.** Up to five GSI key column pairs (`gsi1_pk`, `gsi1_sk`, ..., `gsi5_pk`, `gsi5_sk`) are materialized at write time and covered by partial indexes (`WHERE gsiN_pk IS NOT NULL`), matching DynamoDB's sparse-index semantics.
+- **Real ACID transactions.** `TransactWriteItems` runs phase 1 (validate every condition) and phase 2 (apply every mutation) inside one `BEGIN IMMEDIATE` transaction. A failed condition or any sqlite error rolls back the entire batch via `Drop`.
+- **Snapshot-consistent batch reads.** `TransactGetItems` runs inside a deferred transaction so multi-row reads see the same commit point.
+
+### What the JSON snapshot still carries
+
+`{data_dir}/snapshots/dynamodb.json` is the source of truth for everything sqlite *doesn't* hold: table key schema, attribute definitions, GSI / LSI definitions, stream configuration (enabled, ARN, view type, sequence counter, the bounded ring buffer of recent change records), TTL settings, and tags. On restore, the schema is rehydrated into the in-memory `DashMap` and also mirrored into sqlite's `tables` table so a fresh process started without the JSON snapshot can still bootstrap from sqlite alone.
+
+### `TruncateTable`
+
+The awsim-only `TruncateTable` op clears every item in a table while leaving schema, indexes, and stream config intact — backed by a single `DELETE FROM items WHERE account=? AND region=? AND table_name=?`. Useful for "reset between tests" loops in the admin UI; not available in real DynamoDB.
+
+When `--data-dir` is unset, `dynamodb.db` is created in `std::env::temp_dir()` with a per-process UUID suffix and dies with the process.
 
 ## Lambda function code
 
