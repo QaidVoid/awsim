@@ -5,7 +5,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::state::{S3Object, S3State, VersioningStatus};
+use crate::state::{ObjectVersions, S3Object, S3State, VersioningStatus};
 use crate::util::{compute_etag, now_iso8601, now_rfc7231};
 
 use super::bucket::no_such_bucket;
@@ -18,6 +18,73 @@ fn next_version_id(versioning: &VersioningStatus) -> Option<String> {
     match versioning {
         VersioningStatus::Enabled => Some(Uuid::new_v4().simple().to_string()),
         VersioningStatus::Suspended | VersioningStatus::Disabled => None,
+    }
+}
+
+/// Append `obj` as a new version, but for Disabled / Suspended buckets the
+/// existing un-versioned ("null") slot is replaced rather than retained.
+fn record_version(versions: &mut ObjectVersions, obj: S3Object, status: &VersioningStatus) {
+    if !matches!(status, VersioningStatus::Enabled) {
+        // Disabled buckets only ever keep one entry; Suspended buckets keep
+        // prior ID-bearing versions but overwrite the single "null" slot.
+        versions.versions.retain(|o| o.version_id.is_some());
+    }
+    versions.push(obj);
+}
+
+/// Strip an optional `?versionId=X` suffix from a CopySource value, returning
+/// `(bucket_and_key, version_id)`.
+fn split_copy_source_version(raw: &str) -> (&str, Option<&str>) {
+    if let Some((path, query)) = raw.split_once('?') {
+        for kv in query.split('&') {
+            if let Some(v) = kv.strip_prefix("versionId=") {
+                return (path, Some(v));
+            }
+        }
+        (path, None)
+    } else {
+        (raw, None)
+    }
+}
+
+/// Look up an object respecting an optional caller-supplied VersionId. Returns
+/// the matched entry (which may itself be a delete marker — callers decide how
+/// to react). When no VersionId is supplied, returns the latest non-DM entry.
+fn resolve_version<'a>(
+    versions: &'a ObjectVersions,
+    version_id: Option<&str>,
+) -> Option<&'a S3Object> {
+    match version_id {
+        Some(vid) => versions.find(vid),
+        None => versions.current(),
+    }
+}
+
+/// Read-side resolution: return the requested entry if it exists and is a
+/// real object, otherwise build a NoSuchKey error that carries the
+/// `DeleteMarker` / `VersionId` extras when the caller's read landed on a
+/// tombstone (so the SDK sees the actual `x-amz-delete-marker` signal).
+fn resolve_or_delete_marker<'a>(
+    versions: &'a ObjectVersions,
+    version_id: Option<&str>,
+    key: &str,
+) -> Result<&'a S3Object, AwsError> {
+    // First try: the caller-requested version (or the latest entry).
+    let entry = match version_id {
+        Some(vid) => versions.find(vid),
+        None => versions.latest(),
+    };
+    match entry {
+        Some(obj) if !obj.is_delete_marker => Ok(obj),
+        Some(obj) => {
+            let mut err = no_such_key(key);
+            if let Some(vid) = &obj.version_id {
+                err = err.with_extra("VersionId", Value::String(vid.clone()));
+            }
+            err = err.with_extra("DeleteMarker", Value::Bool(true));
+            Err(err)
+        }
+        None => Err(no_such_key(key)),
     }
 }
 
@@ -88,7 +155,8 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
             None => Body::InMemory(data),
         };
 
-        let version_id = next_version_id(&bucket.versioning);
+        let status = bucket.versioning.clone();
+        let version_id = next_version_id(&status);
 
         let obj = S3Object {
             key: key.to_string(),
@@ -100,9 +168,11 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
             metadata,
             version_id: version_id.clone(),
             tags: Default::default(),
+            is_delete_marker: false,
         };
 
-        bucket.objects.insert(key.to_string(), obj);
+        let mut versions = bucket.objects.entry(key.to_string()).or_default();
+        record_version(&mut versions, obj, &status);
         version_id
     };
 
@@ -115,7 +185,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     Ok(result)
 }
 
-/// GET /{Bucket}/{Key+} — retrieve object data.
+/// GET /{Bucket}/{Key+} — retrieve object data, optionally a specific version.
 pub fn get_object(
     state: &S3State,
     input: &Value,
@@ -124,13 +194,15 @@ pub fn get_object(
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
     let range_header = opt_str(input, "Range");
+    let requested_version = opt_str(input, "VersionId");
 
     let bucket = state
         .buckets
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    let obj = bucket.objects.get(key).ok_or_else(|| no_such_key(key))?;
+    let versions = bucket.objects.get(key).ok_or_else(|| no_such_key(key))?;
+    let obj = resolve_or_delete_marker(&versions, requested_version, key)?;
 
     let body_bytes = obj.body.read_all().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -173,13 +245,15 @@ pub fn get_object(
 pub fn head_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
+    let requested_version = opt_str(input, "VersionId");
 
     let bucket = state
         .buckets
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    let obj = bucket.objects.get(key).ok_or_else(|| no_such_key(key))?;
+    let versions = bucket.objects.get(key).ok_or_else(|| no_such_key(key))?;
+    let obj = resolve_or_delete_marker(&versions, requested_version, key)?;
 
     let mut result = json!({
         "ContentType": obj.content_type,
@@ -193,25 +267,105 @@ pub fn head_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     Ok(result)
 }
 
-/// DELETE /{Bucket}/{Key+} — delete a single object.
+/// DELETE /{Bucket}/{Key+} — delete an object.
+///
+/// Behaviour depends on bucket versioning and whether `VersionId` is supplied:
+///   * With `VersionId` — permanently remove that single version.
+///   * Without, on Enabled bucket — append a delete marker (DeleteMarker=true).
+///   * Without, on Suspended bucket — overwrite the `null`-version slot with
+///     a delete marker.
+///   * Without, on Disabled bucket — drop the (single) version entirely.
 pub fn delete_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
+    let requested_version = opt_str(input, "VersionId");
 
     let bucket = state
         .buckets
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    bucket.objects.remove(key);
+    let mut response = json!({});
 
-    if let Some(store) = state.body_store()
-        && let Err(e) = store.delete_blob("objects", bucket_name, key)
-    {
-        tracing::warn!(bucket = %bucket_name, key = %key, error = %e, "delete object body");
+    if let Some(vid) = requested_version {
+        // Permanent per-version delete — succeeds (no-op) when the VersionId
+        // is unknown, matching real DynamoDB / S3 behaviour.
+        let removed = if let Some(mut versions) = bucket.objects.get_mut(key) {
+            let removed = versions.remove(vid);
+            if versions.is_empty() {
+                drop(versions);
+                bucket.objects.remove(key);
+            }
+            removed
+        } else {
+            None
+        };
+        if let Some(obj) = removed {
+            if let Some(rvid) = obj.version_id {
+                response["VersionId"] = Value::String(rvid);
+            } else {
+                response["VersionId"] = Value::String("null".to_string());
+            }
+            if obj.is_delete_marker {
+                response["DeleteMarker"] = Value::Bool(true);
+            }
+        }
+    } else {
+        let status = bucket.versioning.clone();
+        match status {
+            VersioningStatus::Disabled => {
+                bucket.objects.remove(key);
+                if let Some(store) = state.body_store()
+                    && let Err(e) = store.delete_blob("objects", bucket_name, key)
+                {
+                    tracing::warn!(bucket = %bucket_name, key = %key, error = %e, "delete object body");
+                }
+            }
+            VersioningStatus::Enabled => {
+                let dm_id = Uuid::new_v4().simple().to_string();
+                let marker = S3Object {
+                    key: key.to_string(),
+                    body: Body::InMemory(Vec::new()),
+                    content_type: "application/x-directory".to_string(),
+                    content_length: 0,
+                    etag: String::new(),
+                    last_modified: now_rfc7231(),
+                    metadata: Default::default(),
+                    version_id: Some(dm_id.clone()),
+                    tags: Default::default(),
+                    is_delete_marker: true,
+                };
+                bucket
+                    .objects
+                    .entry(key.to_string())
+                    .or_default()
+                    .push(marker);
+                response["DeleteMarker"] = Value::Bool(true);
+                response["VersionId"] = Value::String(dm_id);
+            }
+            VersioningStatus::Suspended => {
+                let marker = S3Object {
+                    key: key.to_string(),
+                    body: Body::InMemory(Vec::new()),
+                    content_type: "application/x-directory".to_string(),
+                    content_length: 0,
+                    etag: String::new(),
+                    last_modified: now_rfc7231(),
+                    metadata: Default::default(),
+                    version_id: None,
+                    tags: Default::default(),
+                    is_delete_marker: true,
+                };
+                let mut versions = bucket.objects.entry(key.to_string()).or_default();
+                versions.versions.retain(|o| o.version_id.is_some());
+                versions.push(marker);
+                response["DeleteMarker"] = Value::Bool(true);
+                response["VersionId"] = Value::String("null".to_string());
+            }
+        }
     }
 
-    Ok(json!({}))
+    Ok(response)
 }
 
 /// PUT /{Bucket}/{Key+} with x-amz-copy-source — copy an object.
@@ -220,26 +374,31 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
     let dst_key = require_str(input, "Key")?;
     let copy_source = require_str(input, "CopySource")?;
 
-    // copy_source format: "src-bucket/src-key" (URL may start with /)
+    // copy_source format: "src-bucket/src-key[?versionId=X]" (may start with /)
     let copy_source = copy_source.trim_start_matches('/');
-    let slash_pos = copy_source.find('/').ok_or_else(|| {
+    let (path, src_version) = split_copy_source_version(copy_source);
+    let slash_pos = path.find('/').ok_or_else(|| {
         AwsError::bad_request("InvalidArgument", "CopySource must be in format bucket/key")
     })?;
 
-    let src_bucket = &copy_source[..slash_pos];
-    let src_key = &copy_source[slash_pos + 1..];
+    let src_bucket = &path[..slash_pos];
+    let src_key = &path[slash_pos + 1..];
 
-    // Read source object.
+    // Read source object (possibly a specific historical version).
     let (data, content_type, metadata) = {
         let bucket = state
             .buckets
             .get(src_bucket)
             .ok_or_else(|| no_such_bucket(src_bucket))?;
 
-        let obj = bucket
+        let versions = bucket
             .objects
             .get(src_key)
             .ok_or_else(|| no_such_key(src_key))?;
+        let obj = resolve_version(&versions, src_version).ok_or_else(|| no_such_key(src_key))?;
+        if obj.is_delete_marker {
+            return Err(no_such_key(src_key));
+        }
 
         (
             obj.body
@@ -272,7 +431,8 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
         None => Body::InMemory(data),
     };
 
-    let version_id = next_version_id(&dst_bucket_ref.versioning);
+    let status = dst_bucket_ref.versioning.clone();
+    let version_id = next_version_id(&status);
 
     let new_obj = S3Object {
         key: dst_key.to_string(),
@@ -284,9 +444,15 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
         metadata,
         version_id: version_id.clone(),
         tags: Default::default(),
+        is_delete_marker: false,
     };
 
-    dst_bucket_ref.objects.insert(dst_key.to_string(), new_obj);
+    let mut versions = dst_bucket_ref
+        .objects
+        .entry(dst_key.to_string())
+        .or_default();
+    record_version(&mut versions, new_obj, &status);
+    drop(versions);
 
     let mut result = json!({
         "CopyObjectResult": {
@@ -440,5 +606,105 @@ mod tests {
         // GetObject and HeadObject surface the current VersionId.
         let head = head_object(&state, &json!({ "Bucket": "vbucket", "Key": "k" })).unwrap();
         assert_eq!(head["VersionId"].as_str(), Some(v2));
+    }
+
+    #[test]
+    fn enabled_bucket_keeps_history_and_supports_version_lookup() {
+        let mut bucket = Bucket::new("v", "us-east-1", "now");
+        bucket.versioning = VersioningStatus::Enabled;
+        let state = state_with(bucket);
+        let r1 = put_object(
+            &state,
+            &json!({ "Bucket": "v", "Key": "k", "Body": "first" }),
+            &ctx(),
+        )
+        .unwrap();
+        let r2 = put_object(
+            &state,
+            &json!({ "Bucket": "v", "Key": "k", "Body": "second" }),
+            &ctx(),
+        )
+        .unwrap();
+        let v1 = r1["VersionId"].as_str().unwrap().to_string();
+        let v2 = r2["VersionId"].as_str().unwrap().to_string();
+
+        // GetObject without VersionId returns the latest body.
+        let latest = get_object(&state, &json!({ "Bucket": "v", "Key": "k" }), &ctx()).unwrap();
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(latest["Body"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(body, b"second");
+
+        // GetObject with the older VersionId returns the historical body.
+        let historic = get_object(
+            &state,
+            &json!({ "Bucket": "v", "Key": "k", "VersionId": v1 }),
+            &ctx(),
+        )
+        .unwrap();
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(historic["Body"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(body, b"first");
+
+        // DeleteObject without VersionId pushes a delete marker; subsequent
+        // GetObject sees NoSuchKey + DeleteMarker but the older VersionId
+        // remains readable.
+        let del = delete_object(&state, &json!({ "Bucket": "v", "Key": "k" })).unwrap();
+        assert_eq!(del["DeleteMarker"], json!(true));
+
+        let err = get_object(&state, &json!({ "Bucket": "v", "Key": "k" }), &ctx()).unwrap_err();
+        assert_eq!(err.code, "NoSuchKey");
+        let extras = err.extras.as_ref().expect("DeleteMarker extras");
+        assert_eq!(extras["DeleteMarker"], json!(true));
+
+        let still_there = get_object(
+            &state,
+            &json!({ "Bucket": "v", "Key": "k", "VersionId": v2 }),
+            &ctx(),
+        )
+        .unwrap();
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(still_there["Body"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(body, b"second");
+    }
+
+    #[test]
+    fn delete_object_with_version_id_permanently_removes_only_that_version() {
+        let mut bucket = Bucket::new("v", "us-east-1", "now");
+        bucket.versioning = VersioningStatus::Enabled;
+        let state = state_with(bucket);
+        let r1 = put_object(
+            &state,
+            &json!({ "Bucket": "v", "Key": "k", "Body": "a" }),
+            &ctx(),
+        )
+        .unwrap();
+        let r2 = put_object(
+            &state,
+            &json!({ "Bucket": "v", "Key": "k", "Body": "b" }),
+            &ctx(),
+        )
+        .unwrap();
+        let v1 = r1["VersionId"].as_str().unwrap().to_string();
+        let v2 = r2["VersionId"].as_str().unwrap().to_string();
+
+        delete_object(
+            &state,
+            &json!({ "Bucket": "v", "Key": "k", "VersionId": v1.clone() }),
+        )
+        .unwrap();
+
+        // v1 is gone, v2 is still latest.
+        let err = get_object(
+            &state,
+            &json!({ "Bucket": "v", "Key": "k", "VersionId": v1 }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NoSuchKey");
+        let head = head_object(&state, &json!({ "Bucket": "v", "Key": "k" })).unwrap();
+        assert_eq!(head["VersionId"].as_str(), Some(v2.as_str()));
     }
 }

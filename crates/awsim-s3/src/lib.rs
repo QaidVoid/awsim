@@ -949,8 +949,11 @@ impl ServiceHandler for S3Service {
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_string();
-                        let obj = bucket.objects.get(key);
-                        let size = obj.as_ref().map(|o| o.content_length).unwrap_or(0);
+                        let size = bucket
+                            .objects
+                            .get(key)
+                            .and_then(|v| v.current().map(|o| o.content_length))
+                            .unwrap_or(0);
                         let configured_destinations: Vec<serde_json::Value> = bucket
                             .notification_config
                             .destinations
@@ -991,9 +994,11 @@ impl ServiceHandler for S3Service {
                     if let Some(bucket) = state.buckets.get(bucket_name)
                         && !bucket.notification_config.destinations.is_empty()
                     {
-                        let obj = bucket.objects.get(key);
-                        let size = obj.as_ref().map(|o| o.content_length).unwrap_or(0);
-                        let etag = obj.as_ref().map(|o| o.etag.clone()).unwrap_or_default();
+                        let (size, etag) = bucket
+                            .objects
+                            .get(key)
+                            .and_then(|v| v.current().map(|o| (o.content_length, o.etag.clone())))
+                            .unwrap_or((0, String::new()));
                         let configured_destinations: Vec<serde_json::Value> = bucket
                             .notification_config
                             .destinations
@@ -1344,7 +1349,16 @@ impl S3Service {
                 for mut obj_entry in bucket_entry.value_mut().objects.iter_mut() {
                     let key = obj_entry.key().clone();
                     match bs.blob_path("objects", &bucket_name, &key) {
-                        Ok(path) => obj_entry.value_mut().body = Body::OnDisk(path),
+                        Ok(path) => {
+                            // All versions on disk currently share a single
+                            // blob path keyed by (bucket, key); rebind the
+                            // latest non-DM entry to it. Historical version
+                            // bodies become unreadable after a snapshot+
+                            // restore until we key blobs by version too.
+                            if let Some(obj) = obj_entry.value_mut().current_mut() {
+                                obj.body = Body::OnDisk(path);
+                            }
+                        }
                         Err(e) => tracing::warn!(
                             bucket = %bucket_name,
                             key = %key,

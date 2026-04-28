@@ -135,7 +135,13 @@ pub fn upload_part_copy(state: &S3State, input: &Value) -> Result<Value, AwsErro
             .buckets
             .get(src_bucket)
             .ok_or_else(|| no_such_bucket(src_bucket))?;
-        let obj = bucket.objects.get(src_key).ok_or_else(|| {
+        let versions = bucket.objects.get(src_key).ok_or_else(|| {
+            AwsError::not_found(
+                "NoSuchKey",
+                format!("The specified key '{src_key}' does not exist"),
+            )
+        })?;
+        let obj = versions.current().ok_or_else(|| {
             AwsError::not_found(
                 "NoSuchKey",
                 format!("The specified key '{src_key}' does not exist"),
@@ -264,7 +270,8 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         None => Body::InMemory(combined_data),
     };
 
-    let version_id = match bucket.versioning {
+    let status = bucket.versioning.clone();
+    let version_id = match status {
         crate::state::VersioningStatus::Enabled => Some(uuid::Uuid::new_v4().simple().to_string()),
         _ => None,
     };
@@ -279,9 +286,15 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         metadata: Default::default(),
         version_id: version_id.clone(),
         tags: Default::default(),
+        is_delete_marker: false,
     };
 
-    bucket.objects.insert(key.to_string(), obj);
+    let mut versions = bucket.objects.entry(key.to_string()).or_default();
+    if !matches!(status, crate::state::VersioningStatus::Enabled) {
+        versions.versions.retain(|o| o.version_id.is_some());
+    }
+    versions.push(obj);
+    drop(versions);
 
     if let Some(store) = state.body_store()
         && let Err(e) = store.delete_bucket("multipart", &format!("{bucket_name}/{upload_id}"))
@@ -406,25 +419,25 @@ fn no_such_upload(upload_id: &str) -> AwsError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{Bucket, S3Object, S3State};
+    use crate::state::{Bucket, ObjectVersions, S3Object, S3State};
 
     fn state_with_source(src_bucket: &str, src_key: &str, body: &[u8]) -> S3State {
         let state = S3State::default();
         let bucket = Bucket::new(src_bucket, "us-east-1", "now");
-        bucket.objects.insert(
-            src_key.to_string(),
-            S3Object {
-                key: src_key.to_string(),
-                body: Body::InMemory(body.to_vec()),
-                content_type: "application/octet-stream".to_string(),
-                content_length: body.len() as u64,
-                etag: "\"src-etag\"".to_string(),
-                last_modified: "now".to_string(),
-                metadata: Default::default(),
-                version_id: None,
-                tags: Default::default(),
-            },
-        );
+        let mut versions = ObjectVersions::default();
+        versions.push(S3Object {
+            key: src_key.to_string(),
+            body: Body::InMemory(body.to_vec()),
+            content_type: "application/octet-stream".to_string(),
+            content_length: body.len() as u64,
+            etag: "\"src-etag\"".to_string(),
+            last_modified: "now".to_string(),
+            metadata: Default::default(),
+            version_id: None,
+            tags: Default::default(),
+            is_delete_marker: false,
+        });
+        bucket.objects.insert(src_key.to_string(), versions);
         state.buckets.insert(src_bucket.to_string(), bucket);
         state
     }

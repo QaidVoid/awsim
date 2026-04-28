@@ -63,8 +63,9 @@ pub struct Bucket {
     /// Generic named configs (website, replication, requestpayment, accelerate, etc.)
     /// keyed by config name → JSON string.
     pub configs: HashMap<String, String>,
-    /// Objects keyed by object key.
-    pub objects: DashMap<String, S3Object>,
+    /// Objects keyed by object key — each value carries the full version
+    /// history for that key, in chronological order.
+    pub objects: DashMap<String, ObjectVersions>,
     /// Multipart uploads keyed by upload ID.
     pub multipart_uploads: DashMap<String, MultipartUpload>,
 }
@@ -113,6 +114,101 @@ pub struct S3Object {
     /// Object tags (key → value).
     #[serde(default)]
     pub tags: HashMap<String, String>,
+    /// True when this entry is a delete marker — a tombstone written when
+    /// DeleteObject lands on a versioning-enabled bucket without a VersionId.
+    /// Delete markers carry a version_id but no body, and reads against them
+    /// surface as NoSuchKey + `x-amz-delete-marker: true`.
+    #[serde(default)]
+    pub is_delete_marker: bool,
+}
+
+/// All versions of a single key within a bucket, in chronological order.
+///
+/// The last entry is the "current" version per S3 semantics. Versioning is
+/// not "on" until the bucket transitions to Enabled — Disabled buckets keep
+/// at most one entry with `version_id = None`. Suspended buckets keep prior
+/// versions but new writes overwrite the single `null`-version slot.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ObjectVersions {
+    pub versions: Vec<S3Object>,
+}
+
+impl ObjectVersions {
+    /// The most recent entry, regardless of whether it's a delete marker.
+    pub fn latest(&self) -> Option<&S3Object> {
+        self.versions.last()
+    }
+
+    /// The most recent non-delete-marker entry — what GetObject returns
+    /// when no VersionId is supplied. `None` when every version is a DM.
+    pub fn current(&self) -> Option<&S3Object> {
+        match self.versions.last() {
+            Some(o) if !o.is_delete_marker => Some(o),
+            _ => None,
+        }
+    }
+
+    /// Mutable view of the current entry — for header-only mutations such
+    /// as PutObjectTagging that update the latest version's metadata in
+    /// place rather than producing a new version.
+    pub fn current_mut(&mut self) -> Option<&mut S3Object> {
+        match self.versions.last_mut() {
+            Some(o) if !o.is_delete_marker => Some(o),
+            _ => None,
+        }
+    }
+
+    /// Look up a specific version by ID. Treats `"null"` as the slot used
+    /// for Disabled / Suspended writes (which have `version_id = None`).
+    pub fn find(&self, version_id: &str) -> Option<&S3Object> {
+        if version_id == "null" {
+            self.versions.iter().rev().find(|o| o.version_id.is_none())
+        } else {
+            self.versions
+                .iter()
+                .rev()
+                .find(|o| o.version_id.as_deref() == Some(version_id))
+        }
+    }
+
+    pub fn find_mut(&mut self, version_id: &str) -> Option<&mut S3Object> {
+        if version_id == "null" {
+            self.versions
+                .iter_mut()
+                .rev()
+                .find(|o| o.version_id.is_none())
+        } else {
+            self.versions
+                .iter_mut()
+                .rev()
+                .find(|o| o.version_id.as_deref() == Some(version_id))
+        }
+    }
+
+    /// Permanently remove a single version by ID, returning it if found.
+    pub fn remove(&mut self, version_id: &str) -> Option<S3Object> {
+        let target = if version_id == "null" {
+            self.versions.iter().rposition(|o| o.version_id.is_none())
+        } else {
+            self.versions
+                .iter()
+                .rposition(|o| o.version_id.as_deref() == Some(version_id))
+        };
+        target.map(|idx| self.versions.remove(idx))
+    }
+
+    /// Append a new version at the top of the stack.
+    pub fn push(&mut self, obj: S3Object) {
+        self.versions.push(obj);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.versions.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, S3Object> {
+        self.versions.iter()
+    }
 }
 
 /// A multipart upload in progress.
@@ -169,6 +265,8 @@ pub struct S3ObjectMetadata {
     pub last_modified: String,
     pub metadata: HashMap<String, String>,
     pub version_id: Option<String>,
+    #[serde(default)]
+    pub is_delete_marker: bool,
 }
 
 impl From<&S3Object> for S3ObjectMetadata {
@@ -181,6 +279,7 @@ impl From<&S3Object> for S3ObjectMetadata {
             last_modified: obj.last_modified.clone(),
             metadata: obj.metadata.clone(),
             version_id: obj.version_id.clone(),
+            is_delete_marker: obj.is_delete_marker,
         }
     }
 }
@@ -243,7 +342,12 @@ impl Snapshottable for S3State {
                     objects: b
                         .objects
                         .iter()
-                        .map(|oe| S3ObjectMetadata::from(oe.value()))
+                        .flat_map(|oe| {
+                            oe.value()
+                                .iter()
+                                .map(S3ObjectMetadata::from)
+                                .collect::<Vec<_>>()
+                        })
                         .collect(),
                 }
             })
@@ -274,22 +378,21 @@ impl Snapshottable for S3State {
                 logging: bs.logging,
                 configs: bs.configs,
                 objects: {
-                    let dm = DashMap::new();
+                    let dm: DashMap<String, ObjectVersions> = DashMap::new();
                     for meta in bs.objects {
-                        dm.insert(
-                            meta.key.clone(),
-                            S3Object {
-                                key: meta.key,
-                                body: Body::InMemory(Vec::new()),
-                                content_type: meta.content_type,
-                                content_length: meta.content_length,
-                                etag: meta.etag,
-                                last_modified: meta.last_modified,
-                                metadata: meta.metadata,
-                                version_id: meta.version_id,
-                                tags: Default::default(),
-                            },
-                        );
+                        let obj = S3Object {
+                            key: meta.key.clone(),
+                            body: Body::InMemory(Vec::new()),
+                            content_type: meta.content_type,
+                            content_length: meta.content_length,
+                            etag: meta.etag,
+                            last_modified: meta.last_modified,
+                            metadata: meta.metadata,
+                            version_id: meta.version_id,
+                            tags: Default::default(),
+                            is_delete_marker: meta.is_delete_marker,
+                        };
+                        dm.entry(meta.key).or_default().push(obj);
                     }
                     dm
                 },

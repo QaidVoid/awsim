@@ -78,8 +78,11 @@ pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError
             }
         }
 
-        // Full object entry.
-        if let Some(obj) = bucket.objects.get(key.as_str()) {
+        // Full object entry — skip keys whose latest version is a delete
+        // marker (they look gone to the un-versioned listing API).
+        if let Some(versions) = bucket.objects.get(key.as_str())
+            && let Some(obj) = versions.current()
+        {
             contents.push(json!({
                 "Key": obj.key,
                 "ETag": obj.etag,
@@ -87,9 +90,8 @@ pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError
                 "LastModified": rfc7231_to_iso8601(&obj.last_modified),
                 "StorageClass": "STANDARD",
             }));
+            key_count += 1;
         }
-
-        key_count += 1;
     }
 
     let common_prefix_list: Vec<Value> = common_prefixes
@@ -175,7 +177,9 @@ pub fn list_objects(state: &S3State, input: &Value) -> Result<Value, AwsError> {
                 continue;
             }
         }
-        if let Some(obj) = bucket.objects.get(key.as_str()) {
+        if let Some(versions) = bucket.objects.get(key.as_str())
+            && let Some(obj) = versions.current()
+        {
             contents.push(json!({
                 "Key": obj.key,
                 "ETag": obj.etag,
@@ -244,9 +248,13 @@ pub fn list_object_versions(state: &S3State, input: &Value) -> Result<Value, Aws
         .collect();
     matching.sort();
 
-    let mut versions: Vec<Value> = Vec::new();
+    let mut versions_out: Vec<Value> = Vec::new();
+    let mut delete_markers: Vec<Value> = Vec::new();
     let mut common_prefixes: BTreeSet<String> = BTreeSet::new();
-    for key in matching.iter().take(max_keys) {
+    'keys: for key in matching.iter() {
+        if versions_out.len() + delete_markers.len() >= max_keys {
+            break;
+        }
         if !delimiter.is_empty() {
             let suffix = &key[prefix.len()..];
             if let Some(delim_pos) = suffix.find(delimiter) {
@@ -254,16 +262,31 @@ pub fn list_object_versions(state: &S3State, input: &Value) -> Result<Value, Aws
                 continue;
             }
         }
-        if let Some(obj) = bucket.objects.get(key.as_str()) {
-            versions.push(json!({
+        let Some(versions) = bucket.objects.get(key.as_str()) else {
+            continue;
+        };
+        // The most recent entry per key is `IsLatest=true`; everything older
+        // is a historical version (or DM) and `IsLatest=false`.
+        let last_idx = versions.versions.len().saturating_sub(1);
+        for (i, obj) in versions.iter().enumerate().rev() {
+            if versions_out.len() + delete_markers.len() >= max_keys {
+                break 'keys;
+            }
+            let entry = json!({
                 "Key": obj.key,
                 "VersionId": obj.version_id.clone().unwrap_or_else(|| "null".to_string()),
-                "IsLatest": true,
-                "ETag": obj.etag,
-                "Size": obj.content_length,
+                "IsLatest": i == last_idx,
                 "LastModified": rfc7231_to_iso8601(&obj.last_modified),
-                "StorageClass": "STANDARD",
-            }));
+            });
+            if obj.is_delete_marker {
+                delete_markers.push(entry);
+            } else {
+                let mut v = entry;
+                v["ETag"] = json!(obj.etag);
+                v["Size"] = json!(obj.content_length);
+                v["StorageClass"] = json!("STANDARD");
+                versions_out.push(v);
+            }
         }
     }
 
@@ -278,7 +301,8 @@ pub fn list_object_versions(state: &S3State, input: &Value) -> Result<Value, Aws
         "Prefix": prefix,
         "MaxKeys": max_keys,
         "IsTruncated": false,
-        "Version": versions,
+        "Version": versions_out,
+        "DeleteMarker": delete_markers,
     });
     if !delimiter.is_empty() {
         result["Delimiter"] = json!(delimiter);
@@ -288,7 +312,7 @@ pub fn list_object_versions(state: &S3State, input: &Value) -> Result<Value, Aws
     Ok(result)
 }
 
-/// POST /{Bucket}?delete — batch delete objects.
+/// POST /{Bucket}?delete — batch delete objects, version-aware.
 pub fn delete_objects(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
@@ -297,35 +321,67 @@ pub fn delete_objects(state: &S3State, input: &Value) -> Result<Value, AwsError>
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    // Parse the Delete request body.
-    // XML parsed structure: {"Delete": {"Object": [{"Key": "..."}, ...]}}
+    // XML parsed structure: {"Delete": {"Object": [{"Key": "...", "VersionId"?: "..."}, ...]}}
     let objects = input
         .get("Delete")
         .and_then(|d| d.get("Object"))
         .or_else(|| input.get("Object"));
 
-    let mut deleted: Vec<Value> = Vec::new();
-    let errors: Vec<Value> = Vec::new();
-
-    let process_key = |key: &str| {
-        bucket.objects.remove(key);
-        json!({ "Key": key })
-    };
-
+    let mut entries: Vec<(String, Option<String>)> = Vec::new();
     match objects {
         Some(Value::Array(arr)) => {
             for item in arr {
                 if let Some(key) = item.get("Key").and_then(Value::as_str) {
-                    deleted.push(process_key(key));
+                    let vid = item
+                        .get("VersionId")
+                        .and_then(Value::as_str)
+                        .map(String::from);
+                    entries.push((key.to_string(), vid));
                 }
             }
         }
         Some(Value::Object(_)) => {
-            if let Some(key) = objects.and_then(|o| o.get("Key")).and_then(Value::as_str) {
-                deleted.push(process_key(key));
+            if let Some(item) = objects
+                && let Some(key) = item.get("Key").and_then(Value::as_str)
+            {
+                let vid = item
+                    .get("VersionId")
+                    .and_then(Value::as_str)
+                    .map(String::from);
+                entries.push((key.to_string(), vid));
             }
         }
         _ => {}
+    }
+
+    let status = bucket.versioning.clone();
+    drop(bucket);
+
+    let mut deleted: Vec<Value> = Vec::new();
+    let errors: Vec<Value> = Vec::new();
+
+    for (key, vid) in entries {
+        let mut req = json!({ "Bucket": bucket_name, "Key": key.clone() });
+        if let Some(v) = &vid {
+            req["VersionId"] = Value::String(v.clone());
+        }
+        let _ = status; // Quieten unused warning when we later branch on it.
+        let resp = match super::object::delete_object(state, &req) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let mut entry = json!({ "Key": key });
+        if let Some(rvid) = resp.get("VersionId").and_then(Value::as_str) {
+            entry["VersionId"] = Value::String(rvid.to_string());
+        }
+        if let Some(true) = resp.get("DeleteMarker").and_then(Value::as_bool) {
+            entry["DeleteMarker"] = Value::Bool(true);
+            // Real S3 also echoes DeleteMarkerVersionId for the new marker.
+            if let Some(rvid) = resp.get("VersionId").and_then(Value::as_str) {
+                entry["DeleteMarkerVersionId"] = Value::String(rvid.to_string());
+            }
+        }
+        deleted.push(entry);
     }
 
     Ok(json!({

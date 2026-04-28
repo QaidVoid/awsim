@@ -445,9 +445,12 @@ pub fn put_object_tagging(state: &S3State, input: &Value) -> Result<Value, AwsEr
         AwsError::not_found("NoSuchBucket", format!("Bucket '{bucket_name}' not found"))
     })?;
 
-    let mut obj = bucket
+    let mut versions = bucket
         .objects
         .get_mut(key)
+        .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
+    let obj = versions
+        .current_mut()
         .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
 
     let tags = parse_tags(input);
@@ -469,9 +472,12 @@ pub fn get_object_tagging(state: &S3State, input: &Value) -> Result<Value, AwsEr
         AwsError::not_found("NoSuchBucket", format!("Bucket '{bucket_name}' not found"))
     })?;
 
-    let obj = bucket
+    let versions = bucket
         .objects
         .get(key)
+        .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
+    let obj = versions
+        .current()
         .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
 
     let tag_set: Vec<Value> = obj
@@ -499,12 +505,13 @@ pub fn delete_object_tagging(state: &S3State, input: &Value) -> Result<Value, Aw
         AwsError::not_found("NoSuchBucket", format!("Bucket '{bucket_name}' not found"))
     })?;
 
-    let mut obj = bucket
+    let mut versions = bucket
         .objects
         .get_mut(key)
         .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
-
-    obj.tags.clear();
+    if let Some(obj) = versions.current_mut() {
+        obj.tags.clear();
+    }
 
     Ok(json!({}))
 }
@@ -1656,9 +1663,12 @@ pub fn get_object_attributes(state: &S3State, input: &Value) -> Result<Value, Aw
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    let obj = bucket
+    let versions = bucket
         .objects
         .get(key)
+        .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
+    let obj = versions
+        .current()
         .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
 
     Ok(json!({
@@ -1705,14 +1715,15 @@ pub fn rename_object(state: &S3State, input: &Value) -> Result<Value, AwsError> 
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    let (_, obj) = bucket
+    let (_, mut versions) = bucket
         .objects
         .remove(src_key)
         .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{src_key}' not found")))?;
 
-    let mut new_obj = obj;
-    new_obj.key = dst_key.to_string();
-    bucket.objects.insert(dst_key.to_string(), new_obj);
+    for v in &mut versions.versions {
+        v.key = dst_key.to_string();
+    }
+    bucket.objects.insert(dst_key.to_string(), versions);
 
     Ok(json!({}))
 }
