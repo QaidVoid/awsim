@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use awsim_core::{AwsError, Body, RequestContext};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 use tracing::warn;
 use uuid::Uuid;
@@ -125,22 +126,13 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
             let mut msg_attrs = serde_json::Map::new();
             if want_all_msg_attrs {
                 for (k, ma) in &msg.message_attributes {
-                    let mut entry = serde_json::Map::new();
-                    entry.insert("DataType".to_string(), Value::String(ma.data_type.clone()));
-                    if let Some(ref sv) = ma.string_value {
-                        entry.insert("StringValue".to_string(), Value::String(sv.clone()));
-                    }
-                    msg_attrs.insert(k.clone(), Value::Object(entry));
+                    msg_attrs.insert(k.clone(), Value::Object(message_attribute_entry(ma)));
                 }
             } else {
                 for name in &message_attribute_names {
                     if let Some(ma) = msg.message_attributes.get(*name) {
-                        let mut entry = serde_json::Map::new();
-                        entry.insert("DataType".to_string(), Value::String(ma.data_type.clone()));
-                        if let Some(ref sv) = ma.string_value {
-                            entry.insert("StringValue".to_string(), Value::String(sv.clone()));
-                        }
-                        msg_attrs.insert(name.to_string(), Value::Object(entry));
+                        msg_attrs
+                            .insert(name.to_string(), Value::Object(message_attribute_entry(ma)));
                     }
                 }
             }
@@ -229,4 +221,16 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     }
 
     Ok(json!({ "Messages": messages_json }))
+}
+
+fn message_attribute_entry(ma: &crate::state::MessageAttribute) -> serde_json::Map<String, Value> {
+    let mut entry = serde_json::Map::new();
+    entry.insert("DataType".to_string(), Value::String(ma.data_type.clone()));
+    if let Some(ref sv) = ma.string_value {
+        entry.insert("StringValue".to_string(), Value::String(sv.clone()));
+    }
+    if let Some(ref bv) = ma.binary_value {
+        entry.insert("BinaryValue".to_string(), Value::String(BASE64.encode(bv)));
+    }
+    entry
 }

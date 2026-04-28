@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use awsim_core::{AwsError, Body, RequestContext};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 use tracing::debug;
 use uuid::Uuid;
@@ -236,12 +237,17 @@ fn parse_message_attributes(val: &Value) -> HashMap<String, MessageAttribute> {
         for (k, v) in obj {
             let data_type = v["DataType"].as_str().unwrap_or("String").to_string();
             let string_value = v["StringValue"].as_str().map(|s| s.to_string());
+            // BinaryValue arrives base64-encoded over the wire; decode so we
+            // round-trip the raw bytes the caller sent.
+            let binary_value = v["BinaryValue"]
+                .as_str()
+                .and_then(|s| BASE64.decode(s).ok());
             map.insert(
                 k.clone(),
                 MessageAttribute {
                     data_type,
                     string_value,
-                    binary_value: None,
+                    binary_value,
                 },
             );
         }
@@ -266,4 +272,28 @@ fn unix_epoch_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_message_attributes_decodes_binary_value() {
+        let raw = b"\x00\x01\x02hello";
+        let encoded = BASE64.encode(raw);
+        let input = json!({
+            "blob": { "DataType": "Binary", "BinaryValue": encoded },
+            "label": { "DataType": "String", "StringValue": "world" },
+        });
+        let attrs = parse_message_attributes(&input);
+        let blob = attrs.get("blob").expect("blob attribute parsed");
+        assert_eq!(blob.data_type, "Binary");
+        assert_eq!(blob.binary_value.as_deref(), Some(raw.as_ref()));
+        assert!(blob.string_value.is_none());
+
+        let label = attrs.get("label").expect("label attribute parsed");
+        assert_eq!(label.string_value.as_deref(), Some("world"));
+        assert!(label.binary_value.is_none());
+    }
 }
