@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use serde::Serialize;
+use serde_json::{Map, Value};
 
 /// Represents an AWS API error response.
 #[derive(Debug, Clone, Serialize)]
@@ -16,6 +17,19 @@ pub struct AwsError {
 
     /// Error type: "Sender" (client error) or "Receiver" (server error)
     pub error_type: ErrorType,
+
+    /// Extra JSON fields merged into the serialized error body.
+    ///
+    /// Some AWS exceptions carry structured data alongside the standard
+    /// `__type` / `message` envelope — for example, DynamoDB's
+    /// `TransactionCanceledException` includes a `CancellationReasons` array,
+    /// and `ConditionalCheckFailedException` may include the existing `Item`.
+    /// Use [`Self::with_extras`] or [`Self::with_extra`] to attach them.
+    ///
+    /// Boxed to keep `AwsError` small enough to fit comfortably in a
+    /// `Result<_, AwsError>` (clippy's `result_large_err` threshold).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<Box<Map<String, Value>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -31,6 +45,7 @@ impl AwsError {
             code: code.into(),
             message: message.into(),
             error_type: ErrorType::Sender,
+            extras: None,
         }
     }
 
@@ -47,6 +62,7 @@ impl AwsError {
             code: code.into(),
             message: message.into(),
             error_type: ErrorType::Sender,
+            extras: None,
         }
     }
 
@@ -56,6 +72,7 @@ impl AwsError {
             code: code.into(),
             message: message.into(),
             error_type: ErrorType::Sender,
+            extras: None,
         }
     }
 
@@ -65,6 +82,7 @@ impl AwsError {
             code: code.into(),
             message: message.into(),
             error_type: ErrorType::Sender,
+            extras: None,
         }
     }
 
@@ -74,6 +92,7 @@ impl AwsError {
             code: "InternalServiceError".to_string(),
             message: message.into(),
             error_type: ErrorType::Receiver,
+            extras: None,
         }
     }
 
@@ -83,6 +102,7 @@ impl AwsError {
             code: "NotImplemented".to_string(),
             message: format!("Operation '{operation}' is not yet implemented in AWSim"),
             error_type: ErrorType::Receiver,
+            extras: None,
         }
     }
 
@@ -92,6 +112,7 @@ impl AwsError {
             code: "UnknownOperationException".to_string(),
             message: format!("Unknown operation: {operation}"),
             error_type: ErrorType::Sender,
+            extras: None,
         }
     }
 
@@ -101,6 +122,7 @@ impl AwsError {
             code: "AccessDeniedException".to_string(),
             message: message.into(),
             error_type: ErrorType::Sender,
+            extras: None,
         }
     }
 
@@ -112,6 +134,7 @@ impl AwsError {
                 "User: {principal_arn} is not authorized to perform: {action} on resource: {resource}"
             ),
             error_type: ErrorType::Sender,
+            extras: None,
         }
     }
 
@@ -121,7 +144,22 @@ impl AwsError {
             code: "ValidationException".to_string(),
             message: message.into(),
             error_type: ErrorType::Sender,
+            extras: None,
         }
+    }
+
+    /// Replace the extras map wholesale.
+    pub fn with_extras(mut self, extras: Map<String, Value>) -> Self {
+        self.extras = Some(Box::new(extras));
+        self
+    }
+
+    /// Insert a single extra field, allocating the map if needed.
+    pub fn with_extra(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.extras
+            .get_or_insert_with(|| Box::new(Map::new()))
+            .insert(key.into(), value);
+        self
     }
 }
 

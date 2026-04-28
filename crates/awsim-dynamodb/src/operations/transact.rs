@@ -27,6 +27,37 @@ fn decode_existing(stored: Option<Value>) -> Result<Option<DynamoItem>, AwsError
         .transpose()
 }
 
+/// Build a `TransactionCanceledException` with a `CancellationReasons` array
+/// shaped like the real DynamoDB response: one entry per TransactItem in
+/// request order, where the failed item carries `Code` (and a short `Message`)
+/// and every other item is marked `{"Code": "None"}`.
+fn transaction_canceled(total: usize, failed_idx: usize, failed_code: &str) -> AwsError {
+    let reasons: Vec<Value> = (0..total)
+        .map(|i| {
+            if i == failed_idx {
+                json!({
+                    "Code": failed_code,
+                    "Message": "The conditional request failed",
+                })
+            } else {
+                json!({ "Code": "None" })
+            }
+        })
+        .collect();
+
+    let summary: Vec<&str> = reasons
+        .iter()
+        .filter_map(|r| r.get("Code").and_then(Value::as_str))
+        .collect();
+    let message = format!(
+        "Transaction cancelled, please refer cancellation reasons for specific reasons [{}]",
+        summary.join(", ")
+    );
+
+    AwsError::bad_request("TransactionCanceledException", message)
+        .with_extra("CancellationReasons", Value::Array(reasons))
+}
+
 pub fn transact_get_items(
     state: &DynamoState,
     sqlite: &SqliteStore,
@@ -315,11 +346,13 @@ pub fn transact_write_items(
         }
     }
 
+    let mutation_count = mutations.len();
+
     // Run the entire validation + mutation sequence inside one sqlite
     // write transaction. If any condition fails or any sqlite call
     // errors, the txn auto-rolls back on Drop and no changes leak.
     sqlite.with_write_transaction(|tx: &WriteTx<'_>| -> Result<(), AwsError> {
-        for mutation in &mutations {
+        for (idx, mutation) in mutations.iter().enumerate() {
             match &mutation.action {
                 Action::Put {
                     pk,
@@ -346,9 +379,10 @@ pub fn transact_write_items(
                             expr_attr_names,
                             expr_attr_values,
                         )? {
-                            return Err(AwsError::conflict(
-                                "TransactionCanceledException",
-                                "Transaction cancelled, please refer cancellation reasons for specific reasons [ConditionalCheckFailed]",
+                            return Err(transaction_canceled(
+                                mutation_count,
+                                idx,
+                                "ConditionalCheckFailed",
                             ));
                         }
                     }
@@ -385,19 +419,14 @@ pub fn transact_write_items(
                             expr_attr_names,
                             expr_attr_values,
                         )? {
-                            return Err(AwsError::conflict(
-                                "TransactionCanceledException",
-                                "Transaction cancelled, please refer cancellation reasons for specific reasons [ConditionalCheckFailed]",
+                            return Err(transaction_canceled(
+                                mutation_count,
+                                idx,
+                                "ConditionalCheckFailed",
                             ));
                         }
                     }
-                    tx.delete_item(
-                        &ctx.account_id,
-                        &ctx.region,
-                        &mutation.table_name,
-                        pk,
-                        sk,
-                    )?;
+                    tx.delete_item(&ctx.account_id, &ctx.region, &mutation.table_name, pk, sk)?;
                 }
                 Action::Update {
                     pk,
@@ -426,9 +455,10 @@ pub fn transact_write_items(
                             expr_attr_names,
                             expr_attr_values,
                         )? {
-                            return Err(AwsError::conflict(
-                                "TransactionCanceledException",
-                                "Transaction cancelled, please refer cancellation reasons for specific reasons [ConditionalCheckFailed]",
+                            return Err(transaction_canceled(
+                                mutation_count,
+                                idx,
+                                "ConditionalCheckFailed",
                             ));
                         }
                     }
@@ -482,9 +512,10 @@ pub fn transact_write_items(
                             expr_attr_names,
                             expr_attr_values,
                         )? {
-                            return Err(AwsError::conflict(
-                                "TransactionCanceledException",
-                                "Transaction cancelled, please refer cancellation reasons for specific reasons [ConditionalCheckFailed]",
+                            return Err(transaction_canceled(
+                                mutation_count,
+                                idx,
+                                "ConditionalCheckFailed",
                             ));
                         }
                     }
@@ -597,6 +628,58 @@ mod tests {
             json!({"N": "0"}),
             "rollback failed: p1 was mutated"
         );
+    }
+
+    #[test]
+    fn cancellation_reasons_array_marks_failed_index() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let ctx = ctx();
+
+        sqlite
+            .put_item(
+                &ctx.account_id,
+                &ctx.region,
+                "t",
+                "p1",
+                "s1",
+                &json!({"pk": {"S": "p1"}, "sk": {"S": "s1"}}),
+                &Default::default(),
+            )
+            .unwrap();
+
+        // First Put OK, second Put fails its condition. The error should
+        // expose CancellationReasons with [None, ConditionalCheckFailed].
+        let input = json!({
+            "TransactItems": [
+                {
+                    "Put": {
+                        "TableName": "t",
+                        "Item": {"pk": {"S": "fresh"}, "sk": {"S": "1"}},
+                    }
+                },
+                {
+                    "Put": {
+                        "TableName": "t",
+                        "Item": {"pk": {"S": "p1"}, "sk": {"S": "s1"}},
+                        "ConditionExpression": "attribute_not_exists(pk)",
+                    }
+                }
+            ]
+        });
+        let err = transact_write_items(&state, &sqlite, &input, &ctx).unwrap_err();
+        assert_eq!(err.code, "TransactionCanceledException");
+        assert_eq!(err.status.as_u16(), 400);
+
+        let extras = err.extras.as_ref().expect("extras populated");
+        let reasons = extras
+            .get("CancellationReasons")
+            .and_then(|v| v.as_array())
+            .expect("CancellationReasons array");
+        assert_eq!(reasons.len(), 2);
+        assert_eq!(reasons[0]["Code"], json!("None"));
+        assert_eq!(reasons[1]["Code"], json!("ConditionalCheckFailed"));
+        assert!(reasons[1].get("Message").is_some());
     }
 
     #[test]

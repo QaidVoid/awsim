@@ -121,11 +121,15 @@ fn strip_magic_keys(output: &Value) -> Value {
 
 /// Serialize a JSON error response.
 pub fn serialize_error(error: &AwsError, request_id: &str) -> (StatusCode, HeaderMap, Bytes) {
-    let body = serde_json::json!({
-        "__type": error.code,
-        "message": error.message,
-    });
-    let body = serde_json::to_vec(&body).unwrap_or_default();
+    let mut body = serde_json::Map::new();
+    body.insert("__type".to_string(), Value::String(error.code.clone()));
+    body.insert("message".to_string(), Value::String(error.message.clone()));
+    if let Some(extras) = &error.extras {
+        for (k, v) in extras.as_ref() {
+            body.insert(k.clone(), v.clone());
+        }
+    }
+    let body = serde_json::to_vec(&Value::Object(body)).unwrap_or_default();
     let mut headers = HeaderMap::new();
     headers.insert(
         "content-type",
