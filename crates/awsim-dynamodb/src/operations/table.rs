@@ -332,6 +332,33 @@ pub fn create_table(
     Ok(json!({ "TableDescription": desc }))
 }
 
+/// `TruncateTable` — awsim-only op. Wipes every item in a table while
+/// keeping the schema, GSIs, and stream config intact. Useful for the
+/// UI's "reset between tests" workflow; no equivalent in real DynamoDB
+/// (you'd have to DeleteTable + CreateTable, which loses streams).
+pub fn truncate_table(
+    state: &DynamoState,
+    sqlite: &SqliteStore,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let table_name = require_str(input, "TableName")?;
+
+    if !state.tables.contains_key(table_name) {
+        return Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Cannot do operations on a non-existent table: {table_name}"),
+        ));
+    }
+
+    let removed = sqlite.truncate_table(&ctx.account_id, &ctx.region, table_name)?;
+    info!(table = %table_name, removed, "Truncated DynamoDB table");
+    Ok(json!({
+        "TableName": table_name,
+        "DeletedItemCount": removed,
+    }))
+}
+
 pub fn delete_table(
     state: &DynamoState,
     sqlite: &SqliteStore,

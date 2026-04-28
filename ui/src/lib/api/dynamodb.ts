@@ -229,6 +229,19 @@ export async function deleteTable(name: string): Promise<void> {
   await request("DeleteTable", { TableName: name });
 }
 
+/**
+ * awsim-only operation — clears every item in a table without dropping
+ * the schema, GSIs, or stream config. Returns how many items were
+ * removed. Real DynamoDB doesn't support this; awsim keeps it for the
+ * "wipe and retest" loop the UI runs against local data.
+ */
+export async function truncateTable(name: string): Promise<number> {
+  const data = await request<{ DeletedItemCount?: number }>("TruncateTable", {
+    TableName: name,
+  });
+  return data.DeletedItemCount ?? 0;
+}
+
 export interface ScanParams {
   tableName: string;
   limit?: number;

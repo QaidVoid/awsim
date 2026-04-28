@@ -312,6 +312,28 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Clear every item in a table while keeping the schema row intact.
+    /// Backs the awsim-only `TruncateTable` op — DynamoDB itself doesn't
+    /// support this (you'd have to DeleteTable + CreateTable), but as a
+    /// dev tool it's a much faster reset for the UI's "wipe + retest"
+    /// loop. Returns the number of rows removed.
+    pub fn truncate_table(
+        &self,
+        account: &str,
+        region: &str,
+        table: &str,
+    ) -> Result<u64, AwsError> {
+        let conn = self.conn()?;
+        let n = conn
+            .execute(
+                "DELETE FROM items
+                 WHERE account = ?1 AND region = ?2 AND table_name = ?3",
+                params![account, region, table],
+            )
+            .map_err(sqlite_err)?;
+        Ok(n as u64)
+    }
+
     /// Drop every row for a table — used by `DeleteTable`.
     pub fn drop_table(
         &self,
@@ -684,6 +706,27 @@ mod tests {
         store.put_item("a", "r", "t", "p", "s", &json!({}), &empty_gsi()).unwrap();
         assert!(store.delete_item("a", "r", "t", "p", "s").unwrap());
         assert!(!store.delete_item("a", "r", "t", "p", "s").unwrap());
+    }
+
+    #[test]
+    fn truncate_table_clears_items_keeps_schema() {
+        let store = SqliteStore::in_memory().unwrap();
+        store
+            .put_table_schema("a", "r", "t1", &json!({"TableName": "t1"}))
+            .unwrap();
+        for i in 0..5 {
+            store
+                .put_item("a", "r", "t1", "p", &format!("s{i}"), &json!({}), &empty_gsi())
+                .unwrap();
+        }
+        let removed = store.truncate_table("a", "r", "t1").unwrap();
+        assert_eq!(removed, 5);
+        assert_eq!(store.count_items("a", "r", "t1").unwrap(), 0);
+        // Schema row survives.
+        assert_eq!(
+            store.get_table_schema("a", "r", "t1").unwrap(),
+            Some(json!({"TableName": "t1"}))
+        );
     }
 
     #[test]

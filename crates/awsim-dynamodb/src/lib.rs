@@ -132,6 +132,17 @@ impl ServiceHandler for DynamoDbService {
                 })
                 .await
             }
+            // awsim-only — no AWS equivalent. Clears items, keeps schema.
+            "TruncateTable" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::table::truncate_table(&state, &sqlite, &input, &ctx)
+                })
+                .await
+            }
             "DescribeTable" => {
                 let state = state.clone();
                 let sqlite = self.sqlite.clone();
@@ -388,6 +399,7 @@ impl ServiceHandler for DynamoDbService {
         match operation {
             "CreateTable"
             | "DeleteTable"
+            | "TruncateTable"
             | "DescribeTable"
             | "ListTables"
             | "UpdateTable"

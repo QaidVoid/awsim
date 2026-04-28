@@ -5,6 +5,7 @@
 		listTables,
 		describeTable,
 		deleteTable,
+		truncateTable,
 		type TableSummary,
 		type TableDetail,
 		type Item
@@ -23,6 +24,7 @@
 	import ConfirmDialog from '$lib/components/dynamodb/confirm-dialog.svelte';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import Eraser from '@lucide/svelte/icons/eraser';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 
 	let tables = $state<TableSummary[]>([]);
@@ -36,6 +38,8 @@
 	let createOpen = $state(false);
 	let confirmOpen = $state(false);
 	let confirmBusy = $state(false);
+	let truncateOpen = $state(false);
+	let truncateBusy = $state(false);
 
 	let editorOpen = $state(false);
 	let editingItem = $state<Item | null>(null);
@@ -105,6 +109,25 @@
 			confirmBusy = false;
 		}
 	}
+
+	async function confirmTruncate() {
+		if (!selected) return;
+		truncateBusy = true;
+		try {
+			const removed = await truncateTable(selected.name);
+			toast.success(
+				removed === 0
+					? `${selected.name} was already empty`
+					: `Truncated ${selected.name} (${removed.toLocaleString()} item${removed === 1 ? '' : 's'} removed)`
+			);
+			truncateOpen = false;
+			await refreshDetail();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to truncate table');
+		} finally {
+			truncateBusy = false;
+		}
+	}
 </script>
 
 <ServicePage title="DynamoDB" description="Managed NoSQL — tables, items, queries, PartiQL.">
@@ -151,10 +174,16 @@
 							{detail.status || 'UNKNOWN'}
 						</Badge>
 					</div>
-					<Button variant="ghost" size="sm" onclick={() => (confirmOpen = true)}>
-						<Trash2 class="size-3.5 text-destructive" />
-						Delete
-					</Button>
+					<div class="flex items-center gap-1">
+						<Button variant="ghost" size="sm" onclick={() => (truncateOpen = true)}>
+							<Eraser class="size-3.5" />
+							Truncate
+						</Button>
+						<Button variant="ghost" size="sm" onclick={() => (confirmOpen = true)}>
+							<Trash2 class="size-3.5 text-destructive" />
+							Delete
+						</Button>
+					</div>
 				</div>
 
 				<Tabs bind:value={activeTab} class="flex min-h-0 flex-1 flex-col gap-0">
@@ -206,4 +235,14 @@
 	busy={confirmBusy}
 	onConfirm={confirmDelete}
 	onClose={() => (confirmOpen = false)}
+/>
+
+<ConfirmDialog
+	bind:open={truncateOpen}
+	title="Truncate table?"
+	description={`Delete every item in "${selected?.name ?? ''}". The schema, indexes, and stream config stay intact.`}
+	confirmLabel="Truncate"
+	busy={truncateBusy}
+	onConfirm={confirmTruncate}
+	onClose={() => (truncateOpen = false)}
 />
