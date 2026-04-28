@@ -11,9 +11,13 @@
 	import CommandPalette from '$lib/components/command-palette.svelte';
 	import KeyboardHelp from '$lib/components/keyboard-help.svelte';
 	import LeaderHint from '$lib/components/leader-hint.svelte';
+	import InspectDrawer from '$lib/components/inspect-drawer.svelte';
 	import { fetchConfig } from '$lib/api';
 	import { recent } from '$lib/recent.svelte';
 	import { shortcuts } from '$lib/shortcuts.svelte';
+	import { dashboardState } from '$lib/dashboard-state.svelte';
+	import { inspectState } from '$lib/inspect-state.svelte';
+	import { toast } from 'svelte-sonner';
 	import { theme } from '$lib/theme.svelte';
 
 	let { children } = $props();
@@ -33,6 +37,12 @@
 			{ keys: '/', category: 'General', description: 'Open command palette', action: () => (paletteOpen = true) },
 			{ keys: 't', category: 'General', description: 'Toggle theme', action: () => theme.toggle() },
 			{ keys: '[', category: 'General', description: 'Toggle sidebar', action: () => toggleCollapse() },
+			{
+				keys: 'i',
+				category: 'General',
+				description: 'Inspect last request',
+				action: () => inspectLatest(),
+			},
 
 			// Navigation (g leader)
 			{ keys: 'g d', category: 'Navigation', description: 'Dashboard', action: () => goto('/') },
@@ -91,6 +101,30 @@
 		}
 	}
 
+	async function inspectLatest() {
+		// Prefer the SSE buffer (we have full event metadata there) — fall
+		// back to fetching the recent-ids list when the user is on a page
+		// that doesn't subscribe to dashboardState.
+		const last = dashboardState.events[0];
+		if (last) {
+			inspectState.show(last.id, last);
+			return;
+		}
+		try {
+			const res = await fetch('/_awsim/requests');
+			if (!res.ok) throw new Error(String(res.status));
+			const body = (await res.json()) as { ids: string[] };
+			const id = body.ids?.[0];
+			if (!id) {
+				toast.info('No recent requests to inspect — hit any endpoint first.');
+				return;
+			}
+			inspectState.show(id, null);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Failed to load recent requests');
+		}
+	}
+
 	// Track recent paths for the command palette.
 	afterNavigate(() => {
 		const path = page.url?.pathname;
@@ -145,6 +179,7 @@
 
 	<CommandPalette bind:open={paletteOpen} />
 	<KeyboardHelp bind:open={helpOpen} />
+	<InspectDrawer />
 	<LeaderHint />
 	<Toaster />
 </TooltipProvider>

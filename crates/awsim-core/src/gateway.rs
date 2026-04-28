@@ -16,6 +16,7 @@ use crate::body_store::BodyStore;
 use crate::error::AwsError;
 use crate::events::EventBus;
 use crate::protocol::{self, Protocol, RouteDefinition};
+use crate::request_detail::{RequestDetail, RequestDetailStore, capture_body, capture_headers};
 use crate::request_event::{RequestEvent, RequestEventBus};
 
 #[derive(Clone)]
@@ -50,6 +51,8 @@ pub struct AppState {
     pub data_dir: Option<Arc<std::path::PathBuf>>,
     /// Broadcast bus for per-request observability events (consumed by SSE).
     pub events: RequestEventBus,
+    /// Ring buffer of recent per-request detail captures (headers + bodies).
+    pub request_details: RequestDetailStore,
 }
 
 impl AppState {
@@ -66,6 +69,7 @@ impl AppState {
             body_stores: Arc::new(Vec::new()),
             data_dir: None,
             events: RequestEventBus::new(),
+            request_details: RequestDetailStore::default(),
         }
     }
 
@@ -147,29 +151,13 @@ pub async fn handle_request(
     )
     .await;
 
-    let (response, status_code, response_size, operation, error_code) = match outcome {
+    let (status, resp_headers, resp_body, operation, error_code) = match outcome {
         Ok(ProcessOk {
             status,
-            mut headers,
+            headers,
             body,
             operation,
-        }) => {
-            let response_size = body.len() as u64;
-            let mut builder = Response::builder().status(status);
-            for (key, value) in headers.drain() {
-                if let Some(key) = key {
-                    builder = builder.header(key, value);
-                }
-            }
-            let response = builder.body(Body::from(body)).unwrap();
-            (
-                response,
-                status.as_u16(),
-                response_size,
-                Some(operation),
-                None,
-            )
-        }
+        }) => (status, headers, body, Some(operation), None),
         Err((protocol, error)) => {
             warn!(
                 error_code = %error.code,
@@ -178,25 +166,38 @@ pub async fn handle_request(
                 "Request failed"
             );
             let err_code = error.code.clone();
-            let (status, mut resp_headers, resp_body) =
+            let (status, resp_headers, resp_body) =
                 protocol::serialize_error(protocol, &error, &request_id);
-            let response_size = resp_body.len() as u64;
-            let mut builder = Response::builder().status(status);
-            for (key, value) in resp_headers.drain() {
-                if let Some(key) = key {
-                    builder = builder.header(key, value);
-                }
-            }
-            let response = builder.body(Body::from(resp_body)).unwrap();
-            (
-                response,
-                status.as_u16(),
-                response_size,
-                None,
-                Some(err_code),
-            )
+            (status, resp_headers, resp_body, None, Some(err_code))
         }
     };
+    let status_code = status.as_u16();
+    let response_size = resp_body.len() as u64;
+
+    // Capture detail for the inspect drawer before the body is moved into
+    // the response. Bodies are size-capped inside `capture_body`.
+    let body_cap = state.request_details.body_cap();
+    let detail = RequestDetail {
+        id: request_id.clone(),
+        method: method.to_string(),
+        path: uri.path().to_string(),
+        query: uri.query().map(|q| q.to_string()),
+        status_code,
+        request_headers: capture_headers(&headers),
+        response_headers: capture_headers(&resp_headers),
+        request_body: capture_body(&body, body_cap),
+        response_body: capture_body(&resp_body, body_cap),
+    };
+    state.request_details.insert(detail);
+
+    let mut builder = Response::builder().status(status);
+    let mut resp_headers = resp_headers;
+    for (key, value) in resp_headers.drain() {
+        if let Some(key) = key {
+            builder = builder.header(key, value);
+        }
+    }
+    let response = builder.body(Body::from(resp_body)).unwrap();
 
     let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
     let ts = SystemTime::now()

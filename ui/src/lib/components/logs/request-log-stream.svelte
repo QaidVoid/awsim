@@ -14,9 +14,9 @@
 	import { fly } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 	import { dashboardState } from '$lib/dashboard-state.svelte';
+	import { inspectState } from '$lib/inspect-state.svelte';
 	import { relativeTime } from '$lib/format';
 	import type { RequestEvent } from '$lib/events';
-	import RequestDetailSheet from '$lib/components/dashboard/request-detail-sheet.svelte';
 	import type { LogTab, ColumnKey } from './types';
 
 	interface Props {
@@ -27,8 +27,6 @@
 
 	let { tab, query, visibleColumns }: Props = $props();
 
-	let selected = $state<RequestEvent | null>(null);
-	let sheetOpen = $state(false);
 	let scrollEl = $state<HTMLDivElement | null>(null);
 	let pinnedToTop = $state(true);
 
@@ -90,8 +88,7 @@
 	}
 
 	function openDetail(evt: RequestEvent) {
-		selected = evt;
-		sheetOpen = true;
+		inspectState.show(evt.id, evt);
 	}
 </script>
 
@@ -197,5 +194,3 @@
 		{/if}
 	</div>
 </div>
-
-<RequestDetailSheet open={sheetOpen} event={selected} onOpenChange={(o) => (sheetOpen = o)} />

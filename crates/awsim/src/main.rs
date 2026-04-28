@@ -312,6 +312,14 @@ async fn main() -> Result<()> {
         .route("/_awsim/stats", axum::routing::get(admin::stats))
         .route("/_awsim/storage", axum::routing::get(admin::storage))
         .route("/_awsim/events", axum::routing::get(admin::events))
+        .route(
+            "/_awsim/requests",
+            axum::routing::get(admin::recent_request_ids),
+        )
+        .route(
+            "/_awsim/requests/{id}",
+            axum::routing::get(admin::request_detail),
+        )
         .fallback(awsim_core::gateway::handle_request)
         .with_state(state);
 

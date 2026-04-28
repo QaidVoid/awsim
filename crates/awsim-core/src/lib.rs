@@ -7,6 +7,7 @@ pub mod events;
 pub mod gateway;
 pub mod persistence;
 pub mod protocol;
+pub mod request_detail;
 pub mod request_event;
 pub mod router;
 pub mod state;
@@ -22,6 +23,10 @@ pub use events::{EventBus, InternalEvent};
 pub use gateway::{AppState, BodyStoreHandle};
 pub use persistence::PersistenceManager;
 pub use protocol::{Protocol, RouteDefinition};
+pub use request_detail::{
+    CapturedBody, CapturedHeader, DEFAULT_BODY_CAP, DEFAULT_RING_CAPACITY, RequestDetail,
+    RequestDetailStore, capture_body, capture_headers,
+};
 pub use request_event::{RequestEvent, RequestEventBus};
 pub use router::RequestContext;
 pub use state::{AccountRegionStore, Snapshottable};

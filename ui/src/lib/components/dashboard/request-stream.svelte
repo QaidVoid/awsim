@@ -21,14 +21,12 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Activity from '@lucide/svelte/icons/activity';
 	import { dashboardState } from '$lib/dashboard-state.svelte';
+	import { inspectState } from '$lib/inspect-state.svelte';
 	import { relativeTime } from '$lib/format';
 	import type { RequestEvent } from '$lib/events';
-	import RequestDetailSheet from './request-detail-sheet.svelte';
 
 	type Tab = 'all' | '4xx' | '5xx';
 	let tab = $state<Tab>('all');
-	let selected = $state<RequestEvent | null>(null);
-	let sheetOpen = $state(false);
 	let scrollEl = $state<HTMLDivElement | null>(null);
 	let pinnedToTop = $state(true);
 
@@ -88,8 +86,7 @@
 	}
 
 	function openDetail(evt: RequestEvent) {
-		selected = evt;
-		sheetOpen = true;
+		inspectState.show(evt.id, evt);
 	}
 </script>
 
@@ -205,9 +202,3 @@
 		</div>
 	</CardContent>
 </Card>
-
-<RequestDetailSheet
-	open={sheetOpen}
-	event={selected}
-	onOpenChange={(o) => (sheetOpen = o)}
-/>

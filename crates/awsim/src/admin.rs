@@ -1,7 +1,8 @@
 use awsim_core::AppState;
-use axum::extract::State;
-use axum::response::Json;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Json, Response};
 use serde_json::{Value, json};
 use std::convert::Infallible;
 use std::sync::atomic::Ordering;
@@ -140,6 +141,26 @@ pub async fn events(
         })
         .map(Ok::<_, Infallible>);
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// Returns the captured headers + bodies for a single recent request,
+/// or 404 if it has fallen out of the ring buffer.
+pub async fn request_detail(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.request_details.get(&id) {
+        Some(detail) => Json(detail).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "RequestNotFound", "id": id})),
+        )
+            .into_response(),
+    }
+}
+
+/// Returns the most recent N captured request ids (newest first). Used by
+/// the UI to power the "inspect last request" hotkey.
+pub async fn recent_request_ids(State(state): State<AppState>) -> Json<Value> {
+    let ids = state.request_details.recent_ids(50);
+    Json(json!({ "ids": ids }))
 }
 
 fn format_duration(secs: u64) -> String {

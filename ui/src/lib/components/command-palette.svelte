@@ -13,10 +13,14 @@
 	import { CATEGORY_ORDER, SERVICES, findService } from '$lib/services-catalog';
 	import { recent } from '$lib/recent.svelte';
 	import { theme } from '$lib/theme.svelte';
+	import { dashboardState } from '$lib/dashboard-state.svelte';
+	import { inspectState } from '$lib/inspect-state.svelte';
+	import { toast } from 'svelte-sonner';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Sun from '@lucide/svelte/icons/sun';
 	import Moon from '@lucide/svelte/icons/moon';
 	import Clock from '@lucide/svelte/icons/clock';
+	import Eye from '@lucide/svelte/icons/eye';
 
 	interface Props {
 		open: boolean;
@@ -41,6 +45,29 @@
 		value = '';
 		recent.push(path);
 		goto(path);
+	}
+
+	async function inspectLatest() {
+		open = false;
+		value = '';
+		const last = dashboardState.events[0];
+		if (last) {
+			inspectState.show(last.id, last);
+			return;
+		}
+		try {
+			const res = await fetch('/_awsim/requests');
+			if (!res.ok) throw new Error(String(res.status));
+			const body = (await res.json()) as { ids: string[] };
+			const id = body.ids?.[0];
+			if (!id) {
+				toast.info('No recent requests to inspect — hit any endpoint first.');
+				return;
+			}
+			inspectState.show(id, null);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Failed to load recent requests');
+		}
 	}
 
 	function recentLabel(path: string): string {
@@ -97,6 +124,21 @@
 					<span>{action.label}</span>
 				</CommandItem>
 			{/each}
+		</CommandGroup>
+
+		<CommandSeparator />
+
+		<CommandGroup heading="Tools">
+			<CommandItem
+				value="inspect last request raw http"
+				onSelect={inspectLatest}
+			>
+				<Eye class="size-4" />
+				<span>Inspect last request</span>
+				<CommandShortcut>
+					<span class="font-mono text-[10px]">i</span>
+				</CommandShortcut>
+			</CommandItem>
 		</CommandGroup>
 
 		<CommandSeparator />
