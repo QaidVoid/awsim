@@ -203,10 +203,14 @@ pub fn invoke(
     let mut response = json!({
         "StatusCode": response_status,
         "Payload": response_payload,
+        "__status_code": response_status,
     });
 
     if let Some(err_type) = exec_error {
-        response["FunctionError"] = Value::String(err_type);
+        // The AWS SDK reads function errors from the X-Amz-Function-Error
+        // response header, not from the response body, so surface it both ways.
+        response["FunctionError"] = Value::String(err_type.clone());
+        response["__headers"] = json!({ "X-Amz-Function-Error": err_type });
     }
 
     Ok(response)
