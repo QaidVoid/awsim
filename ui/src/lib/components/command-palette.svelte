@@ -12,13 +12,12 @@
 	} from '$lib/components/ui/command';
 	import { CATEGORY_ORDER, SERVICES, findService } from '$lib/services-catalog';
 	import { recent } from '$lib/recent.svelte';
-	import { theme } from '$lib/theme.svelte';
+	import { THEMES, theme, type Theme } from '$lib/theme.svelte';
 	import { dashboardState } from '$lib/dashboard-state.svelte';
 	import { inspectState } from '$lib/inspect-state.svelte';
 	import { toast } from 'svelte-sonner';
 	import Plus from '@lucide/svelte/icons/plus';
-	import Sun from '@lucide/svelte/icons/sun';
-	import Moon from '@lucide/svelte/icons/moon';
+	import Palette from '@lucide/svelte/icons/palette';
 	import Clock from '@lucide/svelte/icons/clock';
 	import Eye from '@lucide/svelte/icons/eye';
 
@@ -45,6 +44,12 @@
 		value = '';
 		recent.push(path);
 		goto(path);
+	}
+
+	function pickTheme(id: Theme) {
+		theme.set(id);
+		open = false;
+		value = '';
 	}
 
 	async function inspectLatest() {
@@ -144,22 +149,27 @@
 		<CommandSeparator />
 
 		<CommandGroup heading="Theme">
-			<CommandItem
-				value="toggle theme dark light mode"
-				onSelect={() => {
-					theme.toggle();
-					open = false;
-					value = '';
-				}}
-			>
-				{#if theme.isDark}
-					<Sun class="size-4" />
-					<span>Switch to light mode</span>
-				{:else}
-					<Moon class="size-4" />
-					<span>Switch to dark mode</span>
-				{/if}
-			</CommandItem>
+			{#each THEMES as t (t.id)}
+				<CommandItem
+					value={`set theme ${t.id} ${t.label}`}
+					onSelect={() => {
+						pickTheme(t.id);
+					}}
+				>
+					<Palette class="size-4" />
+					<span>{t.label}</span>
+					<span class="ml-auto flex items-center gap-0.5">
+						<span class="size-2.5 rounded-sm" style:background={t.swatch.bg}></span>
+						<span class="size-2.5 rounded-sm" style:background={t.swatch.fg}></span>
+						<span class="size-2.5 rounded-sm" style:background={t.swatch.accent}></span>
+					</span>
+					{#if theme.current === t.id}
+						<CommandShortcut>
+							<span class="text-[10px]">active</span>
+						</CommandShortcut>
+					{/if}
+				</CommandItem>
+			{/each}
 		</CommandGroup>
 
 		<CommandSeparator />

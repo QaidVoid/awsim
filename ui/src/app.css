@@ -88,6 +88,105 @@
   --sidebar-ring: oklch(0.7 0.18 35 / 50%);
 }
 
+/*
+ * Variant overrides — composed on top of `.dark`. Each variant tweaks
+ * only the tokens that diverge from the default dark palette so the
+ * blocks stay scannable.
+ */
+
+.dark.theme-midnight {
+  --background: oklch(0.09 0.02 280);
+  --foreground: oklch(0.95 0.01 280);
+  --card: oklch(0.13 0.02 280);
+  --card-foreground: oklch(0.95 0.01 280);
+  --popover: oklch(0.12 0.02 280);
+  --popover-foreground: oklch(0.95 0.01 280);
+  --primary: oklch(0.7 0.21 295);
+  --primary-foreground: oklch(0.09 0.02 280);
+  --secondary: oklch(0.18 0.02 280);
+  --secondary-foreground: oklch(0.95 0.01 280);
+  --muted: oklch(0.18 0.02 280);
+  --muted-foreground: oklch(0.66 0.02 280);
+  --accent: oklch(0.7 0.21 295);
+  --accent-foreground: oklch(0.09 0.02 280);
+  --border: oklch(0.22 0.02 280);
+  --input: oklch(0.22 0.02 280);
+  --ring: oklch(0.7 0.21 295 / 50%);
+  --sidebar: oklch(0.11 0.02 280);
+  --sidebar-foreground: oklch(0.95 0.01 280);
+  --sidebar-primary: oklch(0.7 0.21 295);
+  --sidebar-primary-foreground: oklch(0.09 0.02 280);
+  --sidebar-accent: oklch(0.18 0.02 280);
+  --sidebar-accent-foreground: oklch(0.95 0.01 280);
+  --sidebar-border: oklch(0.18 0.02 280);
+  --sidebar-ring: oklch(0.7 0.21 295 / 50%);
+  --chart-1: oklch(0.7 0.21 295);
+  --chart-3: oklch(0.7 0.18 320);
+}
+
+.dark.theme-slate {
+  --background: oklch(0.16 0.012 235);
+  --foreground: oklch(0.95 0.005 235);
+  --card: oklch(0.2 0.012 235);
+  --card-foreground: oklch(0.95 0.005 235);
+  --popover: oklch(0.18 0.012 235);
+  --popover-foreground: oklch(0.95 0.005 235);
+  --primary: oklch(0.72 0.15 220);
+  --primary-foreground: oklch(0.16 0.012 235);
+  --secondary: oklch(0.24 0.012 235);
+  --secondary-foreground: oklch(0.95 0.005 235);
+  --muted: oklch(0.24 0.012 235);
+  --muted-foreground: oklch(0.66 0.01 235);
+  --accent: oklch(0.72 0.15 220);
+  --accent-foreground: oklch(0.16 0.012 235);
+  --border: oklch(0.27 0.012 235);
+  --input: oklch(0.27 0.012 235);
+  --ring: oklch(0.72 0.15 220 / 50%);
+  --sidebar: oklch(0.18 0.012 235);
+  --sidebar-foreground: oklch(0.95 0.005 235);
+  --sidebar-primary: oklch(0.72 0.15 220);
+  --sidebar-primary-foreground: oklch(0.16 0.012 235);
+  --sidebar-accent: oklch(0.24 0.012 235);
+  --sidebar-accent-foreground: oklch(0.95 0.005 235);
+  --sidebar-border: oklch(0.24 0.012 235);
+  --sidebar-ring: oklch(0.72 0.15 220 / 50%);
+  --chart-1: oklch(0.72 0.15 220);
+}
+
+.dark.theme-solarized {
+  --background: oklch(0.22 0.025 195);
+  --foreground: oklch(0.86 0.04 75);
+  --card: oklch(0.27 0.025 195);
+  --card-foreground: oklch(0.86 0.04 75);
+  --popover: oklch(0.25 0.025 195);
+  --popover-foreground: oklch(0.86 0.04 75);
+  --primary: oklch(0.7 0.13 195);
+  --primary-foreground: oklch(0.22 0.025 195);
+  --secondary: oklch(0.3 0.025 195);
+  --secondary-foreground: oklch(0.86 0.04 75);
+  --muted: oklch(0.3 0.025 195);
+  --muted-foreground: oklch(0.62 0.025 195);
+  --accent: oklch(0.78 0.18 75);
+  --accent-foreground: oklch(0.22 0.025 195);
+  --destructive: oklch(0.66 0.2 25);
+  --border: oklch(0.32 0.025 195);
+  --input: oklch(0.32 0.025 195);
+  --ring: oklch(0.7 0.13 195 / 50%);
+  --sidebar: oklch(0.2 0.025 195);
+  --sidebar-foreground: oklch(0.86 0.04 75);
+  --sidebar-primary: oklch(0.7 0.13 195);
+  --sidebar-primary-foreground: oklch(0.22 0.025 195);
+  --sidebar-accent: oklch(0.3 0.025 195);
+  --sidebar-accent-foreground: oklch(0.86 0.04 75);
+  --sidebar-border: oklch(0.3 0.025 195);
+  --sidebar-ring: oklch(0.7 0.13 195 / 50%);
+  --chart-1: oklch(0.7 0.13 195);
+  --chart-2: oklch(0.78 0.18 75);
+  --chart-3: oklch(0.65 0.2 25);
+  --chart-4: oklch(0.7 0.18 145);
+  --chart-5: oklch(0.7 0.15 320);
+}
+
 @theme inline {
   --font-sans:
     "Geist Variable", "Geist", "Inter Variable", ui-sans-serif, system-ui,

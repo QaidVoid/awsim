@@ -2,9 +2,7 @@
 	import { cn } from '$lib/utils';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { theme } from '$lib/theme.svelte';
-	import Sun from '@lucide/svelte/icons/sun';
-	import Moon from '@lucide/svelte/icons/moon';
+	import ThemePicker from '$lib/components/theme-picker.svelte';
 	import Code from '@lucide/svelte/icons/code-2';
 	import BookOpen from '@lucide/svelte/icons/book-open';
 	import Search from '@lucide/svelte/icons/search';
@@ -104,20 +102,7 @@
 
 	<!-- Right cluster -->
 	<div class="flex items-center gap-1">
-		<Button
-			type="button"
-			variant="ghost"
-			size="icon"
-			onclick={() => theme.toggle()}
-			aria-label={theme.isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-			class="transition-all duration-100"
-		>
-			{#if theme.isDark}
-				<Sun class="size-4" />
-			{:else}
-				<Moon class="size-4" />
-			{/if}
-		</Button>
+		<ThemePicker />
 
 		{#if onOpenHelp}
 			<Button

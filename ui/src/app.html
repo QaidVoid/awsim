@@ -12,15 +12,29 @@
       href="https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@300..600&display=swap"
     />
     <script>
-      // Apply persisted theme before first paint to prevent flash.
+      // Apply persisted theme + variant before first paint to prevent flash.
       (function () {
+        var DARK_VARIANTS = ["dark", "midnight", "slate", "solarized"];
+        var ALL = DARK_VARIANTS.concat(["light"]);
+        var root = document.documentElement;
         try {
-          const saved = localStorage.getItem("awsim-theme");
-          const theme = saved === "light" ? "light" : "dark";
-          document.documentElement.classList.remove("dark", "light");
-          document.documentElement.classList.add(theme);
+          var saved = localStorage.getItem("awsim-theme");
+          if (ALL.indexOf(saved) === -1) saved = "dark";
+          root.classList.remove(
+            "dark",
+            "light",
+            "theme-midnight",
+            "theme-slate",
+            "theme-solarized"
+          );
+          if (saved === "light") {
+            root.classList.add("light");
+          } else {
+            root.classList.add("dark");
+            if (saved !== "dark") root.classList.add("theme-" + saved);
+          }
         } catch (_) {
-          document.documentElement.classList.add("dark");
+          root.classList.add("dark");
         }
       })();
     </script>
