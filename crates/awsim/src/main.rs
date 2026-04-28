@@ -803,7 +803,8 @@ fn register_services(
     };
     state.register(Arc::new(polly), polly_routes);
 
-    // API Gateway — registered last so we can return a clone of the Arc.
+    // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
+    // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
     let apigw_routes = {
         use awsim_core::ServiceHandler;
@@ -811,6 +812,13 @@ fn register_services(
     };
     let apigw_clone = Arc::clone(&apigateway);
     state.register(apigateway, apigw_routes);
+
+    let apigw_v1 = Arc::new(awsim_apigateway::ApiGatewayV1Service::new());
+    let apigw_v1_routes = {
+        use awsim_core::ServiceHandler;
+        apigw_v1.routes()
+    };
+    state.register(apigw_v1, apigw_v1_routes);
 
     (
         apigw_clone,

@@ -2,6 +2,7 @@ mod operations;
 pub mod proxy;
 mod state;
 mod util;
+pub mod v1;
 
 use std::sync::Arc;
 
@@ -16,6 +17,7 @@ use state::ApiGatewayState;
 
 pub use proxy::{ProxyResponse, proxy_request};
 pub use state::ApiGatewayState as State;
+pub use v1::{ApiGatewayV1Service, ApiGatewayV1State};
 
 pub struct ApiGatewayService {
     store: AccountRegionStore<ApiGatewayState>,
