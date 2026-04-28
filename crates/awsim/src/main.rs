@@ -1,7 +1,14 @@
 use anyhow::Result;
+use axum::error_handling::HandleErrorLayer;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use clap::Parser;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tower::BoxError;
+use tower::ServiceBuilder;
+use tower::limit::ConcurrencyLimitLayer;
+use tower::load_shed::LoadShedLayer;
+use tracing::{debug, error, info, warn};
 
 use awsim_core::{
     AppState, BlobInventory, BodyStore, BodyStoreHandle, PersistenceManager, RequestContext,
@@ -50,6 +57,14 @@ struct Cli {
     /// Unset = startup-only GC.
     #[arg(long, env = "AWSIM_GC_INTERVAL_SECS")]
     gc_interval_secs: Option<u64>,
+
+    /// Maximum concurrent in-flight HTTP requests. Requests above this cap
+    /// are immediately rejected with 503 Service Unavailable instead of
+    /// queuing — so a misbehaving client (e.g. one leaking connections
+    /// during a bulk import) can't accumulate work that eventually
+    /// exhausts file descriptors or memory.
+    #[arg(long, env = "AWSIM_MAX_CONCURRENT_REQUESTS", default_value_t = 5_000)]
+    max_concurrent_requests: usize,
 }
 
 #[tokio::main]
@@ -376,7 +391,25 @@ async fn main() -> Result<()> {
         .merge(opensearch_nested)
         .merge(ecr_router)
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB
+        // Bounded in-flight requests with shed-on-overload. A misbehaving
+        // client (leaking sockets during a bulk import, hammering with
+        // unbounded parallelism) can't accumulate work past the cap —
+        // excess requests get an immediate 503 instead of queueing
+        // indefinitely and starving the runtime / exhausting fds.
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(handle_overload_error))
+                .layer(LoadShedLayer::new())
+                .layer(ConcurrencyLimitLayer::new(cli.max_concurrent_requests)),
+        )
         .layer(tower_http::cors::CorsLayer::permissive());
+
+    info!(
+        max_concurrent_requests = cli.max_concurrent_requests,
+        "Inflight-request cap enabled"
+    );
+
+    spawn_fd_pressure_watcher();
 
     // Bind to the IPv6 unspecified address (`[::]`) so we accept both
     // IPv6 and IPv4-mapped connections on a single socket. Node 20+
@@ -427,6 +460,78 @@ async fn main() -> Result<()> {
 /// Handles:
 ///   sns:Publish                    → sqs  — enqueues the SNS message body into the target queue
 ///   sns:Publish                    → lambda — (future) invokes the target Lambda function
+/// Map tower errors to HTTP responses. The only error we expect from the
+/// LoadShed + ConcurrencyLimit stack is `tower::load_shed::error::Overloaded`
+/// — convert it to a friendly 503 with a hint. Anything else is unexpected
+/// and surfaces as 500.
+async fn handle_overload_error(err: BoxError) -> impl IntoResponse {
+    if err.is::<tower::load_shed::error::Overloaded>() {
+        warn!("Request rejected — concurrency limit reached");
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "AWSim is at the configured concurrent-request cap. \
+             Bound your client's parallelism or raise --max-concurrent-requests.",
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Unhandled middleware error: {err}"),
+        )
+            .into_response()
+    }
+}
+
+/// Background task that polls the process's open-fd count and warns when
+/// the soft limit is being approached. Catches the runaway-connection
+/// pattern (client leaks sockets, fds creep up) before the OS slams the
+/// listener with EMFILE / ENFILE — gives the user a chance to spot it
+/// in the logs and tune the client.
+///
+/// Linux-only (reads /proc/self/fd). On non-Linux it gracefully exits
+/// after the first read failure.
+fn spawn_fd_pressure_watcher() {
+    let pid = std::process::id();
+    let fd_dir = std::path::PathBuf::from(format!("/proc/{pid}/fd"));
+    if !fd_dir.exists() {
+        debug!("/proc/<pid>/fd not available — skipping fd-pressure watcher");
+        return;
+    }
+    let (_, hard) = match rlimit::getrlimit(rlimit::Resource::NOFILE) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let warn_at = (hard as f64 * 0.5) as u64;
+    let crit_at = (hard as f64 * 0.8) as u64;
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            let count = match std::fs::read_dir(&fd_dir) {
+                Ok(d) => d.count() as u64,
+                Err(_) => break, // fs went away (proc unmounted? rare) — stop watching
+            };
+            if count >= crit_at {
+                error!(
+                    open_fds = count,
+                    hard_limit = hard,
+                    threshold_pct = 80,
+                    "fd usage critical — listener will start dropping connections"
+                );
+            } else if count >= warn_at {
+                warn!(
+                    open_fds = count,
+                    hard_limit = hard,
+                    threshold_pct = 50,
+                    "fd usage elevated — check for client connection leaks"
+                );
+            } else {
+                debug!(open_fds = count, hard_limit = hard);
+            }
+        }
+    });
+}
+
 /// Bump the open-files soft limit toward the hard limit (capped at 65,536).
 ///
 /// Default Linux distros ship a 1024 soft limit, which a heavy bulk-import

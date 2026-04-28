@@ -58,6 +58,7 @@ awsim-datasync = { workspace = true }
 awsim-polly = { workspace = true }
 axum = { workspace = true }
 dashmap = { workspace = true }
+tower = { workspace = true, features = ["limit", "load-shed"] }
 tower-http = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
