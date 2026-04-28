@@ -52,9 +52,7 @@ impl SqliteStore {
         let mut conn = open_conn(&db_path)?;
         embedded_migrations::migrations::runner()
             .run(&mut conn)
-            .map_err(|e| {
-                AwsError::internal(format!("DynamoDB migration failed: {e}"))
-            })?;
+            .map_err(|e| AwsError::internal(format!("DynamoDB migration failed: {e}")))?;
         Ok(Self {
             inner: Arc::new(Inner { db_path }),
         })
@@ -142,12 +140,22 @@ impl SqliteStore {
                 gsi4_pk = excluded.gsi4_pk, gsi4_sk = excluded.gsi4_sk,
                 gsi5_pk = excluded.gsi5_pk, gsi5_sk = excluded.gsi5_sk",
             params![
-                account, region, table, pk, sk, attrs_json,
-                gsi_keys[0].0, gsi_keys[0].1,
-                gsi_keys[1].0, gsi_keys[1].1,
-                gsi_keys[2].0, gsi_keys[2].1,
-                gsi_keys[3].0, gsi_keys[3].1,
-                gsi_keys[4].0, gsi_keys[4].1,
+                account,
+                region,
+                table,
+                pk,
+                sk,
+                attrs_json,
+                gsi_keys[0].0,
+                gsi_keys[0].1,
+                gsi_keys[1].0,
+                gsi_keys[1].1,
+                gsi_keys[2].0,
+                gsi_keys[2].1,
+                gsi_keys[3].0,
+                gsi_keys[3].1,
+                gsi_keys[4].0,
+                gsi_keys[4].1,
             ],
         )
         .map_err(sqlite_err)?;
@@ -176,12 +184,7 @@ impl SqliteStore {
     }
 
     /// Row count for a table (cheap — covered by the PRIMARY KEY index).
-    pub fn count_items(
-        &self,
-        account: &str,
-        region: &str,
-        table: &str,
-    ) -> Result<u64, AwsError> {
+    pub fn count_items(&self, account: &str, region: &str, table: &str) -> Result<u64, AwsError> {
         let conn = self.conn()?;
         let n: i64 = conn
             .query_row(
@@ -204,6 +207,7 @@ impl SqliteStore {
     /// `start_after_sk` is the `ExclusiveStartKey`'s sort key value; rows
     /// with that exact sk are skipped. (For tables without a sort key it
     /// is meaningless and should be `None`.)
+    #[allow(clippy::too_many_arguments)]
     pub fn query_partition<F>(
         &self,
         account: &str,
@@ -335,12 +339,7 @@ impl SqliteStore {
     }
 
     /// Drop every row for a table — used by `DeleteTable`.
-    pub fn drop_table(
-        &self,
-        account: &str,
-        region: &str,
-        table: &str,
-    ) -> Result<u64, AwsError> {
+    pub fn drop_table(&self, account: &str, region: &str, table: &str) -> Result<u64, AwsError> {
         let conn = self.conn()?;
         let n = conn
             .execute(
@@ -408,11 +407,7 @@ impl SqliteStore {
             .transpose()
     }
 
-    pub fn list_table_names(
-        &self,
-        account: &str,
-        region: &str,
-    ) -> Result<Vec<String>, AwsError> {
+    pub fn list_table_names(&self, account: &str, region: &str) -> Result<Vec<String>, AwsError> {
         let conn = self.conn()?;
         let mut stmt = conn
             .prepare(
@@ -550,12 +545,22 @@ impl<'tx> WriteTx<'tx> {
                     gsi4_pk = excluded.gsi4_pk, gsi4_sk = excluded.gsi4_sk,
                     gsi5_pk = excluded.gsi5_pk, gsi5_sk = excluded.gsi5_sk",
                 params![
-                    account, region, table, pk, sk, attrs_json,
-                    gsi_keys[0].0, gsi_keys[0].1,
-                    gsi_keys[1].0, gsi_keys[1].1,
-                    gsi_keys[2].0, gsi_keys[2].1,
-                    gsi_keys[3].0, gsi_keys[3].1,
-                    gsi_keys[4].0, gsi_keys[4].1,
+                    account,
+                    region,
+                    table,
+                    pk,
+                    sk,
+                    attrs_json,
+                    gsi_keys[0].0,
+                    gsi_keys[0].1,
+                    gsi_keys[1].0,
+                    gsi_keys[1].1,
+                    gsi_keys[2].0,
+                    gsi_keys[2].1,
+                    gsi_keys[3].0,
+                    gsi_keys[3].1,
+                    gsi_keys[4].0,
+                    gsi_keys[4].1,
                 ],
             )
             .map_err(sqlite_err)?;
@@ -631,8 +636,10 @@ fn open_conn(path: &PathBuf) -> Result<Connection, AwsError> {
     // `:memory:` databases can't switch journal mode (WAL needs a file),
     // so we skip those PRAGMAs there.
     if path.as_os_str() != ":memory:" {
-        conn.pragma_update(None, "journal_mode", "WAL").map_err(sqlite_err)?;
-        conn.pragma_update(None, "synchronous", "NORMAL").map_err(sqlite_err)?;
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(sqlite_err)?;
+        conn.pragma_update(None, "synchronous", "NORMAL")
+            .map_err(sqlite_err)?;
     }
     conn.execute_batch(
         "PRAGMA temp_store = MEMORY;
@@ -665,9 +672,19 @@ mod tests {
         let store = SqliteStore::in_memory().unwrap();
         // Smoke: a basic CRUD round-trip after migrations should just work.
         store
-            .put_item("acct", "us-east-1", "t", "pk1", "sk1", &json!({"x": 1}), &empty_gsi())
+            .put_item(
+                "acct",
+                "us-east-1",
+                "t",
+                "pk1",
+                "sk1",
+                &json!({"x": 1}),
+                &empty_gsi(),
+            )
             .unwrap();
-        let got = store.get_item("acct", "us-east-1", "t", "pk1", "sk1").unwrap();
+        let got = store
+            .get_item("acct", "us-east-1", "t", "pk1", "sk1")
+            .unwrap();
         assert_eq!(got, Some(json!({"x": 1})));
     }
 
@@ -690,20 +707,42 @@ mod tests {
     #[test]
     fn isolation_across_account_region_table() {
         let store = SqliteStore::in_memory().unwrap();
-        store.put_item("a1", "r1", "t1", "p", "s", &json!({"x": 1}), &empty_gsi()).unwrap();
-        store.put_item("a2", "r1", "t1", "p", "s", &json!({"x": 2}), &empty_gsi()).unwrap();
-        store.put_item("a1", "r2", "t1", "p", "s", &json!({"x": 3}), &empty_gsi()).unwrap();
-        store.put_item("a1", "r1", "t2", "p", "s", &json!({"x": 4}), &empty_gsi()).unwrap();
-        assert_eq!(store.get_item("a1", "r1", "t1", "p", "s").unwrap(), Some(json!({"x": 1})));
-        assert_eq!(store.get_item("a2", "r1", "t1", "p", "s").unwrap(), Some(json!({"x": 2})));
-        assert_eq!(store.get_item("a1", "r2", "t1", "p", "s").unwrap(), Some(json!({"x": 3})));
-        assert_eq!(store.get_item("a1", "r1", "t2", "p", "s").unwrap(), Some(json!({"x": 4})));
+        store
+            .put_item("a1", "r1", "t1", "p", "s", &json!({"x": 1}), &empty_gsi())
+            .unwrap();
+        store
+            .put_item("a2", "r1", "t1", "p", "s", &json!({"x": 2}), &empty_gsi())
+            .unwrap();
+        store
+            .put_item("a1", "r2", "t1", "p", "s", &json!({"x": 3}), &empty_gsi())
+            .unwrap();
+        store
+            .put_item("a1", "r1", "t2", "p", "s", &json!({"x": 4}), &empty_gsi())
+            .unwrap();
+        assert_eq!(
+            store.get_item("a1", "r1", "t1", "p", "s").unwrap(),
+            Some(json!({"x": 1}))
+        );
+        assert_eq!(
+            store.get_item("a2", "r1", "t1", "p", "s").unwrap(),
+            Some(json!({"x": 2}))
+        );
+        assert_eq!(
+            store.get_item("a1", "r2", "t1", "p", "s").unwrap(),
+            Some(json!({"x": 3}))
+        );
+        assert_eq!(
+            store.get_item("a1", "r1", "t2", "p", "s").unwrap(),
+            Some(json!({"x": 4}))
+        );
     }
 
     #[test]
     fn delete_returns_whether_row_existed() {
         let store = SqliteStore::in_memory().unwrap();
-        store.put_item("a", "r", "t", "p", "s", &json!({}), &empty_gsi()).unwrap();
+        store
+            .put_item("a", "r", "t", "p", "s", &json!({}), &empty_gsi())
+            .unwrap();
         assert!(store.delete_item("a", "r", "t", "p", "s").unwrap());
         assert!(!store.delete_item("a", "r", "t", "p", "s").unwrap());
     }
@@ -716,7 +755,15 @@ mod tests {
             .unwrap();
         for i in 0..5 {
             store
-                .put_item("a", "r", "t1", "p", &format!("s{i}"), &json!({}), &empty_gsi())
+                .put_item(
+                    "a",
+                    "r",
+                    "t1",
+                    "p",
+                    &format!("s{i}"),
+                    &json!({}),
+                    &empty_gsi(),
+                )
                 .unwrap();
         }
         let removed = store.truncate_table("a", "r", "t1").unwrap();
@@ -732,8 +779,12 @@ mod tests {
     #[test]
     fn drop_table_clears_only_the_named_table() {
         let store = SqliteStore::in_memory().unwrap();
-        store.put_item("a", "r", "t1", "p", "s", &json!({}), &empty_gsi()).unwrap();
-        store.put_item("a", "r", "t2", "p", "s", &json!({}), &empty_gsi()).unwrap();
+        store
+            .put_item("a", "r", "t1", "p", "s", &json!({}), &empty_gsi())
+            .unwrap();
+        store
+            .put_item("a", "r", "t2", "p", "s", &json!({}), &empty_gsi())
+            .unwrap();
         let dropped = store.drop_table("a", "r", "t1").unwrap();
         assert_eq!(dropped, 1);
         assert_eq!(store.count_items("a", "r", "t1").unwrap(), 0);
@@ -745,7 +796,15 @@ mod tests {
         let store = SqliteStore::in_memory().unwrap();
         for i in 0..5 {
             store
-                .put_item("a", "r", "t", "p", &format!("sk{i}"), &json!({"i": i}), &empty_gsi())
+                .put_item(
+                    "a",
+                    "r",
+                    "t",
+                    "p",
+                    &format!("sk{i}"),
+                    &json!({"i": i}),
+                    &empty_gsi(),
+                )
                 .unwrap();
         }
         // Forward, no start: all 5 in ascending order.
@@ -828,7 +887,13 @@ mod tests {
             "KeySchema": [{"AttributeName": "PK", "KeyType": "HASH"}],
         });
         store.put_table_schema("a", "r", "users", &schema).unwrap();
-        assert_eq!(store.get_table_schema("a", "r", "users").unwrap(), Some(schema));
-        assert_eq!(store.list_table_names("a", "r").unwrap(), vec!["users".to_string()]);
+        assert_eq!(
+            store.get_table_schema("a", "r", "users").unwrap(),
+            Some(schema)
+        );
+        assert_eq!(
+            store.list_table_names("a", "r").unwrap(),
+            vec!["users".to_string()]
+        );
     }
 }

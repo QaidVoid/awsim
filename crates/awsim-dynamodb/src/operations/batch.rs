@@ -84,13 +84,17 @@ pub fn batch_write_item(
     // Collect SQLite mirror operations while we hold each table lock,
     // then apply them after the lock is released so we don't hold the
     // DashMap entry across blocking sqlite IO.
+    //
+    // The gsi array (5 × Option<String> pairs) is boxed to keep the
+    // SqliteOp enum size in check — without it Put dwarfs Delete by
+    // ~500 bytes, which clippy (rightly) flags for `Vec<SqliteOp>`.
     enum SqliteOp {
         Put {
             table: String,
             pk: String,
             sk: String,
             attrs: Value,
-            gsi: [(Option<String>, Option<String>); crate::sqlite_store::MAX_GSI_SLOTS],
+            gsi: Box<[(Option<String>, Option<String>); crate::sqlite_store::MAX_GSI_SLOTS]>,
         },
         Delete {
             table: String,
@@ -130,7 +134,7 @@ pub fn batch_write_item(
                         pk: keys.pk,
                         sk: keys.sk,
                         attrs,
-                        gsi: keys.gsi,
+                        gsi: Box::new(keys.gsi),
                     });
                 }
             } else if let Some(delete_req) = req.get("DeleteRequest") {
@@ -158,15 +162,7 @@ pub fn batch_write_item(
                 attrs,
                 gsi,
             } => {
-                sqlite.put_item(
-                    &ctx.account_id,
-                    &ctx.region,
-                    &table,
-                    &pk,
-                    &sk,
-                    &attrs,
-                    &gsi,
-                )?;
+                sqlite.put_item(&ctx.account_id, &ctx.region, &table, &pk, &sk, &attrs, &gsi)?;
             }
             SqliteOp::Delete { table, pk, sk } => {
                 sqlite.delete_item(&ctx.account_id, &ctx.region, &table, &pk, &sk)?;

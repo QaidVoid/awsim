@@ -203,9 +203,7 @@ pub fn query(
         "ScannedCount": scanned_count,
     });
 
-    if hit_limit
-        && let Some(item) = last_item
-    {
+    if hit_limit && let Some(item) = last_item {
         let lek = last_evaluated_key(&item, &hash_key_name, range_key_name.as_deref());
         result["LastEvaluatedKey"] = item_to_json(&lek);
     }
@@ -312,9 +310,7 @@ pub fn scan(
         "ScannedCount": scanned_count,
     });
 
-    if hit_limit
-        && let Some(item) = last_item
-    {
+    if hit_limit && let Some(item) = last_item {
         let lek = last_evaluated_key(&item, &hash_key_name, range_key_name.as_deref());
         result["LastEvaluatedKey"] = item_to_json(&lek);
     }
@@ -355,18 +351,16 @@ fn extract_pk_from_condition(
                 left
             };
 
-            if resolved_left == hash_key_name {
-                if let Some(placeholder) = right.strip_prefix(':') {
-                    let key = format!(":{placeholder}");
-                    if let Some(val) = expr_attr_values.get(&key) {
-                        return val
-                            .get("S")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                            .or_else(|| {
-                                val.get("N").and_then(|v| v.as_str()).map(|s| s.to_string())
-                            });
-                    }
+            if resolved_left == hash_key_name
+                && let Some(placeholder) = right.strip_prefix(':')
+            {
+                let key = format!(":{placeholder}");
+                if let Some(val) = expr_attr_values.get(&key) {
+                    return val
+                        .get("S")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| val.get("N").and_then(|v| v.as_str()).map(|s| s.to_string()));
                 }
             }
         }

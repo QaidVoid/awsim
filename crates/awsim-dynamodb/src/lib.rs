@@ -117,20 +117,16 @@ impl ServiceHandler for DynamoDbService {
                 let sqlite = self.sqlite.clone();
                 let input = input.clone();
                 let ctx = ctx.clone();
-                run_blocking(move || {
-                    operations::table::create_table(&state, &sqlite, &input, &ctx)
-                })
-                .await
+                run_blocking(move || operations::table::create_table(&state, &sqlite, &input, &ctx))
+                    .await
             }
             "DeleteTable" => {
                 let state = state.clone();
                 let sqlite = self.sqlite.clone();
                 let input = input.clone();
                 let ctx = ctx.clone();
-                run_blocking(move || {
-                    operations::table::delete_table(&state, &sqlite, &input, &ctx)
-                })
-                .await
+                run_blocking(move || operations::table::delete_table(&state, &sqlite, &input, &ctx))
+                    .await
             }
             // awsim-only — no AWS equivalent. Clears items, keeps schema.
             "TruncateTable" => {
@@ -159,10 +155,8 @@ impl ServiceHandler for DynamoDbService {
                 let sqlite = self.sqlite.clone();
                 let input = input.clone();
                 let ctx = ctx.clone();
-                run_blocking(move || {
-                    operations::table::update_table(&state, &sqlite, &input, &ctx)
-                })
-                .await
+                run_blocking(move || operations::table::update_table(&state, &sqlite, &input, &ctx))
+                    .await
             }
 
             // Endpoint discovery
@@ -208,20 +202,16 @@ impl ServiceHandler for DynamoDbService {
                 let sqlite = self.sqlite.clone();
                 let input = input.clone();
                 let ctx = ctx.clone();
-                run_blocking(move || {
-                    operations::item::delete_item(&state, &sqlite, &input, &ctx)
-                })
-                .await
+                run_blocking(move || operations::item::delete_item(&state, &sqlite, &input, &ctx))
+                    .await
             }
             "UpdateItem" => {
                 let state = state.clone();
                 let sqlite = self.sqlite.clone();
                 let input = input.clone();
                 let ctx = ctx.clone();
-                run_blocking(move || {
-                    operations::item::update_item(&state, &sqlite, &input, &ctx)
-                })
-                .await
+                run_blocking(move || operations::item::update_item(&state, &sqlite, &input, &ctx))
+                    .await
             }
 
             // Query & Scan — read items from SQLite, evaluate filters in Rust.
@@ -230,16 +220,14 @@ impl ServiceHandler for DynamoDbService {
                 let sqlite = self.sqlite.clone();
                 let input = input.clone();
                 let ctx = ctx.clone();
-                run_blocking(move || operations::query::query(&state, &sqlite, &input, &ctx))
-                    .await
+                run_blocking(move || operations::query::query(&state, &sqlite, &input, &ctx)).await
             }
             "Scan" => {
                 let state = state.clone();
                 let sqlite = self.sqlite.clone();
                 let input = input.clone();
                 let ctx = ctx.clone();
-                run_blocking(move || operations::query::scan(&state, &sqlite, &input, &ctx))
-                    .await
+                run_blocking(move || operations::query::scan(&state, &sqlite, &input, &ctx)).await
             }
 
             // Batch operations

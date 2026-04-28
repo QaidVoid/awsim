@@ -203,13 +203,7 @@ pub fn put_item(
     let expr_attr_values = get_expr_attr_values(input);
 
     // Conditional check + old-image lookup against the SQLite mirror.
-    let old_item = fetch_existing(
-        sqlite,
-        ctx,
-        &table_name,
-        &sqlite_keys.pk,
-        &sqlite_keys.sk,
-    )?;
+    let old_item = fetch_existing(sqlite, ctx, &table_name, &sqlite_keys.pk, &sqlite_keys.sk)?;
 
     if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
         let condition = parse_condition(cond_expr)?;
@@ -333,13 +327,7 @@ pub fn delete_item(
 
     // Snapshot the existing item before delete — needed for both
     // ConditionExpression evaluation and the REMOVE stream record.
-    let old_item = fetch_existing(
-        sqlite,
-        ctx,
-        &table_name,
-        &sqlite_pk_sk.0,
-        &sqlite_pk_sk.1,
-    )?;
+    let old_item = fetch_existing(sqlite, ctx, &table_name, &sqlite_pk_sk.0, &sqlite_pk_sk.1)?;
 
     if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
         let condition = parse_condition(cond_expr)?;
@@ -420,13 +408,7 @@ pub fn update_item(
 
     // Load the existing item (upsert semantics — Update creates the row
     // when it doesn't yet exist, with just the key attributes populated).
-    let old_item = fetch_existing(
-        sqlite,
-        ctx,
-        &table_name,
-        &sqlite_pk_sk.0,
-        &sqlite_pk_sk.1,
-    )?;
+    let old_item = fetch_existing(sqlite, ctx, &table_name, &sqlite_pk_sk.0, &sqlite_pk_sk.1)?;
 
     if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
         let condition = parse_condition(cond_expr)?;
@@ -589,7 +571,12 @@ mod tests {
             put_item(&state, &sqlite, &input, &ctx).unwrap();
         }
 
-        assert_eq!(sqlite.count_items(&ctx.account_id, &ctx.region, "t").unwrap(), 1000);
+        assert_eq!(
+            sqlite
+                .count_items(&ctx.account_id, &ctx.region, "t")
+                .unwrap(),
+            1000
+        );
     }
 
     #[test]

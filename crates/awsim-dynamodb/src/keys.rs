@@ -133,7 +133,9 @@ mod tests {
     }
 
     fn dyn_item(json: serde_json::Value) -> DynamoItem {
-        let serde_json::Value::Object(m) = json else { panic!("expected object") };
+        let serde_json::Value::Object(m) = json else {
+            panic!("expected object")
+        };
         m.into_iter().collect()
     }
 

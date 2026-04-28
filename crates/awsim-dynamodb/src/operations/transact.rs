@@ -78,17 +78,19 @@ pub fn transact_get_items(
 
     // Snapshot read across all gets — a deferred sqlite txn pins the
     // visible commit point.
-    let responses = sqlite.with_read_transaction(|tx: &ReadTx<'_>| -> Result<Vec<Value>, AwsError> {
-        let mut out = Vec::with_capacity(gets.len());
-        for g in &gets {
-            let stored = tx.get_item(&ctx.account_id, &ctx.region, &g.table_name, &g.pk, &g.sk)?;
-            match decode_existing(stored)? {
-                None => out.push(json!({})),
-                Some(item) => out.push(json!({ "Item": item_to_json(&item) })),
+    let responses =
+        sqlite.with_read_transaction(|tx: &ReadTx<'_>| -> Result<Vec<Value>, AwsError> {
+            let mut out = Vec::with_capacity(gets.len());
+            for g in &gets {
+                let stored =
+                    tx.get_item(&ctx.account_id, &ctx.region, &g.table_name, &g.pk, &g.sk)?;
+                match decode_existing(stored)? {
+                    None => out.push(json!({})),
+                    Some(item) => out.push(json!({ "Item": item_to_json(&item) })),
+                }
             }
-        }
-        Ok(out)
-    })?;
+            Ok(out)
+        })?;
 
     Ok(json!({ "Responses": responses }))
 }
@@ -107,12 +109,14 @@ pub fn transact_write_items(
     // Translate each transact-item into a fully-resolved Action up front.
     // We do schema-dependent key extraction here while the in-memory
     // schema cache is in scope; the sqlite txn body just runs the actions.
+    // Boxed gsi keeps the Put variant from dwarfing the others — the
+    // 5-slot array would otherwise pad every Action to ~500 bytes.
     enum Action {
         Put {
             pk: String,
             sk: String,
             attrs: Value,
-            gsi: [(Option<String>, Option<String>); MAX_GSI_SLOTS],
+            gsi: Box<[(Option<String>, Option<String>); MAX_GSI_SLOTS]>,
             condition_expr: Option<String>,
             expr_attr_names: std::collections::HashMap<String, String>,
             expr_attr_values: serde_json::Map<String, Value>,
@@ -172,7 +176,7 @@ pub fn transact_write_items(
                     pk: sqlite_keys.pk,
                     sk: sqlite_keys.sk,
                     attrs: item_to_storage_value(&item),
-                    gsi: sqlite_keys.gsi,
+                    gsi: Box::new(sqlite_keys.gsi),
                     condition_expr: opt_str(put, "ConditionExpression").map(str::to_string),
                     expr_attr_names: get_expr_attr_names(put),
                     expr_attr_values: get_expr_attr_values(put),
@@ -588,7 +592,11 @@ mod tests {
             .get_item(&ctx.account_id, &ctx.region, "t", "p1", "s1")
             .unwrap()
             .unwrap();
-        assert_eq!(p1["v"], json!({"N": "0"}), "rollback failed: p1 was mutated");
+        assert_eq!(
+            p1["v"],
+            json!({"N": "0"}),
+            "rollback failed: p1 was mutated"
+        );
     }
 
     #[test]
@@ -606,7 +614,9 @@ mod tests {
         transact_write_items(&state, &sqlite, &input, &ctx).unwrap();
 
         assert_eq!(
-            sqlite.count_items(&ctx.account_id, &ctx.region, "t").unwrap(),
+            sqlite
+                .count_items(&ctx.account_id, &ctx.region, "t")
+                .unwrap(),
             2
         );
     }
