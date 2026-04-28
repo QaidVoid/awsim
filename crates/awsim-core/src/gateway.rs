@@ -120,6 +120,20 @@ pub async fn handle_request(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
+    let (response, _id) = dispatch_request(&state, method, uri, headers, body).await;
+    response
+}
+
+/// Same as `handle_request`, but takes the state by reference and returns
+/// the generated request id alongside the response. Lets internal callers
+/// (replay, etc.) drive the gateway pipeline without going through axum.
+pub async fn dispatch_request(
+    state: &AppState,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> (Response<Body>, String) {
     state.request_count.fetch_add(1, Ordering::Relaxed);
 
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -141,7 +155,7 @@ pub async fn handle_request(
     };
 
     let outcome = process_request(
-        &state,
+        state,
         &method,
         &uri,
         &headers,
@@ -210,7 +224,7 @@ pub async fn handle_request(
         .map(|ak| format!("arn:aws:iam::{}:access-key/{}", meta.account_id, ak));
 
     let event = RequestEvent {
-        id: request_id,
+        id: request_id.clone(),
         ts,
         method: method.to_string(),
         path: uri.path().to_string(),
@@ -227,7 +241,7 @@ pub async fn handle_request(
     };
     state.events.publish(event);
 
-    response
+    (response, request_id)
 }
 
 async fn process_request(

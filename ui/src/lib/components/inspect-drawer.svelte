@@ -13,9 +13,11 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Separator } from '$lib/components/ui/separator';
+	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
 	import { toast } from 'svelte-sonner';
 	import Copy from '@lucide/svelte/icons/copy';
 	import AlertCircle from '@lucide/svelte/icons/alert-circle';
+	import Repeat from '@lucide/svelte/icons/repeat';
 	import { decodeBody, toCurl } from '$lib/body-decode';
 	import { bytesHuman, relativeTime } from '$lib/format';
 	import type { RequestDetail, RequestEvent, CapturedHeader } from '$lib/events';
@@ -25,6 +27,7 @@
 	let loading = $state(false);
 	let loadError = $state<string | null>(null);
 	let activeTab = $state<'request' | 'response' | 'curl'>('request');
+	let replaying = $state(false);
 
 	$effect(() => {
 		if (!inspectState.open || !inspectState.eventId) return;
@@ -85,6 +88,27 @@
 		}
 	}
 
+	async function replay() {
+		if (!detail || replaying) return;
+		replaying = true;
+		try {
+			const res = await fetch(`/_awsim/requests/${detail.id}/replay`, { method: 'POST' });
+			const body = (await res.json()) as { new_id?: string; status_code?: number; error?: string; message?: string };
+			if (!res.ok || !body.new_id) {
+				toast.error(body.message ?? body.error ?? `Replay failed (${res.status})`);
+				return;
+			}
+			toast.success(`Replayed → ${body.status_code}`);
+			// Swap to the freshly captured detail. Clear the cached event
+			// so the metadata grid doesn't show stale duration/region.
+			inspectState.show(body.new_id, null);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Replay failed');
+		} finally {
+			replaying = false;
+		}
+	}
+
 	function headersToText(headers: CapturedHeader[]): string {
 		return headers.map((h) => `${h.name}: ${h.value}`).join('\n');
 	}
@@ -102,9 +126,38 @@
 				<Badge variant="outline" class="font-mono">
 					{detail?.method ?? event?.method ?? '—'}
 				</Badge>
-				<span class="truncate font-mono text-xs text-muted-foreground">
+				<span class="flex-1 truncate font-mono text-xs text-muted-foreground">
 					{detail ? reqUrl : (event?.path ?? '…')}
 				</span>
+				{#if detail}
+					{#if detail.request_body.truncated}
+						<Tooltip>
+							<TooltipTrigger>
+								{#snippet child({ props })}
+									<Button {...props} type="button" variant="outline" size="sm" disabled class="h-7 gap-1 px-2">
+										<Repeat class="size-3.5" />
+										<span class="text-xs">Replay</span>
+									</Button>
+								{/snippet}
+							</TooltipTrigger>
+							<TooltipContent>
+								<p class="text-xs">Body was truncated — replay would not be faithful.</p>
+							</TooltipContent>
+						</Tooltip>
+					{:else}
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							onclick={replay}
+							disabled={replaying}
+							class="h-7 gap-1 px-2"
+						>
+							<Repeat class={`size-3.5 ${replaying ? 'animate-spin' : ''}`} />
+							<span class="text-xs">{replaying ? 'Replaying…' : 'Replay'}</span>
+						</Button>
+					{/if}
+				{/if}
 			</SheetTitle>
 			<SheetDescription>
 				{event?.service ?? 'Request inspector'}

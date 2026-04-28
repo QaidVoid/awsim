@@ -320,6 +320,10 @@ async fn main() -> Result<()> {
             "/_awsim/requests/{id}",
             axum::routing::get(admin::request_detail),
         )
+        .route(
+            "/_awsim/requests/{id}/replay",
+            axum::routing::post(admin::replay_request),
+        )
         .fallback(awsim_core::gateway::handle_request)
         .with_state(state);
 

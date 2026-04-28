@@ -1,8 +1,10 @@
 use awsim_core::AppState;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json, Response};
+use base64::Engine;
+use bytes::Bytes;
 use serde_json::{Value, json};
 use std::convert::Infallible;
 use std::sync::atomic::Ordering;
@@ -161,6 +163,101 @@ pub async fn request_detail(State(state): State<AppState>, Path(id): Path<String
 pub async fn recent_request_ids(State(state): State<AppState>) -> Json<Value> {
     let ids = state.request_details.recent_ids(50);
     Json(json!({ "ids": ids }))
+}
+
+/// Re-issues a captured request through the gateway pipeline and returns
+/// the new id + status. The UI typically follows up with a GET on
+/// `/_awsim/requests/{new_id}` to render the fresh response in the
+/// inspect drawer.
+///
+/// Bails out when the original request body was truncated during capture,
+/// since replaying a partial body would silently lie about the result.
+pub async fn replay_request(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let detail = match state.request_details.get(&id) {
+        Some(d) => d,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "RequestNotFound", "id": id})),
+            )
+                .into_response();
+        }
+    };
+
+    if detail.request_body.truncated {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "RequestBodyTruncated",
+                "message": "Original request body was truncated during capture; replay would not be faithful.",
+                "captured_size": detail.request_body.size,
+            })),
+        )
+            .into_response();
+    }
+
+    let method = match Method::from_bytes(detail.method.as_bytes()) {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "InvalidMethod", "message": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+
+    let uri_str = match &detail.query {
+        Some(q) => format!("{}?{}", detail.path, q),
+        None => detail.path.clone(),
+    };
+    let uri: Uri = match uri_str.parse() {
+        Ok(u) => u,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "InvalidUri", "message": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+
+    // Reconstruct the header map from the captured pairs. Skip any header
+    // that fails to parse — practically the only realistic failure is a
+    // weird control character, and skipping is friendlier than 500ing.
+    let mut headers = HeaderMap::new();
+    for h in &detail.request_headers {
+        if let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(h.name.as_bytes()),
+            HeaderValue::from_str(&h.value),
+        ) {
+            headers.insert(name, value);
+        }
+    }
+
+    let body_bytes = match &detail.request_body.data_b64 {
+        Some(b64) => match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(b) => Bytes::from(b),
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "InvalidBody", "message": e.to_string()})),
+                )
+                    .into_response();
+            }
+        },
+        None => Bytes::new(),
+    };
+
+    let (response, new_id) =
+        awsim_core::gateway::dispatch_request(&state, method, uri, headers, body_bytes).await;
+
+    Json(json!({
+        "new_id": new_id,
+        "status_code": response.status().as_u16(),
+        "original_id": id,
+    }))
+    .into_response()
 }
 
 fn format_duration(secs: u64) -> String {
