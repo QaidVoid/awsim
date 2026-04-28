@@ -96,11 +96,17 @@ impl BlobInventory for S3Service {
                 let bucket_name = bucket_entry.key().clone();
                 let bucket = bucket_entry.value();
                 for obj_entry in bucket.objects.iter() {
-                    out.push((
-                        "objects".to_string(),
-                        bucket_name.clone(),
-                        obj_entry.key().clone(),
-                    ));
+                    let key = obj_entry.key().clone();
+                    for version in obj_entry.value().iter() {
+                        if version.is_delete_marker {
+                            continue;
+                        }
+                        let blob_key = operations::object::versioned_blob_key(
+                            &key,
+                            version.version_id.as_deref(),
+                        );
+                        out.push(("objects".to_string(), bucket_name.clone(), blob_key));
+                    }
                 }
                 for mp_entry in bucket.multipart_uploads.iter() {
                     let upload_id = mp_entry.key().clone();
@@ -1348,23 +1354,33 @@ impl S3Service {
                 let bucket_name = bucket_entry.key().clone();
                 for mut obj_entry in bucket_entry.value_mut().objects.iter_mut() {
                     let key = obj_entry.key().clone();
-                    match bs.blob_path("objects", &bucket_name, &key) {
-                        Ok(path) => {
-                            // All versions on disk currently share a single
-                            // blob path keyed by (bucket, key); rebind the
-                            // latest non-DM entry to it. Historical version
-                            // bodies become unreadable after a snapshot+
-                            // restore until we key blobs by version too.
-                            if let Some(obj) = obj_entry.value_mut().current_mut() {
-                                obj.body = Body::OnDisk(path);
-                            }
+                    for version in obj_entry.value_mut().versions.iter_mut() {
+                        if version.is_delete_marker {
+                            continue;
                         }
-                        Err(e) => tracing::warn!(
-                            bucket = %bucket_name,
-                            key = %key,
-                            error = %e,
-                            "resolve object path on restore"
-                        ),
+                        let blob_key = operations::object::versioned_blob_key(
+                            &key,
+                            version.version_id.as_deref(),
+                        );
+                        match bs.blob_path("objects", &bucket_name, &blob_key) {
+                            Ok(path) if path.exists() => version.body = Body::OnDisk(path),
+                            // Fall back to the legacy un-versioned blob path
+                            // so snapshots written before per-version blobs
+                            // are still readable on restore.
+                            Ok(_) => match bs.blob_path("objects", &bucket_name, &key) {
+                                Ok(legacy) if legacy.exists() => {
+                                    version.body = Body::OnDisk(legacy);
+                                }
+                                _ => {}
+                            },
+                            Err(e) => tracing::warn!(
+                                bucket = %bucket_name,
+                                key = %key,
+                                version = ?version.version_id,
+                                error = %e,
+                                "resolve object path on restore"
+                            ),
+                        }
                     }
                 }
             }

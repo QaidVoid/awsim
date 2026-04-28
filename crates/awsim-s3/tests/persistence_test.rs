@@ -78,6 +78,84 @@ async fn put_then_restart_then_get() {
 }
 
 #[tokio::test]
+async fn versioned_history_survives_snapshot_and_restore() {
+    let dir = tmp_dir("versions");
+    let bucket = "vbucket";
+    let key = "log.txt";
+
+    let (v1, v2, snapshot) = {
+        let svc = S3Service::with_data_dir(&dir);
+        svc.handle("CreateBucket", json!({"Bucket": bucket}), &ctx())
+            .await
+            .unwrap();
+        // Turn versioning on so successive PutObjects retain history.
+        svc.handle(
+            "PutBucketVersioning",
+            json!({
+                "Bucket": bucket,
+                "VersioningConfiguration": { "Status": "Enabled" },
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        let r1 = svc
+            .handle(
+                "PutObject",
+                json!({ "Bucket": bucket, "Key": key, "__raw_body": b64(b"v1") }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let r2 = svc
+            .handle(
+                "PutObject",
+                json!({ "Bucket": bucket, "Key": key, "__raw_body": b64(b"v2") }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let v1 = r1["VersionId"].as_str().unwrap().to_string();
+        let v2 = r2["VersionId"].as_str().unwrap().to_string();
+        (v1, v2, svc.snapshot().expect("snapshot bytes"))
+    };
+
+    let svc2 = S3Service::with_data_dir(&dir);
+    svc2.restore(&snapshot).expect("restore");
+
+    // The latest version is readable as before.
+    let latest = svc2
+        .handle("GetObject", json!({"Bucket": bucket, "Key": key}), &ctx())
+        .await
+        .unwrap();
+    assert_eq!(decode(&latest), b"v2");
+
+    // The historical version body is still readable by ID.
+    let historical = svc2
+        .handle(
+            "GetObject",
+            json!({"Bucket": bucket, "Key": key, "VersionId": v1}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(decode(&historical), b"v1");
+
+    // And the second-version ID still resolves to the same v2 body.
+    let by_id = svc2
+        .handle(
+            "GetObject",
+            json!({"Bucket": bucket, "Key": key, "VersionId": v2}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(decode(&by_id), b"v2");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn multipart_then_restart_then_get() {
     let dir = tmp_dir("multipart");
     let bucket = "buck";

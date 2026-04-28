@@ -260,20 +260,22 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
     let content_length = combined_data.len() as u64;
     let last_modified = now_rfc7231();
 
-    let body = match state.body_store() {
-        Some(store) => {
-            let path = store
-                .write_blob("objects", bucket_name, key, &combined_data)
-                .map_err(|e| AwsError::internal(format!("persist object: {e}")))?;
-            Body::OnDisk(path)
-        }
-        None => Body::InMemory(combined_data),
-    };
-
     let status = bucket.versioning.clone();
     let version_id = match status {
         crate::state::VersioningStatus::Enabled => Some(uuid::Uuid::new_v4().simple().to_string()),
         _ => None,
+    };
+
+    let body = match state.body_store() {
+        Some(store) => {
+            let blob_key =
+                crate::operations::object::versioned_blob_key(key, version_id.as_deref());
+            let path = store
+                .write_blob("objects", bucket_name, &blob_key, &combined_data)
+                .map_err(|e| AwsError::internal(format!("persist object: {e}")))?;
+            Body::OnDisk(path)
+        }
+        None => Body::InMemory(combined_data),
     };
 
     let obj = S3Object {

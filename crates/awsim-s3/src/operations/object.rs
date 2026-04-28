@@ -32,6 +32,14 @@ fn record_version(versions: &mut ObjectVersions, obj: S3Object, status: &Version
     versions.push(obj);
 }
 
+/// Build the BodyStore "key" used to persist a single object version. Each
+/// version gets its own blob — keying by `{key}@v={version_id_or_null}` keeps
+/// historical bodies recoverable across snapshot/restore.
+pub(crate) fn versioned_blob_key(key: &str, version_id: Option<&str>) -> String {
+    let marker = version_id.unwrap_or("null");
+    format!("{key}@v={marker}")
+}
+
 /// Strip an optional `?versionId=X` suffix from a CopySource value, returning
 /// `(bucket_and_key, version_id)`.
 fn split_copy_source_version(raw: &str) -> (&str, Option<&str>) {
@@ -145,18 +153,19 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
             .get(bucket_name)
             .ok_or_else(|| no_such_bucket(bucket_name))?;
 
+        let status = bucket.versioning.clone();
+        let version_id = next_version_id(&status);
+
         let body = match state.body_store() {
             Some(store) => {
+                let blob_key = versioned_blob_key(key, version_id.as_deref());
                 let path = store
-                    .write_blob("objects", bucket_name, key, &data)
+                    .write_blob("objects", bucket_name, &blob_key, &data)
                     .map_err(|e| AwsError::internal(format!("persist object: {e}")))?;
                 Body::OnDisk(path)
             }
             None => Body::InMemory(data),
         };
-
-        let status = bucket.versioning.clone();
-        let version_id = next_version_id(&status);
 
         let obj = S3Object {
             key: key.to_string(),
@@ -170,6 +179,22 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
             tags: Default::default(),
             is_delete_marker: false,
         };
+
+        // Suspended / Disabled buckets overwrite the existing null-slot
+        // blob — purge it before we record the new version so the stale
+        // file doesn't linger.
+        if !matches!(status, VersioningStatus::Enabled)
+            && let Some(store) = state.body_store()
+            && let Some(versions_ref) = bucket.objects.get(key)
+            && let Some(prev) = versions_ref
+                .versions
+                .iter()
+                .find(|o| o.version_id.is_none())
+            && !prev.is_delete_marker
+        {
+            let prev_key = versioned_blob_key(key, None);
+            let _ = store.delete_blob("objects", bucket_name, &prev_key);
+        }
 
         let mut versions = bucket.objects.entry(key.to_string()).or_default();
         record_version(&mut versions, obj, &status);
@@ -301,6 +326,12 @@ pub fn delete_object(state: &S3State, input: &Value) -> Result<Value, AwsError> 
             None
         };
         if let Some(obj) = removed {
+            if !obj.is_delete_marker
+                && let Some(store) = state.body_store()
+            {
+                let blob_key = versioned_blob_key(key, obj.version_id.as_deref());
+                let _ = store.delete_blob("objects", bucket_name, &blob_key);
+            }
             if let Some(rvid) = obj.version_id {
                 response["VersionId"] = Value::String(rvid);
             } else {
@@ -314,11 +345,17 @@ pub fn delete_object(state: &S3State, input: &Value) -> Result<Value, AwsError> 
         let status = bucket.versioning.clone();
         match status {
             VersioningStatus::Disabled => {
-                bucket.objects.remove(key);
+                let removed = bucket.objects.remove(key);
                 if let Some(store) = state.body_store()
-                    && let Err(e) = store.delete_blob("objects", bucket_name, key)
+                    && let Some((_, versions)) = removed
                 {
-                    tracing::warn!(bucket = %bucket_name, key = %key, error = %e, "delete object body");
+                    for v in versions.versions {
+                        if v.is_delete_marker {
+                            continue;
+                        }
+                        let blob_key = versioned_blob_key(key, v.version_id.as_deref());
+                        let _ = store.delete_blob("objects", bucket_name, &blob_key);
+                    }
                 }
             }
             VersioningStatus::Enabled => {
@@ -344,6 +381,12 @@ pub fn delete_object(state: &S3State, input: &Value) -> Result<Value, AwsError> 
                 response["VersionId"] = Value::String(dm_id);
             }
             VersioningStatus::Suspended => {
+                // Clean up the existing null-slot blob (if any) before
+                // overwriting that slot with a delete marker.
+                if let Some(store) = state.body_store() {
+                    let blob_key = versioned_blob_key(key, None);
+                    let _ = store.delete_blob("objects", bucket_name, &blob_key);
+                }
                 let marker = S3Object {
                     key: key.to_string(),
                     body: Body::InMemory(Vec::new()),
@@ -421,18 +464,19 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
         .get(dst_bucket)
         .ok_or_else(|| no_such_bucket(dst_bucket))?;
 
+    let status = dst_bucket_ref.versioning.clone();
+    let version_id = next_version_id(&status);
+
     let body = match state.body_store() {
         Some(store) => {
+            let blob_key = versioned_blob_key(dst_key, version_id.as_deref());
             let path = store
-                .write_blob("objects", dst_bucket, dst_key, &data)
+                .write_blob("objects", dst_bucket, &blob_key, &data)
                 .map_err(|e| AwsError::internal(format!("persist object: {e}")))?;
             Body::OnDisk(path)
         }
         None => Body::InMemory(data),
     };
-
-    let status = dst_bucket_ref.versioning.clone();
-    let version_id = next_version_id(&status);
 
     let new_obj = S3Object {
         key: dst_key.to_string(),
@@ -446,6 +490,21 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
         tags: Default::default(),
         is_delete_marker: false,
     };
+
+    // Same null-slot housekeeping as PutObject: clean up any prior null
+    // blob on Disabled/Suspended copies before recording the new version.
+    if !matches!(status, VersioningStatus::Enabled)
+        && let Some(store) = state.body_store()
+        && let Some(versions_ref) = dst_bucket_ref.objects.get(dst_key)
+        && let Some(prev) = versions_ref
+            .versions
+            .iter()
+            .find(|o| o.version_id.is_none())
+        && !prev.is_delete_marker
+    {
+        let prev_key = versioned_blob_key(dst_key, None);
+        let _ = store.delete_blob("objects", dst_bucket, &prev_key);
+    }
 
     let mut versions = dst_bucket_ref
         .objects
