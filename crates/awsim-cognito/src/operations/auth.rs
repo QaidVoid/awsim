@@ -155,10 +155,18 @@ pub fn initiate_auth(
                 }
             }
 
-            // Lockout / password check inside a tight mutable scope so the
-            // remainder of the flow can keep its existing immutable borrows.
+            // Lockout / password check / risk evaluation inside a tight
+            // mutable scope so the remainder of the flow keeps its existing
+            // immutable borrows.
             {
                 let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+                let block_action = super::auth_policy::compromised_credentials_action_for(
+                    &pool,
+                    Some(client_id),
+                    "SIGN_IN",
+                );
+                let compromised = super::auth_policy::is_compromised_password(password);
+
                 let user = pool.users.get_mut(username).ok_or_else(|| {
                     AwsError::not_found(
                         "UserNotFoundException",
@@ -166,14 +174,35 @@ pub fn initiate_auth(
                     )
                 })?;
                 super::auth_policy::check_not_locked(user)?;
+
                 if user.password != password {
                     super::auth_policy::record_attempt(user, false);
+                    super::auth_policy::record_auth_event(
+                        user,
+                        super::auth_policy::build_signin_event(false, compromised),
+                    );
                     return Err(AwsError::bad_request(
                         "NotAuthorizedException",
                         "Incorrect username or password",
                     ));
                 }
+
+                if compromised && block_action.as_deref() == Some("BLOCK") {
+                    super::auth_policy::record_auth_event(
+                        user,
+                        super::auth_policy::build_signin_event(false, true),
+                    );
+                    return Err(AwsError::bad_request(
+                        "NotAuthorizedException",
+                        "Risk-based authentication blocked sign-in: compromised credentials",
+                    ));
+                }
+
                 super::auth_policy::record_attempt(user, true);
+                super::auth_policy::record_auth_event(
+                    user,
+                    super::auth_policy::build_signin_event(true, compromised),
+                );
             }
 
             let pool = state.user_pools.get(&pool_id).unwrap();
@@ -363,11 +392,18 @@ pub fn admin_initiate_auth(
                 }
             }
 
-            // Lockout / password check inside a tight mutable scope so the
-            // remainder of the flow can take an immutable borrow on the pool
-            // without overlapping with the &mut user.
+            // Lockout / password check / risk evaluation inside a tight
+            // mutable scope; the rest of the flow re-acquires an immutable
+            // borrow without overlapping with the &mut user.
             {
                 let mut pool = state.user_pools.get_mut(pool_id).unwrap();
+                let block_action = super::auth_policy::compromised_credentials_action_for(
+                    &pool,
+                    Some(client_id),
+                    "SIGN_IN",
+                );
+                let compromised = super::auth_policy::is_compromised_password(password);
+
                 let user = pool.users.get_mut(username).ok_or_else(|| {
                     AwsError::not_found(
                         "UserNotFoundException",
@@ -375,14 +411,35 @@ pub fn admin_initiate_auth(
                     )
                 })?;
                 super::auth_policy::check_not_locked(user)?;
+
                 if user.password != password {
                     super::auth_policy::record_attempt(user, false);
+                    super::auth_policy::record_auth_event(
+                        user,
+                        super::auth_policy::build_signin_event(false, compromised),
+                    );
                     return Err(AwsError::bad_request(
                         "NotAuthorizedException",
                         "Incorrect username or password",
                     ));
                 }
+
+                if compromised && block_action.as_deref() == Some("BLOCK") {
+                    super::auth_policy::record_auth_event(
+                        user,
+                        super::auth_policy::build_signin_event(false, true),
+                    );
+                    return Err(AwsError::bad_request(
+                        "NotAuthorizedException",
+                        "Risk-based authentication blocked sign-in: compromised credentials",
+                    ));
+                }
+
                 super::auth_policy::record_attempt(user, true);
+                super::auth_policy::record_auth_event(
+                    user,
+                    super::auth_policy::build_signin_event(true, compromised),
+                );
             }
 
             let pool = state.user_pools.get(pool_id).unwrap();

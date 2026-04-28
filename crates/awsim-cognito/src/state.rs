@@ -281,6 +281,29 @@ pub struct CognitoUser {
     /// with `NotAuthorizedException`. Cleared automatically once it expires.
     #[serde(default)]
     pub locked_until_secs: Option<u64>,
+    /// Bounded ring of recent advanced-security events (sign-ins, sign-ups,
+    /// password changes). Surfaced via AdminListUserAuthEvents and consulted
+    /// by adaptive-auth-style risk decisions.
+    #[serde(default)]
+    pub auth_events: Vec<AuthEvent>,
+}
+
+/// A single recorded advanced-security event for a Cognito user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthEvent {
+    pub event_id: String,
+    /// "SignIn" | "PasswordChange" | "SignUp" | "ForgotPassword"
+    pub event_type: String,
+    pub creation_date: u64,
+    /// "Pass" | "Fail" | "InProgress"
+    pub event_response: String,
+    /// "Low" | "Medium" | "High"
+    pub risk_level: String,
+    /// "NoRisk" | "AccountTakeover" | "Block"
+    pub risk_decision: String,
+    pub compromised_credentials_detected: bool,
+    /// Optional user feedback ("Valid" | "Invalid").
+    pub feedback_value: Option<String>,
 }
 
 /// A Cognito User Pool group.

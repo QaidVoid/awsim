@@ -116,25 +116,28 @@ pub fn describe_risk_configuration(
 // ---------------------------------------------------------------------------
 
 pub fn update_auth_event_feedback(
-    _state: &CognitoState,
+    state: &CognitoState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    // Validate required fields
-    let _pool_id = input["UserPoolId"]
+    let pool_id = input["UserPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let _username = input["Username"]
+    let username = input["Username"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
-    let _event_id = input["EventId"]
+    let event_id = input["EventId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EventId is required"))?;
+    // FeedbackToken is opaque from our side; presence is required but we
+    // don't validate it.
     let _feedback_token = input["FeedbackToken"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "FeedbackToken is required"))?;
-    // Stub — no actual storage needed
-    Ok(json!({}))
+    let feedback_value = input["FeedbackValue"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "FeedbackValue is required"))?;
+    apply_feedback(state, pool_id, username, event_id, feedback_value, ctx)
 }
 
 // ---------------------------------------------------------------------------
@@ -142,22 +145,56 @@ pub fn update_auth_event_feedback(
 // ---------------------------------------------------------------------------
 
 pub fn admin_update_auth_event_feedback(
-    _state: &CognitoState,
+    state: &CognitoState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let _pool_id = input["UserPoolId"]
+    let pool_id = input["UserPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let _username = input["Username"]
+    let username = input["Username"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
-    let _event_id = input["EventId"]
+    let event_id = input["EventId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EventId is required"))?;
-    let _feedback_value = input["FeedbackValue"]
+    let feedback_value = input["FeedbackValue"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "FeedbackValue is required"))?;
-    // Stub
+    apply_feedback(state, pool_id, username, event_id, feedback_value, ctx)
+}
+
+fn apply_feedback(
+    state: &CognitoState,
+    pool_id: &str,
+    username: &str,
+    event_id: &str,
+    feedback: &str,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
+    let user = pool.users.get_mut(username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let event = user
+        .auth_events
+        .iter_mut()
+        .find(|e| e.event_id == event_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Auth event not found: {event_id}"),
+            )
+        })?;
+    event.feedback_value = Some(feedback.to_string());
+    info!(username = %username, event_id = %event_id, "Cognito: auth event feedback recorded");
     Ok(json!({}))
 }

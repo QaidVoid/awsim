@@ -81,6 +81,7 @@ fn make_user(
         webauthn_pending_challenge: None,
         failed_login_attempts: 0,
         locked_until_secs: None,
+        auth_events: Vec::new(),
     }
 }
 
@@ -1278,6 +1279,7 @@ pub fn admin_list_user_auth_events(
     let username = input["Username"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+    let max_results = input["MaxResults"].as_u64().unwrap_or(60).clamp(1, 60) as usize;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -1286,12 +1288,37 @@ pub fn admin_list_user_auth_events(
         )
     })?;
 
-    if !pool.users.contains_key(username) {
-        return Err(AwsError::not_found(
+    let user = pool.users.get(username).ok_or_else(|| {
+        AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
-        ));
-    }
+        )
+    })?;
 
-    Ok(json!({ "AuthEvents": [] }))
+    // Newest first per AWS semantics, capped at MaxResults.
+    let events: Vec<Value> = user
+        .auth_events
+        .iter()
+        .rev()
+        .take(max_results)
+        .map(|e| {
+            json!({
+                "EventId": e.event_id,
+                "EventType": e.event_type,
+                "CreationDate": e.creation_date,
+                "EventResponse": e.event_response,
+                "EventRisk": {
+                    "RiskDecision": e.risk_decision,
+                    "RiskLevel": e.risk_level,
+                    "CompromisedCredentialsDetected": e.compromised_credentials_detected,
+                },
+                "EventFeedback": e.feedback_value.as_ref().map(|v| json!({
+                    "FeedbackValue": v,
+                    "Provider": "Cognito"
+                })),
+            })
+        })
+        .collect();
+
+    Ok(json!({ "AuthEvents": events }))
 }
