@@ -273,6 +273,14 @@ pub struct CognitoUser {
     pub webauthn_credentials: Vec<WebAuthnCredential>,
     /// In-flight WebAuthn registration challenges keyed by credential id placeholder.
     pub webauthn_pending_challenge: Option<String>,
+    /// Consecutive failed login attempts since the last success or unlock.
+    /// Reset to 0 on a successful login.
+    #[serde(default)]
+    pub failed_login_attempts: u32,
+    /// Unix timestamp (seconds) until which authentication should be rejected
+    /// with `NotAuthorizedException`. Cleared automatically once it expires.
+    #[serde(default)]
+    pub locked_until_secs: Option<u64>,
 }
 
 /// A Cognito User Pool group.

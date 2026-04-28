@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod auth_policy;
 pub mod branding;
 pub mod client_secrets;
 pub mod devices;

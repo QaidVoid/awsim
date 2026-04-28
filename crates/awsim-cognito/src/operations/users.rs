@@ -79,6 +79,8 @@ fn make_user(
         mfa_options: Vec::new(),
         webauthn_credentials: Vec::new(),
         webauthn_pending_challenge: None,
+        failed_login_attempts: 0,
+        locked_until_secs: None,
     }
 }
 
@@ -138,6 +140,8 @@ pub fn sign_up(
             format!("Username already exists: {username}"),
         ));
     }
+
+    super::auth_policy::validate_password(&pool.policies, password)?;
 
     let attributes = parse_user_attributes(input, "UserAttributes");
     let user = make_user(username, password, attributes, "UNCONFIRMED");
@@ -308,6 +312,8 @@ pub fn admin_create_user(
         ));
     }
 
+    super::auth_policy::validate_password(&pool.policies, password)?;
+
     let attributes = parse_user_attributes(input, "UserAttributes");
     let user = make_user(username, password, attributes, "FORCE_CHANGE_PASSWORD");
     let user_value = user_to_value(&user);
@@ -411,6 +417,8 @@ pub fn admin_set_user_password(
         )
     })?;
 
+    super::auth_policy::validate_password(&pool.policies, password)?;
+
     let user = pool.users.get_mut(username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
@@ -422,6 +430,9 @@ pub fn admin_set_user_password(
     if permanent {
         user.status = "CONFIRMED".to_string();
     }
+    // Setting a fresh password administratively unlocks the account.
+    user.failed_login_attempts = 0;
+    user.locked_until_secs = None;
 
     info!(username = %username, pool_id = %pool_id, permanent, "Cognito: admin set user password");
     Ok(json!({}))
@@ -652,6 +663,8 @@ pub fn confirm_forgot_password(
     })?;
 
     let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+    super::auth_policy::validate_password(&pool.policies, password)?;
+
     let user = pool.users.get_mut(username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
@@ -661,6 +674,8 @@ pub fn confirm_forgot_password(
 
     user.password = password.to_string();
     user.status = "CONFIRMED".to_string();
+    user.failed_login_attempts = 0;
+    user.locked_until_secs = None;
 
     info!(username = %username, "Cognito: confirm forgot password");
     Ok(json!({}))
@@ -696,7 +711,9 @@ pub fn change_password(
         .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
-        if let Some(user) = pool_entry.users.get_mut(&username) {
+        if pool_entry.users.contains_key(&username) {
+            super::auth_policy::validate_password(&pool_entry.policies, proposed)?;
+            let user = pool_entry.users.get_mut(&username).unwrap();
             if user.password != previous {
                 return Err(AwsError::bad_request(
                     "NotAuthorizedException",
@@ -704,6 +721,8 @@ pub fn change_password(
                 ));
             }
             user.password = proposed.to_string();
+            user.failed_login_attempts = 0;
+            user.locked_until_secs = None;
             return Ok(json!({}));
         }
     }

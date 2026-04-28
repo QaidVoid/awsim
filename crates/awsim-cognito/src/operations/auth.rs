@@ -140,31 +140,44 @@ pub fn initiate_auth(
                 .as_str()
                 .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PASSWORD is required"))?;
 
+            // Pre-Authentication trigger (fire-and-forget) — read pool with
+            // an immutable borrow first to fire the trigger, then drop so we
+            // can take a mutable borrow for the lockout bookkeeping below.
+            {
+                let pool = state.user_pools.get(&pool_id).unwrap();
+                if let Some(arn) = pool.lambda_config.get("PreAuthentication") {
+                    let trigger_event = json!({
+                        "userPoolId": pool_id,
+                        "userName": username,
+                        "callerContext": { "clientId": client_id }
+                    });
+                    invoke_trigger(ctx, "PreAuthentication_Authentication", arn, &trigger_event);
+                }
+            }
+
+            // Lockout / password check inside a tight mutable scope so the
+            // remainder of the flow can keep its existing immutable borrows.
+            {
+                let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+                let user = pool.users.get_mut(username).ok_or_else(|| {
+                    AwsError::not_found(
+                        "UserNotFoundException",
+                        format!("User not found: {username}"),
+                    )
+                })?;
+                super::auth_policy::check_not_locked(user)?;
+                if user.password != password {
+                    super::auth_policy::record_attempt(user, false);
+                    return Err(AwsError::bad_request(
+                        "NotAuthorizedException",
+                        "Incorrect username or password",
+                    ));
+                }
+                super::auth_policy::record_attempt(user, true);
+            }
+
             let pool = state.user_pools.get(&pool_id).unwrap();
-
-            // Pre-Authentication trigger (fire-and-forget)
-            if let Some(arn) = pool.lambda_config.get("PreAuthentication") {
-                let trigger_event = json!({
-                    "userPoolId": pool_id,
-                    "userName": username,
-                    "callerContext": { "clientId": client_id }
-                });
-                invoke_trigger(ctx, "PreAuthentication_Authentication", arn, &trigger_event);
-            }
-
-            let user = pool.users.get(username).ok_or_else(|| {
-                AwsError::not_found(
-                    "UserNotFoundException",
-                    format!("User not found: {username}"),
-                )
-            })?;
-
-            if user.password != password {
-                return Err(AwsError::bad_request(
-                    "NotAuthorizedException",
-                    "Incorrect username or password",
-                ));
-            }
+            let user = pool.users.get(username).unwrap();
 
             if user.status == "UNCONFIRMED" {
                 return Err(AwsError::bad_request(
@@ -311,18 +324,20 @@ pub fn admin_initiate_auth(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AuthFlow is required"))?;
     let params = &input["AuthParameters"];
 
-    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
-            "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
-        )
-    })?;
+    {
+        let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("User pool not found: {pool_id}"),
+            )
+        })?;
 
-    if !pool.clients.contains_key(client_id) {
-        return Err(AwsError::not_found(
-            "ResourceNotFoundException",
-            format!("Client not found: {client_id}"),
-        ));
+        if !pool.clients.contains_key(client_id) {
+            return Err(AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Client not found: {client_id}"),
+            ));
+        }
     }
 
     match auth_flow {
@@ -334,29 +349,44 @@ pub fn admin_initiate_auth(
                 .as_str()
                 .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PASSWORD is required"))?;
 
-            // Pre-Authentication trigger (fire-and-forget)
-            if let Some(arn) = pool.lambda_config.get("PreAuthentication") {
-                let trigger_event = json!({
-                    "userPoolId": pool_id,
-                    "userName": username,
-                    "callerContext": { "clientId": client_id }
-                });
-                invoke_trigger(ctx, "PreAuthentication_Authentication", arn, &trigger_event);
+            // Pre-Authentication trigger (fire-and-forget) — separate
+            // immutable scope so we can take a mutable borrow below.
+            {
+                let pool = state.user_pools.get(pool_id).unwrap();
+                if let Some(arn) = pool.lambda_config.get("PreAuthentication") {
+                    let trigger_event = json!({
+                        "userPoolId": pool_id,
+                        "userName": username,
+                        "callerContext": { "clientId": client_id }
+                    });
+                    invoke_trigger(ctx, "PreAuthentication_Authentication", arn, &trigger_event);
+                }
             }
 
-            let user = pool.users.get(username).ok_or_else(|| {
-                AwsError::not_found(
-                    "UserNotFoundException",
-                    format!("User not found: {username}"),
-                )
-            })?;
-
-            if user.password != password {
-                return Err(AwsError::bad_request(
-                    "NotAuthorizedException",
-                    "Incorrect username or password",
-                ));
+            // Lockout / password check inside a tight mutable scope so the
+            // remainder of the flow can take an immutable borrow on the pool
+            // without overlapping with the &mut user.
+            {
+                let mut pool = state.user_pools.get_mut(pool_id).unwrap();
+                let user = pool.users.get_mut(username).ok_or_else(|| {
+                    AwsError::not_found(
+                        "UserNotFoundException",
+                        format!("User not found: {username}"),
+                    )
+                })?;
+                super::auth_policy::check_not_locked(user)?;
+                if user.password != password {
+                    super::auth_policy::record_attempt(user, false);
+                    return Err(AwsError::bad_request(
+                        "NotAuthorizedException",
+                        "Incorrect username or password",
+                    ));
+                }
+                super::auth_policy::record_attempt(user, true);
             }
+
+            let pool = state.user_pools.get(pool_id).unwrap();
+            let user = pool.users.get(username).unwrap();
 
             if user.status == "UNCONFIRMED" {
                 return Err(AwsError::bad_request(
