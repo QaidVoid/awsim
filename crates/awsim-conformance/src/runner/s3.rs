@@ -922,6 +922,40 @@ pub async fn test_s3(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
+    // After enabling versioning earlier in this run, plain DeleteObject
+    // calls leave delete markers behind that count as bucket contents and
+    // would block DeleteBucket with BucketNotEmpty. Drain every remaining
+    // version + delete marker before tearing the bucket down.
+    if let Ok(versions) = client
+        .list_object_versions()
+        .bucket("conformance-bucket")
+        .send()
+        .await
+    {
+        for v in versions.versions() {
+            if let (Some(key), Some(vid)) = (v.key(), v.version_id()) {
+                let _ = client
+                    .delete_object()
+                    .bucket("conformance-bucket")
+                    .key(key)
+                    .version_id(vid)
+                    .send()
+                    .await;
+            }
+        }
+        for dm in versions.delete_markers() {
+            if let (Some(key), Some(vid)) = (dm.key(), dm.version_id()) {
+                let _ = client
+                    .delete_object()
+                    .bucket("conformance-bucket")
+                    .key(key)
+                    .version_id(vid)
+                    .send()
+                    .await;
+            }
+        }
+    }
+
     // DeleteBucket
     results.push(chk!(
         "DeleteBucket",

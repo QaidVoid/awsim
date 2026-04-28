@@ -40,6 +40,17 @@ pub(crate) fn versioned_blob_key(key: &str, version_id: Option<&str>) -> String 
     format!("{key}@v={marker}")
 }
 
+/// Read the caller's VersionId from input, accepting either the Smithy member
+/// name (`VersionId`, used by JSON callers and our internal tests) or the wire
+/// query parameter spelling (`versionId`, populated by the REST gateway from
+/// `?versionId=...` on real SDK requests).
+fn version_id_input(input: &Value) -> Option<&str> {
+    input
+        .get("VersionId")
+        .or_else(|| input.get("versionId"))
+        .and_then(Value::as_str)
+}
+
 /// Strip an optional `?versionId=X` suffix from a CopySource value, returning
 /// `(bucket_and_key, version_id)`.
 fn split_copy_source_version(raw: &str) -> (&str, Option<&str>) {
@@ -219,7 +230,7 @@ pub fn get_object(
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
     let range_header = opt_str(input, "Range");
-    let requested_version = opt_str(input, "VersionId");
+    let requested_version = version_id_input(input);
 
     let bucket = state
         .buckets
@@ -270,7 +281,7 @@ pub fn get_object(
 pub fn head_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
-    let requested_version = opt_str(input, "VersionId");
+    let requested_version = version_id_input(input);
 
     let bucket = state
         .buckets
@@ -303,7 +314,7 @@ pub fn head_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
 pub fn delete_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
-    let requested_version = opt_str(input, "VersionId");
+    let requested_version = version_id_input(input);
 
     let bucket = state
         .buckets
