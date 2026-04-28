@@ -9,7 +9,7 @@ The service is selected automatically from the `X-Amz-Target` header (for JSON/Q
 | Service | Signing Name | Protocol | Persistent | Operations | Description |
 |---------|-------------|----------|-----------|-----------|-------------|
 | S3 | `s3` | REST-XML | Yes* | 44 | Object storage |
-| DynamoDB | `dynamodb` | JSON | Yes | 26 | Key-value / document store |
+| DynamoDB | `dynamodb` | JSON | Yes | 57 | Key-value / document store |
 | SQS | `sqs` | Query | Yes | 17 | Simple Queue Service |
 | SNS | `sns` | Query | Yes | 21 | Simple Notification Service |
 | IAM | `iam` | Query | Yes | — | Identity and Access Management |
