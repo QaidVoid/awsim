@@ -30,6 +30,25 @@ fn fetch_existing(
 
 use super::{get_expr_attr_names, get_expr_attr_values, opt_str, require_str};
 
+/// Build a `ConditionalCheckFailedException` matching the real DynamoDB shape:
+/// HTTP 400, the standard message, and (when the caller asked for `ALL_OLD`
+/// via `ReturnValuesOnConditionCheckFailure`) the existing item attached as
+/// the `Item` extra so SDKs can read it from the typed exception.
+fn conditional_check_failed(input: &Value, existing: Option<&DynamoItem>) -> AwsError {
+    let mut err = AwsError::bad_request(
+        "ConditionalCheckFailedException",
+        "The conditional request failed",
+    );
+    if matches!(
+        opt_str(input, "ReturnValuesOnConditionCheckFailure"),
+        Some("ALL_OLD")
+    ) && let Some(item) = existing
+    {
+        err = err.with_extra("Item", item_to_json(item));
+    }
+    err
+}
+
 /// Push a stream record into the table's bounded ring-buffer and optionally
 /// publish an `InternalEvent` to the event bus so Lambda triggers fire.
 fn emit_stream_record(
@@ -210,10 +229,7 @@ pub fn put_item(
         let empty_item: DynamoItem = DynamoItem::new();
         let check_item = old_item.as_ref().unwrap_or(&empty_item);
         if !evaluate_condition(&condition, check_item, &expr_attr_names, &expr_attr_values)? {
-            return Err(AwsError::conflict(
-                "ConditionalCheckFailedException",
-                "The conditional request failed",
-            ));
+            return Err(conditional_check_failed(input, old_item.as_ref()));
         }
     }
 
@@ -334,10 +350,7 @@ pub fn delete_item(
         let empty_item: DynamoItem = DynamoItem::new();
         let existing = old_item.as_ref().unwrap_or(&empty_item);
         if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
-            return Err(AwsError::conflict(
-                "ConditionalCheckFailedException",
-                "The conditional request failed",
-            ));
+            return Err(conditional_check_failed(input, old_item.as_ref()));
         }
     }
 
@@ -415,10 +428,7 @@ pub fn update_item(
         let empty_item: DynamoItem = DynamoItem::new();
         let existing = old_item.as_ref().unwrap_or(&empty_item);
         if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
-            return Err(AwsError::conflict(
-                "ConditionalCheckFailedException",
-                "The conditional request failed",
-            ));
+            return Err(conditional_check_failed(input, old_item.as_ref()));
         }
     }
 
@@ -650,6 +660,43 @@ mod tests {
         });
         let res = get_item(&state, &sqlite, &get, &ctx).unwrap();
         assert_eq!(res["Item"]["n"], json!({"S": "Bob"}));
+    }
+
+    #[test]
+    fn put_item_conditional_failure_returns_existing_item_when_requested() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let ctx = ctx();
+
+        // Seed an item that the next put will collide with.
+        let seed = json!({
+            "TableName": "t",
+            "Item": {"pk": {"S": "p"}, "sk": {"S": "s"}, "v": {"N": "1"}}
+        });
+        put_item(&state, &sqlite, &seed, &ctx).unwrap();
+
+        // Conditional put that fails because the item already exists.
+        let conflicting = json!({
+            "TableName": "t",
+            "Item": {"pk": {"S": "p"}, "sk": {"S": "s"}, "v": {"N": "2"}},
+            "ConditionExpression": "attribute_not_exists(pk)",
+            "ReturnValuesOnConditionCheckFailure": "ALL_OLD",
+        });
+        let err = put_item(&state, &sqlite, &conflicting, &ctx).unwrap_err();
+        assert_eq!(err.code, "ConditionalCheckFailedException");
+        assert_eq!(err.status.as_u16(), 400);
+        let extras = err.extras.as_ref().expect("extras populated");
+        let item = extras.get("Item").expect("Item attached on failure");
+        assert_eq!(item["v"], json!({"N": "1"}));
+
+        // Without the opt-in flag, no Item is attached.
+        let no_flag = json!({
+            "TableName": "t",
+            "Item": {"pk": {"S": "p"}, "sk": {"S": "s"}, "v": {"N": "3"}},
+            "ConditionExpression": "attribute_not_exists(pk)",
+        });
+        let err = put_item(&state, &sqlite, &no_flag, &ctx).unwrap_err();
+        assert!(err.extras.is_none(), "Item should be opt-in");
     }
 
     #[test]
