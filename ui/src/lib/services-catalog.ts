@@ -160,6 +160,14 @@ export const SERVICES: Service[] = [
     icon: HardDrive,
     keywords: ["file system", "nfs", "elastic file"],
   },
+  {
+    id: "backup",
+    name: "Backup",
+    href: "/backup",
+    category: "Storage",
+    icon: ShieldCheck,
+    keywords: ["backup", "vault", "recovery point", "snapshot"],
+  },
 
   // Messaging
   {
