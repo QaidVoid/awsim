@@ -57,6 +57,7 @@ members = [
     "crates/awsim-servicediscovery",
     "crates/awsim-appconfig",
     "crates/awsim-glacier",
+    "crates/awsim-mq",
     "crates/awsim-conformance",
     "crates/awsim-enforcement-tests",
 ]
@@ -123,6 +124,7 @@ awsim-xray = { path = "crates/awsim-xray", version = "0.1.0" }
 awsim-servicediscovery = { path = "crates/awsim-servicediscovery", version = "0.1.0" }
 awsim-appconfig = { path = "crates/awsim-appconfig", version = "0.1.0" }
 awsim-glacier = { path = "crates/awsim-glacier", version = "0.1.0" }
+awsim-mq = { path = "crates/awsim-mq", version = "0.1.0" }
 
 # Async
 tokio = { version = "1", features = ["full"] }
