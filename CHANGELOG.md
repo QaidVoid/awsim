@@ -1,4 +1,253 @@
 
+## 0.2.0 — 2026-04-29
+
+### Bug Fixes
+
+- **ui:** Unique column keys in DataTable + harden against future dupes
+- **s3:** Accept versionId query param spelling for VersionId input
+- **dynamodb:** Return existing Item on ConditionalCheckFailedException
+- **sqs:** Reject FIFO-only fields on standard queues
+- **dynamodb:** Return structured CancellationReasons from TransactWriteItems
+- **dynamodb:** Return HTTP 400 for ResourceNotFoundException
+- **lambda:** Surface FunctionError via X-Amz-Function-Error header
+- **sqs:** Only return attributes when explicitly requested
+- **dynamodb:** Create data dir before opening sqlite store
+- **dynamodb:** Clippy + rustfmt cleanup
+- **core:** Preserve serde_json key order so XML field order matches AWS spec
+- **ui:** Hand scroll containment to pages so ServicePage h-full resolves
+- **ui:** Correct GitHub link to QaidVoid/awsim
+
+### Documentation
+
+- **servicediscovery:** Add Cloud Map service page
+- **xray:** Add X-Ray service page
+- **services:** Add EFS, Backup, Application Auto Scaling pages
+- **services:** Add Pipes service page, update Lambda ESM section
+- **services:** Catch up on the recent feature pass
+- **readme:** Refresh service list, flags, highlights
+- **services-index:** Bump DynamoDB operation count 26 → 57
+- **dynamodb:** Document SQLite store + TruncateTable
+- Document Phase D admin features and own AWSim's framing
+- Document /_awsim/events SSE endpoint
+- Document CloudWatch Logs persistence
+- Document /_awsim/storage endpoint
+- Document size cap and periodic GC
+- Document BodyStore startup garbage collection
+- Document SQS message body persistence
+- Document ECR layer storage and persistence
+- Document Lambda function code persistence
+- Document S3 object persistence
+
+### Features
+
+- **ui:** Identity Store — users, groups, memberships
+- **ui:** Pinpoint — apps, endpoints, segments, campaigns
+- **ui:** Transfer Family — servers, users, SSH keys
+- **ui:** QLDB — ledger management
+- **ui:** MemoryDB — clusters, users, ACLs
+- **ui:** MQ — brokers and users
+- **ui:** Glacier — vaults, archives, jobs
+- **ui:** AppConfig — applications, environments, profiles, deployments
+- **ui:** Cloud Map (Service Discovery) — namespaces, services, instances
+- **ui:** X-Ray — traces and service graph
+- **ui:** Application Auto Scaling — targets, policies
+- **ui:** Backup — vaults, plans, jobs
+- **ui:** EFS — file systems, mount targets, access points
+- **identitystore:** Users, groups, group memberships
+- **pinpoint:** Apps, endpoints, segments, campaigns
+- **transfer:** AWS Transfer Family servers, users, SSH keys
+- **qldb:** QLDB ledger metadata service
+- **memorydb:** MemoryDB for Redis with clusters, users, ACLs, snapshots
+- **rds:** Accept docdb and neptune engines on cluster + instance create
+- **mq:** Amazon MQ brokers, users, configurations
+- **glacier:** Amazon S3 Glacier with vaults, archives, jobs
+- **appconfig:** AppConfig + AppConfigData services
+- **servicediscovery:** AWS Cloud Map with namespaces, services, instances
+- **xray:** X-Ray service with trace ingest, summaries, service graph
+- **application-autoscaling:** Scalable targets, scaling policies, scheduled actions
+- **backup:** AWS Backup service with vaults, plans, selections, jobs
+- **efs:** Amazon EFS service with file systems, mount targets, access points
+- **ui:** EventBridge Pipes route and Lambda Event Sources tab
+- **pipes:** EventBridge Pipes service with SQS->Lambda runner
+- **lambda:** Region-aware poller with FilterCriteria, DLQ, stateful iterator
+- **lambda:** Extend ESM model and add UpdateEventSourceMapping
+- **ui:** Surface concurrency, global tables, live alarm state
+- **ui:** Add Resource Groups Tagging route
+- **ec2:** Real instance state machine + start/stop/reboot
+- **cloudwatch:** Real alarm state evaluation against metric data
+- **lambda:** Reserved + provisioned concurrency
+- **dynamodb:** Real CreateGlobalTable / UpdateGlobalTable
+- **cognito:** Record auth events and honor compromised-credentials
+- **kms:** Honor grants in authz evaluation
+- **cognito:** Enforce password policy and account lockout
+- **s3:** Persist each version as its own blob
+- **s3:** Full multi-version object history
+- **s3:** Add UploadPartCopy operation
+- **s3:** Assign and surface VersionId on writes when versioning is Enabled
+- **resourcegroupstagging:** Add Resource Groups Tagging API service
+- **sqs:** Round-trip BinaryValue in MessageAttributes
+- **gateway:** Silently 204 known browser probes
+- **dynamodb:** Add awsim-only TruncateTable op + UI button
+- **dynamodb:** Atomic Transact* over a single sqlite transaction (stage 5)
+- **dynamodb:** Drop in-memory items, sqlite is now authoritative (stage 4)
+- **dynamodb:** Read GetItem/Query/Scan/BatchGetItem from sqlite (stage 3)
+- **dynamodb:** Dual-write item + table ops to sqlite (stage 2 of refactor)
+- **dynamodb:** Scaffold sqlite-backed store (stage 1 of refactor)
+- **awsim:** Bound in-flight requests + warn before fd exhaustion
+- **awsim:** Bump NOFILE rlimit, dual-stack bind, async snapshot saves
+- **apigateway:** Wire HTTP / HTTP_PROXY in v1 stage proxy
+- **apigateway:** Wire stage invocation proxy for v1 REST APIs
+- **apigateway:** Full CRUD for v1 REST APIs + scope proxy under _user_request_
+- **apigateway:** Add v1 (REST APIs) handler alongside the v2 service
+- Replay any captured request from the inspect drawer
+- **ui:** Multi-variant theme picker (default/midnight/slate/solarized + light)
+- Capture per-request detail + add Inspect drawer
+- **ui:** Add vim-style keyboard shortcuts + help overlay
+- **ui/sts:** Add typed API + rebuild with caller-identity + assume-role + federation cards
+- **ui/glue:** Add typed API + rebuild with databases/tables/crawlers/jobs/connections tabs
+- **ui/organizations:** Add typed API + rebuild with accounts/OUs/SCPs tabs
+- **ui/ses:** Add send-email composer dialog
+- **ui/ses:** Rebuild with identities/config-sets/templates/contacts/suppression tabs
+- **ui/cloudfront:** Add origin-access/key-groups/public-keys/functions tabs
+- **ui/cloudfront:** Add typed API + rebuild with distributions+policies tabs
+- **ui/datasync:** Add typed API + rebuild with locations/tasks/executions tabs
+- **ui/athena:** Add typed API + rebuild with query editor + history
+- **ui/ssm:** Add maintenance-windows + ops-items tabs
+- **ui/route53:** Add typed API + rebuild with zones+records workspace
+- **ui/ssm:** Add typed API + rebuild with parameters/documents/activations tabs
+- **ui/batch:** Add typed API + rebuild with compute-env/queues/defs/jobs tabs
+- **ui/polly:** Add typed API + rebuild with voices/lexicons/synthesize panel
+- **ui/elb:** Add typed API + rebuild with LB/target-groups/listeners/rules tabs
+- **ui/sso:** Add typed API + rebuild with instances/permission-sets/assignments tabs
+- **ui/cloudformation:** Add typed API + rebuild with stack workspace + template viewer
+- **ui/ecr:** Rebuild page with decomposed repos+images split view
+- **ui/bedrock:** Add invoke playground for runtime API
+- **ui/bedrock:** Add provisioned/custom-models/knowledge-bases tabs
+- **ui:** Add typed API foundations for bedrock, ecr, ses + bedrock tabs (WIP)
+- **ui/apigateway:** Add typed API + rebuild from stub with full workspace
+- **ui/ec2:** Add typed API + rebuild with instances/sgs/keys/vpcs/subnets/volumes tabs
+- **ui/scheduler:** Add typed API + rebuild with schedules/groups tabs and cron preview
+- **ui/appsync:** Add typed API + rebuild with decomposed workspace
+- **ui/waf:** Add typed API + rebuild with WebACLs/RuleGroups/IPSets tabs
+- **ui/acm:** Add typed API + rebuild with detail sheet
+- **ui/stepfunctions:** Add typed API + decomposed workspace
+- **ui/rds:** Add typed API + rebuild RDS page with instance/snapshot tabs
+- **ui/secrets:** Add typed API + rebuild with show/hide + version history
+- **ui/eks:** Add typed EKS API + rebuild with decomposed tabs
+- **ui/kms:** Add typed API + rebuild with decomposed keys/aliases + encrypt-decrypt playground
+- **ui/s3:** Rebuild S3 page with decomposed components
+- **ui/cloudtrail:** Add typed API + rebuild with decomposed trails/events tabs
+- **ui/firehose:** Add typed API + rebuild with stream details + put record
+- **ui/ecs:** Add typed ECS API + rebuild with decomposed tabs
+- **ui/cognito:** Add JWT decoder panel
+- **ui/cognito:** Add typed API + rebuild with decomposed pool tabs
+- **ui/dynamodb:** Rebuild page with decomposed tabbed workspace
+- **ui/kinesis:** Add typed API + rebuild with stream+record explorer
+- **ui/monitoring:** Rebuild with decomposed metrics/alarms/dashboards tabs
+- **ui/lambda:** Point page at decomposed component workspace
+- **ui/lambda:** Rebuild page with decomposed function workspace
+- **ui/iam:** Add policy simulator tab (Simulate*Policy)
+- **ui/eventbridge:** Add typed API + rebuild with buses/rules/archives + send-event dialog
+- **ui/iam:** Rebuild page with decomposed users/roles/groups/policies
+- **ui/monitoring:** Add typed Metrics API + sparkline component
+- **ui/cloudwatch:** Add Insights query dialog
+- **ui/sns:** Add typed API + rebuild with decomposed topics/subs/publish
+- **ui/dynamodb:** Add typed DynamoDB API client
+- **ui/cloudwatch:** Add typed Logs API + rebuild with decomposed three-pane explorer
+- **ui/sqs:** Add typed API + rebuild with decomposed queue/messages workspace
+- **ui/logs:** Add Request Log page consuming SSE stream
+- **ui/iam:** Add typed IAM API client
+- **ui/lambda:** Add typed Lambda API client
+- **ui:** Add shared ServicePage / DataTable / EmptyState primitives
+- **ui:** Assemble dashboard home page
+- **ui:** Add insights panel component
+- **ui:** Add service status list component
+- **ui:** Add live request stream and detail sheet
+- **ui:** Add KPI card component
+- **ui:** Add dashboard formatting helpers and event types
+- **ui:** Replace home page with dashboard placeholder
+- **ui:** Add command palette (Cmd-K) for navigation and quick actions
+- **ui:** Rebuild app shell with categorized sidebar and topbar
+- **awsim:** Wire CloudWatchLogsService::with_data_dir
+- **ui:** Set up design system with oklch tokens and Geist fonts
+- **admin:** Add GET /_awsim/storage endpoint
+- **cloudwatch-logs:** Implement BlobInventory for CloudWatchLogsService
+- **awsim:** Track per-service body stores in AppState
+- **cloudwatch-logs:** Cleanup persisted logs on delete
+- **cloudwatch-logs:** Persist log events on PutLogEvents
+- **cloudwatch-logs:** Plumb optional BodyStore into LogsState
+- **core:** Add append_blob to BodyStore
+- **awsim:** Add periodic GC via --gc-interval-secs flag
+- **awsim:** Add --max-blob-bytes CLI flag
+- **core:** Add max_size builder, enforce cap on write_blob
+- **core:** Add total_size and evict_to_fit on BodyStore
+- **awsim:** Run BodyStore GC at startup
+- **sqs:** Implement BlobInventory for SqsService
+- **ecr:** Implement BlobInventory for EcrService
+- **lambda:** Implement BlobInventory for LambdaService
+- **s3:** Implement BlobInventory for S3Service
+- **core:** Add BlobInventory trait and BodyStore::gc_orphaned
+- **core:** Add Snapshottable trait + AccountRegionStore helpers
+- **core:** Add unified Body type for blob storage
+- **sqs:** Wire SqsService::with_data_dir in main bin
+- **sqs:** Rebind on-disk message bodies on snapshot restore
+- **sqs:** Migrate persisted body when redriving to DLQ
+- **sqs:** Cleanup persisted bodies on Delete/Purge/DeleteQueue
+- **sqs:** Persist message bodies on SendMessage/SendMessageBatch
+- **sqs:** Plumb optional BodyStore into SqsState
+- **awsim:** Wire EcrService::with_data_dir and with_port in main bin
+- **ecr:** GetDownloadUrlForLayer returns local /v2 endpoint URL
+- **ecr:** Add /v2/{repo}/blobs/{digest} HTTP endpoint
+- **ecr:** Wire body_store on snapshot/restore
+- **ecr:** Cleanup layers on BatchDeleteImage and DeleteRepository
+- **ecr:** Persist completed layers to disk
+- **ecr:** Implement BatchCheckLayerAvailability against stored layers
+- **ecr:** Store completed layers in repository
+- **ecr:** Plumb optional BodyStore into EcrState
+- **ecr:** Introduce Layer/LayerBody types
+- **lambda:** Wire LambdaService::with_data_dir in main binary
+- **lambda:** Wire body_store on snapshot and restore
+- **lambda:** Cleanup persisted code on DeleteFunction
+- **lambda:** Persist published versions on PublishVersion
+- **lambda:** Persist function code on CreateFunction/UpdateFunctionCode
+- **lambda:** Plumb optional BodyStore into LambdaState
+- **core:** Add generalized BodyStore for disk-backed blobs
+- **s3:** Wire S3Service::with_data_dir in main bin
+- **s3:** Wire body_store on restore so persisted objects load lazily
+- **s3:** Persist multipart upload parts to disk
+- **s3:** Persist object bodies to disk on PutObject/CopyObject/DeleteObject
+- **s3:** Plumb optional BodyStore into S3State
+- **s3:** Add BodyStore for disk-backed object bodies
+
+### Refactor
+
+- **dynamodb:** Drop Table.items field, fix ItemCount via sqlite (stage 7)
+- **sqs:** Use Snapshottable trait
+- **ecr:** Use Snapshottable trait
+- **lambda:** Use Snapshottable trait
+- **s3:** Use Snapshottable trait for snapshot/restore
+- **sqs:** Replace MessageBody with awsim_core::Body
+- **ecr:** Replace LayerBody with awsim_core::Body
+- **lambda:** Replace FunctionCode with awsim_core::Body
+- **s3:** Replace ObjectBody with awsim_core::Body
+- **sqs:** Introduce MessageBody enum, replace Message.body
+- **lambda:** Introduce FunctionCode enum
+- **s3:** Use awsim-core::BodyStore for object and multipart blobs
+- **s3:** Introduce ObjectBody enum, replace S3Object.data
+
+### Tests
+
+- **kms:** Cover key-policy participation in authz evaluation
+- **awsim:** Integration test for /_awsim/events SSE streaming
+- **awsim:** Integration test for /_awsim/storage
+- **cloudwatch-logs:** Integration test for log persistence round-trip
+- **awsim-sqs:** Integration coverage for size cap and periodic GC
+- **core:** Integration coverage for BodyStore startup GC
+- **sqs:** Add integration tests for message body persistence
+- **ecr:** Integration test for layer round-trip with persistence
+- **lambda:** Integration test for code persistence round-trip
+- **s3:** Integration test for disk persistence round-trip
+
 ## 0.1.0 — 2026-04-24
 
 ### Bug Fixes
