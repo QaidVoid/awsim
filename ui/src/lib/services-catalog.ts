@@ -579,6 +579,14 @@ export const SERVICES: Service[] = [
     icon: DollarSign,
     keywords: ["pricing", "cost", "bill", "spend", "estimate"],
   },
+  {
+    id: "chaos",
+    name: "Chaos",
+    href: "/chaos",
+    category: "Admin",
+    icon: Flame,
+    keywords: ["chaos", "fault", "inject", "failure", "latency", "throttle"],
+  },
 ];
 
 export function servicesByCategory(): Map<ServiceCategory, Service[]> {
