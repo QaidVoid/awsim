@@ -23,6 +23,7 @@ import Database from "@lucide/svelte/icons/database";
 import FileSearch from "@lucide/svelte/icons/file-search";
 import Fingerprint from "@lucide/svelte/icons/fingerprint";
 import Flame from "@lucide/svelte/icons/flame";
+import Gauge from "@lucide/svelte/icons/gauge";
 import Globe from "@lucide/svelte/icons/globe";
 import HardDrive from "@lucide/svelte/icons/hard-drive";
 import KeyRound from "@lucide/svelte/icons/key-round";
@@ -387,6 +388,14 @@ export const SERVICES: Service[] = [
     category: "Workflows",
     icon: Workflow,
     keywords: ["state machine", "sfn"],
+  },
+  {
+    id: "application-autoscaling",
+    name: "Application Auto Scaling",
+    href: "/application-autoscaling",
+    category: "Workflows",
+    icon: Gauge,
+    keywords: ["autoscaling", "scaling policy", "ecs", "lambda", "dynamodb"],
   },
   {
     id: "scheduler",
