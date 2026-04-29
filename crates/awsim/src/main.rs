@@ -223,8 +223,21 @@ enum ChaosPresetCommand {
     },
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // Build the runtime by hand so we can cap the blocking pool. The
+    // tokio default is 512 blocking threads × 2 MiB stack ≈ 1 GiB
+    // ceiling for `spawn_blocking` alone — easy to hit during a
+    // bulk DDB import that fans out into many synchronous SQLite
+    // calls. 32 threads × 2 MiB = 64 MiB is plenty for I/O-bound
+    // work and bounds RSS predictably.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .max_blocking_threads(32)
+        .build()?;
+    runtime.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let cli = Cli::parse();
 
     // One-shot subcommands run before the server-startup machinery

@@ -17,9 +17,11 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use awsim_core::AwsError;
 
-const POOL_SIZE: u32 = 8;
-const CACHE_SIZE_KIB: i64 = -8 * 1024;
-const MMAP_SIZE_BYTES: i64 = 64 * 1024 * 1024;
+const POOL_MAX: u32 = 4;
+const POOL_MIN_IDLE: u32 = 1;
+const CACHE_SIZE_KIB: i64 = -2 * 1024;
+const MMAP_SIZE_BYTES: i64 = 16 * 1024 * 1024;
+const WAL_AUTOCHECKPOINT_PAGES: i64 = 256;
 
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 type Conn = PooledConnection<SqliteConnectionManager>;
@@ -50,7 +52,8 @@ impl SqliteStore {
         let db_path = path.into();
         let manager = SqliteConnectionManager::file(&db_path).with_init(apply_pragmas);
         let pool = r2d2::Pool::builder()
-            .max_size(POOL_SIZE)
+            .max_size(POOL_MAX)
+            .min_idle(Some(POOL_MIN_IDLE))
             .build(manager)
             .map_err(|e| AwsError::internal(format!("CWL pool init failed: {e}")))?;
         // Run migrations (just one for now).
@@ -395,7 +398,8 @@ fn apply_pragmas(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error>
     conn.execute_batch(&format!(
         "PRAGMA temp_store = MEMORY;
          PRAGMA mmap_size  = {MMAP_SIZE_BYTES};
-         PRAGMA cache_size = {CACHE_SIZE_KIB};"
+         PRAGMA cache_size = {CACHE_SIZE_KIB};
+         PRAGMA wal_autocheckpoint = {WAL_AUTOCHECKPOINT_PAGES};"
     ))?;
     Ok(())
 }

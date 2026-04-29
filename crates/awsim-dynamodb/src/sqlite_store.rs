@@ -31,19 +31,32 @@ mod embedded_migrations {
 /// while keeping the row width modest.
 pub const MAX_GSI_SLOTS: usize = 5;
 
-/// Connection pool size. WAL gives unlimited concurrent readers and
-/// one writer at a time, so a small pool covers typical concurrent
-/// load while keeping per-connection memory (cache + mmap) bounded.
-const POOL_SIZE: u32 = 8;
+/// Connection pool ceiling. Lazy: only `MIN_IDLE` connections are
+/// kept warm, the pool grows on demand and shrinks back. WAL gives
+/// unlimited concurrent readers and one writer, so a 4-connection
+/// cap is plenty for typical workloads.
+const POOL_MAX: u32 = 4;
 
-/// Per-connection cache size in KiB (negative = absolute KiB rather
-/// than pages). 8 MiB × pool_size = ~64 MiB total cache budget.
-const CACHE_SIZE_KIB: i64 = -8 * 1024;
+/// Idle-connection floor. One warm connection per service keeps
+/// the cache warm for hot reads without pinning POOL_MAX × cache
+/// memory at idle.
+const POOL_MIN_IDLE: u32 = 1;
 
-/// Per-connection mmap window. 64 MiB × 8 connections shares OS-level
-/// page cache, so this is more like a per-DB cap. Lazy mapping —
-/// only resident as you touch DB pages.
-const MMAP_SIZE_BYTES: i64 = 64 * 1024 * 1024;
+/// Per-connection cache size in KiB (negative = absolute KiB
+/// rather than pages). 2 MiB per connection — small caches are
+/// fine because the OS page cache backs unmapped pages.
+const CACHE_SIZE_KIB: i64 = -2 * 1024;
+
+/// Per-connection mmap window cap. Lazy mapping — only resident
+/// as the DB grows AND pages get touched, but the OS still bills
+/// the mapping toward RSS so we keep it tight.
+const MMAP_SIZE_BYTES: i64 = 16 * 1024 * 1024;
+
+/// WAL auto-checkpoint threshold in pages. The default 1000 pages
+/// (~4 MiB) is fine for throughput but means the WAL holds that
+/// much memory between checkpoints. 256 pages (~1 MiB) keeps the
+/// WAL bounded for a small write-throughput hit.
+const WAL_AUTOCHECKPOINT_PAGES: i64 = 256;
 
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 pub(crate) type Conn = PooledConnection<SqliteConnectionManager>;
@@ -73,7 +86,8 @@ impl SqliteStore {
         let db_path = path.into();
         let manager = SqliteConnectionManager::file(&db_path).with_init(apply_pragmas);
         let pool = r2d2::Pool::builder()
-            .max_size(POOL_SIZE)
+            .max_size(POOL_MAX)
+            .min_idle(Some(POOL_MIN_IDLE))
             .build(manager)
             .map_err(|e| AwsError::internal(format!("DynamoDB pool init failed: {e}")))?;
         // Migrations need a fresh `&mut Connection`. Pull one from the
@@ -686,7 +700,8 @@ fn apply_pragmas(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error>
     conn.execute_batch(&format!(
         "PRAGMA temp_store = MEMORY;
          PRAGMA mmap_size  = {MMAP_SIZE_BYTES};
-         PRAGMA cache_size = {CACHE_SIZE_KIB};"
+         PRAGMA cache_size = {CACHE_SIZE_KIB};
+         PRAGMA wal_autocheckpoint = {WAL_AUTOCHECKPOINT_PAGES};"
     ))?;
     Ok(())
 }
