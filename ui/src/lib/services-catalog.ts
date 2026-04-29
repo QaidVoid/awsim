@@ -587,6 +587,14 @@ export const SERVICES: Service[] = [
     icon: Flame,
     keywords: ["chaos", "fault", "inject", "failure", "latency", "throttle"],
   },
+  {
+    id: "playground",
+    name: "Playground",
+    href: "/playground",
+    category: "Admin",
+    icon: SquareTerminal,
+    keywords: ["playground", "request", "builder", "test", "rest", "json"],
+  },
 ];
 
 export function servicesByCategory(): Map<ServiceCategory, Service[]> {
