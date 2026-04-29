@@ -45,6 +45,7 @@ mod tests {
             response_size: size_out,
             error_code: None,
             memory_mb: None,
+            state_transitions: None,
         }
     }
 

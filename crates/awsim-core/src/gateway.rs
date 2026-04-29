@@ -234,10 +234,14 @@ pub async fn dispatch_request(
 
     // Extract any X-Awsim-* metadata headers the responding service
     // attached for the billing meter (e.g. Lambda's per-invocation
-    // memory size). Pull them off before draining into the actual
-    // HTTP response so they don't leak to the wire.
+    // memory size, Step Functions' transition count). Pull them off
+    // before draining into the actual HTTP response so they don't
+    // leak to the wire.
     let memory_mb = resp_headers
         .remove("x-awsim-memory-mb")
+        .and_then(|v| v.to_str().ok().and_then(|s| s.parse::<u32>().ok()));
+    let state_transitions = resp_headers
+        .remove("x-awsim-state-transitions")
         .and_then(|v| v.to_str().ok().and_then(|s| s.parse::<u32>().ok()));
 
     let mut builder = Response::builder().status(status);
@@ -274,6 +278,7 @@ pub async fn dispatch_request(
         response_size,
         error_code,
         memory_mb,
+        state_transitions,
     };
     state.events.publish(event);
 

@@ -86,9 +86,15 @@ impl BillingMeter {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         state.ensure_started(now);
+        // Step Functions bills per state transition; the SFN service
+        // emits the transition count via X-Awsim-State-Transitions on
+        // the response, which the gateway pulls into event.state_transitions.
+        // For everything else, one request = one billable unit.
+        let units = event.state_transitions.map(|n| n as u64).unwrap_or(1);
         state.record(
             &event.service,
             operation,
+            units,
             event.request_size,
             event.response_size,
             event.error_code.is_some(),

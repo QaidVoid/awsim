@@ -119,11 +119,25 @@ pub fn start_execution(
     };
 
     info!(arn = %exec_arn, status = %exec.status, "Started execution");
+
+    // AWS bills Step Functions per state transition, not per
+    // StartExecution call. Each state we entered counts as one
+    // billable transition; expose the count via an internal metadata
+    // header so the billing meter can charge accurately.
+    let state_transitions = exec
+        .history
+        .iter()
+        .filter(|e| e.event_type == "StateEntered")
+        .count() as u32;
+
     state.executions.insert(exec_arn.clone(), exec);
 
     Ok(json!({
         "executionArn": exec_arn,
         "startDate": start_date,
+        "__headers": {
+            "X-Awsim-State-Transitions": state_transitions.to_string(),
+        },
     }))
 }
 

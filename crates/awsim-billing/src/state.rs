@@ -14,8 +14,12 @@ pub struct OpCounter {
 }
 
 impl OpCounter {
-    fn record(&self, bytes_in: u64, bytes_out: u64, is_error: bool) {
-        self.count.fetch_add(1, Ordering::Relaxed);
+    /// Record one request's billable units. For most services `units` is 1
+    /// (one billable unit per API call). Step Functions passes the
+    /// number of state transitions executed by the call so the cost
+    /// math matches AWS's per-transition billing.
+    fn record(&self, units: u64, bytes_in: u64, bytes_out: u64, is_error: bool) {
+        self.count.fetch_add(units, Ordering::Relaxed);
         self.bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
         self.bytes_out.fetch_add(bytes_out, Ordering::Relaxed);
         if is_error {
@@ -204,6 +208,7 @@ impl BillingState {
         &self,
         service: &str,
         operation: &str,
+        units: u64,
         bytes_in: u64,
         bytes_out: u64,
         is_error: bool,
@@ -211,7 +216,7 @@ impl BillingState {
         let svc = self.services.entry(service.to_string()).or_default();
         svc.entry(operation.to_string())
             .or_default()
-            .record(bytes_in, bytes_out, is_error);
+            .record(units, bytes_in, bytes_out, is_error);
     }
 
     pub fn ensure_started(&self, now_secs: u64) {

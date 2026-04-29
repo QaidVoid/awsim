@@ -22,6 +22,11 @@ pub struct RequestEvent {
     /// Used by the billing meter for accurate GB-second compute cost
     /// (otherwise it falls back to the 128 MB minimum).
     pub memory_mb: Option<u32>,
+    /// Number of state transitions executed by the responding service
+    /// for this request. Step Functions emits this so the meter can
+    /// charge per-transition (the actual AWS billing unit) instead of
+    /// per-StartExecution call. None for non-stateful services.
+    pub state_transitions: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -78,6 +83,7 @@ mod tests {
             response_size: 256,
             error_code: None,
             memory_mb: None,
+            state_transitions: None,
         };
         bus.publish(event.clone());
         let received = rx.recv().await.expect("receive event");
