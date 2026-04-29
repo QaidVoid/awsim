@@ -32,6 +32,7 @@ import Lock from "@lucide/svelte/icons/lock";
 import MapPin from "@lucide/svelte/icons/map-pin";
 import Mail from "@lucide/svelte/icons/mail";
 import MessageSquare from "@lucide/svelte/icons/message-square";
+import MessagesSquare from "@lucide/svelte/icons/messages-square";
 import MicVocal from "@lucide/svelte/icons/mic-vocal";
 import Network from "@lucide/svelte/icons/network";
 import Package from "@lucide/svelte/icons/package";
@@ -197,6 +198,14 @@ export const SERVICES: Service[] = [
     category: "Messaging",
     icon: BellRing,
     keywords: ["topic", "pubsub"],
+  },
+  {
+    id: "mq",
+    name: "MQ",
+    href: "/mq",
+    category: "Messaging",
+    icon: MessagesSquare,
+    keywords: ["amazon mq", "rabbitmq", "activemq", "broker"],
   },
   {
     id: "eventbridge",
