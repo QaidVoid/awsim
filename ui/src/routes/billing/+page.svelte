@@ -10,6 +10,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+	import DownloadIcon from '@lucide/svelte/icons/download';
 	import DollarSignIcon from '@lucide/svelte/icons/dollar-sign';
 	import TrendingUpIcon from '@lucide/svelte/icons/trending-up';
 	import ClockIcon from '@lucide/svelte/icons/clock';
@@ -137,6 +138,93 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	/// Build a CSV out of the current report — one row per service
+	/// plus a totals row at the bottom — and trigger a browser
+	/// download. Useful for piping into Excel / Pandas / anomaly
+	/// tooling, or stashing point-in-time snapshots for diff.
+	function downloadCsv() {
+		if (!report) return;
+		const headers = [
+			'service',
+			'display_name',
+			'region',
+			'total_cost_usd',
+			'request_count',
+			'bytes_in',
+			'bytes_out',
+			'error_count',
+			'data_transfer_out_cost_usd',
+			'data_ingest_cost_usd',
+			'storage_cost_usd',
+			'storage_bytes',
+			'compute_cost_usd',
+			'compute_gb_seconds',
+			'resource_cost_usd',
+			'resource_count',
+		];
+		const escape = (s: string) =>
+			/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+		const rows: string[] = [headers.join(',')];
+		for (const s of report.services) {
+			rows.push(
+				[
+					s.service,
+					s.display_name,
+					s.region,
+					s.total_cost_usd,
+					s.request_count,
+					s.bytes_in,
+					s.bytes_out,
+					s.error_count,
+					s.data_transfer_out_cost_usd,
+					s.data_ingest_cost_usd,
+					s.storage_cost_usd,
+					s.storage_bytes,
+					s.compute_cost_usd,
+					s.compute_gb_seconds,
+					s.resource_cost_usd,
+					s.resource_count,
+				]
+					.map((v) => (typeof v === 'string' ? escape(v) : String(v)))
+					.join(','),
+			);
+		}
+		// Final totals row — "TOTAL" in the service column, summed
+		// numerics, leave categorical columns blank.
+		rows.push(
+			[
+				'TOTAL',
+				'',
+				report.services[0]?.region ?? 'us-east-1',
+				report.running_cost_usd,
+				report.services.reduce((a, s) => a + s.request_count, 0),
+				report.services.reduce((a, s) => a + s.bytes_in, 0),
+				report.services.reduce((a, s) => a + s.bytes_out, 0),
+				report.services.reduce((a, s) => a + s.error_count, 0),
+				report.services.reduce((a, s) => a + s.data_transfer_out_cost_usd, 0),
+				report.services.reduce((a, s) => a + s.data_ingest_cost_usd, 0),
+				report.services.reduce((a, s) => a + s.storage_cost_usd, 0),
+				report.services.reduce((a, s) => a + s.storage_bytes, 0),
+				report.services.reduce((a, s) => a + s.compute_cost_usd, 0),
+				report.services.reduce((a, s) => a + s.compute_gb_seconds, 0),
+				report.services.reduce((a, s) => a + s.resource_cost_usd, 0),
+				report.services.reduce((a, s) => a + s.resource_count, 0),
+			].join(','),
+		);
+		const blob = new Blob([rows.join('\n') + '\n'], {
+			type: 'text/csv;charset=utf-8;',
+		});
+		const url = URL.createObjectURL(blob);
+		const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `awsim-bill-${stamp}.csv`;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
 	}
 
 	function checkBudgetAlert(r: BillingReport) {
@@ -645,6 +733,16 @@
 	description="Rolling AWS bill from metered usage × vendored pricing."
 >
 	{#snippet actions()}
+		<Button
+			variant="ghost"
+			size="sm"
+			onclick={downloadCsv}
+			disabled={!report}
+			title="Download the current bill report as CSV"
+		>
+			<DownloadIcon />
+			CSV
+		</Button>
 		<Button variant="ghost" size="sm" onclick={load} disabled={loading}>
 			<RefreshCwIcon class={loading ? 'animate-spin' : ''} />
 			Refresh
