@@ -519,12 +519,55 @@
 		const maxCost = Math.max(...history.map((p) => p.running_cost_usd), 1e-12);
 		const xOf = (ts: number) => ((ts - minTs) / span) * CHART_W;
 		const yOf = (cost: number) => CHART_H - (cost / maxCost) * (CHART_H - 4);
+
+		// Stacked-area: pick the services that have ever shown a non-
+		// zero cost in this window, sort largest-current first so the
+		// dominant service is the bottom band.
+		const serviceTotals = new Map<string, number>();
+		for (const p of history) {
+			if (!p.services) continue;
+			for (const [svc, cost] of Object.entries(p.services)) {
+				serviceTotals.set(svc, Math.max(serviceTotals.get(svc) ?? 0, cost));
+			}
+		}
+		const orderedServices = [...serviceTotals.entries()]
+			.filter(([, c]) => c > 0)
+			.sort((a, b) => b[1] - a[1])
+			.map(([svc]) => svc);
+
+		// Per-service stacked area paths. Each band's lower edge is
+		// the cumulative sum of previous bands at that timestamp.
+		const stackedAreas: Array<{ service: string; tint: string; d: string }> = [];
+		for (let i = 0; i < orderedServices.length; i++) {
+			const svc = orderedServices[i];
+			const lowerStr: string[] = [];
+			const upperStr: string[] = [];
+			for (const p of history) {
+				const x = xOf(p.ts);
+				let lower = 0;
+				let cur = 0;
+				for (let j = 0; j < orderedServices.length; j++) {
+					const v = p.services?.[orderedServices[j]] ?? 0;
+					if (j < i) lower += v;
+					if (j === i) cur = v;
+				}
+				const upper = lower + cur;
+				lowerStr.push(`${x.toFixed(2)},${yOf(lower).toFixed(2)}`);
+				upperStr.push(`${x.toFixed(2)},${yOf(upper).toFixed(2)}`);
+			}
+			// Polygon: walk upper edge left→right, then lower edge right→left.
+			const d = `M ${upperStr.join(' L ')} L ${lowerStr.reverse().join(' L ')} Z`;
+			stackedAreas.push({ service: svc, tint: tintFor(svc), d });
+		}
+
+		// Total-cost outline still drawn on top so the headline number
+		// is visible against the stack.
 		const pts = history
 			.map((p) => `${xOf(p.ts).toFixed(2)},${yOf(p.running_cost_usd).toFixed(2)}`)
 			.join(' L ');
 		const stroke = `M ${pts}`;
-		const area = `M ${xOf(minTs).toFixed(2)},${CHART_H} L ${pts} L ${xOf(last.ts).toFixed(2)},${CHART_H} Z`;
 		const lastPoint = { x: xOf(last.ts), y: yOf(last.running_cost_usd) };
+
 		// Linear-regress the most recent ~10 points to project a
 		// short-horizon trend line. Anything further would lie about
 		// how stable the workload is.
@@ -547,18 +590,25 @@
 			const denom = n * sumXX - sumX * sumX;
 			const slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
 			const intercept = (sumY - slope * sumX) / n;
-			// Extrapolate from the last sample's x to the forecast x.
 			const xLast = (last.ts - tail[0].ts) / 1000;
 			const xEnd = (projectTs - tail[0].ts) / 1000;
 			const yEndCost = Math.max(0, intercept + slope * xEnd);
-			// Path from last data point to projected endpoint.
 			projection = {
 				stroke: `M ${xOf(last.ts).toFixed(2)},${yOf(intercept + slope * xLast).toFixed(2)} L ${xOf(projectTs).toFixed(2)},${yOf(yEndCost).toFixed(2)}`,
 				endY: yOf(yEndCost),
 				endCost: yEndCost,
 			};
 		}
-		return { stroke, area, maxCost, minTs, maxTs: last.ts, lastPoint, projection };
+		return {
+			stroke,
+			stackedAreas,
+			orderedServices,
+			maxCost,
+			minTs,
+			maxTs: last.ts,
+			lastPoint,
+			projection,
+		};
 	});
 
 	function fmtRelative(ts: number): string {
@@ -765,14 +815,8 @@
 					viewBox="0 0 {CHART_W} {CHART_H}"
 					preserveAspectRatio="none"
 					class="h-28 w-full"
-					aria-label="Running cost over time"
+					aria-label="Running cost over time, stacked by service"
 				>
-					<defs>
-						<linearGradient id="cost-fill" x1="0" y1="0" x2="0" y2="1">
-							<stop offset="0%" stop-color="oklch(70% 0.15 25)" stop-opacity="0.45" />
-							<stop offset="100%" stop-color="oklch(70% 0.15 25)" stop-opacity="0" />
-						</linearGradient>
-					</defs>
 					<!-- Subtle baseline so the curve has visual context. -->
 					<line
 						x1="0"
@@ -783,21 +827,28 @@
 						stroke-width="1"
 						vector-effect="non-scaling-stroke"
 					/>
-					<path d={chartPaths.area} fill="url(#cost-fill)" />
+					<!-- Per-service stacked areas. Largest-current at the
+					     bottom so the dominant cost driver reads first. -->
+					{#each chartPaths.stackedAreas as band (band.service)}
+						<path d={band.d} fill={band.tint} fill-opacity="0.55" />
+					{/each}
+					<!-- Total cost outline on top so the headline number
+					     is legible against the stack. -->
 					<path
 						d={chartPaths.stroke}
 						fill="none"
-						stroke="oklch(70% 0.15 25)"
-						stroke-width="2"
+						stroke="oklch(95% 0.02 0)"
+						stroke-width="1.5"
 						stroke-linejoin="round"
 						stroke-linecap="round"
+						stroke-opacity="0.7"
 						vector-effect="non-scaling-stroke"
 					/>
 					{#if chartPaths.projection}
 						<path
 							d={chartPaths.projection.stroke}
 							fill="none"
-							stroke="oklch(70% 0.15 25)"
+							stroke="oklch(95% 0.02 0)"
 							stroke-width="1.5"
 							stroke-linecap="round"
 							stroke-dasharray="4 3"
@@ -805,13 +856,12 @@
 							vector-effect="non-scaling-stroke"
 						/>
 					{/if}
-					<!-- Most-recent-value dot anchors the eye on the curve tip. -->
 					{#if chartPaths.lastPoint}
 						<circle
 							cx={chartPaths.lastPoint.x}
 							cy={chartPaths.lastPoint.y}
 							r="2"
-							fill="oklch(70% 0.15 25)"
+							fill="oklch(95% 0.02 0)"
 							vector-effect="non-scaling-stroke"
 						/>
 					{/if}
@@ -824,11 +874,29 @@
 						style="left: {hoverPoint.xPct}%;"
 					></div>
 					<div
-						class="pointer-events-none absolute z-10 rounded-md border border-border bg-popover px-2 py-1 text-[10px] shadow-md"
+						class="pointer-events-none absolute z-10 min-w-[160px] rounded-md border border-border bg-popover px-2 py-1.5 text-[10px] shadow-md"
 						style="left: {Math.min(hoverPoint.xPct, 80)}%; top: {Math.max(hoverPoint.yPct - 12, 0)}%; transform: translateX({hoverPoint.xPct > 80 ? '-100%' : '6px'});"
 					>
-						<div class="font-mono font-semibold tabular-nums">{fmtUsd(hoverPoint.running_cost_usd, { precise: true })}</div>
-						<div class="text-muted-foreground">{fmtRelative(hoverPoint.ts)}</div>
+						<div class="flex items-baseline justify-between gap-3">
+							<span class="font-mono font-semibold tabular-nums">{fmtUsd(hoverPoint.running_cost_usd, { precise: true })}</span>
+							<span class="text-muted-foreground">{fmtRelative(hoverPoint.ts)}</span>
+						</div>
+						{#if hoverPoint.services && chartPaths}
+							{@const lines = chartPaths.orderedServices
+								.map((svc) => ({ svc, cost: hoverPoint.services?.[svc] ?? 0 }))
+								.filter((l) => l.cost > 0)}
+							{#if lines.length > 0}
+								<div class="mt-1.5 space-y-0.5 border-t border-border/40 pt-1.5">
+									{#each lines as line (line.svc)}
+										<div class="flex items-center gap-1.5">
+											<span class="size-1.5 shrink-0 rounded-full" style="background-color: {tintFor(line.svc)};"></span>
+											<span class="truncate text-muted-foreground">{BRAND_ALIAS[line.svc] ?? line.svc}</span>
+											<span class="ml-auto font-mono tabular-nums">{fmtUsd(line.cost, { precise: true })}</span>
+										</div>
+									{/each}
+								</div>
+							{/if}
+						{/if}
 					</div>
 				{/if}
 				</div>
