@@ -1588,6 +1588,7 @@ dependencies = [
  "awsim-kinesis",
  "awsim-kms",
  "awsim-lambda",
+ "awsim-memorydb",
  "awsim-mq",
  "awsim-opensearch",
  "awsim-organizations",
@@ -2247,6 +2248,19 @@ dependencies = [
  "tracing",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "awsim-memorydb"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

@@ -1088,6 +1088,9 @@ fn register_services(
     };
     state.register(Arc::new(mq), mq_routes);
 
+    let memorydb = Arc::new(awsim_memorydb::MemoryDbService::new());
+    state.register(memorydb, vec![]);
+
     // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
