@@ -18,7 +18,9 @@ mod admin;
 mod bill_cli;
 mod chaos_cli;
 mod integrations;
+mod named_snapshots;
 mod proxy;
+mod snapshot_cli;
 
 #[derive(Parser)]
 #[command(
@@ -89,6 +91,43 @@ enum Command {
     Chaos {
         #[command(subcommand)]
         command: ChaosCommand,
+    },
+    /// Save / load named state snapshots — point-in-time bundles of
+    /// every service's serialised state, plus billing + chaos.
+    Snapshot {
+        #[command(subcommand)]
+        command: SnapshotCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SnapshotCommand {
+    /// List saved snapshots.
+    List {
+        #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
+        endpoint: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save the current state under NAME (overwrites if it exists).
+    Save {
+        #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
+        endpoint: String,
+        /// Snapshot name — ASCII alnum + `-` + `_`, max 64 chars.
+        name: String,
+    },
+    /// Restore state from NAME. Existing live state is overwritten
+    /// for any account/region/service represented in the snapshot.
+    Load {
+        #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
+        endpoint: String,
+        name: String,
+    },
+    /// Delete a saved snapshot.
+    Delete {
+        #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
+        endpoint: String,
+        name: String,
     },
 }
 
@@ -191,6 +230,9 @@ async fn main() -> Result<()> {
             }
             Command::Chaos { command } => {
                 return chaos_cli::run(command).await;
+            }
+            Command::Snapshot { command } => {
+                return snapshot_cli::run(command).await;
             }
         }
     }
@@ -705,6 +747,27 @@ async fn main() -> Result<()> {
         )
         .with_state(Arc::clone(&state.chaos));
 
+    // Named-snapshot sub-router. Bundles ServiceHandler state +
+    // billing + chaos under `{data_dir}/named-snapshots/{name}/`.
+    let snapshot_state = Arc::new(named_snapshots::SnapshotState {
+        app: state.clone(),
+        billing: Arc::clone(&billing_meter),
+    });
+    let snapshot_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/snapshots",
+            axum::routing::get(named_snapshots::list),
+        )
+        .route(
+            "/_awsim/snapshots/{name}",
+            axum::routing::post(named_snapshots::save).delete(named_snapshots::delete),
+        )
+        .route(
+            "/_awsim/snapshots/{name}/load",
+            axum::routing::post(named_snapshots::load),
+        )
+        .with_state(snapshot_state);
+
     // Merge all routers and add shared middleware.
     let app = cognito_oauth_router
         .merge(main_router)
@@ -713,6 +776,7 @@ async fn main() -> Result<()> {
         .merge(ecr_router)
         .merge(billing_router)
         .merge(chaos_router)
+        .merge(snapshot_router)
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with

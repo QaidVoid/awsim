@@ -35,6 +35,52 @@ The following services write and restore snapshots:
 
 Services not in this list (e.g., KMS, Secrets Manager) are always in-memory only.
 
+## Named Snapshots
+
+Beyond the automatic save-on-shutdown / restore-on-startup flow,
+AWSim supports point-in-time **named snapshots** — bundles of every
+service's serialised state plus billing + chaos rules — so you can
+freeze a complex test scenario and restore it on demand.
+
+```bash
+# Save the current state under a name.
+awsim snapshot save baseline
+
+# Make changes (apply chaos, create resources, …)
+awsim chaos clear
+aws --endpoint-url http://localhost:4566 s3 mb s3://scratch
+
+# Restore — overwrites live state for any service captured in the snapshot.
+awsim snapshot load baseline
+
+# Inspect what's saved.
+awsim snapshot list
+
+# Drop one when you're done.
+awsim snapshot delete baseline
+```
+
+Snapshots live under `{data_dir}/named-snapshots/{NAME}/` and the
+HTTP API is also available directly:
+
+| Method | Path |
+| --- | --- |
+| GET | `/_awsim/snapshots` |
+| POST | `/_awsim/snapshots/{name}` |
+| POST | `/_awsim/snapshots/{name}/load` |
+| DELETE | `/_awsim/snapshots/{name}` |
+
+**Limitations (v1):** named snapshots only capture
+JSON-serialisable handler state. DynamoDB rows (SQLite) and
+body-store payloads (S3 object bytes, Lambda code, SQS message
+bodies) are *not* in the bundle — buckets/queues/tables are
+recreated on load but their contents are not. This is good enough
+for sharing topology, IAM, Cognito and chaos scenarios; deeper
+bundling is on the roadmap.
+
+`awsim snapshot` requires `--data-dir` to be set on the running
+server.
+
 **Note on S3:** S3 bucket metadata and object metadata are persisted via the JSON snapshot. Object bodies (the raw bytes) are persisted separately to disk under `{data_dir}/s3/` whenever `--data-dir` is supplied — see [S3 object bodies](#s3-object-bodies) below.
 
 **Note on SQS:** SQS queue metadata is persisted via the JSON snapshot. Message bodies are written separately to disk under `{data_dir}/sqs/` whenever `--data-dir` is supplied — see [SQS message bodies](#sqs-message-bodies) below.
