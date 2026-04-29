@@ -1,6 +1,6 @@
 # Services Overview
 
-AWSim registers 37 AWS services. All services share the same endpoint at `http://localhost:4566`.
+AWSim registers 46 AWS services. All services share the same endpoint at `http://localhost:4566`.
 
 The service is selected automatically from the `X-Amz-Target` header (for JSON/Query protocols) or the URL path (for REST protocols).
 
@@ -45,6 +45,15 @@ The service is selected automatically from the `X-Amz-Target` header (for JSON/Q
 | EventBridge Scheduler | `scheduler` | REST-JSON | Yes | — | Scheduled tasks |
 | Comprehend | `comprehend` | JSON | No | — | Natural language processing |
 | Kendra | `kendra` | JSON | No | — | Enterprise search |
+| Resource Groups Tagging API | `tagging` | JSON | Yes | 8 | Cross-service resource discovery by tags |
+| Organizations | `organizations` | JSON | No | — | Account / OU / SCP management |
+| CloudTrail | `cloudtrail` | JSON | No | — | API audit log |
+| Firehose | `firehose` | JSON | No | — | Streaming data delivery |
+| EKS | `eks` | REST-JSON | No | — | Kubernetes control plane |
+| Batch | `batch` | REST-JSON | No | — | Batch compute jobs |
+| SSO Admin | `sso` | JSON | No | — | IAM Identity Center admin |
+| DataSync | `datasync` | JSON | No | — | Data transfer service |
+| Polly | `polly` | REST-JSON | No | — | Text-to-speech |
 
 *S3 persists bucket and object metadata but not object data bytes.
 
@@ -70,3 +79,4 @@ For operations lists, SDK examples, and limitations, see:
 - [Lambda](/services/lambda)
 - [Cognito](/services/cognito)
 - [IAM & STS](/services/iam)
+- [Resource Groups Tagging API](/services/resourcegroupstagging)

@@ -118,6 +118,18 @@ aws --endpoint-url http://localhost:4566 lambda invoke \
 |-----------|-------------|
 | `GetAccountSettings` | Return account-level Lambda limits (total code size, concurrency limits, function count). Useful for SDK health checks |
 
+### Concurrency
+
+| Operation | Description |
+|-----------|-------------|
+| `PutFunctionConcurrency` | Reserve concurrent executions for a function. Input: `FunctionName`, `ReservedConcurrentExecutions`. Rejects values above the 1000 account-pool cap |
+| `GetFunctionConcurrency` | Return the function's reserved concurrency (omitted from the response when unreserved) |
+| `DeleteFunctionConcurrency` | Release the reserved concurrency back to the unreserved pool |
+| `PutProvisionedConcurrencyConfig` | Allocate provisioned (warm-pool) concurrency for a published version or alias. Input: `FunctionName`, `Qualifier`, `ProvisionedConcurrentExecutions`. Rejects `$LATEST` per real Lambda |
+| `GetProvisionedConcurrencyConfig` | Describe a provisioned-concurrency config (returns `ProvisionedConcurrencyConfigNotFoundException` when none exists) |
+| `DeleteProvisionedConcurrencyConfig` | Remove a provisioned-concurrency config |
+| `ListProvisionedConcurrencyConfigs` | List all provisioned-concurrency configs on a function |
+
 ## Curl Examples
 
 ```bash
@@ -209,3 +221,6 @@ See [Lambda Execution](/guide/lambda-execution) for full runtime details and lim
 - Function configuration and zip bytes persist across restarts when `--data-dir` is set: configuration lives in `{data_dir}/snapshots/lambda.json` and zip bytes live at `{data_dir}/lambda/{function}/$LATEST` (plus `{data_dir}/lambda/{function}/{version}` for each published version). See [Persistence](/guide/persistence) for details.
 - Environment variables are injected as real OS environment variables during execution.
 - SQS event source mappings are actively polled every 2 seconds — messages received on the queue trigger the Lambda function automatically.
+- Reserved concurrency (`PutFunctionConcurrency`) is stored and round-tripped but the emulator does not actually throttle invocations against the configured ceiling.
+- Provisioned concurrency configs flip from `IN_PROGRESS` to `READY` immediately because there's no real warm pool to provision. `Allocated` and `Available` always equal `Requested`.
+- `Invoke` returns the function's payload as the response body and surfaces `FunctionError` in the `X-Amz-Function-Error` header (the channel SDKs read), matching real Lambda. The body field is also kept for the in-process admin / inspector path.

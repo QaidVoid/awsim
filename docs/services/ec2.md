@@ -150,22 +150,29 @@ aws --endpoint-url http://localhost:4566 ec2 authorize-security-group-ingress \
   - Returns: `tagSet` list with `key`, `value`, `resourceId`, `resourceType`
 
 ### Instances
-- `RunInstances` — create stub EC2 instance(s) in running state
-  - Input: `ImageId` (optional, default `ami-00000000`), `InstanceType` (optional, default `t2.micro`), `MinCount`, `MaxCount`, optional `SubnetId`
-  - Returns: `instancesSet` with instance details (`instanceId`, `instanceType`, `imageId`, `instanceState`, `launchTime`)
-  - No actual compute resources are launched
 
-- `DescribeInstances` — list stored instances
-  - Input: optional `InstanceId.N` filter
-  - Returns: `reservationSet` with instances
+EC2 instances are modelled as a state machine — no real VMs run, but the lifecycle (`pending` / `running` / `stopping` / `stopped` / `shutting-down` / `terminated`) is honored end-to-end with proper numeric state codes.
 
-- `TerminateInstances` — remove stored instances
-  - Input: `InstanceId.N` (list)
-  - Returns: list of terminated instance state transitions
+- `RunInstances` — register one or more instances under a single reservation
+  - Input: `ImageId` (default `ami-00000000`), `InstanceType` (default `t2.micro`), `MinCount`, `MaxCount`, optional `SubnetId`
+  - Returns `instancesSet` (with `instanceId`, `instanceType`, `imageId`, `instanceState`, `privateIpAddress`, `launchTime`, `reservationId`) and a single shared `reservationId`
+  - Private IPs are allocated from the launch subnet's CIDR via a per-subnet host counter starting at `.10`. With no `SubnetId`, falls back to `10.0.0.10`
+  - Instances land in `running` immediately
 
-- `DescribeInstanceStatus` — returns empty instance status set
+- `DescribeInstances` — list instances grouped by reservation
+  - Filters: `InstanceId.N`, plus `Filter.N.{Name=instance-state-name, Value.N}` for state-based filtering (the one `aws ec2 wait` reaches for)
 
-- `DescribeImages` — stub AMI listing, returns empty set
+- `StartInstances` — `stopped` → `running`. Out-of-order calls (e.g. on a `running` instance) are well-shaped no-ops
+
+- `StopInstances` — `running` → `stopped`. Same no-op semantics for invalid predecessors
+
+- `RebootInstances` — fire-and-forget; instance stays in `running`
+
+- `TerminateInstances` — anything-not-already-terminated → `terminated`. Returns the proper `currentState`/`previousState` shape
+
+- `DescribeInstanceStatus` — returns the lifecycle state for non-terminated instances. Honors `IncludeAllInstances` to surface stopped/terminated entries too
+
+- `DescribeImages` — returns a small built-in AMI catalog (Amazon Linux 2, Ubuntu 22.04)
 
 ### Network / VPC Stubs
 - `DescribeNetworkInterfaces` — returns empty `networkInterfaceSet`
@@ -255,9 +262,10 @@ console.log('VPC:', vpcId, '| Subnet:', Subnet?.SubnetId, '| SG:', GroupId);
 ## Behavior Notes
 
 - `RunInstances` creates in-memory instance records; no compute is allocated and the instance never actually runs.
-- Instance state is always `running` after `RunInstances`; `TerminateInstances` permanently removes the record.
+- The lifecycle state machine is real: `Stop` only works from `running`, `Start` only from `stopped`, etc. Out-of-order transitions are no-ops. `Terminated` instances stay queryable for the lifetime of the process so post-terminate `DescribeInstances` calls still see them (real EC2 also retains records ~1 hour).
 - Tags created with `CreateTags` are reflected on the underlying resource object (e.g., a tagged VPC shows tags in `DescribeVpcs`).
-- `DescribeNatGateways`, `DescribeVpcEndpoints`, `DescribeNetworkInterfaces`, and `DescribeImages` always return empty result sets.
+- `DescribeNatGateways`, `DescribeVpcEndpoints`, `DescribeNetworkInterfaces` always return empty result sets. `DescribeImages` returns a small built-in catalog so listings aren't empty.
+- No userdata execution, no EBS volumes, no IMDS endpoint at 169.254.169.254 — see [the EC2 explainer in CONTRIBUTING](#) for what's modelled vs stubbed.
 - Resource IDs are generated with standard prefixes: `vpc-`, `subnet-`, `sg-`, `igw-`, `rtb-`, `keypair-`, `i-`.
 - `DescribeRegions` returns a hardcoded list of AWS regions (same as real AWS, not dynamic).
 - Security group rules are stored but not enforced — no actual network traffic filtering occurs.

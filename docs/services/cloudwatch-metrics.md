@@ -187,7 +187,9 @@ console.log('Active alarms:', MetricAlarms?.map(a => a.AlarmName));
 ## Behavior Notes
 
 - CloudWatch Metrics uses the `AwsQuery` protocol with service name `monitoring` (not `cloudwatch`).
-- Alarm actions (SNS notifications, Auto Scaling policies, etc.) are recorded but not executed when an alarm state changes.
-- `SetAlarmState` is useful for testing alarm-driven workflows (e.g., SNS fan-out) without waiting for metric thresholds to be crossed.
+- Alarms **actually evaluate** on every `PutMetricData` write (and once more right after `PutMetricAlarm` so a freshly-registered alarm sees existing data). Each alarm aggregates its matching datums via the configured `Statistic` over the `Period × EvaluationPeriods` window and compares the aggregate to `Threshold` with the `ComparisonOperator`. State transitions to `OK` / `ALARM` / `INSUFFICIENT_DATA` and `StateUpdatedTimestamp` is bumped on every change.
+- Alarm `Dimensions` filter which datums participate. An empty `Dimensions` list matches every datum for the (`Namespace`, `MetricName`) pair, mirroring CloudWatch's "no-dimension" semantics.
+- Alarm actions (`AlarmActions` / `OKActions`) are stored on the alarm but not yet dispatched on transitions — SNS fan-out + Auto Scaling triggers are the natural follow-up.
+- `SetAlarmState` is still useful for forcing a specific state in tests (e.g. ALARM-driven workflows) without crafting metric data.
 - `GetMetricStatistics` returns simulated datapoints based on what was published via `PutMetricData`.
 - State is in-memory only and lost on restart.

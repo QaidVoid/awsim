@@ -255,6 +255,8 @@ console.log('Data key length:', dataKey!.length); // 32 bytes for AES_256
 - `GenerateDataKey` returns both a plaintext key (for immediate use) and an encrypted copy (to store) — this enables envelope encryption without exposing the master key.
 - `GenerateRandom` returns cryptographically random bytes and does not require a key ID.
 - Key rotation (`EnableKeyRotation`, `DisableKeyRotation`) state is stored per key but no actual rotation occurs in AWSim.
-- Grants (`CreateGrant`, `ListGrants`, etc.) are stored and returned correctly but are not enforced for cryptographic operations.
-- Key policies (`GetKeyPolicy`, `PutKeyPolicy`) are stored and returned but are not enforced.
+- Key policies and grants are honored when IAM enforcement is enabled (`AWSIM_IAM_ENFORCE=true`):
+  - The key's `default` policy participates in the AuthzEngine evaluation alongside the caller's identity policies; an explicit `Deny` in the key policy overrides any identity-policy `Allow`.
+  - Grants act as the out-of-band Allow path: when identity + resource policies leave the request at `ImplicitDeny`, a matching grant (matching `GranteePrincipal`, `Operations`, and key) authorizes the call.
+  - With enforcement off (the default), all KMS calls succeed regardless of policy/grant state — fast dev loop, no surprises.
 - Key material is in-memory only and lost on restart (no persistence).

@@ -292,5 +292,20 @@ console.log('Refresh Token:', AuthenticationResult?.RefreshToken);
 - Email verification and confirmation codes are always `123456` — no real email is sent.
 - SMS-based MFA is accepted but no SMS is delivered — use TOTP or skip verification in tests.
 - Tokens are real JWTs signed with a locally generated RSA key; they can be verified against the JWKS endpoint at `http://localhost:4566/{userPoolId}/.well-known/jwks.json`.
-- Advanced security features (adaptive authentication, risk scoring) are stubs.
 - Identity pool credentials are valid for testing SDK calls — they use the AWSim account.
+
+### Password policy enforcement
+
+Every password-mutating operation (SignUp, AdminCreateUser, AdminSetUserPassword, ChangePassword, ConfirmForgotPassword) validates against the user pool's `Policies.PasswordPolicy`. Each rule (minimum length, lowercase, uppercase, numeric, symbol) raises `InvalidPasswordException` with a rule-specific message matching real Cognito.
+
+### Account lockout
+
+Five consecutive failed `InitiateAuth` / `AdminInitiateAuth` attempts on the same user lock the account for 15 minutes. Subsequent attempts return `NotAuthorizedException` with `"Password attempts exceeded"` even on the right password. A successful login or any administrative password reset clears the counter. (Real Cognito gates this behind Advanced Security; we ship it always-on for local testing.)
+
+### Compromised-credentials BLOCK
+
+`SetRiskConfiguration` with a `CompromisedCredentialsRiskConfiguration` whose `Actions.EventAction` is `BLOCK` (and `EventFilter` covers `SIGN_IN`) is honored on every sign-in. Passwords on a built-in compromised list (`password`, `12345678`, `qwerty`, etc.) are rejected with `NotAuthorizedException` even when otherwise correct. Real Cognito uses a much larger AWS-curated dataset.
+
+### Auth event history
+
+Every sign-in is recorded as an `AuthEvent` with `EventResponse`, `RiskDecision`, `RiskLevel`, and `CompromisedCredentialsDetected` flags. `AdminListUserAuthEvents` returns the most recent 100 events newest-first. `(Admin)UpdateAuthEventFeedback` mutates the matching event's `FeedbackValue` so SDKs can verify their feedback loop end-to-end.

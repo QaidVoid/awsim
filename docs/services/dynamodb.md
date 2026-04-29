@@ -73,8 +73,10 @@ curl -s http://localhost:4566 \
 
 | Operation | Description |
 |-----------|-------------|
-| `DescribeGlobalTable` | Describe a global table (stub — returns not-found) |
-| `ListGlobalTables` | List global tables (stub — returns empty list) |
+| `CreateGlobalTable` | Register a global table over per-region replicas. Requires the underlying table to exist in the request region. Input: `GlobalTableName`, `ReplicationGroup` (defaults to the request region) |
+| `UpdateGlobalTable` | Add or remove replicas in one batch. Input: `GlobalTableName`, `ReplicaUpdates: [{Create: {RegionName}}, {Delete: {RegionName}}, ...]` |
+| `DescribeGlobalTable` | Return the stored replication group + status |
+| `ListGlobalTables` | Paginated by name, optionally filtered by `RegionName`. Honors `ExclusiveStartGlobalTableName` and `Limit` |
 
 ### Export / Import
 
@@ -262,8 +264,10 @@ aws --endpoint-url http://localhost:4566 dynamodb scan \
 
 - DynamoDB is persistent: tables and items survive AWSim restarts. Items live in a SQLite database (`{data_dir}/dynamodb.db`) — see [DynamoDB SQLite store](../guide/persistence.md#dynamodb-sqlite-store) for details.
 - Global Secondary Indexes (GSI) and Local Secondary Indexes (LSI) are accepted in `CreateTable` but queries with `IndexName` are not yet pushed down to the GSI key columns — they fall back to a full table scan. (The SQLite store materializes up to 5 GSI key column pairs per item, so the data is there; the planner just hasn't been wired to use them yet.)
-- Conditional expressions (`ConditionExpression` on `PutItem`, `UpdateItem`, `DeleteItem`) are evaluated against the existing item — failed checks return `ConditionalCheckFailedException`.
-- `TransactWriteItems` is genuinely atomic: phase 1 (validate every condition) and phase 2 (apply every mutation) run inside a single SQLite write transaction. A failing condition anywhere in the batch rolls back every mutation that had already been applied. `TransactGetItems` reads see a single consistent snapshot.
+- Conditional expressions (`ConditionExpression` on `PutItem`, `UpdateItem`, `DeleteItem`) are evaluated against the existing item — failed checks return `ConditionalCheckFailedException` with HTTP 400. When the caller sets `ReturnValuesOnConditionCheckFailure: ALL_OLD`, the existing `Item` is attached to the error body so SDKs hydrate it onto the typed exception.
+- `TransactWriteItems` is genuinely atomic: phase 1 (validate every condition) and phase 2 (apply every mutation) run inside a single SQLite write transaction. A failing condition anywhere in the batch rolls back every mutation that had already been applied. The cancellation surfaces as `TransactionCanceledException` (HTTP 400) with a structured `CancellationReasons` array — one entry per `TransactItem` in request order, marked `{"Code": "None"}` for unfailed ops and `{"Code": "ConditionalCheckFailed", "Message": ...}` for the failing one. `TransactGetItems` reads see a single consistent snapshot.
+- `ResourceNotFoundException`, `TableNotFoundException`, `BackupNotFoundException`, etc. all return HTTP 400 (matching real DynamoDB), not 404. SDK retry/error-classification logic depends on this.
+- Global tables are metadata-only: `CreateGlobalTable` / `UpdateGlobalTable` register the replication group so Terraform / CDK can `Describe` them, but cross-region data replication is not modelled. Reads and writes to the underlying tables stay per-region.
 - TTL (Time to Live) configuration (`UpdateTimeToLive`) is accepted and stored but items are not automatically expired.
 - `DescribeContinuousBackups` returns a stub response indicating PITR is disabled — no actual backups are made.
 - `DescribeEndpoints` returns a single endpoint entry for SDK endpoint discovery compatibility.
