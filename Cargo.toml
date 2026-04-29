@@ -55,6 +55,7 @@ members = [
     "crates/awsim-application-autoscaling",
     "crates/awsim-xray",
     "crates/awsim-servicediscovery",
+    "crates/awsim-appconfig",
     "crates/awsim-conformance",
     "crates/awsim-enforcement-tests",
 ]
@@ -119,6 +120,7 @@ awsim-backup = { path = "crates/awsim-backup", version = "0.1.0" }
 awsim-application-autoscaling = { path = "crates/awsim-application-autoscaling", version = "0.1.0" }
 awsim-xray = { path = "crates/awsim-xray", version = "0.1.0" }
 awsim-servicediscovery = { path = "crates/awsim-servicediscovery", version = "0.1.0" }
+awsim-appconfig = { path = "crates/awsim-appconfig", version = "0.1.0" }
 
 # Async
 tokio = { version = "1", features = ["full"] }
