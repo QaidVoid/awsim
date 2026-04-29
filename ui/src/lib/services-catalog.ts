@@ -47,6 +47,7 @@ import Shield from "@lucide/svelte/icons/shield";
 import ShieldCheck from "@lucide/svelte/icons/shield-check";
 import SquareTerminal from "@lucide/svelte/icons/square-terminal";
 import Tag from "@lucide/svelte/icons/tag";
+import ToggleLeft from "@lucide/svelte/icons/toggle-left";
 import Workflow from "@lucide/svelte/icons/workflow";
 import Zap from "@lucide/svelte/icons/zap";
 import type { Component } from "svelte";
@@ -413,6 +414,14 @@ export const SERVICES: Service[] = [
     category: "Workflows",
     icon: Gauge,
     keywords: ["autoscaling", "scaling policy", "ecs", "lambda", "dynamodb"],
+  },
+  {
+    id: "appconfig",
+    name: "AppConfig",
+    href: "/appconfig",
+    category: "Workflows",
+    icon: ToggleLeft,
+    keywords: ["feature flag", "appconfig", "config delivery", "deployment"],
   },
   {
     id: "scheduler",
