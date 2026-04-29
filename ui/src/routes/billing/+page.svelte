@@ -54,6 +54,8 @@
 		'cognito-identity': 'Amazon Cognito Identity',
 		ec2: 'Amazon EC2',
 		rds: 'Amazon RDS',
+		polly: 'Amazon Polly',
+		comprehend: 'Amazon Comprehend',
 	};
 
 	// Stable tints per service so the same colour represents the same
@@ -81,6 +83,8 @@
 		'cognito-identity': 'oklch(70% 0.12 195)', // teal
 		ec2: 'oklch(70% 0.16 35)', // tangerine
 		rds: 'oklch(68% 0.13 250)', // navy
+		polly: 'oklch(75% 0.11 320)', // mauve
+		comprehend: 'oklch(70% 0.13 75)', // ochre
 	};
 	const FALLBACK_TINT = 'oklch(70% 0.05 0)';
 

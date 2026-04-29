@@ -17,10 +17,12 @@ pub fn detect_entities(input: &Value) -> Result<Value, AwsError> {
     let _language = input["LanguageCode"].as_str().unwrap_or("en");
 
     let entities = extract_entities(text);
+    let chars = text.chars().count();
 
     Ok(json!({
         "Entities": entities,
         "ResultList": null,
+        "__headers": { "X-Awsim-Char-Count": chars.to_string() },
     }))
 }
 
@@ -35,10 +37,12 @@ pub fn detect_key_phrases(input: &Value) -> Result<Value, AwsError> {
     let _language = input["LanguageCode"].as_str().unwrap_or("en");
 
     let phrases = extract_key_phrases(text);
+    let chars = text.chars().count();
 
     Ok(json!({
         "KeyPhrases": phrases,
         "ResultList": null,
+        "__headers": { "X-Awsim-Char-Count": chars.to_string() },
     }))
 }
 
@@ -48,11 +52,13 @@ pub fn batch_detect_entities(input: &Value) -> Result<Value, AwsError> {
         .as_array()
         .ok_or_else(|| AwsError::validation("TextList parameter is required"))?;
 
+    let mut total_chars: usize = 0;
     let results: Vec<Value> = texts
         .iter()
         .enumerate()
         .map(|(i, text)| {
             let text_str = text.as_str().unwrap_or("");
+            total_chars += text_str.chars().count();
             let entities = extract_entities(text_str);
             json!({
                 "Index": i,
@@ -64,6 +70,7 @@ pub fn batch_detect_entities(input: &Value) -> Result<Value, AwsError> {
     Ok(json!({
         "ResultList": results,
         "ErrorList": [],
+        "__headers": { "X-Awsim-Char-Count": total_chars.to_string() },
     }))
 }
 
@@ -73,11 +80,13 @@ pub fn batch_detect_key_phrases(input: &Value) -> Result<Value, AwsError> {
         .as_array()
         .ok_or_else(|| AwsError::validation("TextList parameter is required"))?;
 
+    let mut total_chars: usize = 0;
     let results: Vec<Value> = texts
         .iter()
         .enumerate()
         .map(|(i, text)| {
             let text_str = text.as_str().unwrap_or("");
+            total_chars += text_str.chars().count();
             let phrases = extract_key_phrases(text_str);
             json!({
                 "Index": i,
@@ -89,6 +98,7 @@ pub fn batch_detect_key_phrases(input: &Value) -> Result<Value, AwsError> {
     Ok(json!({
         "ResultList": results,
         "ErrorList": [],
+        "__headers": { "X-Awsim-Char-Count": total_chars.to_string() },
     }))
 }
 
@@ -144,6 +154,7 @@ pub fn detect_sentiment(input: &Value) -> Result<Value, AwsError> {
         ("MIXED", 0.35, 0.35, 0.2)
     };
 
+    let chars = text.chars().count();
     Ok(json!({
         "Sentiment": sentiment,
         "SentimentScore": {
@@ -151,21 +162,24 @@ pub fn detect_sentiment(input: &Value) -> Result<Value, AwsError> {
             "Negative": neg_score,
             "Neutral": neutral_score,
             "Mixed": 1.0 - pos_score - neg_score - neutral_score,
-        }
+        },
+        "__headers": { "X-Awsim-Char-Count": chars.to_string() },
     }))
 }
 
 /// DetectDominantLanguage — detect the language of text.
 pub fn detect_dominant_language(input: &Value) -> Result<Value, AwsError> {
-    let _text = input["Text"]
+    let text = input["Text"]
         .as_str()
         .ok_or_else(|| AwsError::validation("Text parameter is required"))?;
 
+    let chars = text.chars().count();
     // Always return English with high confidence for dev emulator
     Ok(json!({
         "Languages": [
             { "LanguageCode": "en", "Score": 0.98 }
-        ]
+        ],
+        "__headers": { "X-Awsim-Char-Count": chars.to_string() },
     }))
 }
 

@@ -46,6 +46,7 @@ mod tests {
             error_code: None,
             memory_mb: None,
             state_transitions: None,
+            character_count: None,
         }
     }
 

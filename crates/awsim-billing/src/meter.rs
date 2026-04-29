@@ -115,11 +115,17 @@ impl BillingMeter {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         state.ensure_started(now);
-        // Step Functions bills per state transition; the SFN service
-        // emits the transition count via X-Awsim-State-Transitions on
-        // the response, which the gateway pulls into event.state_transitions.
-        // For everything else, one request = one billable unit.
-        let units = event.state_transitions.map(|n| n as u64).unwrap_or(1);
+        // Determine billable units for this request:
+        //   * Step Functions: state transitions (header from SFN engine)
+        //   * Polly / Comprehend: input characters (header from handler)
+        //   * Everything else: 1 unit per call
+        // At most one of these headers is set on a given event since
+        // they belong to different services.
+        let units = event
+            .state_transitions
+            .map(|n| n as u64)
+            .or(event.character_count)
+            .unwrap_or(1);
         state.record(
             &event.service,
             operation,

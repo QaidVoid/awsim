@@ -1,0 +1,32 @@
+{
+  "service": "polly",
+  "display_name": "Amazon Polly",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "Hand-written per-character rate (Standard voices). AWS publishes $4/M chars; emitted here as $4e-6 per character. Neural ($16/M), Long-form ($100/M) and Generative ($30/M) voices use higher rates AWSim doesn't model — workloads on those tiers underbill in proportion.",
+  "request_dimensions": [
+    {
+      "description": "$4.00 per 1 million characters synthesized (Standard)",
+      "operations": [
+        "SynthesizeSpeech",
+        "StartSpeechSynthesisTask"
+      ],
+      "price_per_request": 4.0e-6
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "DescribeVoices",
+        "GetSpeechSynthesisTask",
+        "ListSpeechSynthesisTasks",
+        "PutLexicon",
+        "GetLexicon",
+        "DeleteLexicon",
+        "ListLexicons"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09
+}

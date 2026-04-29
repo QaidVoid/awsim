@@ -1,0 +1,57 @@
+{
+  "service": "comprehend",
+  "display_name": "Amazon Comprehend",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "Hand-written per-character rates. AWS bills per 100-character 'Unit' at $0.0001 (= $1e-6/char) for the standard analysis endpoints.",
+  "request_dimensions": [
+    {
+      "description": "$0.0001 per 100 characters (Detect/BatchDetect)",
+      "operations": [
+        "DetectEntities",
+        "BatchDetectEntities",
+        "DetectKeyPhrases",
+        "BatchDetectKeyPhrases",
+        "DetectSentiment",
+        "BatchDetectSentiment",
+        "DetectDominantLanguage",
+        "BatchDetectDominantLanguage",
+        "DetectSyntax",
+        "BatchDetectSyntax",
+        "DetectPiiEntities",
+        "ContainsPiiEntities"
+      ],
+      "price_per_request": 1.0e-6
+    },
+    {
+      "description": "Control-plane / async job requests",
+      "operations": [
+        "StartEntitiesDetectionJob",
+        "StartKeyPhrasesDetectionJob",
+        "StartSentimentDetectionJob",
+        "StartDominantLanguageDetectionJob",
+        "StartTopicsDetectionJob",
+        "StartPiiEntitiesDetectionJob",
+        "StartTargetedSentimentDetectionJob",
+        "DescribeEntitiesDetectionJob",
+        "DescribeKeyPhrasesDetectionJob",
+        "DescribeSentimentDetectionJob",
+        "DescribeDominantLanguageDetectionJob",
+        "DescribeTopicsDetectionJob",
+        "ListEntitiesDetectionJobs",
+        "ListKeyPhrasesDetectionJobs",
+        "ListSentimentDetectionJobs",
+        "ListTopicsDetectionJobs",
+        "StopEntitiesDetectionJob",
+        "StopKeyPhrasesDetectionJob",
+        "StopSentimentDetectionJob",
+        "TagResource",
+        "UntagResource",
+        "ListTagsForResource"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09
+}

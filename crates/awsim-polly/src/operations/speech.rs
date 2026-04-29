@@ -18,9 +18,10 @@ pub fn synthesize_speech(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let _text = input["Text"]
+    let text = input["Text"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidSampleRateException", "Text is required"))?;
+    let char_count = text.chars().count();
 
     let format = input["OutputFormat"].as_str().unwrap_or("mp3");
     let content_type = match format {
@@ -34,9 +35,15 @@ pub fn synthesize_speech(
     let dummy_audio: &[u8] = b"\x00\x00\x00\x00";
     let encoded = base64::engine::general_purpose::STANDARD.encode(dummy_audio);
 
+    // Polly bills per character of input text. Surface the count via
+    // an internal metadata header so the billing meter can charge
+    // accurately ($4 per million characters at the Standard tier).
     Ok(json!({
         "__raw_body": encoded,
         "__content_type": content_type,
+        "__headers": {
+            "X-Awsim-Char-Count": char_count.to_string(),
+        },
     }))
 }
 

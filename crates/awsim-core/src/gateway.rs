@@ -243,6 +243,9 @@ pub async fn dispatch_request(
     let state_transitions = resp_headers
         .remove("x-awsim-state-transitions")
         .and_then(|v| v.to_str().ok().and_then(|s| s.parse::<u32>().ok()));
+    let character_count = resp_headers
+        .remove("x-awsim-char-count")
+        .and_then(|v| v.to_str().ok().and_then(|s| s.parse::<u64>().ok()));
 
     let mut builder = Response::builder().status(status);
     for (key, value) in resp_headers.drain() {
@@ -279,6 +282,7 @@ pub async fn dispatch_request(
         error_code,
         memory_mb,
         state_transitions,
+        character_count,
     };
     state.events.publish(event);
 

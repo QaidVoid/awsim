@@ -27,6 +27,11 @@ pub struct RequestEvent {
     /// charge per-transition (the actual AWS billing unit) instead of
     /// per-StartExecution call. None for non-stateful services.
     pub state_transitions: Option<u32>,
+    /// Number of characters in the request payload. Polly /
+    /// Comprehend / Translate emit this so the meter can charge
+    /// per-character (the AWS billing unit for these services). None
+    /// for services that don't bill per character.
+    pub character_count: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -84,6 +89,7 @@ mod tests {
             error_code: None,
             memory_mb: None,
             state_transitions: None,
+            character_count: None,
         };
         bus.publish(event.clone());
         let received = rx.recv().await.expect("receive event");
