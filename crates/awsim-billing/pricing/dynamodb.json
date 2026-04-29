@@ -1,0 +1,60 @@
+{
+  "service": "dynamodb",
+  "display_name": "Amazon DynamoDB",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AmazonDynamoDB, 2025-08-28T15:38:19Z)",
+  "request_dimensions": [
+    {
+      "description": "$0.625 per million write request units (N. Virginia)",
+      "operations": [
+        "PutItem",
+        "UpdateItem",
+        "DeleteItem",
+        "BatchWriteItem",
+        "TransactWriteItems"
+      ],
+      "price_per_request": 6.25e-7
+    },
+    {
+      "description": "$0.125 per million read request units (N. Virginia)",
+      "operations": [
+        "GetItem",
+        "BatchGetItem",
+        "Query",
+        "Scan",
+        "TransactGetItems"
+      ],
+      "price_per_request": 1.25e-7
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "CreateTable",
+        "DeleteTable",
+        "DescribeTable",
+        "ListTables",
+        "UpdateTable",
+        "TagResource",
+        "UntagResource",
+        "ListTagsOfResource",
+        "DescribeLimits",
+        "DescribeContinuousBackups",
+        "UpdateContinuousBackups",
+        "CreateBackup",
+        "DeleteBackup",
+        "ListBackups",
+        "DescribeBackup",
+        "RestoreTableFromBackup",
+        "RestoreTableToPointInTime",
+        "CreateGlobalTable",
+        "UpdateGlobalTable",
+        "DescribeGlobalTable",
+        "ListGlobalTables"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09
+}

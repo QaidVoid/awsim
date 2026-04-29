@@ -1,0 +1,57 @@
+{
+  "service": "lambda",
+  "display_name": "AWS Lambda",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AWSLambda, 2026-04-28T22:16:02Z)",
+  "request_dimensions": [
+    {
+      "description": "AWS Lambda - Total Requests - US East (Northern Virginia)",
+      "operations": [
+        "Invoke",
+        "InvokeAsync",
+        "InvokeWithResponseStream"
+      ],
+      "price_per_request": 2e-7
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "CreateFunction",
+        "UpdateFunctionCode",
+        "UpdateFunctionConfiguration",
+        "DeleteFunction",
+        "GetFunction",
+        "GetFunctionConfiguration",
+        "ListFunctions",
+        "PublishVersion",
+        "CreateAlias",
+        "UpdateAlias",
+        "DeleteAlias",
+        "GetAlias",
+        "ListAliases",
+        "AddPermission",
+        "RemovePermission",
+        "GetPolicy",
+        "PutFunctionConcurrency",
+        "DeleteFunctionConcurrency",
+        "GetFunctionConcurrency",
+        "PutProvisionedConcurrencyConfig",
+        "DeleteProvisionedConcurrencyConfig",
+        "GetProvisionedConcurrencyConfig",
+        "ListProvisionedConcurrencyConfigs",
+        "TagResource",
+        "UntagResource",
+        "ListTags",
+        "CreateEventSourceMapping",
+        "UpdateEventSourceMapping",
+        "DeleteEventSourceMapping",
+        "ListEventSourceMappings",
+        "GetEventSourceMapping"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09
+}

@@ -1563,6 +1563,7 @@ dependencies = [
  "awsim-backup",
  "awsim-batch",
  "awsim-bedrock",
+ "awsim-billing",
  "awsim-cloudformation",
  "awsim-cloudfront",
  "awsim-cloudtrail",
@@ -1751,6 +1752,20 @@ dependencies = [
  "serde_json",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "awsim-billing"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "awsim-core",
+ "dashmap",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

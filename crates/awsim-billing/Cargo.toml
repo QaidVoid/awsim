@@ -1,0 +1,30 @@
+[package]
+name = "awsim-billing"
+description = "AWS pricing + usage metering for AWSim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+awsim-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dashmap = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+# Pulled in only when the `refresh` feature is enabled — keeps the
+# regular library/binary build free of an HTTP client.
+reqwest = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+
+[features]
+# Enables the refresh-pricing binary. Run via:
+#   cargo run -p awsim-billing --bin refresh-pricing --features refresh
+refresh = ["dep:reqwest", "dep:anyhow"]
+
+[[bin]]
+name = "refresh-pricing"
+path = "src/bin/refresh_pricing.rs"
+required-features = ["refresh"]
