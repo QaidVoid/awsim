@@ -62,6 +62,7 @@ members = [
     "crates/awsim-qldb",
     "crates/awsim-transfer",
     "crates/awsim-pinpoint",
+    "crates/awsim-identitystore",
     "crates/awsim-conformance",
     "crates/awsim-enforcement-tests",
 ]
@@ -133,6 +134,7 @@ awsim-memorydb = { path = "crates/awsim-memorydb", version = "0.1.0" }
 awsim-qldb = { path = "crates/awsim-qldb", version = "0.1.0" }
 awsim-transfer = { path = "crates/awsim-transfer", version = "0.1.0" }
 awsim-pinpoint = { path = "crates/awsim-pinpoint", version = "0.1.0" }
+awsim-identitystore = { path = "crates/awsim-identitystore", version = "0.1.0" }
 
 # Async
 tokio = { version = "1", features = ["full"] }

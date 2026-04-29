@@ -1,6 +1,6 @@
 # Services Overview
 
-AWSim registers 60 AWS services. All services share the same endpoint at `http://localhost:4566`.
+AWSim registers 61 AWS services. All services share the same endpoint at `http://localhost:4566`.
 
 The service is selected automatically from the `X-Amz-Target` header (for JSON/Query protocols) or the URL path (for REST protocols).
 
@@ -68,6 +68,7 @@ The service is selected automatically from the `X-Amz-Target` header (for JSON/Q
 | QLDB | `qldb` | REST-JSON | Yes | 8 | Ledger metadata (control plane only) |
 | Transfer Family | `transfer` | JSON | Yes | 13 | SFTP/FTP servers, users, SSH keys (no actual listener) |
 | Pinpoint | `mobiletargeting` | REST-JSON | Yes | 15 | Apps, endpoints, segments, campaigns (no real delivery) |
+| Identity Store | `identitystore` | JSON | Yes | 16 | Users, groups, group memberships (paired with SSO Admin) |
 
 *S3 persists bucket and object metadata but not object data bytes.
 
@@ -109,3 +110,4 @@ For operations lists, SDK examples, and limitations, see:
 - [QLDB](/services/qldb)
 - [Transfer Family](/services/transfer)
 - [Pinpoint](/services/pinpoint)
+- [Identity Store](/services/identitystore)

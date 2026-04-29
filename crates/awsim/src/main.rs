@@ -1108,6 +1108,9 @@ fn register_services(
     };
     state.register(Arc::new(pinpoint), pinpoint_routes);
 
+    let identitystore = Arc::new(awsim_identitystore::IdentityStoreService::new());
+    state.register(identitystore, vec![]);
+
     // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
