@@ -38,5 +38,6 @@
     }
   ],
   "default_request_rate": 5e-7,
-  "data_transfer_out_per_gb": 0.09
+  "data_transfer_out_per_gb": 0.09,
+  "data_ingest_per_gb": null
 }

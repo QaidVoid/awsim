@@ -1,0 +1,36 @@
+{
+  "service": "firehose",
+  "display_name": "Amazon Kinesis Firehose",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AmazonKinesisFirehose, 2025-12-18T18:04:51Z)",
+  "request_dimensions": [
+    {
+      "description": "PutRecord / PutRecordBatch",
+      "operations": [
+        "PutRecord",
+        "PutRecordBatch"
+      ],
+      "price_per_request": 0.0
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "CreateDeliveryStream",
+        "DeleteDeliveryStream",
+        "DescribeDeliveryStream",
+        "ListDeliveryStreams",
+        "UpdateDestination",
+        "TagDeliveryStream",
+        "UntagDeliveryStream",
+        "ListTagsForDeliveryStream",
+        "StartDeliveryStreamEncryption",
+        "StopDeliveryStreamEncryption"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09,
+  "data_ingest_per_gb": 0.029
+}

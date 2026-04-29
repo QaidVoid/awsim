@@ -1,0 +1,50 @@
+{
+  "service": "kinesis",
+  "display_name": "Amazon Kinesis",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AmazonKinesis, 2025-11-18T00:56:55Z)",
+  "request_dimensions": [
+    {
+      "description": "$0.014 per 1 million payload units",
+      "operations": [
+        "PutRecord",
+        "PutRecords"
+      ],
+      "price_per_request": 1.4e-8
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "CreateStream",
+        "DeleteStream",
+        "DescribeStream",
+        "DescribeStreamSummary",
+        "ListStreams",
+        "GetShardIterator",
+        "GetRecords",
+        "MergeShards",
+        "SplitShard",
+        "IncreaseStreamRetentionPeriod",
+        "DecreaseStreamRetentionPeriod",
+        "RegisterStreamConsumer",
+        "DeregisterStreamConsumer",
+        "ListStreamConsumers",
+        "DescribeStreamConsumer",
+        "AddTagsToStream",
+        "RemoveTagsFromStream",
+        "ListTagsForStream",
+        "EnableEnhancedMonitoring",
+        "DisableEnhancedMonitoring",
+        "UpdateShardCount",
+        "UpdateStreamMode",
+        "StartStreamEncryption",
+        "StopStreamEncryption"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09,
+  "data_ingest_per_gb": null
+}

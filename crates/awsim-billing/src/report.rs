@@ -33,6 +33,10 @@ pub struct ServiceCost {
     pub bytes_out: u64,
     pub error_count: u64,
     pub data_transfer_out_cost_usd: f64,
+    /// Cost from ingest-billed services charging $/GB on bytes_in
+    /// (Firehose, CloudWatch Logs etc.). Zero for services that bill
+    /// per-request only.
+    pub data_ingest_cost_usd: f64,
     pub dimensions: Vec<DimensionCost>,
 }
 
@@ -157,7 +161,9 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             .and_then(|p| p.data_transfer_out_per_gb)
             .unwrap_or(0.0);
         let transfer_cost = (svc_bytes_out as f64 / BYTES_PER_GB) * transfer_rate;
-        let svc_total = svc_request_cost + transfer_cost;
+        let ingest_rate = pricing.and_then(|p| p.data_ingest_per_gb).unwrap_or(0.0);
+        let ingest_cost = (svc_bytes_in as f64 / BYTES_PER_GB) * ingest_rate;
+        let svc_total = svc_request_cost + transfer_cost + ingest_cost;
         total_cost += svc_total;
 
         services_out.push(ServiceCost {
@@ -170,6 +176,7 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             bytes_out: svc_bytes_out,
             error_count: svc_error_count,
             data_transfer_out_cost_usd: transfer_cost,
+            data_ingest_cost_usd: ingest_cost,
             dimensions: dim_buckets,
         });
     }

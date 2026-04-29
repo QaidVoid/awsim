@@ -36,6 +36,10 @@
 		states: 'AWS Step Functions',
 		ses: 'Amazon SES',
 		monitoring: 'Amazon CloudWatch',
+		route53: 'Amazon Route 53',
+		kinesis: 'Amazon Kinesis Data Streams',
+		cloudfront: 'Amazon CloudFront',
+		firehose: 'Amazon Data Firehose',
 	};
 
 	// Stable tints per service so the same colour represents the same
@@ -53,6 +57,10 @@
 		states: 'oklch(70% 0.13 220)', // sky blue
 		ses: 'oklch(72% 0.13 175)', // mint
 		monitoring: 'oklch(68% 0.15 340)', // hot pink
+		route53: 'oklch(72% 0.12 50)', // peach
+		kinesis: 'oklch(68% 0.14 130)', // grass
+		cloudfront: 'oklch(72% 0.13 95)', // gold
+		firehose: 'oklch(68% 0.16 30)', // burnt orange
 	};
 	const FALLBACK_TINT = 'oklch(70% 0.05 0)';
 
@@ -447,6 +455,7 @@
 					{@const svcMaxDimCost = Math.max(
 						...svc.dimensions.map((d) => d.cost_usd),
 						svc.data_transfer_out_cost_usd,
+						svc.data_ingest_cost_usd,
 						0,
 					)}
 					<div class="overflow-hidden rounded-lg border border-border bg-card">
@@ -531,6 +540,32 @@
 												</td>
 												<td class="px-2 py-1.5 text-right font-mono tabular-nums">
 													{fmtUsd(svc.data_transfer_out_cost_usd, { precise: true })}
+												</td>
+												<td class="px-4 py-1.5">
+													<div class="h-1 w-full overflow-hidden rounded-full bg-muted/30">
+														<div
+															class="h-full transition-all duration-500"
+															style="width: {sharePct}%; background-color: {tint}; opacity: 0.7;"
+														></div>
+													</div>
+												</td>
+											</tr>
+										{/if}
+										{#if svc.data_ingest_cost_usd > 0}
+											{@const sharePct =
+												svcMaxDimCost > 0
+													? (svc.data_ingest_cost_usd / svcMaxDimCost) * 100
+													: 0}
+											<tr class="border-t border-border/40">
+												<td class="px-4 py-1.5">Data ingested</td>
+												<td class="px-2 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
+													${(svc.data_ingest_cost_usd / (svc.bytes_in / 1_073_741_824)).toFixed(3)}/GB
+												</td>
+												<td class="px-2 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
+													{fmtBytes(svc.bytes_in)}
+												</td>
+												<td class="px-2 py-1.5 text-right font-mono tabular-nums">
+													{fmtUsd(svc.data_ingest_cost_usd, { precise: true })}
 												</td>
 												<td class="px-4 py-1.5">
 													<div class="h-1 w-full overflow-hidden rounded-full bg-muted/30">

@@ -31,8 +31,19 @@ struct ServiceConfig {
     service: &'static str,
     /// AWS offer code (e.g. "AmazonS3").
     aws_code: &'static str,
+    /// CloudFront and friends bill by edge region rather than
+    /// customer region, so their per-region offer files only carry
+    /// origin-shield SKUs. Set this to fetch the bulk file with no
+    /// region segment instead — the matchers then need to match the
+    /// region-prefixed usagetypes (US-Requests-Tier2-HTTPS, etc.).
+    use_global_file: bool,
     /// Fallback per-request rate for ops not matched by any dimension.
     default_request_rate: f64,
+    /// Optional ingest matcher for byte-billed services (Firehose,
+    /// CloudWatch Logs ingest etc.). When set, the rate becomes the
+    /// slim file's `data_ingest_per_gb`. AWS publishes ingest rates
+    /// in dollars per GB so we emit them as-is.
+    ingest_matcher: Option<DimensionMatcher>,
     dimensions: &'static [DimensionConfig],
 }
 
@@ -60,7 +71,9 @@ const SERVICES: &[ServiceConfig] = &[
     ServiceConfig {
         service: "s3",
         aws_code: "AmazonS3",
+        use_global_file: false,
         default_request_rate: 4.0e-7,
+        ingest_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -158,7 +171,9 @@ const SERVICES: &[ServiceConfig] = &[
     ServiceConfig {
         service: "lambda",
         aws_code: "AWSLambda",
+        use_global_file: false,
         default_request_rate: 0.0,
+        ingest_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &["Invoke", "InvokeAsync", "InvokeWithResponseStream"],
@@ -212,7 +227,9 @@ const SERVICES: &[ServiceConfig] = &[
     ServiceConfig {
         service: "dynamodb",
         aws_code: "AmazonDynamoDB",
+        use_global_file: false,
         default_request_rate: 0.0,
+        ingest_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -277,7 +294,9 @@ const SERVICES: &[ServiceConfig] = &[
     ServiceConfig {
         service: "sqs",
         aws_code: "AWSQueueService",
+        use_global_file: false,
         default_request_rate: 4.0e-7,
+        ingest_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -333,7 +352,9 @@ const SERVICES: &[ServiceConfig] = &[
     ServiceConfig {
         service: "sns",
         aws_code: "AmazonSNS",
+        use_global_file: false,
         default_request_rate: 5.0e-7,
+        ingest_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -379,7 +400,9 @@ const SERVICES: &[ServiceConfig] = &[
     ServiceConfig {
         service: "kms",
         aws_code: "awskms",
+        use_global_file: false,
         default_request_rate: 3.0e-6,
+        ingest_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -442,7 +465,9 @@ const SERVICES: &[ServiceConfig] = &[
     ServiceConfig {
         service: "secretsmanager",
         aws_code: "AWSSecretsManager",
+        use_global_file: false,
         default_request_rate: 5.0e-6,
+        ingest_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -487,7 +512,9 @@ const SERVICES: &[ServiceConfig] = &[
     ServiceConfig {
         service: "events",
         aws_code: "AWSEvents",
+        use_global_file: false,
         default_request_rate: 0.0,
+        ingest_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &["PutEvents"],
@@ -535,7 +562,9 @@ const SERVICES: &[ServiceConfig] = &[
     ServiceConfig {
         service: "apigateway",
         aws_code: "AmazonApiGateway",
+        use_global_file: false,
         default_request_rate: 0.0,
+        ingest_matcher: None,
         dimensions: &[
             // REST API requests are billed per-call. The
             // `usagetype=USE1-ApiGatewayRequest` SKU's first paid tier
@@ -612,7 +641,9 @@ const SERVICES: &[ServiceConfig] = &[
     ServiceConfig {
         service: "states",
         aws_code: "AmazonStates",
+        use_global_file: false,
         default_request_rate: 0.0,
+        ingest_matcher: None,
         dimensions: &[
             // AWS bills per state transition, not per execution. We
             // can only see StartExecution from the request event, so
@@ -661,7 +692,9 @@ const SERVICES: &[ServiceConfig] = &[
     ServiceConfig {
         service: "ses",
         aws_code: "AmazonSES",
+        use_global_file: false,
         default_request_rate: 0.0,
+        ingest_matcher: None,
         dimensions: &[
             // AWS bills per recipient, not per send. SDK callers
             // typically send to one recipient at a time, so per-call
@@ -713,7 +746,9 @@ const SERVICES: &[ServiceConfig] = &[
     ServiceConfig {
         service: "monitoring",
         aws_code: "AmazonCloudWatch",
+        use_global_file: false,
         default_request_rate: 1.0e-5,
+        ingest_matcher: None,
         dimensions: &[
             // AWS bills CloudWatch API requests at $0.01 per 1,000.
             // PutMetricData is in the same bucket — its per-metric
@@ -753,6 +788,195 @@ const SERVICES: &[ServiceConfig] = &[
                     "PutAnomalyDetector",
                     "DeleteAnomalyDetector",
                     "DescribeAnomalyDetectors",
+                ],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
+    ServiceConfig {
+        service: "route53",
+        aws_code: "AmazonRoute53",
+        use_global_file: false,
+        default_request_rate: 0.0,
+        ingest_matcher: None,
+        dimensions: &[
+            // The Route53 resolver is metered server-side (DNS resolves
+            // never reach the AWSim AWS-API gateway) so this dimension
+            // typically stays at count 0. Kept here so the rate is
+            // discoverable on the dashboard.
+            DimensionConfig {
+                operations: &[],
+                matcher: Some(DimensionMatcher {
+                    product_family: "DNS Query",
+                    attributes: &[("usagetype", "USE1-DNS-Queries")],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &[
+                    "CreateHostedZone",
+                    "DeleteHostedZone",
+                    "GetHostedZone",
+                    "ListHostedZones",
+                    "ListHostedZonesByName",
+                    "UpdateHostedZoneComment",
+                    "ChangeResourceRecordSets",
+                    "ListResourceRecordSets",
+                    "GetChange",
+                    "CreateHealthCheck",
+                    "DeleteHealthCheck",
+                    "GetHealthCheck",
+                    "ListHealthChecks",
+                    "UpdateHealthCheck",
+                    "ChangeTagsForResource",
+                    "ListTagsForResource",
+                    "ListTagsForResources",
+                ],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
+    ServiceConfig {
+        service: "kinesis",
+        aws_code: "AmazonKinesis",
+        use_global_file: false,
+        default_request_rate: 0.0,
+        ingest_matcher: None,
+        dimensions: &[
+            // Provisioned-mode put-payload-units is what AWS actually
+            // bills against — one unit per 25KB rounded up. We charge
+            // one unit per Put* call, which underbills records >25KB.
+            DimensionConfig {
+                operations: &["PutRecord", "PutRecords"],
+                matcher: Some(DimensionMatcher {
+                    product_family: "Kinesis Streams",
+                    attributes: &[("usagetype", "PutRequestPayloadUnits")],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &[
+                    "CreateStream",
+                    "DeleteStream",
+                    "DescribeStream",
+                    "DescribeStreamSummary",
+                    "ListStreams",
+                    "GetShardIterator",
+                    "GetRecords",
+                    "MergeShards",
+                    "SplitShard",
+                    "IncreaseStreamRetentionPeriod",
+                    "DecreaseStreamRetentionPeriod",
+                    "RegisterStreamConsumer",
+                    "DeregisterStreamConsumer",
+                    "ListStreamConsumers",
+                    "DescribeStreamConsumer",
+                    "AddTagsToStream",
+                    "RemoveTagsFromStream",
+                    "ListTagsForStream",
+                    "EnableEnhancedMonitoring",
+                    "DisableEnhancedMonitoring",
+                    "UpdateShardCount",
+                    "UpdateStreamMode",
+                    "StartStreamEncryption",
+                    "StopStreamEncryption",
+                ],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
+    ServiceConfig {
+        service: "cloudfront",
+        aws_code: "AmazonCloudFront",
+        // CloudFront's per-region offer file only contains origin-shield
+        // SKUs — the headline request rates are in the global bulk file
+        // keyed by edge-region prefix (US-, EU-, AP-, etc.).
+        use_global_file: true,
+        default_request_rate: 0.0,
+        ingest_matcher: None,
+        dimensions: &[
+            DimensionConfig {
+                // CloudFront proxied traffic doesn't typically reach
+                // the AWSim API gateway, so this dimension is mostly
+                // for informational display.
+                operations: &[],
+                matcher: Some(DimensionMatcher {
+                    product_family: "Request",
+                    attributes: &[("usagetype", "US-Requests-Tier2-HTTPS")],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &[
+                    "CreateDistribution",
+                    "DeleteDistribution",
+                    "GetDistribution",
+                    "GetDistributionConfig",
+                    "ListDistributions",
+                    "UpdateDistribution",
+                    "CreateInvalidation",
+                    "GetInvalidation",
+                    "ListInvalidations",
+                    "CreateOriginAccessControl",
+                    "DeleteOriginAccessControl",
+                    "GetOriginAccessControl",
+                    "ListOriginAccessControls",
+                    "UpdateOriginAccessControl",
+                    "TagResource",
+                    "UntagResource",
+                    "ListTagsForResource",
+                ],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
+    ServiceConfig {
+        service: "firehose",
+        aws_code: "AmazonKinesisFirehose",
+        use_global_file: false,
+        default_request_rate: 0.0,
+        // Firehose bills by GB ingested — pulled into
+        // `data_ingest_per_gb` and applied against bytes_in.
+        ingest_matcher: Some(DimensionMatcher {
+            product_family: "Kinesis Firehose",
+            attributes: &[
+                ("usagetype", "USE1-BilledBytes"),
+                ("operation", "PutRecord"),
+            ],
+        }),
+        dimensions: &[
+            // Per-request rate is $0 — Firehose bills purely on
+            // ingested bytes — but listing PutRecord/PutRecordBatch
+            // here ensures the row count shows up in the dashboard.
+            DimensionConfig {
+                operations: &["PutRecord", "PutRecordBatch"],
+                matcher: None,
+                fixed_description: "PutRecord / PutRecordBatch",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &[
+                    "CreateDeliveryStream",
+                    "DeleteDeliveryStream",
+                    "DescribeDeliveryStream",
+                    "ListDeliveryStreams",
+                    "UpdateDestination",
+                    "TagDeliveryStream",
+                    "UntagDeliveryStream",
+                    "ListTagsForDeliveryStream",
+                    "StartDeliveryStreamEncryption",
+                    "StopDeliveryStreamEncryption",
                 ],
                 matcher: None,
                 fixed_description: "Control-plane requests",
@@ -809,9 +1033,20 @@ struct PricePerUnit {
     usd: Option<String>,
 }
 
-async fn fetch_pricing(client: &reqwest::Client, code: &str) -> anyhow::Result<PricingDoc> {
-    let url = format!("{BASE}/{code}/current/{REGION}/index.json");
-    eprintln!("  fetching {code}");
+async fn fetch_pricing(
+    client: &reqwest::Client,
+    code: &str,
+    use_global_file: bool,
+) -> anyhow::Result<PricingDoc> {
+    let url = if use_global_file {
+        format!("{BASE}/{code}/current/index.json")
+    } else {
+        format!("{BASE}/{code}/current/{REGION}/index.json")
+    };
+    eprintln!(
+        "  fetching {code}{}",
+        if use_global_file { " (global)" } else { "" }
+    );
     let res = client.get(&url).send().await?.error_for_status()?;
     let bytes = res.bytes().await?;
     Ok(serde_json::from_slice(&bytes)?)
@@ -927,7 +1162,7 @@ async fn build_service(
     cfg: &ServiceConfig,
     data_transfer_out_per_gb: f64,
 ) -> anyhow::Result<ServicePricing> {
-    let doc = fetch_pricing(client, cfg.aws_code).await?;
+    let doc = fetch_pricing(client, cfg.aws_code, cfg.use_global_file).await?;
     let display_name = derive_display_name(&doc, cfg.aws_code);
     let pubdate = doc.publication_date.as_deref().unwrap_or("unknown");
 
@@ -950,6 +1185,22 @@ async fn build_service(
         });
     }
 
+    // Pull the per-GB ingest rate when the service config supplied a
+    // matcher. Services that bill per-request only leave this null.
+    let data_ingest_per_gb =
+        cfg.ingest_matcher
+            .as_ref()
+            .and_then(|m| match extract_dimension(&doc, m) {
+                Some((rate, _desc)) => Some(rate),
+                None => {
+                    eprintln!(
+                        "  WARN: no ingest SKU for {}/{:?} — leaving null",
+                        m.product_family, m.attributes
+                    );
+                    None
+                }
+            });
+
     Ok(ServicePricing {
         service: cfg.service.to_string(),
         display_name,
@@ -962,6 +1213,7 @@ async fn build_service(
         request_dimensions: dimensions,
         default_request_rate: Some(cfg.default_request_rate),
         data_transfer_out_per_gb: Some(data_transfer_out_per_gb),
+        data_ingest_per_gb,
     })
 }
 
@@ -977,7 +1229,7 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     eprintln!("Fetching outbound transfer rate...");
-    let dt_doc = fetch_pricing(&client, "AWSDataTransfer").await?;
+    let dt_doc = fetch_pricing(&client, "AWSDataTransfer", false).await?;
     let dt_rate = extract_data_transfer_out(&dt_doc);
     eprintln!("  data_transfer_out_per_gb = ${dt_rate}\n");
 

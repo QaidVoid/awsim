@@ -1,0 +1,40 @@
+{
+  "service": "cloudfront",
+  "display_name": "Amazon CloudFront",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AmazonCloudFront, 2025-07-01T21:16:47Z)",
+  "request_dimensions": [
+    {
+      "description": "$0.0100 per 10,000 HTTPS Requests",
+      "operations": [],
+      "price_per_request": 1e-6
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "CreateDistribution",
+        "DeleteDistribution",
+        "GetDistribution",
+        "GetDistributionConfig",
+        "ListDistributions",
+        "UpdateDistribution",
+        "CreateInvalidation",
+        "GetInvalidation",
+        "ListInvalidations",
+        "CreateOriginAccessControl",
+        "DeleteOriginAccessControl",
+        "GetOriginAccessControl",
+        "ListOriginAccessControls",
+        "UpdateOriginAccessControl",
+        "TagResource",
+        "UntagResource",
+        "ListTagsForResource"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09,
+  "data_ingest_per_gb": null
+}

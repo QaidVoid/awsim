@@ -1,0 +1,40 @@
+{
+  "service": "route53",
+  "display_name": "Amazon Route 53",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AmazonRoute53, 2026-03-13T21:05:36Z)",
+  "request_dimensions": [
+    {
+      "description": "$0.40 per 1,000,000 resolver queries for the first 1 Billion queries",
+      "operations": [],
+      "price_per_request": 4e-7
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "CreateHostedZone",
+        "DeleteHostedZone",
+        "GetHostedZone",
+        "ListHostedZones",
+        "ListHostedZonesByName",
+        "UpdateHostedZoneComment",
+        "ChangeResourceRecordSets",
+        "ListResourceRecordSets",
+        "GetChange",
+        "CreateHealthCheck",
+        "DeleteHealthCheck",
+        "GetHealthCheck",
+        "ListHealthChecks",
+        "UpdateHealthCheck",
+        "ChangeTagsForResource",
+        "ListTagsForResource",
+        "ListTagsForResources"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09,
+  "data_ingest_per_gb": null
+}

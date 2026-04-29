@@ -65,6 +65,11 @@ pub struct ServicePricing {
     /// Cost per GB of outbound response payload.
     #[serde(default)]
     pub data_transfer_out_per_gb: Option<f64>,
+    /// Cost per GB of inbound request payload — used for ingest-billed
+    /// services (Firehose, CloudWatch Logs ingest, etc.) where AWS
+    /// charges by data volume rather than per-request.
+    #[serde(default)]
+    pub data_ingest_per_gb: Option<f64>,
 }
 
 fn default_currency() -> String {
@@ -110,4 +115,8 @@ const EMBEDDED_PRICING: &[&str] = &[
     include_str!("../pricing/states.json"),
     include_str!("../pricing/ses.json"),
     include_str!("../pricing/monitoring.json"),
+    include_str!("../pricing/route53.json"),
+    include_str!("../pricing/kinesis.json"),
+    include_str!("../pricing/cloudfront.json"),
+    include_str!("../pricing/firehose.json"),
 ];
