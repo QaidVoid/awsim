@@ -25,6 +25,7 @@ export default defineConfig({
             { text: 'Persistence', link: '/guide/persistence' },
             { text: 'Admin Console', link: '/guide/admin-console' },
             { text: 'Estimated Billing', link: '/guide/billing' },
+            { text: 'Chaos Engine', link: '/guide/chaos' },
             { text: 'Cross-Service Integrations', link: '/guide/integrations' },
             { text: 'IAM Policy Enforcement', link: '/guide/iam-enforcement' },
             { text: 'Cognito OAuth/OIDC', link: '/guide/cognito-oauth' },
