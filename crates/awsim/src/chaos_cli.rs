@@ -2,7 +2,8 @@
 
 use anyhow::{Context, Result, bail};
 use awsim_chaos::{
-    ChaosEffect, ChaosRule, ErrorEffect, LatencyEffect, OperationMatch, ServiceMatch,
+    ChaosEffect, ChaosRule, ChaosSchedule, ErrorEffect, Flap, LatencyEffect, OperationMatch,
+    ServiceMatch, TimeWindow,
 };
 use serde_json::{Value, json};
 
@@ -23,8 +24,12 @@ pub async fn run(cmd: ChaosCommand) -> Result<()> {
             error,
             latency,
             label,
+            ttl_secs,
+            start_in_secs,
+            flap,
         } => {
             let effect = parse_effect(error.as_deref(), latency.as_deref())?;
+            let schedule = build_schedule(start_in_secs, ttl_secs, flap.as_deref())?;
             add(
                 &client,
                 &endpoint,
@@ -33,6 +38,7 @@ pub async fn run(cmd: ChaosCommand) -> Result<()> {
                 probability,
                 effect,
                 label.as_deref(),
+                schedule,
             )
             .await
         }
@@ -116,6 +122,61 @@ fn parse_latency(spec: &str) -> Result<LatencyEffect> {
     }
 }
 
+fn build_schedule(
+    start_in_secs: Option<u64>,
+    ttl_secs: Option<u64>,
+    flap: Option<&str>,
+) -> Result<Option<ChaosSchedule>> {
+    if start_in_secs.is_none() && ttl_secs.is_none() && flap.is_none() {
+        return Ok(None);
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let start_ts = start_in_secs.map(|s| now + s);
+    let end_ts = ttl_secs.map(|s| start_ts.unwrap_or(now) + s);
+    let window = if start_ts.is_some() || end_ts.is_some() {
+        Some(TimeWindow { start_ts, end_ts })
+    } else {
+        None
+    };
+    let flap = flap
+        .map(parse_flap)
+        .transpose()?
+        .map(|(active, period)| Flap {
+            period_secs: period,
+            active_secs: active,
+            anchor_ts: start_ts.unwrap_or(now),
+        });
+    Ok(Some(ChaosSchedule { window, flap }))
+}
+
+/// `ACTIVE/PERIOD` in seconds — e.g. `30/60` = on 30s of every 60s.
+fn parse_flap(spec: &str) -> Result<(u64, u64)> {
+    let (active, period) = spec
+        .split_once('/')
+        .ok_or_else(|| anyhow::anyhow!("flap spec must be ACTIVE/PERIOD (got `{spec}`)"))?;
+    let active_secs: u64 = active
+        .trim()
+        .parse()
+        .with_context(|| format!("invalid flap active secs `{active}`"))?;
+    let period_secs: u64 = period
+        .trim()
+        .parse()
+        .with_context(|| format!("invalid flap period secs `{period}`"))?;
+    if period_secs == 0 {
+        bail!("flap period must be > 0");
+    }
+    if active_secs == 0 {
+        bail!("flap active must be > 0");
+    }
+    if active_secs > period_secs {
+        bail!("flap active ({active_secs}) must be <= period ({period_secs})");
+    }
+    Ok((active_secs, period_secs))
+}
+
 fn service_match(s: &str) -> ServiceMatch {
     if s == "*" {
         ServiceMatch::Any
@@ -174,8 +235,60 @@ async fn list(client: &reqwest::Client, endpoint: &str, as_json: bool) -> Result
         if let Some(label) = &r.label {
             println!("       └ {label}");
         }
+        if let Some(sched) = &r.schedule
+            && let Some(desc) = describe_schedule(sched)
+        {
+            println!("       ⏱ {desc}");
+        }
     }
     Ok(())
+}
+
+/// Human-readable schedule summary — relative to now, since absolute
+/// timestamps are noise to a human running the CLI. Returns `None`
+/// when the schedule is empty (no window, no flap).
+fn describe_schedule(s: &ChaosSchedule) -> Option<String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut parts = Vec::new();
+    if let Some(w) = &s.window {
+        match (w.start_ts, w.end_ts) {
+            (Some(start), Some(end)) => {
+                let from = signed_delta(start, now);
+                let to = signed_delta(end, now);
+                parts.push(format!("window {from} → {to}"));
+            }
+            (Some(start), None) => {
+                parts.push(format!("starts {}", signed_delta(start, now)));
+            }
+            (None, Some(end)) => {
+                parts.push(format!("ends {}", signed_delta(end, now)));
+            }
+            (None, None) => {}
+        }
+    }
+    if let Some(f) = &s.flap {
+        parts.push(format!(
+            "flap {}s on / {}s off",
+            f.active_secs,
+            f.period_secs.saturating_sub(f.active_secs),
+        ));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
+}
+
+fn signed_delta(target: u64, now: u64) -> String {
+    if target >= now {
+        format!("in {}s", target - now)
+    } else {
+        format!("{}s ago", now - target)
+    }
 }
 
 fn describe_effect(eff: &ChaosEffect) -> String {
@@ -194,6 +307,7 @@ fn describe_effect(eff: &ChaosEffect) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn add(
     client: &reqwest::Client,
     endpoint: &str,
@@ -202,6 +316,7 @@ async fn add(
     probability: f64,
     effect: ChaosEffect,
     label: Option<&str>,
+    schedule: Option<ChaosSchedule>,
 ) -> Result<()> {
     let body = json!({
         "id": "",
@@ -211,6 +326,7 @@ async fn add(
         "effect": effect,
         "enabled": true,
         "label": label,
+        "schedule": schedule,
     });
     let url = format!("{}/_awsim/chaos/rules", trim(endpoint));
     let resp = client

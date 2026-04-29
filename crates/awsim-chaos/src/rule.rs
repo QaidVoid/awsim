@@ -86,6 +86,68 @@ pub enum ChaosEffect {
     },
 }
 
+/// Optional fixed window of unix-second timestamps. Either bound is
+/// optional — `start_ts: None` means "from forever", `end_ts: None`
+/// means "until forever". A rule outside its window is treated as
+/// disabled even when `enabled = true`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimeWindow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_ts: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ts: Option<u64>,
+}
+
+/// Periodic on/off cycle: active for `active_secs` out of every
+/// `period_secs`, with phase anchored at `anchor_ts`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Flap {
+    pub period_secs: u64,
+    pub active_secs: u64,
+    pub anchor_ts: u64,
+}
+
+/// Composable schedule — the rule fires only if every populated
+/// component says it's active. `window` and `flap` are independent
+/// and combine with AND.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChaosSchedule {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<TimeWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flap: Option<Flap>,
+}
+
+impl ChaosSchedule {
+    /// Returns `true` when the schedule allows the rule to fire at
+    /// `now`. Empty schedule (no window, no flap) always allows.
+    pub fn is_active_at(&self, now: u64) -> bool {
+        if let Some(w) = &self.window {
+            if let Some(start) = w.start_ts
+                && now < start
+            {
+                return false;
+            }
+            if let Some(end) = w.end_ts
+                && now >= end
+            {
+                return false;
+            }
+        }
+        if let Some(f) = &self.flap {
+            if f.period_secs == 0 || f.active_secs == 0 {
+                return false;
+            }
+            // Phase = how far into the current period we are.
+            let phase = now.saturating_sub(f.anchor_ts) % f.period_secs;
+            if phase >= f.active_secs {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// One chaos rule — a match predicate plus an effect to inject when
 /// `probability` rolls true.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +170,10 @@ pub struct ChaosRule {
     /// the engine; persisted across restarts.
     #[serde(default)]
     pub injection_count: u64,
+    /// Optional time-based gating — windows + flap cycles. Rules
+    /// without a schedule are always active when `enabled = true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<ChaosSchedule>,
 }
 
 fn default_enabled() -> bool {

@@ -123,6 +123,18 @@ enum ChaosCommand {
         /// Optional human label shown in the dashboard.
         #[arg(long)]
         label: Option<String>,
+        /// Auto-stop firing after N seconds (rule stays in the table
+        /// but gates itself off). Useful for "fire for the next 5
+        /// min then stop".
+        #[arg(long)]
+        ttl_secs: Option<u64>,
+        /// Wait N seconds before the rule starts firing.
+        #[arg(long)]
+        start_in_secs: Option<u64>,
+        /// Periodic on/off cycle: `ACTIVE/PERIOD` in seconds. e.g.
+        /// `30/60` = on for 30s out of every 60s.
+        #[arg(long)]
+        flap: Option<String>,
     },
     /// Remove a rule by id.
     Remove {

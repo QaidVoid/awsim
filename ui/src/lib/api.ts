@@ -92,6 +92,22 @@ export type ChaosEffect =
   | { kind: "latency"; min_ms: number; max_ms: number }
   | { kind: "both"; latency: LatencyEffect; error: ErrorEffect };
 
+export interface TimeWindow {
+  start_ts?: number;
+  end_ts?: number;
+}
+
+export interface Flap {
+  period_secs: number;
+  active_secs: number;
+  anchor_ts: number;
+}
+
+export interface ChaosSchedule {
+  window?: TimeWindow;
+  flap?: Flap;
+}
+
 export interface ChaosRule {
   id: string;
   service: ServiceMatch;
@@ -102,6 +118,7 @@ export interface ChaosRule {
   label?: string | null;
   created_at: number;
   injection_count: number;
+  schedule?: ChaosSchedule | null;
 }
 
 export interface ChaosRulesResponse {

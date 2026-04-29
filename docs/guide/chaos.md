@@ -54,6 +54,44 @@ Rules are evaluated in registration order. The **first** rule whose
 predicate matches *and* whose probability roll succeeds wins —
 subsequent rules don't fire even if they'd also match.
 
+## Schedules
+
+Rules can be gated by an optional `schedule` containing two
+independent components, combined with AND:
+
+- **`window`** — `{ start_ts, end_ts }` unix-seconds, either bound
+  optional. Useful for "fire only during this maintenance window" or
+  "auto-stop after N seconds".
+- **`flap`** — `{ period_secs, active_secs, anchor_ts }`. Active for
+  `active_secs` out of every `period_secs`, anchored at
+  `anchor_ts`. Useful for "flap on / off every 30s" workloads that
+  test flapping connections.
+
+A rule with no schedule is always active (subject to the `enabled`
+flag and probability roll).
+
+The CLI exposes three convenience flags on `awsim chaos add`:
+
+```sh
+# Fire for the next 5 min then auto-stop.
+awsim chaos add --service kms --error '503,KMSInternalException,boom' \
+  --ttl-secs 300
+
+# Wait 30s, then start firing.
+awsim chaos add --service s3 --latency 200-500 --start-in-secs 30
+
+# Flap: 30s on / 30s off, indefinitely.
+awsim chaos add --service '*' --error '503,ServiceUnavailable,...' \
+  --flap '30/60'
+
+# Compose: starts in 1 min, lasts 10 min total, flaps 20s on / 40s off.
+awsim chaos add --service lambda --operation Invoke --latency 1000-3000 \
+  --start-in-secs 60 --ttl-secs 600 --flap '20/60'
+```
+
+Schedule fields can also be set directly via the HTTP API or the
+"Add rule" dialog in the dashboard.
+
 ## Built-in presets
 
 Six common failure-mode bundles ship out of the box:

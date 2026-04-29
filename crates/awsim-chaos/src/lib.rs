@@ -16,4 +16,7 @@ pub mod rule;
 
 pub use engine::{ChaosEngine, ChaosOutcome, RecentInjection};
 pub use presets::{PRESETS, PresetInfo};
-pub use rule::{ChaosEffect, ChaosRule, ErrorEffect, LatencyEffect, OperationMatch, ServiceMatch};
+pub use rule::{
+    ChaosEffect, ChaosRule, ChaosSchedule, ErrorEffect, Flap, LatencyEffect, OperationMatch,
+    ServiceMatch, TimeWindow,
+};

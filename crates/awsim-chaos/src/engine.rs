@@ -70,9 +70,31 @@ impl ChaosEngine {
         operation: Option<&str>,
         rng: &mut impl rand::Rng,
     ) -> Option<ChaosOutcome> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.evaluate_with_rng_at(service, operation, now, rng)
+    }
+
+    /// Evaluate at a caller-supplied unix timestamp — lets tests
+    /// pin the clock so schedule windows / flap cycles are
+    /// deterministic.
+    pub fn evaluate_with_rng_at(
+        &self,
+        service: &str,
+        operation: Option<&str>,
+        now: u64,
+        rng: &mut impl rand::Rng,
+    ) -> Option<ChaosOutcome> {
         let rules = self.rules.read().ok()?;
         for rule in rules.iter() {
             if !rule.matches(service, operation) {
+                continue;
+            }
+            if let Some(sched) = &rule.schedule
+                && !sched.is_active_at(now)
+            {
                 continue;
             }
             if rule.probability <= 0.0 {
@@ -207,7 +229,9 @@ fn build_outcome(rule: &ChaosRule, rng: &mut impl rand::Rng) -> ChaosOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rule::{LatencyEffect, OperationMatch, ServiceMatch};
+    use crate::rule::{
+        ChaosSchedule, Flap, LatencyEffect, OperationMatch, ServiceMatch, TimeWindow,
+    };
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
@@ -228,6 +252,7 @@ mod tests {
             label: None,
             created_at: 0,
             injection_count: 0,
+            schedule: None,
         }
     }
 
@@ -378,6 +403,125 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].id, "r1");
         assert_eq!(rules[0].probability, 0.25);
+    }
+
+    #[test]
+    fn schedule_window_gates_evaluation() {
+        let e = ChaosEngine::new();
+        let mut r = rule(
+            "r1",
+            ServiceMatch::Any,
+            OperationMatch::Any,
+            1.0,
+            ChaosEffect::Error(err("X")),
+        );
+        r.schedule = Some(ChaosSchedule {
+            window: Some(TimeWindow {
+                start_ts: Some(100),
+                end_ts: Some(200),
+            }),
+            flap: None,
+        });
+        e.add_rule(r);
+
+        let mut rng = StdRng::seed_from_u64(0);
+        // Before window — inert.
+        assert!(
+            e.evaluate_with_rng_at("s3", Some("Op"), 50, &mut rng)
+                .is_none()
+        );
+        // Inside window — fires.
+        assert!(
+            e.evaluate_with_rng_at("s3", Some("Op"), 150, &mut rng)
+                .is_some()
+        );
+        // After window (boundary is exclusive) — inert.
+        assert!(
+            e.evaluate_with_rng_at("s3", Some("Op"), 200, &mut rng)
+                .is_none()
+        );
+        assert!(
+            e.evaluate_with_rng_at("s3", Some("Op"), 1_000, &mut rng)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn schedule_flap_alternates() {
+        let e = ChaosEngine::new();
+        let mut r = rule(
+            "r1",
+            ServiceMatch::Any,
+            OperationMatch::Any,
+            1.0,
+            ChaosEffect::Error(err("X")),
+        );
+        // 60s period, active for the first 30s of each window.
+        r.schedule = Some(ChaosSchedule {
+            window: None,
+            flap: Some(Flap {
+                period_secs: 60,
+                active_secs: 30,
+                anchor_ts: 1_000,
+            }),
+        });
+        e.add_rule(r);
+
+        let mut rng = StdRng::seed_from_u64(0);
+        // First period: active 1000..1029, inert 1030..1059.
+        assert!(
+            e.evaluate_with_rng_at("s3", Some("Op"), 1_000, &mut rng)
+                .is_some()
+        );
+        assert!(
+            e.evaluate_with_rng_at("s3", Some("Op"), 1_029, &mut rng)
+                .is_some()
+        );
+        assert!(
+            e.evaluate_with_rng_at("s3", Some("Op"), 1_030, &mut rng)
+                .is_none()
+        );
+        assert!(
+            e.evaluate_with_rng_at("s3", Some("Op"), 1_059, &mut rng)
+                .is_none()
+        );
+        // Next period mirrors the first.
+        assert!(
+            e.evaluate_with_rng_at("s3", Some("Op"), 1_060, &mut rng)
+                .is_some()
+        );
+        assert!(
+            e.evaluate_with_rng_at("s3", Some("Op"), 1_090, &mut rng)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn schedule_window_and_flap_compose() {
+        // Active window 1000..2000 AND flap 30/60 anchored at 1000.
+        // Outside the window, flap doesn't matter.
+        let mut sched = ChaosSchedule {
+            window: Some(TimeWindow {
+                start_ts: Some(1_000),
+                end_ts: Some(2_000),
+            }),
+            flap: Some(Flap {
+                period_secs: 60,
+                active_secs: 30,
+                anchor_ts: 1_000,
+            }),
+        };
+        assert!(!sched.is_active_at(999)); // before window
+        assert!(sched.is_active_at(1_000)); // in window, flap-on
+        assert!(!sched.is_active_at(1_030)); // in window, flap-off
+        assert!(sched.is_active_at(1_060)); // in window, flap-on (next cycle)
+        assert!(!sched.is_active_at(2_000)); // after window
+        assert!(!sched.is_active_at(2_500));
+
+        // Empty schedule always allows.
+        sched = ChaosSchedule::default();
+        assert!(sched.is_active_at(0));
+        assert!(sched.is_active_at(u64::MAX));
     }
 
     #[test]

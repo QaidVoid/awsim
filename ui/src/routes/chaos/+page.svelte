@@ -75,6 +75,9 @@
 	let formLatencyMin = $state('');
 	let formLatencyMax = $state('');
 	let formLabel = $state('');
+	let formStartInSecs = $state('');
+	let formTtlSecs = $state('');
+	let formFlap = $state('');
 
 	async function refresh() {
 		loading = true;
@@ -160,6 +163,45 @@
 		formLatencyMin = '';
 		formLatencyMax = '';
 		formLabel = '';
+		formStartInSecs = '';
+		formTtlSecs = '';
+		formFlap = '';
+	}
+
+	function buildScheduleFromForm(): { schedule: Record<string, unknown> } | { error: string } | null {
+		const hasStart = formStartInSecs.trim() !== '';
+		const hasTtl = formTtlSecs.trim() !== '';
+		const hasFlap = formFlap.trim() !== '';
+		if (!hasStart && !hasTtl && !hasFlap) return null;
+
+		const now = Math.floor(Date.now() / 1000);
+		let startTs: number | undefined;
+		let endTs: number | undefined;
+		if (hasStart) {
+			const n = parseInt(formStartInSecs, 10);
+			if (Number.isNaN(n) || n < 0) return { error: 'Invalid start-in-secs.' };
+			startTs = now + n;
+		}
+		if (hasTtl) {
+			const n = parseInt(formTtlSecs, 10);
+			if (Number.isNaN(n) || n <= 0) return { error: 'Invalid ttl-secs.' };
+			endTs = (startTs ?? now) + n;
+		}
+		const window =
+			startTs !== undefined || endTs !== undefined ? { start_ts: startTs, end_ts: endTs } : undefined;
+
+		let flap: { period_secs: number; active_secs: number; anchor_ts: number } | undefined;
+		if (hasFlap) {
+			const m = formFlap.match(/^(\d+)\s*\/\s*(\d+)$/);
+			if (!m) return { error: 'Flap must be ACTIVE/PERIOD (e.g. 30/60).' };
+			const active = parseInt(m[1]!, 10);
+			const period = parseInt(m[2]!, 10);
+			if (active <= 0 || period <= 0 || active > period)
+				return { error: 'Flap: 0 < active <= period.' };
+			flap = { active_secs: active, period_secs: period, anchor_ts: startTs ?? now };
+		}
+
+		return { schedule: { window, flap } };
 	}
 
 	async function submitAdd() {
@@ -215,13 +257,20 @@
 				? { kind: 'any' }
 				: { kind: 'exact', value: formOperation.trim() };
 
+		const sched = buildScheduleFromForm();
+		if (sched && 'error' in sched) {
+			toast.error(sched.error);
+			return;
+		}
+
 		try {
 			await addChaosRule({
 				service: service as ChaosRule['service'],
 				operation: operation as ChaosRule['operation'],
 				probability: formProbability,
 				effect: effect as ChaosRule['effect'],
-				label: formLabel.trim() || null
+				label: formLabel.trim() || null,
+				schedule: (sched?.schedule ?? null) as ChaosRule['schedule']
 			});
 			toast.success('Rule added');
 			addOpen = false;
@@ -250,6 +299,32 @@
 				? `+${e.latency.min_ms}ms`
 				: `+${e.latency.min_ms}-${e.latency.max_ms}ms`;
 		return `${lat} then [${e.error.status}] ${e.error.code}`;
+	}
+
+	function describeSchedule(s: ChaosRule['schedule']): string | null {
+		if (!s) return null;
+		const now = Math.floor(Date.now() / 1000);
+		const parts: string[] = [];
+		if (s.window) {
+			const { start_ts, end_ts } = s.window;
+			if (start_ts !== undefined && end_ts !== undefined) {
+				parts.push(`window ${signedDelta(start_ts, now)} → ${signedDelta(end_ts, now)}`);
+			} else if (start_ts !== undefined) {
+				parts.push(`starts ${signedDelta(start_ts, now)}`);
+			} else if (end_ts !== undefined) {
+				parts.push(`ends ${signedDelta(end_ts, now)}`);
+			}
+		}
+		if (s.flap) {
+			parts.push(
+				`flap ${s.flap.active_secs}s on / ${s.flap.period_secs - s.flap.active_secs}s off`
+			);
+		}
+		return parts.length > 0 ? parts.join(', ') : null;
+	}
+
+	function signedDelta(target: number, now: number): string {
+		return target >= now ? `in ${target - now}s` : `${now - target}s ago`;
 	}
 
 	function formatTs(ts: number): string {
@@ -368,6 +443,27 @@
 								<Label for="lat-max">Max</Label>
 								<Input id="lat-max" bind:value={formLatencyMax} placeholder="500" />
 							</div>
+						</div>
+					</div>
+					<div class="rounded border border-border p-3">
+						<div class="mb-2 text-sm font-medium">Schedule (optional)</div>
+						<div class="grid grid-cols-2 gap-2">
+							<div>
+								<Label for="start-in">Start in (s)</Label>
+								<Input
+									id="start-in"
+									bind:value={formStartInSecs}
+									placeholder="0"
+								/>
+							</div>
+							<div>
+								<Label for="ttl">TTL (s)</Label>
+								<Input id="ttl" bind:value={formTtlSecs} placeholder="600" />
+							</div>
+						</div>
+						<div class="mt-2">
+							<Label for="flap">Flap (active/period)</Label>
+							<Input id="flap" bind:value={formFlap} placeholder="30/60" />
 						</div>
 					</div>
 					<div>
@@ -502,9 +598,14 @@
 										>{rule.probability.toFixed(2)}</TableCell
 									>
 									<TableCell><Badge>{formatEffect(rule.effect)}</Badge></TableCell>
-									<TableCell class="text-xs text-muted-foreground"
-										>{rule.label ?? '—'}</TableCell
-									>
+									<TableCell class="text-xs text-muted-foreground">
+										<div>{rule.label ?? '—'}</div>
+										{#if describeSchedule(rule.schedule)}
+											<div class="mt-0.5 text-[11px] text-orange-500/80">
+												⏱ {describeSchedule(rule.schedule)}
+											</div>
+										{/if}
+									</TableCell>
 									<TableCell class="text-right font-mono text-xs"
 										>{rule.injection_count}</TableCell
 									>

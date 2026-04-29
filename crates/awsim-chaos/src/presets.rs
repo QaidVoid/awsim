@@ -133,6 +133,7 @@ fn rule(
         label: Some(label.to_string()),
         created_at: now,
         injection_count: 0,
+        schedule: None,
     }
 }
 
