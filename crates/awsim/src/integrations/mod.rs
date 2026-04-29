@@ -8,126 +8,206 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use awsim_core::{InternalEvent, RequestContext, ServiceHandler};
+use awsim_core::{AccountRegionStore, InternalEvent, RequestContext, ServiceHandler};
+use awsim_lambda::state::LambdaState;
+use serde_json::Value;
 use tracing::{debug, info, warn};
 
-/// Poll SQS queues for all enabled Lambda event source mappings and invoke Lambda
-/// with batches of messages.
-pub async fn poll_sqs_event_sources(services: &HashMap<String, Arc<dyn ServiceHandler>>) {
+mod esm;
+
+/// Snapshot of the fields the SQS poller needs from an EventSourceMapping.
+/// Tuple aliased to keep clippy's type-complexity lint quiet.
+type SqsMappingSnapshot = (
+    String,         // uuid
+    String,         // event_source_arn
+    String,         // function_arn
+    u32,            // batch_size
+    Option<Value>,  // filter_criteria
+    Option<String>, // destination_on_failure
+);
+
+/// Snapshot of the fields the Kinesis poller needs from an EventSourceMapping.
+type KinesisMappingSnapshot = (
+    String,         // uuid
+    String,         // event_source_arn
+    String,         // function_arn
+    u32,            // batch_size
+    Option<String>, // starting_position
+    Option<f64>,    // starting_position_timestamp
+    Option<Value>,  // filter_criteria
+    Option<String>, // destination_on_failure
+    Option<String>, // saved iterator for shard 0
+);
+
+/// Poll SQS queues for every enabled Lambda event source mapping in every
+/// (account, region) and invoke Lambda with batches of messages. Honors
+/// FilterCriteria when configured, and routes failed batches to the
+/// DestinationConfig.OnFailure target if one is set.
+pub async fn poll_sqs_event_sources(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+    lambda_store: &AccountRegionStore<LambdaState>,
+) {
     let lambda = match services.get("lambda") {
-        Some(l) => l,
+        Some(l) => l.clone(),
         None => return,
     };
     let sqs = match services.get("sqs") {
-        Some(s) => s,
+        Some(s) => s.clone(),
         None => return,
     };
 
-    // List all event source mappings from Lambda
-    let ctx = RequestContext::new("lambda", "us-east-1");
-    let mappings_result = lambda
-        .handle("ListEventSourceMappings", serde_json::json!({}), &ctx)
-        .await;
+    for ((account_id, region), state) in lambda_store.iter_all() {
+        let mappings: Vec<SqsMappingSnapshot> = state
+            .event_source_mappings
+            .iter()
+            .filter_map(|entry| {
+                let m = entry.value();
+                if m.state != "Enabled" {
+                    return None;
+                }
+                if !m.event_source_arn.contains(":sqs:") {
+                    return None;
+                }
+                Some((
+                    m.uuid.clone(),
+                    m.event_source_arn.clone(),
+                    m.function_arn.clone(),
+                    m.batch_size,
+                    m.filter_criteria.clone(),
+                    m.destination_on_failure.clone(),
+                ))
+            })
+            .collect();
 
-    if let Ok(result) = mappings_result
-        && let Some(mappings) = result["EventSourceMappings"].as_array()
-    {
-        for mapping in mappings {
-            let enabled = mapping["State"].as_str() == Some("Enabled");
-            if !enabled {
-                continue;
-            }
-
-            let event_source_arn = match mapping["EventSourceArn"].as_str() {
-                Some(arn) if arn.contains(":sqs:") => arn,
-                _ => continue,
-            };
-            let function_name = match mapping["FunctionName"].as_str() {
-                Some(n) => n,
-                None => continue,
-            };
-            let batch_size = mapping["BatchSize"].as_u64().unwrap_or(10) as u32;
-
-            // Extract queue URL from ARN
-            // ARN format: arn:aws:sqs:{region}:{account}:{queue_name}
+        for (uuid, event_source_arn, function_arn, batch_size, filter_criteria, dlq_arn) in mappings
+        {
             let parts: Vec<&str> = event_source_arn.split(':').collect();
             if parts.len() < 6 {
                 continue;
             }
-            let region = parts[3];
-            let account = parts[4];
+            let queue_region = parts[3];
+            let queue_account = parts[4];
             let queue_name = parts[5];
-            let queue_url = format!("http://sqs.{region}.localhost:4566/{account}/{queue_name}");
+            let queue_url =
+                format!("http://sqs.{queue_region}.localhost:4566/{queue_account}/{queue_name}");
 
-            // Receive messages from SQS
             let receive_input = serde_json::json!({
                 "QueueUrl": queue_url,
                 "MaxNumberOfMessages": batch_size,
                 "WaitTimeSeconds": 0,
             });
-            let sqs_ctx = RequestContext::new("sqs", region);
-            if let Ok(receive_result) = sqs.handle("ReceiveMessage", receive_input, &sqs_ctx).await
-                && let Some(messages) = receive_result["Messages"].as_array()
-            {
-                if messages.is_empty() {
-                    continue;
-                }
+            let sqs_ctx = RequestContext::new("sqs", queue_region);
+            let receive_result = match sqs.handle("ReceiveMessage", receive_input, &sqs_ctx).await {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let messages = match receive_result["Messages"].as_array() {
+                Some(m) if !m.is_empty() => m.clone(),
+                _ => continue,
+            };
 
-                // Build SQS event for Lambda
-                let records: Vec<serde_json::Value> = messages.iter().map(|msg| {
-                            serde_json::json!({
-                                "messageId": msg["MessageId"],
-                                "receiptHandle": msg["ReceiptHandle"],
-                                "body": msg["Body"],
-                                "attributes": msg.get("Attributes").unwrap_or(&serde_json::json!({})),
-                                "messageAttributes": msg.get("MessageAttributes").unwrap_or(&serde_json::json!({})),
-                                "md5OfBody": msg["MD5OfBody"],
-                                "eventSource": "aws:sqs",
-                                "eventSourceARN": event_source_arn,
-                                "awsRegion": region,
-                            })
-                        }).collect();
+            let raw_records: Vec<Value> = messages
+                .iter()
+                .map(|msg| {
+                    serde_json::json!({
+                        "messageId": msg["MessageId"],
+                        "receiptHandle": msg["ReceiptHandle"],
+                        "body": msg["Body"],
+                        "attributes": msg.get("Attributes").unwrap_or(&Value::Object(Default::default())),
+                        "messageAttributes": msg.get("MessageAttributes").unwrap_or(&Value::Object(Default::default())),
+                        "md5OfBody": msg["MD5OfBody"],
+                        "eventSource": "aws:sqs",
+                        "eventSourceARN": event_source_arn,
+                        "awsRegion": region,
+                    })
+                })
+                .collect();
 
-                let lambda_event = serde_json::json!({ "Records": records });
-
-                // Invoke Lambda
-                let invoke_input = serde_json::json!({
-                    "FunctionName": function_name,
-                    "Payload": serde_json::to_string(&lambda_event).unwrap_or_default(),
-                    "InvocationType": "Event",
+            let (kept, filtered_handles) =
+                esm::partition_by_filter(&raw_records, filter_criteria.as_ref(), |rec| {
+                    rec.get("receiptHandle")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
                 });
-                let lambda_ctx = RequestContext::new("lambda", region);
-                if lambda
-                    .handle("Invoke", invoke_input, &lambda_ctx)
-                    .await
-                    .is_ok()
-                {
-                    // Delete messages on successful invocation
-                    for msg in messages {
-                        if let Some(receipt) = msg["ReceiptHandle"].as_str() {
-                            let delete_input = serde_json::json!({
-                                "QueueUrl": queue_url,
-                                "ReceiptHandle": receipt,
-                            });
-                            let _ = sqs.handle("DeleteMessage", delete_input, &sqs_ctx).await;
+
+            // Filtered-out messages are considered consumed — delete them so the
+            // queue doesn't loop them forever. This matches real Lambda ESM behavior.
+            for handle in &filtered_handles {
+                let _ = sqs
+                    .handle(
+                        "DeleteMessage",
+                        serde_json::json!({ "QueueUrl": queue_url, "ReceiptHandle": handle }),
+                        &sqs_ctx,
+                    )
+                    .await;
+            }
+
+            if kept.is_empty() {
+                set_last_result(&state, &uuid, "OK");
+                continue;
+            }
+
+            let lambda_event = serde_json::json!({ "Records": kept });
+            let invoke_input = serde_json::json!({
+                "FunctionName": function_arn,
+                "Payload": serde_json::to_string(&lambda_event).unwrap_or_default(),
+                "InvocationType": "Event",
+            });
+            let lambda_ctx = RequestContext::new_with_account("lambda", &region, &account_id);
+            match lambda.handle("Invoke", invoke_input, &lambda_ctx).await {
+                Ok(_) => {
+                    for rec in &kept {
+                        if let Some(handle) = rec.get("receiptHandle").and_then(|v| v.as_str()) {
+                            let _ = sqs
+                                .handle(
+                                    "DeleteMessage",
+                                    serde_json::json!({ "QueueUrl": queue_url, "ReceiptHandle": handle }),
+                                    &sqs_ctx,
+                                )
+                                .await;
                         }
                     }
-
                     debug!(
-                        function = function_name,
+                        function = %function_arn,
                         queue = queue_name,
-                        count = messages.len(),
+                        account = %account_id,
+                        region = %region,
+                        count = kept.len(),
                         "SQS->Lambda: delivered batch"
                     );
-                } else {
+                    set_last_result(&state, &uuid, "OK");
+                }
+                Err(e) => {
                     warn!(
-                        function = function_name,
+                        function = %function_arn,
                         queue = queue_name,
-                        "SQS->Lambda: Lambda invocation failed, messages remain in queue"
+                        error = %e.message,
+                        "SQS->Lambda: invocation failed; messages remain in queue"
+                    );
+                    if let Some(dlq) = &dlq_arn {
+                        esm::route_to_destination(
+                            services,
+                            dlq,
+                            &lambda_event,
+                            &account_id,
+                            &region,
+                        )
+                        .await;
+                    }
+                    set_last_result(
+                        &state,
+                        &uuid,
+                        &format!("PROBLEM: invoke failed: {}", e.message),
                     );
                 }
             }
         }
+    }
+}
+
+fn set_last_result(state: &Arc<LambdaState>, uuid: &str, result: &str) {
+    if let Some(mut m) = state.event_source_mappings.get_mut(uuid) {
+        m.last_processing_result = result.to_string();
     }
 }
 
@@ -337,9 +417,6 @@ pub async fn handle_dynamodb_stream(
         }
     };
 
-    // Build the standard Lambda DynamoDB stream event envelope.
-    let lambda_payload = serde_json::json!({ "Records": records });
-
     let lambda_handler = match services.get("lambda") {
         Some(h) => h.clone(),
         None => return,
@@ -385,6 +462,20 @@ pub async fn handle_dynamodb_stream(
             None => continue,
         };
 
+        let filter_criteria = mapping.get("FilterCriteria").cloned();
+        let dlq_arn = mapping
+            .get("DestinationConfig")
+            .and_then(|d| d.get("OnFailure"))
+            .and_then(|f| f.get("Destination"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let (kept, _) = esm::partition_by_filter(&records, filter_criteria.as_ref(), |_| None);
+        if kept.is_empty() {
+            continue;
+        }
+        let per_mapping_payload = serde_json::json!({ "Records": kept });
+
         let invoke_ctx = RequestContext {
             account_id: event.account_id.clone(),
             region: event.region.clone(),
@@ -399,7 +490,7 @@ pub async fn handle_dynamodb_stream(
         let invoke_input = serde_json::json!({
             "FunctionName": function_arn,
             "InvocationType": "Event",
-            "Payload": lambda_payload,
+            "Payload": per_mapping_payload,
         });
 
         match lambda_handler
@@ -411,12 +502,24 @@ pub async fn handle_dynamodb_stream(
                 stream = %stream_arn,
                 "DynamoDB stream triggered Lambda function"
             ),
-            Err(e) => warn!(
-                function = %function_arn,
-                stream = %stream_arn,
-                error = %e.message,
-                "DynamoDB stream Lambda invocation failed"
-            ),
+            Err(e) => {
+                warn!(
+                    function = %function_arn,
+                    stream = %stream_arn,
+                    error = %e.message,
+                    "DynamoDB stream Lambda invocation failed"
+                );
+                if let Some(dlq) = &dlq_arn {
+                    esm::route_to_destination(
+                        services,
+                        dlq,
+                        &per_mapping_payload,
+                        &event.account_id,
+                        &event.region,
+                    )
+                    .await;
+                }
+            }
         }
     }
 }
@@ -502,79 +605,102 @@ pub async fn handle_eventbridge_target(
     }
 }
 
-/// Poll Kinesis streams for all enabled Lambda event source mappings and invoke
-/// Lambda with batches of records.
-pub async fn poll_kinesis_event_sources(services: &HashMap<String, Arc<dyn ServiceHandler>>) {
+/// Poll Kinesis streams for every enabled Lambda event source mapping in
+/// every (account, region). The shard iterator returned by GetRecords is
+/// persisted on the mapping so the next tick resumes where we left off,
+/// instead of re-fetching `TRIM_HORIZON` and re-delivering records forever.
+pub async fn poll_kinesis_event_sources(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+    lambda_store: &AccountRegionStore<LambdaState>,
+) {
     let lambda = match services.get("lambda") {
-        Some(l) => l,
+        Some(l) => l.clone(),
         None => return,
     };
     let kinesis = match services.get("kinesis") {
-        Some(k) => k,
+        Some(k) => k.clone(),
         None => return,
     };
 
-    // List all event source mappings from Lambda
-    let ctx = RequestContext::new("lambda", "us-east-1");
-    let mappings_result = lambda
-        .handle("ListEventSourceMappings", serde_json::json!({}), &ctx)
-        .await;
+    const SHARD_ID: &str = "shardId-000000000000";
 
-    if let Ok(result) = mappings_result
-        && let Some(mappings) = result["EventSourceMappings"].as_array()
-    {
-        for mapping in mappings {
-            if mapping["State"].as_str() != Some("Enabled") {
-                continue;
-            }
+    for ((account_id, region), state) in lambda_store.iter_all() {
+        // Snapshot the mappings up front so we don't hold a DashMap reference
+        // across .await points.
+        let mappings: Vec<KinesisMappingSnapshot> = state
+            .event_source_mappings
+            .iter()
+            .filter_map(|entry| {
+                let m = entry.value();
+                if m.state != "Enabled" {
+                    return None;
+                }
+                if !m.event_source_arn.contains(":kinesis:") {
+                    return None;
+                }
+                Some((
+                    m.uuid.clone(),
+                    m.event_source_arn.clone(),
+                    m.function_arn.clone(),
+                    m.batch_size,
+                    m.starting_position.clone(),
+                    m.starting_position_timestamp,
+                    m.filter_criteria.clone(),
+                    m.destination_on_failure.clone(),
+                    m.shard_iterators.get(SHARD_ID).cloned(),
+                ))
+            })
+            .collect();
 
-            let event_source_arn = match mapping["EventSourceArn"].as_str() {
-                Some(arn) if arn.contains(":kinesis:") => arn,
-                _ => continue,
-            };
-
-            let function_name = match mapping["FunctionName"].as_str() {
-                Some(f) => f,
-                None => continue,
-            };
-            let batch_size = mapping["BatchSize"].as_u64().unwrap_or(100);
-
-            // Extract stream name from ARN: arn:aws:kinesis:{region}:{account}:stream/{name}
+        for (
+            uuid,
+            event_source_arn,
+            function_arn,
+            batch_size,
+            starting_position,
+            starting_position_timestamp,
+            filter_criteria,
+            dlq_arn,
+            saved_iterator,
+        ) in mappings
+        {
             let stream_name = event_source_arn.split('/').next_back().unwrap_or("");
             if stream_name.is_empty() {
                 continue;
             }
-
-            // Derive the region from the ARN if possible
             let parts: Vec<&str> = event_source_arn.splitn(6, ':').collect();
-            let region = if parts.len() >= 4 {
-                parts[3]
-            } else {
-                "us-east-1"
-            };
+            let stream_region = if parts.len() >= 4 { parts[3] } else { &region };
+            let kinesis_ctx =
+                RequestContext::new_with_account("kinesis", stream_region, &account_id);
 
-            let kinesis_ctx = RequestContext::new("kinesis", region);
-
-            // Get shard iterator (TRIM_HORIZON to pick up unread records)
-            let iter_input = serde_json::json!({
-                "StreamName": stream_name,
-                "ShardId": "shardId-000000000000",
-                "ShardIteratorType": "TRIM_HORIZON",
-            });
-            let iter_result = match kinesis
-                .handle("GetShardIterator", iter_input, &kinesis_ctx)
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!(stream = %stream_name, error = %e.message, "Kinesis->Lambda: GetShardIterator failed");
-                    continue;
+            let iterator = match saved_iterator {
+                Some(it) => it,
+                None => {
+                    let iter_type = starting_position.as_deref().unwrap_or("TRIM_HORIZON");
+                    let mut iter_input = serde_json::json!({
+                        "StreamName": stream_name,
+                        "ShardId": SHARD_ID,
+                        "ShardIteratorType": iter_type,
+                    });
+                    if iter_type == "AT_TIMESTAMP"
+                        && let Some(ts) = starting_position_timestamp
+                    {
+                        iter_input["Timestamp"] = serde_json::json!(ts);
+                    }
+                    match kinesis
+                        .handle("GetShardIterator", iter_input, &kinesis_ctx)
+                        .await
+                    {
+                        Ok(r) => match r["ShardIterator"].as_str() {
+                            Some(s) => s.to_string(),
+                            None => continue,
+                        },
+                        Err(e) => {
+                            warn!(stream = stream_name, error = %e.message, "Kinesis->Lambda: GetShardIterator failed");
+                            continue;
+                        }
+                    }
                 }
-            };
-
-            let iterator = match iter_result["ShardIterator"].as_str() {
-                Some(i) => i.to_string(),
-                None => continue,
             };
 
             let records_input = serde_json::json!({
@@ -587,36 +713,83 @@ pub async fn poll_kinesis_event_sources(services: &HashMap<String, Arc<dyn Servi
             {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!(stream = %stream_name, error = %e.message, "Kinesis->Lambda: GetRecords failed");
+                    warn!(stream = stream_name, error = %e.message, "Kinesis->Lambda: GetRecords failed");
+                    set_last_result(
+                        &state,
+                        &uuid,
+                        &format!("PROBLEM: GetRecords failed: {}", e.message),
+                    );
                     continue;
                 }
             };
 
+            // Always advance to NextShardIterator if the Kinesis service supplied one.
+            // Empty batches still need to advance, otherwise we'd starve when the stream
+            // has no records and never see new ones.
+            if let Some(next) = records_result["NextShardIterator"].as_str()
+                && let Some(mut m) = state.event_source_mappings.get_mut(&uuid)
+            {
+                m.shard_iterators
+                    .insert(SHARD_ID.to_string(), next.to_string());
+            }
+
             let records = match records_result["Records"].as_array() {
                 Some(r) if !r.is_empty() => r.clone(),
-                _ => continue,
+                _ => {
+                    set_last_result(&state, &uuid, "OK");
+                    continue;
+                }
             };
 
-            let lambda_event = serde_json::json!({ "Records": records });
+            let (kept, _filtered) =
+                esm::partition_by_filter(&records, filter_criteria.as_ref(), |_| None);
+            if kept.is_empty() {
+                set_last_result(&state, &uuid, "OK");
+                continue;
+            }
+
+            let lambda_event = serde_json::json!({ "Records": kept });
             let invoke_input = serde_json::json!({
-                "FunctionName": function_name,
+                "FunctionName": function_arn,
                 "Payload": serde_json::to_string(&lambda_event).unwrap_or_default(),
                 "InvocationType": "Event",
             });
-            let lambda_ctx = RequestContext::new("lambda", region);
+            let lambda_ctx = RequestContext::new_with_account("lambda", &region, &account_id);
             match lambda.handle("Invoke", invoke_input, &lambda_ctx).await {
-                Ok(_) => debug!(
-                    function = %function_name,
-                    stream = %stream_name,
-                    count = records.len(),
-                    "Kinesis->Lambda: delivered batch"
-                ),
-                Err(e) => warn!(
-                    function = %function_name,
-                    stream = %stream_name,
-                    error = %e.message,
-                    "Kinesis->Lambda: Lambda invocation failed"
-                ),
+                Ok(_) => {
+                    debug!(
+                        function = %function_arn,
+                        stream = stream_name,
+                        account = %account_id,
+                        region = %region,
+                        count = kept.len(),
+                        "Kinesis->Lambda: delivered batch"
+                    );
+                    set_last_result(&state, &uuid, "OK");
+                }
+                Err(e) => {
+                    warn!(
+                        function = %function_arn,
+                        stream = stream_name,
+                        error = %e.message,
+                        "Kinesis->Lambda: invocation failed"
+                    );
+                    if let Some(dlq) = &dlq_arn {
+                        esm::route_to_destination(
+                            services,
+                            dlq,
+                            &lambda_event,
+                            &account_id,
+                            &region,
+                        )
+                        .await;
+                    }
+                    set_last_result(
+                        &state,
+                        &uuid,
+                        &format!("PROBLEM: invoke failed: {}", e.message),
+                    );
+                }
             }
         }
     }

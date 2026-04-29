@@ -44,6 +44,25 @@ impl RequestContext {
         }
     }
 
+    /// Like [`new`] but with an explicit account id — used by background
+    /// pollers that fan out across every (account, region) pair.
+    pub fn new_with_account(
+        service: impl Into<String>,
+        region: impl Into<String>,
+        account_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            region: region.into(),
+            service: service.into(),
+            access_key: None,
+            request_id: uuid::Uuid::new_v4().to_string(),
+            method: "POST".to_string(),
+            uri: "/".to_string(),
+            event_bus: None,
+        }
+    }
+
     /// Returns an ARN prefix for this account and region.
     /// e.g., "arn:aws:s3:us-east-1:000000000000"
     pub fn arn_prefix(&self, service: &str) -> String {

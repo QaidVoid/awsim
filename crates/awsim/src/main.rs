@@ -187,7 +187,9 @@ async fn main() -> Result<()> {
         );
         authz.resource_policy_lookups.insert(
             "lambda".to_string(),
-            Arc::new(awsim_lambda::LambdaResourcePolicyLookup::new(lambda_store)),
+            Arc::new(awsim_lambda::LambdaResourcePolicyLookup::new(
+                lambda_store.clone(),
+            )),
         );
         authz.scp_lookup = Some(Arc::new(awsim_organizations::OrganizationsScpLookup::new(
             organizations_store,
@@ -291,19 +293,22 @@ async fn main() -> Result<()> {
 
     // Spawn SQS->Lambda poller: periodically polls SQS queues for event source mappings.
     let poll_services = Arc::clone(&state.services);
+    let sqs_lambda_store = lambda_store.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-            integrations::poll_sqs_event_sources(&poll_services).await;
+            integrations::poll_sqs_event_sources(&poll_services, &sqs_lambda_store).await;
         }
     });
 
     // Spawn Kinesis->Lambda poller: periodically polls Kinesis streams for event source mappings.
     let kinesis_poll_services = Arc::clone(&state.services);
+    let kinesis_lambda_store = lambda_store.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-            integrations::poll_kinesis_event_sources(&kinesis_poll_services).await;
+            integrations::poll_kinesis_event_sources(&kinesis_poll_services, &kinesis_lambda_store)
+                .await;
         }
     });
 
