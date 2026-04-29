@@ -89,6 +89,9 @@ jobs:
   release:
     name: Create Release
     needs: [build, changelog]
+    # Ship whatever artifacts built. A single failed target (e.g. Windows)
+    # shouldn't block the entire release.
+    if: ${{ !cancelled() && needs.changelog.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -96,7 +99,15 @@ jobs:
           merge-multiple: true
 
       - name: Generate checksums
-        run: sha256sum awsim-*.tar.xz awsim-*.zip > SHA256SUMS
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(awsim-*.tar.xz awsim-*.zip)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No artifacts to release" >&2
+            exit 1
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS
 
       - name: Create release
         uses: softprops/action-gh-release@v2
