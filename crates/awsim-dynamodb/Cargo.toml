@@ -21,4 +21,7 @@ uuid = { workspace = true }
 # at the operation handler layer.
 rusqlite = { version = "0.32", features = ["bundled", "serde_json"] }
 refinery = { version = "0.8", features = ["rusqlite"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+tempfile = "3"
 tokio = { workspace = true }

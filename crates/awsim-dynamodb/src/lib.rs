@@ -28,20 +28,37 @@ use state::{DynamoState, DynamoStateSnapshot, Table};
 pub struct DynamoDbService {
     store: AccountRegionStore<DynamoState>,
     sqlite: Arc<SqliteStore>,
+    /// Holds the per-process `TempDir` for the no-data-dir case so
+    /// `dynamodb.db` + `.db-wal` + `.db-shm` are deleted when the
+    /// service drops. `None` when persistent storage is in use — the
+    /// user owns that directory.
+    _tempdir: Option<tempfile::TempDir>,
 }
 
 impl DynamoDbService {
     /// Ephemeral in-process store. Useful for tests and `awsim` runs
-    /// that don't pass `--data-dir` (the SQLite file goes under
-    /// `std::env::temp_dir()` and is cleaned up by the OS).
+    /// that don't pass `--data-dir` — files live in a `TempDir` that
+    /// the OS cleans up on graceful shutdown via the Drop impl.
     pub fn new() -> Self {
-        let id = uuid::Uuid::new_v4();
-        let path = std::env::temp_dir().join(format!("awsim-ddb-{id}.db"));
-        let sqlite = SqliteStore::open(path)
+        // Best-effort cleanup of leaked legacy temp files from prior
+        // crashes / SIGKILLs / pre-tempdir versions of awsim. The old
+        // layout was a single `awsim-ddb-{uuid}.db` (+ .db-wal / .db-shm)
+        // directly in $TMPDIR; the new layout is a self-cleaning
+        // tempdir, so anything matching the old pattern is safe to
+        // remove here.
+        sweep_legacy_temp_files();
+
+        let dir = tempfile::Builder::new()
+            .prefix("awsim-ddb-")
+            .tempdir()
+            .expect("creating ephemeral DynamoDB tempdir should not fail");
+        let path = dir.path().join("dynamodb.db");
+        let sqlite = SqliteStore::open(&path)
             .expect("opening ephemeral DynamoDB sqlite store should not fail");
         Self {
             store: AccountRegionStore::new(),
             sqlite: Arc::new(sqlite),
+            _tempdir: Some(dir),
         }
     }
 
@@ -67,7 +84,21 @@ impl DynamoDbService {
         Self {
             store: AccountRegionStore::new(),
             sqlite: Arc::new(sqlite),
+            _tempdir: None,
         }
+    }
+
+    /// Reclaim disk space after heavy DELETE / UPDATE churn — exposed
+    /// so the awsim binary can wire it to a CLI / admin endpoint.
+    pub fn vacuum(&self) -> Result<(), AwsError> {
+        self.sqlite.vacuum()
+    }
+
+    /// If this instance owns an ephemeral tempdir (no `--data-dir`
+    /// case), return its path so the shutdown handler can remove it
+    /// before calling `process::exit`. Drop wouldn't run otherwise.
+    pub fn tempdir_path(&self) -> Option<&Path> {
+        self._tempdir.as_ref().map(|d| d.path())
     }
 
     fn get_state(&self, ctx: &RequestContext) -> Arc<DynamoState> {
@@ -78,6 +109,51 @@ impl DynamoDbService {
 impl Default for DynamoDbService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Remove any leftover `awsim-ddb-{uuid}.db[-wal|-shm]?` files in
+/// the system temp directory. These came from older awsim builds
+/// (pre-tempdir) that didn't clean up on shutdown — once the
+/// process owning them is gone, the files are pure garbage.
+///
+/// Best-effort: failure to read $TMPDIR or unlink any individual
+/// file is logged at debug level but never blocks startup.
+fn sweep_legacy_temp_files() {
+    let tmp = std::env::temp_dir();
+    let entries = match std::fs::read_dir(&tmp) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut removed = 0u64;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        // Old pattern: `awsim-ddb-{uuid}.db` plus optional `-wal` / `-shm`.
+        // The new tempdir-based pattern is `awsim-ddb-{random}/...` —
+        // a directory, not a regular file — so this filter doesn't
+        // accidentally delete a live tempdir.
+        if !name_str.starts_with("awsim-ddb-") {
+            continue;
+        }
+        if !(name_str.ends_with(".db")
+            || name_str.ends_with(".db-wal")
+            || name_str.ends_with(".db-shm"))
+        {
+            continue;
+        }
+        let Ok(ft) = entry.file_type() else { continue };
+        if !ft.is_file() {
+            continue;
+        }
+        if std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        debug!(removed, "cleaned up legacy DynamoDB tmp files");
     }
 }
 

@@ -15,6 +15,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use r2d2::PooledConnection;
+use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::Value;
 
@@ -29,32 +31,64 @@ mod embedded_migrations {
 /// while keeping the row width modest.
 pub const MAX_GSI_SLOTS: usize = 5;
 
+/// Connection pool size. WAL gives unlimited concurrent readers and
+/// one writer at a time, so a small pool covers typical concurrent
+/// load while keeping per-connection memory (cache + mmap) bounded.
+const POOL_SIZE: u32 = 8;
+
+/// Per-connection cache size in KiB (negative = absolute KiB rather
+/// than pages). 8 MiB × pool_size = ~64 MiB total cache budget.
+const CACHE_SIZE_KIB: i64 = -8 * 1024;
+
+/// Per-connection mmap window. 64 MiB × 8 connections shares OS-level
+/// page cache, so this is more like a per-DB cap. Lazy mapping —
+/// only resident as you touch DB pages.
+const MMAP_SIZE_BYTES: i64 = 64 * 1024 * 1024;
+
+type Pool = r2d2::Pool<SqliteConnectionManager>;
+pub(crate) type Conn = PooledConnection<SqliteConnectionManager>;
+
 /// One sqlite-backed store per AWSim instance. All accounts/regions/
 /// tables share the same database, partitioned by columns. Cheap to
-/// clone — internal connection management is via thread-local handles
-/// in rusqlite.
+/// clone — backed by an Arc'd r2d2 connection pool.
 #[derive(Clone)]
 pub struct SqliteStore {
     inner: Arc<Inner>,
 }
 
 struct Inner {
-    /// Path to the sqlite file (or `":memory:"` for ephemeral).
+    /// Path to the sqlite file. Kept for diagnostics + VACUUM.
     db_path: PathBuf,
+    /// Pooled SQLite connections — readers never block each other in
+    /// WAL mode, and we keep the pool small so per-connection memory
+    /// (cache + mmap) stays bounded.
+    pool: Pool,
 }
 
 impl SqliteStore {
     /// Open (or create) the sqlite file at `path` and run pending
-    /// migrations. Use `":memory:"` for an ephemeral store — useful in
-    /// tests and when AWSim is started without `--data-dir`.
+    /// migrations. Pre-builds the connection pool so PRAGMAs are
+    /// applied once per long-lived connection rather than per query.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, AwsError> {
         let db_path = path.into();
-        let mut conn = open_conn(&db_path)?;
-        embedded_migrations::migrations::runner()
-            .run(&mut conn)
-            .map_err(|e| AwsError::internal(format!("DynamoDB migration failed: {e}")))?;
+        let manager = SqliteConnectionManager::file(&db_path).with_init(apply_pragmas);
+        let pool = r2d2::Pool::builder()
+            .max_size(POOL_SIZE)
+            .build(manager)
+            .map_err(|e| AwsError::internal(format!("DynamoDB pool init failed: {e}")))?;
+        // Migrations need a fresh `&mut Connection`. Pull one from the
+        // pool, run the runner, then drop it back so the rest of the
+        // pool inherits the post-migration schema.
+        {
+            let mut conn = pool
+                .get()
+                .map_err(|e| AwsError::internal(format!("DynamoDB pool acquire failed: {e}")))?;
+            embedded_migrations::migrations::runner()
+                .run(&mut *conn)
+                .map_err(|e| AwsError::internal(format!("DynamoDB migration failed: {e}")))?;
+        }
         Ok(Self {
-            inner: Arc::new(Inner { db_path }),
+            inner: Arc::new(Inner { db_path, pool }),
         })
     }
 
@@ -71,8 +105,26 @@ impl SqliteStore {
         Self::open(path)
     }
 
-    fn conn(&self) -> Result<Connection, AwsError> {
-        open_conn(&self.inner.db_path)
+    /// Path to the underlying sqlite file. Used by VACUUM and tests.
+    pub fn db_path(&self) -> &std::path::Path {
+        &self.inner.db_path
+    }
+
+    /// Reclaim disk space after heavy DELETE / UPDATE churn. Cheap
+    /// when the file is already compact; expensive when it's not, so
+    /// expose this as an explicit admin operation rather than running
+    /// it on every shutdown.
+    pub fn vacuum(&self) -> Result<(), AwsError> {
+        let conn = self.conn()?;
+        conn.execute("VACUUM", []).map_err(sqlite_err)?;
+        Ok(())
+    }
+
+    fn conn(&self) -> Result<Conn, AwsError> {
+        self.inner
+            .pool
+            .get()
+            .map_err(|e| AwsError::internal(format!("DynamoDB pool acquire failed: {e}")))
     }
 
     // -----------------------------------------------------------------
@@ -621,33 +673,22 @@ impl<'tx> ReadTx<'tx> {
     }
 }
 
-fn open_conn(path: &PathBuf) -> Result<Connection, AwsError> {
-    let conn = if path.as_os_str() == ":memory:" {
-        Connection::open_in_memory()
-    } else {
-        Connection::open(path)
-    }
-    .map_err(sqlite_err)?;
-    // Apply PRAGMAs per-connection. `journal_mode = WAL` and
-    // `synchronous = NORMAL` are sticky once set on the database, but
-    // re-issuing them is cheap and harmless. The rest are session
-    // PRAGMAs that need to be set on every fresh connection.
-    //
-    // `:memory:` databases can't switch journal mode (WAL needs a file),
-    // so we skip those PRAGMAs there.
-    if path.as_os_str() != ":memory:" {
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(sqlite_err)?;
-        conn.pragma_update(None, "synchronous", "NORMAL")
-            .map_err(sqlite_err)?;
-    }
-    conn.execute_batch(
+/// Connection initialiser run by the r2d2 pool whenever it spins up
+/// a new connection. Applies the same PRAGMAs the legacy per-query
+/// `open_conn` did, but with a leaner memory profile — connections
+/// are long-lived now, so cache + mmap budgets multiply by pool size
+/// rather than concurrent-query count.
+fn apply_pragmas(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
+    // WAL mode is sticky on the file, but re-setting per-connection is
+    // cheap and ensures synchronous = NORMAL applies to every reader.
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    conn.execute_batch(&format!(
         "PRAGMA temp_store = MEMORY;
-         PRAGMA mmap_size  = 268435456;
-         PRAGMA cache_size = -65536;",
-    )
-    .map_err(sqlite_err)?;
-    Ok(conn)
+         PRAGMA mmap_size  = {MMAP_SIZE_BYTES};
+         PRAGMA cache_size = {CACHE_SIZE_KIB};"
+    ))?;
+    Ok(())
 }
 
 fn sqlite_err(e: rusqlite::Error) -> AwsError {

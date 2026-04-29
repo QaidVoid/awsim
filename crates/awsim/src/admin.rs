@@ -418,3 +418,31 @@ pub async fn chaos_stats(State(engine): State<Arc<ChaosEngine>>) -> Json<Value> 
         "recent": engine.recent_injections(),
     }))
 }
+
+// ---------------------------------------------------------------------------
+// DynamoDB admin — VACUUM
+// ---------------------------------------------------------------------------
+
+use awsim_dynamodb::DynamoDbService;
+
+/// POST /_awsim/admin/dynamodb/vacuum — reclaim disk space after
+/// heavy DELETE / UPDATE churn. Runs SQLite VACUUM, which can take
+/// time on large databases, so it's exposed as an explicit admin
+/// op rather than running on every shutdown.
+pub async fn ddb_vacuum(State(svc): State<Arc<DynamoDbService>>) -> Response {
+    let svc = Arc::clone(&svc);
+    let result = tokio::task::spawn_blocking(move || svc.vacuum()).await;
+    match result {
+        Ok(Ok(())) => Json(json!({"status": "ok"})).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "VacuumFailed", "message": e.message})),
+        )
+            .into_response(),
+        Err(join) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "JoinError", "message": join.to_string()})),
+        )
+            .into_response(),
+    }
+}

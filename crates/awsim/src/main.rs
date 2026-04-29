@@ -98,6 +98,13 @@ enum Command {
         #[command(subcommand)]
         command: SnapshotCommand,
     },
+    /// Reclaim disk space in the DynamoDB SQLite store. Run after
+    /// heavy DELETE / UPDATE churn — the file shrinks back to live
+    /// data size.
+    Vacuum {
+        #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
+        endpoint: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -234,6 +241,9 @@ async fn main() -> Result<()> {
             Command::Snapshot { command } => {
                 return snapshot_cli::run(command).await;
             }
+            Command::Vacuum { endpoint } => {
+                return run_vacuum(&endpoint).await;
+            }
         }
     }
 
@@ -269,6 +279,7 @@ async fn main() -> Result<()> {
         rds_service,
         mq_service,
         memorydb_service,
+        dynamodb_service,
     ) = register_services(
         &mut state,
         &cli.account_id,
@@ -374,6 +385,38 @@ async fn main() -> Result<()> {
         )));
     }
 
+    // Always-on signal handler that removes the DynamoDB tempdir
+    // before exit. The richer save-snapshots-on-shutdown handler
+    // below is gated on `--data-dir` and supersedes this one — it
+    // takes care of the same tempdir cleanup in its exit path.
+    if cli.data_dir.is_none() {
+        let dynamodb_for_cleanup = Arc::clone(&dynamodb_service);
+        tokio::spawn(async move {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{SignalKind, signal};
+                let mut sigint = signal(SignalKind::interrupt()).expect("install SIGINT");
+                let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM");
+                tokio::select! {
+                    _ = sigint.recv() => {}
+                    _ = sigterm.recv() => {}
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                tokio::signal::ctrl_c().await.ok();
+            }
+            if let Some(path) = dynamodb_for_cleanup.tempdir_path() {
+                let path = path.to_path_buf();
+                if let Err(e) = std::fs::remove_dir_all(&path) {
+                    warn!(path = %path.display(), error = %e, "Failed to remove DynamoDB tempdir on shutdown");
+                }
+            }
+            info!("Exiting.");
+            std::process::exit(0);
+        });
+    }
+
     // Persistence: restore snapshots if --data-dir was provided.
     if let Some(ref data_dir) = cli.data_dir {
         let pm = PersistenceManager::new(data_dir);
@@ -431,6 +474,7 @@ async fn main() -> Result<()> {
         let pm_shutdown = Arc::new(PersistenceManager::new(data_dir));
         let billing_for_shutdown = Arc::clone(&billing_meter);
         let chaos_for_shutdown = Arc::clone(&state.chaos);
+        let dynamodb_for_shutdown = Arc::clone(&dynamodb_service);
         tokio::spawn(async move {
             #[cfg(unix)]
             {
@@ -461,6 +505,16 @@ async fn main() -> Result<()> {
             {
                 warn!(error = %e, "Failed to save chaos snapshot on shutdown");
             }
+            // `process::exit` skips Drop, so the DynamoDB tempdir
+            // wouldn't get removed automatically. Take it out by hand
+            // when the service owns one (no-data-dir case).
+            if let Some(path) = dynamodb_for_shutdown.tempdir_path() {
+                let path = path.to_path_buf();
+                if let Err(e) = std::fs::remove_dir_all(&path) {
+                    warn!(path = %path.display(), error = %e, "Failed to remove DynamoDB tempdir on shutdown");
+                }
+            }
+
             info!("Snapshots saved. Exiting.");
             std::process::exit(0);
         });
@@ -747,6 +801,15 @@ async fn main() -> Result<()> {
         )
         .with_state(Arc::clone(&state.chaos));
 
+    // DynamoDB admin sub-router. Carries an Arc<DynamoDbService> so
+    // we can run VACUUM without going through the gateway protocol path.
+    let ddb_admin_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/admin/dynamodb/vacuum",
+            axum::routing::post(admin::ddb_vacuum),
+        )
+        .with_state(Arc::clone(&dynamodb_service));
+
     // Named-snapshot sub-router. Bundles ServiceHandler state +
     // billing + chaos under `{data_dir}/named-snapshots/{name}/`.
     let snapshot_state = Arc::new(named_snapshots::SnapshotState {
@@ -777,6 +840,7 @@ async fn main() -> Result<()> {
         .merge(billing_router)
         .merge(chaos_router)
         .merge(snapshot_router)
+        .merge(ddb_admin_router)
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with
@@ -851,6 +915,26 @@ async fn main() -> Result<()> {
 /// LoadShed + ConcurrencyLimit stack is `tower::load_shed::error::Overloaded`
 /// — convert it to a friendly 503 with a hint. Anything else is unexpected
 /// and surfaces as 500.
+/// One-shot client for `awsim vacuum` — calls the admin endpoint
+/// on a running awsim instance.
+async fn run_vacuum(endpoint: &str) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()?;
+    let url = format!(
+        "{}/_awsim/admin/dynamodb/vacuum",
+        endpoint.trim_end_matches('/')
+    );
+    let resp = client.post(&url).send().await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("HTTP {status}: {text}");
+    }
+    println!("DynamoDB VACUUM complete");
+    Ok(())
+}
+
 async fn handle_overload_error(err: BoxError) -> impl IntoResponse {
     if err.is::<tower::load_shed::error::Overloaded>() {
         warn!("Request rejected — concurrency limit reached");
@@ -1136,6 +1220,7 @@ type RegisteredServices = (
     Arc<awsim_rds::RdsService>,
     Arc<awsim_mq::MqService>,
     Arc<awsim_memorydb::MemoryDbService>,
+    Arc<awsim_dynamodb::DynamoDbService>,
 );
 
 /// Register all services and return handles needed by the router:
@@ -1180,6 +1265,7 @@ fn register_services(
         Some(dir) => awsim_dynamodb::DynamoDbService::with_data_dir(dir),
         None => awsim_dynamodb::DynamoDbService::new(),
     });
+    let dynamodb_clone = Arc::clone(&dynamodb);
     state.register(dynamodb, vec![]);
 
     let s3 = match data_dir {
@@ -1533,6 +1619,7 @@ fn register_services(
         rds_clone,
         mq_clone,
         memorydb_clone,
+        dynamodb_clone,
     )
 }
 
