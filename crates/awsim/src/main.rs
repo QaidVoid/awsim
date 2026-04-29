@@ -1039,6 +1039,13 @@ fn register_services(
     };
     state.register(Arc::new(efs), efs_routes);
 
+    let backup = awsim_backup::BackupService::new();
+    let backup_routes = {
+        use awsim_core::ServiceHandler;
+        backup.routes()
+    };
+    state.register(Arc::new(backup), backup_routes);
+
     // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
