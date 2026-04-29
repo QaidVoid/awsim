@@ -269,6 +269,26 @@ pub struct EventSourceMapping {
     pub enabled: bool,
     pub state: String,
     pub last_modified: String,
+    /// TRIM_HORIZON | LATEST | AT_TIMESTAMP — only meaningful for Kinesis/DDB streams.
+    pub starting_position: Option<String>,
+    pub starting_position_timestamp: Option<f64>,
+    pub maximum_batching_window_in_seconds: u32,
+    pub maximum_record_age_in_seconds: Option<i32>,
+    pub bisect_batch_on_function_error: bool,
+    pub maximum_retry_attempts: Option<i32>,
+    pub parallelization_factor: Option<u32>,
+    pub tumbling_window_in_seconds: Option<u32>,
+    /// Raw FilterCriteria JSON: { "Filters": [{ "Pattern": "..." }, ...] }.
+    pub filter_criteria: Option<serde_json::Value>,
+    /// DestinationConfig.OnFailure.Destination ARN — receives failed batches.
+    pub destination_on_failure: Option<String>,
+    pub function_response_types: Vec<String>,
+    /// Last poll result, surfaced via Get/List for diagnostics.
+    /// "OK", "PROBLEM: <message>", or "No records processed".
+    pub last_processing_result: String,
+    /// Per-shard iterator state for Kinesis/DDB-stream pollers so we don't
+    /// re-deliver records on every tick. Keyed by shard id.
+    pub shard_iterators: HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

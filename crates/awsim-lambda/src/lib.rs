@@ -238,6 +238,12 @@ impl ServiceHandler for LambdaService {
                 operation: "DeleteEventSourceMapping",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/2015-03-31/event-source-mappings/{UUID}",
+                operation: "UpdateEventSourceMapping",
+                required_query_param: None,
+            },
             // Layers
             RouteDefinition {
                 method: "POST",
@@ -464,6 +470,9 @@ impl ServiceHandler for LambdaService {
             }
             "ListEventSourceMappings" => {
                 operations::event_source_mappings::list_event_source_mappings(&state, &input, ctx)
+            }
+            "UpdateEventSourceMapping" => {
+                operations::event_source_mappings::update_event_source_mapping(&state, &input, ctx)
             }
 
             // Layers
