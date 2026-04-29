@@ -26,6 +26,9 @@
 		ts: number;
 		running_cost_usd: number;
 		projected_monthly_cost_usd: number;
+		// Per-service cost snapshot at this sample time. Used to compute
+		// "top mover" — which service grew fastest in the recent window.
+		services?: Record<string, number>;
 	}
 
 	// AWS publishes verbose service names ("Amazon Simple Storage
@@ -108,6 +111,18 @@
 	let editingBudget = $state(false);
 	let budgetInputEl: HTMLInputElement | null = $state(null);
 
+	// Highest budget-fraction threshold we've already alerted on,
+	// persisted so a refresh doesn't re-fire stale toasts. Reset to 0
+	// when the user changes their budget upward (more headroom) or
+	// when projected cost drops below the lowest threshold.
+	const ALERT_KEY = 'awsim-billing-alert-threshold';
+	const BUDGET_ALERT_THRESHOLDS: Array<{ pct: number; level: 'info' | 'warning' | 'error' }> = [
+		{ pct: 0.5, level: 'info' },
+		{ pct: 0.8, level: 'warning' },
+		{ pct: 1.0, level: 'error' },
+	];
+	let lastAlertedThreshold = $state(0);
+
 	async function load() {
 		loading = true;
 		try {
@@ -115,6 +130,7 @@
 			error = null;
 			lastFetched = Date.now();
 			recordHistory(report);
+			checkBudgetAlert(report);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load billing report';
 			toast.error(error);
@@ -123,14 +139,42 @@
 		}
 	}
 
+	function checkBudgetAlert(r: BillingReport) {
+		if (budgetUsd <= 0 || r.projected_monthly_cost_usd <= 0) return;
+		const fraction = r.projected_monthly_cost_usd / budgetUsd;
+		// Find the highest threshold the projection has now crossed.
+		let crossed: typeof BUDGET_ALERT_THRESHOLDS[number] | null = null;
+		for (const t of BUDGET_ALERT_THRESHOLDS) {
+			if (fraction >= t.pct) crossed = t;
+		}
+		if (!crossed) return;
+		if (crossed.pct <= lastAlertedThreshold) return;
+		const fmt = fmtUsd(r.projected_monthly_cost_usd);
+		const budget = fmtBudget(budgetUsd);
+		const pct = Math.round(fraction * 100);
+		const msg = `Projected monthly bill ${fmt} — ${pct}% of your ${budget} budget`;
+		if (crossed.level === 'error') toast.error(msg);
+		else if (crossed.level === 'warning') toast.warning(msg);
+		else toast.info(msg);
+		lastAlertedThreshold = crossed.pct;
+		try {
+			localStorage.setItem(ALERT_KEY, String(crossed.pct));
+		} catch {
+			/* ignore */
+		}
+	}
+
 	function recordHistory(r: BillingReport) {
 		const now = Date.now();
+		const services: Record<string, number> = {};
+		for (const s of r.services) services[s.service] = s.total_cost_usd;
 		const next = [
 			...history,
 			{
 				ts: now,
 				running_cost_usd: r.running_cost_usd,
 				projected_monthly_cost_usd: r.projected_monthly_cost_usd,
+				services,
 			},
 		].filter((p) => now - p.ts <= HISTORY_WINDOW_MS);
 		history = next;
@@ -166,6 +210,11 @@
 				const parsed = Number(saved);
 				if (Number.isFinite(parsed) && parsed > 0) budgetUsd = parsed;
 			}
+			const alertSaved = localStorage.getItem(ALERT_KEY);
+			if (alertSaved) {
+				const parsed = Number(alertSaved);
+				if (Number.isFinite(parsed)) lastAlertedThreshold = parsed;
+			}
 		} catch {
 			/* ignore */
 		}
@@ -190,6 +239,15 @@
 		if (Number.isFinite(value) && value > 0) {
 			budgetUsd = Math.round(value);
 			persistBudget();
+			// Raising the budget can drop us below thresholds we'd
+			// already alerted on; reset so future increases re-arm
+			// the alerts at the new budget level.
+			lastAlertedThreshold = 0;
+			try {
+				localStorage.setItem(ALERT_KEY, '0');
+			} catch {
+				/* ignore */
+			}
 		}
 	}
 
@@ -343,6 +401,48 @@
 		return budgetUsd / dailyBurn;
 	});
 
+	/// "Top mover" — which service has grown the most (in absolute
+	/// USD) over the most recent ~5 minutes of history. Compares the
+	/// latest sample against the oldest sample within the window.
+	let topMover = $derived.by(() => {
+		if (history.length < 2 || !report) return null;
+		const TOP_MOVER_WINDOW_MS = 5 * 60 * 1000;
+		const now = history[history.length - 1].ts;
+		// Pick the oldest sample within our window (or the very first
+		// if we don't have 5 minutes of data yet).
+		let oldest = history[0];
+		for (const p of history) {
+			if (now - p.ts <= TOP_MOVER_WINDOW_MS) {
+				oldest = p;
+				break;
+			}
+		}
+		const latest = history[history.length - 1];
+		const elapsedMs = latest.ts - oldest.ts;
+		if (elapsedMs <= 0 || !latest.services || !oldest.services) return null;
+		let bestService = '';
+		let bestGrowth = 0;
+		for (const [svc, cost] of Object.entries(latest.services)) {
+			const prev = oldest.services[svc] ?? 0;
+			const delta = cost - prev;
+			if (delta > bestGrowth) {
+				bestGrowth = delta;
+				bestService = svc;
+			}
+		}
+		if (bestGrowth <= 0 || !bestService) return null;
+		const svcReport = report.services.find((s) => s.service === bestService);
+		const name = svcReport ? brandName(svcReport) : bestService;
+		const tint = tintFor(bestService);
+		return {
+			service: bestService,
+			name,
+			tint,
+			growthUsd: bestGrowth,
+			elapsedMins: Math.max(elapsedMs / 60000, 0.1),
+		};
+	});
+
 	let bankruptcyText = $derived.by(() => {
 		if (daysToBudget == null) return '∞';
 		if (daysToBudget >= 365 * 100) return '∞';
@@ -409,8 +509,13 @@
 	let chartPaths = $derived.by(() => {
 		if (history.length < 2) return null;
 		const minTs = history[0].ts;
-		const maxTs = Math.max(history[history.length - 1].ts, minTs + 1);
-		const span = maxTs - minTs;
+		const last = history[history.length - 1];
+		// Forecast horizon: extend the X axis ~25% past the last
+		// observation so the projection line has somewhere to live.
+		const FORECAST_FRACTION = 0.25;
+		const observedSpan = Math.max(last.ts - minTs, 1);
+		const projectTs = last.ts + observedSpan * FORECAST_FRACTION;
+		const span = projectTs - minTs;
 		const maxCost = Math.max(...history.map((p) => p.running_cost_usd), 1e-12);
 		const xOf = (ts: number) => ((ts - minTs) / span) * CHART_W;
 		const yOf = (cost: number) => CHART_H - (cost / maxCost) * (CHART_H - 4);
@@ -418,10 +523,42 @@
 			.map((p) => `${xOf(p.ts).toFixed(2)},${yOf(p.running_cost_usd).toFixed(2)}`)
 			.join(' L ');
 		const stroke = `M ${pts}`;
-		const area = `M ${xOf(minTs).toFixed(2)},${CHART_H} L ${pts} L ${xOf(maxTs).toFixed(2)},${CHART_H} Z`;
-		const last = history[history.length - 1];
+		const area = `M ${xOf(minTs).toFixed(2)},${CHART_H} L ${pts} L ${xOf(last.ts).toFixed(2)},${CHART_H} Z`;
 		const lastPoint = { x: xOf(last.ts), y: yOf(last.running_cost_usd) };
-		return { stroke, area, maxCost, minTs, maxTs, lastPoint };
+		// Linear-regress the most recent ~10 points to project a
+		// short-horizon trend line. Anything further would lie about
+		// how stable the workload is.
+		const tail = history.slice(-Math.min(10, history.length));
+		let projection: { stroke: string; endY: number; endCost: number } | null = null;
+		if (tail.length >= 2) {
+			let sumX = 0,
+				sumY = 0,
+				sumXY = 0,
+				sumXX = 0;
+			for (const p of tail) {
+				const x = (p.ts - tail[0].ts) / 1000;
+				const y = p.running_cost_usd;
+				sumX += x;
+				sumY += y;
+				sumXY += x * y;
+				sumXX += x * x;
+			}
+			const n = tail.length;
+			const denom = n * sumXX - sumX * sumX;
+			const slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
+			const intercept = (sumY - slope * sumX) / n;
+			// Extrapolate from the last sample's x to the forecast x.
+			const xLast = (last.ts - tail[0].ts) / 1000;
+			const xEnd = (projectTs - tail[0].ts) / 1000;
+			const yEndCost = Math.max(0, intercept + slope * xEnd);
+			// Path from last data point to projected endpoint.
+			projection = {
+				stroke: `M ${xOf(last.ts).toFixed(2)},${yOf(intercept + slope * xLast).toFixed(2)} L ${xOf(projectTs).toFixed(2)},${yOf(yEndCost).toFixed(2)}`,
+				endY: yOf(yEndCost),
+				endCost: yEndCost,
+			};
+		}
+		return { stroke, area, maxCost, minTs, maxTs: last.ts, lastPoint, projection };
 	});
 
 	function fmtRelative(ts: number): string {
@@ -521,6 +658,16 @@
 						over {fmtElapsed(report.elapsed_secs)}
 					</div>
 				{/if}
+				{#if topMover}
+					<div class="mt-3 flex items-center gap-1.5 text-[11px]">
+						<span class="size-2 shrink-0 rounded-full" style="background-color: {topMover.tint};"></span>
+						<span class="truncate text-muted-foreground">Top mover</span>
+						<span class="truncate font-medium">{topMover.name}</span>
+						<span class="ml-auto font-mono tabular-nums text-foreground">
+							+{fmtUsd(topMover.growthUsd, { precise: true })}
+						</span>
+					</div>
+				{/if}
 			</div>
 
 			<div
@@ -601,6 +748,9 @@
 					<div class="text-[10px] text-muted-foreground">
 						last {Math.round(HISTORY_WINDOW_MS / 60000)} min
 						· peak {fmtUsd(chartPaths.maxCost, { precise: true })}
+						{#if chartPaths.projection}
+							· trend → {fmtUsd(chartPaths.projection.endCost, { precise: true })}
+						{/if}
 					</div>
 				</div>
 				<div
@@ -643,6 +793,18 @@
 						stroke-linecap="round"
 						vector-effect="non-scaling-stroke"
 					/>
+					{#if chartPaths.projection}
+						<path
+							d={chartPaths.projection.stroke}
+							fill="none"
+							stroke="oklch(70% 0.15 25)"
+							stroke-width="1.5"
+							stroke-linecap="round"
+							stroke-dasharray="4 3"
+							opacity="0.55"
+							vector-effect="non-scaling-stroke"
+						/>
+					{/if}
 					<!-- Most-recent-value dot anchors the eye on the curve tip. -->
 					{#if chartPaths.lastPoint}
 						<circle
