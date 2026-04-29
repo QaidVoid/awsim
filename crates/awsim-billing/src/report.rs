@@ -37,6 +37,13 @@ pub struct ServiceCost {
     /// (Firehose, CloudWatch Logs etc.). Zero for services that bill
     /// per-request only.
     pub data_ingest_cost_usd: f64,
+    /// Accumulated point-in-time storage cost (S3 / DDB / Lambda code).
+    /// Sampled by a periodic poll loop; zero for services that don't
+    /// track at-rest storage.
+    pub storage_cost_usd: f64,
+    /// Most recent sampled storage size in bytes — surfaced for the
+    /// dashboard's "currently storing X" line.
+    pub storage_bytes: u64,
     pub dimensions: Vec<DimensionCost>,
 }
 
@@ -53,6 +60,10 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
     // region) bucket. Multi-account/region accumulation is fine for the
     // dashboard total — attribution is a follow-up.
     let mut aggregate: BTreeMap<String, BTreeMap<String, OpCounterSnapshot>> = BTreeMap::new();
+    // Storage aggregation: sum cost (micros) + take the max sampled
+    // bytes across buckets (so the displayed "currently storing X"
+    // matches the largest current footprint, not a stale snapshot).
+    let mut storage_agg: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     let mut earliest_start: u64 = 0;
 
     for ((_acct, _region), state) in store.iter_all() {
@@ -69,6 +80,11 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
                 entry.bytes_out += snap.bytes_out;
                 entry.error_count += snap.error_count;
             }
+        }
+        for (svc, st) in state.iter_storage() {
+            let entry = storage_agg.entry(svc).or_default();
+            entry.0 += st.accumulated_cost_picos;
+            entry.1 = entry.1.max(st.last_sample_bytes);
         }
     }
 
@@ -163,7 +179,11 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
         let transfer_cost = (svc_bytes_out as f64 / BYTES_PER_GB) * transfer_rate;
         let ingest_rate = pricing.and_then(|p| p.data_ingest_per_gb).unwrap_or(0.0);
         let ingest_cost = (svc_bytes_in as f64 / BYTES_PER_GB) * ingest_rate;
-        let svc_total = svc_request_cost + transfer_cost + ingest_cost;
+        let (storage_cost_usd, storage_bytes) = storage_agg
+            .remove(&svc_name)
+            .map(|(picos, bytes)| (picos as f64 / 1e12, bytes))
+            .unwrap_or((0.0, 0));
+        let svc_total = svc_request_cost + transfer_cost + ingest_cost + storage_cost_usd;
         total_cost += svc_total;
 
         services_out.push(ServiceCost {
@@ -177,6 +197,51 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             error_count: svc_error_count,
             data_transfer_out_cost_usd: transfer_cost,
             data_ingest_cost_usd: ingest_cost,
+            storage_cost_usd,
+            storage_bytes,
+            dimensions: dim_buckets,
+        });
+    }
+
+    // Storage-only services — anything in storage_agg that didn't
+    // match a service in the request aggregate. A bucket that's been
+    // sitting idle but storing data still costs money.
+    for (svc_name, (cost_picos, bytes)) in storage_agg {
+        let pricing = catalog.get(&svc_name);
+        let display_name = pricing
+            .map(|p| p.display_name.clone())
+            .unwrap_or_else(|| svc_name.clone());
+        let region = pricing
+            .map(|p| p.region.clone())
+            .unwrap_or_else(|| "us-east-1".to_string());
+        let storage_cost_usd = cost_picos as f64 / 1e12;
+        let dim_buckets: Vec<DimensionCost> = pricing
+            .map(|p| {
+                p.request_dimensions
+                    .iter()
+                    .map(|d| DimensionCost {
+                        description: d.description.clone(),
+                        price_per_request: d.price_per_request,
+                        request_count: 0,
+                        cost_usd: 0.0,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        total_cost += storage_cost_usd;
+        services_out.push(ServiceCost {
+            service: svc_name,
+            display_name,
+            region,
+            total_cost_usd: storage_cost_usd,
+            request_count: 0,
+            bytes_in: 0,
+            bytes_out: 0,
+            error_count: 0,
+            data_transfer_out_cost_usd: 0.0,
+            data_ingest_cost_usd: 0.0,
+            storage_cost_usd,
+            storage_bytes: bytes,
             dimensions: dim_buckets,
         });
     }

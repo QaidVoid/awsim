@@ -44,6 +44,10 @@ struct ServiceConfig {
     /// slim file's `data_ingest_per_gb`. AWS publishes ingest rates
     /// in dollars per GB so we emit them as-is.
     ingest_matcher: Option<DimensionMatcher>,
+    /// Optional storage matcher for point-in-time billed services
+    /// (S3 / DDB / Lambda code). AWS publishes these in GB-Month
+    /// units so we emit the rate straight into `storage_per_gb_month`.
+    storage_matcher: Option<DimensionMatcher>,
     dimensions: &'static [DimensionConfig],
 }
 
@@ -74,6 +78,14 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 4.0e-7,
         ingest_matcher: None,
+        // S3 Standard storage. AWS publishes the rate in $/GB-Mo,
+        // first paid tier is $0.023/GB-Mo (50 TB free under tier 0
+        // is for the full-organisation free tier; tier 1 is the
+        // headline rate).
+        storage_matcher: Some(DimensionMatcher {
+            product_family: "Storage",
+            attributes: &[("usagetype", "TimedStorage-ByteHrs")],
+        }),
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -174,6 +186,7 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 0.0,
         ingest_matcher: None,
+        storage_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &["Invoke", "InvokeAsync", "InvokeWithResponseStream"],
@@ -230,6 +243,13 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 0.0,
         ingest_matcher: None,
+        // DDB Standard table storage at $0.25/GB-Mo (free first 25 GB
+        // is the org-wide free tier — extract_dimension's
+        // prefer-paid-tier logic picks the right one).
+        storage_matcher: Some(DimensionMatcher {
+            product_family: "Database Storage",
+            attributes: &[("usagetype", "TimedStorage-ByteHrs")],
+        }),
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -297,6 +317,7 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 4.0e-7,
         ingest_matcher: None,
+        storage_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -355,6 +376,7 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 5.0e-7,
         ingest_matcher: None,
+        storage_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -403,6 +425,7 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 3.0e-6,
         ingest_matcher: None,
+        storage_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -468,6 +491,7 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 5.0e-6,
         ingest_matcher: None,
+        storage_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -515,6 +539,7 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 0.0,
         ingest_matcher: None,
+        storage_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &["PutEvents"],
@@ -565,6 +590,7 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 0.0,
         ingest_matcher: None,
+        storage_matcher: None,
         dimensions: &[
             // REST API requests are billed per-call. The
             // `usagetype=USE1-ApiGatewayRequest` SKU's first paid tier
@@ -644,6 +670,7 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 0.0,
         ingest_matcher: None,
+        storage_matcher: None,
         dimensions: &[
             // AWS bills per state transition, not per execution. We
             // can only see StartExecution from the request event, so
@@ -695,6 +722,7 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 0.0,
         ingest_matcher: None,
+        storage_matcher: None,
         dimensions: &[
             // AWS bills per recipient, not per send. SDK callers
             // typically send to one recipient at a time, so per-call
@@ -749,6 +777,7 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 1.0e-5,
         ingest_matcher: None,
+        storage_matcher: None,
         dimensions: &[
             // AWS bills CloudWatch API requests at $0.01 per 1,000.
             // PutMetricData is in the same bucket — its per-metric
@@ -801,6 +830,7 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 0.0,
         ingest_matcher: None,
+        storage_matcher: None,
         dimensions: &[
             // The Route53 resolver is metered server-side (DNS resolves
             // never reach the AWSim AWS-API gateway) so this dimension
@@ -847,6 +877,7 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: false,
         default_request_rate: 0.0,
         ingest_matcher: None,
+        storage_matcher: None,
         dimensions: &[
             // Provisioned-mode put-payload-units is what AWS actually
             // bills against — one unit per 25KB rounded up. We charge
@@ -902,6 +933,7 @@ const SERVICES: &[ServiceConfig] = &[
         use_global_file: true,
         default_request_rate: 0.0,
         ingest_matcher: None,
+        storage_matcher: None,
         dimensions: &[
             DimensionConfig {
                 // CloudFront proxied traffic doesn't typically reach
@@ -955,6 +987,7 @@ const SERVICES: &[ServiceConfig] = &[
                 ("operation", "PutRecord"),
             ],
         }),
+        storage_matcher: None,
         dimensions: &[
             // Per-request rate is $0 — Firehose bills purely on
             // ingested bytes — but listing PutRecord/PutRecordBatch
@@ -1001,6 +1034,7 @@ const SERVICES: &[ServiceConfig] = &[
                 ("operation", "PutLogEvents"),
             ],
         }),
+        storage_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &["PutLogEvents"],
@@ -1267,6 +1301,21 @@ async fn build_service(
                 }
             });
 
+    // Same logic for the at-rest storage rate (point-in-time billed).
+    let storage_per_gb_month =
+        cfg.storage_matcher
+            .as_ref()
+            .and_then(|m| match extract_dimension(&doc, m) {
+                Some((rate, _desc)) => Some(rate),
+                None => {
+                    eprintln!(
+                        "  WARN: no storage SKU for {}/{:?} — leaving null",
+                        m.product_family, m.attributes
+                    );
+                    None
+                }
+            });
+
     Ok(ServicePricing {
         service: cfg.service.to_string(),
         display_name,
@@ -1280,6 +1329,7 @@ async fn build_service(
         default_request_rate: Some(cfg.default_request_rate),
         data_transfer_out_per_gb: Some(data_transfer_out_per_gb),
         data_ingest_per_gb,
+        storage_per_gb_month,
     })
 }
 

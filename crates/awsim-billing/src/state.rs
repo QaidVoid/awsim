@@ -54,6 +54,77 @@ pub struct OpCounterSnapshot {
     pub error_count: u64,
 }
 
+/// Per-service point-in-time storage tracker.
+///
+/// The poll loop calls `record_sample` periodically; each sample
+/// accrues `(avg_bytes_since_last_sample) × (elapsed_seconds) × rate`
+/// into the cost accumulator. Cost is stored as integer pico-USD
+/// (1e-12 USD) to keep tiny per-sample accruals from truncating to
+/// zero — at S3's $0.023/GB-month, 1 MB × 30 s amounts to ~0.27
+/// micro-USD, which would round away under coarser units. u64 of
+/// pico-USD still gives ~$18M total headroom before overflow.
+#[derive(Debug, Default)]
+pub struct StorageMetering {
+    /// Most recent sampled byte count — also used by the dashboard
+    /// so the UI can show "currently storing X GB".
+    pub last_sample_bytes: AtomicU64,
+    /// Unix timestamp of the most recent sample (seconds).
+    pub last_sample_ts: AtomicU64,
+    /// Accumulated storage cost in pico-USD (1e-12 USD).
+    pub accumulated_cost_picos: AtomicU64,
+}
+
+impl StorageMetering {
+    fn snapshot(&self) -> StorageMeteringSnapshot {
+        StorageMeteringSnapshot {
+            last_sample_bytes: self.last_sample_bytes.load(Ordering::Relaxed),
+            last_sample_ts: self.last_sample_ts.load(Ordering::Relaxed),
+            accumulated_cost_picos: self.accumulated_cost_picos.load(Ordering::Relaxed),
+        }
+    }
+
+    fn from_snapshot(s: StorageMeteringSnapshot) -> Self {
+        Self {
+            last_sample_bytes: AtomicU64::new(s.last_sample_bytes),
+            last_sample_ts: AtomicU64::new(s.last_sample_ts),
+            accumulated_cost_picos: AtomicU64::new(s.accumulated_cost_picos),
+        }
+    }
+
+    /// Accrue cost for the interval between the previous sample and
+    /// `current_bytes` (taken at `now_secs`). Trapezoidal integration:
+    /// the average of the two samples × elapsed time × rate.
+    pub fn record_sample(&self, current_bytes: u64, now_secs: u64, per_byte_per_sec_usd: f64) {
+        let last_ts = self.last_sample_ts.swap(now_secs, Ordering::Relaxed);
+        let last_bytes = self
+            .last_sample_bytes
+            .swap(current_bytes, Ordering::Relaxed);
+        if last_ts == 0 || now_secs <= last_ts {
+            // First sample (or clock skew) — nothing to accrue yet.
+            return;
+        }
+        let elapsed = (now_secs - last_ts) as f64;
+        let avg_bytes = (last_bytes as f64 + current_bytes as f64) / 2.0;
+        let cost_usd = avg_bytes * elapsed * per_byte_per_sec_usd;
+        if cost_usd > 0.0 {
+            let picos = (cost_usd * 1e12) as u64;
+            self.accumulated_cost_picos
+                .fetch_add(picos, Ordering::Relaxed);
+        }
+    }
+
+    pub fn cost_usd(&self) -> f64 {
+        self.accumulated_cost_picos.load(Ordering::Relaxed) as f64 / 1e12
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct StorageMeteringSnapshot {
+    pub last_sample_bytes: u64,
+    pub last_sample_ts: u64,
+    pub accumulated_cost_picos: u64,
+}
+
 /// Per-(account, region) usage bucket.
 ///
 /// Outer DashMap keyed by service signing name (e.g. `s3`), inner DashMap
@@ -62,6 +133,10 @@ pub struct OpCounterSnapshot {
 pub struct BillingState {
     pub started_at: AtomicU64,
     services: DashMap<String, DashMap<String, OpCounter>>,
+    /// Per-service point-in-time storage trackers. Separate from the
+    /// per-operation counters because storage is sampled at intervals
+    /// rather than incremented per request.
+    storage: DashMap<String, StorageMetering>,
 }
 
 impl BillingState {
@@ -101,6 +176,30 @@ impl BillingState {
             })
             .collect()
     }
+
+    /// Snapshot the storage trackers, keyed by service signing name.
+    pub fn snapshot_storage(&self) -> HashMap<String, StorageMeteringSnapshot> {
+        self.storage
+            .iter()
+            .map(|s| (s.key().clone(), s.value().snapshot()))
+            .collect()
+    }
+
+    /// Look up (creating if absent) the storage tracker for `service`.
+    pub fn storage_for(
+        &self,
+        service: &str,
+    ) -> dashmap::mapref::one::RefMut<'_, String, StorageMetering> {
+        self.storage.entry(service.to_string()).or_default()
+    }
+
+    /// Iterate the storage trackers — useful for the report builder.
+    pub fn iter_storage(&self) -> Vec<(String, StorageMeteringSnapshot)> {
+        self.storage
+            .iter()
+            .map(|s| (s.key().clone(), s.value().snapshot()))
+            .collect()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -110,6 +209,8 @@ pub struct BillingSnapshot {
     #[serde(default)]
     pub started_at: u64,
     pub services: HashMap<String, HashMap<String, OpCounterSnapshot>>,
+    #[serde(default)]
+    pub storage: HashMap<String, StorageMeteringSnapshot>,
 }
 
 impl Snapshottable for BillingState {
@@ -121,6 +222,7 @@ impl Snapshottable for BillingState {
             region: region.to_string(),
             started_at: self.started_at.load(Ordering::Relaxed),
             services: self.snapshot_services(),
+            storage: self.snapshot_storage(),
         }
     }
 
@@ -133,12 +235,17 @@ impl Snapshottable for BillingState {
             }
             services.insert(svc_name, ops_map);
         }
+        let storage: DashMap<String, StorageMetering> = DashMap::new();
+        for (svc_name, st) in snap.storage {
+            storage.insert(svc_name, StorageMetering::from_snapshot(st));
+        }
         (
             snap.account_id,
             snap.region,
             BillingState {
                 started_at: AtomicU64::new(snap.started_at),
                 services,
+                storage,
             },
         )
     }

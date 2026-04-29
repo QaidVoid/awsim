@@ -70,6 +70,12 @@ pub struct ServicePricing {
     /// charges by data volume rather than per-request.
     #[serde(default)]
     pub data_ingest_per_gb: Option<f64>,
+    /// Cost per GB stored per month — point-in-time billing for
+    /// services like S3 / DynamoDB / Lambda function code. The meter
+    /// samples the at-rest size periodically and accrues cost over
+    /// elapsed time using this rate.
+    #[serde(default)]
+    pub storage_per_gb_month: Option<f64>,
 }
 
 fn default_currency() -> String {

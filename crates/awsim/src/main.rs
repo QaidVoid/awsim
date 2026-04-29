@@ -316,6 +316,52 @@ async fn main() -> Result<()> {
                 }
             }
         });
+
+        // Periodic storage-sampling task. Walks the per-service BodyStore
+        // sizes plus the DynamoDB SQLite file every 30s and feeds them
+        // into the billing meter, which accrues GB-month cost over the
+        // sampled interval. Only runs in persistent mode — in-memory
+        // mode has no on-disk size to query.
+        let body_stores_for_storage = Arc::clone(&state.body_stores);
+        let billing_for_storage = Arc::clone(&billing_meter);
+        let data_dir_for_storage = data_dir.clone();
+        let account_for_storage = cli.account_id.clone();
+        let region_for_storage = cli.region.clone();
+        tokio::spawn(async move {
+            let interval = std::time::Duration::from_secs(30);
+            loop {
+                tokio::time::sleep(interval).await;
+
+                // Sum BodyStore bytes per service. Some services have
+                // multiple groups (S3 stores objects under "s3"; Lambda
+                // stores function code under "lambda" etc.).
+                let mut bytes_by_service: std::collections::HashMap<String, u64> =
+                    std::collections::HashMap::new();
+                for handle in body_stores_for_storage.iter() {
+                    let mut total: u64 = 0;
+                    for group in &handle.groups {
+                        total =
+                            total.saturating_add(handle.body_store.group_size(group).unwrap_or(0));
+                    }
+                    bytes_by_service.insert(handle.service_name.clone(), total);
+                }
+
+                // DDB lives in a SQLite file rather than a BodyStore.
+                let ddb_path = std::path::Path::new(&data_dir_for_storage).join("dynamodb.db");
+                if let Ok(meta) = std::fs::metadata(&ddb_path) {
+                    bytes_by_service.insert("dynamodb".to_string(), meta.len());
+                }
+
+                for (service, bytes) in bytes_by_service {
+                    billing_for_storage.record_storage_sample(
+                        &service,
+                        &account_for_storage,
+                        &region_for_storage,
+                        bytes,
+                    );
+                }
+            }
+        });
     }
 
     let service_count = state.services.len();

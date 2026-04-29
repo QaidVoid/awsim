@@ -47,6 +47,8 @@ export interface BillingService {
   error_count: number;
   data_transfer_out_cost_usd: number;
   data_ingest_cost_usd: number;
+  storage_cost_usd: number;
+  storage_bytes: number;
   dimensions: BillingDimension[];
 }
 

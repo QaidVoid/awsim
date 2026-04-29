@@ -7,6 +7,9 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::pricing::PricingCatalog;
 use crate::state::BillingStateStore;
 
+const SECONDS_PER_MONTH: f64 = 30.0 * 24.0 * 60.0 * 60.0;
+const BYTES_PER_GB: f64 = 1_073_741_824.0;
+
 /// Holds the in-memory billing store + the pricing catalog. Cheaply
 /// cloned (Arcs inside).
 #[derive(Clone)]
@@ -21,6 +24,34 @@ impl BillingMeter {
             store: BillingStateStore::new(),
             pricing: Arc::new(PricingCatalog::embedded()),
         }
+    }
+
+    /// Record a point-in-time storage sample for a metered service.
+    /// Cost since the last sample accrues into the per-service
+    /// `StorageMetering` bucket; nothing happens if the service has
+    /// no `storage_per_gb_month` rate in the pricing catalogue.
+    pub fn record_storage_sample(
+        &self,
+        service: &str,
+        account_id: &str,
+        region: &str,
+        current_bytes: u64,
+    ) {
+        let Some(pricing) = self.pricing.get(service) else {
+            return;
+        };
+        let Some(per_gb_month) = pricing.storage_per_gb_month else {
+            return;
+        };
+        let per_byte_per_sec = per_gb_month / BYTES_PER_GB / SECONDS_PER_MONTH;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let state = self.store.get(account_id, region);
+        state.ensure_started(now);
+        let storage = state.storage_for(service);
+        storage.record_sample(current_bytes, now, per_byte_per_sec);
     }
 
     /// Apply a single request event to the relevant per-(account, region)
