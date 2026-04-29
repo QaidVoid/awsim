@@ -106,7 +106,7 @@
 			{ key: 'name', label: 'Name', mono: true },
 			{ key: 'accessString', label: 'Access', mono: true },
 			{ key: 'status', label: 'Status', width: '110px', cell: statusCell },
-			{ key: 'name', label: '', width: '60px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.name}
 	>

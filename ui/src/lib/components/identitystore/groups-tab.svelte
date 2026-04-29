@@ -152,8 +152,8 @@
 		columns={[
 			{ key: 'displayName', label: 'Display name', mono: true },
 			{ key: 'groupId', label: 'GroupId', mono: true, width: '300px' },
-			{ key: 'groupId', label: 'Members', cell: membersCell },
-			{ key: 'groupId', label: '', width: '60px', cell: actionsCell }
+			{ key: '__members', label: 'Members', cell: membersCell },
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.groupId}
 	>

@@ -114,8 +114,8 @@
 			{ key: 'scalableDimension', label: 'Dimension', mono: true },
 			{ key: 'minCapacity', label: 'Min', width: '60px' },
 			{ key: 'maxCapacity', label: 'Max', width: '60px' },
-			{ key: 'resourceId', label: 'Policies', width: '90px', cell: policyCell },
-			{ key: 'resourceId', label: '', width: '60px', cell: actionsCell }
+			{ key: '__policies', label: 'Policies', width: '90px', cell: policyCell },
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => `${r.resourceId}|${r.scalableDimension}`}
 	>

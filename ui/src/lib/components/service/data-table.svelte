@@ -42,7 +42,7 @@
 				class="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur-sm"
 			>
 				<tr>
-					{#each columns as col (col.key)}
+					{#each columns as col, ci (ci)}
 						<th
 							class={cn(
 								'px-4 text-left font-medium text-muted-foreground',
@@ -66,7 +66,7 @@
 						)}
 						onclick={onRowClick ? () => onRowClick(row) : undefined}
 					>
-						{#each columns as col (col.key)}
+						{#each columns as col, ci (ci)}
 							<td
 								class={cn(
 									'px-4',
@@ -88,7 +88,7 @@
 					{#if loading}
 						{#each Array(5) as _, i (i)}
 							<tr class="border-b border-border/40">
-								{#each columns as col (col.key)}
+								{#each columns as col, ci (ci)}
 									<td
 										class={cn('px-4', dense ? 'py-1.5' : 'py-2.5')}
 										style={col.width ? `width: ${col.width}` : undefined}

@@ -118,7 +118,7 @@
 			{ key: 'type', label: 'Type', width: '110px', cell: typeCell },
 			{ key: 'serviceCount', label: 'Services', width: '90px' },
 			{ key: 'createDate', label: 'Created', width: '180px', cell: createdCell },
-			{ key: 'id', label: '', width: '60px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.id}
 	>

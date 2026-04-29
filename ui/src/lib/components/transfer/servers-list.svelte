@@ -121,7 +121,7 @@
 			{ key: 'identityProviderType', label: 'Identity', width: '180px', mono: true },
 			{ key: 'endpointType', label: 'Endpoint', width: '110px', mono: true },
 			{ key: 'userCount', label: 'Users', width: '80px' },
-			{ key: 'serverId', label: '', width: '100px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.serverId}
 	>

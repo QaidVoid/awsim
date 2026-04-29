@@ -108,7 +108,7 @@
 			{ key: 'versionId', label: 'Version', width: '150px', mono: true },
 			{ key: 'lastExecutionDate', label: 'Last exec', width: '180px', cell: lastCell },
 			{ key: 'creationDate', label: 'Created', width: '180px', cell: createdCell },
-			{ key: 'planId', label: '', width: '60px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.planId}
 	>

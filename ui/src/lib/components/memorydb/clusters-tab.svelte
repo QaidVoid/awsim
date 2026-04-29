@@ -129,7 +129,7 @@
 			{ key: 'numberOfShards', label: 'Shards', width: '70px' },
 			{ key: 'aclName', label: 'ACL', width: '160px', mono: true },
 			{ key: 'status', label: 'Status', width: '110px', cell: stateCell },
-			{ key: 'name', label: '', width: '60px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.name}
 	>

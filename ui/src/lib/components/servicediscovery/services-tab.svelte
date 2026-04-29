@@ -118,7 +118,7 @@
 			{ key: 'id', label: 'ID', mono: true, width: '200px' },
 			{ key: 'type', label: 'Type', width: '80px', cell: typeCell },
 			{ key: 'instanceCount', label: 'Instances', width: '100px' },
-			{ key: 'id', label: '', width: '60px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.id}
 	>

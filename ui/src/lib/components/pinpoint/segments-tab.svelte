@@ -99,7 +99,7 @@
 			{ key: 'id', label: 'ID', mono: true, width: '300px' },
 			{ key: 'segmentType', label: 'Type', width: '130px', cell: typeCell },
 			{ key: 'version', label: 'Ver', width: '60px' },
-			{ key: 'id', label: '', width: '60px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.id}
 	>

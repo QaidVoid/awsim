@@ -123,7 +123,7 @@
 			{ key: 'id', label: 'ID', mono: true, width: '120px' },
 			{ key: 'type', label: 'Type', width: '160px', cell: typeCell },
 			{ key: 'locationUri', label: 'Location', mono: true },
-			{ key: 'id', label: '', width: '60px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.id}
 	>

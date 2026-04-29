@@ -135,7 +135,7 @@
 			{ key: 'name', label: 'Name', mono: true },
 			{ key: 'state', label: 'State', width: '100px', cell: stateCell },
 			{ key: 'creationDateTime', label: 'Created', width: '180px', cell: createdCell },
-			{ key: 'name', label: '', width: '120px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.name}
 	>

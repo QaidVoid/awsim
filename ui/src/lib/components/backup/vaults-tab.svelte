@@ -99,7 +99,7 @@
 			{ key: 'numberOfRecoveryPoints', label: 'Recovery points', width: '140px' },
 			{ key: 'locked', label: 'Lock', width: '80px', cell: lockCell },
 			{ key: 'creationDate', label: 'Created', width: '180px', cell: createdCell },
-			{ key: 'name', label: '', width: '60px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.name}
 	>

@@ -117,7 +117,7 @@
 			{ key: 'id', label: 'ID', mono: true, width: '280px' },
 			{ key: 'segmentId', label: 'Segment', mono: true, width: '280px' },
 			{ key: 'state', label: 'State', width: '120px', cell: stateCell },
-			{ key: 'id', label: '', width: '60px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.id}
 	>

@@ -98,7 +98,7 @@
 			{ key: 'name', label: 'Name', mono: true },
 			{ key: 'id', label: 'ID', mono: true, width: '120px' },
 			{ key: 'state', label: 'State', width: '180px', cell: stateCell },
-			{ key: 'id', label: '', width: '60px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.id}
 	>

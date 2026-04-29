@@ -104,7 +104,7 @@
 			{ key: 'numberOfArchives', label: 'Archives', width: '100px' },
 			{ key: 'sizeInBytes', label: 'Size', width: '110px', cell: sizeCell },
 			{ key: 'creationDate', label: 'Created', width: '220px' },
-			{ key: 'vaultName', label: '', width: '60px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.vaultName}
 	>

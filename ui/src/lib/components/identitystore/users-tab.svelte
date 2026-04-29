@@ -112,7 +112,7 @@
 			{ key: 'displayName', label: 'Display name' },
 			{ key: 'emails', label: 'Email', cell: emailCell },
 			{ key: 'userId', label: 'UserId', mono: true, width: '300px' },
-			{ key: 'userId', label: '', width: '60px', cell: actionsCell }
+			{ key: '__actions', label: '', width: '60px', cell: actionsCell }
 		]}
 		rowKey={(r) => r.userId}
 	>
