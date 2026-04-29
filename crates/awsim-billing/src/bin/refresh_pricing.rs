@@ -984,6 +984,72 @@ const SERVICES: &[ServiceConfig] = &[
             },
         ],
     },
+    ServiceConfig {
+        service: "logs",
+        // CloudWatch Logs lives inside the AmazonCloudWatch offer
+        // (CWL was retconned into CloudWatch's product family even
+        // though it has its own service signing name `logs`).
+        aws_code: "AmazonCloudWatch",
+        use_global_file: false,
+        default_request_rate: 0.0,
+        // Real cost driver: $0.50/GB ingested via PutLogEvents. Wired
+        // up against bytes_in to PutLogEvents calls.
+        ingest_matcher: Some(DimensionMatcher {
+            product_family: "Data Payload",
+            attributes: &[
+                ("usagetype", "USE1-DataProcessing-Bytes"),
+                ("operation", "PutLogEvents"),
+            ],
+        }),
+        dimensions: &[
+            DimensionConfig {
+                operations: &["PutLogEvents"],
+                matcher: None,
+                fixed_description: "PutLogEvents (billed by GB ingested)",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &[
+                    "CreateLogGroup",
+                    "DeleteLogGroup",
+                    "DescribeLogGroups",
+                    "PutRetentionPolicy",
+                    "DeleteRetentionPolicy",
+                    "CreateLogStream",
+                    "DeleteLogStream",
+                    "DescribeLogStreams",
+                    "GetLogEvents",
+                    "FilterLogEvents",
+                    "StartQuery",
+                    "GetQueryResults",
+                    "StopQuery",
+                    "DescribeQueries",
+                    "GetLogGroupFields",
+                    "GetLogRecord",
+                    "PutMetricFilter",
+                    "DeleteMetricFilter",
+                    "DescribeMetricFilters",
+                    "PutSubscriptionFilter",
+                    "DeleteSubscriptionFilter",
+                    "DescribeSubscriptionFilters",
+                    "PutDestination",
+                    "DeleteDestination",
+                    "PutResourcePolicy",
+                    "DeleteResourcePolicy",
+                    "DescribeResourcePolicies",
+                    "TagResource",
+                    "UntagResource",
+                    "TagLogGroup",
+                    "UntagLogGroup",
+                    "ListTagsForResource",
+                    "ListTagsLogGroup",
+                ],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
 ];
 
 /// Decoded AWS bulk pricing JSON. We only deserialize the fields we

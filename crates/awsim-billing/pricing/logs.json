@@ -1,0 +1,58 @@
+{
+  "service": "logs",
+  "display_name": "AmazonCloudWatch",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AmazonCloudWatch, 2026-03-13T17:42:19Z)",
+  "request_dimensions": [
+    {
+      "description": "PutLogEvents (billed by GB ingested)",
+      "operations": [
+        "PutLogEvents"
+      ],
+      "price_per_request": 0.0
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "CreateLogGroup",
+        "DeleteLogGroup",
+        "DescribeLogGroups",
+        "PutRetentionPolicy",
+        "DeleteRetentionPolicy",
+        "CreateLogStream",
+        "DeleteLogStream",
+        "DescribeLogStreams",
+        "GetLogEvents",
+        "FilterLogEvents",
+        "StartQuery",
+        "GetQueryResults",
+        "StopQuery",
+        "DescribeQueries",
+        "GetLogGroupFields",
+        "GetLogRecord",
+        "PutMetricFilter",
+        "DeleteMetricFilter",
+        "DescribeMetricFilters",
+        "PutSubscriptionFilter",
+        "DeleteSubscriptionFilter",
+        "DescribeSubscriptionFilters",
+        "PutDestination",
+        "DeleteDestination",
+        "PutResourcePolicy",
+        "DeleteResourcePolicy",
+        "DescribeResourcePolicies",
+        "TagResource",
+        "UntagResource",
+        "TagLogGroup",
+        "UntagLogGroup",
+        "ListTagsForResource",
+        "ListTagsLogGroup"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09,
+  "data_ingest_per_gb": 0.5
+}
