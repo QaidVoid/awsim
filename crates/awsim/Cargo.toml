@@ -53,6 +53,7 @@ awsim-cloudtrail = { workspace = true }
 awsim-eks = { workspace = true }
 awsim-firehose = { workspace = true }
 awsim-batch = { workspace = true }
+awsim-billing = { workspace = true }
 awsim-sso-admin = { workspace = true }
 awsim-datasync = { workspace = true }
 awsim-polly = { workspace = true }

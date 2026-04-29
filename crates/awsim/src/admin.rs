@@ -1,3 +1,4 @@
+use awsim_billing::{BillingMeter, compute_report};
 use awsim_core::AppState;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
@@ -7,6 +8,7 @@ use base64::Engine;
 use bytes::Bytes;
 use serde_json::{Value, json};
 use std::convert::Infallible;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
@@ -271,4 +273,15 @@ fn format_duration(secs: u64) -> String {
     } else {
         format!("{s}s")
     }
+}
+
+/// Returns the rolling estimated bill: per-service breakdown + projected
+/// monthly cost based on the rate observed since the meter started.
+///
+/// Pricing covers the vertical-slice services (S3, Lambda, DynamoDB) for
+/// us-east-1; everything else is omitted from the report rather than
+/// faked at zero so users don't think they're seeing a complete bill.
+pub async fn billing(State(meter): State<Arc<BillingMeter>>) -> Json<Value> {
+    let report = compute_report(&meter.store, &meter.pricing);
+    Json(serde_json::to_value(report).unwrap_or_else(|_| json!({"error": "serialise_failed"})))
 }

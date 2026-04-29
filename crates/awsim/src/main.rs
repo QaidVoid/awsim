@@ -164,6 +164,12 @@ async fn main() -> Result<()> {
         state.data_dir = Some(Arc::new(std::path::PathBuf::from(dir)));
     }
 
+    // Billing meter: subscribes to the request-event stream and tallies
+    // per-service / per-operation counters. Restored from disk + auto-saved
+    // alongside the regular service snapshots when --data-dir is set.
+    let billing_meter = Arc::new(awsim_billing::BillingMeter::new());
+    awsim_billing::spawn_meter((*billing_meter).clone(), &state.events);
+
     if let Some(authz) = Arc::get_mut(&mut state.authz) {
         authz.principal_lookup = Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store));
         authz.resource_policy_lookups.insert(
@@ -204,6 +210,14 @@ async fn main() -> Result<()> {
         info!(data_dir = %data_dir, "Persistence enabled — restoring snapshots");
         pm.restore_all(&state.services);
 
+        // Billing counters are persisted as a regular snapshot file but
+        // sit outside the ServiceHandler map (billing isn't an AWS service).
+        if let Some(bytes) = pm.load_snapshot("billing")
+            && let Err(e) = billing_meter.store.restore_from_bytes(&bytes)
+        {
+            warn!(error = %e, "Failed to restore billing snapshot");
+        }
+
         if !cli.no_gc {
             run_gc(
                 s3_service.as_ref(),
@@ -239,6 +253,7 @@ async fn main() -> Result<()> {
         // Spawn graceful-shutdown handler that saves snapshots on SIGINT/SIGTERM.
         let services_for_shutdown = Arc::clone(&state.services);
         let pm_shutdown = Arc::new(PersistenceManager::new(data_dir));
+        let billing_for_shutdown = Arc::clone(&billing_meter);
         tokio::spawn(async move {
             #[cfg(unix)]
             {
@@ -259,6 +274,11 @@ async fn main() -> Result<()> {
 
             info!("Shutdown signal received — saving snapshots...");
             pm_shutdown.save_all(&services_for_shutdown);
+            if let Some(bytes) = billing_for_shutdown.store.snapshot_to_bytes()
+                && let Err(e) = pm_shutdown.save_snapshot("billing", &bytes)
+            {
+                warn!(error = %e, "Failed to save billing snapshot on shutdown");
+            }
             info!("Snapshots saved. Exiting.");
             std::process::exit(0);
         });
@@ -266,6 +286,7 @@ async fn main() -> Result<()> {
         // Spawn periodic auto-save every 30 seconds.
         let services_for_autosave = Arc::clone(&state.services);
         let pm_autosave = Arc::new(PersistenceManager::new(data_dir));
+        let billing_for_autosave = Arc::clone(&billing_meter);
         tokio::spawn(async move {
             let interval = std::time::Duration::from_secs(30);
             loop {
@@ -280,7 +301,17 @@ async fn main() -> Result<()> {
                 // blocking pool instead.
                 let pm = Arc::clone(&pm_autosave);
                 let services = Arc::clone(&services_for_autosave);
-                if let Err(e) = tokio::task::spawn_blocking(move || pm.save_all(&services)).await {
+                let billing = Arc::clone(&billing_for_autosave);
+                if let Err(e) = tokio::task::spawn_blocking(move || {
+                    pm.save_all(&services);
+                    if let Some(bytes) = billing.store.snapshot_to_bytes()
+                        && let Err(e) = pm.save_snapshot("billing", &bytes)
+                    {
+                        warn!(error = %e, "Failed to save billing snapshot");
+                    }
+                })
+                .await
+                {
                     warn!(error = %e, "Snapshot save_all task panicked");
                 }
             }
@@ -405,12 +436,20 @@ async fn main() -> Result<()> {
 
     let ecr_router = awsim_ecr::router(ecr_service);
 
+    // Billing sub-router. Carries its own state (Arc<BillingMeter>) so it
+    // doesn't have to be plumbed through AppState — keeps awsim-core free
+    // of billing concerns.
+    let billing_router: axum::Router<()> = axum::Router::new()
+        .route("/_awsim/billing", axum::routing::get(admin::billing))
+        .with_state(Arc::clone(&billing_meter));
+
     // Merge all routers and add shared middleware.
     let app = cognito_oauth_router
         .merge(main_router)
         .merge(proxy_router)
         .merge(opensearch_nested)
         .merge(ecr_router)
+        .merge(billing_router)
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with
