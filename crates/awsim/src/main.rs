@@ -1049,6 +1049,13 @@ fn register_services(
     let app_autoscaling = Arc::new(awsim_application_autoscaling::AppAutoScalingService::new());
     state.register(app_autoscaling, vec![]);
 
+    let xray = awsim_xray::XrayService::new();
+    let xray_routes = {
+        use awsim_core::ServiceHandler;
+        xray.routes()
+    };
+    state.register(Arc::new(xray), xray_routes);
+
     // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());

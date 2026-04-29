@@ -1604,6 +1604,7 @@ dependencies = [
  "awsim-stepfunctions",
  "awsim-sts",
  "awsim-waf",
+ "awsim-xray",
  "axum",
  "base64",
  "bytes",
@@ -2459,6 +2460,18 @@ dependencies = [
  "serde_json",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "awsim-xray"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
