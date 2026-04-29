@@ -51,6 +51,7 @@ import ShieldCheck from "@lucide/svelte/icons/shield-check";
 import Snowflake from "@lucide/svelte/icons/snowflake";
 import SquareTerminal from "@lucide/svelte/icons/square-terminal";
 import Tag from "@lucide/svelte/icons/tag";
+import Upload from "@lucide/svelte/icons/upload";
 import ToggleLeft from "@lucide/svelte/icons/toggle-left";
 import Workflow from "@lucide/svelte/icons/workflow";
 import Zap from "@lucide/svelte/icons/zap";
@@ -174,6 +175,14 @@ export const SERVICES: Service[] = [
     category: "Storage",
     icon: BookText,
     keywords: ["ledger", "qldb", "quantum ledger"],
+  },
+  {
+    id: "transfer",
+    name: "Transfer Family",
+    href: "/transfer",
+    category: "Storage",
+    icon: Upload,
+    keywords: ["sftp", "ftp", "ftps", "transfer family"],
   },
   {
     id: "efs",
