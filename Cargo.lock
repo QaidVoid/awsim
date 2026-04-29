@@ -1596,6 +1596,7 @@ dependencies = [
  "awsim-s3",
  "awsim-scheduler",
  "awsim-secretsmanager",
+ "awsim-servicediscovery",
  "awsim-ses",
  "awsim-sns",
  "awsim-sqs",
@@ -2348,6 +2349,19 @@ dependencies = [
  "awsim-core",
  "awsim-iam-policy",
  "base64",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-servicediscovery"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
  "dashmap",
  "serde",
  "serde_json",

@@ -1,0 +1,531 @@
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use awsim_core::{AwsError, RequestContext};
+use serde_json::{Value, json};
+
+use crate::state::{Instance, Namespace, Operation, ServiceDiscoveryState, ServiceEntry};
+
+fn now() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
+
+fn new_id(prefix: char) -> String {
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    format!("{prefix}-{}", &suffix[..16])
+}
+
+fn require_str<'a>(input: &'a Value, key: &str) -> Result<&'a str, AwsError> {
+    input
+        .get(key)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AwsError::bad_request("InvalidInput", format!("{key} is required")))
+}
+
+fn instance_key(service_id: &str, instance_id: &str) -> String {
+    format!("{service_id}:{instance_id}")
+}
+
+fn namespace_arn(ctx: &RequestContext, id: &str) -> String {
+    format!(
+        "arn:aws:servicediscovery:{}:{}:namespace/{}",
+        ctx.region, ctx.account_id, id
+    )
+}
+
+fn service_arn(ctx: &RequestContext, id: &str) -> String {
+    format!(
+        "arn:aws:servicediscovery:{}:{}:service/{}",
+        ctx.region, ctx.account_id, id
+    )
+}
+
+fn record_operation(
+    state: &ServiceDiscoveryState,
+    op_type: &str,
+    targets: HashMap<String, String>,
+) -> String {
+    let id = uuid::Uuid::new_v4().to_string();
+    let op = Operation {
+        id: id.clone(),
+        r#type: op_type.to_string(),
+        status: "SUCCESS".to_string(),
+        error_message: None,
+        error_code: None,
+        create_date: now(),
+        update_date: now(),
+        targets,
+    };
+    state.operations.insert(id.clone(), op);
+    id
+}
+
+fn ns_to_value(n: &Namespace) -> Value {
+    json!({
+        "Id": n.id,
+        "Arn": n.arn,
+        "Name": n.name,
+        "Type": n.r#type,
+        "Description": n.description,
+        "ServiceCount": n.service_count,
+        "CreateDate": n.create_date,
+        "CreatorRequestId": n.creator_request_id,
+        "Properties": n.properties,
+    })
+}
+
+fn svc_to_value(s: &ServiceEntry) -> Value {
+    json!({
+        "Id": s.id,
+        "Arn": s.arn,
+        "Name": s.name,
+        "NamespaceId": s.namespace_id,
+        "Description": s.description,
+        "InstanceCount": s.instance_count,
+        "DnsConfig": s.dns_config,
+        "HealthCheckConfig": s.health_check_config,
+        "HealthCheckCustomConfig": s.health_check_custom_config,
+        "CreateDate": s.create_date,
+        "CreatorRequestId": s.creator_request_id,
+        "Type": s.r#type,
+    })
+}
+
+fn inst_to_value(i: &Instance) -> Value {
+    json!({
+        "Id": i.id,
+        "CreatorRequestId": i.creator_request_id,
+        "Attributes": i.attributes,
+    })
+}
+
+// ---------- Namespaces ----------
+
+fn create_namespace(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    ctx: &RequestContext,
+    namespace_type: &str,
+) -> Result<Value, AwsError> {
+    let name = require_str(input, "Name")?.to_string();
+    let id = new_id('n');
+    let n = Namespace {
+        id: id.clone(),
+        arn: namespace_arn(ctx, &id),
+        name,
+        r#type: namespace_type.to_string(),
+        description: input
+            .get("Description")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        service_count: 0,
+        create_date: now(),
+        creator_request_id: input
+            .get("CreatorRequestId")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        properties: input.get("Properties").cloned(),
+    };
+    state.namespaces.insert(id.clone(), n);
+    let mut targets = HashMap::new();
+    targets.insert("NAMESPACE".to_string(), id);
+    let op_id = record_operation(state, "CREATE_NAMESPACE", targets);
+    Ok(json!({ "OperationId": op_id }))
+}
+
+pub fn create_http_namespace(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    create_namespace(state, input, ctx, "HTTP")
+}
+
+pub fn create_private_dns_namespace(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    create_namespace(state, input, ctx, "DNS_PRIVATE")
+}
+
+pub fn create_public_dns_namespace(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    create_namespace(state, input, ctx, "DNS_PUBLIC")
+}
+
+pub fn delete_namespace(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = require_str(input, "Id")?.to_string();
+    if state.services.iter().any(|e| e.value().namespace_id == id) {
+        return Err(AwsError::bad_request(
+            "ResourceInUse",
+            "Namespace still has services attached",
+        ));
+    }
+    state.namespaces.remove(&id).ok_or_else(|| {
+        AwsError::not_found("NamespaceNotFound", format!("Namespace {id} not found"))
+    })?;
+    let mut targets = HashMap::new();
+    targets.insert("NAMESPACE".to_string(), id);
+    let op_id = record_operation(state, "DELETE_NAMESPACE", targets);
+    Ok(json!({ "OperationId": op_id }))
+}
+
+pub fn get_namespace(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = require_str(input, "Id")?;
+    let n = state.namespaces.get(id).ok_or_else(|| {
+        AwsError::not_found("NamespaceNotFound", format!("Namespace {id} not found"))
+    })?;
+    Ok(json!({ "Namespace": ns_to_value(&n) }))
+}
+
+pub fn list_namespaces(
+    state: &ServiceDiscoveryState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let items: Vec<Value> = state
+        .namespaces
+        .iter()
+        .map(|e| ns_to_value(e.value()))
+        .collect();
+    Ok(json!({ "Namespaces": items }))
+}
+
+// ---------- Services ----------
+
+pub fn create_service(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = require_str(input, "Name")?.to_string();
+    let namespace_id = input
+        .get("NamespaceId")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| AwsError::bad_request("InvalidInput", "NamespaceId is required"))?;
+    if !state.namespaces.contains_key(&namespace_id) {
+        return Err(AwsError::not_found(
+            "NamespaceNotFound",
+            format!("Namespace {namespace_id} not found"),
+        ));
+    }
+    let id = new_id('s');
+    let svc_type = if input.get("DnsConfig").is_some() {
+        "DNS"
+    } else {
+        "HTTP"
+    };
+    let svc = ServiceEntry {
+        id: id.clone(),
+        arn: service_arn(ctx, &id),
+        name,
+        namespace_id: namespace_id.clone(),
+        description: input
+            .get("Description")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        instance_count: 0,
+        dns_config: input.get("DnsConfig").cloned(),
+        health_check_config: input.get("HealthCheckConfig").cloned(),
+        health_check_custom_config: input.get("HealthCheckCustomConfig").cloned(),
+        create_date: now(),
+        creator_request_id: input
+            .get("CreatorRequestId")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        r#type: svc_type.to_string(),
+    };
+    let result = json!({ "Service": svc_to_value(&svc) });
+    state.services.insert(id, svc);
+    if let Some(mut n) = state.namespaces.get_mut(&namespace_id) {
+        n.service_count += 1;
+    }
+    Ok(result)
+}
+
+pub fn delete_service(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = require_str(input, "Id")?;
+    if state.instances.iter().any(|e| e.value().service_id == id) {
+        return Err(AwsError::bad_request(
+            "ResourceInUse",
+            "Service still has registered instances",
+        ));
+    }
+    let (_, svc) = state
+        .services
+        .remove(id)
+        .ok_or_else(|| AwsError::not_found("ServiceNotFound", format!("Service {id} not found")))?;
+    if let Some(mut n) = state.namespaces.get_mut(&svc.namespace_id)
+        && n.service_count > 0
+    {
+        n.service_count -= 1;
+    }
+    Ok(json!({}))
+}
+
+pub fn get_service(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = require_str(input, "Id")?;
+    let s = state
+        .services
+        .get(id)
+        .ok_or_else(|| AwsError::not_found("ServiceNotFound", format!("Service {id} not found")))?;
+    Ok(json!({ "Service": svc_to_value(&s) }))
+}
+
+pub fn list_services(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    // Optional filter on NAMESPACE_ID
+    let ns_filter = input
+        .get("Filters")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| {
+            arr.iter().find_map(|f| {
+                let name = f.get("Name").and_then(|n| n.as_str())?;
+                if name == "NAMESPACE_ID" {
+                    f.get("Values")
+                        .and_then(|v| v.as_array())
+                        .and_then(|arr| arr.first().cloned())
+                        .and_then(|v| v.as_str().map(String::from))
+                } else {
+                    None
+                }
+            })
+        });
+    let items: Vec<Value> = state
+        .services
+        .iter()
+        .filter(|e| match &ns_filter {
+            Some(ns) => e.value().namespace_id == *ns,
+            None => true,
+        })
+        .map(|e| svc_to_value(e.value()))
+        .collect();
+    Ok(json!({ "Services": items }))
+}
+
+// ---------- Instances ----------
+
+pub fn register_instance(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let service_id = input
+        .get("ServiceId")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| AwsError::bad_request("InvalidInput", "ServiceId is required"))?;
+    if !state.services.contains_key(&service_id) {
+        return Err(AwsError::not_found(
+            "ServiceNotFound",
+            format!("Service {service_id} not found"),
+        ));
+    }
+    let instance_id = require_str(input, "InstanceId")?.to_string();
+    let attrs: HashMap<String, String> = input
+        .get("Attributes")
+        .and_then(|v| v.as_object())
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let inst = Instance {
+        id: instance_id.clone(),
+        service_id: service_id.clone(),
+        creator_request_id: input
+            .get("CreatorRequestId")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        attributes: attrs,
+    };
+    state
+        .instances
+        .insert(instance_key(&service_id, &instance_id), inst);
+    if let Some(mut s) = state.services.get_mut(&service_id) {
+        s.instance_count += 1;
+    }
+    let mut targets = HashMap::new();
+    targets.insert("INSTANCE".to_string(), instance_id);
+    targets.insert("SERVICE".to_string(), service_id);
+    let op_id = record_operation(state, "REGISTER_INSTANCE", targets);
+    Ok(json!({ "OperationId": op_id }))
+}
+
+pub fn deregister_instance(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let service_id = require_str(input, "ServiceId")?.to_string();
+    let instance_id = require_str(input, "InstanceId")?.to_string();
+    state
+        .instances
+        .remove(&instance_key(&service_id, &instance_id))
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "InstanceNotFound",
+                format!("Instance {instance_id} not found"),
+            )
+        })?;
+    if let Some(mut s) = state.services.get_mut(&service_id)
+        && s.instance_count > 0
+    {
+        s.instance_count -= 1;
+    }
+    let mut targets = HashMap::new();
+    targets.insert("INSTANCE".to_string(), instance_id);
+    targets.insert("SERVICE".to_string(), service_id);
+    let op_id = record_operation(state, "DEREGISTER_INSTANCE", targets);
+    Ok(json!({ "OperationId": op_id }))
+}
+
+pub fn get_instance(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let service_id = require_str(input, "ServiceId")?;
+    let instance_id = require_str(input, "InstanceId")?;
+    let i = state
+        .instances
+        .get(&instance_key(service_id, instance_id))
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "InstanceNotFound",
+                format!("Instance {instance_id} not found"),
+            )
+        })?;
+    Ok(json!({ "Instance": inst_to_value(&i) }))
+}
+
+pub fn list_instances(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let service_id = require_str(input, "ServiceId")?;
+    let items: Vec<Value> = state
+        .instances
+        .iter()
+        .filter(|e| e.value().service_id == service_id)
+        .map(|e| inst_to_value(e.value()))
+        .collect();
+    Ok(json!({ "Instances": items }))
+}
+
+pub fn discover_instances(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let namespace_name = require_str(input, "NamespaceName")?;
+    let service_name = require_str(input, "ServiceName")?;
+
+    // Resolve namespace by name → id, then service by name + namespace_id.
+    let ns = state
+        .namespaces
+        .iter()
+        .find(|e| e.value().name == namespace_name)
+        .map(|e| e.value().clone());
+    let Some(ns) = ns else {
+        return Ok(json!({ "Instances": [] }));
+    };
+    let svc = state
+        .services
+        .iter()
+        .find(|e| {
+            let s = e.value();
+            s.name == service_name && s.namespace_id == ns.id
+        })
+        .map(|e| e.value().clone());
+    let Some(svc) = svc else {
+        return Ok(json!({ "Instances": [] }));
+    };
+
+    let items: Vec<Value> = state
+        .instances
+        .iter()
+        .filter(|e| e.value().service_id == svc.id)
+        .map(|e| {
+            let i = e.value();
+            json!({
+                "InstanceId": i.id,
+                "NamespaceName": ns.name,
+                "ServiceName": svc.name,
+                "HealthStatus": "HEALTHY",
+                "Attributes": i.attributes,
+            })
+        })
+        .collect();
+    Ok(json!({ "Instances": items, "InstancesRevision": 1 }))
+}
+
+// ---------- Operations ----------
+
+pub fn get_operation(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = require_str(input, "OperationId")?;
+    let o = state.operations.get(id).ok_or_else(|| {
+        AwsError::not_found("OperationNotFound", format!("Operation {id} not found"))
+    })?;
+    Ok(json!({
+        "Operation": {
+            "Id": o.id,
+            "Type": o.r#type,
+            "Status": o.status,
+            "ErrorMessage": o.error_message,
+            "ErrorCode": o.error_code,
+            "CreateDate": o.create_date,
+            "UpdateDate": o.update_date,
+            "Targets": o.targets,
+        }
+    }))
+}
+
+pub fn list_operations(
+    state: &ServiceDiscoveryState,
+    _input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let items: Vec<Value> = state
+        .operations
+        .iter()
+        .map(|e| {
+            let o = e.value();
+            json!({ "Id": o.id, "Status": o.status })
+        })
+        .collect();
+    Ok(json!({ "Operations": items }))
+}

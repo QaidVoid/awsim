@@ -498,6 +498,8 @@ fn resolve_service_from_target(target: &str) -> Option<String> {
         p if p.starts_with("ResourceGroupsTaggingAPI") => "tagging",
         // Auto scaling
         p if p.starts_with("AnyScaleFrontendService") => "application-autoscaling",
+        // Cloud Map (Service Discovery)
+        p if p.starts_with("Route53AutoNaming_v") => "servicediscovery",
         _ => return None,
     };
     Some(service.to_string())

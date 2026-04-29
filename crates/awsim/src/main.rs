@@ -1056,6 +1056,9 @@ fn register_services(
     };
     state.register(Arc::new(xray), xray_routes);
 
+    let servicediscovery = Arc::new(awsim_servicediscovery::ServiceDiscoveryService::new());
+    state.register(servicediscovery, vec![]);
+
     // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
