@@ -16,6 +16,7 @@
 		CodeTab,
 		ConfigTab,
 		ConcurrencyTab,
+		EventSourcesTab,
 		InvokeTab,
 		VersionsTab,
 		LogsTab,
@@ -45,9 +46,9 @@
 	let selectedName = $state<string | null>(null);
 	let detail = $state<LambdaFunctionDetail | null>(null);
 	let detailLoading = $state(false);
-	let activeTab = $state<'code' | 'config' | 'invoke' | 'versions' | 'logs' | 'concurrency'>(
-		'invoke'
-	);
+	let activeTab = $state<
+		'code' | 'config' | 'invoke' | 'versions' | 'logs' | 'concurrency' | 'sources'
+	>('invoke');
 	let createOpen = $state(false);
 
 	onMount(loadList);
@@ -160,6 +161,7 @@
 						<TabsTrigger value="code">Code</TabsTrigger>
 						<TabsTrigger value="versions">Versions</TabsTrigger>
 						<TabsTrigger value="concurrency">Concurrency</TabsTrigger>
+						<TabsTrigger value="sources">Event sources</TabsTrigger>
 						<TabsTrigger value="logs">Logs</TabsTrigger>
 					</TabsList>
 					<div class="min-h-0 flex-1 overflow-y-auto">
@@ -183,6 +185,9 @@
 						</TabsContent>
 						<TabsContent value="concurrency" class="m-0 h-full">
 							<ConcurrencyTab functionName={selectedName} />
+						</TabsContent>
+						<TabsContent value="sources" class="m-0 h-full">
+							<EventSourcesTab functionName={selectedName} />
 						</TabsContent>
 						<TabsContent value="logs" class="m-0 h-full">
 							<LogsTab functionName={selectedName} />

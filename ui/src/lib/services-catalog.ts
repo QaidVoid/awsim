@@ -202,6 +202,14 @@ export const SERVICES: Service[] = [
     icon: Mail,
     keywords: ["email"],
   },
+  {
+    id: "pipes",
+    name: "EventBridge Pipes",
+    href: "/pipes",
+    category: "Messaging",
+    icon: Cable,
+    keywords: ["pipe", "source", "target", "filter", "enrichment"],
+  },
 
   // Observability
   {

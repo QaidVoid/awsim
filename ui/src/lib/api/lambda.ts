@@ -552,3 +552,150 @@ export async function deleteProvisionedConcurrencyConfig(
   const res = await lambdaFetch("DELETE", path);
   await ok(res);
 }
+
+// ----- Event source mappings -----
+
+export interface EventSourceMappingSummary {
+  uuid: string;
+  eventSourceArn: string;
+  functionArn: string;
+  state: string;
+  batchSize: number;
+  maximumBatchingWindowInSeconds: number;
+  startingPosition?: string;
+  bisectBatchOnFunctionError: boolean;
+  maximumRetryAttempts?: number;
+  parallelizationFactor?: number;
+  filterCriteria?: { Filters?: { Pattern: string }[] };
+  destinationOnFailure?: string;
+  lastProcessingResult: string;
+  lastModified: string;
+}
+
+export interface CreateEventSourceMappingInput {
+  functionName: string;
+  eventSourceArn: string;
+  batchSize?: number;
+  enabled?: boolean;
+  startingPosition?: string;
+  maximumBatchingWindowInSeconds?: number;
+  filterPatternJson?: string;
+  destinationOnFailureArn?: string;
+}
+
+interface RawEsm {
+  UUID: string;
+  EventSourceArn: string;
+  FunctionArn: string;
+  State: string;
+  BatchSize: number;
+  MaximumBatchingWindowInSeconds?: number;
+  StartingPosition?: string;
+  BisectBatchOnFunctionError?: boolean;
+  MaximumRetryAttempts?: number;
+  ParallelizationFactor?: number;
+  FilterCriteria?: { Filters?: { Pattern: string }[] };
+  DestinationConfig?: { OnFailure?: { Destination?: string } };
+  LastProcessingResult?: string;
+  LastModified?: string;
+}
+
+function fromRawEsm(r: RawEsm): EventSourceMappingSummary {
+  return {
+    uuid: r.UUID,
+    eventSourceArn: r.EventSourceArn,
+    functionArn: r.FunctionArn,
+    state: r.State,
+    batchSize: r.BatchSize,
+    maximumBatchingWindowInSeconds: r.MaximumBatchingWindowInSeconds ?? 0,
+    startingPosition: r.StartingPosition,
+    bisectBatchOnFunctionError: r.BisectBatchOnFunctionError ?? false,
+    maximumRetryAttempts: r.MaximumRetryAttempts,
+    parallelizationFactor: r.ParallelizationFactor,
+    filterCriteria: r.FilterCriteria,
+    destinationOnFailure: r.DestinationConfig?.OnFailure?.Destination,
+    lastProcessingResult: r.LastProcessingResult ?? "",
+    lastModified: r.LastModified ?? "",
+  };
+}
+
+export async function listEventSourceMappings(
+  functionName?: string,
+): Promise<EventSourceMappingSummary[]> {
+  const qs = functionName
+    ? `?FunctionName=${encodeURIComponent(functionName)}`
+    : "";
+  const res = await lambdaFetch("GET", `/2015-03-31/event-source-mappings${qs}`);
+  await ok(res);
+  const data = (await res.json()) as { EventSourceMappings?: RawEsm[] };
+  return (data.EventSourceMappings ?? []).map(fromRawEsm);
+}
+
+export async function createEventSourceMapping(
+  input: CreateEventSourceMappingInput,
+): Promise<EventSourceMappingSummary> {
+  const body: Record<string, unknown> = {
+    FunctionName: input.functionName,
+    EventSourceArn: input.eventSourceArn,
+    Enabled: input.enabled ?? true,
+  };
+  if (input.batchSize !== undefined) body.BatchSize = input.batchSize;
+  if (input.maximumBatchingWindowInSeconds !== undefined)
+    body.MaximumBatchingWindowInSeconds = input.maximumBatchingWindowInSeconds;
+  if (input.startingPosition) body.StartingPosition = input.startingPosition;
+  if (input.filterPatternJson?.trim()) {
+    body.FilterCriteria = {
+      Filters: [{ Pattern: input.filterPatternJson.trim() }],
+    };
+  }
+  if (input.destinationOnFailureArn?.trim()) {
+    body.DestinationConfig = {
+      OnFailure: { Destination: input.destinationOnFailureArn.trim() },
+    };
+  }
+  const res = await lambdaFetch("POST", `/2015-03-31/event-source-mappings`, body);
+  await ok(res);
+  return fromRawEsm((await res.json()) as RawEsm);
+}
+
+export async function updateEventSourceMapping(
+  uuid: string,
+  patch: {
+    enabled?: boolean;
+    batchSize?: number;
+    maximumBatchingWindowInSeconds?: number;
+    filterPatternJson?: string | null;
+    destinationOnFailureArn?: string | null;
+  },
+): Promise<EventSourceMappingSummary> {
+  const body: Record<string, unknown> = {};
+  if (patch.enabled !== undefined) body.Enabled = patch.enabled;
+  if (patch.batchSize !== undefined) body.BatchSize = patch.batchSize;
+  if (patch.maximumBatchingWindowInSeconds !== undefined)
+    body.MaximumBatchingWindowInSeconds = patch.maximumBatchingWindowInSeconds;
+  if (patch.filterPatternJson !== undefined) {
+    body.FilterCriteria = patch.filterPatternJson
+      ? { Filters: [{ Pattern: patch.filterPatternJson }] }
+      : { Filters: [] };
+  }
+  if (patch.destinationOnFailureArn !== undefined) {
+    body.DestinationConfig = patch.destinationOnFailureArn
+      ? { OnFailure: { Destination: patch.destinationOnFailureArn } }
+      : { OnFailure: {} };
+  }
+  const res = await lambdaFetch(
+    "PUT",
+    `/2015-03-31/event-source-mappings/${encodeURIComponent(uuid)}`,
+    body,
+  );
+  await ok(res);
+  return fromRawEsm((await res.json()) as RawEsm);
+}
+
+export async function deleteEventSourceMapping(uuid: string): Promise<void> {
+  const res = await lambdaFetch(
+    "DELETE",
+    `/2015-03-31/event-source-mappings/${encodeURIComponent(uuid)}`,
+  );
+  await ok(res);
+}

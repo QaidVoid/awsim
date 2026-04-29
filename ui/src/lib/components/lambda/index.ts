@@ -6,4 +6,5 @@ export { default as InvokeTab } from "./invoke-tab.svelte";
 export { default as VersionsTab } from "./versions-tab.svelte";
 export { default as LogsTab } from "./logs-tab.svelte";
 export { default as ConcurrencyTab } from "./concurrency-tab.svelte";
+export { default as EventSourcesTab } from "./event-sources-tab.svelte";
 export { default as CreateFunctionDialog } from "./create-function-dialog.svelte";
