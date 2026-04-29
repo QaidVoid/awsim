@@ -69,6 +69,7 @@ awsim-mq = { workspace = true }
 awsim-memorydb = { workspace = true }
 awsim-qldb = { workspace = true }
 awsim-transfer = { workspace = true }
+awsim-pinpoint = { workspace = true }
 axum = { workspace = true }
 dashmap = { workspace = true }
 tower = { workspace = true, features = ["limit", "load-shed"] }

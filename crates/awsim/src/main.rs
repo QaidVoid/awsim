@@ -1101,6 +1101,13 @@ fn register_services(
     let transfer = Arc::new(awsim_transfer::TransferService::new());
     state.register(transfer, vec![]);
 
+    let pinpoint = awsim_pinpoint::PinpointService::new();
+    let pinpoint_routes = {
+        use awsim_core::ServiceHandler;
+        pinpoint.routes()
+    };
+    state.register(Arc::new(pinpoint), pinpoint_routes);
+
     // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());

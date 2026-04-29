@@ -1592,6 +1592,7 @@ dependencies = [
  "awsim-mq",
  "awsim-opensearch",
  "awsim-organizations",
+ "awsim-pinpoint",
  "awsim-pipes",
  "awsim-polly",
  "awsim-qldb",
@@ -2299,6 +2300,19 @@ dependencies = [
  "async-trait",
  "awsim-core",
  "awsim-iam-policy",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-pinpoint"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
  "dashmap",
  "serde",
  "serde_json",
