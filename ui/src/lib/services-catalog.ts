@@ -53,6 +53,7 @@ import Snowflake from "@lucide/svelte/icons/snowflake";
 import SquareTerminal from "@lucide/svelte/icons/square-terminal";
 import Tag from "@lucide/svelte/icons/tag";
 import Upload from "@lucide/svelte/icons/upload";
+import UsersRound from "@lucide/svelte/icons/users-round";
 import ToggleLeft from "@lucide/svelte/icons/toggle-left";
 import Workflow from "@lucide/svelte/icons/workflow";
 import Zap from "@lucide/svelte/icons/zap";
@@ -528,6 +529,14 @@ export const SERVICES: Service[] = [
     category: "Admin",
     icon: KeyRound,
     keywords: ["sso"],
+  },
+  {
+    id: "identitystore",
+    name: "Identity Store",
+    href: "/identitystore",
+    category: "Admin",
+    icon: UsersRound,
+    keywords: ["identity store", "users", "groups", "sso directory"],
   },
   {
     id: "ssm",
