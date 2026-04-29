@@ -807,16 +807,45 @@
 					bind:this={chartContainerEl}
 					role="img"
 					aria-label="Cost trajectory chart"
-					class="relative mt-3"
+					class="relative mt-3 pr-12"
 					onmousemove={onChartMove}
 					onmouseleave={onChartLeave}
 				>
+				<!-- Cost reference labels pinned to the right edge.
+				     Placed outside the SVG so they aren't stretched by
+				     non-uniform preserveAspectRatio. -->
+				<div class="pointer-events-none absolute inset-y-0 right-0 w-12 font-mono text-[9px] tabular-nums text-muted-foreground">
+					{#each [1, 0.5, 0] as frac (frac)}
+						<span
+							class="absolute right-0 -translate-y-1/2 pl-1"
+							style="top: {(1 - frac) * 100}%;"
+						>
+							{fmtUsd(chartPaths.maxCost * frac, { precise: true })}
+						</span>
+					{/each}
+				</div>
 				<svg
 					viewBox="0 0 {CHART_W} {CHART_H}"
 					preserveAspectRatio="none"
-					class="h-28 w-full"
+					class="h-32 w-full"
 					aria-label="Running cost over time, stacked by service"
 				>
+					<!-- Reference gridlines at 25 / 50 / 75 / 100% of the
+					     window's peak. Helps the eye sanity-check the
+					     curve's height without hovering. -->
+					{#each [0.25, 0.5, 0.75, 1] as frac (frac)}
+						<line
+							x1="0"
+							x2={CHART_W}
+							y1={CHART_H - frac * (CHART_H - 4)}
+							y2={CHART_H - frac * (CHART_H - 4)}
+							stroke="oklch(50% 0.02 0)"
+							stroke-width="0.5"
+							stroke-dasharray="2 2"
+							opacity="0.3"
+							vector-effect="non-scaling-stroke"
+						/>
+					{/each}
 					<!-- Subtle baseline so the curve has visual context. -->
 					<line
 						x1="0"
@@ -900,10 +929,26 @@
 					</div>
 				{/if}
 				</div>
-				<div class="flex justify-between text-[10px] text-muted-foreground">
+				<div class="flex justify-between pr-12 text-[10px] text-muted-foreground">
 					<span>{fmtRelative(chartPaths.minTs)}</span>
 					<span>now</span>
 				</div>
+				<!-- Service legend: same stack order as the chart, with
+				     each service's most-recent cost. Hover the row to
+				     see which band it corresponds to. -->
+				{#if chartPaths.orderedServices.length > 0}
+					<div class="mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t border-border/40 pt-2 pr-12 text-[10px]">
+						{#each chartPaths.orderedServices as svc (svc)}
+							{@const latest = history[history.length - 1]?.services?.[svc] ?? 0}
+							{@const svcReport = report?.services.find((s) => s.service === svc)}
+							<div class="flex items-center gap-1.5">
+								<span class="size-2 shrink-0 rounded-full" style="background-color: {tintFor(svc)};"></span>
+								<span class="text-muted-foreground">{svcReport ? brandName(svcReport) : svc}</span>
+								<span class="font-mono tabular-nums">{fmtUsd(latest, { precise: true })}</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
 			</div>
 		{/if}
 
