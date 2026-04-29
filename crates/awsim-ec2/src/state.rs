@@ -16,6 +16,10 @@ pub struct Ec2State {
     pub addresses: DashMap<String, Address>,
     /// resource-specific tags: resource_id → (key → value)
     pub resource_tags: DashMap<String, HashMap<String, String>>,
+    /// Per-subnet host-octet cursor for the next launched instance. Real EC2
+    /// allocates from the subnet's CIDR; we just bump a counter starting
+    /// at host .10 (real EC2 reserves the first 4 addresses anyway).
+    pub subnet_next_host: DashMap<String, u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,12 +102,38 @@ pub struct Instance {
     pub instance_id: String,
     pub instance_type: String,
     pub image_id: String,
+    /// EC2 lifecycle state — `pending` | `running` | `stopping` | `stopped`
+    /// | `shutting-down` | `terminated`. Real EC2 transitions through these
+    /// asynchronously; we move synchronously since there's nothing to wait
+    /// on, but keep the state machine valid (e.g. you can't Start a
+    /// `terminated` instance).
     pub state: String,
+    pub previous_state: Option<String>,
+    pub state_transition_reason: String,
     pub subnet_id: Option<String>,
     pub vpc_id: Option<String>,
     pub private_ip_address: Option<String>,
     pub launch_time: String,
+    /// All instances from a single RunInstances batch share a reservation —
+    /// DescribeInstances groups them under one reservationSet entry.
+    pub reservation_id: String,
     pub tags: HashMap<String, String>,
+}
+
+impl Instance {
+    /// Numeric state code per the EC2 wire format. Real SDKs key off `code`,
+    /// not `name`, so it must stay in sync with `state`.
+    pub fn state_code(&self) -> u32 {
+        match self.state.as_str() {
+            "pending" => 0,
+            "running" => 16,
+            "shutting-down" => 32,
+            "terminated" => 48,
+            "stopping" => 64,
+            "stopped" => 80,
+            _ => 16,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
