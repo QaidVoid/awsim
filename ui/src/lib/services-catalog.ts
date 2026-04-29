@@ -45,6 +45,7 @@ import Settings from "@lucide/svelte/icons/settings";
 import Share2 from "@lucide/svelte/icons/share-2";
 import Shield from "@lucide/svelte/icons/shield";
 import ShieldCheck from "@lucide/svelte/icons/shield-check";
+import Snowflake from "@lucide/svelte/icons/snowflake";
 import SquareTerminal from "@lucide/svelte/icons/square-terminal";
 import Tag from "@lucide/svelte/icons/tag";
 import ToggleLeft from "@lucide/svelte/icons/toggle-left";
@@ -170,6 +171,14 @@ export const SERVICES: Service[] = [
     category: "Storage",
     icon: ShieldCheck,
     keywords: ["backup", "vault", "recovery point", "snapshot"],
+  },
+  {
+    id: "glacier",
+    name: "Glacier",
+    href: "/glacier",
+    category: "Storage",
+    icon: Snowflake,
+    keywords: ["glacier", "cold storage", "archive", "vault"],
   },
 
   // Messaging
