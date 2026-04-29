@@ -101,6 +101,8 @@ async fn main() -> Result<()> {
         pipes_store,
         ec2_service,
         rds_service,
+        mq_service,
+        memorydb_service,
     ) = register_services(
         &mut state,
         &cli.account_id,
@@ -332,6 +334,8 @@ async fn main() -> Result<()> {
         let region_for_storage = cli.region.clone();
         let ec2_for_storage = Arc::clone(&ec2_service);
         let rds_for_storage = Arc::clone(&rds_service);
+        let mq_for_storage = Arc::clone(&mq_service);
+        let memorydb_for_storage = Arc::clone(&memorydb_service);
         tokio::spawn(async move {
             let interval = std::time::Duration::from_secs(30);
             loop {
@@ -389,6 +393,22 @@ async fn main() -> Result<()> {
                     &account_for_storage,
                     &region_for_storage,
                     rds_count,
+                );
+                let mq_count =
+                    mq_for_storage.running_broker_count(&account_for_storage, &region_for_storage);
+                billing_for_storage.record_resource_count_sample(
+                    "mq",
+                    &account_for_storage,
+                    &region_for_storage,
+                    mq_count,
+                );
+                let memorydb_count = memorydb_for_storage
+                    .running_node_count(&account_for_storage, &region_for_storage);
+                billing_for_storage.record_resource_count_sample(
+                    "memorydb",
+                    &account_for_storage,
+                    &region_for_storage,
+                    memorydb_count,
                 );
             }
         });
@@ -883,6 +903,8 @@ type RegisteredServices = (
     awsim_core::AccountRegionStore<awsim_pipes::PipesState>,
     Arc<awsim_ec2::Ec2Service>,
     Arc<awsim_rds::RdsService>,
+    Arc<awsim_mq::MqService>,
+    Arc<awsim_memorydb::MemoryDbService>,
 );
 
 /// Register all services and return handles needed by the router:
@@ -1213,9 +1235,12 @@ fn register_services(
         use awsim_core::ServiceHandler;
         mq.routes()
     };
-    state.register(Arc::new(mq), mq_routes);
+    let mq_arc = Arc::new(mq);
+    let mq_clone = Arc::clone(&mq_arc);
+    state.register(mq_arc, mq_routes);
 
     let memorydb = Arc::new(awsim_memorydb::MemoryDbService::new());
+    let memorydb_clone = Arc::clone(&memorydb);
     state.register(memorydb, vec![]);
 
     let qldb = awsim_qldb::QldbService::new();
@@ -1275,6 +1300,8 @@ fn register_services(
         pipes_store,
         ec2_clone,
         rds_clone,
+        mq_clone,
+        memorydb_clone,
     )
 }
 

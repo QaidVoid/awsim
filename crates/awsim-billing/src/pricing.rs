@@ -148,4 +148,6 @@ const EMBEDDED_PRICING: &[&str] = &[
     include_str!("../pricing/rds.json"),
     include_str!("../pricing/polly.json"),
     include_str!("../pricing/comprehend.json"),
+    include_str!("../pricing/mq.json"),
+    include_str!("../pricing/memorydb.json"),
 ];

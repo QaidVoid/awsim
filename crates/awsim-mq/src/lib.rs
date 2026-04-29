@@ -34,6 +34,24 @@ impl MqService {
     fn get_state(&self, ctx: &RequestContext) -> Arc<MqState> {
         self.store.get(&ctx.account_id, &ctx.region)
     }
+
+    /// Count active brokers for a given account+region — used by the
+    /// billing meter to charge broker-hours. AWS bills any broker
+    /// that's running or in a transitional state that still costs
+    /// money (`CREATION_IN_PROGRESS`, `RUNNING`, `REBOOT_IN_PROGRESS`).
+    pub fn running_broker_count(&self, account_id: &str, region: &str) -> u64 {
+        let state = self.store.get(account_id, region);
+        state
+            .brokers
+            .iter()
+            .filter(|b| {
+                matches!(
+                    b.value().broker_state.as_str(),
+                    "RUNNING" | "CREATION_IN_PROGRESS" | "REBOOT_IN_PROGRESS"
+                )
+            })
+            .count() as u64
+    }
 }
 
 impl Default for MqService {

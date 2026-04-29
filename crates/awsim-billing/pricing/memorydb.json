@@ -1,0 +1,29 @@
+{
+  "service": "memorydb",
+  "display_name": "Amazon MemoryDB",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "Hand-written baseline (db.t4g.small Redis-compatible). Real AWS rates vary by node type and engine version; workloads on bigger node types underbill in proportion. Replica nodes are not modeled — each cluster is metered as primary-only by shard count.",
+  "request_dimensions": [
+    {
+      "description": "API requests (free)",
+      "operations": [
+        "CreateCluster", "DeleteCluster", "DescribeClusters", "UpdateCluster",
+        "CreateUser", "DeleteUser", "DescribeUsers", "UpdateUser",
+        "CreateAcl", "DeleteAcl", "DescribeAcls", "UpdateAcl",
+        "CreateSnapshot", "DeleteSnapshot", "DescribeSnapshots",
+        "CopySnapshot", "RestoreFromSnapshot",
+        "CreateSubnetGroup", "DeleteSubnetGroup", "DescribeSubnetGroups", "UpdateSubnetGroup",
+        "CreateParameterGroup", "DeleteParameterGroup", "DescribeParameterGroups",
+        "DescribeParameters", "ResetParameterGroup", "UpdateParameterGroup",
+        "TagResource", "UntagResource", "ListTags",
+        "ListAllowedNodeTypeUpdates", "DescribeEngineVersions", "DescribeServiceUpdates",
+        "FailoverShard"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09,
+  "instance_hour_per_instance": 0.043
+}

@@ -1,0 +1,24 @@
+{
+  "service": "mq",
+  "display_name": "Amazon MQ",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "Hand-written baseline (mq.t3.micro ActiveMQ Single-AZ). Real AWS rates vary by engine (ActiveMQ vs RabbitMQ), broker class, and deployment mode (single-AZ vs HA); workloads on bigger classes underbill in proportion.",
+  "request_dimensions": [
+    {
+      "description": "API requests (free)",
+      "operations": [
+        "CreateBroker", "DeleteBroker", "DescribeBroker", "ListBrokers",
+        "UpdateBroker", "RebootBroker",
+        "CreateUser", "DeleteUser", "DescribeUser", "ListUsers", "UpdateUser",
+        "CreateConfiguration", "DescribeConfiguration", "DescribeConfigurationRevision",
+        "ListConfigurations", "ListConfigurationRevisions", "UpdateConfiguration",
+        "CreateTags", "DeleteTags", "ListTags"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09,
+  "instance_hour_per_instance": 0.018
+}

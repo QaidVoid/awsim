@@ -33,6 +33,25 @@ impl MemoryDbService {
     fn get_state(&self, ctx: &RequestContext) -> Arc<MemoryDbState> {
         self.store.get(&ctx.account_id, &ctx.region)
     }
+
+    /// Count active MemoryDB nodes for a given account+region — used
+    /// by the billing meter to charge node-hours. AWS bills per-node
+    /// for active clusters; nodes-per-cluster equals number_of_shards
+    /// (single-node-per-shard primary, no replica modeling here).
+    pub fn running_node_count(&self, account_id: &str, region: &str) -> u64 {
+        let state = self.store.get(account_id, region);
+        state
+            .clusters
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.value().status.as_str(),
+                    "available" | "creating" | "modifying" | "snapshotting"
+                )
+            })
+            .map(|c| c.value().number_of_shards.max(1) as u64)
+            .sum()
+    }
 }
 
 impl Default for MemoryDbService {

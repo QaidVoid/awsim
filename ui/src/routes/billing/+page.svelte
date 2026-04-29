@@ -56,6 +56,8 @@
 		rds: 'Amazon RDS',
 		polly: 'Amazon Polly',
 		comprehend: 'Amazon Comprehend',
+		mq: 'Amazon MQ',
+		memorydb: 'Amazon MemoryDB',
 	};
 
 	// Stable tints per service so the same colour represents the same
@@ -85,6 +87,8 @@
 		rds: 'oklch(68% 0.13 250)', // navy
 		polly: 'oklch(75% 0.11 320)', // mauve
 		comprehend: 'oklch(70% 0.13 75)', // ochre
+		mq: 'oklch(68% 0.12 155)', // forest
+		memorydb: 'oklch(70% 0.15 0)', // crimson
 	};
 	const FALLBACK_TINT = 'oklch(70% 0.05 0)';
 
