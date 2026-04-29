@@ -173,6 +173,19 @@ impl ChaosEngine {
             *rules = snap.rules;
         }
     }
+
+    /// JSON-serialise the current rule list. Returns `None` only on
+    /// the (effectively unreachable) serde failure path so callers
+    /// can ignore the error rather than handle it.
+    pub fn snapshot_to_bytes(&self) -> Option<Vec<u8>> {
+        serde_json::to_vec(&self.snapshot()).ok()
+    }
+
+    pub fn restore_from_bytes(&self, bytes: &[u8]) -> Result<(), serde_json::Error> {
+        let snap: ChaosSnapshot = serde_json::from_slice(bytes)?;
+        self.restore(snap);
+        Ok(())
+    }
 }
 
 fn build_outcome(rule: &ChaosRule, rng: &mut impl rand::Rng) -> ChaosOutcome {
@@ -345,6 +358,26 @@ mod tests {
         assert_eq!(rules[0].injection_count, 2);
         assert_eq!(e.total_injections.load(Ordering::Relaxed), 2);
         assert_eq!(e.recent_injections().len(), 2);
+    }
+
+    #[test]
+    fn snapshot_to_bytes_round_trip() {
+        let e = ChaosEngine::new();
+        e.add_rule(rule(
+            "r1",
+            ServiceMatch::Exact("s3".into()),
+            OperationMatch::Any,
+            0.25,
+            ChaosEffect::Error(err("SlowDown")),
+        ));
+        let bytes = e.snapshot_to_bytes().expect("serialise");
+
+        let other = ChaosEngine::new();
+        other.restore_from_bytes(&bytes).expect("deserialise");
+        let rules = other.rules();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].id, "r1");
+        assert_eq!(rules[0].probability, 0.25);
     }
 
     #[test]

@@ -334,6 +334,12 @@ async fn main() -> Result<()> {
             warn!(error = %e, "Failed to restore billing snapshot");
         }
 
+        if let Some(bytes) = pm.load_snapshot("chaos")
+            && let Err(e) = state.chaos.restore_from_bytes(&bytes)
+        {
+            warn!(error = %e, "Failed to restore chaos snapshot");
+        }
+
         if !cli.no_gc {
             run_gc(
                 s3_service.as_ref(),
@@ -370,6 +376,7 @@ async fn main() -> Result<()> {
         let services_for_shutdown = Arc::clone(&state.services);
         let pm_shutdown = Arc::new(PersistenceManager::new(data_dir));
         let billing_for_shutdown = Arc::clone(&billing_meter);
+        let chaos_for_shutdown = Arc::clone(&state.chaos);
         tokio::spawn(async move {
             #[cfg(unix)]
             {
@@ -394,6 +401,11 @@ async fn main() -> Result<()> {
                 && let Err(e) = pm_shutdown.save_snapshot("billing", &bytes)
             {
                 warn!(error = %e, "Failed to save billing snapshot on shutdown");
+            }
+            if let Some(bytes) = chaos_for_shutdown.snapshot_to_bytes()
+                && let Err(e) = pm_shutdown.save_snapshot("chaos", &bytes)
+            {
+                warn!(error = %e, "Failed to save chaos snapshot on shutdown");
             }
             info!("Snapshots saved. Exiting.");
             std::process::exit(0);
