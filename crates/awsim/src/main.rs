@@ -335,6 +335,9 @@ async fn main() -> Result<()> {
                 // Sum BodyStore bytes per service. Some services have
                 // multiple groups (S3 stores objects under "s3"; Lambda
                 // stores function code under "lambda" etc.).
+                // The body-store handle uses display-style names; the
+                // billing meter keys on signing names from the request
+                // event stream, so remap any that diverge.
                 let mut bytes_by_service: std::collections::HashMap<String, u64> =
                     std::collections::HashMap::new();
                 for handle in body_stores_for_storage.iter() {
@@ -343,7 +346,11 @@ async fn main() -> Result<()> {
                         total =
                             total.saturating_add(handle.body_store.group_size(group).unwrap_or(0));
                     }
-                    bytes_by_service.insert(handle.service_name.clone(), total);
+                    let service_key = match handle.service_name.as_str() {
+                        "cloudwatch-logs" => "logs".to_string(),
+                        other => other.to_string(),
+                    };
+                    bytes_by_service.insert(service_key, total);
                 }
 
                 // DDB lives in a SQLite file rather than a BodyStore.

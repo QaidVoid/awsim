@@ -1063,7 +1063,13 @@ const SERVICES: &[ServiceConfig] = &[
                 ("operation", "PutLogEvents"),
             ],
         }),
-        storage_matcher: None,
+        // Archived log retention: $0.03/GB-Mo. Sampled by the same
+        // poll loop as S3/Lambda — the BodyStore for the "logs"
+        // group gives current bytes.
+        storage_matcher: Some(DimensionMatcher {
+            product_family: "Storage Snapshot",
+            attributes: &[("usagetype", "USE1-TimedStorage-ByteHrs")],
+        }),
         compute_matcher: None,
         dimensions: &[
             DimensionConfig {
@@ -1110,6 +1116,62 @@ const SERVICES: &[ServiceConfig] = &[
                 ],
                 matcher: None,
                 fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
+    ServiceConfig {
+        service: "ecr",
+        aws_code: "AmazonECR",
+        use_global_file: false,
+        default_request_rate: 0.0,
+        ingest_matcher: None,
+        // ECR registry storage: $0.10/GB-Mo for stored container
+        // images. Sampled via the body store poll loop.
+        storage_matcher: Some(DimensionMatcher {
+            product_family: "EC2 Container Registry",
+            attributes: &[("usagetype", "TimedStorage-ByteHrs")],
+        }),
+        compute_matcher: None,
+        dimensions: &[
+            // Per-request rate is $0 for the ECR API — billing is
+            // entirely on stored bytes + cross-region transfer.
+            DimensionConfig {
+                operations: &[
+                    "GetAuthorizationToken",
+                    "DescribeRepositories",
+                    "DescribeImages",
+                    "ListImages",
+                    "BatchGetImage",
+                    "BatchCheckLayerAvailability",
+                    "GetDownloadUrlForLayer",
+                ],
+                matcher: None,
+                fixed_description: "Read API requests",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &[
+                    "CreateRepository",
+                    "DeleteRepository",
+                    "PutImage",
+                    "BatchDeleteImage",
+                    "InitiateLayerUpload",
+                    "UploadLayerPart",
+                    "CompleteLayerUpload",
+                    "PutImageScanningConfiguration",
+                    "PutLifecyclePolicy",
+                    "DeleteLifecyclePolicy",
+                    "GetLifecyclePolicy",
+                    "PutRepositoryPolicy",
+                    "DeleteRepositoryPolicy",
+                    "GetRepositoryPolicy",
+                    "TagResource",
+                    "UntagResource",
+                    "ListTagsForResource",
+                ],
+                matcher: None,
+                fixed_description: "Write / control-plane requests",
                 fixed_rate: 0.0,
             },
         ],

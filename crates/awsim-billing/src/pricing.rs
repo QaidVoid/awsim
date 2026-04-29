@@ -133,4 +133,5 @@ const EMBEDDED_PRICING: &[&str] = &[
     include_str!("../pricing/cloudfront.json"),
     include_str!("../pricing/firehose.json"),
     include_str!("../pricing/logs.json"),
+    include_str!("../pricing/ecr.json"),
 ];

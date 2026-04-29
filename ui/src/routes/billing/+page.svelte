@@ -41,6 +41,7 @@
 		cloudfront: 'Amazon CloudFront',
 		firehose: 'Amazon Data Firehose',
 		logs: 'Amazon CloudWatch Logs',
+		ecr: 'Amazon ECR',
 	};
 
 	// Stable tints per service so the same colour represents the same
@@ -63,6 +64,7 @@
 		cloudfront: 'oklch(72% 0.13 95)', // gold
 		firehose: 'oklch(68% 0.16 30)', // burnt orange
 		logs: 'oklch(64% 0.12 240)', // dusk blue
+		ecr: 'oklch(70% 0.13 280)', // lavender
 	};
 	const FALLBACK_TINT = 'oklch(70% 0.05 0)';
 
