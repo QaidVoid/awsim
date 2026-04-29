@@ -51,7 +51,7 @@ pub fn decode_iterator(token: &str) -> Option<ShardIteratorInfo> {
     }
     let stream_name = parts[0].to_string();
     let shard_index: usize = parts[1].parse().ok()?;
-    let position: usize = parts[2].parse().ok()?;
+    let position: u64 = parts[2].parse().ok()?;
     Some(ShardIteratorInfo {
         stream_name,
         shard_index,

@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use dashmap::DashMap;
 
-/// Per-account/region Kinesis state.
+/// Per-account/region Kinesis state. Records live in the shared
+/// `SqliteStore` (off `state.sqlite`); everything below is metadata.
 #[derive(Debug, Default)]
 pub struct KinesisState {
     /// Stream name → KinesisStream
@@ -16,6 +18,18 @@ pub struct KinesisState {
     /// Resource ARN -> tags
     pub resource_tags: DashMap<String, HashMap<String, String>>,
     pub account_settings: std::sync::RwLock<AccountSettings>,
+    /// Shared SQLite store for records. Set on first `get_state`.
+    pub sqlite: OnceLock<Arc<crate::SqliteStore>>,
+}
+
+impl KinesisState {
+    pub fn sqlite(&self) -> Option<&Arc<crate::SqliteStore>> {
+        self.sqlite.get()
+    }
+
+    pub fn set_sqlite(&self, store: Arc<crate::SqliteStore>) {
+        let _ = self.sqlite.set(store);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -66,7 +80,9 @@ pub struct KinesisStream {
     pub warm_throughput_records: u64,
 }
 
-/// A single shard within a stream.
+/// A single shard within a stream. Records themselves live in the
+/// SQLite store; the shard struct only tracks routing metadata + the
+/// next sequence number to allocate.
 #[derive(Debug, Clone)]
 pub struct Shard {
     pub shard_id: String,
@@ -74,7 +90,6 @@ pub struct Shard {
     pub hash_key_range: (String, String),
     /// (starting_sequence_number, ending_sequence_number)
     pub sequence_number_range: (String, Option<String>),
-    pub records: Vec<KinesisRecord>,
     pub next_sequence: u64,
 }
 
@@ -84,36 +99,30 @@ impl Shard {
             shard_id: shard_id_for(index),
             hash_key_range: (start_hash.to_string(), end_hash.to_string()),
             sequence_number_range: (format!("{:020}", 0), None),
-            records: Vec::new(),
             next_sequence: 1,
         }
     }
 
-    /// Allocate the next sequence number for this shard.
-    pub fn alloc_sequence(&mut self) -> String {
+    /// Allocate the next sequence number for this shard, returning
+    /// both the i64 numeric form (for SQLite indexing) and the
+    /// 20-digit zero-padded string (the AWS wire format).
+    pub fn alloc_sequence(&mut self) -> (i64, String) {
         let seq = self.next_sequence;
         self.next_sequence += 1;
-        format!("{:020}", seq)
+        (seq as i64, format!("{seq:020}"))
     }
 }
 
-/// A record stored in a shard.
-#[derive(Debug, Clone)]
-pub struct KinesisRecord {
-    pub sequence_number: String,
-    /// base64-encoded data
-    pub data: String,
-    pub partition_key: String,
-    pub timestamp_millis: u64,
-}
-
-/// Information about an active shard iterator.
+/// Information about an active shard iterator. `position` is now a
+/// sequence-number cursor (exclusive lower bound) — `GetRecords`
+/// returns rows with `seq > position`.
 #[derive(Debug, Clone)]
 pub struct ShardIteratorInfo {
     pub stream_name: String,
     pub shard_index: usize,
-    /// Next record index to return (position within shard.records).
-    pub position: usize,
+    /// Sequence-number cursor (exclusive lower bound). Records with
+    /// `seq > position` are returned by `GetRecords`.
+    pub position: u64,
 }
 
 /// Build a standard shard ID string from an index.

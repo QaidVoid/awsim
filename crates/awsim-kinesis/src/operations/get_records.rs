@@ -7,7 +7,7 @@ use crate::util::{decode_iterator, encode_iterator};
 pub fn handle(
     state: &KinesisState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let iterator_token = input["ShardIterator"]
         .as_str()
@@ -36,16 +36,25 @@ pub fn handle(
         ));
     }
 
-    let shard = &stream.shards[info.shard_index];
-    let total_records = shard.records.len();
-    let start = info.position.min(total_records);
-    let end = (start + limit).min(total_records);
+    let shard_id = stream.shards[info.shard_index].shard_id.clone();
+    let sqlite = state
+        .sqlite()
+        .ok_or_else(|| AwsError::internal("Kinesis sqlite store not initialised"))?;
 
-    let records: Vec<Value> = shard.records[start..end]
+    let rows = sqlite.read_after(
+        &ctx.account_id,
+        &ctx.region,
+        &info.stream_name,
+        &shard_id,
+        info.position as i64,
+        limit,
+    )?;
+
+    let records: Vec<Value> = rows
         .iter()
         .map(|r| {
             json!({
-                "SequenceNumber": r.sequence_number,
+                "SequenceNumber": format!("{:020}", r.seq),
                 "ApproximateArrivalTimestamp": r.timestamp_millis / 1000,
                 "Data": r.data,
                 "PartitionKey": r.partition_key,
@@ -54,9 +63,8 @@ pub fn handle(
         })
         .collect();
 
-    let new_position = end;
+    let new_position = rows.last().map(|r| r.seq as u64).unwrap_or(info.position);
 
-    // Build next iterator at the new position
     let next_iterator_info = ShardIteratorInfo {
         stream_name: info.stream_name.clone(),
         shard_index: info.shard_index,
@@ -67,13 +75,30 @@ pub fn handle(
         .iterators
         .insert(next_token.clone(), next_iterator_info);
 
-    // MillisBehindLatest: 0 if we've caught up to the latest record, else a positive value
-    let millis_behind = if new_position >= total_records {
+    // MillisBehindLatest: rough lag between our cursor and the most
+    // recent record's wall-clock timestamp.
+    let max_seq = sqlite
+        .max_seq(&ctx.account_id, &ctx.region, &info.stream_name, &shard_id)
+        .unwrap_or(0) as u64;
+    let millis_behind = if new_position >= max_seq {
         0u64
     } else {
-        // Use approximate lag based on the oldest unread record's timestamp
-        let oldest_unread = &shard.records[new_position];
-        now_millis().saturating_sub(oldest_unread.timestamp_millis)
+        // Fetch the next unread record's timestamp to estimate the lag.
+        let next_unread = sqlite
+            .read_after(
+                &ctx.account_id,
+                &ctx.region,
+                &info.stream_name,
+                &shard_id,
+                new_position as i64,
+                1,
+            )
+            .ok()
+            .and_then(|v| v.into_iter().next());
+        match next_unread {
+            Some(r) => now_millis().saturating_sub(r.timestamp_millis as u64),
+            None => 0,
+        }
     };
 
     Ok(json!({

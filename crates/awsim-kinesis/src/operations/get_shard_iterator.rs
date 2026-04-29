@@ -7,7 +7,7 @@ use crate::util::encode_iterator;
 pub fn handle(
     state: &KinesisState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let stream_name = input["StreamName"]
         .as_str()
@@ -24,11 +24,10 @@ pub fn handle(
     let stream = state.streams.get(stream_name).ok_or_else(|| {
         AwsError::not_found(
             "ResourceNotFoundException",
-            format!("Stream {} does not exist", stream_name),
+            format!("Stream {stream_name} does not exist"),
         )
     })?;
 
-    // Find shard index by shard_id
     let shard_index = stream
         .shards
         .iter()
@@ -36,49 +35,50 @@ pub fn handle(
         .ok_or_else(|| {
             AwsError::bad_request(
                 "ResourceNotFoundException",
-                format!(
-                    "Shard {} does not exist in stream {}",
-                    shard_id, stream_name
-                ),
+                format!("Shard {shard_id} does not exist in stream {stream_name}"),
             )
         })?;
 
-    let shard = &stream.shards[shard_index];
+    let sqlite = state
+        .sqlite()
+        .ok_or_else(|| AwsError::internal("Kinesis sqlite store not initialised"))?;
 
-    let position = match iterator_type {
+    // Iterator semantics — `position` is the exclusive lower bound;
+    // `GetRecords` returns rows with `seq > position`.
+    //
+    // Sequence numbers are 1-based, so `position = 0` means
+    // "from the start". `LATEST` skips ahead to the highest stored
+    // seq so only future records are visible.
+    let position: u64 = match iterator_type {
         "TRIM_HORIZON" => 0,
-        "LATEST" => shard.records.len(),
+        "LATEST" => sqlite
+            .max_seq(&ctx.account_id, &ctx.region, stream_name, shard_id)
+            .unwrap_or(0) as u64,
         "AT_SEQUENCE_NUMBER" => {
-            let seq = input["StartingSequenceNumber"].as_str().ok_or_else(|| {
+            let seq_str = input["StartingSequenceNumber"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
                     "MissingParameter",
                     "StartingSequenceNumber is required for AT_SEQUENCE_NUMBER",
                 )
             })?;
-            shard
-                .records
-                .iter()
-                .position(|r| r.sequence_number == seq)
-                .unwrap_or(shard.records.len())
+            // `AT` means inclusive — set the cursor one before the
+            // requested seq so the requested record is the next read.
+            let seq: u64 = seq_str.parse().unwrap_or(0);
+            seq.saturating_sub(1)
         }
         "AFTER_SEQUENCE_NUMBER" => {
-            let seq = input["StartingSequenceNumber"].as_str().ok_or_else(|| {
+            let seq_str = input["StartingSequenceNumber"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
                     "MissingParameter",
                     "StartingSequenceNumber is required for AFTER_SEQUENCE_NUMBER",
                 )
             })?;
-            shard
-                .records
-                .iter()
-                .position(|r| r.sequence_number == seq)
-                .map(|i| i + 1)
-                .unwrap_or(shard.records.len())
+            seq_str.parse().unwrap_or(0)
         }
         other => {
             return Err(AwsError::bad_request(
                 "InvalidArgumentException",
-                format!("Unknown ShardIteratorType: {}", other),
+                format!("Unknown ShardIteratorType: {other}"),
             ));
         }
     };
@@ -90,8 +90,6 @@ pub fn handle(
     };
 
     let token = encode_iterator(&info);
-    // Store it for GetRecords to look up (not strictly needed since we decode from the token,
-    // but useful for debugging / future TTL expiry)
     state.iterators.insert(token.clone(), info);
 
     Ok(json!({

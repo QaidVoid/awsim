@@ -1,7 +1,11 @@
+use std::path::Path;
+use std::sync::Arc;
+
 use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
 use serde_json::Value;
 use tracing::debug;
 
+use crate::SqliteStore;
 use crate::operations::{
     consumers, create_stream, delete_stream, describe_stream, describe_stream_summary, encryption,
     extras, get_records, get_shard_iterator, list_shards, list_streams, merge_split, monitoring,
@@ -9,16 +13,61 @@ use crate::operations::{
 };
 use crate::state::KinesisState;
 
-/// The Kinesis Data Streams service handler.
+/// The Kinesis Data Streams service handler. Records live in
+/// `sqlite_store`; stream / shard / iterator metadata stays in
+/// per-(account, region) DashMaps on `KinesisState`.
 pub struct KinesisService {
     store: AccountRegionStore<KinesisState>,
+    sqlite_store: Arc<SqliteStore>,
+    _tempdir: Option<tempfile::TempDir>,
 }
 
 impl KinesisService {
     pub fn new() -> Self {
+        let dir = tempfile::Builder::new()
+            .prefix("awsim-kinesis-")
+            .tempdir()
+            .expect("creating ephemeral Kinesis tempdir should not fail");
+        let path = dir.path().join("kinesis.db");
+        let sqlite_store = Arc::new(
+            SqliteStore::open(&path)
+                .expect("opening ephemeral Kinesis sqlite store should not fail"),
+        );
         Self {
             store: AccountRegionStore::new(),
+            sqlite_store,
+            _tempdir: Some(dir),
         }
+    }
+
+    pub fn with_data_dir(dir: impl AsRef<Path>) -> Self {
+        let dir = dir.as_ref();
+        std::fs::create_dir_all(dir)
+            .unwrap_or_else(|e| panic!("creating Kinesis data dir {} failed: {e}", dir.display()));
+        let path = dir.join("kinesis.db");
+        let sqlite_store = Arc::new(SqliteStore::open(&path).unwrap_or_else(|e| {
+            panic!(
+                "opening persistent Kinesis sqlite store at {} failed: {e}",
+                path.display()
+            )
+        }));
+        Self {
+            store: AccountRegionStore::new(),
+            sqlite_store,
+            _tempdir: None,
+        }
+    }
+
+    /// Path to the tempdir (when this instance owns one) so the
+    /// awsim binary can clean it up before `process::exit`.
+    pub fn tempdir_path(&self) -> Option<&Path> {
+        self._tempdir.as_ref().map(|d| d.path())
+    }
+
+    fn get_state(&self, ctx: &RequestContext) -> Arc<KinesisState> {
+        let state = self.store.get(&ctx.account_id, &ctx.region);
+        state.set_sqlite(Arc::clone(&self.sqlite_store));
+        state
     }
 }
 
@@ -46,7 +95,7 @@ impl ServiceHandler for KinesisService {
     ) -> Result<Value, AwsError> {
         debug!(operation = %operation, "Kinesis operation");
 
-        let state = self.store.get(&ctx.account_id, &ctx.region);
+        let state = self.get_state(ctx);
 
         match operation {
             "CreateStream" => create_stream::handle(&state, &input, ctx),

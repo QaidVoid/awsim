@@ -7,7 +7,7 @@ use crate::state::KinesisState;
 pub fn handle(
     state: &KinesisState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     // Accept either StreamName or StreamARN
     let stream_name = resolve_stream_name(state, input)?;
@@ -15,9 +15,13 @@ pub fn handle(
     state.streams.remove(&stream_name).ok_or_else(|| {
         AwsError::not_found(
             "ResourceNotFoundException",
-            format!("Stream {} does not exist", stream_name),
+            format!("Stream {stream_name} does not exist"),
         )
     })?;
+
+    if let Some(sqlite) = state.sqlite() {
+        let _ = sqlite.delete_stream(&ctx.account_id, &ctx.region, &stream_name);
+    }
 
     info!(stream = %stream_name, "Deleted Kinesis stream");
     Ok(json!({}))
