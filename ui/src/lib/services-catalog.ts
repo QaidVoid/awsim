@@ -29,6 +29,7 @@ import HardDrive from "@lucide/svelte/icons/hard-drive";
 import KeyRound from "@lucide/svelte/icons/key-round";
 import Layers from "@lucide/svelte/icons/layers";
 import Lock from "@lucide/svelte/icons/lock";
+import MapPin from "@lucide/svelte/icons/map-pin";
 import Mail from "@lucide/svelte/icons/mail";
 import MessageSquare from "@lucide/svelte/icons/message-square";
 import MicVocal from "@lucide/svelte/icons/mic-vocal";
@@ -386,6 +387,14 @@ export const SERVICES: Service[] = [
     category: "Networking",
     icon: Cable,
     keywords: ["graphql"],
+  },
+  {
+    id: "servicediscovery",
+    name: "Cloud Map",
+    href: "/servicediscovery",
+    category: "Networking",
+    icon: MapPin,
+    keywords: ["service discovery", "cloud map", "namespace", "instance"],
   },
 
   // Workflows
