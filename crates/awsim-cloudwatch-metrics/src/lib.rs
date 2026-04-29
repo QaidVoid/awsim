@@ -74,6 +74,12 @@ impl CloudWatchMetricsService {
         self._tempdir.as_ref().map(|d| d.path())
     }
 
+    /// Internal Arc to the sqlite store — exposed so the awsim
+    /// binary's `/_awsim/storage/sqlite` endpoint can report stats.
+    pub fn sqlite_store_handle(&self) -> Option<Arc<SqliteStore>> {
+        Some(Arc::clone(&self.sqlite_store))
+    }
+
     fn get_state(&self, ctx: &RequestContext) -> Arc<CloudWatchState> {
         let state = self.store.get(&ctx.account_id, &ctx.region);
         state.set_sqlite(Arc::clone(&self.sqlite_store));

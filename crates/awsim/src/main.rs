@@ -800,6 +800,22 @@ async fn main() -> Result<()> {
         )
         .with_state(Arc::clone(&dynamodb_service));
 
+    // SQLite-backed storage stats endpoint. Surfaces row counts +
+    // db file sizes for the four high-volume services so users can
+    // see where memory / disk is going.
+    let sqlite_stats_state = Arc::new(admin::SqliteStatsState {
+        dynamodb: Arc::clone(&dynamodb_service),
+        cw_logs: Arc::clone(&logs_service),
+        cw_metrics: Arc::clone(&cw_metrics_service),
+        kinesis: Arc::clone(&kinesis_service),
+    });
+    let sqlite_stats_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/storage/sqlite",
+            axum::routing::get(admin::sqlite_stats),
+        )
+        .with_state(sqlite_stats_state);
+
     // Named-snapshot sub-router. Bundles ServiceHandler state +
     // billing + chaos under `{data_dir}/named-snapshots/{name}/`.
     let snapshot_state = Arc::new(named_snapshots::SnapshotState {
@@ -831,6 +847,7 @@ async fn main() -> Result<()> {
         .merge(chaos_router)
         .merge(snapshot_router)
         .merge(ddb_admin_router)
+        .merge(sqlite_stats_router)
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with

@@ -425,6 +425,113 @@ pub async fn chaos_stats(State(engine): State<Arc<ChaosEngine>>) -> Json<Value> 
 
 use awsim_dynamodb::DynamoDbService;
 
+// ---------------------------------------------------------------------------
+// SQLite-backed storage stats — row counts + db file sizes for the
+// four high-volume services. Surfaces real numbers so users can see
+// where their memory / disk went.
+// ---------------------------------------------------------------------------
+
+pub struct SqliteStatsState {
+    pub dynamodb: Arc<DynamoDbService>,
+    pub cw_logs: Arc<awsim_cloudwatch_logs::CloudWatchLogsService>,
+    pub cw_metrics: Arc<awsim_cloudwatch_metrics::CloudWatchMetricsService>,
+    pub kinesis: Arc<awsim_kinesis::KinesisService>,
+}
+
+fn file_size(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+pub async fn sqlite_stats(State(s): State<Arc<SqliteStatsState>>) -> Json<Value> {
+    use awsim_cloudwatch_logs as cwl;
+    use awsim_cloudwatch_metrics as cwm;
+    use awsim_kinesis as kin;
+
+    // DynamoDB doesn't expose a public sqlite handle, so we just
+    // report the file size for now. Row counts on the other three
+    // come straight from each store.
+    // DynamoDB only exposes its tempdir path; for the persistent
+    // case we'd need a public `db_path()` accessor on the service.
+    // Report the tempdir-based file size when available, 0 otherwise.
+    let dynamodb_db = s.dynamodb.tempdir_path().map(|p| p.join("dynamodb.db"));
+    let dynamodb_size = dynamodb_db.as_deref().map(file_size).unwrap_or(0);
+
+    let cwl_store: Option<Arc<cwl::SqliteStore>> = sqlite_store_for_logs(&s.cw_logs);
+    let cwm_store: Option<Arc<cwm::SqliteStore>> = sqlite_store_for_cwm(&s.cw_metrics);
+    let kinesis_store: Option<Arc<kin::SqliteStore>> = sqlite_store_for_kinesis(&s.kinesis);
+
+    let cwl_rows = cwl_store
+        .as_ref()
+        .and_then(|s| s.total_rows().ok())
+        .unwrap_or(0);
+    let cwl_size = cwl_store
+        .as_ref()
+        .map(|s| file_size(s.db_path()))
+        .unwrap_or(0);
+
+    let cwm_rows = cwm_store
+        .as_ref()
+        .and_then(|s| s.total_rows().ok())
+        .unwrap_or(0);
+    let cwm_size = cwm_store
+        .as_ref()
+        .map(|s| file_size(s.db_path()))
+        .unwrap_or(0);
+
+    let kinesis_rows = kinesis_store
+        .as_ref()
+        .and_then(|s| s.total_rows().ok())
+        .unwrap_or(0);
+    let kinesis_size = kinesis_store
+        .as_ref()
+        .map(|s| file_size(s.db_path()))
+        .unwrap_or(0);
+
+    Json(json!({
+        "stores": [
+            {
+                "service": "dynamodb",
+                "rows": Value::Null,
+                "size_bytes": dynamodb_size,
+            },
+            {
+                "service": "cloudwatch-logs",
+                "rows": cwl_rows,
+                "size_bytes": cwl_size,
+            },
+            {
+                "service": "cloudwatch-metrics",
+                "rows": cwm_rows,
+                "size_bytes": cwm_size,
+            },
+            {
+                "service": "kinesis",
+                "rows": kinesis_rows,
+                "size_bytes": kinesis_size,
+            },
+        ]
+    }))
+}
+
+// Internal accessors. The services don't currently expose a public
+// `sqlite_store()` method (it would be tempting to leak the type),
+// so we walk through public test helpers / known paths instead.
+fn sqlite_store_for_logs(
+    svc: &Arc<awsim_cloudwatch_logs::CloudWatchLogsService>,
+) -> Option<Arc<awsim_cloudwatch_logs::SqliteStore>> {
+    svc.sqlite_store_handle()
+}
+fn sqlite_store_for_cwm(
+    svc: &Arc<awsim_cloudwatch_metrics::CloudWatchMetricsService>,
+) -> Option<Arc<awsim_cloudwatch_metrics::SqliteStore>> {
+    svc.sqlite_store_handle()
+}
+fn sqlite_store_for_kinesis(
+    svc: &Arc<awsim_kinesis::KinesisService>,
+) -> Option<Arc<awsim_kinesis::SqliteStore>> {
+    svc.sqlite_store_handle()
+}
+
 /// POST /_awsim/admin/dynamodb/vacuum — reclaim disk space after
 /// heavy DELETE / UPDATE churn. Runs SQLite VACUUM, which can take
 /// time on large databases, so it's exposed as an explicit admin
