@@ -293,6 +293,43 @@ pub async fn billing(State(meter): State<Arc<BillingMeter>>) -> Json<Value> {
 use awsim_chaos::{ChaosEngine, ChaosRule};
 use std::sync::atomic::Ordering as AtomicOrdering;
 
+pub async fn chaos_presets_list() -> Json<Value> {
+    let entries: Vec<Value> = awsim_chaos::PRESETS
+        .iter()
+        .map(|p| {
+            json!({
+                "name": p.name,
+                "description": p.description,
+            })
+        })
+        .collect();
+    Json(json!({ "presets": entries }))
+}
+
+/// POST /_awsim/chaos/presets/{name} — appends the preset's rules
+/// to the engine. Returns the new rule ids.
+pub async fn chaos_preset_apply(
+    State(engine): State<Arc<ChaosEngine>>,
+    Path(name): Path<String>,
+) -> Response {
+    let Some(rules) = awsim_chaos::presets::build(&name) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "PresetNotFound", "name": name})),
+        )
+            .into_response();
+    };
+    let ids: Vec<String> = rules.iter().map(|r| r.id.clone()).collect();
+    for rule in rules {
+        engine.add_rule(rule);
+    }
+    (
+        StatusCode::CREATED,
+        Json(json!({ "preset": name, "rule_ids": ids })),
+    )
+        .into_response()
+}
+
 pub async fn chaos_list(State(engine): State<Arc<ChaosEngine>>) -> Json<Value> {
     let rules = engine.rules();
     Json(json!({

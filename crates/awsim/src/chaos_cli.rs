@@ -6,7 +6,7 @@ use awsim_chaos::{
 };
 use serde_json::{Value, json};
 
-use crate::ChaosCommand;
+use crate::{ChaosCommand, ChaosPresetCommand};
 
 pub async fn run(cmd: ChaosCommand) -> Result<()> {
     let client = reqwest::Client::builder()
@@ -39,6 +39,14 @@ pub async fn run(cmd: ChaosCommand) -> Result<()> {
         ChaosCommand::Remove { endpoint, id } => remove(&client, &endpoint, &id).await,
         ChaosCommand::Clear { endpoint } => clear(&client, &endpoint).await,
         ChaosCommand::Stats { endpoint } => stats(&client, &endpoint).await,
+        ChaosCommand::Preset { command } => match command {
+            ChaosPresetCommand::List { endpoint, json } => {
+                preset_list(&client, &endpoint, json).await
+            }
+            ChaosPresetCommand::Apply { endpoint, name } => {
+                preset_apply(&client, &endpoint, &name).await
+            }
+        },
     }
 }
 
@@ -270,6 +278,56 @@ async fn stats(client: &reqwest::Client, endpoint: &str) -> Result<()> {
             let op = entry["operation"].as_str().unwrap_or("?");
             let ts = entry["ts"].as_u64().unwrap_or(0);
             println!("  {ts}  {svc}/{op}");
+        }
+    }
+    Ok(())
+}
+
+async fn preset_list(client: &reqwest::Client, endpoint: &str, as_json: bool) -> Result<()> {
+    let url = format!("{}/_awsim/chaos/presets", trim(endpoint));
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("connect to {endpoint}"))?
+        .error_for_status()
+        .context("list presets")?;
+    let body: Value = resp.json().await.context("parse response")?;
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+    let entries = body["presets"].as_array().cloned().unwrap_or_default();
+    if entries.is_empty() {
+        println!("No presets registered.");
+        return Ok(());
+    }
+    for p in entries {
+        let name = p["name"].as_str().unwrap_or("?");
+        let desc = p["description"].as_str().unwrap_or("");
+        println!("  {name:20}  {desc}");
+    }
+    Ok(())
+}
+
+async fn preset_apply(client: &reqwest::Client, endpoint: &str, name: &str) -> Result<()> {
+    let url = format!("{}/_awsim/chaos/presets/{name}", trim(endpoint));
+    let resp = client
+        .post(&url)
+        .send()
+        .await
+        .with_context(|| format!("connect to {endpoint}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        bail!("HTTP {status}: {text}");
+    }
+    let v: Value = resp.json().await.context("parse response")?;
+    let ids = v["rule_ids"].as_array().cloned().unwrap_or_default();
+    println!("applied preset `{name}` ({} rule(s))", ids.len());
+    for id in ids {
+        if let Some(s) = id.as_str() {
+            println!("  + {s}");
         }
     }
     Ok(())

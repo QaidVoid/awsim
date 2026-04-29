@@ -11,7 +11,9 @@
 //! `--data-dir` is set, so chaos rules survive restarts.
 
 pub mod engine;
+pub mod presets;
 pub mod rule;
 
 pub use engine::{ChaosEngine, ChaosOutcome, RecentInjection};
+pub use presets::{PRESETS, PresetInfo};
 pub use rule::{ChaosEffect, ChaosRule, ErrorEffect, LatencyEffect, OperationMatch, ServiceMatch};

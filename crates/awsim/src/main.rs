@@ -140,6 +140,29 @@ enum ChaosCommand {
         #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
         endpoint: String,
     },
+    /// Built-in chaos presets — list or apply common failure scenarios.
+    Preset {
+        #[command(subcommand)]
+        command: ChaosPresetCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ChaosPresetCommand {
+    /// List the available presets.
+    List {
+        #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
+        endpoint: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Apply a preset by name (e.g. `flaky-s3`).
+    Apply {
+        #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
+        endpoint: String,
+        /// Preset name (see `awsim chaos preset list`).
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -647,6 +670,14 @@ async fn main() -> Result<()> {
         .route(
             "/_awsim/chaos/stats",
             axum::routing::get(admin::chaos_stats),
+        )
+        .route(
+            "/_awsim/chaos/presets",
+            axum::routing::get(admin::chaos_presets_list),
+        )
+        .route(
+            "/_awsim/chaos/presets/{name}",
+            axum::routing::post(admin::chaos_preset_apply),
         )
         .with_state(Arc::clone(&state.chaos));
 
