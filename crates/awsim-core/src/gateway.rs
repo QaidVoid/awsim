@@ -53,6 +53,9 @@ pub struct AppState {
     pub events: RequestEventBus,
     /// Ring buffer of recent per-request detail captures (headers + bodies).
     pub request_details: RequestDetailStore,
+    /// Chaos engine — empty by default, populated by admin endpoints.
+    /// Evaluated before dispatch to inject synthetic errors / latency.
+    pub chaos: Arc<awsim_chaos::ChaosEngine>,
 }
 
 impl AppState {
@@ -70,6 +73,7 @@ impl AppState {
             data_dir: None,
             events: RequestEventBus::new(),
             request_details: RequestDetailStore::default(),
+            chaos: Arc::new(awsim_chaos::ChaosEngine::new()),
         }
     }
 
@@ -367,6 +371,35 @@ async fn process_request(
     }
 
     let operation = parsed.operation.clone();
+
+    // 6c. Chaos injection — sleep + optionally short-circuit with a
+    // synthetic AWS error before the handler runs. Empty engine is a
+    // no-op fast path so the cost is negligible when chaos is off.
+    if let Some(outcome) = state.chaos.evaluate(&service_name, Some(&operation)) {
+        if let Some(delay) = outcome.latency {
+            tokio::time::sleep(delay).await;
+        }
+        state
+            .chaos
+            .record_injection(&outcome.rule_id, &service_name, Some(&operation));
+        if let Some(err) = outcome.error {
+            let status = axum::http::StatusCode::from_u16(err.status)
+                .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+            let error_type = if status.is_server_error() {
+                crate::error::ErrorType::Receiver
+            } else {
+                crate::error::ErrorType::Sender
+            };
+            let aws_err = AwsError {
+                status,
+                code: err.code,
+                message: err.message,
+                error_type,
+                extras: None,
+            };
+            return Err((detected, aws_err));
+        }
+    }
 
     // 7. Dispatch to service handler
     let result = handler
