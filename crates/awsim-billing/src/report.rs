@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -8,7 +8,7 @@ use crate::state::{BillingStateStore, OpCounterSnapshot};
 const SECONDS_PER_MONTH: f64 = 30.0 * 24.0 * 60.0 * 60.0;
 const BYTES_PER_GB: f64 = 1_073_741_824.0;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BillingReport {
     pub currency: String,
     /// Wall-clock seconds the meter has been running (max across all
@@ -22,7 +22,7 @@ pub struct BillingReport {
     pub services: Vec<ServiceCost>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ServiceCost {
     pub service: String,
     pub display_name: String,
@@ -55,7 +55,7 @@ pub struct ServiceCost {
     pub dimensions: Vec<DimensionCost>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DimensionCost {
     pub description: String,
     pub price_per_request: f64,

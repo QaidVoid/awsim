@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::error_handling::HandleErrorLayer;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use tower::BoxError;
 use tower::ServiceBuilder;
@@ -15,6 +15,7 @@ use awsim_core::{
 };
 
 mod admin;
+mod bill_cli;
 mod integrations;
 mod proxy;
 
@@ -65,11 +66,40 @@ struct Cli {
     /// exhausts file descriptors or memory.
     #[arg(long, env = "AWSIM_MAX_CONCURRENT_REQUESTS", default_value_t = 5_000)]
     max_concurrent_requests: usize,
+
+    /// One-shot subcommand. Without one, `awsim` runs the server
+    /// (the default for backwards compatibility).
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Print the current bill from a running awsim instance.
+    Bill {
+        /// awsim endpoint to query.
+        #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
+        endpoint: String,
+        /// Emit raw JSON instead of the human-readable summary.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // One-shot subcommands run before the server-startup machinery
+    // boots so they don't drag in tracing, the rlimit bump, or any
+    // of the body-store wiring.
+    if let Some(cmd) = cli.command {
+        match cmd {
+            Command::Bill { endpoint, json } => {
+                return bill_cli::run(&endpoint, json).await;
+            }
+        }
+    }
 
     tracing_subscriber::fmt()
         .with_env_filter(&cli.log_level)
