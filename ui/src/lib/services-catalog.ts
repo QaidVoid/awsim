@@ -25,6 +25,7 @@ import Fingerprint from "@lucide/svelte/icons/fingerprint";
 import Flame from "@lucide/svelte/icons/flame";
 import Gauge from "@lucide/svelte/icons/gauge";
 import Globe from "@lucide/svelte/icons/globe";
+import BookText from "@lucide/svelte/icons/book-text";
 import HardDrive from "@lucide/svelte/icons/hard-drive";
 import KeyRound from "@lucide/svelte/icons/key-round";
 import Layers from "@lucide/svelte/icons/layers";
@@ -165,6 +166,14 @@ export const SERVICES: Service[] = [
     category: "Storage",
     icon: MemoryStick,
     keywords: ["memorydb", "redis", "in-memory", "cache"],
+  },
+  {
+    id: "qldb",
+    name: "QLDB",
+    href: "/qldb",
+    category: "Storage",
+    icon: BookText,
+    keywords: ["ledger", "qldb", "quantum ledger"],
   },
   {
     id: "efs",
