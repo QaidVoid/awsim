@@ -1,0 +1,46 @@
+{
+  "service": "monitoring",
+  "display_name": "AmazonCloudWatch",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AmazonCloudWatch, 2026-03-13T17:42:19Z)",
+  "request_dimensions": [
+    {
+      "description": "$0.01 per 1,000 requests",
+      "operations": [
+        "GetMetricData",
+        "GetMetricStatistics",
+        "GetMetricWidgetImage",
+        "PutMetricData",
+        "ListMetrics",
+        "DescribeAlarms",
+        "DescribeAlarmsForMetric",
+        "DescribeAlarmHistory",
+        "PutMetricAlarm",
+        "DeleteAlarms",
+        "EnableAlarmActions",
+        "DisableAlarmActions",
+        "SetAlarmState",
+        "PutDashboard",
+        "GetDashboard",
+        "DeleteDashboards",
+        "ListDashboards"
+      ],
+      "price_per_request": 0.00001
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "TagResource",
+        "UntagResource",
+        "ListTagsForResource",
+        "PutAnomalyDetector",
+        "DeleteAnomalyDetector",
+        "DescribeAnomalyDetectors"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.00001,
+  "data_transfer_out_per_gb": 0.09
+}

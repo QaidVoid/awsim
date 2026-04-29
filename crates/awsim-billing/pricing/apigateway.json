@@ -1,0 +1,72 @@
+{
+  "service": "apigateway",
+  "display_name": "Amazon API Gateway",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AmazonApiGateway, 2025-11-20T01:06:52Z)",
+  "request_dimensions": [
+    {
+      "description": "$3.50/million requests - first 333 million requests/month",
+      "operations": [
+        "ApiGatewayRequest",
+        "Invoke",
+        "ApiInvoke"
+      ],
+      "price_per_request": 3.5e-6
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "CreateRestApi",
+        "DeleteRestApi",
+        "GetRestApi",
+        "GetRestApis",
+        "UpdateRestApi",
+        "CreateResource",
+        "DeleteResource",
+        "GetResource",
+        "GetResources",
+        "UpdateResource",
+        "PutMethod",
+        "DeleteMethod",
+        "GetMethod",
+        "UpdateMethod",
+        "PutIntegration",
+        "DeleteIntegration",
+        "GetIntegration",
+        "UpdateIntegration",
+        "PutMethodResponse",
+        "PutIntegrationResponse",
+        "CreateDeployment",
+        "GetDeployment",
+        "GetDeployments",
+        "DeleteDeployment",
+        "CreateStage",
+        "GetStage",
+        "GetStages",
+        "UpdateStage",
+        "DeleteStage",
+        "CreateAuthorizer",
+        "GetAuthorizer",
+        "GetAuthorizers",
+        "UpdateAuthorizer",
+        "DeleteAuthorizer",
+        "CreateApiKey",
+        "DeleteApiKey",
+        "GetApiKey",
+        "GetApiKeys",
+        "UpdateApiKey",
+        "CreateUsagePlan",
+        "DeleteUsagePlan",
+        "GetUsagePlan",
+        "GetUsagePlans",
+        "UpdateUsagePlan",
+        "TagResource",
+        "UntagResource"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09
+}

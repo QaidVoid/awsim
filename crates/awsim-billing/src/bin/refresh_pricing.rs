@@ -532,6 +532,234 @@ const SERVICES: &[ServiceConfig] = &[
             },
         ],
     },
+    ServiceConfig {
+        service: "apigateway",
+        aws_code: "AmazonApiGateway",
+        default_request_rate: 0.0,
+        dimensions: &[
+            // REST API requests are billed per-call. The
+            // `usagetype=USE1-ApiGatewayRequest` SKU's first paid tier
+            // is the headline $3.50/M rate.
+            DimensionConfig {
+                // We can't tell REST from HTTP from the request event
+                // alone — both go through the gateway proxy without a
+                // protocol tag — so we charge everything at the REST
+                // rate. Slight overbill vs HTTP API, but defensible
+                // given AWSim doesn't model HTTP-vs-REST distinctly.
+                operations: &["ApiGatewayRequest", "Invoke", "ApiInvoke"],
+                matcher: Some(DimensionMatcher {
+                    product_family: "API Calls",
+                    attributes: &[("usagetype", "USE1-ApiGatewayRequest")],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &[
+                    "CreateRestApi",
+                    "DeleteRestApi",
+                    "GetRestApi",
+                    "GetRestApis",
+                    "UpdateRestApi",
+                    "CreateResource",
+                    "DeleteResource",
+                    "GetResource",
+                    "GetResources",
+                    "UpdateResource",
+                    "PutMethod",
+                    "DeleteMethod",
+                    "GetMethod",
+                    "UpdateMethod",
+                    "PutIntegration",
+                    "DeleteIntegration",
+                    "GetIntegration",
+                    "UpdateIntegration",
+                    "PutMethodResponse",
+                    "PutIntegrationResponse",
+                    "CreateDeployment",
+                    "GetDeployment",
+                    "GetDeployments",
+                    "DeleteDeployment",
+                    "CreateStage",
+                    "GetStage",
+                    "GetStages",
+                    "UpdateStage",
+                    "DeleteStage",
+                    "CreateAuthorizer",
+                    "GetAuthorizer",
+                    "GetAuthorizers",
+                    "UpdateAuthorizer",
+                    "DeleteAuthorizer",
+                    "CreateApiKey",
+                    "DeleteApiKey",
+                    "GetApiKey",
+                    "GetApiKeys",
+                    "UpdateApiKey",
+                    "CreateUsagePlan",
+                    "DeleteUsagePlan",
+                    "GetUsagePlan",
+                    "GetUsagePlans",
+                    "UpdateUsagePlan",
+                    "TagResource",
+                    "UntagResource",
+                ],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
+    ServiceConfig {
+        service: "states",
+        aws_code: "AmazonStates",
+        default_request_rate: 0.0,
+        dimensions: &[
+            // AWS bills per state transition, not per execution. We
+            // can only see StartExecution from the request event, so
+            // we charge one transition per execution — a deliberate
+            // underbill. Real workflows average 5-10 transitions per
+            // run; future work will need to tap into the SFN engine's
+            // transition events for accurate metering.
+            DimensionConfig {
+                operations: &["StartExecution", "StartSyncExecution"],
+                matcher: Some(DimensionMatcher {
+                    product_family: "AWS Step Functions",
+                    attributes: &[("usagetype", "USE1-StateTransition")],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &[
+                    "CreateStateMachine",
+                    "DeleteStateMachine",
+                    "DescribeStateMachine",
+                    "ListStateMachines",
+                    "UpdateStateMachine",
+                    "DescribeExecution",
+                    "GetExecutionHistory",
+                    "ListExecutions",
+                    "StopExecution",
+                    "SendTaskSuccess",
+                    "SendTaskFailure",
+                    "SendTaskHeartbeat",
+                    "CreateActivity",
+                    "DeleteActivity",
+                    "DescribeActivity",
+                    "GetActivityTask",
+                    "ListActivities",
+                    "TagResource",
+                    "UntagResource",
+                    "ListTagsForResource",
+                ],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
+    ServiceConfig {
+        service: "ses",
+        aws_code: "AmazonSES",
+        default_request_rate: 0.0,
+        dimensions: &[
+            // AWS bills per recipient, not per send. SDK callers
+            // typically send to one recipient at a time, so per-call
+            // is a close-enough approximation. Multi-recipient sends
+            // (Destination.ToAddresses with N entries) underbill by N.
+            DimensionConfig {
+                operations: &[
+                    "SendEmail",
+                    "SendRawEmail",
+                    "SendBulkEmail",
+                    "SendBulkTemplatedEmail",
+                    "SendTemplatedEmail",
+                ],
+                matcher: Some(DimensionMatcher {
+                    product_family: "Sending Email",
+                    attributes: &[("usagetype", "Recipients"), ("operation", "Send")],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &[
+                    "VerifyEmailIdentity",
+                    "DeleteIdentity",
+                    "GetIdentityVerificationAttributes",
+                    "ListIdentities",
+                    "VerifyDomainIdentity",
+                    "VerifyDomainDkim",
+                    "GetSendStatistics",
+                    "GetSendQuota",
+                    "CreateConfigurationSet",
+                    "DeleteConfigurationSet",
+                    "DescribeConfigurationSet",
+                    "ListConfigurationSets",
+                    "CreateTemplate",
+                    "DeleteTemplate",
+                    "GetTemplate",
+                    "ListTemplates",
+                    "UpdateTemplate",
+                    "TagResource",
+                    "UntagResource",
+                ],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
+    ServiceConfig {
+        service: "monitoring",
+        aws_code: "AmazonCloudWatch",
+        default_request_rate: 1.0e-5,
+        dimensions: &[
+            // AWS bills CloudWatch API requests at $0.01 per 1,000.
+            // PutMetricData is in the same bucket — its per-metric
+            // monthly cost is point-in-time and not yet metered here.
+            DimensionConfig {
+                operations: &[
+                    "GetMetricData",
+                    "GetMetricStatistics",
+                    "GetMetricWidgetImage",
+                    "PutMetricData",
+                    "ListMetrics",
+                    "DescribeAlarms",
+                    "DescribeAlarmsForMetric",
+                    "DescribeAlarmHistory",
+                    "PutMetricAlarm",
+                    "DeleteAlarms",
+                    "EnableAlarmActions",
+                    "DisableAlarmActions",
+                    "SetAlarmState",
+                    "PutDashboard",
+                    "GetDashboard",
+                    "DeleteDashboards",
+                    "ListDashboards",
+                ],
+                matcher: Some(DimensionMatcher {
+                    product_family: "API Request",
+                    attributes: &[("usagetype", "CW:Requests")],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &[
+                    "TagResource",
+                    "UntagResource",
+                    "ListTagsForResource",
+                    "PutAnomalyDetector",
+                    "DeleteAnomalyDetector",
+                    "DescribeAnomalyDetectors",
+                ],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
 ];
 
 /// Decoded AWS bulk pricing JSON. We only deserialize the fields we

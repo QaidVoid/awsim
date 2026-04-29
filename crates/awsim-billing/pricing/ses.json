@@ -1,0 +1,47 @@
+{
+  "service": "ses",
+  "display_name": "Amazon Simple Email Service",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AmazonSES, 2026-04-28T18:18:24Z)",
+  "request_dimensions": [
+    {
+      "description": "Cost per recipient of SendEmail or SendRawEmail",
+      "operations": [
+        "SendEmail",
+        "SendRawEmail",
+        "SendBulkEmail",
+        "SendBulkTemplatedEmail",
+        "SendTemplatedEmail"
+      ],
+      "price_per_request": 0.0001
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "VerifyEmailIdentity",
+        "DeleteIdentity",
+        "GetIdentityVerificationAttributes",
+        "ListIdentities",
+        "VerifyDomainIdentity",
+        "VerifyDomainDkim",
+        "GetSendStatistics",
+        "GetSendQuota",
+        "CreateConfigurationSet",
+        "DeleteConfigurationSet",
+        "DescribeConfigurationSet",
+        "ListConfigurationSets",
+        "CreateTemplate",
+        "DeleteTemplate",
+        "GetTemplate",
+        "ListTemplates",
+        "UpdateTemplate",
+        "TagResource",
+        "UntagResource"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09
+}

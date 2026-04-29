@@ -32,6 +32,10 @@
 		kms: 'AWS KMS',
 		secretsmanager: 'AWS Secrets Manager',
 		events: 'Amazon EventBridge',
+		apigateway: 'Amazon API Gateway',
+		states: 'AWS Step Functions',
+		ses: 'Amazon SES',
+		monitoring: 'Amazon CloudWatch',
 	};
 
 	// Stable tints per service so the same colour represents the same
@@ -45,6 +49,10 @@
 		kms: 'oklch(70% 0.15 200)', // teal
 		secretsmanager: 'oklch(68% 0.15 285)', // violet
 		events: 'oklch(70% 0.15 105)', // chartreuse
+		apigateway: 'oklch(68% 0.15 0)', // red/coral
+		states: 'oklch(70% 0.13 220)', // sky blue
+		ses: 'oklch(72% 0.13 175)', // mint
+		monitoring: 'oklch(68% 0.15 340)', // hot pink
 	};
 	const FALLBACK_TINT = 'oklch(70% 0.05 0)';
 

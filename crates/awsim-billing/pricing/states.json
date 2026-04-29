@@ -1,0 +1,45 @@
+{
+  "service": "states",
+  "display_name": "AWS Step Functions",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AmazonStates, 2025-08-28T15:39:04Z)",
+  "request_dimensions": [
+    {
+      "description": "$0.000025 per state transition",
+      "operations": [
+        "StartExecution",
+        "StartSyncExecution"
+      ],
+      "price_per_request": 0.000025
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "CreateStateMachine",
+        "DeleteStateMachine",
+        "DescribeStateMachine",
+        "ListStateMachines",
+        "UpdateStateMachine",
+        "DescribeExecution",
+        "GetExecutionHistory",
+        "ListExecutions",
+        "StopExecution",
+        "SendTaskSuccess",
+        "SendTaskFailure",
+        "SendTaskHeartbeat",
+        "CreateActivity",
+        "DeleteActivity",
+        "DescribeActivity",
+        "GetActivityTask",
+        "ListActivities",
+        "TagResource",
+        "UntagResource",
+        "ListTagsForResource"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09
+}

@@ -106,4 +106,8 @@ const EMBEDDED_PRICING: &[&str] = &[
     include_str!("../pricing/kms.json"),
     include_str!("../pricing/secretsmanager.json"),
     include_str!("../pricing/events.json"),
+    include_str!("../pricing/apigateway.json"),
+    include_str!("../pricing/states.json"),
+    include_str!("../pricing/ses.json"),
+    include_str!("../pricing/monitoring.json"),
 ];
