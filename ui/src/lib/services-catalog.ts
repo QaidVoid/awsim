@@ -246,6 +246,14 @@ export const SERVICES: Service[] = [
     keywords: ["metrics", "monitoring"],
   },
   {
+    id: "xray",
+    name: "X-Ray",
+    href: "/xray",
+    category: "Observability",
+    icon: Activity,
+    keywords: ["trace", "tracing", "service graph", "segments"],
+  },
+  {
     id: "cloudtrail",
     name: "CloudTrail",
     href: "/cloudtrail",
