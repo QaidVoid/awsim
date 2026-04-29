@@ -1581,6 +1581,7 @@ dependencies = [
  "awsim-elb",
  "awsim-eventbridge",
  "awsim-firehose",
+ "awsim-glacier",
  "awsim-glue",
  "awsim-iam",
  "awsim-kendra",
@@ -2128,6 +2129,21 @@ dependencies = [
  "dashmap",
  "serde",
  "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-glacier"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "base64",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "tracing",
  "uuid",
 ]

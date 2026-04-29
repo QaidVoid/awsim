@@ -1074,6 +1074,13 @@ fn register_services(
     };
     state.register(Arc::new(appconfigdata), appconfigdata_routes);
 
+    let glacier = awsim_glacier::GlacierService::new();
+    let glacier_routes = {
+        use awsim_core::ServiceHandler;
+        glacier.routes()
+    };
+    state.register(Arc::new(glacier), glacier_routes);
+
     // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());

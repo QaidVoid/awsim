@@ -64,6 +64,7 @@ awsim-application-autoscaling = { workspace = true }
 awsim-xray = { workspace = true }
 awsim-servicediscovery = { workspace = true }
 awsim-appconfig = { workspace = true }
+awsim-glacier = { workspace = true }
 axum = { workspace = true }
 dashmap = { workspace = true }
 tower = { workspace = true, features = ["limit", "load-shed"] }
