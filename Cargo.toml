@@ -195,3 +195,9 @@ codegen-units = 256
 [profile.release.package.awsim-conformance]
 codegen-units = 16
 
+[profile.release]
+opt-level = "z"
+strip = true
+lto = true
+panic = "abort"
+codegen-units = 1
