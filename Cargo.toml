@@ -140,6 +140,7 @@ awsim-identitystore = { path = "crates/awsim-identitystore", version = "0.2.0" }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 # Web
 axum = "0.8"
