@@ -1,8 +1,9 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
-use tracing::{info, warn};
+use tracing::info;
 
-use crate::state::{LogEvent, LogsState, now_millis};
+use crate::sqlite_store::LogEventRow;
+use crate::state::{LogsState, now_millis};
 
 // ---------------------------------------------------------------------------
 // PutLogEvents
@@ -11,7 +12,7 @@ use crate::state::{LogEvent, LogsState, now_millis};
 pub fn put_log_events(
     state: &LogsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let group_name = input["logGroupName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "logGroupName is required")
@@ -40,7 +41,9 @@ pub fn put_log_events(
     })?;
 
     let ingestion_time = now_millis();
-    let mut new_events: Vec<LogEvent> = Vec::with_capacity(log_events.len());
+    let mut new_events: Vec<LogEventRow> = Vec::with_capacity(log_events.len());
+    let mut min_ts = u64::MAX;
+    let mut max_ts = 0u64;
 
     for ev in log_events {
         let timestamp = ev["timestamp"].as_u64().ok_or_else(|| {
@@ -55,8 +58,13 @@ pub fn put_log_events(
                 "each logEvent must have a message",
             )
         })?;
-
-        new_events.push(LogEvent {
+        if timestamp < min_ts {
+            min_ts = timestamp;
+        }
+        if timestamp > max_ts {
+            max_ts = timestamp;
+        }
+        new_events.push(LogEventRow {
             timestamp,
             message: message.to_string(),
             ingestion_time,
@@ -65,52 +73,35 @@ pub fn put_log_events(
 
     let seq_token = stream.next_sequence_token();
 
-    if let Some(bs) = state.body_store()
-        && !new_events.is_empty()
+    let sqlite = state.sqlite().ok_or_else(|| {
+        AwsError::internal("CloudWatch Logs sqlite store not initialised".to_string())
+    })?;
+    sqlite.put_events(
+        &ctx.account_id,
+        &ctx.region,
+        group_name,
+        stream_name,
+        &new_events,
+    )?;
+
+    // Enforce retention immediately after writes, so a chatty workload
+    // doesn't accumulate events past `retentionInDays` between sweeps.
+    if let Some(days) = group.retention_in_days
+        && days > 0
     {
-        let mut buf = String::new();
-        for ev in &new_events {
-            let line = serde_json::to_string(&json!({
-                "ts": ev.timestamp,
-                "msg": ev.message,
-                "ing": ev.ingestion_time,
-            }))
-            .unwrap_or_default();
-            buf.push_str(&line);
-            buf.push('\n');
-        }
-        if let Err(e) = bs.append_blob("cloudwatch-logs", group_name, stream_name, buf.as_bytes()) {
-            warn!(
-                log_group = %group_name,
-                log_stream = %stream_name,
-                error = %e,
-                "Failed to persist log events"
-            );
-        }
+        let cutoff = ingestion_time.saturating_sub((days as u64) * 86_400_000);
+        let _ = sqlite.trim_older_than(&ctx.account_id, &ctx.region, group_name, cutoff);
     }
 
-    // Merge and sort events by timestamp; extract metadata before releasing the write lock
-    let (new_first_ts, new_last_ts) = {
-        let mut events = stream.events.write().unwrap();
-        events.extend(new_events.iter().cloned());
-        events.sort_by_key(|e| e.timestamp);
-        let first = events.first().map(|e| e.timestamp);
-        let last = events.last().map(|e| e.timestamp);
-        (first, last)
-    };
-
-    // Update stream metadata (outside the write-lock scope)
-    if let Some(ts) = new_first_ts
-        && stream
-            .first_event_timestamp
-            .is_none_or(|existing| ts < existing)
-    {
-        stream.first_event_timestamp = Some(ts);
+    if !new_events.is_empty() {
+        if stream.first_event_timestamp.is_none_or(|ex| min_ts < ex) {
+            stream.first_event_timestamp = Some(min_ts);
+        }
+        if stream.last_event_timestamp.is_none_or(|ex| max_ts > ex) {
+            stream.last_event_timestamp = Some(max_ts);
+        }
+        stream.last_ingestion_time = Some(ingestion_time);
     }
-    if let Some(ts) = new_last_ts {
-        stream.last_event_timestamp = Some(ts);
-    }
-    stream.last_ingestion_time = Some(ingestion_time);
 
     info!(
         log_group = %group_name,
@@ -129,7 +120,7 @@ pub fn put_log_events(
 pub fn get_log_events(
     state: &LogsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let group_name = input["logGroupName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "logGroupName is required")
@@ -152,60 +143,67 @@ pub fn get_log_events(
         )
     })?;
 
-    let stream = group.streams.get(stream_name).ok_or_else(|| {
-        AwsError::not_found(
+    if !group.streams.contains_key(stream_name) {
+        return Err(AwsError::not_found(
             "ResourceNotFoundException",
             format!("Log stream not found: {stream_name}"),
-        )
+        ));
+    }
+
+    let sqlite = state.sqlite().ok_or_else(|| {
+        AwsError::internal("CloudWatch Logs sqlite store not initialised".to_string())
     })?;
 
-    let events = stream.events.read().unwrap();
+    let total = sqlite.count_events(
+        &ctx.account_id,
+        &ctx.region,
+        group_name,
+        stream_name,
+        start_time,
+        end_time,
+    )?;
 
-    // Filter by time range
-    let filtered: Vec<&LogEvent> = events
-        .iter()
-        .filter(|e| {
-            if let Some(start) = start_time
-                && e.timestamp < start
-            {
-                return false;
-            }
-            if let Some(end) = end_time
-                && e.timestamp > end
-            {
-                return false;
-            }
-            true
-        })
-        .collect();
+    // Token format: "{f|b}/{offset}" — keep the legacy shape so SDK
+    // callers don't need to change. Offsets count from head when
+    // ascending, from tail otherwise.
+    let offset = parse_offset(next_token);
 
-    // Determine offset from nextToken
-    let offset = if next_token.is_empty() {
-        0usize
+    let (page_offset, ascending) = if start_from_head {
+        (offset, true)
     } else {
-        next_token.parse::<usize>().unwrap_or(0)
+        // From tail: page_offset advances backward through the data.
+        let bound = total.saturating_sub(offset + limit);
+        (bound, true)
+    };
+    let take = if start_from_head {
+        limit
+    } else {
+        // When pulling from the tail, clamp the requested page so we
+        // don't slip below offset 0 once we've exhausted the buffer.
+        limit.min(total.saturating_sub(offset))
     };
 
-    // Apply direction
-    let page: Vec<Value> = if start_from_head {
-        filtered
-            .iter()
-            .skip(offset)
-            .take(limit)
-            .map(|e| event_to_json(e))
-            .collect()
-    } else {
-        // From tail: default direction for GetLogEvents without startFromHead
-        let total = filtered.len();
-        let start = total.saturating_sub(offset + limit);
-        let end = total.saturating_sub(offset);
-        filtered[start..end]
-            .iter()
-            .map(|e| event_to_json(e))
-            .collect()
-    };
+    let rows = sqlite.get_events(
+        &ctx.account_id,
+        &ctx.region,
+        group_name,
+        stream_name,
+        start_time,
+        end_time,
+        page_offset,
+        take,
+        ascending,
+    )?;
 
-    let next_forward_offset = offset + page.len();
+    let page: Vec<Value> = rows.iter().map(event_to_json).collect();
+
+    let next_forward_offset = if start_from_head {
+        offset + page.len()
+    } else {
+        // Tail pagination: forward = older, so accumulated offset
+        // grows by the page size up to total.
+        (offset + page.len()).min(total)
+    };
     let next_backward_offset = if offset == 0 {
         0
     } else {
@@ -226,15 +224,17 @@ pub fn get_log_events(
 pub fn filter_log_events(
     state: &LogsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let group_name = input["logGroupName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "logGroupName is required")
     })?;
 
-    let stream_names: Option<Vec<&str>> = input["logStreamNames"]
-        .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect());
+    let stream_names: Option<Vec<String>> = input["logStreamNames"].as_array().map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    });
 
     let filter_pattern = input["filterPattern"].as_str().unwrap_or("");
     let start_time = input["startTime"].as_u64();
@@ -248,65 +248,53 @@ pub fn filter_log_events(
         )
     })?;
 
-    let mut matched_events: Vec<Value> = Vec::new();
-    let mut searched_streams: Vec<Value> = Vec::new();
+    let sqlite = state.sqlite().ok_or_else(|| {
+        AwsError::internal("CloudWatch Logs sqlite store not initialised".to_string())
+    })?;
 
-    for stream_entry in group.streams.iter() {
-        let sname = stream_entry.key().as_str();
+    let substring = if filter_pattern.is_empty() {
+        None
+    } else {
+        Some(filter_pattern)
+    };
 
-        // Filter by logStreamNames if provided
-        if let Some(ref names) = stream_names
-            && !names.contains(&sname)
-        {
-            continue;
-        }
+    let rows = sqlite.filter_events(
+        &ctx.account_id,
+        &ctx.region,
+        group_name,
+        stream_names.as_deref(),
+        substring,
+        start_time,
+        end_time,
+        limit,
+    )?;
 
-        let stream = stream_entry.value();
-        let events = stream.events.read().unwrap();
+    let matched_events: Vec<Value> = rows
+        .into_iter()
+        .map(|(stream_name, ev)| {
+            let mut obj = event_to_json(&ev);
+            obj["logStreamName"] = json!(stream_name);
+            obj["eventId"] = json!(format!("{}-{}", stream_name, ev.timestamp));
+            obj
+        })
+        .collect();
 
-        let searched = true;
-        let mut has_match = false;
-
-        let stream_events: Vec<Value> = events
-            .iter()
-            .filter(|e| {
-                if let Some(start) = start_time
-                    && e.timestamp < start
-                {
-                    return false;
-                }
-                if let Some(end) = end_time
-                    && e.timestamp > end
-                {
-                    return false;
-                }
-                // Simple substring match for filter pattern
-                if filter_pattern.is_empty() || e.message.contains(filter_pattern) {
-                    has_match = true;
-                    return true;
-                }
-                false
-            })
-            .map(|e| {
-                let mut obj = event_to_json(e);
-                obj["logStreamName"] = json!(sname);
-                obj["eventId"] = json!(format!("{}-{}", sname, e.timestamp));
-                obj
-            })
-            .collect();
-
-        matched_events.extend(stream_events);
-        searched_streams.push(json!({
-            "logStreamName": sname,
-            "searchedCompletely": searched,
-        }));
-        let _ = has_match;
-        let _ = searched;
-    }
-
-    // Sort by timestamp for stable output
-    matched_events.sort_by_key(|e| e["timestamp"].as_u64().unwrap_or(0));
-    matched_events.truncate(limit);
+    let searched_streams: Vec<Value> = group
+        .streams
+        .iter()
+        .filter_map(|s| {
+            let sname = s.key();
+            if let Some(ref names) = stream_names
+                && !names.iter().any(|n| n == sname)
+            {
+                return None;
+            }
+            Some(json!({
+                "logStreamName": sname,
+                "searchedCompletely": true,
+            }))
+        })
+        .collect();
 
     Ok(json!({
         "events": matched_events,
@@ -318,10 +306,20 @@ pub fn filter_log_events(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn event_to_json(e: &LogEvent) -> Value {
+fn event_to_json(e: &LogEventRow) -> Value {
     json!({
         "timestamp": e.timestamp,
         "message": e.message,
         "ingestionTime": e.ingestion_time,
     })
+}
+
+/// Pagination tokens have the form `"{f|b}/{offset}"`. Older
+/// awsim builds emitted a bare integer; tolerate both.
+fn parse_offset(token: &str) -> usize {
+    if token.is_empty() {
+        return 0;
+    }
+    let body = token.split_once('/').map(|(_, rest)| rest).unwrap_or(token);
+    body.parse::<usize>().unwrap_or(0)
 }

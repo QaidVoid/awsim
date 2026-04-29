@@ -54,7 +54,7 @@ pub fn create_log_group(
 pub fn delete_log_group(
     state: &LogsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name = input["logGroupName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "logGroupName is required")
@@ -67,13 +67,13 @@ pub fn delete_log_group(
         )
     })?;
 
-    if let Some(bs) = state.body_store()
-        && let Err(e) = bs.delete_bucket("cloudwatch-logs", name)
+    if let Some(sqlite) = state.sqlite()
+        && let Err(e) = sqlite.delete_group(&ctx.account_id, &ctx.region, name)
     {
         warn!(
             log_group = %name,
-            error = %e,
-            "Failed to remove persisted log group directory"
+            error = %e.message,
+            "Failed to remove persisted log group events"
         );
     }
 

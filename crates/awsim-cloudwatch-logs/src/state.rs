@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use awsim_core::{BodyStore, Snapshottable};
@@ -15,15 +15,9 @@ pub fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
-/// A single log event.
-#[derive(Debug, Clone)]
-pub struct LogEvent {
-    pub timestamp: u64,
-    pub message: String,
-    pub ingestion_time: u64,
-}
-
-/// A log stream within a log group.
+/// A log stream within a log group. Events themselves live in the
+/// shared `SqliteStore` (off the `LogsState`); the stream struct
+/// only carries its name + bookkeeping metadata.
 #[derive(Debug)]
 pub struct LogStream {
     pub name: String,
@@ -33,7 +27,6 @@ pub struct LogStream {
     pub last_event_timestamp: Option<u64>,
     pub last_ingestion_time: Option<u64>,
     pub upload_sequence_token: Arc<AtomicU64>,
-    pub events: RwLock<Vec<LogEvent>>,
 }
 
 impl LogStream {
@@ -46,7 +39,6 @@ impl LogStream {
             last_event_timestamp: None,
             last_ingestion_time: None,
             upload_sequence_token: Arc::new(AtomicU64::new(1)),
-            events: RwLock::new(Vec::new()),
         }
     }
 
@@ -131,6 +123,10 @@ pub struct LogsState {
     /// queryId → InsightsQuery
     pub insights_queries: DashMap<String, InsightsQuery>,
     pub body_store: OnceLock<Arc<BodyStore>>,
+    /// Shared SQLite store backing all log events. Set by the
+    /// service on first `get_state` so per-region stores all see the
+    /// same database.
+    pub sqlite: OnceLock<Arc<crate::SqliteStore>>,
 }
 
 impl LogsState {
@@ -140,6 +136,14 @@ impl LogsState {
 
     pub fn set_body_store(&self, store: Arc<BodyStore>) {
         let _ = self.body_store.set(store);
+    }
+
+    pub fn sqlite(&self) -> Option<&Arc<crate::SqliteStore>> {
+        self.sqlite.get()
+    }
+
+    pub fn set_sqlite(&self, store: Arc<crate::SqliteStore>) {
+        let _ = self.sqlite.set(store);
     }
 }
 
@@ -394,7 +398,6 @@ impl Snapshottable for LogsState {
                     last_event_timestamp: ss.last_event_timestamp,
                     last_ingestion_time: ss.last_ingestion_time,
                     upload_sequence_token: Arc::new(AtomicU64::new(ss.upload_sequence_token)),
-                    events: RwLock::new(Vec::new()),
                 };
                 group.streams.insert(ss.name, stream);
             }

@@ -330,16 +330,8 @@ async fn main() -> Result<()> {
             body_store: Arc::clone(bs),
         });
     }
-    if let Some(bs) = logs_service.body_store() {
-        body_stores.push(BodyStoreHandle {
-            service_name: "cloudwatch-logs".to_string(),
-            groups: awsim_cloudwatch_logs::CloudWatchLogsService::GROUPS
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect(),
-            body_store: Arc::clone(bs),
-        });
-    }
+    // CloudWatch Logs no longer uses a body store — events are in
+    // its own SQLite file.
     state.body_stores = Arc::new(body_stores);
     if let Some(ref dir) = cli.data_dir {
         state.data_dir = Some(Arc::new(std::path::PathBuf::from(dir)));
@@ -391,6 +383,7 @@ async fn main() -> Result<()> {
     // takes care of the same tempdir cleanup in its exit path.
     if cli.data_dir.is_none() {
         let dynamodb_for_cleanup = Arc::clone(&dynamodb_service);
+        let logs_for_cleanup = Arc::clone(&logs_service);
         tokio::spawn(async move {
             #[cfg(unix)]
             {
@@ -406,12 +399,8 @@ async fn main() -> Result<()> {
             {
                 tokio::signal::ctrl_c().await.ok();
             }
-            if let Some(path) = dynamodb_for_cleanup.tempdir_path() {
-                let path = path.to_path_buf();
-                if let Err(e) = std::fs::remove_dir_all(&path) {
-                    warn!(path = %path.display(), error = %e, "Failed to remove DynamoDB tempdir on shutdown");
-                }
-            }
+            cleanup_tempdir("DynamoDB", dynamodb_for_cleanup.tempdir_path());
+            cleanup_tempdir("CloudWatch Logs", logs_for_cleanup.tempdir_path());
             info!("Exiting.");
             std::process::exit(0);
         });
@@ -443,7 +432,6 @@ async fn main() -> Result<()> {
                 lambda_service.as_ref(),
                 sqs_service.as_ref(),
                 ecr_service.as_ref(),
-                logs_service.as_ref(),
             );
         }
 
@@ -452,7 +440,6 @@ async fn main() -> Result<()> {
             let lambda_gc = Arc::clone(&lambda_service);
             let sqs_gc = Arc::clone(&sqs_service);
             let ecr_gc = Arc::clone(&ecr_service);
-            let logs_gc = Arc::clone(&logs_service);
             let interval = std::time::Duration::from_secs(secs);
             info!(interval_secs = secs, "Periodic BodyStore GC enabled");
             tokio::spawn(async move {
@@ -463,7 +450,6 @@ async fn main() -> Result<()> {
                         lambda_gc.as_ref(),
                         sqs_gc.as_ref(),
                         ecr_gc.as_ref(),
-                        logs_gc.as_ref(),
                     );
                 }
             });
@@ -475,6 +461,7 @@ async fn main() -> Result<()> {
         let billing_for_shutdown = Arc::clone(&billing_meter);
         let chaos_for_shutdown = Arc::clone(&state.chaos);
         let dynamodb_for_shutdown = Arc::clone(&dynamodb_service);
+        let logs_for_shutdown = Arc::clone(&logs_service);
         tokio::spawn(async move {
             #[cfg(unix)]
             {
@@ -505,15 +492,8 @@ async fn main() -> Result<()> {
             {
                 warn!(error = %e, "Failed to save chaos snapshot on shutdown");
             }
-            // `process::exit` skips Drop, so the DynamoDB tempdir
-            // wouldn't get removed automatically. Take it out by hand
-            // when the service owns one (no-data-dir case).
-            if let Some(path) = dynamodb_for_shutdown.tempdir_path() {
-                let path = path.to_path_buf();
-                if let Err(e) = std::fs::remove_dir_all(&path) {
-                    warn!(path = %path.display(), error = %e, "Failed to remove DynamoDB tempdir on shutdown");
-                }
-            }
+            cleanup_tempdir("DynamoDB", dynamodb_for_shutdown.tempdir_path());
+            cleanup_tempdir("CloudWatch Logs", logs_for_shutdown.tempdir_path());
 
             info!("Snapshots saved. Exiting.");
             std::process::exit(0);
@@ -915,6 +895,21 @@ async fn main() -> Result<()> {
 /// LoadShed + ConcurrencyLimit stack is `tower::load_shed::error::Overloaded`
 /// — convert it to a friendly 503 with a hint. Anything else is unexpected
 /// and surfaces as 500.
+/// `process::exit` skips Drop, so any service that owns a tempdir
+/// (no `--data-dir` case) wouldn't get its files cleaned up
+/// automatically. Remove the directory by hand instead.
+fn cleanup_tempdir(label: &str, path: Option<&std::path::Path>) {
+    let Some(path) = path else { return };
+    if let Err(e) = std::fs::remove_dir_all(path) {
+        warn!(
+            service = label,
+            path = %path.display(),
+            error = %e,
+            "Failed to remove tempdir on shutdown"
+        );
+    }
+}
+
 /// One-shot client for `awsim vacuum` — calls the admin endpoint
 /// on a running awsim instance.
 async fn run_vacuum(endpoint: &str) -> Result<()> {
@@ -1628,7 +1623,6 @@ fn run_gc(
     lambda: &awsim_lambda::LambdaService,
     sqs: &awsim_sqs::SqsService,
     ecr: &awsim_ecr::EcrService,
-    logs: &awsim_cloudwatch_logs::CloudWatchLogsService,
 ) {
     gc_one("s3", s3.body_store(), awsim_s3::S3Service::GROUPS, s3);
     gc_one(
@@ -1639,12 +1633,6 @@ fn run_gc(
     );
     gc_one("sqs", sqs.body_store(), awsim_sqs::SqsService::GROUPS, sqs);
     gc_one("ecr", ecr.body_store(), awsim_ecr::EcrService::GROUPS, ecr);
-    gc_one(
-        "cloudwatch-logs",
-        logs.body_store(),
-        awsim_cloudwatch_logs::CloudWatchLogsService::GROUPS,
-        logs,
-    );
 }
 
 fn gc_one(

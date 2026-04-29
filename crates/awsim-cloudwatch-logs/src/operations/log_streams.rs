@@ -54,7 +54,7 @@ pub fn create_log_stream(
 pub fn delete_log_stream(
     state: &LogsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let group_name = input["logGroupName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "logGroupName is required")
@@ -78,14 +78,14 @@ pub fn delete_log_stream(
         )
     })?;
 
-    if let Some(bs) = state.body_store()
-        && let Err(e) = bs.delete_blob("cloudwatch-logs", group_name, stream_name)
+    if let Some(sqlite) = state.sqlite()
+        && let Err(e) = sqlite.delete_stream(&ctx.account_id, &ctx.region, group_name, stream_name)
     {
         warn!(
             log_group = %group_name,
             log_stream = %stream_name,
-            error = %e,
-            "Failed to remove persisted log stream blob"
+            error = %e.message,
+            "Failed to remove persisted log stream events"
         );
     }
 

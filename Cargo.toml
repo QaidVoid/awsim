@@ -171,6 +171,15 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Concurrency
 dashmap = "6"
 
+# SQLite-backed state — shared across DynamoDB / CloudWatch Logs /
+# CloudWatch Metrics / Kinesis stores so they all stay on the same
+# rusqlite + r2d2 versions.
+rusqlite = { version = "0.32", features = ["bundled", "serde_json"] }
+refinery = { version = "0.8", features = ["rusqlite"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+tempfile = "3"
+
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 

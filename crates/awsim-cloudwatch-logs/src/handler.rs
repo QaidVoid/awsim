@@ -2,43 +2,79 @@ use std::path::Path;
 use std::sync::Arc;
 
 use awsim_core::{
-    AccountRegionStore, AwsError, BlobInventory, BodyStore, Protocol, RequestContext,
-    ServiceHandler,
+    AccountRegionStore, AwsError, BlobInventory, Protocol, RequestContext, ServiceHandler,
 };
 use serde_json::Value;
-use tracing::{debug, warn};
+use tracing::debug;
 
+use crate::SqliteStore;
 use crate::operations::{filters, log_events, log_groups, log_streams};
-use crate::state::{LogEvent, LogsState};
+use crate::state::LogsState;
 
-/// The CloudWatch Logs service handler.
+/// The CloudWatch Logs service handler. Log events live in
+/// `sqlite_store` (one DB per process); group/stream metadata
+/// stays in `LogsState` per (account, region).
 pub struct CloudWatchLogsService {
     store: AccountRegionStore<LogsState>,
-    body_store: Option<Arc<BodyStore>>,
+    sqlite_store: Arc<SqliteStore>,
+    /// Holds the per-process tempdir when running without
+    /// `--data-dir` so the `.db` files are removed on graceful
+    /// shutdown via Drop.
+    _tempdir: Option<tempfile::TempDir>,
 }
 
 impl CloudWatchLogsService {
-    pub const GROUPS: &'static [&'static str] = &["cloudwatch-logs"];
+    pub const GROUPS: &'static [&'static str] = &[];
 
+    /// Ephemeral in-process store. Useful for tests and `awsim` runs
+    /// without `--data-dir` — files live in a `TempDir` cleaned up
+    /// on shutdown.
     pub fn new() -> Self {
+        let dir = tempfile::Builder::new()
+            .prefix("awsim-cwl-")
+            .tempdir()
+            .expect("creating ephemeral CWL tempdir should not fail");
+        let path = dir.path().join("cloudwatch-logs.db");
+        let sqlite_store = Arc::new(
+            SqliteStore::open(&path).expect("opening ephemeral CWL sqlite store should not fail"),
+        );
         Self {
             store: AccountRegionStore::new(),
-            body_store: None,
+            sqlite_store,
+            _tempdir: Some(dir),
         }
     }
 
+    /// Persistent store rooted at `{dir}/cloudwatch-logs.db`. Created
+    /// alongside DynamoDB's `dynamodb.db` so a single `--data-dir`
+    /// captures every persistent service.
     pub fn with_data_dir(dir: impl AsRef<Path>) -> Self {
+        let dir = dir.as_ref();
+        std::fs::create_dir_all(dir).unwrap_or_else(|e| {
+            panic!(
+                "creating CloudWatch Logs data dir {} failed: {e}",
+                dir.display()
+            )
+        });
+        let path = dir.join("cloudwatch-logs.db");
+        let sqlite_store = Arc::new(SqliteStore::open(&path).unwrap_or_else(|e| {
+            panic!(
+                "opening persistent CWL sqlite store at {} failed: {e}",
+                path.display()
+            )
+        }));
         Self {
             store: AccountRegionStore::new(),
-            body_store: Some(Arc::new(BodyStore::new(dir.as_ref().to_path_buf()))),
+            sqlite_store,
+            _tempdir: None,
         }
     }
 
-    pub fn with_max_blob_bytes(mut self, bytes: u64) -> Self {
-        if let Some(bs) = self.body_store.take() {
-            let root = bs.root().to_path_buf();
-            self.body_store = Some(Arc::new(BodyStore::new(root).with_max_size(bytes)));
-        }
+    /// Legacy shim — `--max-blob-bytes` used to size the body store
+    /// that backed log events. Now that events live in SQLite the
+    /// flag is a no-op for CloudWatch Logs; kept on the type so the
+    /// `awsim` binary's wiring doesn't have to special-case it.
+    pub fn with_max_blob_bytes(self, _bytes: u64) -> Self {
         self
     }
 
@@ -46,91 +82,16 @@ impl CloudWatchLogsService {
         self.store.clone()
     }
 
-    pub fn body_store(&self) -> Option<&Arc<BodyStore>> {
-        self.body_store.as_ref()
+    /// Return the path to the sqlite tempdir (when this instance owns
+    /// one) so the awsim binary can clean it up on `process::exit`.
+    pub fn tempdir_path(&self) -> Option<&Path> {
+        self._tempdir.as_ref().map(|d| d.path())
     }
 
     fn get_state(&self, ctx: &RequestContext) -> Arc<LogsState> {
         let state = self.store.get(&ctx.account_id, &ctx.region);
-        if let Some(bs) = &self.body_store {
-            state.set_body_store(Arc::clone(bs));
-        }
+        state.set_sqlite(Arc::clone(&self.sqlite_store));
         state
-    }
-
-    fn rebind_and_replay(&self) {
-        let Some(bs) = &self.body_store else {
-            return;
-        };
-        for (_, state) in self.store.iter_all() {
-            state.set_body_store(Arc::clone(bs));
-            for group_entry in state.log_groups.iter() {
-                let group_name = group_entry.key().clone();
-                let group = group_entry.value();
-                for stream_entry in group.streams.iter() {
-                    let stream_name = stream_entry.key().clone();
-                    let stream = stream_entry.value();
-                    let events = match bs.read_blob("cloudwatch-logs", &group_name, &stream_name) {
-                        Ok(b) => b,
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                        Err(e) => {
-                            warn!(
-                                log_group = %group_name,
-                                log_stream = %stream_name,
-                                error = %e,
-                                "Failed to read persisted log stream during restore"
-                            );
-                            continue;
-                        }
-                    };
-                    let text = match std::str::from_utf8(&events) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            warn!(
-                                log_group = %group_name,
-                                log_stream = %stream_name,
-                                error = %e,
-                                "Persisted log stream is not valid utf-8"
-                            );
-                            continue;
-                        }
-                    };
-                    let mut restored: Vec<LogEvent> = Vec::new();
-                    for (lineno, line) in text.lines().enumerate() {
-                        if line.trim().is_empty() {
-                            continue;
-                        }
-                        match serde_json::from_str::<Value>(line) {
-                            Ok(v) => {
-                                let ts = v.get("ts").and_then(|x| x.as_u64()).unwrap_or(0);
-                                let msg = v
-                                    .get("msg")
-                                    .and_then(|x| x.as_str())
-                                    .unwrap_or("")
-                                    .to_string();
-                                let ing = v.get("ing").and_then(|x| x.as_u64()).unwrap_or(0);
-                                restored.push(LogEvent {
-                                    timestamp: ts,
-                                    message: msg,
-                                    ingestion_time: ing,
-                                });
-                            }
-                            Err(e) => {
-                                warn!(
-                                    log_group = %group_name,
-                                    log_stream = %stream_name,
-                                    line = lineno,
-                                    error = %e,
-                                    "Skipping malformed JSONL line during restore"
-                                );
-                            }
-                        }
-                    }
-                    restored.sort_by_key(|e| e.timestamp);
-                    *stream.events.write().unwrap() = restored;
-                }
-            }
-        }
     }
 }
 
@@ -141,27 +102,10 @@ impl Default for CloudWatchLogsService {
 }
 
 impl BlobInventory for CloudWatchLogsService {
+    /// Log events used to live in a body store. Now they're rows in
+    /// SQLite, so the orphan-blob inventory is empty for CWL.
     fn known_blobs(&self) -> Vec<(String, String, String)> {
-        let mut out = Vec::new();
-        for (_, state) in self.store.iter_all() {
-            for group_entry in state.log_groups.iter() {
-                let group_name = group_entry.key().clone();
-                let group = group_entry.value();
-                for stream_entry in group.streams.iter() {
-                    let stream_name = stream_entry.key().clone();
-                    let stream = stream_entry.value();
-                    let has_events = !stream.events.read().unwrap().is_empty();
-                    if has_events {
-                        out.push((
-                            "cloudwatch-logs".to_string(),
-                            group_name.clone(),
-                            stream_name,
-                        ));
-                    }
-                }
-            }
-        }
-        out
+        Vec::new()
     }
 }
 
@@ -246,8 +190,9 @@ impl ServiceHandler for CloudWatchLogsService {
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {
-        self.store.restore_from_bytes(data)?;
-        self.rebind_and_replay();
-        Ok(())
+        // Group/stream metadata comes from JSON; events themselves
+        // live in the SQLite file alongside the rest of awsim's
+        // persistent state, so there's no second-pass replay anymore.
+        self.store.restore_from_bytes(data)
     }
 }

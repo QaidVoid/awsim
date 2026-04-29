@@ -61,13 +61,9 @@ async fn put_then_restart_then_get_round_trips_events() {
         svc.snapshot().expect("snapshot bytes")
     };
 
-    let blob_path = dir.join("cloudwatch-logs").join(group).join(stream);
-    assert!(
-        blob_path.exists(),
-        "JSONL file should exist at {blob_path:?}"
-    );
-    let raw = std::fs::read_to_string(&blob_path).unwrap();
-    assert_eq!(raw.lines().count(), 5);
+    // Events live in cloudwatch-logs.db now (not under a body store).
+    let db_path = dir.join("cloudwatch-logs.db");
+    assert!(db_path.exists(), "sqlite file should exist at {db_path:?}");
 
     let svc2 = CloudWatchLogsService::with_data_dir(&dir);
     svc2.restore(&snapshot).expect("restore");
@@ -103,7 +99,7 @@ async fn put_then_restart_then_get_round_trips_events() {
 }
 
 #[tokio::test]
-async fn delete_log_stream_removes_persisted_blob() {
+async fn delete_log_stream_removes_persisted_events() {
     let dir = tmp_dir("delete-stream");
     let group = "persist-del-stream";
     let stream = "to-delete";
@@ -131,9 +127,9 @@ async fn delete_log_stream_removes_persisted_blob() {
     .await
     .unwrap();
 
-    let blob_path = dir.join("cloudwatch-logs").join(group).join(stream);
-    assert!(blob_path.exists());
-
+    // Re-create the stream after delete and confirm GetLogEvents
+    // returns empty — the row would still be there if delete didn't
+    // hit SQLite.
     svc.handle(
         "DeleteLogStream",
         json!({ "logGroupName": group, "logStreamName": stream }),
@@ -141,13 +137,32 @@ async fn delete_log_stream_removes_persisted_blob() {
     )
     .await
     .unwrap();
-    assert!(!blob_path.exists());
+    svc.handle(
+        "CreateLogStream",
+        json!({ "logGroupName": group, "logStreamName": stream }),
+        &ctx(),
+    )
+    .await
+    .unwrap();
+    let got = svc
+        .handle(
+            "GetLogEvents",
+            json!({
+                "logGroupName": group,
+                "logStreamName": stream,
+                "startFromHead": true,
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(got["events"].as_array().unwrap().len(), 0);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
-async fn delete_log_group_removes_persisted_directory() {
+async fn delete_log_group_removes_persisted_events() {
     let dir = tmp_dir("delete-group");
     let group = "persist-del-group";
     let stream = "s";
@@ -175,13 +190,34 @@ async fn delete_log_group_removes_persisted_directory() {
     .await
     .unwrap();
 
-    let group_dir = dir.join("cloudwatch-logs").join(group);
-    assert!(group_dir.exists());
-
     svc.handle("DeleteLogGroup", json!({ "logGroupName": group }), &ctx())
         .await
         .unwrap();
-    assert!(!group_dir.exists());
+
+    // Re-create + read should yield no surviving events.
+    svc.handle("CreateLogGroup", json!({ "logGroupName": group }), &ctx())
+        .await
+        .unwrap();
+    svc.handle(
+        "CreateLogStream",
+        json!({ "logGroupName": group, "logStreamName": stream }),
+        &ctx(),
+    )
+    .await
+    .unwrap();
+    let got = svc
+        .handle(
+            "GetLogEvents",
+            json!({
+                "logGroupName": group,
+                "logStreamName": stream,
+                "startFromHead": true,
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(got["events"].as_array().unwrap().len(), 0);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1,8 +1,10 @@
 mod handler;
 mod operations;
+pub mod sqlite_store;
 mod state;
 
 pub use handler::CloudWatchLogsService;
+pub use sqlite_store::{LogEventRow, SqliteStore};
 
 #[cfg(test)]
 mod tests {

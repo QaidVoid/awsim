@@ -19,9 +19,9 @@ uuid = { workspace = true }
 # depend on the system library — important for distributable awsim builds.
 # Sync API; we cross the async boundary with `tokio::task::spawn_blocking`
 # at the operation handler layer.
-rusqlite = { version = "0.32", features = ["bundled", "serde_json"] }
-refinery = { version = "0.8", features = ["rusqlite"] }
-r2d2 = "0.8"
-r2d2_sqlite = "0.25"
-tempfile = "3"
+rusqlite = { workspace = true }
+refinery = { workspace = true }
+r2d2 = { workspace = true }
+r2d2_sqlite = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true }
