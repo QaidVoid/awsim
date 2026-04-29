@@ -48,6 +48,10 @@ pub struct ServiceCost {
     pub compute_cost_usd: f64,
     /// Total GB-seconds of compute consumed.
     pub compute_gb_seconds: f64,
+    /// Accumulated resource-hour cost (EC2/RDS/OpenSearch instances).
+    pub resource_cost_usd: f64,
+    /// Most recent sampled count of running instances.
+    pub resource_count: u64,
     pub dimensions: Vec<DimensionCost>,
 }
 
@@ -70,6 +74,8 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
     let mut storage_agg: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     // Same shape as storage: (cost picos, gb_microseconds).
     let mut compute_agg: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+    // (cost picos, max running-instance count seen).
+    let mut resources_agg: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     let mut earliest_start: u64 = 0;
 
     for ((_acct, _region), state) in store.iter_all() {
@@ -96,6 +102,11 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             let entry = compute_agg.entry(svc).or_default();
             entry.0 += c.accumulated_cost_picos;
             entry.1 += c.gb_microseconds;
+        }
+        for (svc, r) in state.iter_resources() {
+            let entry = resources_agg.entry(svc).or_default();
+            entry.0 += r.accumulated_cost_picos;
+            entry.1 = entry.1.max(r.last_sample_count);
         }
     }
 
@@ -198,8 +209,16 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             .remove(&svc_name)
             .map(|(picos, gb_us)| (picos as f64 / 1e12, gb_us as f64 / 1e6))
             .unwrap_or((0.0, 0.0));
-        let svc_total =
-            svc_request_cost + transfer_cost + ingest_cost + storage_cost_usd + compute_cost_usd;
+        let (resource_cost_usd, resource_count) = resources_agg
+            .remove(&svc_name)
+            .map(|(picos, count)| (picos as f64 / 1e12, count))
+            .unwrap_or((0.0, 0));
+        let svc_total = svc_request_cost
+            + transfer_cost
+            + ingest_cost
+            + storage_cost_usd
+            + compute_cost_usd
+            + resource_cost_usd;
         total_cost += svc_total;
 
         services_out.push(ServiceCost {
@@ -217,6 +236,8 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             storage_bytes,
             compute_cost_usd,
             compute_gb_seconds,
+            resource_cost_usd,
+            resource_count,
             dimensions: dim_buckets,
         });
     }
@@ -241,6 +262,12 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
                 .filter(|(_, (picos, gb_us))| *picos > 0 || *gb_us > 0)
                 .map(|(k, _)| k.clone()),
         )
+        .chain(
+            resources_agg
+                .iter()
+                .filter(|(_, (picos, count))| *picos > 0 || *count > 0)
+                .map(|(k, _)| k.clone()),
+        )
         .collect();
     for svc_name in leftover_keys {
         let pricing = catalog.get(&svc_name);
@@ -258,6 +285,10 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             .remove(&svc_name)
             .map(|(picos, gb_us)| (picos as f64 / 1e12, gb_us as f64 / 1e6))
             .unwrap_or((0.0, 0.0));
+        let (resource_cost_usd, resource_count) = resources_agg
+            .remove(&svc_name)
+            .map(|(picos, count)| (picos as f64 / 1e12, count))
+            .unwrap_or((0.0, 0));
         let dim_buckets: Vec<DimensionCost> = pricing
             .map(|p| {
                 p.request_dimensions
@@ -271,7 +302,7 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
                     .collect()
             })
             .unwrap_or_default();
-        let svc_total = storage_cost_usd + compute_cost_usd;
+        let svc_total = storage_cost_usd + compute_cost_usd + resource_cost_usd;
         total_cost += svc_total;
         services_out.push(ServiceCost {
             service: svc_name,
@@ -288,6 +319,8 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             storage_bytes,
             compute_cost_usd,
             compute_gb_seconds,
+            resource_cost_usd,
+            resource_count,
             dimensions: dim_buckets,
         });
     }

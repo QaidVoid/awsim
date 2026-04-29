@@ -99,6 +99,8 @@ async fn main() -> Result<()> {
         sqs_service,
         logs_service,
         pipes_store,
+        ec2_service,
+        rds_service,
     ) = register_services(
         &mut state,
         &cli.account_id,
@@ -317,16 +319,19 @@ async fn main() -> Result<()> {
             }
         });
 
-        // Periodic storage-sampling task. Walks the per-service BodyStore
-        // sizes plus the DynamoDB SQLite file every 30s and feeds them
-        // into the billing meter, which accrues GB-month cost over the
-        // sampled interval. Only runs in persistent mode — in-memory
-        // mode has no on-disk size to query.
+        // Periodic point-in-time sampling task — drives both at-rest
+        // storage metering (BodyStore/SQLite bytes × $/GB-mo) and
+        // resource-hour metering (running EC2/RDS instances × $/hr).
+        // Only runs in persistent mode — in-memory mode has no
+        // on-disk size to query, but instance counts work either way
+        // so we sample those regardless.
         let body_stores_for_storage = Arc::clone(&state.body_stores);
         let billing_for_storage = Arc::clone(&billing_meter);
         let data_dir_for_storage = data_dir.clone();
         let account_for_storage = cli.account_id.clone();
         let region_for_storage = cli.region.clone();
+        let ec2_for_storage = Arc::clone(&ec2_service);
+        let rds_for_storage = Arc::clone(&rds_service);
         tokio::spawn(async move {
             let interval = std::time::Duration::from_secs(30);
             loop {
@@ -367,6 +372,24 @@ async fn main() -> Result<()> {
                         bytes,
                     );
                 }
+
+                // Resource-hour billing: running instance counts.
+                let ec2_count = ec2_for_storage
+                    .running_instance_count(&account_for_storage, &region_for_storage);
+                billing_for_storage.record_resource_count_sample(
+                    "ec2",
+                    &account_for_storage,
+                    &region_for_storage,
+                    ec2_count,
+                );
+                let rds_count = rds_for_storage
+                    .running_instance_count(&account_for_storage, &region_for_storage);
+                billing_for_storage.record_resource_count_sample(
+                    "rds",
+                    &account_for_storage,
+                    &region_for_storage,
+                    rds_count,
+                );
             }
         });
     }
@@ -858,6 +881,8 @@ type RegisteredServices = (
     Arc<awsim_sqs::SqsService>,
     Arc<awsim_cloudwatch_logs::CloudWatchLogsService>,
     awsim_core::AccountRegionStore<awsim_pipes::PipesState>,
+    Arc<awsim_ec2::Ec2Service>,
+    Arc<awsim_rds::RdsService>,
 );
 
 /// Register all services and return handles needed by the router:
@@ -1009,9 +1034,11 @@ fn register_services(
     state.register(ecs, vec![]);
 
     let ec2 = Arc::new(awsim_ec2::Ec2Service::new());
+    let ec2_clone = Arc::clone(&ec2);
     state.register(ec2, vec![]);
 
     let rds = Arc::new(awsim_rds::RdsService::new());
+    let rds_clone = Arc::clone(&rds);
     state.register(rds, vec![]);
 
     let appsync = awsim_appsync::AppSyncService::new();
@@ -1246,6 +1273,8 @@ fn register_services(
         sqs_clone,
         logs_clone,
         pipes_store,
+        ec2_clone,
+        rds_clone,
     )
 }
 

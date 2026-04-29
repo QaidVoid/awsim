@@ -27,6 +27,24 @@ impl RdsService {
     fn get_state(&self, ctx: &RequestContext) -> Arc<RdsState> {
         self.store.get(&ctx.account_id, &ctx.region)
     }
+
+    /// Count active DB instances for a given account+region — used by
+    /// the billing meter to charge instance-hours. AWS bills any RDS
+    /// instance that's not in `creating`, `deleting`, or `stopped`,
+    /// so we accept the most common live states.
+    pub fn running_instance_count(&self, account_id: &str, region: &str) -> u64 {
+        let state = self.store.get(account_id, region);
+        state
+            .instances
+            .iter()
+            .filter(|i| {
+                matches!(
+                    i.value().status.as_str(),
+                    "available" | "backing-up" | "modifying" | "rebooting" | "starting"
+                )
+            })
+            .count() as u64
+    }
 }
 
 impl Default for RdsService {

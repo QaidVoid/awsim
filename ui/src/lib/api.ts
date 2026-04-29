@@ -51,6 +51,8 @@ export interface BillingService {
   storage_bytes: number;
   compute_cost_usd: number;
   compute_gb_seconds: number;
+  resource_cost_usd: number;
+  resource_count: number;
   dimensions: BillingDimension[];
 }
 

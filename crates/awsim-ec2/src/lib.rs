@@ -27,6 +27,19 @@ impl Ec2Service {
     fn get_state(&self, ctx: &RequestContext) -> Arc<Ec2State> {
         self.store.get(&ctx.account_id, &ctx.region)
     }
+
+    /// Count running instances for a given account+region pair —
+    /// used by the billing meter to charge instance-hours. Stopped /
+    /// terminated / pending instances are excluded since AWS doesn't
+    /// bill compute time for them.
+    pub fn running_instance_count(&self, account_id: &str, region: &str) -> u64 {
+        let state = self.store.get(account_id, region);
+        state
+            .instances
+            .iter()
+            .filter(|i| i.value().state == "running")
+            .count() as u64
+    }
 }
 
 impl Default for Ec2Service {

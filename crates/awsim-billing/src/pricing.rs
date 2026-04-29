@@ -83,6 +83,14 @@ pub struct ServicePricing {
     /// this rate.
     #[serde(default)]
     pub compute_per_gb_second: Option<f64>,
+    /// Cost per running instance per hour — for "always on" services
+    /// like EC2 / RDS / OpenSearch where AWS bills by instance-type
+    /// hours regardless of API activity. AWSim doesn't carry the
+    /// per-instance type through, so this is a baseline rate
+    /// (t3.micro-class). The meter samples the running-instance
+    /// count periodically and accrues cost across elapsed time.
+    #[serde(default)]
+    pub instance_hour_per_instance: Option<f64>,
 }
 
 fn default_currency() -> String {
@@ -136,4 +144,6 @@ const EMBEDDED_PRICING: &[&str] = &[
     include_str!("../pricing/cognito-idp.json"),
     include_str!("../pricing/cognito-identity.json"),
     include_str!("../pricing/ecr.json"),
+    include_str!("../pricing/ec2.json"),
+    include_str!("../pricing/rds.json"),
 ];

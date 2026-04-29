@@ -39,6 +39,35 @@ impl BillingMeter {
         }
     }
 
+    /// Record a point-in-time running-instance count sample for a
+    /// metered service (EC2 / RDS / OpenSearch). Cost accrues based on
+    /// the published `instance_hour_per_instance` rate.
+    pub fn record_resource_count_sample(
+        &self,
+        service: &str,
+        account_id: &str,
+        region: &str,
+        current_count: u64,
+    ) {
+        let Some(pricing) = self.pricing.get(service) else {
+            return;
+        };
+        let Some(per_hour) = pricing.instance_hour_per_instance else {
+            return;
+        };
+        const SECONDS_PER_HOUR: f64 = 3600.0;
+        let per_count_per_sec = per_hour / SECONDS_PER_HOUR;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let state = self.store.get(account_id, region);
+        state.ensure_started(now);
+        state
+            .resource_for(service)
+            .record_sample(current_count, now, per_count_per_sec);
+    }
+
     /// Record a point-in-time storage sample for a metered service.
     /// Cost since the last sample accrues into the per-service
     /// `StorageMetering` bucket; nothing happens if the service has

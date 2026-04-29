@@ -1,0 +1,34 @@
+{
+  "service": "rds",
+  "display_name": "Amazon RDS",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "Hand-written baseline (db.t3.micro MySQL/PostgreSQL Single-AZ) — engine/class/storage-specific pricing not threaded through AWSim's request event yet",
+  "request_dimensions": [
+    {
+      "description": "API requests (free)",
+      "operations": [
+        "CreateDBInstance", "DeleteDBInstance", "ModifyDBInstance",
+        "DescribeDBInstances", "RebootDBInstance", "StartDBInstance", "StopDBInstance",
+        "CreateDBSnapshot", "DeleteDBSnapshot", "DescribeDBSnapshots",
+        "RestoreDBInstanceFromDBSnapshot", "RestoreDBInstanceToPointInTime",
+        "CopyDBSnapshot",
+        "CreateDBSubnetGroup", "DeleteDBSubnetGroup", "DescribeDBSubnetGroups",
+        "ModifyDBSubnetGroup",
+        "CreateDBParameterGroup", "DeleteDBParameterGroup", "DescribeDBParameterGroups",
+        "ModifyDBParameterGroup",
+        "CreateDBClusterParameterGroup", "DeleteDBClusterParameterGroup",
+        "DescribeDBClusterParameterGroups", "ModifyDBClusterParameterGroup",
+        "CreateDBCluster", "DeleteDBCluster", "ModifyDBCluster",
+        "DescribeDBClusters", "RebootDBCluster", "StartDBCluster", "StopDBCluster",
+        "CreateDBClusterSnapshot", "DeleteDBClusterSnapshot",
+        "DescribeDBClusterSnapshots", "RestoreDBClusterFromSnapshot",
+        "AddTagsToResource", "RemoveTagsFromResource", "ListTagsForResource"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09,
+  "instance_hour_per_instance": 0.017
+}

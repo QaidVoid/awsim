@@ -52,6 +52,8 @@
 		ecr: 'Amazon ECR',
 		'cognito-idp': 'Amazon Cognito User Pools',
 		'cognito-identity': 'Amazon Cognito Identity',
+		ec2: 'Amazon EC2',
+		rds: 'Amazon RDS',
 	};
 
 	// Stable tints per service so the same colour represents the same
@@ -77,6 +79,8 @@
 		ecr: 'oklch(70% 0.13 280)', // lavender
 		'cognito-idp': 'oklch(72% 0.14 165)', // jade
 		'cognito-identity': 'oklch(70% 0.12 195)', // teal
+		ec2: 'oklch(70% 0.16 35)', // tangerine
+		rds: 'oklch(68% 0.13 250)', // navy
 	};
 	const FALLBACK_TINT = 'oklch(70% 0.05 0)';
 
@@ -676,6 +680,7 @@
 						svc.data_ingest_cost_usd,
 						svc.storage_cost_usd,
 						svc.compute_cost_usd,
+						svc.resource_cost_usd,
 						0,
 					)}
 					<div class="overflow-hidden rounded-lg border border-border bg-card">
@@ -812,6 +817,32 @@
 												</td>
 												<td class="px-2 py-1.5 text-right font-mono tabular-nums">
 													{fmtUsd(svc.storage_cost_usd, { precise: true })}
+												</td>
+												<td class="px-4 py-1.5">
+													<div class="h-1 w-full overflow-hidden rounded-full bg-muted/30">
+														<div
+															class="h-full transition-all duration-500"
+															style="width: {sharePct}%; background-color: {tint}; opacity: 0.7;"
+														></div>
+													</div>
+												</td>
+											</tr>
+										{/if}
+										{#if svc.resource_count > 0 || svc.resource_cost_usd > 0}
+											{@const sharePct =
+												svcMaxDimCost > 0
+													? (svc.resource_cost_usd / svcMaxDimCost) * 100
+													: 0}
+											<tr class="border-t border-border/40">
+												<td class="px-4 py-1.5">Running instances (instance-hours)</td>
+												<td class="px-2 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
+													baseline
+												</td>
+												<td class="px-2 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
+													{svc.resource_count}
+												</td>
+												<td class="px-2 py-1.5 text-right font-mono tabular-nums">
+													{fmtUsd(svc.resource_cost_usd, { precise: true })}
 												</td>
 												<td class="px-4 py-1.5">
 													<div class="h-1 w-full overflow-hidden rounded-full bg-muted/30">

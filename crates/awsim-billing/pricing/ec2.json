@@ -1,0 +1,38 @@
+{
+  "service": "ec2",
+  "display_name": "Amazon EC2",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "Hand-written baseline (t3.micro Linux On-Demand) — instance-type-specific pricing not threaded through AWSim's request event yet",
+  "request_dimensions": [
+    {
+      "description": "API requests (free)",
+      "operations": [
+        "RunInstances", "StartInstances", "StopInstances", "TerminateInstances",
+        "RebootInstances", "DescribeInstances", "DescribeInstanceStatus",
+        "ModifyInstanceAttribute", "DescribeInstanceAttribute",
+        "CreateImage", "DeregisterImage", "DescribeImages",
+        "CreateSnapshot", "DeleteSnapshot", "DescribeSnapshots",
+        "CreateVolume", "DeleteVolume", "AttachVolume", "DetachVolume", "DescribeVolumes",
+        "CreateSecurityGroup", "DeleteSecurityGroup", "DescribeSecurityGroups",
+        "AuthorizeSecurityGroupIngress", "AuthorizeSecurityGroupEgress",
+        "RevokeSecurityGroupIngress", "RevokeSecurityGroupEgress",
+        "CreateKeyPair", "DeleteKeyPair", "DescribeKeyPairs", "ImportKeyPair",
+        "CreateVpc", "DeleteVpc", "DescribeVpcs",
+        "CreateSubnet", "DeleteSubnet", "DescribeSubnets",
+        "CreateInternetGateway", "DeleteInternetGateway", "DescribeInternetGateways",
+        "AttachInternetGateway", "DetachInternetGateway",
+        "CreateRouteTable", "DeleteRouteTable", "DescribeRouteTables",
+        "CreateRoute", "DeleteRoute",
+        "AssociateRouteTable", "DisassociateRouteTable",
+        "CreateTags", "DeleteTags", "DescribeTags",
+        "AllocateAddress", "ReleaseAddress", "DescribeAddresses",
+        "AssociateAddress", "DisassociateAddress"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09,
+  "instance_hour_per_instance": 0.0104
+}

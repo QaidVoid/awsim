@@ -187,6 +187,60 @@ pub struct ComputeMeteringSnapshot {
     pub accumulated_cost_picos: u64,
 }
 
+/// Per-service running-instance tracker (EC2 / RDS / OpenSearch
+/// instance-hour billing). Mirrors the storage tracker shape: a
+/// trapezoidal-integration sample-and-accrue loop, integer pico-USD
+/// accumulator.
+#[derive(Debug, Default)]
+pub struct ResourceMetering {
+    pub last_sample_count: AtomicU64,
+    pub last_sample_ts: AtomicU64,
+    pub accumulated_cost_picos: AtomicU64,
+}
+
+impl ResourceMetering {
+    fn snapshot(&self) -> ResourceMeteringSnapshot {
+        ResourceMeteringSnapshot {
+            last_sample_count: self.last_sample_count.load(Ordering::Relaxed),
+            last_sample_ts: self.last_sample_ts.load(Ordering::Relaxed),
+            accumulated_cost_picos: self.accumulated_cost_picos.load(Ordering::Relaxed),
+        }
+    }
+
+    fn from_snapshot(s: ResourceMeteringSnapshot) -> Self {
+        Self {
+            last_sample_count: AtomicU64::new(s.last_sample_count),
+            last_sample_ts: AtomicU64::new(s.last_sample_ts),
+            accumulated_cost_picos: AtomicU64::new(s.accumulated_cost_picos),
+        }
+    }
+
+    pub fn record_sample(&self, current_count: u64, now_secs: u64, per_count_per_sec_usd: f64) {
+        let last_ts = self.last_sample_ts.swap(now_secs, Ordering::Relaxed);
+        let last_count = self
+            .last_sample_count
+            .swap(current_count, Ordering::Relaxed);
+        if last_ts == 0 || now_secs <= last_ts {
+            return;
+        }
+        let elapsed = (now_secs - last_ts) as f64;
+        let avg_count = (last_count as f64 + current_count as f64) / 2.0;
+        let cost_usd = avg_count * elapsed * per_count_per_sec_usd;
+        if cost_usd > 0.0 {
+            let picos = (cost_usd * 1e12) as u64;
+            self.accumulated_cost_picos
+                .fetch_add(picos, Ordering::Relaxed);
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ResourceMeteringSnapshot {
+    pub last_sample_count: u64,
+    pub last_sample_ts: u64,
+    pub accumulated_cost_picos: u64,
+}
+
 /// Per-(account, region) usage bucket.
 ///
 /// Outer DashMap keyed by service signing name (e.g. `s3`), inner DashMap
@@ -201,6 +255,9 @@ pub struct BillingState {
     storage: DashMap<String, StorageMetering>,
     /// Per-service compute trackers (Lambda GB-seconds).
     compute: DashMap<String, ComputeMetering>,
+    /// Per-service running-instance trackers (EC2/RDS/OpenSearch
+    /// instance-hour billing).
+    resources: DashMap<String, ResourceMetering>,
 }
 
 impl BillingState {
@@ -288,6 +345,27 @@ impl BillingState {
             .map(|c| (c.key().clone(), c.value().snapshot()))
             .collect()
     }
+
+    pub fn snapshot_resources(&self) -> HashMap<String, ResourceMeteringSnapshot> {
+        self.resources
+            .iter()
+            .map(|r| (r.key().clone(), r.value().snapshot()))
+            .collect()
+    }
+
+    pub fn resource_for(
+        &self,
+        service: &str,
+    ) -> dashmap::mapref::one::RefMut<'_, String, ResourceMetering> {
+        self.resources.entry(service.to_string()).or_default()
+    }
+
+    pub fn iter_resources(&self) -> Vec<(String, ResourceMeteringSnapshot)> {
+        self.resources
+            .iter()
+            .map(|r| (r.key().clone(), r.value().snapshot()))
+            .collect()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -301,6 +379,8 @@ pub struct BillingSnapshot {
     pub storage: HashMap<String, StorageMeteringSnapshot>,
     #[serde(default)]
     pub compute: HashMap<String, ComputeMeteringSnapshot>,
+    #[serde(default)]
+    pub resources: HashMap<String, ResourceMeteringSnapshot>,
 }
 
 impl Snapshottable for BillingState {
@@ -314,6 +394,7 @@ impl Snapshottable for BillingState {
             services: self.snapshot_services(),
             storage: self.snapshot_storage(),
             compute: self.snapshot_compute(),
+            resources: self.snapshot_resources(),
         }
     }
 
@@ -334,6 +415,10 @@ impl Snapshottable for BillingState {
         for (svc_name, c) in snap.compute {
             compute.insert(svc_name, ComputeMetering::from_snapshot(c));
         }
+        let resources: DashMap<String, ResourceMetering> = DashMap::new();
+        for (svc_name, r) in snap.resources {
+            resources.insert(svc_name, ResourceMetering::from_snapshot(r));
+        }
         (
             snap.account_id,
             snap.region,
@@ -342,6 +427,7 @@ impl Snapshottable for BillingState {
                 services,
                 storage,
                 compute,
+                resources,
             },
         )
     }
