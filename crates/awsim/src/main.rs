@@ -1032,6 +1032,13 @@ fn register_services(
     };
     state.register(Arc::new(pipes), pipes_routes);
 
+    let efs = awsim_efs::EfsService::new();
+    let efs_routes = {
+        use awsim_core::ServiceHandler;
+        efs.routes()
+    };
+    state.register(Arc::new(efs), efs_routes);
+
     // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());

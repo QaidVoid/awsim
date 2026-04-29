@@ -1573,6 +1573,7 @@ dependencies = [
  "awsim-ec2",
  "awsim-ecr",
  "awsim-ecs",
+ "awsim-efs",
  "awsim-eks",
  "awsim-elb",
  "awsim-eventbridge",
@@ -1985,6 +1986,19 @@ dependencies = [
 
 [[package]]
 name = "awsim-ecs"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-efs"
 version = "0.1.0"
 dependencies = [
  "async-trait",
