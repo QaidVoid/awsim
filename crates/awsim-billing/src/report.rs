@@ -44,6 +44,10 @@ pub struct ServiceCost {
     /// Most recent sampled storage size in bytes — surfaced for the
     /// dashboard's "currently storing X" line.
     pub storage_bytes: u64,
+    /// Accumulated compute cost (Lambda GB-seconds × rate).
+    pub compute_cost_usd: f64,
+    /// Total GB-seconds of compute consumed.
+    pub compute_gb_seconds: f64,
     pub dimensions: Vec<DimensionCost>,
 }
 
@@ -64,6 +68,8 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
     // bytes across buckets (so the displayed "currently storing X"
     // matches the largest current footprint, not a stale snapshot).
     let mut storage_agg: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+    // Same shape as storage: (cost picos, gb_microseconds).
+    let mut compute_agg: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     let mut earliest_start: u64 = 0;
 
     for ((_acct, _region), state) in store.iter_all() {
@@ -85,6 +91,11 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             let entry = storage_agg.entry(svc).or_default();
             entry.0 += st.accumulated_cost_picos;
             entry.1 = entry.1.max(st.last_sample_bytes);
+        }
+        for (svc, c) in state.iter_compute() {
+            let entry = compute_agg.entry(svc).or_default();
+            entry.0 += c.accumulated_cost_picos;
+            entry.1 += c.gb_microseconds;
         }
     }
 
@@ -183,7 +194,12 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             .remove(&svc_name)
             .map(|(picos, bytes)| (picos as f64 / 1e12, bytes))
             .unwrap_or((0.0, 0));
-        let svc_total = svc_request_cost + transfer_cost + ingest_cost + storage_cost_usd;
+        let (compute_cost_usd, compute_gb_seconds) = compute_agg
+            .remove(&svc_name)
+            .map(|(picos, gb_us)| (picos as f64 / 1e12, gb_us as f64 / 1e6))
+            .unwrap_or((0.0, 0.0));
+        let svc_total =
+            svc_request_cost + transfer_cost + ingest_cost + storage_cost_usd + compute_cost_usd;
         total_cost += svc_total;
 
         services_out.push(ServiceCost {
@@ -199,14 +215,23 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             data_ingest_cost_usd: ingest_cost,
             storage_cost_usd,
             storage_bytes,
+            compute_cost_usd,
+            compute_gb_seconds,
             dimensions: dim_buckets,
         });
     }
 
-    // Storage-only services — anything in storage_agg that didn't
-    // match a service in the request aggregate. A bucket that's been
-    // sitting idle but storing data still costs money.
-    for (svc_name, (cost_picos, bytes)) in storage_agg {
+    // Storage- or compute-only services — anything left in storage_agg
+    // or compute_agg that didn't match a service in the request
+    // aggregate. A bucket that's been sitting idle but storing data
+    // still costs money; a Lambda that ran once a long time ago and
+    // hasn't been invoked recently still has accumulated GB-seconds.
+    let leftover_keys: std::collections::BTreeSet<String> = storage_agg
+        .keys()
+        .chain(compute_agg.keys())
+        .cloned()
+        .collect();
+    for svc_name in leftover_keys {
         let pricing = catalog.get(&svc_name);
         let display_name = pricing
             .map(|p| p.display_name.clone())
@@ -214,7 +239,14 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
         let region = pricing
             .map(|p| p.region.clone())
             .unwrap_or_else(|| "us-east-1".to_string());
-        let storage_cost_usd = cost_picos as f64 / 1e12;
+        let (storage_cost_usd, storage_bytes) = storage_agg
+            .remove(&svc_name)
+            .map(|(picos, bytes)| (picos as f64 / 1e12, bytes))
+            .unwrap_or((0.0, 0));
+        let (compute_cost_usd, compute_gb_seconds) = compute_agg
+            .remove(&svc_name)
+            .map(|(picos, gb_us)| (picos as f64 / 1e12, gb_us as f64 / 1e6))
+            .unwrap_or((0.0, 0.0));
         let dim_buckets: Vec<DimensionCost> = pricing
             .map(|p| {
                 p.request_dimensions
@@ -228,12 +260,13 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
                     .collect()
             })
             .unwrap_or_default();
-        total_cost += storage_cost_usd;
+        let svc_total = storage_cost_usd + compute_cost_usd;
+        total_cost += svc_total;
         services_out.push(ServiceCost {
             service: svc_name,
             display_name,
             region,
-            total_cost_usd: storage_cost_usd,
+            total_cost_usd: svc_total,
             request_count: 0,
             bytes_in: 0,
             bytes_out: 0,
@@ -241,7 +274,9 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             data_transfer_out_cost_usd: 0.0,
             data_ingest_cost_usd: 0.0,
             storage_cost_usd,
-            storage_bytes: bytes,
+            storage_bytes,
+            compute_cost_usd,
+            compute_gb_seconds,
             dimensions: dim_buckets,
         });
     }

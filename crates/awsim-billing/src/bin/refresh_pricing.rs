@@ -48,6 +48,10 @@ struct ServiceConfig {
     /// (S3 / DDB / Lambda code). AWS publishes these in GB-Month
     /// units so we emit the rate straight into `storage_per_gb_month`.
     storage_matcher: Option<DimensionMatcher>,
+    /// Optional compute matcher for duration-billed services
+    /// (Lambda's GB-second axis). AWS publishes these in $/GB-Second,
+    /// emitted as `compute_per_gb_second` in the slim file.
+    compute_matcher: Option<DimensionMatcher>,
     dimensions: &'static [DimensionConfig],
 }
 
@@ -86,6 +90,7 @@ const SERVICES: &[ServiceConfig] = &[
             product_family: "Storage",
             attributes: &[("usagetype", "TimedStorage-ByteHrs")],
         }),
+        compute_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -187,6 +192,16 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 0.0,
         ingest_matcher: None,
         storage_matcher: None,
+        // Lambda x86 compute. AWS prices ARM ~20% cheaper but the
+        // request event doesn't carry the architecture, so x86 is the
+        // safer default (overbills ARM workloads slightly).
+        compute_matcher: Some(DimensionMatcher {
+            product_family: "Serverless",
+            attributes: &[
+                ("usagetype", "Lambda-GB-Second"),
+                ("group", "AWS-Lambda-Duration"),
+            ],
+        }),
         dimensions: &[
             DimensionConfig {
                 operations: &["Invoke", "InvokeAsync", "InvokeWithResponseStream"],
@@ -250,6 +265,7 @@ const SERVICES: &[ServiceConfig] = &[
             product_family: "Database Storage",
             attributes: &[("usagetype", "TimedStorage-ByteHrs")],
         }),
+        compute_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -318,6 +334,7 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 4.0e-7,
         ingest_matcher: None,
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -377,6 +394,7 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 5.0e-7,
         ingest_matcher: None,
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -426,6 +444,7 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 3.0e-6,
         ingest_matcher: None,
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -492,6 +511,7 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 5.0e-6,
         ingest_matcher: None,
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -540,6 +560,7 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 0.0,
         ingest_matcher: None,
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &["PutEvents"],
@@ -591,6 +612,7 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 0.0,
         ingest_matcher: None,
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             // REST API requests are billed per-call. The
             // `usagetype=USE1-ApiGatewayRequest` SKU's first paid tier
@@ -671,6 +693,7 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 0.0,
         ingest_matcher: None,
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             // AWS bills per state transition, not per execution. We
             // can only see StartExecution from the request event, so
@@ -723,6 +746,7 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 0.0,
         ingest_matcher: None,
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             // AWS bills per recipient, not per send. SDK callers
             // typically send to one recipient at a time, so per-call
@@ -778,6 +802,7 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 1.0e-5,
         ingest_matcher: None,
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             // AWS bills CloudWatch API requests at $0.01 per 1,000.
             // PutMetricData is in the same bucket — its per-metric
@@ -831,6 +856,7 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 0.0,
         ingest_matcher: None,
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             // The Route53 resolver is metered server-side (DNS resolves
             // never reach the AWSim AWS-API gateway) so this dimension
@@ -878,6 +904,7 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 0.0,
         ingest_matcher: None,
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             // Provisioned-mode put-payload-units is what AWS actually
             // bills against — one unit per 25KB rounded up. We charge
@@ -934,6 +961,7 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 0.0,
         ingest_matcher: None,
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             DimensionConfig {
                 // CloudFront proxied traffic doesn't typically reach
@@ -988,6 +1016,7 @@ const SERVICES: &[ServiceConfig] = &[
             ],
         }),
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             // Per-request rate is $0 — Firehose bills purely on
             // ingested bytes — but listing PutRecord/PutRecordBatch
@@ -1035,6 +1064,7 @@ const SERVICES: &[ServiceConfig] = &[
             ],
         }),
         storage_matcher: None,
+        compute_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &["PutLogEvents"],
@@ -1316,6 +1346,21 @@ async fn build_service(
                 }
             });
 
+    // And the compute rate (Lambda GB-second).
+    let compute_per_gb_second = cfg
+        .compute_matcher
+        .as_ref()
+        .and_then(|m| match extract_dimension(&doc, m) {
+            Some((rate, _desc)) => Some(rate),
+            None => {
+                eprintln!(
+                    "  WARN: no compute SKU for {}/{:?} — leaving null",
+                    m.product_family, m.attributes
+                );
+                None
+            }
+        });
+
     Ok(ServicePricing {
         service: cfg.service.to_string(),
         display_name,
@@ -1330,6 +1375,7 @@ async fn build_service(
         data_transfer_out_per_gb: Some(data_transfer_out_per_gb),
         data_ingest_per_gb,
         storage_per_gb_month,
+        compute_per_gb_second,
     })
 }
 

@@ -125,6 +125,64 @@ pub struct StorageMeteringSnapshot {
     pub accumulated_cost_picos: u64,
 }
 
+/// Per-service compute tracker — Lambda's GB-second billing axis.
+///
+/// Each invocation contributes `duration_ms × assumed_memory_gb × rate`
+/// to the accumulated cost; we also keep the running GB-microsecond
+/// total so the dashboard can show "X GB-seconds consumed" alongside
+/// the dollar amount.
+#[derive(Debug, Default)]
+pub struct ComputeMetering {
+    /// Total GB-microseconds of compute consumed (1 GB-s = 1e6).
+    /// u64 fits ~1.8e13 GB-seconds — Lambda would have to run a
+    /// 128 MB function flat-out for ~45,000 years to overflow this.
+    pub gb_microseconds: AtomicU64,
+    /// Accumulated compute cost in pico-USD (1e-12 USD).
+    pub accumulated_cost_picos: AtomicU64,
+}
+
+impl ComputeMetering {
+    fn snapshot(&self) -> ComputeMeteringSnapshot {
+        ComputeMeteringSnapshot {
+            gb_microseconds: self.gb_microseconds.load(Ordering::Relaxed),
+            accumulated_cost_picos: self.accumulated_cost_picos.load(Ordering::Relaxed),
+        }
+    }
+
+    fn from_snapshot(s: ComputeMeteringSnapshot) -> Self {
+        Self {
+            gb_microseconds: AtomicU64::new(s.gb_microseconds),
+            accumulated_cost_picos: AtomicU64::new(s.accumulated_cost_picos),
+        }
+    }
+
+    pub fn record(&self, gb_seconds: f64, per_gb_second_usd: f64) {
+        if gb_seconds <= 0.0 {
+            return;
+        }
+        let cost = gb_seconds * per_gb_second_usd;
+        let picos = (cost * 1e12) as u64;
+        let micros = (gb_seconds * 1e6) as u64;
+        self.gb_microseconds.fetch_add(micros, Ordering::Relaxed);
+        self.accumulated_cost_picos
+            .fetch_add(picos, Ordering::Relaxed);
+    }
+
+    pub fn cost_usd(&self) -> f64 {
+        self.accumulated_cost_picos.load(Ordering::Relaxed) as f64 / 1e12
+    }
+
+    pub fn gb_seconds(&self) -> f64 {
+        self.gb_microseconds.load(Ordering::Relaxed) as f64 / 1e6
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ComputeMeteringSnapshot {
+    pub gb_microseconds: u64,
+    pub accumulated_cost_picos: u64,
+}
+
 /// Per-(account, region) usage bucket.
 ///
 /// Outer DashMap keyed by service signing name (e.g. `s3`), inner DashMap
@@ -137,6 +195,8 @@ pub struct BillingState {
     /// per-operation counters because storage is sampled at intervals
     /// rather than incremented per request.
     storage: DashMap<String, StorageMetering>,
+    /// Per-service compute trackers (Lambda GB-seconds).
+    compute: DashMap<String, ComputeMetering>,
 }
 
 impl BillingState {
@@ -200,6 +260,29 @@ impl BillingState {
             .map(|s| (s.key().clone(), s.value().snapshot()))
             .collect()
     }
+
+    /// Snapshot the compute trackers, keyed by service signing name.
+    pub fn snapshot_compute(&self) -> HashMap<String, ComputeMeteringSnapshot> {
+        self.compute
+            .iter()
+            .map(|c| (c.key().clone(), c.value().snapshot()))
+            .collect()
+    }
+
+    /// Look up (creating if absent) the compute tracker for `service`.
+    pub fn compute_for(
+        &self,
+        service: &str,
+    ) -> dashmap::mapref::one::RefMut<'_, String, ComputeMetering> {
+        self.compute.entry(service.to_string()).or_default()
+    }
+
+    pub fn iter_compute(&self) -> Vec<(String, ComputeMeteringSnapshot)> {
+        self.compute
+            .iter()
+            .map(|c| (c.key().clone(), c.value().snapshot()))
+            .collect()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -211,6 +294,8 @@ pub struct BillingSnapshot {
     pub services: HashMap<String, HashMap<String, OpCounterSnapshot>>,
     #[serde(default)]
     pub storage: HashMap<String, StorageMeteringSnapshot>,
+    #[serde(default)]
+    pub compute: HashMap<String, ComputeMeteringSnapshot>,
 }
 
 impl Snapshottable for BillingState {
@@ -223,6 +308,7 @@ impl Snapshottable for BillingState {
             started_at: self.started_at.load(Ordering::Relaxed),
             services: self.snapshot_services(),
             storage: self.snapshot_storage(),
+            compute: self.snapshot_compute(),
         }
     }
 
@@ -239,6 +325,10 @@ impl Snapshottable for BillingState {
         for (svc_name, st) in snap.storage {
             storage.insert(svc_name, StorageMetering::from_snapshot(st));
         }
+        let compute: DashMap<String, ComputeMetering> = DashMap::new();
+        for (svc_name, c) in snap.compute {
+            compute.insert(svc_name, ComputeMetering::from_snapshot(c));
+        }
         (
             snap.account_id,
             snap.region,
@@ -246,6 +336,7 @@ impl Snapshottable for BillingState {
                 started_at: AtomicU64::new(snap.started_at),
                 services,
                 storage,
+                compute,
             },
         )
     }

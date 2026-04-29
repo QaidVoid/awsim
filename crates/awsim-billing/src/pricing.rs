@@ -76,6 +76,13 @@ pub struct ServicePricing {
     /// elapsed time using this rate.
     #[serde(default)]
     pub storage_per_gb_month: Option<f64>,
+    /// Cost per GB-second of compute time — Lambda's invocation
+    /// duration model. The meter multiplies request duration_ms by an
+    /// assumed memory size (128 MB default — AWSim doesn't carry the
+    /// per-function memory through the request event yet) and applies
+    /// this rate.
+    #[serde(default)]
+    pub compute_per_gb_second: Option<f64>,
 }
 
 fn default_currency() -> String {

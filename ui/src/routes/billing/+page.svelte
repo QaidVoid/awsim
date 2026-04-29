@@ -459,6 +459,7 @@
 						svc.data_transfer_out_cost_usd,
 						svc.data_ingest_cost_usd,
 						svc.storage_cost_usd,
+						svc.compute_cost_usd,
 						0,
 					)}
 					<div class="overflow-hidden rounded-lg border border-border bg-card">
@@ -595,6 +596,32 @@
 												</td>
 												<td class="px-2 py-1.5 text-right font-mono tabular-nums">
 													{fmtUsd(svc.storage_cost_usd, { precise: true })}
+												</td>
+												<td class="px-4 py-1.5">
+													<div class="h-1 w-full overflow-hidden rounded-full bg-muted/30">
+														<div
+															class="h-full transition-all duration-500"
+															style="width: {sharePct}%; background-color: {tint}; opacity: 0.7;"
+														></div>
+													</div>
+												</td>
+											</tr>
+										{/if}
+										{#if svc.compute_gb_seconds > 0 || svc.compute_cost_usd > 0}
+											{@const sharePct =
+												svcMaxDimCost > 0
+													? (svc.compute_cost_usd / svcMaxDimCost) * 100
+													: 0}
+											<tr class="border-t border-border/40">
+												<td class="px-4 py-1.5">Compute (GB-seconds)</td>
+												<td class="px-2 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
+													$0.0000167 / GB-s
+												</td>
+												<td class="px-2 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
+													{svc.compute_gb_seconds.toFixed(svc.compute_gb_seconds < 1 ? 4 : 2)}&nbsp;GB·s
+												</td>
+												<td class="px-2 py-1.5 text-right font-mono tabular-nums">
+													{fmtUsd(svc.compute_cost_usd, { precise: true })}
 												</td>
 												<td class="px-4 py-1.5">
 													<div class="h-1 w-full overflow-hidden rounded-full bg-muted/30">

@@ -10,6 +10,19 @@ use crate::state::BillingStateStore;
 const SECONDS_PER_MONTH: f64 = 30.0 * 24.0 * 60.0 * 60.0;
 const BYTES_PER_GB: f64 = 1_073_741_824.0;
 
+/// Default Lambda function memory (128 MB) — AWS's lowest tier and
+/// the default for new functions. AWSim doesn't carry per-function
+/// memory through the request event yet; until it does, this gives
+/// a defensible lower bound on compute cost.
+const LAMBDA_DEFAULT_MEMORY_MB: u64 = 128;
+const MB_PER_GB: f64 = 1024.0;
+
+/// Operations whose request_event.duration_ms should be billed as
+/// compute time when the service has a `compute_per_gb_second` rate.
+/// Currently Lambda-only; if we ever add Fargate-style compute
+/// pricing this list grows.
+const COMPUTE_BILLED_OPS: &[&str] = &["Invoke", "InvokeAsync", "InvokeWithResponseStream"];
+
 /// Holds the in-memory billing store + the pricing catalog. Cheaply
 /// cloned (Arcs inside).
 #[derive(Clone)]
@@ -64,9 +77,9 @@ impl BillingMeter {
         // Only meter services we have pricing for; otherwise the bucket
         // would grow unbounded with services nobody can attribute cost
         // to anyway.
-        if self.pricing.get(&event.service).is_none() {
+        let Some(pricing) = self.pricing.get(&event.service) else {
             return;
-        }
+        };
         let state = self.store.get(&event.account_id, &event.region);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -80,6 +93,17 @@ impl BillingMeter {
             event.response_size,
             event.error_code.is_some(),
         );
+
+        // Compute billing — Lambda's GB-second axis. We only accrue
+        // for compute-billed ops on services with a published rate.
+        if let Some(rate) = pricing.compute_per_gb_second
+            && COMPUTE_BILLED_OPS.contains(&operation)
+            && event.duration_ms > 0.0
+        {
+            let memory_gb = LAMBDA_DEFAULT_MEMORY_MB as f64 / MB_PER_GB;
+            let gb_seconds = (event.duration_ms / 1000.0) * memory_gb;
+            state.compute_for(&event.service).record(gb_seconds, rate);
+        }
     }
 }
 

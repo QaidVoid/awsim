@@ -91,5 +91,6 @@
   "default_request_rate": 4e-7,
   "data_transfer_out_per_gb": 0.09,
   "data_ingest_per_gb": null,
-  "storage_per_gb_month": 0.023
+  "storage_per_gb_month": 0.023,
+  "compute_per_gb_second": null
 }

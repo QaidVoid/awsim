@@ -49,6 +49,8 @@ export interface BillingService {
   data_ingest_cost_usd: number;
   storage_cost_usd: number;
   storage_bytes: number;
+  compute_cost_usd: number;
+  compute_gb_seconds: number;
   dimensions: BillingDimension[];
 }
 
