@@ -1,6 +1,6 @@
 # Services Overview
 
-AWSim registers 51 AWS services. All services share the same endpoint at `http://localhost:4566`.
+AWSim registers 52 AWS services. All services share the same endpoint at `http://localhost:4566`.
 
 The service is selected automatically from the `X-Amz-Target` header (for JSON/Query protocols) or the URL path (for REST protocols).
 
@@ -59,6 +59,7 @@ The service is selected automatically from the `X-Amz-Target` header (for JSON/Q
 | Backup | `backup` | REST-JSON | Yes | 17 | Backup vaults, plans, selections, jobs |
 | Application Auto Scaling | `application-autoscaling` | JSON | Yes | 10 | Scalable targets and policies for ECS/Lambda/DynamoDB |
 | X-Ray | `xray` | REST-JSON | Yes | 11 | Trace ingest, summaries, service graph |
+| Cloud Map | `servicediscovery` | JSON | Yes | 17 | Service discovery — namespaces, services, instances |
 
 *S3 persists bucket and object metadata but not object data bytes.
 
@@ -90,3 +91,4 @@ For operations lists, SDK examples, and limitations, see:
 - [Backup](/services/backup)
 - [Application Auto Scaling](/services/application-autoscaling)
 - [X-Ray](/services/xray)
+- [Cloud Map (Service Discovery)](/services/servicediscovery)
