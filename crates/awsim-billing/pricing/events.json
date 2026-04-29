@@ -1,0 +1,43 @@
+{
+  "service": "events",
+  "display_name": "CloudWatch Events",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AWSEvents, 2026-02-03T18:57:46Z)",
+  "request_dimensions": [
+    {
+      "description": "$1.00 per million EventBridge custom events received in US East (N. Virginia)",
+      "operations": [
+        "PutEvents"
+      ],
+      "price_per_request": 1e-6
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "PutRule",
+        "DeleteRule",
+        "DescribeRule",
+        "ListRules",
+        "DisableRule",
+        "EnableRule",
+        "PutTargets",
+        "RemoveTargets",
+        "ListTargetsByRule",
+        "CreateEventBus",
+        "DeleteEventBus",
+        "DescribeEventBus",
+        "ListEventBuses",
+        "PutPermission",
+        "RemovePermission",
+        "TagResource",
+        "UntagResource",
+        "ListTagsForResource",
+        "TestEventPattern"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09
+}

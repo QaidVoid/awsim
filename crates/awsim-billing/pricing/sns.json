@@ -1,0 +1,42 @@
+{
+  "service": "sns",
+  "display_name": "Amazon Simple Notification Service",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AmazonSNS, 2026-02-11T00:02:29Z)",
+  "request_dimensions": [
+    {
+      "description": "$0.50 per 1,000,000 Amazon SNS API Requests per month thereafter",
+      "operations": [
+        "Publish",
+        "PublishBatch",
+        "Subscribe",
+        "Unsubscribe",
+        "ConfirmSubscription",
+        "ListSubscriptions",
+        "ListSubscriptionsByTopic",
+        "GetSubscriptionAttributes",
+        "SetSubscriptionAttributes",
+        "ListTopics",
+        "GetTopicAttributes",
+        "SetTopicAttributes",
+        "AddPermission",
+        "RemovePermission"
+      ],
+      "price_per_request": 5e-7
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "CreateTopic",
+        "DeleteTopic",
+        "TagResource",
+        "UntagResource",
+        "ListTagsForResource"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 5e-7,
+  "data_transfer_out_per_gb": 0.09
+}

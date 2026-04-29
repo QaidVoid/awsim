@@ -27,6 +27,11 @@
 		s3: 'Amazon S3',
 		lambda: 'AWS Lambda',
 		dynamodb: 'Amazon DynamoDB',
+		sqs: 'Amazon SQS',
+		sns: 'Amazon SNS',
+		kms: 'AWS KMS',
+		secretsmanager: 'AWS Secrets Manager',
+		events: 'Amazon EventBridge',
 	};
 
 	// Stable tints per service so the same colour represents the same
@@ -35,6 +40,11 @@
 		s3: 'oklch(70% 0.15 25)', // warm orange
 		lambda: 'oklch(70% 0.15 145)', // green
 		dynamodb: 'oklch(70% 0.15 250)', // blue
+		sqs: 'oklch(70% 0.15 320)', // pink/magenta
+		sns: 'oklch(72% 0.15 60)', // amber
+		kms: 'oklch(70% 0.15 200)', // teal
+		secretsmanager: 'oklch(68% 0.15 285)', // violet
+		events: 'oklch(70% 0.15 105)', // chartreuse
 	};
 	const FALLBACK_TINT = 'oklch(70% 0.05 0)';
 
@@ -207,10 +217,11 @@
 		// Strip "$X per Y unit" prefix (S3 / DDB style descriptions).
 		s = s.replace(/^\$[\d.]+ per [\d,]+\s*(million|billion|GB|TB|MB|hours?|requests?)?\s*/i, '');
 		s = s.replace(/^\$[\d.]+\s*per\s+[A-Za-z]+\s*/, '');
-		// Strip trailing region notes — both "(N. Virginia)" form and
-		// the dash-separated " - US East" / " - US East (...)" form
-		// Lambda uses.
+		// Strip trailing region notes — both "(N. Virginia)" form, the
+		// dash-separated " - US East (...)" form Lambda uses, and the
+		// space-prefixed " in US East" form KMS / EventBridge use.
 		s = s.replace(/\s*-\s*US\s+East.*$/i, '');
+		s = s.replace(/\s*in\s+US\s+East.*$/i, '');
 		s = s.replace(/\s*\([^)]+\)\s*$/, '');
 		// Lambda's headline description still leads with the service
 		// name ("AWS Lambda - Total Requests"); strip it so the column
@@ -287,7 +298,7 @@
 
 <ServicePage
 	title="Billing (estimated)"
-	description="Rolling AWS bill from metered usage × vendored pricing. Currently meters S3, Lambda, DynamoDB."
+	description="Rolling AWS bill from metered usage × vendored pricing."
 >
 	{#snippet actions()}
 		<Button variant="ghost" size="sm" onclick={load} disabled={loading}>

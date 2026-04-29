@@ -274,6 +274,264 @@ const SERVICES: &[ServiceConfig] = &[
             },
         ],
     },
+    ServiceConfig {
+        service: "sqs",
+        aws_code: "AWSQueueService",
+        default_request_rate: 4.0e-7,
+        dimensions: &[
+            DimensionConfig {
+                operations: &[
+                    "SendMessage",
+                    "SendMessageBatch",
+                    "ReceiveMessage",
+                    "DeleteMessage",
+                    "DeleteMessageBatch",
+                    "ChangeMessageVisibility",
+                    "ChangeMessageVisibilityBatch",
+                    "PurgeQueue",
+                    "GetQueueAttributes",
+                    "SetQueueAttributes",
+                    "GetQueueUrl",
+                    "ListQueues",
+                    "ListDeadLetterSourceQueues",
+                    "AddPermission",
+                    "RemovePermission",
+                    "TagQueue",
+                    "UntagQueue",
+                    "ListQueueTags",
+                ],
+                matcher: Some(DimensionMatcher {
+                    product_family: "API Request",
+                    attributes: &[("usagetype", "Requests-RBP")],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                // FIFO ops aren't named differently from standard ones
+                // (the queue ARN ending in `.fifo` is what tells AWS
+                // it's FIFO), so we can't bucket per-operation. Keep
+                // the dimension visible at AWS's FIFO rate so users
+                // see what FIFO would cost; counts stay 0 because
+                // RequestEvent doesn't carry queue type.
+                operations: &[],
+                matcher: Some(DimensionMatcher {
+                    product_family: "API Request",
+                    attributes: &[("usagetype", "Requests-FIFO-RBP")],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &["CreateQueue", "DeleteQueue"],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
+    ServiceConfig {
+        service: "sns",
+        aws_code: "AmazonSNS",
+        default_request_rate: 5.0e-7,
+        dimensions: &[
+            DimensionConfig {
+                operations: &[
+                    "Publish",
+                    "PublishBatch",
+                    "Subscribe",
+                    "Unsubscribe",
+                    "ConfirmSubscription",
+                    "ListSubscriptions",
+                    "ListSubscriptionsByTopic",
+                    "GetSubscriptionAttributes",
+                    "SetSubscriptionAttributes",
+                    "ListTopics",
+                    "GetTopicAttributes",
+                    "SetTopicAttributes",
+                    "AddPermission",
+                    "RemovePermission",
+                ],
+                matcher: Some(DimensionMatcher {
+                    product_family: "API Request",
+                    attributes: &[
+                        ("usagetype", "Requests-Tier1"),
+                        ("group", "SNS-Requests-Tier1"),
+                    ],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &[
+                    "CreateTopic",
+                    "DeleteTopic",
+                    "TagResource",
+                    "UntagResource",
+                    "ListTagsForResource",
+                ],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
+    ServiceConfig {
+        service: "kms",
+        aws_code: "awskms",
+        default_request_rate: 3.0e-6,
+        dimensions: &[
+            DimensionConfig {
+                operations: &[
+                    "Encrypt",
+                    "Decrypt",
+                    "ReEncrypt",
+                    "GenerateDataKey",
+                    "GenerateDataKeyWithoutPlaintext",
+                    "GenerateRandom",
+                    "GenerateMac",
+                    "VerifyMac",
+                    "Sign",
+                    "Verify",
+                    "DeriveSharedSecret",
+                ],
+                matcher: Some(DimensionMatcher {
+                    product_family: "API Request",
+                    attributes: &[("group", "awskms-APIRequest-All")],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                // Per-key-month is point-in-time and metered separately
+                // (not yet wired). Show as $0 here for now so the
+                // dashboard doesn't pretend it's been counted.
+                operations: &[
+                    "CreateKey",
+                    "DescribeKey",
+                    "ListKeys",
+                    "ListAliases",
+                    "CreateAlias",
+                    "DeleteAlias",
+                    "UpdateAlias",
+                    "EnableKey",
+                    "DisableKey",
+                    "ScheduleKeyDeletion",
+                    "CancelKeyDeletion",
+                    "PutKeyPolicy",
+                    "GetKeyPolicy",
+                    "ListKeyPolicies",
+                    "ListResourceTags",
+                    "TagResource",
+                    "UntagResource",
+                    "EnableKeyRotation",
+                    "DisableKeyRotation",
+                    "GetKeyRotationStatus",
+                    "CreateGrant",
+                    "RetireGrant",
+                    "RevokeGrant",
+                    "ListGrants",
+                    "ListRetirableGrants",
+                ],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
+    ServiceConfig {
+        service: "secretsmanager",
+        aws_code: "AWSSecretsManager",
+        default_request_rate: 5.0e-6,
+        dimensions: &[
+            DimensionConfig {
+                operations: &[
+                    "GetSecretValue",
+                    "PutSecretValue",
+                    "DescribeSecret",
+                    "ListSecrets",
+                    "ListSecretVersionIds",
+                    "GetResourcePolicy",
+                    "PutResourcePolicy",
+                    "DeleteResourcePolicy",
+                    "ValidateResourcePolicy",
+                    "UpdateSecret",
+                    "UpdateSecretVersionStage",
+                    "RotateSecret",
+                    "CancelRotateSecret",
+                ],
+                matcher: Some(DimensionMatcher {
+                    product_family: "API Request",
+                    attributes: &[("group", "AWSSecretsManager-APIRequest")],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &[
+                    "CreateSecret",
+                    "DeleteSecret",
+                    "RestoreSecret",
+                    "TagResource",
+                    "UntagResource",
+                    "ReplicateSecretToRegions",
+                    "RemoveRegionsFromReplication",
+                    "StopReplicationToReplica",
+                ],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
+    ServiceConfig {
+        service: "events",
+        aws_code: "AWSEvents",
+        default_request_rate: 0.0,
+        dimensions: &[
+            DimensionConfig {
+                operations: &["PutEvents"],
+                matcher: Some(DimensionMatcher {
+                    product_family: "EventBridge",
+                    // `operation=PutEvents` narrows past the partner /
+                    // discovery / cross-account variants that share
+                    // the 64K-Chunks usagetype.
+                    attributes: &[
+                        ("usagetype", "USE1-Event-64K-Chunks"),
+                        ("operation", "PutEvents"),
+                    ],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+            },
+            DimensionConfig {
+                operations: &[
+                    "PutRule",
+                    "DeleteRule",
+                    "DescribeRule",
+                    "ListRules",
+                    "DisableRule",
+                    "EnableRule",
+                    "PutTargets",
+                    "RemoveTargets",
+                    "ListTargetsByRule",
+                    "CreateEventBus",
+                    "DeleteEventBus",
+                    "DescribeEventBus",
+                    "ListEventBuses",
+                    "PutPermission",
+                    "RemovePermission",
+                    "TagResource",
+                    "UntagResource",
+                    "ListTagsForResource",
+                    "TestEventPattern",
+                ],
+                matcher: None,
+                fixed_description: "Control-plane requests",
+                fixed_rate: 0.0,
+            },
+        ],
+    },
 ];
 
 /// Decoded AWS bulk pricing JSON. We only deserialize the fields we
@@ -332,7 +590,10 @@ async fn fetch_pricing(client: &reqwest::Client, code: &str) -> anyhow::Result<P
 }
 
 /// Find the first product matching the matcher; pull its OnDemand
-/// rate + description.
+/// rate + description. AWS commonly ships a "first N free" dimension
+/// alongside the paid tier on the same SKU (SNS, EventBridge, SQS),
+/// so we prefer the lowest-beginRange *paid* tier and only fall back
+/// to a $0 dimension when every tier on the SKU is genuinely free.
 fn extract_dimension(doc: &PricingDoc, m: &DimensionMatcher) -> Option<(f64, String)> {
     let product = doc.products.values().find(|p| {
         p.product_family.as_deref() == Some(m.product_family)
@@ -341,9 +602,9 @@ fn extract_dimension(doc: &PricingDoc, m: &DimensionMatcher) -> Option<(f64, Str
                 .all(|(k, v)| p.attributes.get(*k).map(|s| s.as_str()) == Some(*v))
     })?;
     let term = doc.terms.on_demand.get(&product.sku)?.values().next()?;
-    // HashMap iteration order is non-deterministic; sort by beginRange
-    // so tiered SKUs always pick the lowest-tier (canonical) rate.
     let mut dims: Vec<&PriceDimension> = term.price_dimensions.values().collect();
+    // HashMap iteration order is non-deterministic; sort by beginRange
+    // so tiered SKUs always evaluate from the lowest threshold up.
     dims.sort_by(|a, b| {
         let ar = a
             .begin_range
@@ -357,9 +618,20 @@ fn extract_dimension(doc: &PricingDoc, m: &DimensionMatcher) -> Option<(f64, Str
             .unwrap_or(0.0);
         ar.partial_cmp(&br).unwrap_or(std::cmp::Ordering::Equal)
     });
-    let dim = dims.into_iter().next()?;
-    let usd = dim.price_per_unit.usd.as_deref()?;
-    let rate: f64 = usd.parse().ok()?;
+    let parse_rate = |d: &PriceDimension| {
+        d.price_per_unit
+            .usd
+            .as_deref()
+            .and_then(|s| s.parse::<f64>().ok())
+    };
+    // Prefer the lowest-tier non-zero rate (the "headline" rate AWS
+    // markets after the free tier). Fall back to whatever we have.
+    let dim = dims
+        .iter()
+        .copied()
+        .find(|d| parse_rate(d).is_some_and(|v| v > 0.0))
+        .or_else(|| dims.into_iter().next())?;
+    let rate = parse_rate(dim)?;
     Some((rate, dim.description.clone().unwrap_or_default()))
 }
 

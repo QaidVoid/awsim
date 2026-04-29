@@ -1,0 +1,48 @@
+{
+  "service": "sqs",
+  "display_name": "Amazon Simple Queue Service",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AWSQueueService, 2025-08-28T20:07:13Z)",
+  "request_dimensions": [
+    {
+      "description": "$0.40 per million Amazon SQS standard requests in Tier1 in US East (N Virginia)",
+      "operations": [
+        "SendMessage",
+        "SendMessageBatch",
+        "ReceiveMessage",
+        "DeleteMessage",
+        "DeleteMessageBatch",
+        "ChangeMessageVisibility",
+        "ChangeMessageVisibilityBatch",
+        "PurgeQueue",
+        "GetQueueAttributes",
+        "SetQueueAttributes",
+        "GetQueueUrl",
+        "ListQueues",
+        "ListDeadLetterSourceQueues",
+        "AddPermission",
+        "RemovePermission",
+        "TagQueue",
+        "UntagQueue",
+        "ListQueueTags"
+      ],
+      "price_per_request": 4e-7
+    },
+    {
+      "description": "$0.50 per million Amazon SQS FIFO requests in Tier1 in US East (N Virginia)",
+      "operations": [],
+      "price_per_request": 5e-7
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "CreateQueue",
+        "DeleteQueue"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 4e-7,
+  "data_transfer_out_per_gb": 0.09
+}

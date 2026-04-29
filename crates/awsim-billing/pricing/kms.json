@@ -1,0 +1,59 @@
+{
+  "service": "kms",
+  "display_name": "AWS Key Management Service",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (awskms, 2025-08-28T15:39:13Z)",
+  "request_dimensions": [
+    {
+      "description": "$0.03 per 10000 KMS requests in US East (N. Virginia)",
+      "operations": [
+        "Encrypt",
+        "Decrypt",
+        "ReEncrypt",
+        "GenerateDataKey",
+        "GenerateDataKeyWithoutPlaintext",
+        "GenerateRandom",
+        "GenerateMac",
+        "VerifyMac",
+        "Sign",
+        "Verify",
+        "DeriveSharedSecret"
+      ],
+      "price_per_request": 3e-6
+    },
+    {
+      "description": "Control-plane requests",
+      "operations": [
+        "CreateKey",
+        "DescribeKey",
+        "ListKeys",
+        "ListAliases",
+        "CreateAlias",
+        "DeleteAlias",
+        "UpdateAlias",
+        "EnableKey",
+        "DisableKey",
+        "ScheduleKeyDeletion",
+        "CancelKeyDeletion",
+        "PutKeyPolicy",
+        "GetKeyPolicy",
+        "ListKeyPolicies",
+        "ListResourceTags",
+        "TagResource",
+        "UntagResource",
+        "EnableKeyRotation",
+        "DisableKeyRotation",
+        "GetKeyRotationStatus",
+        "CreateGrant",
+        "RetireGrant",
+        "RevokeGrant",
+        "ListGrants",
+        "ListRetirableGrants"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 3e-6,
+  "data_transfer_out_per_gb": 0.09
+}

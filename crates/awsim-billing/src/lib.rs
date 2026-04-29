@@ -81,9 +81,11 @@ mod tests {
 
     #[test]
     fn unmetered_service_is_not_recorded() {
+        // IAM has no embedded pricing (and won't, until we wire control-plane
+        // services). Switch to whatever's missing if we ever add it.
         let meter = BillingMeter::new();
-        meter.record(&evt("kms", "Encrypt", 0));
+        meter.record(&evt("iam", "GetUser", 0));
         let report = compute_report(&meter.store, &meter.pricing);
-        assert!(report.services.iter().all(|s| s.service != "kms"));
+        assert!(report.services.iter().all(|s| s.service != "iam"));
     }
 }
