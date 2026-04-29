@@ -395,3 +395,125 @@ export function inferAttribute(
       return { NULL: true };
   }
 }
+
+// -- Global Tables --
+
+export interface GlobalTableReplica {
+  regionName: string;
+  replicaStatus?: string;
+}
+
+export interface GlobalTable {
+  globalTableName: string;
+  globalTableArn?: string;
+  globalTableStatus?: string;
+  creationDateTime?: number;
+  replicationGroup: GlobalTableReplica[];
+}
+
+export async function listGlobalTables(): Promise<GlobalTable[]> {
+  const resp = (await request("ListGlobalTables", {})) as {
+    GlobalTables?: Array<{
+      GlobalTableName: string;
+      ReplicationGroup?: Array<{ RegionName: string }>;
+    }>;
+  };
+  return (resp.GlobalTables ?? []).map((g) => ({
+    globalTableName: g.GlobalTableName,
+    replicationGroup: (g.ReplicationGroup ?? []).map((r) => ({
+      regionName: r.RegionName,
+    })),
+  }));
+}
+
+export async function describeGlobalTable(name: string): Promise<GlobalTable> {
+  const resp = (await request("DescribeGlobalTable", {
+    GlobalTableName: name,
+  })) as {
+    GlobalTableDescription: {
+      GlobalTableName: string;
+      GlobalTableArn?: string;
+      GlobalTableStatus?: string;
+      CreationDateTime?: number;
+      ReplicationGroup?: Array<{ RegionName: string; ReplicaStatus?: string }>;
+    };
+  };
+  const g = resp.GlobalTableDescription;
+  return {
+    globalTableName: g.GlobalTableName,
+    globalTableArn: g.GlobalTableArn,
+    globalTableStatus: g.GlobalTableStatus,
+    creationDateTime: g.CreationDateTime,
+    replicationGroup: (g.ReplicationGroup ?? []).map((r) => ({
+      regionName: r.RegionName,
+      replicaStatus: r.ReplicaStatus,
+    })),
+  };
+}
+
+export async function createGlobalTable(
+  name: string,
+  regions: string[],
+): Promise<GlobalTable> {
+  const resp = (await request("CreateGlobalTable", {
+    GlobalTableName: name,
+    ReplicationGroup: regions.map((r) => ({ RegionName: r })),
+  })) as {
+    GlobalTableDescription: {
+      GlobalTableName: string;
+      GlobalTableArn?: string;
+      GlobalTableStatus?: string;
+      CreationDateTime?: number;
+      ReplicationGroup?: Array<{ RegionName: string; ReplicaStatus?: string }>;
+    };
+  };
+  const g = resp.GlobalTableDescription;
+  return {
+    globalTableName: g.GlobalTableName,
+    globalTableArn: g.GlobalTableArn,
+    globalTableStatus: g.GlobalTableStatus,
+    creationDateTime: g.CreationDateTime,
+    replicationGroup: (g.ReplicationGroup ?? []).map((r) => ({
+      regionName: r.RegionName,
+      replicaStatus: r.ReplicaStatus,
+    })),
+  };
+}
+
+export interface ReplicaUpdate {
+  create?: string;
+  delete?: string;
+}
+
+export async function updateGlobalTable(
+  name: string,
+  updates: ReplicaUpdate[],
+): Promise<GlobalTable> {
+  const resp = (await request("UpdateGlobalTable", {
+    GlobalTableName: name,
+    ReplicaUpdates: updates.map((u) => {
+      if (u.create) return { Create: { RegionName: u.create } };
+      if (u.delete) return { Delete: { RegionName: u.delete } };
+      return {};
+    }),
+  })) as {
+    GlobalTableDescription: {
+      GlobalTableName: string;
+      GlobalTableArn?: string;
+      GlobalTableStatus?: string;
+      CreationDateTime?: number;
+      ReplicationGroup?: Array<{ RegionName: string; ReplicaStatus?: string }>;
+    };
+  };
+  const g = resp.GlobalTableDescription;
+  return {
+    globalTableName: g.GlobalTableName,
+    globalTableArn: g.GlobalTableArn,
+    globalTableStatus: g.GlobalTableStatus,
+    creationDateTime: g.CreationDateTime,
+    replicationGroup: (g.ReplicationGroup ?? []).map((r) => ({
+      regionName: r.RegionName,
+      replicaStatus: r.ReplicaStatus,
+    })),
+  };
+}

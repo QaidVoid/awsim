@@ -445,3 +445,110 @@ export async function tailLogs(
   events.sort((a, b) => b.timestamp - a.timestamp);
   return { events: events.slice(0, limit) };
 }
+
+// -- Concurrency --
+
+export interface ProvisionedConcurrencyConfig {
+  qualifier: string;
+  requestedProvisionedConcurrentExecutions: number;
+  allocatedProvisionedConcurrentExecutions: number;
+  availableProvisionedConcurrentExecutions: number;
+  status: string;
+  statusReason?: string;
+  lastModified: string;
+}
+
+export async function getFunctionConcurrency(
+  name: string,
+): Promise<{ reservedConcurrentExecutions?: number }> {
+  const res = await lambdaFetch(
+    "GET",
+    `/2019-09-30/functions/${encodeURIComponent(name)}/concurrency`,
+  );
+  const body = await ok<{ ReservedConcurrentExecutions?: number }>(res);
+  return { reservedConcurrentExecutions: body.ReservedConcurrentExecutions };
+}
+
+export async function putFunctionConcurrency(
+  name: string,
+  reserved: number,
+): Promise<void> {
+  const res = await lambdaFetch(
+    "PUT",
+    `/2017-10-31/functions/${encodeURIComponent(name)}/concurrency`,
+    { ReservedConcurrentExecutions: reserved },
+  );
+  await ok(res);
+}
+
+export async function deleteFunctionConcurrency(name: string): Promise<void> {
+  const res = await lambdaFetch(
+    "DELETE",
+    `/2017-10-31/functions/${encodeURIComponent(name)}/concurrency`,
+  );
+  await ok(res);
+}
+
+export async function listProvisionedConcurrencyConfigs(
+  name: string,
+): Promise<ProvisionedConcurrencyConfig[]> {
+  const res = await lambdaFetch(
+    "GET",
+    `/2019-09-30/functions/${encodeURIComponent(name)}/provisioned-concurrency`,
+  );
+  const body = await ok<{
+    ProvisionedConcurrencyConfigs?: Array<{
+      FunctionArn?: string;
+      RequestedProvisionedConcurrentExecutions: number;
+      AllocatedProvisionedConcurrentExecutions: number;
+      AvailableProvisionedConcurrentExecutions: number;
+      Status: string;
+      StatusReason?: string;
+      LastModified: string;
+    }>;
+  }>(res);
+  return (body.ProvisionedConcurrencyConfigs ?? []).map((c) => ({
+    qualifier: extractQualifier(c.FunctionArn ?? ""),
+    requestedProvisionedConcurrentExecutions:
+      c.RequestedProvisionedConcurrentExecutions,
+    allocatedProvisionedConcurrentExecutions:
+      c.AllocatedProvisionedConcurrentExecutions,
+    availableProvisionedConcurrentExecutions:
+      c.AvailableProvisionedConcurrentExecutions,
+    status: c.Status,
+    statusReason: c.StatusReason,
+    lastModified: c.LastModified,
+  }));
+}
+
+function extractQualifier(arn: string): string {
+  // arn:aws:lambda:region:account:function:name:qualifier — the last segment
+  // is the qualifier when present.
+  const parts = arn.split(":");
+  return parts[parts.length - 1] ?? "";
+}
+
+export async function putProvisionedConcurrencyConfig(
+  name: string,
+  qualifier: string,
+  count: number,
+): Promise<void> {
+  const path =
+    `/2019-09-30/functions/${encodeURIComponent(name)}/provisioned-concurrency` +
+    `?Qualifier=${encodeURIComponent(qualifier)}`;
+  const res = await lambdaFetch("PUT", path, {
+    ProvisionedConcurrentExecutions: count,
+  });
+  await ok(res);
+}
+
+export async function deleteProvisionedConcurrencyConfig(
+  name: string,
+  qualifier: string,
+): Promise<void> {
+  const path =
+    `/2019-09-30/functions/${encodeURIComponent(name)}/provisioned-concurrency` +
+    `?Qualifier=${encodeURIComponent(qualifier)}`;
+  const res = await lambdaFetch("DELETE", path);
+  await ok(res);
+}

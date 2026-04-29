@@ -22,9 +22,11 @@
 	import ItemEditor from '$lib/components/dynamodb/item-editor.svelte';
 	import CreateTableDialog from '$lib/components/dynamodb/create-table-dialog.svelte';
 	import ConfirmDialog from '$lib/components/dynamodb/confirm-dialog.svelte';
+	import GlobalTablesDialog from '$lib/components/dynamodb/global-tables-dialog.svelte';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Eraser from '@lucide/svelte/icons/eraser';
+	import Globe from '@lucide/svelte/icons/globe';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 
 	let tables = $state<TableSummary[]>([]);
@@ -36,6 +38,7 @@
 	let detailLoading = $state(false);
 
 	let createOpen = $state(false);
+	let globalTablesOpen = $state(false);
 	let confirmOpen = $state(false);
 	let confirmBusy = $state(false);
 	let truncateOpen = $state(false);
@@ -135,6 +138,10 @@
 		<Badge variant="outline" class="font-mono">
 			{tables.length} table{tables.length === 1 ? '' : 's'}
 		</Badge>
+		<Button variant="outline" size="sm" onclick={() => (globalTablesOpen = true)}>
+			<Globe class="size-3.5" />
+			Global tables
+		</Button>
 		<Button size="sm" onclick={() => (createOpen = true)}>
 			<Plus class="size-3.5" />
 			Create table
@@ -218,6 +225,11 @@
 	bind:open={createOpen}
 	onClose={() => (createOpen = false)}
 	onCreated={onTableCreated}
+/>
+
+<GlobalTablesDialog
+	bind:open={globalTablesOpen}
+	onClose={() => (globalTablesOpen = false)}
 />
 
 <ItemEditor

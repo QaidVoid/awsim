@@ -82,12 +82,14 @@ export interface Alarm {
   metricName: string;
   stateValue: string;
   stateReason?: string;
+  stateUpdatedTimestamp?: string;
   threshold: number;
   comparisonOperator: string;
   period: number;
   evaluationPeriods: number;
   statistic?: string;
   unit?: string;
+  dimensions: Array<{ name: string; value: string }>;
 }
 
 export interface DashboardSummary {
@@ -173,20 +175,30 @@ export async function describeAlarms(): Promise<{ alarms: Alarm[] }> {
   const members = Array.from(
     doc.querySelectorAll("DescribeAlarmsResult > MetricAlarms > member"),
   );
-  const alarms: Alarm[] = members.map((el) => ({
-    alarmName: txt(el, "AlarmName"),
-    alarmDescription: txt(el, "AlarmDescription") || undefined,
-    namespace: txt(el, "Namespace"),
-    metricName: txt(el, "MetricName"),
-    stateValue: txt(el, "StateValue"),
-    stateReason: txt(el, "StateReason") || undefined,
-    threshold: num(el, "Threshold"),
-    comparisonOperator: txt(el, "ComparisonOperator"),
-    period: num(el, "Period") || 60,
-    evaluationPeriods: num(el, "EvaluationPeriods") || 1,
-    statistic: txt(el, "Statistic") || undefined,
-    unit: txt(el, "Unit") || undefined,
-  }));
+  const alarms: Alarm[] = members.map((el) => {
+    const dims = Array.from(el.querySelectorAll("Dimensions > member")).map(
+      (d) => ({
+        name: d.querySelector("Name")?.textContent ?? "",
+        value: d.querySelector("Value")?.textContent ?? "",
+      }),
+    );
+    return {
+      alarmName: txt(el, "AlarmName"),
+      alarmDescription: txt(el, "AlarmDescription") || undefined,
+      namespace: txt(el, "Namespace"),
+      metricName: txt(el, "MetricName"),
+      stateValue: txt(el, "StateValue"),
+      stateReason: txt(el, "StateReason") || undefined,
+      stateUpdatedTimestamp: txt(el, "StateUpdatedTimestamp") || undefined,
+      threshold: num(el, "Threshold"),
+      comparisonOperator: txt(el, "ComparisonOperator"),
+      period: num(el, "Period") || 60,
+      evaluationPeriods: num(el, "EvaluationPeriods") || 1,
+      statistic: txt(el, "Statistic") || undefined,
+      unit: txt(el, "Unit") || undefined,
+      dimensions: dims.filter((d) => d.name !== ""),
+    };
+  });
   return { alarms: alarms.filter((a) => a.alarmName !== "") };
 }
 
