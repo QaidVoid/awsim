@@ -28,6 +28,7 @@ import Globe from "@lucide/svelte/icons/globe";
 import HardDrive from "@lucide/svelte/icons/hard-drive";
 import KeyRound from "@lucide/svelte/icons/key-round";
 import Layers from "@lucide/svelte/icons/layers";
+import MemoryStick from "@lucide/svelte/icons/memory-stick";
 import Lock from "@lucide/svelte/icons/lock";
 import MapPin from "@lucide/svelte/icons/map-pin";
 import Mail from "@lucide/svelte/icons/mail";
@@ -156,6 +157,14 @@ export const SERVICES: Service[] = [
     category: "Storage",
     icon: HardDrive,
     keywords: ["sql", "postgres", "mysql"],
+  },
+  {
+    id: "memorydb",
+    name: "MemoryDB",
+    href: "/memorydb",
+    category: "Storage",
+    icon: MemoryStick,
+    keywords: ["memorydb", "redis", "in-memory", "cache"],
   },
   {
     id: "efs",
