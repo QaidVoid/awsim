@@ -70,6 +70,20 @@ struct Cli {
     #[arg(long, env = "AWSIM_MAX_CONCURRENT_REQUESTS", default_value_t = 5_000)]
     max_concurrent_requests: usize,
 
+    /// Cap on tokio's blocking-pool threads (the pool that runs sync
+    /// SQLite calls via `spawn_blocking`). Each thread reserves ~2 MiB
+    /// of stack, so this directly bounds RSS contribution from
+    /// blocking work. Set lower (e.g. 8) to clamp memory during bulk
+    /// imports; raise for higher write throughput.
+    #[arg(long, env = "AWSIM_MAX_BLOCKING_THREADS", default_value_t = 32)]
+    max_blocking_threads: usize,
+
+    /// Per-request body size cap in bytes. Lower this when you're
+    /// hammering DDB with large `BatchWriteItem` payloads — axum
+    /// reserves up to this much per connection. Default 100 MiB.
+    #[arg(long, env = "AWSIM_MAX_BODY_BYTES", default_value_t = 100 * 1024 * 1024)]
+    max_body_bytes: usize,
+
     /// One-shot subcommand. Without one, `awsim` runs the server
     /// (the default for backwards compatibility).
     #[command(subcommand)]
@@ -224,15 +238,17 @@ enum ChaosPresetCommand {
 }
 
 fn main() -> Result<()> {
-    // Build the runtime by hand so we can cap the blocking pool. The
-    // tokio default is 512 blocking threads × 2 MiB stack ≈ 1 GiB
-    // ceiling for `spawn_blocking` alone — easy to hit during a
-    // bulk DDB import that fans out into many synchronous SQLite
-    // calls. 32 threads × 2 MiB = 64 MiB is plenty for I/O-bound
-    // work and bounds RSS predictably.
+    // Peek at the CLI just to size the runtime. Full parse happens
+    // inside `async_main`. The tokio default of 512 blocking threads
+    // × 2 MiB stack ≈ 1 GiB ceiling for `spawn_blocking` is easy to
+    // hit during a bulk DDB import that fans out across many sync
+    // SQLite calls — keep it tight by default and let users override.
+    let max_blocking = Cli::try_parse()
+        .map(|c| c.max_blocking_threads)
+        .unwrap_or(32);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .max_blocking_threads(32)
+        .max_blocking_threads(max_blocking)
         .build()?;
     runtime.block_on(async_main())
 }
@@ -861,7 +877,7 @@ async fn async_main() -> Result<()> {
         .merge(snapshot_router)
         .merge(ddb_admin_router)
         .merge(sqlite_stats_router)
-        .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB
+        .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_bytes))
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with
         // unbounded parallelism) can't accumulate work past the cap —
