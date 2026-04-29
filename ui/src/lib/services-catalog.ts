@@ -440,6 +440,14 @@ export const SERVICES: Service[] = [
     icon: CloudCog,
     keywords: ["stack", "iac"],
   },
+  {
+    id: "resourcegroupstagging",
+    name: "Resource Tags",
+    href: "/resourcegroupstagging",
+    category: "Admin",
+    icon: Tag,
+    keywords: ["tagging", "tag", "resource groups", "discovery"],
+  },
 ];
 
 export function servicesByCategory(): Map<ServiceCategory, Service[]> {
