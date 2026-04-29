@@ -11,6 +11,7 @@
 	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Separator } from '$lib/components/ui/separator';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
@@ -28,9 +29,19 @@
 	let loadError = $state<string | null>(null);
 	let activeTab = $state<'request' | 'response' | 'curl'>('request');
 	let replaying = $state(false);
+	let replayProgress = $state<{ done: number; total: number } | null>(null);
+	let batchSize = $state(10);
+	/** Status-code histogram from the most recent batch replay. Each
+	 *  entry maps an HTTP code to the new request ids that produced
+	 *  it, so the user can click through to inspect any of them. */
+	let batchResults = $state<Record<number, string[]>>({});
 
 	$effect(() => {
 		if (!inspectState.open || !inspectState.eventId) return;
+		// Switching to a different request — clear stale batch results so
+		// we don't show last replay's histogram on the new target.
+		batchResults = {};
+		replayProgress = null;
 		loadDetail(inspectState.eventId);
 	});
 
@@ -109,6 +120,63 @@
 		}
 	}
 
+	/// Replay the request `batchSize` times sequentially. Sequential
+	/// (not parallel) so each call rolls chaos probability independently
+	/// and ordering is preserved in the request log. Progress and the
+	/// final status-code histogram are surfaced inline.
+	async function batchReplay() {
+		if (!detail || replaying) return;
+		const total = batchSize;
+		if (total < 1 || total > 100) {
+			toast.error('Batch size must be between 1 and 100.');
+			return;
+		}
+		replaying = true;
+		batchResults = {};
+		replayProgress = { done: 0, total };
+		const originalId = detail.id;
+		try {
+			for (let i = 0; i < total; i++) {
+				const res = await fetch(`/_awsim/requests/${originalId}/replay`, {
+					method: 'POST'
+				});
+				const body = (await res.json()) as {
+					new_id?: string;
+					status_code?: number;
+					error?: string;
+					message?: string;
+				};
+				if (!res.ok || !body.new_id || body.status_code === undefined) {
+					toast.error(
+						body.message ?? body.error ?? `Replay ${i + 1}/${total} failed (${res.status})`
+					);
+					break;
+				}
+				const code = body.status_code;
+				const bucket = batchResults[code] ?? [];
+				bucket.push(body.new_id);
+				batchResults = { ...batchResults, [code]: bucket };
+				replayProgress = { done: i + 1, total };
+			}
+			const codes = Object.entries(batchResults)
+				.map(([c, ids]) => `${c} × ${ids.length}`)
+				.join(', ');
+			toast.success(`Batch replay done — ${codes}`);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Batch replay failed');
+		} finally {
+			replaying = false;
+		}
+	}
+
+	function statusBadgeVariant(code: number): 'default' | 'destructive' | 'outline' {
+		return statusVariant(code);
+	}
+
+	function jumpToReplay(id: string) {
+		inspectState.show(id, null);
+	}
+
 	function headersToText(headers: CapturedHeader[]): string {
 		return headers.map((h) => `${h.name}: ${h.value}`).join('\n');
 	}
@@ -156,6 +224,33 @@
 							<Repeat class={`size-3.5 ${replaying ? 'animate-spin' : ''}`} />
 							<span class="text-xs">{replaying ? 'Replaying…' : 'Replay'}</span>
 						</Button>
+						<div class="flex items-center gap-1">
+							<Input
+								type="number"
+								min="1"
+								max="100"
+								bind:value={batchSize}
+								disabled={replaying}
+								class="h-7 w-14 px-2 text-xs"
+							/>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onclick={batchReplay}
+								disabled={replaying}
+								class="h-7 gap-1 px-2"
+							>
+								<Repeat class={`size-3.5 ${replaying ? 'animate-spin' : ''}`} />
+								<span class="text-xs">
+									{#if replayProgress && replaying}
+										{replayProgress.done}/{replayProgress.total}
+									{:else}
+										Batch
+									{/if}
+								</span>
+							</Button>
+						</div>
 					{/if}
 				{/if}
 			</SheetTitle>
@@ -225,6 +320,34 @@
 						</div>
 					{/if}
 				</dl>
+
+				{#if Object.keys(batchResults).length > 0}
+					<section class="rounded-md border border-border bg-muted/30 p-3">
+						<h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+							Batch replay
+							{#if replayProgress}
+								<span class="font-mono normal-case">
+									· {replayProgress.done}/{replayProgress.total}
+								</span>
+							{/if}
+						</h3>
+						<div class="flex flex-wrap gap-2">
+							{#each Object.entries(batchResults).sort((a, b) => Number(a[0]) - Number(b[0])) as [code, ids] (code)}
+								<button
+									type="button"
+									onclick={() => jumpToReplay(ids[ids.length - 1]!)}
+									class="flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs hover:border-foreground/40"
+									title="Jump to most recent {code} response"
+								>
+									<Badge variant={statusBadgeVariant(Number(code))} class="font-mono">
+										{code}
+									</Badge>
+									<span class="font-mono text-muted-foreground">× {ids.length}</span>
+								</button>
+							{/each}
+						</div>
+					</section>
+				{/if}
 
 				<Separator />
 
