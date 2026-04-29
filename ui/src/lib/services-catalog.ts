@@ -595,6 +595,14 @@ export const SERVICES: Service[] = [
     icon: SquareTerminal,
     keywords: ["playground", "request", "builder", "test", "rest", "json"],
   },
+  {
+    id: "flow",
+    name: "Activity Flow",
+    href: "/flow",
+    category: "Admin",
+    icon: Activity,
+    keywords: ["flow", "trace", "burst", "fanout", "activity", "timeline"],
+  },
 ];
 
 export function servicesByCategory(): Map<ServiceCategory, Service[]> {
