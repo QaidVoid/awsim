@@ -1556,6 +1556,7 @@ dependencies = [
  "aws-types",
  "awsim-acm",
  "awsim-apigateway",
+ "awsim-application-autoscaling",
  "awsim-appsync",
  "awsim-athena",
  "awsim-backup",
@@ -1646,6 +1647,19 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-application-autoscaling"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
  "tracing",
  "uuid",
 ]

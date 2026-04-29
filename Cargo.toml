@@ -52,6 +52,7 @@ members = [
     "crates/awsim-pipes",
     "crates/awsim-efs",
     "crates/awsim-backup",
+    "crates/awsim-application-autoscaling",
     "crates/awsim-conformance",
     "crates/awsim-enforcement-tests",
 ]
@@ -113,6 +114,7 @@ awsim-resourcegroupstagging = { path = "crates/awsim-resourcegroupstagging", ver
 awsim-pipes = { path = "crates/awsim-pipes", version = "0.1.0" }
 awsim-efs = { path = "crates/awsim-efs", version = "0.1.0" }
 awsim-backup = { path = "crates/awsim-backup", version = "0.1.0" }
+awsim-application-autoscaling = { path = "crates/awsim-application-autoscaling", version = "0.1.0" }
 
 # Async
 tokio = { version = "1", features = ["full"] }

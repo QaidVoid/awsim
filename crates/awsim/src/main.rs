@@ -1046,6 +1046,9 @@ fn register_services(
     };
     state.register(Arc::new(backup), backup_routes);
 
+    let app_autoscaling = Arc::new(awsim_application_autoscaling::AppAutoScalingService::new());
+    state.register(app_autoscaling, vec![]);
+
     // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());

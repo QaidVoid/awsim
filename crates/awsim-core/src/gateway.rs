@@ -496,6 +496,8 @@ fn resolve_service_from_target(target: &str) -> Option<String> {
         p if p.starts_with("Firehose_") => "firehose",
         // Cross-service tagging
         p if p.starts_with("ResourceGroupsTaggingAPI") => "tagging",
+        // Auto scaling
+        p if p.starts_with("AnyScaleFrontendService") => "application-autoscaling",
         _ => return None,
     };
     Some(service.to_string())
