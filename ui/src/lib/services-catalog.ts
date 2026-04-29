@@ -152,6 +152,14 @@ export const SERVICES: Service[] = [
     icon: HardDrive,
     keywords: ["sql", "postgres", "mysql"],
   },
+  {
+    id: "efs",
+    name: "EFS",
+    href: "/efs",
+    category: "Storage",
+    icon: HardDrive,
+    keywords: ["file system", "nfs", "elastic file"],
+  },
 
   // Messaging
   {
