@@ -1091,6 +1091,13 @@ fn register_services(
     let memorydb = Arc::new(awsim_memorydb::MemoryDbService::new());
     state.register(memorydb, vec![]);
 
+    let qldb = awsim_qldb::QldbService::new();
+    let qldb_routes = {
+        use awsim_core::ServiceHandler;
+        qldb.routes()
+    };
+    state.register(Arc::new(qldb), qldb_routes);
+
     // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());

@@ -1594,6 +1594,7 @@ dependencies = [
  "awsim-organizations",
  "awsim-pipes",
  "awsim-polly",
+ "awsim-qldb",
  "awsim-rds",
  "awsim-resourcegroupstagging",
  "awsim-route53",
@@ -2328,6 +2329,18 @@ dependencies = [
  "serde_json",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "awsim-qldb"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

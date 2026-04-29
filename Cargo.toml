@@ -59,6 +59,7 @@ members = [
     "crates/awsim-glacier",
     "crates/awsim-mq",
     "crates/awsim-memorydb",
+    "crates/awsim-qldb",
     "crates/awsim-conformance",
     "crates/awsim-enforcement-tests",
 ]
@@ -127,6 +128,7 @@ awsim-appconfig = { path = "crates/awsim-appconfig", version = "0.1.0" }
 awsim-glacier = { path = "crates/awsim-glacier", version = "0.1.0" }
 awsim-mq = { path = "crates/awsim-mq", version = "0.1.0" }
 awsim-memorydb = { path = "crates/awsim-memorydb", version = "0.1.0" }
+awsim-qldb = { path = "crates/awsim-qldb", version = "0.1.0" }
 
 # Async
 tokio = { version = "1", features = ["full"] }

@@ -1,6 +1,6 @@
 # Services Overview
 
-AWSim registers 55 AWS services. All services share the same endpoint at `http://localhost:4566`.
+AWSim registers 58 AWS services. All services share the same endpoint at `http://localhost:4566`.
 
 The service is selected automatically from the `X-Amz-Target` header (for JSON/Query protocols) or the URL path (for REST protocols).
 
@@ -63,6 +63,9 @@ The service is selected automatically from the `X-Amz-Target` header (for JSON/Q
 | AppConfig | `appconfig` | REST-JSON | Yes | 20 | Feature flags & config delivery (control + data plane) |
 | AppConfig Data | `appconfig` (`appconfigdata`) | REST-JSON | Yes | 2 | Runtime polling: StartConfigurationSession + GetLatestConfiguration |
 | Glacier | `glacier` | REST-JSON | Yes | 12 | Cold storage: vaults + archives + jobs |
+| MQ | `mq` | REST-JSON | Yes | 14 | Amazon MQ brokers, users, configurations |
+| MemoryDB | `memorydb` | JSON | Yes | 18 | Redis-compatible clusters, users, ACLs, snapshots |
+| QLDB | `qldb` | REST-JSON | Yes | 8 | Ledger metadata (control plane only) |
 
 *S3 persists bucket and object metadata but not object data bytes.
 
@@ -97,3 +100,8 @@ For operations lists, SDK examples, and limitations, see:
 - [Cloud Map (Service Discovery)](/services/servicediscovery)
 - [AppConfig](/services/appconfig)
 - [Glacier](/services/glacier)
+- [MQ](/services/mq)
+- [DocumentDB](/services/docdb)
+- [Neptune](/services/neptune)
+- [MemoryDB](/services/memorydb)
+- [QLDB](/services/qldb)
