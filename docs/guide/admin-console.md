@@ -29,6 +29,7 @@ AWSim exposes a lightweight admin API independent of the AWS wire protocol:
 | `/_awsim/requests` | GET | Most recent captured request ids (newest first) |
 | `/_awsim/requests/{id}` | GET | Full captured detail for one request — headers + bodies |
 | `/_awsim/requests/{id}/replay` | POST | Re-issue the captured request through the gateway |
+| `/_awsim/billing` | GET | Rolling estimated AWS bill — running cost, projected monthly, per-service breakdown. See the [Billing guide](/guide/billing). |
 
 Example:
 

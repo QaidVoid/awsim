@@ -1,6 +1,6 @@
 # AWS Identity Store
 
-Users, groups, and group memberships scoped by `IdentityStoreId`. Pairs with [SSO Admin](/services/sso) for full IAM Identity Center coverage — Identity Store handles the directory, SSO Admin handles the permission sets and account assignments.
+Users, groups, and group memberships scoped by `IdentityStoreId`. Pairs with SSO Admin (permission sets and account assignments) for full IAM Identity Center coverage.
 
 **Endpoint:** `http://localhost:4566`
 **Signing name:** `identitystore`

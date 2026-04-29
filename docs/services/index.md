@@ -74,7 +74,7 @@ The service is selected automatically from the `X-Amz-Target` header (for JSON/Q
 
 ## OpenSearch
 
-In addition to the 37 AWS services, AWSim mounts an Elasticsearch-compatible REST API at `/opensearch/`. This is not a standard AWS service endpoint — see [OpenSearch](/guide/opensearch) for details.
+In addition to the AWS services, AWSim mounts an Elasticsearch-compatible REST API at `/opensearch/`. This is not a standard AWS service endpoint — see [OpenSearch](/guide/opensearch) for details.
 
 ## Protocol Notes
 

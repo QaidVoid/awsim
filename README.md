@@ -1,6 +1,6 @@
 # AWSim
 
-A fully offline, free AWS development environment. Single binary, sub-second startup, ~46 services, real IAM policy enforcement.
+A fully offline, free AWS development environment. Single binary, sub-second startup, 61 services, real IAM policy enforcement, and an estimated-bill dashboard so you can watch how much your workload would cost on real AWS.
 
 ## Quick Start
 
@@ -61,6 +61,7 @@ All services share the same `http://localhost:4566` endpoint; routing comes from
 - **Lambda execution.** Real container-based Lambda runtimes (Node, Python, Go, Rust) via `docker run`. Supports event source mappings from SQS, Kinesis, and DynamoDB Streams. See [docs/guide/lambda-execution.md](docs/guide/lambda-execution.md).
 - **Persistence.** `--data-dir` enables snapshot-based recovery for tables, queues, secrets, IAM, etc. Object/message/code/layer bodies are written to per-service body stores; orphan GC sweeps them on startup. See [docs/guide/persistence.md](docs/guide/persistence.md).
 - **Admin console.** SvelteKit UI at `http://localhost:5173` (after `cd ui && bun run dev`) — browse buckets, scan DynamoDB, invoke Lambda, list IAM principals, etc. See [docs/guide/admin-console.md](docs/guide/admin-console.md).
+- **Estimated billing dashboard.** Real-time rolling AWS bill at `/billing` — every metered request × vendored AWS pricing, with per-service breakdown, 30-min cost trajectory chart, and a "time to bankruptcy" widget. Pricing data is pulled directly from the AWS Pricing Bulk JSON via `cargo run -p awsim-billing --bin refresh-pricing --features refresh`. Covers per-request, byte-ingest, data-transfer, GB-month storage, GB-second compute, instance-hours, state-transition and per-character billing axes across 22+ services. See [docs/guide/billing.md](docs/guide/billing.md).
 
 ## Configuration
 
@@ -95,6 +96,7 @@ Open `http://localhost:5173`.
 - [Lambda execution](docs/guide/lambda-execution.md)
 - [API Gateway](docs/guide/api-gateway.md)
 - [Cognito OAuth](docs/guide/cognito-oauth.md)
+- [Estimated billing](docs/guide/billing.md)
 - [Service-by-service operation lists](docs/services/index.md)
 
 ## License
