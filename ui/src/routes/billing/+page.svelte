@@ -50,6 +50,8 @@
 		firehose: 'Amazon Data Firehose',
 		logs: 'Amazon CloudWatch Logs',
 		ecr: 'Amazon ECR',
+		'cognito-idp': 'Amazon Cognito User Pools',
+		'cognito-identity': 'Amazon Cognito Identity',
 	};
 
 	// Stable tints per service so the same colour represents the same
@@ -73,6 +75,8 @@
 		firehose: 'oklch(68% 0.16 30)', // burnt orange
 		logs: 'oklch(64% 0.12 240)', // dusk blue
 		ecr: 'oklch(70% 0.13 280)', // lavender
+		'cognito-idp': 'oklch(72% 0.14 165)', // jade
+		'cognito-identity': 'oklch(70% 0.12 195)', // teal
 	};
 	const FALLBACK_TINT = 'oklch(70% 0.05 0)';
 
@@ -348,6 +352,48 @@
 	const CHART_W = 600;
 	const CHART_H = 80;
 
+	// Hover state for the chart tooltip — null when the cursor is
+	// outside the chart, otherwise the index into history that's
+	// closest to the cursor's x position.
+	let hoverIndex = $state<number | null>(null);
+	let chartContainerEl: HTMLDivElement | null = $state(null);
+
+	function onChartMove(e: MouseEvent) {
+		const target = e.currentTarget as HTMLElement;
+		if (!target || history.length < 2) return;
+		const rect = target.getBoundingClientRect();
+		const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+		const minTs = history[0].ts;
+		const maxTs = Math.max(history[history.length - 1].ts, minTs + 1);
+		const targetTs = minTs + fraction * (maxTs - minTs);
+		// Pick the closest sample by timestamp.
+		let best = 0;
+		let bestDelta = Infinity;
+		for (let i = 0; i < history.length; i++) {
+			const delta = Math.abs(history[i].ts - targetTs);
+			if (delta < bestDelta) {
+				bestDelta = delta;
+				best = i;
+			}
+		}
+		hoverIndex = best;
+	}
+
+	function onChartLeave() {
+		hoverIndex = null;
+	}
+
+	let hoverPoint = $derived.by(() => {
+		if (hoverIndex == null || !chartPaths || hoverIndex >= history.length) return null;
+		const p = history[hoverIndex];
+		const minTs = history[0].ts;
+		const maxTs = Math.max(history[history.length - 1].ts, minTs + 1);
+		const span = maxTs - minTs;
+		const xPct = ((p.ts - minTs) / span) * 100;
+		const yPct = (1 - p.running_cost_usd / Math.max(chartPaths.maxCost, 1e-12)) * (100 - 5);
+		return { ...p, xPct, yPct };
+	});
+
 	let chartPaths = $derived.by(() => {
 		if (history.length < 2) return null;
 		const minTs = history[0].ts;
@@ -531,7 +577,8 @@
 		</div>
 
 		<!-- Cost trajectory: rolling 30-min running-cost sparkline,
-		     fed from localStorage so the chart survives page reloads. -->
+		     fed from localStorage so the chart survives page reloads.
+		     Hovering shows an exact $-value tooltip at the cursor. -->
 		{#if chartPaths}
 			<div class="rounded-lg border border-border bg-card p-4">
 				<div class="flex items-baseline justify-between">
@@ -544,10 +591,18 @@
 						· peak {fmtUsd(chartPaths.maxCost, { precise: true })}
 					</div>
 				</div>
+				<div
+					bind:this={chartContainerEl}
+					role="img"
+					aria-label="Cost trajectory chart"
+					class="relative mt-3"
+					onmousemove={onChartMove}
+					onmouseleave={onChartLeave}
+				>
 				<svg
 					viewBox="0 0 {CHART_W} {CHART_H}"
 					preserveAspectRatio="none"
-					class="mt-3 h-28 w-full"
+					class="h-28 w-full"
 					aria-label="Running cost over time"
 				>
 					<defs>
@@ -587,6 +642,22 @@
 						/>
 					{/if}
 				</svg>
+				<!-- Hover overlay: vertical guide + tooltip pinned to
+				     the closest sample's x position. -->
+				{#if hoverPoint}
+					<div
+						class="pointer-events-none absolute top-0 bottom-0 w-px bg-foreground/30"
+						style="left: {hoverPoint.xPct}%;"
+					></div>
+					<div
+						class="pointer-events-none absolute z-10 rounded-md border border-border bg-popover px-2 py-1 text-[10px] shadow-md"
+						style="left: {Math.min(hoverPoint.xPct, 80)}%; top: {Math.max(hoverPoint.yPct - 12, 0)}%; transform: translateX({hoverPoint.xPct > 80 ? '-100%' : '6px'});"
+					>
+						<div class="font-mono font-semibold tabular-nums">{fmtUsd(hoverPoint.running_cost_usd, { precise: true })}</div>
+						<div class="text-muted-foreground">{fmtRelative(hoverPoint.ts)}</div>
+					</div>
+				{/if}
+				</div>
 				<div class="flex justify-between text-[10px] text-muted-foreground">
 					<span>{fmtRelative(chartPaths.minTs)}</span>
 					<span>now</span>

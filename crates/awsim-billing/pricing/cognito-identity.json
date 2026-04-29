@@ -1,0 +1,41 @@
+{
+  "service": "cognito-identity",
+  "display_name": "Amazon Cognito",
+  "region": "us-east-1",
+  "currency": "USD",
+  "source": "AWS Pricing Bulk JSON (AmazonCognito, 2026-04-24T22:31:02Z)",
+  "request_dimensions": [
+    {
+      "description": "Identity Pool API (free)",
+      "operations": [
+        "GetId",
+        "GetCredentialsForIdentity",
+        "GetOpenIdToken",
+        "GetOpenIdTokenForDeveloperIdentity",
+        "ListIdentities",
+        "DescribeIdentity",
+        "DeleteIdentities",
+        "MergeDeveloperIdentities",
+        "UnlinkIdentity",
+        "UnlinkDeveloperIdentity",
+        "LookupDeveloperIdentity",
+        "CreateIdentityPool",
+        "DeleteIdentityPool",
+        "DescribeIdentityPool",
+        "UpdateIdentityPool",
+        "ListIdentityPools",
+        "GetIdentityPoolRoles",
+        "SetIdentityPoolRoles",
+        "TagResource",
+        "UntagResource",
+        "ListTagsForResource"
+      ],
+      "price_per_request": 0.0
+    }
+  ],
+  "default_request_rate": 0.0,
+  "data_transfer_out_per_gb": 0.09,
+  "data_ingest_per_gb": null,
+  "storage_per_gb_month": null,
+  "compute_per_gb_second": null
+}
