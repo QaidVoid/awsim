@@ -20,6 +20,7 @@ import CloudCog from "@lucide/svelte/icons/cloud-cog";
 import Container from "@lucide/svelte/icons/container";
 import Cpu from "@lucide/svelte/icons/cpu";
 import Database from "@lucide/svelte/icons/database";
+import DollarSign from "@lucide/svelte/icons/dollar-sign";
 import FileSearch from "@lucide/svelte/icons/file-search";
 import Fingerprint from "@lucide/svelte/icons/fingerprint";
 import Flame from "@lucide/svelte/icons/flame";
@@ -569,6 +570,14 @@ export const SERVICES: Service[] = [
     category: "Admin",
     icon: Tag,
     keywords: ["tagging", "tag", "resource groups", "discovery"],
+  },
+  {
+    id: "billing",
+    name: "Billing",
+    href: "/billing",
+    category: "Admin",
+    icon: DollarSign,
+    keywords: ["pricing", "cost", "bill", "spend", "estimate"],
   },
 ];
 
