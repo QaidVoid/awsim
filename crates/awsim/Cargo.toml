@@ -54,6 +54,8 @@ awsim-eks = { workspace = true }
 awsim-firehose = { workspace = true }
 awsim-batch = { workspace = true }
 awsim-billing = { workspace = true }
+awsim-chaos = { workspace = true }
+serde = { workspace = true }
 awsim-sso-admin = { workspace = true }
 awsim-datasync = { workspace = true }
 awsim-polly = { workspace = true }

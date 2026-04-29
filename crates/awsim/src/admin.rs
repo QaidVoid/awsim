@@ -285,3 +285,99 @@ pub async fn billing(State(meter): State<Arc<BillingMeter>>) -> Json<Value> {
     let report = compute_report(&meter.store, &meter.pricing);
     Json(serde_json::to_value(report).unwrap_or_else(|_| json!({"error": "serialise_failed"})))
 }
+
+// ---------------------------------------------------------------------------
+// Chaos engine admin endpoints
+// ---------------------------------------------------------------------------
+
+use awsim_chaos::{ChaosEngine, ChaosRule};
+use std::sync::atomic::Ordering as AtomicOrdering;
+
+pub async fn chaos_list(State(engine): State<Arc<ChaosEngine>>) -> Json<Value> {
+    let rules = engine.rules();
+    Json(json!({
+        "rules": rules,
+        "total_injections": engine.total_injections.load(AtomicOrdering::Relaxed),
+    }))
+}
+
+/// POST /_awsim/chaos/rules — accepts a `ChaosRule` body. The
+/// caller can omit `id` / `created_at` / `injection_count` and we
+/// fill them in.
+pub async fn chaos_add(
+    State(engine): State<Arc<ChaosEngine>>,
+    Json(body): Json<Value>,
+) -> Response {
+    let mut rule: ChaosRule = match serde_json::from_value(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "InvalidRule", "message": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    if rule.id.is_empty() {
+        rule.id = uuid::Uuid::new_v4().to_string();
+    }
+    if rule.created_at == 0 {
+        rule.created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+    }
+    rule.injection_count = 0;
+    let id = rule.id.clone();
+    engine.add_rule(rule);
+    (StatusCode::CREATED, Json(json!({"id": id}))).into_response()
+}
+
+pub async fn chaos_remove(
+    State(engine): State<Arc<ChaosEngine>>,
+    Path(id): Path<String>,
+) -> Response {
+    if engine.remove_rule(&id) {
+        (StatusCode::NO_CONTENT, ()).into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "RuleNotFound", "id": id})),
+        )
+            .into_response()
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct ChaosPatchBody {
+    pub enabled: Option<bool>,
+}
+
+pub async fn chaos_patch(
+    State(engine): State<Arc<ChaosEngine>>,
+    Path(id): Path<String>,
+    Json(body): Json<ChaosPatchBody>,
+) -> Response {
+    if let Some(enabled) = body.enabled
+        && !engine.set_enabled(&id, enabled)
+    {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "RuleNotFound", "id": id})),
+        )
+            .into_response();
+    }
+    (StatusCode::NO_CONTENT, ()).into_response()
+}
+
+pub async fn chaos_clear(State(engine): State<Arc<ChaosEngine>>) -> Response {
+    engine.clear();
+    (StatusCode::NO_CONTENT, ()).into_response()
+}
+
+pub async fn chaos_stats(State(engine): State<Arc<ChaosEngine>>) -> Json<Value> {
+    Json(json!({
+        "total_injections": engine.total_injections.load(AtomicOrdering::Relaxed),
+        "recent": engine.recent_injections(),
+    }))
+}

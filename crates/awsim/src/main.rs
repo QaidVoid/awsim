@@ -551,7 +551,7 @@ async fn main() -> Result<()> {
             axum::routing::post(admin::replay_request),
         )
         .fallback(awsim_core::gateway::handle_request)
-        .with_state(state);
+        .with_state(state.clone());
 
     // Build the OpenSearch (Elasticsearch-compatible) sub-router.
     // Nest OpenSearch under /opensearch prefix so it doesn't conflict with AWS routes.
@@ -569,6 +569,28 @@ async fn main() -> Result<()> {
         .route("/_awsim/billing", axum::routing::get(admin::billing))
         .with_state(Arc::clone(&billing_meter));
 
+    // Chaos sub-router. Same pattern as billing — its own typed
+    // state so the admin handlers can mutate the engine without
+    // routing everything through AppState.
+    let chaos_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/chaos/rules",
+            axum::routing::get(admin::chaos_list).post(admin::chaos_add),
+        )
+        .route(
+            "/_awsim/chaos/rules/{id}",
+            axum::routing::patch(admin::chaos_patch).delete(admin::chaos_remove),
+        )
+        .route(
+            "/_awsim/chaos/clear",
+            axum::routing::post(admin::chaos_clear),
+        )
+        .route(
+            "/_awsim/chaos/stats",
+            axum::routing::get(admin::chaos_stats),
+        )
+        .with_state(Arc::clone(&state.chaos));
+
     // Merge all routers and add shared middleware.
     let app = cognito_oauth_router
         .merge(main_router)
@@ -576,6 +598,7 @@ async fn main() -> Result<()> {
         .merge(opensearch_nested)
         .merge(ecr_router)
         .merge(billing_router)
+        .merge(chaos_router)
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with
