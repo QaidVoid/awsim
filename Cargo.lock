@@ -1609,6 +1609,7 @@ dependencies = [
  "awsim-sso-admin",
  "awsim-stepfunctions",
  "awsim-sts",
+ "awsim-transfer",
  "awsim-waf",
  "awsim-xray",
  "axum",
@@ -2529,6 +2530,19 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "awsim-transfer"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
  "serde",
  "serde_json",
  "tracing",

@@ -1098,6 +1098,9 @@ fn register_services(
     };
     state.register(Arc::new(qldb), qldb_routes);
 
+    let transfer = Arc::new(awsim_transfer::TransferService::new());
+    state.register(transfer, vec![]);
+
     // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
