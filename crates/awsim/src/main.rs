@@ -16,6 +16,7 @@ use awsim_core::{
 
 mod admin;
 mod bill_cli;
+mod chaos_cli;
 mod integrations;
 mod proxy;
 
@@ -84,6 +85,61 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Manage chaos-injection rules on a running awsim instance.
+    Chaos {
+        #[command(subcommand)]
+        command: ChaosCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ChaosCommand {
+    /// List active rules.
+    List {
+        #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
+        endpoint: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add a new rule. Specify `--error`, `--latency`, or both.
+    Add {
+        #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
+        endpoint: String,
+        /// Service signing name (e.g. `s3`) or `*` for any.
+        #[arg(long, default_value = "*")]
+        service: String,
+        /// Operation name (e.g. `PutObject`) or `*` for any.
+        #[arg(long, default_value = "*")]
+        operation: String,
+        /// Probability in `[0.0, 1.0]`. Defaults to 1.0 (always fires).
+        #[arg(long, default_value_t = 1.0)]
+        probability: f64,
+        /// Error spec: `STATUS,CODE[,MESSAGE]`. Example: `503,SlowDown,please retry`.
+        #[arg(long)]
+        error: Option<String>,
+        /// Latency range in ms. `100` for fixed, `100-500` for a range.
+        #[arg(long)]
+        latency: Option<String>,
+        /// Optional human label shown in the dashboard.
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Remove a rule by id.
+    Remove {
+        #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
+        endpoint: String,
+        id: String,
+    },
+    /// Clear all rules + reset injection counters.
+    Clear {
+        #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
+        endpoint: String,
+    },
+    /// Show injection stats (total + recent ring buffer).
+    Stats {
+        #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
+        endpoint: String,
+    },
 }
 
 #[tokio::main]
@@ -97,6 +153,9 @@ async fn main() -> Result<()> {
         match cmd {
             Command::Bill { endpoint, json } => {
                 return bill_cli::run(&endpoint, json).await;
+            }
+            Command::Chaos { command } => {
+                return chaos_cli::run(command).await;
             }
         }
     }
