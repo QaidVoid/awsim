@@ -1,6 +1,6 @@
 # Services Overview
 
-AWSim registers 46 AWS services. All services share the same endpoint at `http://localhost:4566`.
+AWSim registers 47 AWS services. All services share the same endpoint at `http://localhost:4566`.
 
 The service is selected automatically from the `X-Amz-Target` header (for JSON/Query protocols) or the URL path (for REST protocols).
 
@@ -17,6 +17,7 @@ The service is selected automatically from the `X-Amz-Target` header (for JSON/Q
 | Lambda | `lambda` | REST-JSON | No | — | Serverless function execution |
 | API Gateway | `execute-api` | REST-JSON | No | — | REST API management and proxy |
 | EventBridge | `events` | JSON | No | — | Event routing |
+| EventBridge Pipes | `pipes` | REST-JSON | Yes | 10 | Point-to-point source→target integrations |
 | CloudWatch Logs | `logs` | JSON | No | — | Log groups and streams |
 | KMS | `kms` | JSON | No | 28 | Key Management Service |
 | Secrets Manager | `secretsmanager` | JSON | No | — | Secret storage |
@@ -80,3 +81,4 @@ For operations lists, SDK examples, and limitations, see:
 - [Cognito](/services/cognito)
 - [IAM & STS](/services/iam)
 - [Resource Groups Tagging API](/services/resourcegroupstagging)
+- [EventBridge Pipes](/services/pipes)

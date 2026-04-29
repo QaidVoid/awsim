@@ -72,11 +72,20 @@ aws --endpoint-url http://localhost:4566 lambda invoke \
 
 | Operation | Description |
 |-----------|-------------|
-| `CreateEventSourceMapping` | Map SQS, Kinesis, or DynamoDB Streams as a trigger. Input: `FunctionName`, `EventSourceArn`, `BatchSize`, `StartingPosition` (`TRIM_HORIZON` or `LATEST` for Kinesis) |
-| `GetEventSourceMapping` | Get mapping configuration |
+| `CreateEventSourceMapping` | Map SQS, Kinesis, or DynamoDB Streams as a trigger. Honored fields: `FunctionName`, `EventSourceArn`, `BatchSize`, `Enabled`, `StartingPosition` (`TRIM_HORIZON` / `LATEST` / `AT_TIMESTAMP`), `StartingPositionTimestamp`, `MaximumBatchingWindowInSeconds`, `FilterCriteria`, `DestinationConfig.OnFailure.Destination`, `MaximumRetryAttempts`, `ParallelizationFactor`, `BisectBatchOnFunctionError` |
+| `GetEventSourceMapping` | Get mapping configuration including `LastProcessingResult` |
 | `DeleteEventSourceMapping` | Remove a trigger |
-| `ListEventSourceMappings` | List all mappings |
-| `UpdateEventSourceMapping` | Update batch size or enable/disable the mapping |
+| `ListEventSourceMappings` | List all mappings, optionally filtered by `EventSourceArn` / `FunctionName` |
+| `UpdateEventSourceMapping` | Patch any creation field; `LastModified` is bumped |
+
+#### Poller behavior
+
+Background pollers (one for SQS, one for Kinesis) iterate every `(account, region)` pair every 2–5 seconds and drive every enabled mapping in that scope. DynamoDB streams are push-based — write events on the source table immediately fan out to matching mappings.
+
+- **FilterCriteria** is evaluated against each record using EventBridge content-pattern syntax: equality arrays, `prefix`, `suffix`, `exists`, `anything-but`, `numeric` ranges. SQS records that fail the filter are deleted from the queue (matching real Lambda behavior).
+- **Kinesis** uses the `NextShardIterator` returned by `GetRecords` and persists it on the mapping, so records aren't re-delivered every tick.
+- **DestinationConfig.OnFailure** is honored for SQS and SNS ARNs — failed Lambda invocations route the offending batch to that destination. Source messages stay in their queue / shard so the next tick retries them.
+- **LastProcessingResult** is updated to `OK` or `PROBLEM: <message>` after each cycle and surfaced via `Get` / `List`.
 
 ### Layers
 
