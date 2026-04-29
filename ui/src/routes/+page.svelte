@@ -5,7 +5,7 @@
 	 * `dashboardState` (SSE) plus polled storage / stats / config.
 	 */
 	import { onDestroy, onMount } from 'svelte';
-	import { fetchConfig, fetchStats, fetchStorage } from '$lib/api';
+	import { fetchConfig, fetchStats, fetchStorage, fetchSqliteStats, type SqliteStatsPayload } from '$lib/api';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import KpiCard from '$lib/components/dashboard/kpi-card.svelte';
@@ -37,6 +37,7 @@
 	let stats = $state<Stats | null>(null);
 	let config = $state<Config | null>(null);
 	let storage = $state<StoragePayload | null>(null);
+	let sqliteStats = $state<SqliteStatsPayload | null>(null);
 	let pollTimer: ReturnType<typeof setInterval> | undefined;
 	let refreshing = $state(false);
 	let lastError = $state<string | null>(null);
@@ -58,14 +59,16 @@
 	async function refresh() {
 		refreshing = true;
 		try {
-			const [s, c, st] = await Promise.all([
+			const [s, c, st, sq] = await Promise.all([
 				fetchStats() as Promise<Stats>,
 				fetchConfig() as Promise<Config>,
 				fetchStorage().catch(() => null as StoragePayload | null),
+				fetchSqliteStats().catch(() => null as SqliteStatsPayload | null),
 			]);
 			stats = s;
 			config = c;
 			storage = st;
+			sqliteStats = sq;
 			lastError = null;
 			lastUpdated = Date.now() / 1000;
 		} catch (err) {
@@ -178,6 +181,6 @@
 	</section>
 
 		<!-- 4. Insights row -->
-		<InsightsPanel {storage} {config} />
+		<InsightsPanel {storage} {sqliteStats} {config} />
 	</div>
 </div>

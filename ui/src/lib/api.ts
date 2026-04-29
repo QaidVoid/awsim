@@ -27,6 +27,25 @@ export async function fetchStorage(): Promise<StoragePayload> {
   return res.json();
 }
 
+// ---------- SQLite-backed storage stats ----------
+
+export interface SqliteStoreStats {
+  service: string;
+  /** `null` for services that don't expose a row count yet (DynamoDB). */
+  rows: number | null;
+  size_bytes: number;
+}
+
+export interface SqliteStatsPayload {
+  stores: SqliteStoreStats[];
+}
+
+export async function fetchSqliteStats(): Promise<SqliteStatsPayload> {
+  const res = await fetch(`${BASE}/storage/sqlite`);
+  if (!res.ok) throw new Error(`SQLite stats fetch failed: ${res.status}`);
+  return res.json();
+}
+
 // ---------- Billing ----------
 
 export interface BillingDimension {

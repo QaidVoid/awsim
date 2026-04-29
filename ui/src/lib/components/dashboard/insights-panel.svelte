@@ -20,16 +20,19 @@
 	import { dashboardState } from '$lib/dashboard-state.svelte';
 	import { bytesHuman } from '$lib/format';
 	import type { StoragePayload } from '$lib/events';
+	import type { SqliteStatsPayload } from '$lib/api';
 	import type { Component } from 'svelte';
 	import { fade } from 'svelte/transition';
+	import Database from '@lucide/svelte/icons/database';
 
 	interface Props {
 		storage: StoragePayload | null;
+		sqliteStats: SqliteStatsPayload | null;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		config: Record<string, any> | null;
 	}
 
-	let { storage, config }: Props = $props();
+	let { storage, sqliteStats, config }: Props = $props();
 
 	interface Insight {
 		key: string;
@@ -95,6 +98,26 @@
 				text: 'Persistence is off — state is in-memory only',
 				tone: 'warning',
 			});
+		}
+
+		// SQLite-backed stores — total rows + db size across DDB / CWL /
+		// CWM / Kinesis. Surfaces where memory + disk are actually going.
+		if (sqliteStats?.stores?.length) {
+			const totalRows = sqliteStats.stores.reduce((a, s) => a + (s.rows ?? 0), 0);
+			const totalSize = sqliteStats.stores.reduce((a, s) => a + s.size_bytes, 0);
+			const top = [...sqliteStats.stores]
+				.filter((s) => (s.rows ?? 0) > 0)
+				.sort((a, b) => (b.rows ?? 0) - (a.rows ?? 0))[0];
+			if (totalRows > 0 || totalSize > 0) {
+				out.push({
+					key: 'sqlite',
+					icon: Database,
+					text: top
+						? `${totalRows.toLocaleString()} SQLite rows · ${bytesHuman(totalSize)} on disk — top: ${top.service} (${(top.rows ?? 0).toLocaleString()})`
+						: `${bytesHuman(totalSize)} of SQLite-backed state on disk`,
+					tone: 'default',
+				});
+			}
 		}
 
 		// IAM enforcement.
