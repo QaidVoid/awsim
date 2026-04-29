@@ -32,6 +32,7 @@ import Layers from "@lucide/svelte/icons/layers";
 import MemoryStick from "@lucide/svelte/icons/memory-stick";
 import Lock from "@lucide/svelte/icons/lock";
 import MapPin from "@lucide/svelte/icons/map-pin";
+import Megaphone from "@lucide/svelte/icons/megaphone";
 import Mail from "@lucide/svelte/icons/mail";
 import MessageSquare from "@lucide/svelte/icons/message-square";
 import MessagesSquare from "@lucide/svelte/icons/messages-square";
@@ -265,6 +266,14 @@ export const SERVICES: Service[] = [
     category: "Messaging",
     icon: Mail,
     keywords: ["email"],
+  },
+  {
+    id: "pinpoint",
+    name: "Pinpoint",
+    href: "/pinpoint",
+    category: "Messaging",
+    icon: Megaphone,
+    keywords: ["pinpoint", "campaign", "endpoint", "segment", "marketing"],
   },
   {
     id: "pipes",
