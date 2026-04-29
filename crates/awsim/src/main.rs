@@ -98,6 +98,7 @@ async fn main() -> Result<()> {
         lambda_service,
         sqs_service,
         logs_service,
+        pipes_store,
     ) = register_services(
         &mut state,
         &cli.account_id,
@@ -309,6 +310,17 @@ async fn main() -> Result<()> {
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             integrations::poll_kinesis_event_sources(&kinesis_poll_services, &kinesis_lambda_store)
                 .await;
+        }
+    });
+
+    // Spawn EventBridge Pipes runner: forwards source records to targets for
+    // every RUNNING pipe.
+    let pipes_runner_services = Arc::clone(&state.services);
+    let pipes_runner_store = pipes_store.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            integrations::pipes::run_pipes_once(&pipes_runner_services, &pipes_runner_store).await;
         }
     });
 
@@ -745,6 +757,7 @@ type RegisteredServices = (
     Arc<awsim_lambda::LambdaService>,
     Arc<awsim_sqs::SqsService>,
     Arc<awsim_cloudwatch_logs::CloudWatchLogsService>,
+    awsim_core::AccountRegionStore<awsim_pipes::PipesState>,
 );
 
 /// Register all services and return handles needed by the router:
@@ -1011,6 +1024,14 @@ fn register_services(
         Arc::new(awsim_resourcegroupstagging::ResourceGroupsTaggingService::new());
     state.register(resourcegroupstagging, vec![]);
 
+    let pipes = awsim_pipes::PipesService::new();
+    let pipes_store = pipes.store();
+    let pipes_routes = {
+        use awsim_core::ServiceHandler;
+        pipes.routes()
+    };
+    state.register(Arc::new(pipes), pipes_routes);
+
     // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
@@ -1045,6 +1066,7 @@ fn register_services(
         lambda_clone,
         sqs_clone,
         logs_clone,
+        pipes_store,
     )
 }
 

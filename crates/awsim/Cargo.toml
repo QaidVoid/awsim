@@ -57,6 +57,7 @@ awsim-sso-admin = { workspace = true }
 awsim-datasync = { workspace = true }
 awsim-polly = { workspace = true }
 awsim-resourcegroupstagging = { workspace = true }
+awsim-pipes = { workspace = true }
 axum = { workspace = true }
 dashmap = { workspace = true }
 tower = { workspace = true, features = ["limit", "load-shed"] }

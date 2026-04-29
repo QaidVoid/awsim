@@ -14,6 +14,7 @@ use serde_json::Value;
 use tracing::{debug, info, warn};
 
 mod esm;
+pub mod pipes;
 
 /// Snapshot of the fields the SQS poller needs from an EventSourceMapping.
 /// Tuple aliased to keep clippy's type-complexity lint quiet.

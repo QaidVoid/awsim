@@ -1585,6 +1585,7 @@ dependencies = [
  "awsim-lambda",
  "awsim-opensearch",
  "awsim-organizations",
+ "awsim-pipes",
  "awsim-polly",
  "awsim-rds",
  "awsim-resourcegroupstagging",
@@ -2198,6 +2199,18 @@ dependencies = [
  "serde_json",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "awsim-pipes"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "awsim-core",
+ "dashmap",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
