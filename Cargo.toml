@@ -46,6 +46,7 @@ members = [
     "crates/awsim-firehose",
     "crates/awsim-batch",
     "crates/awsim-billing",
+    "crates/awsim-chaos",
     "crates/awsim-sso-admin",
     "crates/awsim-datasync",
     "crates/awsim-polly",
@@ -119,6 +120,7 @@ awsim-eks = { path = "crates/awsim-eks", version = "0.2.0" }
 awsim-firehose = { path = "crates/awsim-firehose", version = "0.2.0" }
 awsim-batch = { path = "crates/awsim-batch", version = "0.2.0" }
 awsim-billing = { path = "crates/awsim-billing", version = "0.2.0" }
+awsim-chaos = { path = "crates/awsim-chaos", version = "0.2.0" }
 awsim-sso-admin = { path = "crates/awsim-sso-admin", version = "0.2.0" }
 awsim-datasync = { path = "crates/awsim-datasync", version = "0.2.0" }
 awsim-polly = { path = "crates/awsim-polly", version = "0.2.0" }

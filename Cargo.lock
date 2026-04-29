@@ -1769,6 +1769,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "awsim-chaos"
+version = "0.2.0"
+dependencies = [
+ "awsim-core",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "awsim-cloudformation"
 version = "0.2.0"
 dependencies = [
