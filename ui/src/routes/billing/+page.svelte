@@ -19,6 +19,14 @@
 	import { toast } from 'svelte-sonner';
 
 	const REFRESH_INTERVAL_MS = 5_000;
+	const HISTORY_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+	const HISTORY_KEY = 'awsim-billing-history';
+
+	interface HistoryPoint {
+		ts: number;
+		running_cost_usd: number;
+		projected_monthly_cost_usd: number;
+	}
 
 	// AWS publishes verbose service names ("Amazon Simple Storage
 	// Service"); users know them by their brand names. Fall through to
@@ -73,6 +81,7 @@
 	let error = $state<string | null>(null);
 	let lastFetched = $state<number>(0);
 	let timer: ReturnType<typeof setInterval> | undefined;
+	let history = $state<HistoryPoint[]>([]);
 
 	// Money you'd light on fire in a year before going broke. Default
 	// $1k — a reasonable "side project gets DDoSed" budget. Persisted so
@@ -89,11 +98,48 @@
 			report = await fetchBilling();
 			error = null;
 			lastFetched = Date.now();
+			recordHistory(report);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load billing report';
 			toast.error(error);
 		} finally {
 			loading = false;
+		}
+	}
+
+	function recordHistory(r: BillingReport) {
+		const now = Date.now();
+		const next = [
+			...history,
+			{
+				ts: now,
+				running_cost_usd: r.running_cost_usd,
+				projected_monthly_cost_usd: r.projected_monthly_cost_usd,
+			},
+		].filter((p) => now - p.ts <= HISTORY_WINDOW_MS);
+		history = next;
+		try {
+			localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+		} catch {
+			/* ignore — quota exceeded etc. */
+		}
+	}
+
+	function loadHistory() {
+		try {
+			const saved = localStorage.getItem(HISTORY_KEY);
+			if (!saved) return;
+			const parsed = JSON.parse(saved) as HistoryPoint[];
+			if (!Array.isArray(parsed)) return;
+			const now = Date.now();
+			history = parsed.filter(
+				(p) =>
+					typeof p?.ts === 'number' &&
+					typeof p?.running_cost_usd === 'number' &&
+					now - p.ts <= HISTORY_WINDOW_MS,
+			);
+		} catch {
+			/* ignore */
 		}
 	}
 
@@ -107,6 +153,7 @@
 		} catch {
 			/* ignore */
 		}
+		loadHistory();
 		void load();
 		timer = setInterval(load, REFRESH_INTERVAL_MS);
 	});
@@ -297,6 +344,38 @@
 		return 'until budget exhausted';
 	});
 
+	// SVG viewBox for the sparkline chart (logical coords).
+	const CHART_W = 600;
+	const CHART_H = 80;
+
+	let chartPaths = $derived.by(() => {
+		if (history.length < 2) return null;
+		const minTs = history[0].ts;
+		const maxTs = Math.max(history[history.length - 1].ts, minTs + 1);
+		const span = maxTs - minTs;
+		const maxCost = Math.max(...history.map((p) => p.running_cost_usd), 1e-12);
+		const xOf = (ts: number) => ((ts - minTs) / span) * CHART_W;
+		const yOf = (cost: number) => CHART_H - (cost / maxCost) * (CHART_H - 4);
+		const pts = history
+			.map((p) => `${xOf(p.ts).toFixed(2)},${yOf(p.running_cost_usd).toFixed(2)}`)
+			.join(' L ');
+		const stroke = `M ${pts}`;
+		const area = `M ${xOf(minTs).toFixed(2)},${CHART_H} L ${pts} L ${xOf(maxTs).toFixed(2)},${CHART_H} Z`;
+		const last = history[history.length - 1];
+		const lastPoint = { x: xOf(last.ts), y: yOf(last.running_cost_usd) };
+		return { stroke, area, maxCost, minTs, maxTs, lastPoint };
+	});
+
+	function fmtRelative(ts: number): string {
+		const diff = Math.max(0, Date.now() - ts);
+		const mins = Math.floor(diff / 60000);
+		const secs = Math.floor((diff % 60000) / 1000);
+		if (mins === 0) return `${secs}s ago`;
+		if (mins < 60) return `${mins}m ago`;
+		const h = Math.floor(mins / 60);
+		return `${h}h ago`;
+	}
+
 	type BurnSeverity = 'safe' | 'warn' | 'critical';
 	let burnSeverity = $derived.by<BurnSeverity>(() => {
 		if (daysToBudget == null) return 'safe';
@@ -450,6 +529,70 @@
 				</div>
 			</div>
 		</div>
+
+		<!-- Cost trajectory: rolling 30-min running-cost sparkline,
+		     fed from localStorage so the chart survives page reloads. -->
+		{#if chartPaths}
+			<div class="rounded-lg border border-border bg-card p-4">
+				<div class="flex items-baseline justify-between">
+					<div class="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+						<TrendingUpIcon class="size-3.5" />
+						Cost trajectory
+					</div>
+					<div class="text-[10px] text-muted-foreground">
+						last {Math.round(HISTORY_WINDOW_MS / 60000)} min
+						· peak {fmtUsd(chartPaths.maxCost, { precise: true })}
+					</div>
+				</div>
+				<svg
+					viewBox="0 0 {CHART_W} {CHART_H}"
+					preserveAspectRatio="none"
+					class="mt-3 h-28 w-full"
+					aria-label="Running cost over time"
+				>
+					<defs>
+						<linearGradient id="cost-fill" x1="0" y1="0" x2="0" y2="1">
+							<stop offset="0%" stop-color="oklch(70% 0.15 25)" stop-opacity="0.45" />
+							<stop offset="100%" stop-color="oklch(70% 0.15 25)" stop-opacity="0" />
+						</linearGradient>
+					</defs>
+					<!-- Subtle baseline so the curve has visual context. -->
+					<line
+						x1="0"
+						x2={CHART_W}
+						y1={CHART_H}
+						y2={CHART_H}
+						stroke="oklch(50% 0.02 0)"
+						stroke-width="1"
+						vector-effect="non-scaling-stroke"
+					/>
+					<path d={chartPaths.area} fill="url(#cost-fill)" />
+					<path
+						d={chartPaths.stroke}
+						fill="none"
+						stroke="oklch(70% 0.15 25)"
+						stroke-width="2"
+						stroke-linejoin="round"
+						stroke-linecap="round"
+						vector-effect="non-scaling-stroke"
+					/>
+					<!-- Most-recent-value dot anchors the eye on the curve tip. -->
+					{#if chartPaths.lastPoint}
+						<circle
+							cx={chartPaths.lastPoint.x}
+							cy={chartPaths.lastPoint.y}
+							r="2"
+							fill="oklch(70% 0.15 25)"
+							vector-effect="non-scaling-stroke"
+						/>
+					{/if}
+				</svg>
+				<div class="flex justify-between text-[10px] text-muted-foreground">
+					<span>{fmtRelative(chartPaths.minTs)}</span>
+					<span>now</span>
+				</div>
+			</div>
+		{/if}
 
 		<!-- Per-service breakdown -->
 		{#if report && report.services.length > 0}

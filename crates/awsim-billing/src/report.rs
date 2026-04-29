@@ -226,10 +226,21 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
     // aggregate. A bucket that's been sitting idle but storing data
     // still costs money; a Lambda that ran once a long time ago and
     // hasn't been invoked recently still has accumulated GB-seconds.
+    //
+    // Skip services whose tracker is fully zero — the storage poll
+    // creates an entry on first call even when bytes are 0 (e.g. an
+    // empty ECR registry), which would otherwise surface as a
+    // ghost row on the dashboard.
     let leftover_keys: std::collections::BTreeSet<String> = storage_agg
-        .keys()
-        .chain(compute_agg.keys())
-        .cloned()
+        .iter()
+        .filter(|(_, (picos, bytes))| *picos > 0 || *bytes > 0)
+        .map(|(k, _)| k.clone())
+        .chain(
+            compute_agg
+                .iter()
+                .filter(|(_, (picos, gb_us))| *picos > 0 || *gb_us > 0)
+                .map(|(k, _)| k.clone()),
+        )
         .collect();
     for svc_name in leftover_keys {
         let pricing = catalog.get(&svc_name);
