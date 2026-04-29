@@ -86,6 +86,11 @@ uuid = { workspace = true }
 bytes = { workspace = true }
 base64 = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+
+# rlimit is POSIX only — the crate's Resource::NOFILE / get/setrlimit don't
+# exist on Windows, so the unix-targeted fd watcher / soft-limit bumper
+# is cfg-gated below.
+[target.'cfg(unix)'.dependencies]
 rlimit = "0.10"
 
 [dev-dependencies]

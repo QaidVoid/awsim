@@ -511,6 +511,7 @@ async fn handle_overload_error(err: BoxError) -> impl IntoResponse {
 ///
 /// Linux-only (reads /proc/self/fd). On non-Linux it gracefully exits
 /// after the first read failure.
+#[cfg(unix)]
 fn spawn_fd_pressure_watcher() {
     let pid = std::process::id();
     let fd_dir = std::path::PathBuf::from(format!("/proc/{pid}/fd"));
@@ -562,6 +563,7 @@ fn spawn_fd_pressure_watcher() {
 /// have to remember to `ulimit -n` before launching the binary.
 ///
 /// No-op on Windows (the rlimit crate's NOFILE doesn't exist there).
+#[cfg(unix)]
 fn raise_nofile_limit() {
     const TARGET: u64 = 65_536;
     let (soft, hard) = match rlimit::getrlimit(rlimit::Resource::NOFILE) {
@@ -592,6 +594,12 @@ fn raise_nofile_limit() {
         "Raised NOFILE rlimit"
     );
 }
+
+#[cfg(not(unix))]
+fn spawn_fd_pressure_watcher() {}
+
+#[cfg(not(unix))]
+fn raise_nofile_limit() {}
 
 ///   cloudformation:CreateResource  — provisions the resource in the target service
 ///   cloudformation:DeleteResource  — deprovisions the resource from the target service
