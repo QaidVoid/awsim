@@ -206,12 +206,22 @@ pub fn invoke(
         "__status_code": response_status,
     });
 
+    // Emit the function's configured memory as an internal metadata
+    // header so the billing meter can charge GB-second compute cost
+    // accurately. The header name uses the X-Awsim-* prefix that the
+    // gateway strips before the response leaves the building.
+    let mut headers = serde_json::Map::new();
+    headers.insert(
+        "X-Awsim-Memory-MB".to_string(),
+        Value::String(memory_size.to_string()),
+    );
     if let Some(err_type) = exec_error {
         // The AWS SDK reads function errors from the X-Amz-Function-Error
         // response header, not from the response body, so surface it both ways.
         response["FunctionError"] = Value::String(err_type.clone());
-        response["__headers"] = json!({ "X-Amz-Function-Error": err_type });
+        headers.insert("X-Amz-Function-Error".to_string(), Value::String(err_type));
     }
+    response["__headers"] = Value::Object(headers);
 
     Ok(response)
 }

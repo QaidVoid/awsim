@@ -10,10 +10,10 @@ use crate::state::BillingStateStore;
 const SECONDS_PER_MONTH: f64 = 30.0 * 24.0 * 60.0 * 60.0;
 const BYTES_PER_GB: f64 = 1_073_741_824.0;
 
-/// Default Lambda function memory (128 MB) — AWS's lowest tier and
-/// the default for new functions. AWSim doesn't carry per-function
-/// memory through the request event yet; until it does, this gives
-/// a defensible lower bound on compute cost.
+/// Fallback Lambda function memory (128 MB) — AWS's lowest tier
+/// and the default for new functions. Used when the responding
+/// service didn't attach an `X-Awsim-Memory-MB` header (older
+/// services / non-Lambda compute paths).
 const LAMBDA_DEFAULT_MEMORY_MB: u64 = 128;
 const MB_PER_GB: f64 = 1024.0;
 
@@ -96,11 +96,18 @@ impl BillingMeter {
 
         // Compute billing — Lambda's GB-second axis. We only accrue
         // for compute-billed ops on services with a published rate.
+        // Memory comes from the responder's X-Awsim-Memory-MB header
+        // (Lambda populates this with the function's configured
+        // memory); falls back to 128 MB when absent.
         if let Some(rate) = pricing.compute_per_gb_second
             && COMPUTE_BILLED_OPS.contains(&operation)
             && event.duration_ms > 0.0
         {
-            let memory_gb = LAMBDA_DEFAULT_MEMORY_MB as f64 / MB_PER_GB;
+            let memory_mb = event
+                .memory_mb
+                .map(|m| m as u64)
+                .unwrap_or(LAMBDA_DEFAULT_MEMORY_MB);
+            let memory_gb = memory_mb as f64 / MB_PER_GB;
             let gb_seconds = (event.duration_ms / 1000.0) * memory_gb;
             state.compute_for(&event.service).record(gb_seconds, rate);
         }

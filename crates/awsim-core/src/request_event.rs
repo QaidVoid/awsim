@@ -17,6 +17,11 @@ pub struct RequestEvent {
     pub request_size: u64,
     pub response_size: u64,
     pub error_code: Option<String>,
+    /// Lambda-style memory size in MB, populated when the responding
+    /// service sets the `X-Awsim-Memory-MB` header on its response.
+    /// Used by the billing meter for accurate GB-second compute cost
+    /// (otherwise it falls back to the 128 MB minimum).
+    pub memory_mb: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -72,6 +77,7 @@ mod tests {
             request_size: 1024,
             response_size: 256,
             error_code: None,
+            memory_mb: None,
         };
         bus.publish(event.clone());
         let received = rx.recv().await.expect("receive event");
