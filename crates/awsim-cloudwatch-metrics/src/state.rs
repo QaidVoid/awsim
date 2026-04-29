@@ -1,3 +1,5 @@
+use std::sync::{Arc, OnceLock};
+
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
@@ -6,17 +8,6 @@ use serde::{Deserialize, Serialize};
 pub struct Dimension {
     pub name: String,
     pub value: String,
-}
-
-/// A single stored metric data point.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetricDatum {
-    pub metric_name: String,
-    pub namespace: String,
-    pub value: f64,
-    pub unit: String,
-    pub timestamp: String,
-    pub dimensions: Vec<Dimension>,
 }
 
 /// A CloudWatch metric alarm.
@@ -52,13 +43,26 @@ pub struct Dashboard {
     pub body: String,
 }
 
-/// Per-account/region CloudWatch Metrics state.
+/// Per-account/region CloudWatch Metrics state. Datapoints live in
+/// the shared `SqliteStore` (off `state.sqlite`); alarms + dashboards
+/// stay in DashMap because they are small and read often.
 #[derive(Debug, Default)]
 pub struct CloudWatchState {
-    /// namespace → list of data points
-    pub metrics: DashMap<String, Vec<MetricDatum>>,
     /// alarm name → alarm
     pub alarms: DashMap<String, MetricAlarm>,
     /// dashboard name → dashboard
     pub dashboards: DashMap<String, Dashboard>,
+    /// Shared SQLite store for datapoints. Populated by the service
+    /// on first `get_state` call.
+    pub sqlite: OnceLock<Arc<crate::SqliteStore>>,
+}
+
+impl CloudWatchState {
+    pub fn sqlite(&self) -> Option<&Arc<crate::SqliteStore>> {
+        self.sqlite.get()
+    }
+
+    pub fn set_sqlite(&self, store: Arc<crate::SqliteStore>) {
+        let _ = self.sqlite.set(store);
+    }
 }

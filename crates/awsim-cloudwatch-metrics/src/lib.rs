@@ -1,6 +1,8 @@
 mod operations;
+pub mod sqlite_store;
 mod state;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -8,25 +10,74 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
+pub use sqlite_store::{MetricDatumRow, SqliteStore};
 use state::CloudWatchState;
 
 /// The AWSim CloudWatch Metrics service handler.
 ///
 /// Supports the `AwsQuery` protocol (Action= form-encoded requests),
-/// signing name `monitoring`.
+/// signing name `monitoring`. Datapoints live in `sqlite_store`;
+/// alarms + dashboards stay in DashMap on `CloudWatchState`.
 pub struct CloudWatchMetricsService {
     store: AccountRegionStore<CloudWatchState>,
+    sqlite_store: Arc<SqliteStore>,
+    /// Owns the per-process tempdir when running without
+    /// `--data-dir` so the `.db` file is removed on graceful exit.
+    _tempdir: Option<tempfile::TempDir>,
 }
 
 impl CloudWatchMetricsService {
+    /// Ephemeral in-process store. Files live in a `TempDir` cleaned
+    /// up by the awsim shutdown handler.
     pub fn new() -> Self {
+        let dir = tempfile::Builder::new()
+            .prefix("awsim-cwm-")
+            .tempdir()
+            .expect("creating ephemeral CWM tempdir should not fail");
+        let path = dir.path().join("cloudwatch-metrics.db");
+        let sqlite_store = Arc::new(
+            SqliteStore::open(&path).expect("opening ephemeral CWM sqlite store should not fail"),
+        );
         Self {
             store: AccountRegionStore::new(),
+            sqlite_store,
+            _tempdir: Some(dir),
         }
     }
 
+    /// Persistent store at `{dir}/cloudwatch-metrics.db`.
+    pub fn with_data_dir(dir: impl AsRef<Path>) -> Self {
+        let dir = dir.as_ref();
+        std::fs::create_dir_all(dir).unwrap_or_else(|e| {
+            panic!(
+                "creating CloudWatch Metrics data dir {} failed: {e}",
+                dir.display()
+            )
+        });
+        let path = dir.join("cloudwatch-metrics.db");
+        let sqlite_store = Arc::new(SqliteStore::open(&path).unwrap_or_else(|e| {
+            panic!(
+                "opening persistent CWM sqlite store at {} failed: {e}",
+                path.display()
+            )
+        }));
+        Self {
+            store: AccountRegionStore::new(),
+            sqlite_store,
+            _tempdir: None,
+        }
+    }
+
+    /// Path to the underlying tempdir (when one is owned), so the
+    /// awsim binary can clean it up before `process::exit`.
+    pub fn tempdir_path(&self) -> Option<&Path> {
+        self._tempdir.as_ref().map(|d| d.path())
+    }
+
     fn get_state(&self, ctx: &RequestContext) -> Arc<CloudWatchState> {
-        self.store.get(&ctx.account_id, &ctx.region)
+        let state = self.store.get(&ctx.account_id, &ctx.region);
+        state.set_sqlite(Arc::clone(&self.sqlite_store));
+        state
     }
 }
 

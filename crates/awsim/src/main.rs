@@ -280,6 +280,7 @@ async fn main() -> Result<()> {
         mq_service,
         memorydb_service,
         dynamodb_service,
+        cw_metrics_service,
     ) = register_services(
         &mut state,
         &cli.account_id,
@@ -384,6 +385,7 @@ async fn main() -> Result<()> {
     if cli.data_dir.is_none() {
         let dynamodb_for_cleanup = Arc::clone(&dynamodb_service);
         let logs_for_cleanup = Arc::clone(&logs_service);
+        let cw_metrics_for_cleanup = Arc::clone(&cw_metrics_service);
         tokio::spawn(async move {
             #[cfg(unix)]
             {
@@ -401,6 +403,7 @@ async fn main() -> Result<()> {
             }
             cleanup_tempdir("DynamoDB", dynamodb_for_cleanup.tempdir_path());
             cleanup_tempdir("CloudWatch Logs", logs_for_cleanup.tempdir_path());
+            cleanup_tempdir("CloudWatch Metrics", cw_metrics_for_cleanup.tempdir_path());
             info!("Exiting.");
             std::process::exit(0);
         });
@@ -462,6 +465,7 @@ async fn main() -> Result<()> {
         let chaos_for_shutdown = Arc::clone(&state.chaos);
         let dynamodb_for_shutdown = Arc::clone(&dynamodb_service);
         let logs_for_shutdown = Arc::clone(&logs_service);
+        let cw_metrics_for_shutdown = Arc::clone(&cw_metrics_service);
         tokio::spawn(async move {
             #[cfg(unix)]
             {
@@ -494,6 +498,7 @@ async fn main() -> Result<()> {
             }
             cleanup_tempdir("DynamoDB", dynamodb_for_shutdown.tempdir_path());
             cleanup_tempdir("CloudWatch Logs", logs_for_shutdown.tempdir_path());
+            cleanup_tempdir("CloudWatch Metrics", cw_metrics_for_shutdown.tempdir_path());
 
             info!("Snapshots saved. Exiting.");
             std::process::exit(0);
@@ -1216,6 +1221,7 @@ type RegisteredServices = (
     Arc<awsim_mq::MqService>,
     Arc<awsim_memorydb::MemoryDbService>,
     Arc<awsim_dynamodb::DynamoDbService>,
+    Arc<awsim_cloudwatch_metrics::CloudWatchMetricsService>,
 );
 
 /// Register all services and return handles needed by the router:
@@ -1406,7 +1412,11 @@ fn register_services(
     };
     state.register(Arc::new(route53), route53_routes);
 
-    let cloudwatch_metrics = Arc::new(awsim_cloudwatch_metrics::CloudWatchMetricsService::new());
+    let cloudwatch_metrics = Arc::new(match data_dir {
+        Some(dir) => awsim_cloudwatch_metrics::CloudWatchMetricsService::with_data_dir(dir),
+        None => awsim_cloudwatch_metrics::CloudWatchMetricsService::new(),
+    });
+    let cloudwatch_metrics_clone = Arc::clone(&cloudwatch_metrics);
     state.register(cloudwatch_metrics, vec![]);
 
     let athena = Arc::new(awsim_athena::AthenaService::new());
@@ -1615,6 +1625,7 @@ fn register_services(
         mq_clone,
         memorydb_clone,
         dynamodb_clone,
+        cloudwatch_metrics_clone,
     )
 }
 

@@ -14,3 +14,8 @@ serde_json = { workspace = true }
 dashmap = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
+chrono = { workspace = true }
+rusqlite = { workspace = true }
+r2d2 = { workspace = true }
+r2d2_sqlite = { workspace = true }
+tempfile = { workspace = true }

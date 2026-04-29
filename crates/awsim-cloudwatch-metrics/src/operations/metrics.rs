@@ -3,51 +3,17 @@ use std::sync::Arc;
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-use crate::state::{CloudWatchState, Dimension, MetricDatum};
+use crate::sqlite_store::{MetricDatumRow, parse_timestamp_ms};
+use crate::state::{CloudWatchState, Dimension};
 
 fn chrono_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let (y, mo, d, h, mi, s) = epoch_to_ymdhms(secs);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-fn epoch_to_ymdhms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
-    let s = secs % 60;
-    let m = (secs / 60) % 60;
-    let h = (secs / 3600) % 24;
-    let days = secs / 86400;
-    let mut year = 1970u64;
-    let mut remaining = days;
-    loop {
-        let leap =
-            (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
-        let days_in_year = if leap { 366 } else { 365 };
-        if remaining < days_in_year {
-            break;
-        }
-        remaining -= days_in_year;
-        year += 1;
-    }
-    let leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
-    let month_days: &[u64] = if leap {
-        &[31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        &[31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-    let mut month = 0u64;
-    for &md in month_days {
-        if remaining < md {
-            break;
-        }
-        remaining -= md;
-        month += 1;
-    }
-    (year, month + 1, remaining + 1, h, m, s)
-}
+/// 15-day default retention. Mirrors the AWS retention for high-
+/// resolution metric data and is plenty for local dev. Configurable
+/// per-account/region eventually; hard-coded for now.
+const DEFAULT_RETENTION_MS: i64 = 15 * 86_400_000;
 
 fn parse_dimensions(dims_val: &Value) -> Vec<Dimension> {
     dims_val
@@ -64,11 +30,45 @@ fn parse_dimensions(dims_val: &Value) -> Vec<Dimension> {
         .unwrap_or_default()
 }
 
+fn dimensions_to_json(dims: &[Dimension]) -> Value {
+    Value::Array(
+        dims.iter()
+            .map(|d| {
+                json!({
+                    "Name": d.name,
+                    "Value": d.value,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn json_to_dimensions(v: &Value) -> Vec<Dimension> {
+    v.as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|d| {
+                    let name = d.get("Name").and_then(Value::as_str)?.to_string();
+                    let value = d.get("Value").and_then(Value::as_str)?.to_string();
+                    Some(Dimension { name, value })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn require_sqlite(state: &Arc<CloudWatchState>) -> Result<Arc<crate::SqliteStore>, AwsError> {
+    state
+        .sqlite()
+        .map(Arc::clone)
+        .ok_or_else(|| AwsError::internal("CloudWatch Metrics sqlite store not initialised"))
+}
+
 /// PutMetricData
 pub fn put_metric_data(
     state: &Arc<CloudWatchState>,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let namespace = input
         .get("Namespace")
@@ -81,7 +81,7 @@ pub fn put_metric_data(
         .and_then(Value::as_array)
         .ok_or_else(|| AwsError::bad_request("InvalidParameterValue", "MetricData is required"))?;
 
-    let mut entry = state.metrics.entry(namespace.clone()).or_default();
+    let mut rows: Vec<MetricDatumRow> = Vec::with_capacity(metric_data.len());
 
     for datum in metric_data {
         let metric_name = datum
@@ -106,21 +106,28 @@ pub fn put_metric_data(
             .get("Dimensions")
             .map(parse_dimensions)
             .unwrap_or_default();
+        let ts_ms = parse_timestamp_ms(&timestamp);
 
-        entry.push(MetricDatum {
-            metric_name,
+        rows.push(MetricDatumRow {
             namespace: namespace.clone(),
+            metric_name,
             value,
             unit,
             timestamp,
-            dimensions,
+            ts_ms,
+            dimensions_json: dimensions_to_json(&dimensions),
         });
     }
 
-    // Drop the entry borrow before re-evaluating alarms — the evaluator
-    // takes its own DashMap borrows on `state.metrics`.
-    drop(entry);
-    super::alarms::evaluate_alarms(state);
+    let sqlite = require_sqlite(state)?;
+    sqlite.put_datapoints(&ctx.account_id, &ctx.region, &rows)?;
+
+    // Best-effort retention sweep on every write — cheap when the
+    // table is already trimmed; one indexed DELETE otherwise.
+    let cutoff = parse_timestamp_ms(&chrono_now()).saturating_sub(DEFAULT_RETENTION_MS);
+    let _ = sqlite.trim_older_than(&ctx.account_id, &ctx.region, cutoff);
+
+    super::alarms::evaluate_alarms(state, ctx);
 
     Ok(json!({}))
 }
@@ -129,40 +136,29 @@ pub fn put_metric_data(
 pub fn list_metrics(
     state: &Arc<CloudWatchState>,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let filter_namespace = input.get("Namespace").and_then(Value::as_str);
     let filter_metric_name = input.get("MetricName").and_then(Value::as_str);
 
-    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
-    let mut metrics: Vec<Value> = Vec::new();
+    let sqlite = require_sqlite(state)?;
+    let rows = sqlite.list_metrics(
+        &ctx.account_id,
+        &ctx.region,
+        filter_namespace,
+        filter_metric_name,
+    )?;
 
-    for entry in state.metrics.iter() {
-        let ns = entry.key().clone();
-        if let Some(fn_) = filter_namespace
-            && ns != fn_
-        {
-            continue;
-        }
-        for datum in entry.value() {
-            if let Some(fmn) = filter_metric_name
-                && datum.metric_name != fmn
-            {
-                continue;
-            }
-            let key = (ns.clone(), datum.metric_name.clone());
-            if seen.insert(key) {
-                metrics.push(json!({
-                    "Namespace": ns,
-                    "MetricName": datum.metric_name,
-                    "Dimensions": datum.dimensions.iter().map(|d| json!({
-                        "Name": d.name,
-                        "Value": d.value,
-                    })).collect::<Vec<_>>(),
-                }));
-            }
-        }
-    }
+    let metrics: Vec<Value> = rows
+        .into_iter()
+        .map(|(ns, name, dims)| {
+            json!({
+                "Namespace": ns,
+                "MetricName": name,
+                "Dimensions": dims,
+            })
+        })
+        .collect();
 
     Ok(json!({ "Metrics": metrics }))
 }
@@ -171,7 +167,7 @@ pub fn list_metrics(
 pub fn get_metric_statistics(
     state: &Arc<CloudWatchState>,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let namespace = input
         .get("Namespace")
@@ -186,31 +182,31 @@ pub fn get_metric_statistics(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let start_ms = input
+        .get("StartTime")
+        .and_then(Value::as_str)
+        .map(parse_timestamp_ms);
+    let end_ms = input
+        .get("EndTime")
+        .and_then(Value::as_str)
+        .map(parse_timestamp_ms);
 
-    let values: Vec<f64> = state
-        .metrics
-        .get(namespace)
-        .map(|entry| {
-            entry
-                .iter()
-                .filter(|d| d.metric_name == metric_name)
-                .map(|d| d.value)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let sqlite = require_sqlite(state)?;
+    let rows = sqlite.get_datapoints(
+        &ctx.account_id,
+        &ctx.region,
+        namespace,
+        metric_name,
+        start_ms,
+        end_ms,
+    )?;
 
-    let first_unit = state
-        .metrics
-        .get(namespace)
-        .and_then(|entry| {
-            entry
-                .iter()
-                .find(|d| d.metric_name == metric_name)
-                .map(|d| d.unit.clone())
-        })
+    let values: Vec<f64> = rows.iter().map(|r| r.value).collect();
+    let first_unit = rows
+        .first()
+        .map(|r| r.unit.clone())
         .unwrap_or_else(|| "None".to_string());
     let count = values.len() as f64;
-
     let sum: f64 = values.iter().sum();
     let average = if count > 0.0 { sum / count } else { 0.0 };
     let minimum = values.iter().cloned().fold(f64::INFINITY, f64::min);
@@ -256,14 +252,23 @@ pub fn get_metric_statistics(
 pub fn get_metric_data(
     state: &Arc<CloudWatchState>,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let queries = input
         .get("MetricDataQueries")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let start_ms = input
+        .get("StartTime")
+        .and_then(Value::as_str)
+        .map(parse_timestamp_ms);
+    let end_ms = input
+        .get("EndTime")
+        .and_then(Value::as_str)
+        .map(parse_timestamp_ms);
 
+    let sqlite = require_sqlite(state)?;
     let mut results: Vec<Value> = Vec::new();
 
     for query in &queries {
@@ -285,21 +290,10 @@ pub fn get_metric_data(
                 .and_then(|m| m.get("MetricName"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
-
-            let data_points: Vec<(f64, String)> = state
-                .metrics
-                .get(ns)
-                .map(|entry| {
-                    entry
-                        .iter()
-                        .filter(|d| d.metric_name == mn)
-                        .map(|d| (d.value, d.timestamp.clone()))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let vals: Vec<Value> = data_points.iter().map(|(v, _)| json!(v)).collect();
-            let ts: Vec<Value> = data_points.iter().map(|(_, t)| json!(t)).collect();
+            let rows =
+                sqlite.get_datapoints(&ctx.account_id, &ctx.region, ns, mn, start_ms, end_ms)?;
+            let vals: Vec<Value> = rows.iter().map(|r| json!(r.value)).collect();
+            let ts: Vec<Value> = rows.iter().map(|r| json!(r.timestamp)).collect();
             (vals, ts)
         } else {
             (vec![], vec![])
@@ -317,4 +311,31 @@ pub fn get_metric_data(
         "MetricDataResults": results,
         "NextToken": null,
     }))
+}
+
+/// Internal helper for the alarm evaluator: pull all datapoints for
+/// `(namespace, metric_name)` whose ts is within `[start_ms, end_ms]`.
+/// Returns `(value, dimensions, timestamp_string)` tuples so the
+/// evaluator can do its filtering / aggregation without re-querying.
+pub(crate) fn datapoints_for_alarm(
+    state: &Arc<CloudWatchState>,
+    ctx: &RequestContext,
+    namespace: &str,
+    metric_name: &str,
+    start_ms: i64,
+    end_ms: i64,
+) -> Result<Vec<(f64, Vec<Dimension>, String)>, AwsError> {
+    let sqlite = require_sqlite(state)?;
+    let rows = sqlite.get_datapoints(
+        &ctx.account_id,
+        &ctx.region,
+        namespace,
+        metric_name,
+        Some(start_ms),
+        Some(end_ms),
+    )?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.value, json_to_dimensions(&r.dimensions_json), r.timestamp))
+        .collect())
 }
