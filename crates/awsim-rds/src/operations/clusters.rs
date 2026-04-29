@@ -40,7 +40,8 @@ pub fn create_db_cluster(
     let _master_password = require_str(input, "MasterUserPassword")?;
 
     match engine {
-        "aurora" | "aurora-mysql" | "aurora-postgresql" | "mysql" | "postgres" => {}
+        "aurora" | "aurora-mysql" | "aurora-postgresql" | "mysql" | "postgres" | "docdb"
+        | "neptune" => {}
         _ => {
             return Err(invalid_parameter(format!(
                 "Unknown engine for cluster: {engine}"

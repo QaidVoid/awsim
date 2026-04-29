@@ -4,6 +4,8 @@ pub fn default_engine_version(engine: &str) -> &'static str {
         "postgres" => "16.1",
         "mysql" => "8.0.35",
         "mariadb" => "10.11.6",
+        "docdb" => "5.0.0",
+        "neptune" => "1.3.1.0",
         _ => "1.0",
     }
 }
@@ -12,6 +14,8 @@ pub fn default_engine_version(engine: &str) -> &'static str {
 pub fn default_port(engine: &str) -> u16 {
     match engine {
         "postgres" => 5432,
+        "docdb" => 27017,
+        "neptune" => 8182,
         _ => 3306,
     }
 }

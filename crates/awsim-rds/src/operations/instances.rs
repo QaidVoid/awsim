@@ -60,7 +60,7 @@ pub fn create_db_instance(
     // Validate engine
     match engine {
         "postgres" | "mysql" | "mariadb" | "oracle-ee" | "sqlserver-ex" | "sqlserver-se"
-        | "sqlserver-ee" | "sqlserver-web" => {}
+        | "sqlserver-ee" | "sqlserver-web" | "docdb" | "neptune" => {}
         _ => {
             return Err(invalid_parameter(format!("Unknown engine: {engine}")));
         }
