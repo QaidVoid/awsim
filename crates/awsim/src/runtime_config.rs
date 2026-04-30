@@ -41,6 +41,25 @@ pub struct RuntimeConfig {
     pub ses: SesSection,
     #[serde(default)]
     pub iam: IamSection,
+    #[serde(default)]
+    pub logging: LoggingSection,
+}
+
+/// Tracing/logging filter directive. Same syntax as `RUST_LOG`:
+/// `info`, `debug,sqlx=warn`, `awsim=trace`, etc. Hot-reloaded via
+/// `tracing_subscriber::reload`, so flipping `info → debug` from
+/// the UI takes effect on the next emitted event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingSection {
+    pub level: String,
+}
+
+impl Default for LoggingSection {
+    fn default() -> Self {
+        Self {
+            level: "info".to_string(),
+        }
+    }
 }
 
 /// IAM authorization section. When `enforce` is true, every request
@@ -99,6 +118,8 @@ pub enum RuntimeConfigError {
     },
     #[error(transparent)]
     Bedrock(#[from] awsim_bedrock::BedrockConfigError),
+    #[error("invalid log level filter '{value}': {reason}")]
+    InvalidLogLevel { value: String, reason: String },
 }
 
 /// A hook called after a successful config swap. Receives the new
@@ -235,6 +256,17 @@ fn validate(cfg: &RuntimeConfig) -> Result<(), RuntimeConfigError> {
         // backends, env-var mismatches, etc. before we swap.
         let spec_clone = cfg.bedrock.spec.clone();
         awsim_bedrock::build_from_spec(spec_clone, |v| std::env::var(v).ok())?;
+    }
+    // Catch malformed log filters at apply time so the UI shows a
+    // useful error instead of silently leaving the live filter in
+    // place.
+    if !cfg.logging.level.is_empty()
+        && let Err(e) = tracing_subscriber::EnvFilter::try_new(&cfg.logging.level)
+    {
+        return Err(RuntimeConfigError::InvalidLogLevel {
+            value: cfg.logging.level.clone(),
+            reason: e.to_string(),
+        });
     }
     Ok(())
 }

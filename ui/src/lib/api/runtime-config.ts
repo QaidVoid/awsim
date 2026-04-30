@@ -36,10 +36,15 @@ export interface IamSection {
   enforce: boolean;
 }
 
+export interface LoggingSection {
+  level: string;
+}
+
 export interface RuntimeConfig {
   bedrock: BedrockSection;
   ses: SesSection;
   iam: IamSection;
+  logging: LoggingSection;
 }
 
 export interface RuntimeConfigEnvelope {

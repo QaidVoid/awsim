@@ -334,8 +334,23 @@ async fn async_main() -> Result<()> {
         }
     }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(&cli.log_level)
+    // Reloadable log filter: wrap the env filter in a `reload::Layer`
+    // so the runtime-config hook can swap directives at runtime
+    // without restarting the process.
+    let initial_filter =
+        tracing_subscriber::EnvFilter::try_new(&cli.log_level).unwrap_or_else(|e| {
+            eprintln!(
+                "Invalid log filter {:?}: {e} — falling back to 'info'",
+                cli.log_level
+            );
+            tracing_subscriber::EnvFilter::new("info")
+        });
+    let (filter_layer, log_reload) = tracing_subscriber::reload::Layer::new(initial_filter);
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(tracing_subscriber::fmt::layer())
         .init();
 
     raise_nofile_limit();
@@ -515,6 +530,31 @@ async fn async_main() -> Result<()> {
         runtime_config_store.on_change(Box::new(move |cfg| {
             authz.set_enabled(cfg.iam.enforce);
             info!(enforce = cfg.iam.enforce, "IAM enforcement hot-reloaded");
+        }));
+    }
+
+    // Log-level hot reload. Validation already ran in `apply()` so
+    // the directive parses; on the off chance it fails here (e.g.
+    // toctou with a removed feature flag), we keep the previous
+    // filter rather than wedging logging.
+    {
+        // Apply the persisted level if it differs from the CLI seed
+        // (e.g. user previously persisted "debug" via UI).
+        let persisted = runtime_config_store.current().logging.level.clone();
+        if persisted != cli.log_level
+            && let Ok(filter) = tracing_subscriber::EnvFilter::try_new(&persisted)
+        {
+            let _ = log_reload.modify(|f| *f = filter);
+        }
+        runtime_config_store.on_change(Box::new(move |cfg| {
+            match tracing_subscriber::EnvFilter::try_new(&cfg.logging.level) {
+                Ok(filter) => {
+                    if log_reload.modify(|f| *f = filter).is_ok() {
+                        info!(level = %cfg.logging.level, "Log filter hot-reloaded");
+                    }
+                }
+                Err(e) => warn!(error = %e, "Log filter rejected at reload time"),
+            }
         }));
     }
 
@@ -1605,6 +1645,9 @@ fn build_runtime_config_seed(cli: &Cli) -> Result<runtime_config::RuntimeConfig>
             // Seed from the existing AWSIM_IAM_ENFORCE env var so the
             // CLI / env-var path keeps working on first run.
             enforce: std::env::var("AWSIM_IAM_ENFORCE").ok().as_deref() == Some("true"),
+        },
+        logging: runtime_config::LoggingSection {
+            level: cli.log_level.clone(),
         },
     })
 }

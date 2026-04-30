@@ -58,6 +58,7 @@
 	let embedRows = $state<MapRow[]>([]);
 	let sesRetentionHours = $state(720);
 	let iamEnforce = $state(false);
+	let logLevel = $state('info');
 
 	onMount(load);
 
@@ -123,6 +124,7 @@
 		embedRows = entriesToRows(cfg.bedrock.spec.embed);
 		sesRetentionHours = cfg.ses.retention_hours;
 		iamEnforce = cfg.iam.enforce;
+		logLevel = cfg.logging.level;
 	}
 
 	function entriesToRows(record: Record<string, ModelMapEntry>): MapRow[] {
@@ -166,6 +168,7 @@
 			},
 			ses: { retention_hours: sesRetentionHours },
 			iam: { enforce: iamEnforce },
+			logging: { level: logLevel.trim() || 'info' },
 		};
 	}
 
@@ -566,6 +569,41 @@
 			<div class="p-4 text-xs text-muted-foreground">
 				Equivalent CLI flag:
 				<code class="ml-1 rounded bg-muted px-1.5 py-0.5 font-mono">AWSIM_IAM_ENFORCE=true</code>
+			</div>
+		</section>
+
+		<!-- Logging section -->
+		<section class="rounded-lg border bg-card">
+			<header class="border-b p-4">
+				<h2 class="text-base font-semibold">Log level</h2>
+				<p class="mt-1 text-sm text-muted-foreground">
+					Tracing filter directive. Same syntax as the <code>RUST_LOG</code> env var:
+					<code>info</code>, <code>debug</code>, or per-target overrides like
+					<code>info,awsim_dynamodb=debug,sqlx=warn</code>. Hot-reloaded — flip to
+					<code>debug</code> to capture more detail without restarting.
+				</p>
+			</header>
+			<div class="space-y-2 p-4">
+				<div class="flex flex-wrap items-center gap-2">
+					<Label for="log-level" class="text-sm shrink-0">Filter</Label>
+					<Input
+						id="log-level"
+						bind:value={logLevel}
+						placeholder="info"
+						class="max-w-md"
+					/>
+					<div class="flex flex-wrap gap-1">
+						{#each ['error', 'warn', 'info', 'debug', 'trace'] as preset (preset)}
+							<Button
+								variant="outline"
+								size="sm"
+								onclick={() => (logLevel = preset)}
+							>
+								{preset}
+							</Button>
+						{/each}
+					</div>
+				</div>
 			</div>
 		</section>
 
