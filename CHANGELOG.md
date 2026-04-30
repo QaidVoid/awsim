@@ -1,4 +1,76 @@
 
+## 0.3.0 — 2026-04-30
+
+### Bug Fixes
+
+- **cognito:** Populate EstimatedNumberOfUsers in DescribeUserPool
+- **ui:** Cognito attribute rows — grid layout so long names don't overlap values
+- **ui:** Force cognito drawer to 900px override over default sm:max-w-sm
+- **ui:** Widen cognito pool drawer + tidy user row layout
+- **ui:** Tint toasts by severity via Sonner richColors
+- **billing:** Per-character Polly + Comprehend metering
+- **billing:** Per-transition Step Functions metering
+- **billing:** Per-function Lambda memory for accurate GB-seconds
+- **build:** Cfg-gate rlimit calls so Windows builds compile
+
+### Documentation
+
+- **chaos:** Guide page + README highlight
+- Refresh README + guide for billing dashboard + 61 services
+
+### Features
+
+- **ui:** Cognito user pool create + delete
+- **ui:** Cognito domain create + delete + status
+- **ui:** Cognito app-client create + delete + OAuth editor
+- **ui:** Cognito group management — create, delete, edit members
+- **ui:** Cognito user detail panel with attribute + group editing
+- **ui:** Cognito user CRUD — create, set-password, delete
+- **ui:** Expand cognito API client with admin + group + client + domain ops
+- **cognito:** Hosted-UI logout endpoint
+- --max-blocking-threads + --max-body-bytes flags for memory tuning
+- **ui:** Show SQLite row counts + db size in dashboard insights
+- **storage:** /_awsim/storage/sqlite reports row counts + db sizes
+- **ui:** /flow burst-grouped activity view
+- **playground:** /playground request builder with templates
+- **snapshot:** Named state snapshots — save/load/list/delete
+- **replay:** Batch replay with status-code histogram in inspect drawer
+- **chaos:** Time-window + flap schedules
+- **chaos:** Persist rules to data-dir across restarts
+- **chaos:** /chaos UI page with presets, rules, sparkline
+- **chaos:** Built-in failure-mode presets
+- **chaos:** Awsim chaos CLI subcommand
+- **chaos:** Admin API for managing rules + injection stats
+- **chaos:** Inject errors + latency in the gateway dispatch path
+- **chaos:** Scaffold awsim-chaos crate with rule engine
+- **cli:** Awsim bill subcommand for terminal-friendly bill output
+- **ui:** CSV export for the current bill
+- **ui:** Chart polish — Y-axis labels, gridlines, service legend
+- **ui:** Per-service stacked area in cost trajectory chart
+- **ui:** Cost-explorer features — budget alerts, forecast, top mover
+- **billing:** Instance-hour metering for MQ + MemoryDB
+- **billing:** Instance-hour metering for EC2 + RDS
+- **billing:** Meter Cognito + chart hover tooltip
+- **billing:** Cost trajectory sparkline + suppress ghost rows
+- **billing:** Meter ECR + CloudWatch Logs at-rest storage
+- **billing:** Meter Lambda compute (GB-seconds)
+- **billing:** Point-in-time storage metering for S3 + DynamoDB
+- **billing:** Meter CloudWatch Logs ingest
+- **billing:** Meter Route 53, Kinesis, CloudFront, Firehose
+- **billing:** Meter API Gateway, Step Functions, SES, CloudWatch
+- **billing:** Meter SQS, SNS, KMS, Secrets Manager, EventBridge
+- **ui:** Billing dashboard with per-service breakdown
+- **billing:** Wire meter to event stream + /_awsim/billing endpoint
+- **billing:** Awsim-billing crate with vendored AWS pricing
+
+### Performance
+
+- Cap tokio blocking pool + lazy SQLite pools + tighter PRAGMAs
+- **kinesis:** Move records to SQLite with retention sweep
+- **cw-metrics:** Move datapoints to SQLite with retention sweep
+- **logs:** Move log events to SQLite, drop body-store backing
+- **ddb:** R2d2 pool, lower mmap/cache, tempdir cleanup, vacuum CLI
+
 ## 0.2.0 — 2026-04-29
 
 ### Bug Fixes
