@@ -777,6 +777,15 @@ pub async fn runtime_config_get(
     }))
 }
 
+/// GET /_awsim/runtime-config/defaults — return the runtime config
+/// you'd get on a clean install (no env-var seeds, no persisted
+/// file). The Settings page uses this to (a) flag fields the user
+/// has customised and (b) power "Reset section to defaults" buttons.
+pub async fn runtime_config_defaults() -> Json<Value> {
+    let cfg = crate::runtime_config::RuntimeConfig::default();
+    Json(serde_json::to_value(&cfg).expect("RuntimeConfig serialisation is infallible"))
+}
+
 /// PUT /_awsim/runtime-config — replace the live runtime config.
 /// Validation runs before any state changes; a bad payload returns
 /// 400 without touching disk or running services. On success we

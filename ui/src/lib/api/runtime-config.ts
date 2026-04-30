@@ -63,6 +63,14 @@ export async function getRuntimeConfig(): Promise<RuntimeConfigEnvelope> {
   return (await res.json()) as RuntimeConfigEnvelope;
 }
 
+export async function getRuntimeConfigDefaults(): Promise<RuntimeConfig> {
+  const res = await fetch(`${ENDPOINT}/defaults`);
+  if (!res.ok) {
+    throw new Error(`runtime-config defaults GET failed (HTTP ${res.status})`);
+  }
+  return (await res.json()) as RuntimeConfig;
+}
+
 export async function putRuntimeConfig(
   cfg: RuntimeConfig,
 ): Promise<RuntimeConfigEnvelope> {

@@ -1134,6 +1134,10 @@ async fn async_main() -> Result<()> {
             "/_awsim/runtime-config",
             axum::routing::get(admin::runtime_config_get).put(admin::runtime_config_put),
         )
+        .route(
+            "/_awsim/runtime-config/defaults",
+            axum::routing::get(admin::runtime_config_defaults),
+        )
         .with_state(Arc::clone(&runtime_config_store));
 
     // Named-snapshot sub-router. Bundles ServiceHandler state +

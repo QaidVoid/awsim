@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import {
 		getRuntimeConfig,
+		getRuntimeConfigDefaults,
 		putRuntimeConfig,
 		type BedrockBackendSpec,
 		type ModelMapEntry,
@@ -27,6 +28,7 @@
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
+	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import { toast } from 'svelte-sonner';
 
 	// UI-shape rows. We expand the wire `Record<string, …>` into arrays
@@ -48,6 +50,7 @@
 
 	let envelope = $state<RuntimeConfigEnvelope | null>(null);
 	let defaults = $state<BedrockDefaultsResponse | null>(null);
+	let configDefaults = $state<RuntimeConfig | null>(null);
 	let loading = $state(true);
 	let saving = $state(false);
 
@@ -65,9 +68,14 @@
 	async function load() {
 		loading = true;
 		try {
-			const [env, defs] = await Promise.all([getRuntimeConfig(), getBedrockDefaults()]);
+			const [env, defs, cfgDefs] = await Promise.all([
+				getRuntimeConfig(),
+				getBedrockDefaults(),
+				getRuntimeConfigDefaults(),
+			]);
 			envelope = env;
 			defaults = defs;
+			configDefaults = cfgDefs;
 			seedFromEnvelope(env.config);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to load runtime config');
@@ -75,6 +83,62 @@
 			loading = false;
 		}
 	}
+
+	function resetBedrock() {
+		if (!configDefaults) return;
+		bedrockEnabled = configDefaults.bedrock.enabled;
+		defaultBackend = configDefaults.bedrock.spec.default_backend ?? '';
+		backendRows = Object.entries(configDefaults.bedrock.spec.backends).map(([name, b]) => {
+			const keyMode: BackendRow['keyMode'] = b.api_key_env
+				? 'env'
+				: b.api_key
+					? 'inline'
+					: 'none';
+			return {
+				name,
+				endpoint: b.endpoint,
+				apiKey: b.api_key ?? '',
+				apiKeyEnv: b.api_key_env ?? '',
+				keyMode,
+			};
+		});
+		invokeRows = entriesToRows(configDefaults.bedrock.spec.invoke);
+		embedRows = entriesToRows(configDefaults.bedrock.spec.embed);
+		toast.info('Bedrock section reset — Save to apply');
+	}
+	function resetSes() {
+		if (!configDefaults) return;
+		sesRetentionHours = configDefaults.ses.retention_hours;
+		toast.info('SES section reset — Save to apply');
+	}
+	function resetIam() {
+		if (!configDefaults) return;
+		iamEnforce = configDefaults.iam.enforce;
+		toast.info('IAM section reset — Save to apply');
+	}
+	function resetLogging() {
+		if (!configDefaults) return;
+		logLevel = configDefaults.logging.level;
+		toast.info('Logging section reset — Save to apply');
+	}
+
+	// Derived "modified" flags per section. Compares current form
+	// state to the server-side defaults snapshot. We compare the
+	// shape the form will serialise (built via buildPayload) so this
+	// stays consistent with what actually gets PUT.
+	let isBedrockModified = $derived.by(() => {
+		if (!configDefaults) return false;
+		const current = buildPayload().bedrock;
+		const def = configDefaults.bedrock;
+		return JSON.stringify(current) !== JSON.stringify(def);
+	});
+	let isSesModified = $derived(
+		!!configDefaults && sesRetentionHours !== configDefaults.ses.retention_hours
+	);
+	let isIamModified = $derived(!!configDefaults && iamEnforce !== configDefaults.iam.enforce);
+	let isLoggingModified = $derived(
+		!!configDefaults && (logLevel.trim() || 'info') !== configDefaults.logging.level
+	);
 
 	function applyOllamaPreset() {
 		bedrockEnabled = true;
@@ -275,13 +339,24 @@
 		<section class="rounded-lg border bg-card">
 			<header class="flex items-start justify-between gap-4 border-b p-4">
 				<div>
-					<h2 class="text-base font-semibold">Bedrock proxy</h2>
+					<div class="flex items-center gap-2">
+						<h2 class="text-base font-semibold">Bedrock proxy</h2>
+						{#if isBedrockModified}
+							<Badge variant="secondary" class="text-[10px]">modified</Badge>
+						{/if}
+					</div>
 					<p class="mt-1 text-sm text-muted-foreground">
 						OpenAI-compatible backends serving Bedrock InvokeModel / Converse / embeddings.
 						Disable to fall back to canned responses.
 					</p>
 				</div>
 				<div class="flex items-center gap-2 pt-1">
+					{#if isBedrockModified}
+						<Button variant="ghost" size="sm" onclick={resetBedrock}>
+							<RotateCcwIcon class="h-4 w-4" />
+							<span class="ml-1">Reset</span>
+						</Button>
+					{/if}
 					<Label for="bedrock-enabled" class="text-sm">Enabled</Label>
 					<Switch id="bedrock-enabled" bind:checked={bedrockEnabled} />
 				</div>
@@ -527,12 +602,25 @@
 
 		<!-- SES section -->
 		<section class="rounded-lg border bg-card">
-			<header class="border-b p-4">
-				<h2 class="text-base font-semibold">SES outbox retention</h2>
-				<p class="mt-1 text-sm text-muted-foreground">
-					Hours to retain captured outbound emails before the hourly sweep deletes them.
-					Set to 0 to keep all emails forever.
-				</p>
+			<header class="flex items-start justify-between gap-4 border-b p-4">
+				<div>
+					<div class="flex items-center gap-2">
+						<h2 class="text-base font-semibold">SES outbox retention</h2>
+						{#if isSesModified}
+							<Badge variant="secondary" class="text-[10px]">modified</Badge>
+						{/if}
+					</div>
+					<p class="mt-1 text-sm text-muted-foreground">
+						Hours to retain captured outbound emails before the hourly sweep deletes them.
+						Set to 0 to keep all emails forever.
+					</p>
+				</div>
+				{#if isSesModified}
+					<Button variant="ghost" size="sm" onclick={resetSes}>
+						<RotateCcwIcon class="h-4 w-4" />
+						<span class="ml-1">Reset</span>
+					</Button>
+				{/if}
 			</header>
 			<div class="p-4">
 				<Label for="ses-retention">Retention hours</Label>
@@ -553,7 +641,12 @@
 		<section class="rounded-lg border bg-card">
 			<header class="flex items-start justify-between gap-4 border-b p-4">
 				<div>
-					<h2 class="text-base font-semibold">IAM enforcement</h2>
+					<div class="flex items-center gap-2">
+						<h2 class="text-base font-semibold">IAM enforcement</h2>
+						{#if isIamModified}
+							<Badge variant="secondary" class="text-[10px]">modified</Badge>
+						{/if}
+					</div>
 					<p class="mt-1 text-sm text-muted-foreground">
 						When on, every request runs through the IAM policy engine: identity policies,
 						resource policies, SCPs, KMS grants. When off, all calls are allowed regardless
@@ -562,6 +655,12 @@
 					</p>
 				</div>
 				<div class="flex items-center gap-2 pt-1">
+					{#if isIamModified}
+						<Button variant="ghost" size="sm" onclick={resetIam}>
+							<RotateCcwIcon class="h-4 w-4" />
+							<span class="ml-1">Reset</span>
+						</Button>
+					{/if}
 					<Label for="iam-enforce" class="text-sm">Enforce</Label>
 					<Switch id="iam-enforce" bind:checked={iamEnforce} />
 				</div>
@@ -574,14 +673,27 @@
 
 		<!-- Logging section -->
 		<section class="rounded-lg border bg-card">
-			<header class="border-b p-4">
-				<h2 class="text-base font-semibold">Log level</h2>
-				<p class="mt-1 text-sm text-muted-foreground">
-					Tracing filter directive. Same syntax as the <code>RUST_LOG</code> env var:
-					<code>info</code>, <code>debug</code>, or per-target overrides like
-					<code>info,awsim_dynamodb=debug,sqlx=warn</code>. Hot-reloaded — flip to
-					<code>debug</code> to capture more detail without restarting.
-				</p>
+			<header class="flex items-start justify-between gap-4 border-b p-4">
+				<div>
+					<div class="flex items-center gap-2">
+						<h2 class="text-base font-semibold">Log level</h2>
+						{#if isLoggingModified}
+							<Badge variant="secondary" class="text-[10px]">modified</Badge>
+						{/if}
+					</div>
+					<p class="mt-1 text-sm text-muted-foreground">
+						Tracing filter directive. Same syntax as the <code>RUST_LOG</code> env var:
+						<code>info</code>, <code>debug</code>, or per-target overrides like
+						<code>info,awsim_dynamodb=debug,sqlx=warn</code>. Hot-reloaded — flip to
+						<code>debug</code> to capture more detail without restarting.
+					</p>
+				</div>
+				{#if isLoggingModified}
+					<Button variant="ghost" size="sm" onclick={resetLogging}>
+						<RotateCcwIcon class="h-4 w-4" />
+						<span class="ml-1">Reset</span>
+					</Button>
+				{/if}
 			</header>
 			<div class="space-y-2 p-4">
 				<div class="flex flex-wrap items-center gap-2">
@@ -638,5 +750,20 @@
 				</ul>
 			</div>
 		</section>
+
+		<!-- Footer with persistence info -->
+		{#if envelope}
+			<footer class="flex items-center gap-2 border-t pt-4 text-xs text-muted-foreground">
+				<HardDriveIcon class="h-3.5 w-3.5" />
+				{#if envelope.persistent && envelope.configPath}
+					<span>
+						Persisted at
+						<code class="rounded bg-muted px-1.5 py-0.5 font-mono">{envelope.configPath}</code>
+					</span>
+				{:else}
+					<span>In-memory only — pass <code class="font-mono">--data-dir</code> to persist.</span>
+				{/if}
+			</footer>
+		{/if}
 	</div>
 </ServicePage>
