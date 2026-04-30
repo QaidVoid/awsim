@@ -28,6 +28,7 @@ mod chaos_cli;
 mod integrations;
 mod named_snapshots;
 mod proxy;
+mod seed;
 mod snapshot_cli;
 
 #[derive(Parser)]
@@ -911,6 +912,16 @@ async fn async_main() -> Result<()> {
         cognito: Arc::clone(&cognito_state),
         sqlite: Arc::clone(&sqlite_stats_state),
     });
+    // Bulk-seed router. Each /_awsim/seed/<service> writes directly
+    // to the service's internal state — no SigV4, no per-request
+    // overhead — so a 10k-row seed lands in well under a second.
+    let seed_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/seed/cognito-users",
+            axum::routing::post(seed::cognito::seed),
+        )
+        .with_state(Arc::clone(&cognito_state));
+
     let debug_router: axum::Router<()> = axum::Router::new()
         .route(
             "/_awsim/debug/objects",
@@ -952,6 +963,7 @@ async fn async_main() -> Result<()> {
         .merge(sqlite_stats_router)
         .merge(ses_admin_router)
         .merge(debug_router)
+        .merge(seed_router)
         .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_bytes))
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with

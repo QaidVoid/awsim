@@ -186,6 +186,10 @@ clap = { version = "4", features = ["derive", "env"] }
 # Config
 toml = "0.8"
 
+# Fake data — drives the /_awsim/seed admin endpoints. Random
+# names, emails, lorem ipsum, etc. without hand-rolling word lists.
+fake = "3"
+
 # Crypto
 uuid = { version = "1", features = ["v4"] }
 md-5 = "0.10"
