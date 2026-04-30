@@ -8,6 +8,11 @@
 		type RuntimeConfig,
 		type RuntimeConfigEnvelope,
 	} from '$lib/api/runtime-config';
+	import {
+		getBedrockDefaults,
+		type BedrockDefaultsResponse,
+		type BedrockModelMapEntry,
+	} from '$lib/api/bedrock';
 	import { ServicePage } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -21,6 +26,7 @@
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import { toast } from 'svelte-sonner';
 
 	// UI-shape rows. We expand the wire `Record<string, …>` into arrays
@@ -41,6 +47,7 @@
 	}
 
 	let envelope = $state<RuntimeConfigEnvelope | null>(null);
+	let defaults = $state<BedrockDefaultsResponse | null>(null);
 	let loading = $state(true);
 	let saving = $state(false);
 
@@ -56,14 +63,43 @@
 	async function load() {
 		loading = true;
 		try {
-			envelope = await getRuntimeConfig();
-			seedFromEnvelope(envelope.config);
+			const [env, defs] = await Promise.all([getRuntimeConfig(), getBedrockDefaults()]);
+			envelope = env;
+			defaults = defs;
+			seedFromEnvelope(env.config);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to load runtime config');
 		} finally {
 			loading = false;
 		}
 	}
+
+	function applyOllamaPreset() {
+		bedrockEnabled = true;
+		defaultBackend = 'ollama';
+		backendRows = [
+			{
+				name: 'ollama',
+				endpoint: 'http://localhost:11434/v1',
+				apiKey: '',
+				apiKeyEnv: '',
+				keyMode: 'none',
+			},
+		];
+		// Leave invoke/embed empty so the built-in defaults govern.
+		invokeRows = [];
+		embedRows = [];
+		toast.info('Ollama preset filled in — Save to apply');
+	}
+
+	// Set of Bedrock ids that the user has overridden, for shadow-
+	// highlighting the built-in defaults table.
+	let invokeOverrideIds = $derived(
+		new Set(invokeRows.map((r) => r.id.trim()).filter((s) => s.length > 0))
+	);
+	let embedOverrideIds = $derived(
+		new Set(embedRows.map((r) => r.id.trim()).filter((s) => s.length > 0))
+	);
 
 	function seedFromEnvelope(cfg: RuntimeConfig) {
 		bedrockEnabled = cfg.bedrock.enabled;
@@ -226,17 +262,17 @@
 				<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 					<div>
 						<Label for="default-backend">Default backend</Label>
-						<Input
+						<select
 							id="default-backend"
-							placeholder="e.g. ollama"
 							bind:value={defaultBackend}
-							list="backend-name-options"
-						/>
-						<datalist id="backend-name-options">
+							class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+							disabled={backendNames.length === 0}
+						>
+							<option value="">(none)</option>
 							{#each backendNames as n (n)}
-								<option value={n}></option>
+								<option value={n}>{n}</option>
 							{/each}
-						</datalist>
+						</select>
 						<p class="mt-1 text-xs text-muted-foreground">
 							Bare-tag mappings route here when no backend is pinned on the entry.
 						</p>
@@ -246,10 +282,16 @@
 				<div>
 					<div class="mb-2 flex items-center justify-between">
 						<h3 class="text-sm font-semibold">Backends</h3>
-						<Button variant="outline" size="sm" onclick={addBackend}>
-							<PlusIcon class="h-4 w-4" />
-							<span class="ml-1">Add</span>
-						</Button>
+						<div class="flex gap-2">
+							<Button variant="outline" size="sm" onclick={applyOllamaPreset}>
+								<SparklesIcon class="h-4 w-4" />
+								<span class="ml-1">Use Ollama preset</span>
+							</Button>
+							<Button variant="outline" size="sm" onclick={addBackend}>
+								<PlusIcon class="h-4 w-4" />
+								<span class="ml-1">Add</span>
+							</Button>
+						</div>
 					</div>
 					<div class="space-y-2">
 						{#each backendRows as row, i (i)}
@@ -266,7 +308,7 @@
 									<Label class="text-xs">Auth</Label>
 									<select
 										bind:value={row.keyMode}
-										class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+										class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 									>
 										<option value="none">None</option>
 										<option value="inline">Inline key</option>
@@ -327,8 +369,16 @@
 									<Input bind:value={row.id} placeholder="anthropic.claude-3-5-sonnet-..." />
 								</div>
 								<div class="col-span-6 sm:col-span-3">
-									<Label class="text-xs">Backend (optional)</Label>
-									<Input bind:value={row.backend} list="backend-name-options" placeholder="ollama" />
+									<Label class="text-xs">Backend</Label>
+									<select
+										bind:value={row.backend}
+										class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+									>
+										<option value="">(default)</option>
+										{#each backendNames as n (n)}
+											<option value={n}>{n}</option>
+										{/each}
+									</select>
 								</div>
 								<div class="col-span-6 sm:col-span-3">
 									<Label class="text-xs">Tag</Label>
@@ -364,8 +414,16 @@
 									<Input bind:value={row.id} placeholder="amazon.titan-embed-text-v2:0" />
 								</div>
 								<div class="col-span-6 sm:col-span-3">
-									<Label class="text-xs">Backend (optional)</Label>
-									<Input bind:value={row.backend} list="backend-name-options" placeholder="ollama" />
+									<Label class="text-xs">Backend</Label>
+									<select
+										bind:value={row.backend}
+										class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+									>
+										<option value="">(default)</option>
+										{#each backendNames as n (n)}
+											<option value={n}>{n}</option>
+										{/each}
+									</select>
 								</div>
 								<div class="col-span-6 sm:col-span-3">
 									<Label class="text-xs">Tag</Label>
@@ -385,6 +443,53 @@
 					</div>
 				</div>
 			</div>
+			{#if defaults}
+				<div class="border-t bg-muted/20">
+					<details class="group">
+						<summary class="flex cursor-pointer items-center justify-between p-4 text-sm">
+							<span>
+								<span class="font-semibold">Built-in defaults</span>
+								<span class="ml-2 text-xs text-muted-foreground">
+									(invoke: {defaults.invoke.length} · embed: {defaults.embed.length})
+								</span>
+							</span>
+							<span class="text-xs text-muted-foreground group-open:hidden">show</span>
+							<span class="hidden text-xs text-muted-foreground group-open:inline">hide</span>
+						</summary>
+						<div class="px-4 pb-4 text-xs">
+							<p class="mb-3 text-muted-foreground">
+								These ship with the proxy and apply automatically. Adding an override above
+								replaces the matching default; greyed-out rows below are currently shadowed.
+							</p>
+							{#snippet defaultsTable(label: string, entries: BedrockModelMapEntry[], shadowed: Set<string>)}
+								{#if entries.length > 0}
+									<div class="mb-3">
+										<div class="mb-1 text-[11px] font-semibold uppercase text-muted-foreground">
+											{label}
+										</div>
+										<div class="rounded border bg-background">
+											{#each entries as e (e.id)}
+												{@const isShadowed = shadowed.has(e.id)}
+												<div
+													class={'grid grid-cols-12 gap-2 border-b px-2 py-1.5 last:border-b-0 ' +
+														(isShadowed ? 'opacity-40 line-through' : '')}
+												>
+													<span class="col-span-7 truncate font-mono">{e.id}</span>
+													<span class="col-span-5 truncate font-mono text-muted-foreground">
+														→ {e.tag}
+													</span>
+												</div>
+											{/each}
+										</div>
+									</div>
+								{/if}
+							{/snippet}
+							{@render defaultsTable('Invoke / Converse', defaults.invoke, invokeOverrideIds)}
+							{@render defaultsTable('Embeddings', defaults.embed, embedOverrideIds)}
+						</div>
+					</details>
+				</div>
+			{/if}
 		</section>
 
 		<!-- SES section -->

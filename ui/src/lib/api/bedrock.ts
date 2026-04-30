@@ -413,6 +413,37 @@ export interface BedrockProxyConfig {
   embed: BedrockModelMapEntry[];
 }
 
+export interface BedrockDefaultsResponse {
+  invoke: BedrockModelMapEntry[];
+  embed: BedrockModelMapEntry[];
+}
+
+export async function getBedrockDefaults(): Promise<BedrockDefaultsResponse> {
+  const res = await fetch("/_awsim/bedrock/defaults");
+  if (!res.ok) throw new Error(`bedrock/defaults failed (HTTP ${res.status})`);
+  return (await res.json()) as BedrockDefaultsResponse;
+}
+
+export interface BedrockBackendCheckResult {
+  ok: boolean;
+  latencyMs?: number;
+  models?: string[];
+  warning?: string;
+  error?: string;
+}
+
+export async function checkBedrockBackend(
+  name: string,
+): Promise<BedrockBackendCheckResult> {
+  const res = await fetch(
+    `/_awsim/bedrock/backends/${encodeURIComponent(name)}/check`,
+  );
+  if (!res.ok) {
+    return { ok: false, error: `HTTP ${res.status}` };
+  }
+  return (await res.json()) as BedrockBackendCheckResult;
+}
+
 export async function getBedrockProxyConfig(): Promise<BedrockProxyConfig> {
   const res = await fetch("/_awsim/bedrock/config");
   if (!res.ok) {

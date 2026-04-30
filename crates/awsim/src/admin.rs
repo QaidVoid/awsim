@@ -811,6 +811,112 @@ pub async fn runtime_config_put(
     }
 }
 
+/// GET /_awsim/bedrock/defaults — return the built-in Bedrock model
+/// map (the mappings that ship out of the box). The Settings page
+/// shows these as read-only context so users can see what they'd
+/// get with no overrides — and which built-ins they're shadowing
+/// when they add a custom mapping.
+pub async fn bedrock_defaults() -> Json<Value> {
+    let m = awsim_bedrock::ModelMap::defaults();
+    let render =
+        |map: &std::collections::HashMap<String, awsim_bedrock::ModelEntry>| -> Vec<Value> {
+            let mut entries: Vec<Value> = map
+                .iter()
+                .map(|(id, e)| {
+                    json!({
+                        "id": id,
+                        "tag": e.tag(),
+                        "backend": e.backend(),
+                    })
+                })
+                .collect();
+            entries.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+            entries
+        };
+    Json(json!({
+        "invoke": render(&m.invoke),
+        "embed": render(&m.embed),
+    }))
+}
+
+/// GET /_awsim/bedrock/backends/{name}/check — ping a configured
+/// Bedrock proxy backend and report whether it's reachable.
+/// Calls the OpenAI-compatible `/models` endpoint, which both
+/// answers the "is the server up?" question and (for Ollama at
+/// least) lists which model tags are actually installed locally —
+/// useful for spotting "tag in mappings but not pulled" mismatches.
+pub async fn bedrock_backend_check(
+    State(backends): State<awsim_bedrock::BedrockBackendsSwap>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Json<Value> {
+    let guard = backends.load();
+    let Some(registry) = guard.as_ref().as_ref() else {
+        return Json(json!({
+            "ok": false,
+            "error": "Bedrock proxy is disabled — enable it in Settings before checking backends",
+        }));
+    };
+    let Some(backend) = registry.get_backend(&name) else {
+        return Json(json!({
+            "ok": false,
+            "error": format!("Backend '{name}' is not configured"),
+        }));
+    };
+    let url = format!("{}/models", backend.endpoint());
+    let mut req = backend
+        .client()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5));
+    if let Some(key) = backend.api_key() {
+        req = req.bearer_auth(key);
+    }
+    let started = std::time::Instant::now();
+    match req.send().await {
+        Ok(resp) => {
+            let latency_ms = started.elapsed().as_millis() as u64;
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                let snippet: String = body.chars().take(200).collect();
+                return Json(json!({
+                    "ok": false,
+                    "latencyMs": latency_ms,
+                    "error": format!("HTTP {status}: {snippet}"),
+                }));
+            }
+            // OpenAI-compat shape: { "data": [{ "id": "...", ... }, ...] }
+            let parsed: Value = match resp.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    return Json(json!({
+                        "ok": true,
+                        "latencyMs": latency_ms,
+                        "models": [],
+                        "warning": format!("response not JSON: {e}"),
+                    }));
+                }
+            };
+            let models: Vec<String> = parsed["data"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m["id"].as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Json(json!({
+                "ok": true,
+                "latencyMs": latency_ms,
+                "models": models,
+            }))
+        }
+        Err(e) => Json(json!({
+            "ok": false,
+            "error": e.to_string(),
+        })),
+    }
+}
+
 /// GET /_awsim/bedrock/config — render the live Bedrock proxy
 /// registry as JSON for the admin UI. API keys are reported as a
 /// boolean (`hasApiKey`) — never the secret itself. Returns

@@ -1066,7 +1066,16 @@ async fn async_main() -> Result<()> {
             "/_awsim/bedrock/config",
             axum::routing::get(admin::bedrock_config),
         )
+        .route(
+            "/_awsim/bedrock/backends/{name}/check",
+            axum::routing::get(admin::bedrock_backend_check),
+        )
         .with_state(Arc::clone(&bedrock_swap));
+
+    let bedrock_defaults_router: axum::Router<()> = axum::Router::new().route(
+        "/_awsim/bedrock/defaults",
+        axum::routing::get(admin::bedrock_defaults),
+    );
 
     let runtime_config_router: axum::Router<()> = axum::Router::new()
         .route(
@@ -1110,6 +1119,7 @@ async fn async_main() -> Result<()> {
         .merge(ses_admin_router)
         .merge(debug_router)
         .merge(bedrock_admin_router)
+        .merge(bedrock_defaults_router)
         .merge(runtime_config_router)
         .merge(seed_router)
         .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_bytes))
