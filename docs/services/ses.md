@@ -201,12 +201,35 @@ console.log('Daily sending limit:', account.SendQuota?.Max24HourSend);
 console.log('Sent in last 24h:', account.SendQuota?.SentLast24Hours);
 ```
 
+## Outbox
+
+Awsim captures every outbound email — `SendEmail`, `SendBulkEmail`, `SendCustomVerificationEmail` — into a SQLite store so you can inspect what was actually sent without parsing the SDK call.
+
+**UI:** open `/ses` and switch to the **Outbox** tab (default). Lists every captured message newest-first, with a search box that filters by subject / from / recipient. Click a row to expand the body — picks the best view automatically (Text → HTML in a sandboxed iframe → Raw). The dialog shows message ID, full To / Cc / Bcc, account, region, and timestamp.
+
+**Admin endpoint:**
+
+```bash
+# All captured emails, newest first
+curl http://localhost:4566/_awsim/ses/sent | jq .
+
+# Scope to one account / region
+curl 'http://localhost:4566/_awsim/ses/sent?account=000000000000&region=us-east-1'
+```
+
+Returns `{ count, emails: [...] }`; each email has `messageId`, `from`, `to`, `cc`, `bcc`, `subject`, `bodyText`, `bodyHtml`, `raw`, `sentAt`, `account`, `region`.
+
+### Persistence + retention
+
+- With `--data-dir`, the outbox lives in `{data-dir}/ses.db` and survives restarts. Without it, an ephemeral tempdir holds the DB and is cleaned up on shutdown.
+- An hourly background sweep deletes emails older than `--ses-retention-hours` (default 720h / 30 days). Set to `0` to disable.
+
 ## Behavior Notes
 
 - SES uses the REST/JSON v2 API (`/v2/email/...` paths), not the legacy form-encoded `ses` protocol.
-- Emails are accepted and recorded internally but **not actually delivered** — no SMTP connection is made.
+- Emails are accepted, recorded into the [Outbox](#outbox), and **not actually delivered** — no SMTP connection is made.
 - Identity verification status is set to `SUCCESS` immediately without DNS verification or email confirmation.
 - Template variable substitution (`{{variable}}`) is stored but **not rendered** during send in the current implementation.
 - `MessageId` is returned as a UUID for each sent email.
 - `GetAccount` always reports `SendingEnabled: true` and generous quota limits.
-- State is in-memory only and lost on restart.
+- Outbound emails are persisted in SQLite (see [Outbox](#outbox)). All other state (identities, templates, contact lists, suppression list) is in-memory only and lost on restart.

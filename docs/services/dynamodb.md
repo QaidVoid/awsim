@@ -260,6 +260,21 @@ aws --endpoint-url http://localhost:4566 dynamodb scan \
   --expression-attribute-values '{":age":{"N":"25"}}'
 ```
 
+## AWS-defined limits
+
+awsim enforces the same hard limits real AWS DynamoDB does, so SDK code that handles `LastEvaluatedKey` / `UnprocessedKeys` / `ValidationException` works against awsim without modification. Without these caps, an unlimited Query against a fat partition would materialize the whole partition in memory.
+
+| Operation | Limit | Behaviour over the limit |
+|-----------|-------|--------------------------|
+| `Query` / `Scan` | 1 MiB response | Set `LastEvaluatedKey`; client paginates. |
+| `BatchGetItem` | 100 keys / 16 MB response | Echo overflow back in `UnprocessedKeys` for client retry. |
+| `TransactGetItems` | 100 actions / 4 MB response | Hard `ValidationException` — transactions don't paginate. |
+| `BatchWriteItem` | 25 requests / 400 KB per item | `ValidationException`. |
+| `TransactWriteItems` | 100 actions | `ValidationException`. |
+| `PutItem` / `UpdateItem` | 400 KB per item (post-update for UpdateItem) | `ValidationException`. |
+
+The byte estimator that drives the response caps walks the typed `AttributeValue` tree rather than serializing each item — keeps the cap check ~200× faster than `to_string()` on every accumulated item.
+
 ## Behavior Notes
 
 - DynamoDB is persistent: tables and items survive AWSim restarts. Items live in a SQLite database (`{data_dir}/dynamodb.db`) — see [DynamoDB SQLite store](../guide/persistence.md#dynamodb-sqlite-store) for details.
