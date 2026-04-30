@@ -10,6 +10,7 @@
 		adminConfirmSignUp,
 		adminResetUserPassword,
 		adminDeleteUser,
+		deleteGroup,
 		type UserPool,
 		type UserPoolDetail,
 		type CognitoUserSummary,
@@ -36,6 +37,8 @@
 	import SetPasswordDialog from './set-password-dialog.svelte';
 	import ConfirmDialog from './confirm-dialog.svelte';
 	import UserDetail from './user-detail.svelte';
+	import CreateGroupDialog from './create-group-dialog.svelte';
+	import GroupDetail from './group-detail.svelte';
 
 	interface Props {
 		pool: UserPool | null;
@@ -177,6 +180,43 @@
 			deleteUserBusy = false;
 		}
 	}
+
+	let expandedGroup = $state<string | null>(null);
+	let createGroupOpen = $state(false);
+	let deleteGroupName = $state<string | null>(null);
+	let deleteGroupOpen = $state(false);
+	let deleteGroupBusy = $state(false);
+
+	async function reloadGroups() {
+		if (!pool) return;
+		loadingGroups = true;
+		try {
+			groups = await listGroups(pool.id);
+		} finally {
+			loadingGroups = false;
+		}
+	}
+
+	function openDeleteGroup(name: string) {
+		deleteGroupName = name;
+		deleteGroupOpen = true;
+	}
+
+	async function confirmDeleteGroup() {
+		if (!pool || !deleteGroupName) return;
+		deleteGroupBusy = true;
+		try {
+			await deleteGroup(pool.id, deleteGroupName);
+			toast.success(`Deleted group ${deleteGroupName}`);
+			deleteGroupOpen = false;
+			deleteGroupName = null;
+			await reloadGroups();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteGroupBusy = false;
+		}
+	}
 </script>
 
 <Sheet bind:open onOpenChange={(v) => onOpenChange(v)}>
@@ -284,7 +324,16 @@
 					{/if}
 				</TabsContent>
 
-				<TabsContent value="groups" class="mt-4">
+				<TabsContent value="groups" class="mt-4 space-y-3">
+					<div class="flex items-center gap-2">
+						<div class="flex-1"></div>
+						<Button variant="ghost" size="icon-sm" onclick={reloadGroups} title="Refresh">
+							<RefreshCw class="size-3.5 {loadingGroups ? 'animate-spin' : ''}" />
+						</Button>
+						<Button size="xs" onclick={() => (createGroupOpen = true)}>
+							<Plus class="size-3.5" /> Group
+						</Button>
+					</div>
 					{#if loadingGroups}
 						<p class="text-xs text-muted-foreground">Loading groups...</p>
 					{:else if groups.length === 0}
@@ -292,13 +341,56 @@
 					{:else}
 						<ul class="space-y-1.5">
 							{#each groups as g (g.name)}
-								<li class="rounded border border-border/60 px-3 py-2 text-sm">
-									<div class="font-medium">{g.name}</div>
-									{#if g.description}
-										<div class="text-xs text-muted-foreground">{g.description}</div>
-									{/if}
-									{#if g.roleArn}
-										<div class="font-mono text-xs text-muted-foreground">{g.roleArn}</div>
+								<li class="rounded border border-border/60">
+									<div class="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+										<button
+											type="button"
+											class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+											onclick={() =>
+												(expandedGroup = expandedGroup === g.name ? null : g.name)}
+											aria-expanded={expandedGroup === g.name}
+											aria-label="Toggle members for {g.name}"
+										>
+											<ChevronRight
+												class="size-3.5 shrink-0 text-muted-foreground transition-transform {expandedGroup ===
+												g.name
+													? 'rotate-90'
+													: ''}"
+											/>
+											<div class="min-w-0">
+												<div class="flex flex-wrap items-center gap-2 font-medium">
+													{g.name}
+													{#if g.precedence !== undefined}
+														<Badge variant="outline" class="font-mono text-[10px]">
+															prec {g.precedence}
+														</Badge>
+													{/if}
+												</div>
+												{#if g.description}
+													<div class="text-xs text-muted-foreground">{g.description}</div>
+												{/if}
+												{#if g.roleArn}
+													<div class="truncate font-mono text-xs text-muted-foreground">
+														{g.roleArn}
+													</div>
+												{/if}
+											</div>
+										</button>
+										<Button
+											variant="ghost"
+											size="xs"
+											class="text-destructive hover:text-destructive"
+											onclick={() => openDeleteGroup(g.name)}
+										>
+											Delete
+										</Button>
+									</div>
+									{#if expandedGroup === g.name && pool}
+										<div class="border-t border-border/60 px-3 py-3">
+											{#key g.name}
+												<GroupDetail poolId={pool.id} groupName={g.name} />
+											{/key}
+										</div>
 									{/if}
 								</li>
 							{/each}
@@ -376,6 +468,25 @@
 			onClose={() => {
 				deleteUserOpen = false;
 				deleteUser = null;
+			}}
+		/>
+	{/if}
+	<CreateGroupDialog
+		bind:open={createGroupOpen}
+		poolId={pool.id}
+		onClose={() => (createGroupOpen = false)}
+		onCreated={() => void reloadGroups()}
+	/>
+	{#if deleteGroupName}
+		<ConfirmDialog
+			bind:open={deleteGroupOpen}
+			title="Delete group"
+			description={`Delete group ${deleteGroupName}? Members are not deleted but lose this membership.`}
+			busy={deleteGroupBusy}
+			onConfirm={confirmDeleteGroup}
+			onClose={() => {
+				deleteGroupOpen = false;
+				deleteGroupName = null;
 			}}
 		/>
 	{/if}
