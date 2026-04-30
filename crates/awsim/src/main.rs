@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::error_handling::HandleErrorLayer;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -99,6 +99,28 @@ struct Cli {
     /// to disable the sweep entirely.
     #[arg(long, env = "AWSIM_SES_RETENTION_HOURS", default_value_t = 720)]
     ses_retention_hours: u64,
+
+    /// OpenAI-compatible base URL for the Bedrock proxy backend
+    /// (e.g. `http://localhost:11434/v1` for Ollama,
+    /// `http://localhost:1234/v1` for LM Studio). When unset,
+    /// Bedrock InvokeModel returns deterministic canned responses
+    /// so SDK wiring can still be tested without a local LLM.
+    #[arg(long, env = "AWSIM_BEDROCK_BACKEND")]
+    bedrock_backend: Option<String>,
+
+    /// Optional API key for the Bedrock proxy backend, sent as
+    /// `Authorization: Bearer <key>`. Most local servers (Ollama
+    /// default, LM Studio default) don't need this.
+    #[arg(long, env = "AWSIM_BEDROCK_API_KEY")]
+    bedrock_api_key: Option<String>,
+
+    /// Path to a TOML file overriding the built-in Bedrock model
+    /// map. Keys are AWS-style ids (`anthropic.claude-3-5-sonnet-…`)
+    /// and values are backend-side model tags (`llama3.1:8b`).
+    /// User overrides merge on top of the defaults; see the
+    /// Bedrock guide for the file shape.
+    #[arg(long, env = "AWSIM_BEDROCK_MODEL_MAP")]
+    bedrock_model_map: Option<std::path::PathBuf>,
 
     /// One-shot subcommand. Without one, `awsim` runs the server
     /// (the default for backwards compatibility).
@@ -347,6 +369,7 @@ async fn async_main() -> Result<()> {
         cli.data_dir.as_deref(),
         cli.port,
         cli.max_blob_bytes,
+        build_bedrock_backend(&cli)?,
     );
 
     let mut body_stores: Vec<BodyStoreHandle> = Vec::new();
@@ -1428,6 +1451,28 @@ type RegisteredServices = (
 /// Register all services and return handles needed by the router:
 ///   - the ApiGateway Arc (for proxy routing)
 ///   - an `Arc<CognitoState>` for the default account+region (for OAuth/OIDC)
+// Resolve the Bedrock proxy backend from CLI flags.
+//
+// Returns `Ok(None)` when `--bedrock-backend` is unset (canned-response
+// mode); returns `Err` when a model-map file was supplied but couldn't
+// be loaded.
+fn build_bedrock_backend(cli: &Cli) -> Result<Option<awsim_bedrock::BedrockBackend>> {
+    let Some(endpoint) = cli.bedrock_backend.as_deref() else {
+        return Ok(None);
+    };
+    let model_map = match cli.bedrock_model_map.as_deref() {
+        Some(path) => awsim_bedrock::ModelMap::from_toml_file_with_defaults(path)
+            .with_context(|| format!("loading bedrock model map {}", path.display()))?,
+        None => awsim_bedrock::ModelMap::defaults(),
+    };
+    info!(endpoint, "Bedrock proxy backend enabled");
+    Ok(Some(awsim_bedrock::BedrockBackend::new(
+        endpoint.to_string(),
+        cli.bedrock_api_key.clone(),
+        model_map,
+    )))
+}
+
 fn register_services(
     state: &mut AppState,
     default_account_id: &str,
@@ -1435,6 +1480,7 @@ fn register_services(
     data_dir: Option<&str>,
     port: u16,
     max_blob_bytes: Option<u64>,
+    bedrock_backend: Option<awsim_bedrock::BedrockBackend>,
 ) -> RegisteredServices {
     use std::sync::Arc;
 
@@ -1603,7 +1649,10 @@ fn register_services(
     };
     state.register(Arc::new(bedrock), bedrock_routes);
 
-    let bedrock_runtime = awsim_bedrock::BedrockRuntimeService::new();
+    let bedrock_runtime = match bedrock_backend {
+        Some(b) => awsim_bedrock::BedrockRuntimeService::with_backend(b),
+        None => awsim_bedrock::BedrockRuntimeService::new(),
+    };
     let bedrock_runtime_routes = {
         use awsim_core::ServiceHandler;
         bedrock_runtime.routes()

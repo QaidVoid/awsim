@@ -1,7 +1,12 @@
+mod backend;
 mod management;
+mod model_map;
 mod models;
 mod runtime;
 mod state;
+
+pub use backend::BedrockBackend;
+pub use model_map::{ModelMap, ModelMapError};
 
 use std::sync::Arc;
 
@@ -302,11 +307,34 @@ impl ServiceHandler for BedrockService {
 
 // ── Runtime service (signing name: bedrock-runtime) ───────────────────────────
 
-pub struct BedrockRuntimeService;
+/// Bedrock runtime handler. Optionally wraps a `BedrockBackend` —
+/// when set, invocations translate-and-proxy to an OpenAI-compatible
+/// LLM server (Ollama / LM Studio / vLLM / …). When unset, the
+/// service returns deterministic canned responses so SDK code that
+/// just wires up the calls keeps working in CI.
+pub struct BedrockRuntimeService {
+    // Wired in this commit; consumed by the Anthropic / Titan / etc.
+    // translators in subsequent commits, hence the allow.
+    #[allow(dead_code)]
+    backend: Option<BedrockBackend>,
+}
 
 impl BedrockRuntimeService {
     pub fn new() -> Self {
-        Self
+        Self { backend: None }
+    }
+
+    pub fn with_backend(backend: BedrockBackend) -> Self {
+        Self {
+            backend: Some(backend),
+        }
+    }
+
+    /// Internal accessor for the runtime translators. Returns `None`
+    /// when no backend is wired, signalling the canned-response fallback.
+    #[allow(dead_code)] // consumed by translators in subsequent commits
+    pub(crate) fn backend(&self) -> Option<&BedrockBackend> {
+        self.backend.as_ref()
     }
 }
 
