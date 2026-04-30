@@ -532,6 +532,55 @@ fn sqlite_store_for_kinesis(
     svc.sqlite_store_handle()
 }
 
+// ---------------------------------------------------------------------------
+// SES sent-email inspector — reads `SesService::list_sent_emails()` and
+// surfaces every captured outbound message so users can verify what was
+// sent without parsing the SDK call.
+// ---------------------------------------------------------------------------
+
+/// GET /_awsim/ses/sent — list every captured outbound email,
+/// newest-first, scoped optionally by `?account=` and `?region=`.
+pub async fn ses_sent(
+    State(svc): State<Arc<awsim_ses::SesService>>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    let account_filter = q.get("account").cloned();
+    let region_filter = q.get("region").cloned();
+
+    let entries = svc.list_sent_emails();
+    let emails: Vec<Value> = entries
+        .into_iter()
+        .filter(|(account, region, _)| {
+            account_filter
+                .as_ref()
+                .map(|a| a == account)
+                .unwrap_or(true)
+                && region_filter
+                    .as_ref()
+                    .map(|r| r == region)
+                    .unwrap_or(true)
+        })
+        .map(|(account, region, e)| {
+            json!({
+                "account": account,
+                "region": region,
+                "messageId": e.message_id,
+                "from": e.from,
+                "to": e.to,
+                "cc": e.cc,
+                "bcc": e.bcc,
+                "subject": e.subject,
+                "bodyText": e.body_text,
+                "bodyHtml": e.body_html,
+                "raw": e.raw,
+                "sentAt": e.sent_at,
+            })
+        })
+        .collect();
+
+    Json(json!({ "count": emails.len(), "emails": emails }))
+}
+
 /// POST /_awsim/admin/dynamodb/vacuum — reclaim disk space after
 /// heavy DELETE / UPDATE churn. Runs SQLite VACUUM, which can take
 /// time on large databases, so it's exposed as an explicit admin

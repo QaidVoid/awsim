@@ -311,6 +311,7 @@ async fn async_main() -> Result<()> {
         dynamodb_service,
         cw_metrics_service,
         kinesis_service,
+        ses_service,
     ) = register_services(
         &mut state,
         &cli.account_id,
@@ -845,6 +846,12 @@ async fn async_main() -> Result<()> {
         )
         .with_state(sqlite_stats_state);
 
+    // SES outbox inspector. Lets the admin UI list every captured
+    // outbound email across all accounts/regions.
+    let ses_admin_router: axum::Router<()> = axum::Router::new()
+        .route("/_awsim/ses/sent", axum::routing::get(admin::ses_sent))
+        .with_state(Arc::clone(&ses_service));
+
     // Named-snapshot sub-router. Bundles ServiceHandler state +
     // billing + chaos under `{data_dir}/named-snapshots/{name}/`.
     let snapshot_state = Arc::new(named_snapshots::SnapshotState {
@@ -877,6 +884,7 @@ async fn async_main() -> Result<()> {
         .merge(snapshot_router)
         .merge(ddb_admin_router)
         .merge(sqlite_stats_router)
+        .merge(ses_admin_router)
         .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_bytes))
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with
@@ -1274,6 +1282,7 @@ type RegisteredServices = (
     Arc<awsim_dynamodb::DynamoDbService>,
     Arc<awsim_cloudwatch_metrics::CloudWatchMetricsService>,
     Arc<awsim_kinesis::KinesisService>,
+    Arc<awsim_ses::SesService>,
 );
 
 /// Register all services and return handles needed by the router:
@@ -1397,12 +1406,12 @@ fn register_services(
     let kinesis_clone = Arc::clone(&kinesis);
     state.register(kinesis, vec![]);
 
-    let ses = awsim_ses::SesService::new();
+    let ses_service = Arc::new(awsim_ses::SesService::new());
     let ses_routes = {
         use awsim_core::ServiceHandler;
-        ses.routes()
+        ses_service.routes()
     };
-    state.register(Arc::new(ses), ses_routes);
+    state.register(Arc::clone(&ses_service) as _, ses_routes);
 
     // Cognito — keep an Arc so we can share its state with the OAuth router.
     let cognito = Arc::new(awsim_cognito::CognitoService::new());
@@ -1683,6 +1692,7 @@ fn register_services(
         dynamodb_clone,
         cloudwatch_metrics_clone,
         kinesis_clone,
+        ses_service,
     )
 }
 
