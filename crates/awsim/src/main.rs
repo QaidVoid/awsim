@@ -542,16 +542,22 @@ async fn async_main() -> Result<()> {
     }
 
     // SES outbox retention sweep — drops emails older than
-    // `--ses-retention-hours` once per hour. Set the flag to 0 to
-    // keep emails forever.
-    if cli.ses_retention_hours > 0 {
+    // `ses.retention_hours` once per hour. The retention value is
+    // read from the runtime config on every tick, so flipping it
+    // from the UI takes effect on the next sweep without a restart.
+    // A retention of 0 disables trimming for that tick.
+    {
         let ses_for_sweep = Arc::clone(&ses_service);
-        let retention_hours = cli.ses_retention_hours;
+        let cfg_store = Arc::clone(&runtime_config_store);
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
             tick.tick().await; // skip first immediate tick
             loop {
                 tick.tick().await;
+                let retention_hours = cfg_store.current().ses.retention_hours;
+                if retention_hours == 0 {
+                    continue;
+                }
                 if let Some(store) = ses_for_sweep.sqlite_store_handle() {
                     let cutoff = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
