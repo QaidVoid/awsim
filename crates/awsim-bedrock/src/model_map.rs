@@ -17,14 +17,14 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Per-id mapping in the model map. Either a bare backend tag
 /// (route through the default backend) or a fully-qualified
 /// `{ backend, tag }` pair routing the id to a specific named
 /// backend.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 pub enum ModelEntry {
     /// Shorthand: just the backend-side tag. Routes through

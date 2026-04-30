@@ -31,35 +31,42 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::backend::{BedrockBackend, BedrockBackends};
 use crate::model_map::{ModelEntry, ModelMap};
 
-#[derive(Debug, Deserialize)]
-struct ConfigFile {
-    /// Name of the `[backends.<name>]` block to fall back to when an
+/// Declarative spec describing a multi-backend Bedrock proxy setup.
+/// Used both as the on-disk TOML config schema and as the JSON-shaped
+/// payload for the runtime-config API. Build into a live registry
+/// with [`build_from_spec`].
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+pub struct BedrockSpec {
+    /// Name of the `[backends.<name>]` entry to fall back to when an
     /// `[invoke]` / `[embed]` entry is just a bare backend tag.
     /// Optional — without it, bare-tag entries don't route.
-    default_backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_backend: Option<String>,
     #[serde(default)]
-    backends: HashMap<String, BackendConfig>,
+    pub backends: HashMap<String, BackendSpec>,
     #[serde(default)]
-    invoke: HashMap<String, ModelEntry>,
+    pub invoke: HashMap<String, ModelEntry>,
     #[serde(default)]
-    embed: HashMap<String, ModelEntry>,
+    pub embed: HashMap<String, ModelEntry>,
 }
 
-#[derive(Debug, Deserialize)]
-struct BackendConfig {
-    endpoint: String,
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct BackendSpec {
+    pub endpoint: String,
     /// Inline API key. Supported but discouraged; prefer `api_key_env`.
-    api_key: Option<String>,
-    /// Name of an env var holding the API key. Resolved at load time;
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// Name of an env var holding the API key. Resolved at build time;
     /// missing env var is a hard error so misconfigured backends fail
     /// fast rather than silently sending unauthenticated requests.
-    api_key_env: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -114,17 +121,27 @@ fn load_from_str(
     path_for_errors: String,
     env_lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<BedrockBackends, BedrockConfigError> {
-    let cfg: ConfigFile = toml::from_str(raw).map_err(|e| BedrockConfigError::Parse {
+    let spec: BedrockSpec = toml::from_str(raw).map_err(|e| BedrockConfigError::Parse {
         path: path_for_errors,
         source: e,
     })?;
+    build_from_spec(spec, env_lookup)
+}
 
-    if cfg.backends.is_empty() {
+/// Validate a [`BedrockSpec`] and build a live `BedrockBackends`
+/// registry. Resolves `api_key_env` via the supplied closure (use
+/// [`std::env::var`] in production; tests pass a stub). Reused by the
+/// TOML loader and the runtime-config API.
+pub fn build_from_spec(
+    spec: BedrockSpec,
+    env_lookup: impl Fn(&str) -> Option<String>,
+) -> Result<BedrockBackends, BedrockConfigError> {
+    if spec.backends.is_empty() {
         return Err(BedrockConfigError::NoBackends);
     }
 
-    if let Some(name) = cfg.default_backend.as_deref()
-        && !cfg.backends.contains_key(name)
+    if let Some(name) = spec.default_backend.as_deref()
+        && !spec.backends.contains_key(name)
     {
         return Err(BedrockConfigError::UnknownDefault {
             name: name.to_string(),
@@ -132,7 +149,7 @@ fn load_from_str(
     }
 
     let mut built: HashMap<String, BedrockBackend> = HashMap::new();
-    for (name, bc) in cfg.backends {
+    for (name, bc) in spec.backends {
         let api_key = resolve_api_key(&name, &bc, &env_lookup)?;
         built.insert(
             name.clone(),
@@ -140,23 +157,23 @@ fn load_from_str(
         );
     }
 
-    validate_entries("invoke", &cfg.invoke, &built)?;
-    validate_entries("embed", &cfg.embed, &built)?;
+    validate_entries("invoke", &spec.invoke, &built)?;
+    validate_entries("embed", &spec.embed, &built)?;
 
     let mut model_map = ModelMap::defaults();
-    for (k, v) in cfg.invoke {
+    for (k, v) in spec.invoke {
         model_map.invoke.insert(k, v);
     }
-    for (k, v) in cfg.embed {
+    for (k, v) in spec.embed {
         model_map.embed.insert(k, v);
     }
 
-    Ok(BedrockBackends::new(built, cfg.default_backend, model_map))
+    Ok(BedrockBackends::new(built, spec.default_backend, model_map))
 }
 
 fn resolve_api_key(
     name: &str,
-    bc: &BackendConfig,
+    bc: &BackendSpec,
     env_lookup: &impl Fn(&str) -> Option<String>,
 ) -> Result<Option<String>, BedrockConfigError> {
     match (&bc.api_key, &bc.api_key_env) {

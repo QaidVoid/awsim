@@ -186,6 +186,10 @@ clap = { version = "4", features = ["derive", "env"] }
 # Config
 toml = "0.8"
 
+# Atomic Arc swaps. Used by the runtime-config store so the request
+# path reads live config without touching a lock.
+arc-swap = "1"
+
 # Fake data — drives the /_awsim/seed admin endpoints. Random
 # names, emails, lorem ipsum, etc. without hand-rolling word lists.
 fake = "3"

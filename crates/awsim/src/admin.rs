@@ -762,6 +762,55 @@ pub async fn ses_sent(
     Json(json!({ "count": emails.len(), "emails": emails }))
 }
 
+/// GET /_awsim/runtime-config — return the live runtime config plus
+/// metadata indicating whether changes will persist across restarts.
+/// API keys round-trip through this endpoint as the literal config
+/// stores them, so be careful exposing the admin surface.
+pub async fn runtime_config_get(
+    State(store): State<Arc<crate::runtime_config::RuntimeConfigStore>>,
+) -> Json<Value> {
+    let cfg = store.current();
+    Json(json!({
+        "config": &*cfg,
+        "persistent": store.is_persistent(),
+        "configPath": store.config_path().map(|p| p.display().to_string()),
+    }))
+}
+
+/// PUT /_awsim/runtime-config — replace the live runtime config.
+/// Validation runs before any state changes; a bad payload returns
+/// 400 without touching disk or running services. On success we
+/// persist (when disk-backed), swap the live config, and run hooks
+/// so services like Bedrock can hot-reload.
+pub async fn runtime_config_put(
+    State(store): State<Arc<crate::runtime_config::RuntimeConfigStore>>,
+    Json(body): Json<Value>,
+) -> Response {
+    let parsed: crate::runtime_config::RuntimeConfig = match serde_json::from_value(body) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "InvalidPayload", "message": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    match store.apply(parsed) {
+        Ok(new_cfg) => Json(json!({
+            "config": &*new_cfg,
+            "persistent": store.is_persistent(),
+            "configPath": store.config_path().map(|p| p.display().to_string()),
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "ConfigRejected", "message": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 /// GET /_awsim/bedrock/config — render the live Bedrock proxy
 /// registry as JSON for the admin UI. API keys are reported as a
 /// boolean (`hasApiKey`) — never the secret itself. Returns

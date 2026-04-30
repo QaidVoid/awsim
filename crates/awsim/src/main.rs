@@ -28,6 +28,7 @@ mod chaos_cli;
 mod integrations;
 mod named_snapshots;
 mod proxy;
+mod runtime_config;
 mod seed;
 mod seed_cli;
 mod snapshot_cli;
@@ -341,9 +342,21 @@ async fn async_main() -> Result<()> {
 
     let mut state = AppState::new(cli.region.clone(), cli.account_id.clone());
 
-    // Bedrock proxy registry — kept as an Option so the admin endpoint
-    // can expose the live config alongside the canned-response fallback.
-    let bedrock_backends = build_bedrock_backend(&cli)?;
+    // Runtime config store — disk-backed when --data-dir is set, in
+    // memory only otherwise. CLI flags seed initial values; persisted
+    // file overlays them on subsequent runs.
+    let runtime_config_store = build_runtime_config_store(&cli)?;
+    info!(
+        persistent = runtime_config_store.is_persistent(),
+        path = ?runtime_config_store.config_path(),
+        "Runtime config store initialised"
+    );
+
+    // Bedrock proxy registry — built from the live runtime config.
+    // Slice 2 will swap this to a hot-reloadable handle; for now we
+    // build once at startup so behaviour matches the previous flag-
+    // driven path.
+    let bedrock_backends = build_bedrock_backend_from_config(&runtime_config_store.current())?;
 
     // Register all services; get back the ApiGateway Arc for proxy routing and
     // an Arc<CognitoState> for the default account+region so the OAuth router
@@ -1031,6 +1044,13 @@ async fn async_main() -> Result<()> {
         )
         .with_state(Arc::new(bedrock_backends.clone()));
 
+    let runtime_config_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/runtime-config",
+            axum::routing::get(admin::runtime_config_get).put(admin::runtime_config_put),
+        )
+        .with_state(Arc::clone(&runtime_config_store));
+
     // Named-snapshot sub-router. Bundles ServiceHandler state +
     // billing + chaos under `{data_dir}/named-snapshots/{name}/`.
     let snapshot_state = Arc::new(named_snapshots::SnapshotState {
@@ -1066,6 +1086,7 @@ async fn async_main() -> Result<()> {
         .merge(ses_admin_router)
         .merge(debug_router)
         .merge(bedrock_admin_router)
+        .merge(runtime_config_router)
         .merge(seed_router)
         .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_bytes))
         // Bounded in-flight requests with shed-on-overload. A misbehaving
@@ -1470,35 +1491,99 @@ type RegisteredServices = (
 /// Register all services and return handles needed by the router:
 ///   - the ApiGateway Arc (for proxy routing)
 ///   - an `Arc<CognitoState>` for the default account+region (for OAuth/OIDC)
-// Resolve the Bedrock proxy backend from CLI flags. Config file wins
-// over the single-backend `--bedrock-backend` shortcut. Returns
-// `Ok(None)` only when neither path is supplied (canned-response mode).
-fn build_bedrock_backend(cli: &Cli) -> Result<Option<awsim_bedrock::BedrockBackends>> {
-    if let Some(path) = cli.bedrock_config.as_deref() {
-        let backends = awsim_bedrock::load_from_file(path)
-            .with_context(|| format!("loading bedrock config {}", path.display()))?;
-        info!(
-            config = %path.display(),
-            backends = ?backends.backend_names(),
-            default = ?backends.default_name(),
-            "Bedrock multi-backend config loaded"
+// Build the runtime-config store. Path is `<data_dir>/runtime-config.json`
+// when --data-dir is set; otherwise the store is in-memory only.
+//
+// CLI flags seed initial values. On first run with --data-dir, those
+// values are persisted to disk; on subsequent runs, the file wins.
+fn build_runtime_config_store(cli: &Cli) -> Result<Arc<runtime_config::RuntimeConfigStore>> {
+    let seed = build_runtime_config_seed(cli)?;
+    let path = cli
+        .data_dir
+        .as_deref()
+        .map(|d| std::path::PathBuf::from(d).join(runtime_config::CONFIG_FILENAME));
+    let store = runtime_config::RuntimeConfigStore::load_or_seed(seed, path)
+        .context("loading runtime config")?;
+    Ok(Arc::new(store))
+}
+
+// Translate startup CLI flags into a RuntimeConfig seed. The seed is
+// only used as the initial state when no persisted file exists.
+fn build_runtime_config_seed(cli: &Cli) -> Result<runtime_config::RuntimeConfig> {
+    let bedrock_spec = if let Some(path) = cli.bedrock_config.as_deref() {
+        let raw =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        toml::from_str::<awsim_bedrock::BedrockSpec>(&raw)
+            .with_context(|| format!("parsing bedrock config {}", path.display()))?
+    } else if let Some(endpoint) = cli.bedrock_backend.as_deref() {
+        let mut backends = std::collections::HashMap::new();
+        backends.insert(
+            "default".to_string(),
+            awsim_bedrock::BackendSpec {
+                endpoint: endpoint.to_string(),
+                api_key: cli.bedrock_api_key.clone(),
+                api_key_env: None,
+            },
         );
-        return Ok(Some(backends));
-    }
-    let Some(endpoint) = cli.bedrock_backend.as_deref() else {
+        // --bedrock-model-map is a model-map-only TOML override: parse
+        // its [invoke] / [embed] tables and overlay them.
+        let (invoke, embed) = match cli.bedrock_model_map.as_deref() {
+            Some(p) => {
+                let raw = std::fs::read_to_string(p)
+                    .with_context(|| format!("reading {}", p.display()))?;
+                let parsed: ModelMapToml = toml::from_str(&raw)
+                    .with_context(|| format!("parsing model map {}", p.display()))?;
+                (parsed.invoke, parsed.embed)
+            }
+            None => (Default::default(), Default::default()),
+        };
+        awsim_bedrock::BedrockSpec {
+            default_backend: Some("default".into()),
+            backends,
+            invoke,
+            embed,
+        }
+    } else {
+        awsim_bedrock::BedrockSpec::default()
+    };
+    let bedrock_enabled = !bedrock_spec.backends.is_empty();
+    Ok(runtime_config::RuntimeConfig {
+        bedrock: runtime_config::BedrockSection {
+            enabled: bedrock_enabled,
+            spec: bedrock_spec,
+        },
+        ses: runtime_config::SesSection {
+            retention_hours: cli.ses_retention_hours,
+        },
+    })
+}
+
+#[derive(serde::Deserialize, Default)]
+struct ModelMapToml {
+    #[serde(default)]
+    invoke: std::collections::HashMap<String, awsim_bedrock::ModelEntry>,
+    #[serde(default)]
+    embed: std::collections::HashMap<String, awsim_bedrock::ModelEntry>,
+}
+
+// Translate a runtime-config snapshot into a live BedrockBackends
+// registry. `Ok(None)` means canned-response mode (proxy disabled or
+// no backends declared).
+fn build_bedrock_backend_from_config(
+    cfg: &runtime_config::RuntimeConfig,
+) -> Result<Option<awsim_bedrock::BedrockBackends>> {
+    if !cfg.bedrock.enabled || cfg.bedrock.spec.backends.is_empty() {
         return Ok(None);
-    };
-    let model_map = match cli.bedrock_model_map.as_deref() {
-        Some(path) => awsim_bedrock::ModelMap::from_toml_file_with_defaults(path)
-            .with_context(|| format!("loading bedrock model map {}", path.display()))?,
-        None => awsim_bedrock::ModelMap::defaults(),
-    };
-    info!(endpoint, "Bedrock proxy backend enabled");
-    Ok(Some(awsim_bedrock::single_default(
-        endpoint.to_string(),
-        cli.bedrock_api_key.clone(),
-        model_map,
-    )))
+    }
+    let backends =
+        awsim_bedrock::build_from_spec(cfg.bedrock.spec.clone(), |v| std::env::var(v).ok())
+            .context("building bedrock backends from runtime config")?;
+    info!(
+        backends = ?backends.backend_names(),
+        default = ?backends.default_name(),
+        "Bedrock proxy backend enabled"
+    );
+    Ok(Some(backends))
 }
 
 fn register_services(
