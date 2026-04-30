@@ -80,14 +80,15 @@
 		loadingGroups = true;
 		loadingClients = true;
 		try {
-			const [d, u, g, c] = await Promise.all([
+			const [d, page, g, c] = await Promise.all([
 				describeUserPool(p.id),
-				listPoolUsers(p.id),
+				listPoolUsers(p.id, { limit: USERS_PAGE_SIZE }),
 				listGroups(p.id),
 				listAppClients(p.id)
 			]);
 			detail = d;
-			users = u;
+			users = page.users;
+			usersNextToken = page.nextToken;
 			groups = g;
 			clients = c;
 			if (d.domain) {
@@ -124,7 +125,7 @@
 		try {
 			await adminConfirmSignUp(pool.id, u.username);
 			toast.success(`${u.username} confirmed`);
-			users = await listPoolUsers(pool.id);
+			await reloadUsers();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Confirm failed');
 		}
@@ -140,14 +141,30 @@
 		}
 	}
 
+	const USERS_PAGE_SIZE = 60;
+	const USER_FILTER_DEBOUNCE_MS = 250;
+
 	let userFilter = $state('');
-	const filteredUsers = $derived(
-		userFilter.trim()
-			? users.filter((u) =>
-					u.username.toLowerCase().includes(userFilter.trim().toLowerCase())
-				)
-			: users
-	);
+	let usersNextToken = $state<string | undefined>(undefined);
+	let loadingMoreUsers = $state(false);
+	let userFilterTimer: ReturnType<typeof setTimeout> | null = null;
+
+	/// Cognito Filter operators are restrictive: `=`, `^=`, plus `attribute "value"`.
+	/// Map a free-form box into `username ^= "<input>"` so prefix searches Just Work.
+	function buildUserFilter(raw: string): string | undefined {
+		const t = raw.trim();
+		if (!t) return undefined;
+		const escaped = t.replace(/"/g, '\\"');
+		return `username ^= "${escaped}"`;
+	}
+
+	$effect(() => {
+		// React to filter changes only — pool changes are handled by loadAll.
+		userFilter;
+		if (!pool) return;
+		if (userFilterTimer) clearTimeout(userFilterTimer);
+		userFilterTimer = setTimeout(() => void reloadUsers(), USER_FILTER_DEBOUNCE_MS);
+	});
 
 	let expandedUser = $state<string | null>(null);
 	let createUserOpen = $state(false);
@@ -161,9 +178,32 @@
 		if (!pool) return;
 		loadingUsers = true;
 		try {
-			users = await listPoolUsers(pool.id);
+			const page = await listPoolUsers(pool.id, {
+				limit: USERS_PAGE_SIZE,
+				filter: buildUserFilter(userFilter)
+			});
+			users = page.users;
+			usersNextToken = page.nextToken;
 		} finally {
 			loadingUsers = false;
+		}
+	}
+
+	async function loadMoreUsers() {
+		if (!pool || !usersNextToken || loadingMoreUsers) return;
+		loadingMoreUsers = true;
+		try {
+			const page = await listPoolUsers(pool.id, {
+				limit: USERS_PAGE_SIZE,
+				paginationToken: usersNextToken,
+				filter: buildUserFilter(userFilter)
+			});
+			users = [...users, ...page.users];
+			usersNextToken = page.nextToken;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Load more failed');
+		} finally {
+			loadingMoreUsers = false;
 		}
 	}
 
@@ -356,13 +396,15 @@
 					</div>
 					{#if loadingUsers}
 						<p class="text-xs text-muted-foreground">Loading users...</p>
+					{:else if users.length === 0 && userFilter.trim()}
+						<p class="text-xs text-muted-foreground">
+							No users match "{userFilter}". Filter searches usernames by prefix.
+						</p>
 					{:else if users.length === 0}
 						<p class="text-xs text-muted-foreground">No users in this pool.</p>
-					{:else if filteredUsers.length === 0}
-						<p class="text-xs text-muted-foreground">No users match "{userFilter}".</p>
 					{:else}
 						<ul class="space-y-1.5">
-							{#each filteredUsers as u (u.username)}
+							{#each users as u (u.username)}
 								<li class="rounded border border-border/60">
 									<div class="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
 										<button
@@ -425,6 +467,22 @@
 								</li>
 							{/each}
 						</ul>
+						<div class="flex items-center justify-between text-xs text-muted-foreground">
+							<span>
+								Showing {users.length}{usersNextToken ? '+' : ''}
+								{userFilter.trim() ? ` matching "${userFilter}"` : ''}
+							</span>
+							{#if usersNextToken}
+								<Button
+									variant="outline"
+									size="xs"
+									onclick={loadMoreUsers}
+									disabled={loadingMoreUsers}
+								>
+									{loadingMoreUsers ? 'Loading...' : 'Load more'}
+								</Button>
+							{/if}
+						</div>
 					{/if}
 				</TabsContent>
 

@@ -200,25 +200,47 @@ export async function describeUserPool(id: string): Promise<UserPoolDetail> {
 
 // ---- Users in pool ----
 
+export interface ListUsersOptions {
+  limit?: number;
+  paginationToken?: string;
+  /** Cognito filter expression, e.g. `username ^= "alice"` */
+  filter?: string;
+}
+
+export interface ListUsersPage {
+  users: CognitoUserSummary[];
+  /** Present when more pages exist; pass back as `paginationToken`. */
+  nextToken?: string;
+}
+
 export async function listPoolUsers(
   poolId: string,
-): Promise<CognitoUserSummary[]> {
-  const data = (await idpRequest("ListUsers", { UserPoolId: poolId })) as {
+  opts: ListUsersOptions = {},
+): Promise<ListUsersPage> {
+  const body: Record<string, unknown> = { UserPoolId: poolId };
+  if (opts.limit !== undefined) body.Limit = opts.limit;
+  if (opts.paginationToken) body.PaginationToken = opts.paginationToken;
+  if (opts.filter) body.Filter = opts.filter;
+  const data = (await idpRequest("ListUsers", body)) as {
     Users?: {
       Username: string;
       UserStatus?: string;
       Enabled?: boolean;
       UserCreateDate?: number;
     }[];
+    PaginationToken?: string;
   };
-  return (data.Users ?? []).map((u) => ({
-    username: u.Username,
-    status: u.UserStatus ?? "",
-    enabled: u.Enabled ?? true,
-    createDate: u.UserCreateDate
-      ? new Date(u.UserCreateDate * 1000).toISOString()
-      : "",
-  }));
+  return {
+    users: (data.Users ?? []).map((u) => ({
+      username: u.Username,
+      status: u.UserStatus ?? "",
+      enabled: u.Enabled ?? true,
+      createDate: u.UserCreateDate
+        ? new Date(u.UserCreateDate * 1000).toISOString()
+        : "",
+    })),
+    nextToken: data.PaginationToken,
+  };
 }
 
 export async function adminGetUser(

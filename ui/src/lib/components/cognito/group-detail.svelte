@@ -48,12 +48,12 @@
 	async function load() {
 		loading = true;
 		try {
-			const [m, all] = await Promise.all([
+			const [m, allPage] = await Promise.all([
 				listUsersInGroup(poolId, groupName),
-				listPoolUsers(poolId)
+				listPoolUsers(poolId, { limit: 60 })
 			]);
 			members = m;
-			allUsers = all;
+			allUsers = allPage.users;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to load members');
 		} finally {
