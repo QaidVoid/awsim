@@ -321,7 +321,10 @@
 </script>
 
 <Sheet bind:open onOpenChange={(v) => onOpenChange(v)}>
-	<SheetContent side="right" class="w-full overflow-y-auto sm:max-w-[min(900px,90vw)]">
+	<SheetContent
+		side="right"
+		class="w-full overflow-y-auto data-[side=right]:sm:max-w-[min(900px,90vw)]"
+	>
 		<SheetHeader>
 			<SheetTitle>{pool?.name ?? ''}</SheetTitle>
 			<SheetDescription class="font-mono text-xs">{pool?.id ?? ''}</SheetDescription>

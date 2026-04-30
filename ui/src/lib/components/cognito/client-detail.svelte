@@ -115,13 +115,14 @@
 			<Loader2 class="inline size-3 animate-spin" /> Loading...
 		</p>
 	{:else if detail}
-		<div class="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[120px_1fr]">
+		<div class="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[120px_minmax(0,1fr)]">
 			<div class="text-xs text-muted-foreground">Client ID</div>
-			<div class="flex items-center gap-1">
-				<code class="truncate font-mono text-xs">{detail.clientId}</code>
+			<div class="flex min-w-0 items-center gap-1">
+				<code class="min-w-0 flex-1 truncate font-mono text-xs">{detail.clientId}</code>
 				<Button
 					variant="ghost"
 					size="icon-sm"
+					class="shrink-0"
 					onclick={() => copyText(detail!.clientId)}
 					title="Copy"
 				>
@@ -130,13 +131,14 @@
 			</div>
 			{#if detail.clientSecret}
 				<div class="text-xs text-muted-foreground">Client secret</div>
-				<div class="flex items-center gap-1">
-					<code class="truncate font-mono text-xs">
+				<div class="flex min-w-0 items-center gap-1">
+					<code class="min-w-0 flex-1 truncate font-mono text-xs">
 						{secretVisible ? detail.clientSecret : '•'.repeat(detail.clientSecret.length)}
 					</code>
 					<Button
 						variant="ghost"
 						size="icon-sm"
+						class="shrink-0"
 						onclick={() => (secretVisible = !secretVisible)}
 						title={secretVisible ? 'Hide' : 'Reveal'}
 					>
@@ -145,6 +147,7 @@
 					<Button
 						variant="ghost"
 						size="icon-sm"
+						class="shrink-0"
 						onclick={() => copyText(detail!.clientSecret ?? '')}
 						title="Copy"
 					>
