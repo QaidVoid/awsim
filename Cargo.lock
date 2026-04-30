@@ -2469,6 +2469,7 @@ dependencies = [
  "awsim-core",
  "awsim-iam-policy",
  "base64",
+ "chrono",
  "dashmap",
  "md-5",
  "serde",

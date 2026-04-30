@@ -932,7 +932,17 @@ async fn async_main() -> Result<()> {
             axum::routing::post(seed::dynamodb::seed),
         )
         .with_state(seed_ddb_state);
-    let seed_router = seed_cognito_router.merge(seed_ddb_router);
+    let seed_s3_state = Arc::new(seed::s3::SeedS3State {
+        service: Arc::clone(&s3_service),
+        default_account: cli.account_id.clone(),
+        default_region: cli.region.clone(),
+    });
+    let seed_s3_router: axum::Router<()> = axum::Router::new()
+        .route("/_awsim/seed/s3", axum::routing::post(seed::s3::seed))
+        .with_state(seed_s3_state);
+    let seed_router = seed_cognito_router
+        .merge(seed_ddb_router)
+        .merge(seed_s3_router);
 
     let debug_router: axum::Router<()> = axum::Router::new()
         .route(

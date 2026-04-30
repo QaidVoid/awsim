@@ -80,6 +80,90 @@ impl S3Service {
     }
 
     pub const GROUPS: &'static [&'static str] = &["objects", "multipart"];
+
+    /// Bulk-seed `buckets` empty buckets, each with `objects_per_bucket`
+    /// small text objects. Object body is a deterministic in-memory blob
+    /// of `body_bytes` length so the seed is fast + repeatable. Skips
+    /// SigV4 / gateway entirely — a 100-bucket × 100-object seed lands
+    /// in well under a second.
+    pub fn seed(&self, input: SeedDatasetInput) -> SeedDatasetOutput {
+        use awsim_core::Body;
+        use state::{Bucket, ObjectVersions, S3Object};
+        use uuid::Uuid;
+        let region_label = "global";
+        let state = self.store.get(&input.account, region_label);
+        let now = chrono::Utc::now().to_rfc3339();
+        let body_bytes = input.body_bytes.min(64 * 1024) as usize;
+        let body_data: Vec<u8> = (0..body_bytes).map(|i| b'a' + (i as u8 % 26)).collect();
+        // Stable etag for the shared body — md5 of the byte string.
+        let etag_hex = md5_hex(&body_data);
+
+        let mut buckets_created = 0u64;
+        let mut objects_created = 0u64;
+
+        for b in 0..input.buckets {
+            let name = format!("{}-{}-{}", input.prefix, b, Uuid::new_v4().simple());
+            let bucket = Bucket::new(&name, &input.region, &now);
+            for o in 0..input.objects_per_bucket {
+                let key = format!("seed/{o}.txt");
+                let object = S3Object {
+                    key: key.clone(),
+                    body: Body::InMemory(body_data.clone()),
+                    content_type: "text/plain".to_string(),
+                    content_length: body_data.len() as u64,
+                    etag: format!("\"{etag_hex}\""),
+                    last_modified: now.clone(),
+                    metadata: std::collections::HashMap::new(),
+                    version_id: None,
+                    tags: std::collections::HashMap::new(),
+                    is_delete_marker: false,
+                };
+                bucket.objects.insert(
+                    key,
+                    ObjectVersions {
+                        versions: vec![object],
+                    },
+                );
+                objects_created += 1;
+            }
+            state.buckets.insert(name, bucket);
+            buckets_created += 1;
+        }
+
+        SeedDatasetOutput {
+            buckets_created,
+            objects_created,
+        }
+    }
+}
+
+/// Input shape for `S3Service::seed`.
+pub struct SeedDatasetInput {
+    pub account: String,
+    pub region: String,
+    pub buckets: u64,
+    pub objects_per_bucket: u64,
+    /// Body bytes per object — capped at 64 KiB by the seeder.
+    pub body_bytes: u64,
+    pub prefix: String,
+}
+
+/// Result shape returned by `S3Service::seed`.
+pub struct SeedDatasetOutput {
+    pub buckets_created: u64,
+    pub objects_created: u64,
+}
+
+fn md5_hex(bytes: &[u8]) -> String {
+    use md5::{Digest, Md5};
+    let mut h = Md5::new();
+    h.update(bytes);
+    let out = h.finalize();
+    let mut s = String::with_capacity(32);
+    for b in out {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 impl Default for S3Service {
