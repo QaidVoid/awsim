@@ -29,6 +29,7 @@ mod integrations;
 mod named_snapshots;
 mod proxy;
 mod seed;
+mod seed_cli;
 mod snapshot_cli;
 
 #[derive(Parser)]
@@ -133,6 +134,15 @@ enum Command {
     Vacuum {
         #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
         endpoint: String,
+    },
+    /// Bulk-seed services from a TOML scenario file via /_awsim/seed.
+    Seed {
+        /// Path to the TOML config (see `awsim seed --help` for shape).
+        #[arg(long)]
+        file: std::path::PathBuf,
+        /// Override the endpoint from the TOML file.
+        #[arg(long, env = "AWSIM_ENDPOINT")]
+        endpoint: Option<String>,
     },
 }
 
@@ -287,6 +297,9 @@ async fn async_main() -> Result<()> {
             }
             Command::Vacuum { endpoint } => {
                 return run_vacuum(&endpoint).await;
+            }
+            Command::Seed { file, endpoint } => {
+                return seed_cli::run(&file, endpoint.as_deref()).await;
             }
         }
     }

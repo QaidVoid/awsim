@@ -1632,6 +1632,7 @@ dependencies = [
  "tikv-jemallocator",
  "tokio",
  "tokio-stream",
+ "toml",
  "tower",
  "tower-http",
  "tracing",
