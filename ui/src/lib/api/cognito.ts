@@ -516,6 +516,71 @@ export async function adminUpdateUserAttributes(input: {
   });
 }
 
+export interface AuthEvent {
+  eventId: string;
+  eventType: string;
+  creationDate: string;
+  eventResponse: string;
+  riskDecision?: string;
+  riskLevel?: string;
+  compromised?: boolean;
+  ipAddress?: string;
+  deviceName?: string;
+  city?: string;
+  country?: string;
+}
+
+export async function adminListUserAuthEvents(
+  poolId: string,
+  username: string,
+  opts?: { maxResults?: number; nextToken?: string },
+): Promise<{ events: AuthEvent[]; nextToken?: string }> {
+  const body: Record<string, unknown> = {
+    UserPoolId: poolId,
+    Username: username,
+    MaxResults: opts?.maxResults ?? 60,
+  };
+  if (opts?.nextToken) body.NextToken = opts.nextToken;
+  const data = (await idpRequest("AdminListUserAuthEvents", body)) as {
+    AuthEvents?: {
+      EventId: string;
+      EventType?: string;
+      CreationDate?: number;
+      EventResponse?: string;
+      EventRisk?: {
+        RiskDecision?: string;
+        RiskLevel?: string;
+        CompromisedCredentialsDetected?: boolean;
+      };
+      EventContextData?: {
+        IpAddress?: string;
+        DeviceName?: string;
+        City?: string;
+        Country?: string;
+      };
+    }[];
+    NextToken?: string;
+  };
+  return {
+    events: (data.AuthEvents ?? []).map((e) => ({
+      eventId: e.EventId,
+      eventType: e.EventType ?? "",
+      creationDate: e.CreationDate
+        ? new Date(e.CreationDate * 1000).toISOString()
+        : "",
+      eventResponse: e.EventResponse ?? "",
+      riskDecision: e.EventRisk?.RiskDecision,
+      riskLevel: e.EventRisk?.RiskLevel,
+      compromised: e.EventRisk?.CompromisedCredentialsDetected,
+      ipAddress: e.EventContextData?.IpAddress,
+      deviceName: e.EventContextData?.DeviceName,
+      city: e.EventContextData?.City,
+      country: e.EventContextData?.Country,
+    })),
+    nextToken: data.NextToken,
+  };
+}
+
 export async function adminListGroupsForUser(
   poolId: string,
   username: string,

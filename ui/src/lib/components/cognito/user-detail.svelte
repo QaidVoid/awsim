@@ -7,9 +7,11 @@
 		adminAddUserToGroup,
 		adminRemoveUserFromGroup,
 		adminUpdateUserAttributes,
+		adminListUserAuthEvents,
 		listGroups,
 		type CognitoUser,
-		type CognitoGroup
+		type CognitoGroup,
+		type AuthEvent
 	} from '$lib/api/cognito';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -33,6 +35,10 @@
 	let user = $state<CognitoUser | null>(null);
 	let groups = $state<CognitoGroup[]>([]);
 	let allGroups = $state<CognitoGroup[]>([]);
+	let events = $state<AuthEvent[]>([]);
+	let eventsLoading = $state(false);
+	let eventsLoaded = $state(false);
+	let showEvents = $state(false);
 	let loading = $state(true);
 	let editing = $state<{ name: string; value: string } | null>(null);
 	let editValue = $state('');
@@ -118,6 +124,28 @@
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Add failed');
 		}
+	}
+
+	async function toggleEvents() {
+		showEvents = !showEvents;
+		if (showEvents && !eventsLoaded) {
+			eventsLoading = true;
+			try {
+				const r = await adminListUserAuthEvents(poolId, username, { maxResults: 30 });
+				events = r.events;
+				eventsLoaded = true;
+			} catch (e) {
+				toast.error(e instanceof Error ? e.message : 'Failed to load auth events');
+			} finally {
+				eventsLoading = false;
+			}
+		}
+	}
+
+	function fmtDate(iso: string): string {
+		if (!iso) return '—';
+		const d = new Date(iso);
+		return d.toLocaleString();
 	}
 
 	async function leaveGroup(g: CognitoGroup) {
@@ -244,6 +272,59 @@
 							</button>
 						</Badge>
 					{/each}
+				</div>
+			{/if}
+		</div>
+
+		<div>
+			<button
+				type="button"
+				class="flex w-full items-center justify-between text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+				onclick={toggleEvents}
+				aria-expanded={showEvents}
+			>
+				<span>Auth events</span>
+				<span class="text-[11px] text-muted-foreground/70">
+					{showEvents ? 'hide' : 'show'}
+				</span>
+			</button>
+			{#if showEvents}
+				<div class="mt-2 space-y-1.5">
+					{#if eventsLoading}
+						<p class="text-xs text-muted-foreground">
+							<Loader2 class="inline size-3 animate-spin" /> Loading...
+						</p>
+					{:else if events.length === 0}
+						<p class="text-xs text-muted-foreground">No auth events recorded.</p>
+					{:else}
+						<ul class="space-y-1">
+							{#each events as e (e.eventId)}
+								<li class="rounded border border-border/60 px-2 py-1.5 text-xs">
+									<div class="flex flex-wrap items-baseline gap-2">
+										<span class="font-medium">{e.eventType || 'Unknown'}</span>
+										<Badge
+											variant={e.eventResponse === 'Pass' ? 'secondary' : 'destructive'}
+											class="text-[10px]"
+										>
+											{e.eventResponse || '?'}
+										</Badge>
+										{#if e.riskLevel && e.riskLevel !== 'NoRisk'}
+											<Badge variant="outline" class="text-[10px]">{e.riskLevel}</Badge>
+										{/if}
+										{#if e.compromised}
+											<Badge variant="destructive" class="text-[10px]">compromised</Badge>
+										{/if}
+										<span class="text-muted-foreground">{fmtDate(e.creationDate)}</span>
+									</div>
+									{#if e.ipAddress || e.deviceName || e.city || e.country}
+										<div class="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
+											{[e.ipAddress, e.deviceName, e.city, e.country].filter(Boolean).join(' · ')}
+										</div>
+									{/if}
+								</li>
+							{/each}
+						</ul>
+					{/if}
 				</div>
 			{/if}
 		</div>
