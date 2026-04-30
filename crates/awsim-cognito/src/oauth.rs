@@ -105,10 +105,7 @@ pub fn router(state: Arc<CognitoOAuthState>) -> axum::Router {
             "/cognito/{pool_id}/oauth2/revoke",
             axum::routing::post(revoke),
         )
-        .route(
-            "/cognito/{pool_id}/logout",
-            axum::routing::get(logout),
-        )
+        .route("/cognito/{pool_id}/logout", axum::routing::get(logout))
         .with_state(state)
 }
 
