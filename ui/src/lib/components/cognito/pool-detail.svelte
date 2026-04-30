@@ -44,6 +44,7 @@
 	import GroupDetail from './group-detail.svelte';
 	import ClientDetail from './client-detail.svelte';
 	import CreateClientDialog from './create-client-dialog.svelte';
+	import TriggersTab from './triggers-tab.svelte';
 
 	interface Props {
 		pool: UserPool | null;
@@ -399,6 +400,7 @@
 					<TabsTrigger value="groups">Groups ({groups.length})</TabsTrigger>
 					<TabsTrigger value="clients">App Clients ({clients.length})</TabsTrigger>
 					<TabsTrigger value="domain">Domain</TabsTrigger>
+					<TabsTrigger value="triggers">Triggers</TabsTrigger>
 				</TabsList>
 
 				<TabsContent value="users" class="mt-4 space-y-3">
@@ -718,6 +720,14 @@
 								</form>
 							{/if}
 						</div>
+					{/if}
+				</TabsContent>
+
+				<TabsContent value="triggers" class="mt-4">
+					{#if pool}
+						{#key pool.id}
+							<TriggersTab poolId={pool.id} />
+						{/key}
 					{/if}
 				</TabsContent>
 			</Tabs>

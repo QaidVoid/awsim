@@ -214,6 +214,48 @@ export async function describeUserPool(id: string): Promise<UserPoolDetail> {
   };
 }
 
+export interface UpdateUserPoolInput {
+  lambdaConfig?: Record<string, string>;
+  mfaConfiguration?: "OFF" | "ON" | "OPTIONAL";
+  autoVerifiedAttributes?: string[];
+  passwordPolicy?: {
+    minimumLength?: number;
+    requireUppercase?: boolean;
+    requireLowercase?: boolean;
+    requireNumbers?: boolean;
+    requireSymbols?: boolean;
+    temporaryPasswordValidityDays?: number;
+  };
+}
+
+export async function updateUserPool(
+  poolId: string,
+  patch: UpdateUserPoolInput,
+): Promise<void> {
+  const body: Record<string, unknown> = { UserPoolId: poolId };
+  if (patch.lambdaConfig) body.LambdaConfig = patch.lambdaConfig;
+  if (patch.mfaConfiguration) body.MfaConfiguration = patch.mfaConfiguration;
+  if (patch.autoVerifiedAttributes)
+    body.AutoVerifiedAttributes = patch.autoVerifiedAttributes;
+  if (patch.passwordPolicy) {
+    const p = patch.passwordPolicy;
+    const policy: Record<string, unknown> = {};
+    if (p.minimumLength !== undefined) policy.MinimumLength = p.minimumLength;
+    if (p.requireUppercase !== undefined)
+      policy.RequireUppercase = p.requireUppercase;
+    if (p.requireLowercase !== undefined)
+      policy.RequireLowercase = p.requireLowercase;
+    if (p.requireNumbers !== undefined)
+      policy.RequireNumbers = p.requireNumbers;
+    if (p.requireSymbols !== undefined)
+      policy.RequireSymbols = p.requireSymbols;
+    if (p.temporaryPasswordValidityDays !== undefined)
+      policy.TemporaryPasswordValidityDays = p.temporaryPasswordValidityDays;
+    body.Policies = { PasswordPolicy: policy };
+  }
+  await idpRequest("UpdateUserPool", body);
+}
+
 // ---- Users in pool ----
 
 export interface ListUsersOptions {
