@@ -1,4 +1,5 @@
 mod backend;
+mod config;
 mod management;
 mod model_map;
 mod models;
@@ -6,6 +7,7 @@ mod runtime;
 mod state;
 
 pub use backend::{BedrockBackend, BedrockBackends, single_default};
+pub use config::{BedrockConfigError, load_from_file};
 pub use model_map::{ModelEntry, ModelMap, ModelMapError};
 
 use std::sync::Arc;

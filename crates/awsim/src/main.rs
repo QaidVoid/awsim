@@ -122,6 +122,13 @@ struct Cli {
     #[arg(long, env = "AWSIM_BEDROCK_MODEL_MAP")]
     bedrock_model_map: Option<std::path::PathBuf>,
 
+    /// Path to a TOML config file declaring multiple Bedrock proxy
+    /// backends and per-id routing in one place. Takes precedence over
+    /// `--bedrock-backend` / `--bedrock-api-key` / `--bedrock-model-map`.
+    /// See the Bedrock guide for the schema.
+    #[arg(long, env = "AWSIM_BEDROCK_CONFIG")]
+    bedrock_config: Option<std::path::PathBuf>,
+
     /// One-shot subcommand. Without one, `awsim` runs the server
     /// (the default for backwards compatibility).
     #[command(subcommand)]
@@ -1451,12 +1458,21 @@ type RegisteredServices = (
 /// Register all services and return handles needed by the router:
 ///   - the ApiGateway Arc (for proxy routing)
 ///   - an `Arc<CognitoState>` for the default account+region (for OAuth/OIDC)
-// Resolve the Bedrock proxy backend from CLI flags.
-//
-// Returns `Ok(None)` when `--bedrock-backend` is unset (canned-response
-// mode); returns `Err` when a model-map file was supplied but couldn't
-// be loaded.
+// Resolve the Bedrock proxy backend from CLI flags. Config file wins
+// over the single-backend `--bedrock-backend` shortcut. Returns
+// `Ok(None)` only when neither path is supplied (canned-response mode).
 fn build_bedrock_backend(cli: &Cli) -> Result<Option<awsim_bedrock::BedrockBackends>> {
+    if let Some(path) = cli.bedrock_config.as_deref() {
+        let backends = awsim_bedrock::load_from_file(path)
+            .with_context(|| format!("loading bedrock config {}", path.display()))?;
+        info!(
+            config = %path.display(),
+            backends = ?backends.backend_names(),
+            default = ?backends.default_name(),
+            "Bedrock multi-backend config loaded"
+        );
+        return Ok(Some(backends));
+    }
     let Some(endpoint) = cli.bedrock_backend.as_deref() else {
         return Ok(None);
     };
