@@ -7,7 +7,15 @@ use crate::{
     state::DynamoState,
 };
 
-use super::item::{item_to_json, parse_item};
+use super::item::{estimate_value_bytes, item_to_json, parse_item};
+
+/// AWS BatchGetItem caps a single call at 100 keys total across all
+/// tables, and at 16 MB of response payload. Items beyond the byte
+/// cap aren't returned — their keys are echoed back in
+/// `UnprocessedKeys` so the client can retry. Without these caps
+/// awsim materialises arbitrarily large responses in memory.
+const BATCH_GET_MAX_KEYS: usize = 100;
+const BATCH_GET_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn batch_get_item(
     state: &DynamoState,
@@ -20,8 +28,16 @@ pub fn batch_get_item(
         .and_then(|v| v.as_object())
         .ok_or_else(|| AwsError::validation("RequestItems is required"))?;
 
-    let mut responses = serde_json::Map::new();
-    let unprocessed_keys = serde_json::Map::new();
+    // Resolve every key up front so we can bail on the 100-key limit
+    // before touching SQLite, and so each key carries its original
+    // JSON value for echoing in UnprocessedKeys.
+    struct PendingKey {
+        table_name: String,
+        original_key: Value,
+        pk: String,
+        sk: String,
+    }
+    let mut pending: Vec<PendingKey> = Vec::new();
 
     for (table_name, table_request) in request_items {
         let keys = table_request
@@ -29,42 +45,94 @@ pub fn batch_get_item(
             .and_then(|v| v.as_array())
             .ok_or_else(|| AwsError::validation(format!("Keys required for table {table_name}")))?;
 
-        // Resolve the composite (pk, sk) pairs while holding the schema
-        // guard, then drop it before SQLite IO.
-        let pk_sk_pairs: Vec<(String, String)> = {
-            let table = match state.tables.get(table_name) {
-                Some(t) => t,
-                None => {
-                    return Err(AwsError::service_not_found(
-                        "ResourceNotFoundException",
-                        format!("Cannot do operations on a non-existent table: {table_name}"),
-                    ));
-                }
-            };
-            keys.iter()
-                .filter_map(|key_val| {
-                    let key = parse_item(key_val)?;
-                    extract_pk_sk(&table, &key)
-                })
-                .collect()
-        };
-
-        let mut table_items: Vec<Value> = Vec::new();
-        for (pk, sk) in pk_sk_pairs {
-            if let Some(stored) =
-                sqlite.get_item(&ctx.account_id, &ctx.region, table_name, &pk, &sk)?
-                && let Some(item) = storage_value_to_item(stored)
-            {
-                table_items.push(item_to_json(&item));
+        let table = match state.tables.get(table_name) {
+            Some(t) => t,
+            None => {
+                return Err(AwsError::service_not_found(
+                    "ResourceNotFoundException",
+                    format!("Cannot do operations on a non-existent table: {table_name}"),
+                ));
             }
+        };
+        for key_val in keys {
+            let Some(parsed) = parse_item(key_val) else {
+                continue;
+            };
+            let Some((pk, sk)) = extract_pk_sk(&table, &parsed) else {
+                continue;
+            };
+            pending.push(PendingKey {
+                table_name: table_name.clone(),
+                original_key: key_val.clone(),
+                pk,
+                sk,
+            });
         }
-
-        responses.insert(table_name.clone(), json!(table_items));
     }
 
+    if pending.len() > BATCH_GET_MAX_KEYS {
+        return Err(AwsError::validation(format!(
+            "BatchGetItem cannot process more than {BATCH_GET_MAX_KEYS} keys per call ({} supplied)",
+            pending.len()
+        )));
+    }
+
+    let mut responses: std::collections::HashMap<String, Vec<Value>> =
+        std::collections::HashMap::new();
+    let mut unprocessed: std::collections::HashMap<String, Vec<Value>> =
+        std::collections::HashMap::new();
+    let mut response_bytes = 0usize;
+    let mut cap_reached = false;
+
+    for key in pending {
+        if cap_reached {
+            unprocessed
+                .entry(key.table_name.clone())
+                .or_default()
+                .push(key.original_key);
+            continue;
+        }
+
+        let stored =
+            sqlite.get_item(&ctx.account_id, &ctx.region, &key.table_name, &key.pk, &key.sk)?;
+        let Some(stored) = stored else {
+            continue;
+        };
+        let Some(item) = storage_value_to_item(stored) else {
+            continue;
+        };
+        let item_json = item_to_json(&item);
+        let item_bytes = estimate_value_bytes(&item_json);
+
+        // If this single item would push us past the cap and we've
+        // already returned at least one item for this call, defer it —
+        // matches AWS behaviour where a partial response + an
+        // UnprocessedKeys entry beats a hard error.
+        if response_bytes > 0 && response_bytes + item_bytes > BATCH_GET_MAX_RESPONSE_BYTES {
+            cap_reached = true;
+            unprocessed
+                .entry(key.table_name.clone())
+                .or_default()
+                .push(key.original_key);
+            continue;
+        }
+
+        response_bytes += item_bytes;
+        responses.entry(key.table_name).or_default().push(item_json);
+    }
+
+    let responses_json: serde_json::Map<String, Value> = responses
+        .into_iter()
+        .map(|(table, items)| (table, Value::Array(items)))
+        .collect();
+    let unprocessed_json: serde_json::Map<String, Value> = unprocessed
+        .into_iter()
+        .map(|(table, keys)| (table, json!({ "Keys": keys })))
+        .collect();
+
     Ok(json!({
-        "Responses": responses,
-        "UnprocessedKeys": unprocessed_keys
+        "Responses": responses_json,
+        "UnprocessedKeys": unprocessed_json
     }))
 }
 

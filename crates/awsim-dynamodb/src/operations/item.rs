@@ -174,6 +174,39 @@ pub fn item_to_json(item: &DynamoItem) -> Value {
     Value::Object(map)
 }
 
+/// Approximate the on-the-wire bytes a JSON value will contribute to
+/// a response. Walks the tree summing string lengths plus small
+/// constants for structural overhead — a couple orders of magnitude
+/// faster than `serde_json::to_string`. Used to enforce the
+/// AWS-defined response caps on Query/Scan/BatchGetItem/TransactGetItems
+/// without paying serialization cost twice.
+pub(crate) fn estimate_value_bytes(v: &Value) -> usize {
+    match v {
+        Value::Null => 1,
+        Value::Bool(_) => 1,
+        Value::Number(n) => n.to_string().len(),
+        Value::String(s) => s.len() + 2,
+        Value::Array(arr) => 2 + arr.iter().map(estimate_value_bytes).sum::<usize>() + arr.len(),
+        Value::Object(map) => {
+            2 + map
+                .iter()
+                .map(|(k, vv)| k.len() + 2 + estimate_value_bytes(vv) + 2)
+                .sum::<usize>()
+        }
+    }
+}
+
+/// Estimate bytes for a typed DynamoItem (sum of attribute names +
+/// each AttributeValue subtree + small per-attribute overhead).
+pub(crate) fn estimate_item_bytes(item: &DynamoItem) -> usize {
+    let mut total = 0usize;
+    for (name, value) in item {
+        total += name.len();
+        total += estimate_value_bytes(value);
+    }
+    total + item.len() * 4 + 2
+}
+
 pub fn put_item(
     state: &DynamoState,
     sqlite: &SqliteStore,

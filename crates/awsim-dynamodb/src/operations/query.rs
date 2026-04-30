@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::{get_expr_attr_names, get_expr_attr_values, opt_str, require_str};
-use crate::operations::item::item_to_json;
+use crate::operations::item::{estimate_item_bytes, item_to_json};
 
 /// AWS DynamoDB caps `Query` / `Scan` responses at 1 MiB regardless of
 /// `Limit`. Real clients are written to handle pagination via
@@ -18,37 +18,6 @@ use crate::operations::item::item_to_json;
 /// "fetch the whole partition" call materializes the entire table in
 /// memory as `serde_json::Value` trees.
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
-
-/// Approximate the on-the-wire bytes a DynamoItem will contribute to
-/// the `Items` array. Cheaper than a full JSON serialization — walks
-/// the typed AttributeValue tree and sums string lengths + small
-/// constants for structural overhead, matching how AWS bills item
-/// size closely enough for the response cap.
-fn estimate_item_bytes(item: &DynamoItem) -> usize {
-    let mut total = 0usize;
-    for (name, value) in item {
-        total += name.len();
-        total += estimate_value_bytes(value);
-    }
-    // brace + key/value separators per attribute: rough overhead.
-    total + item.len() * 4 + 2
-}
-
-fn estimate_value_bytes(v: &Value) -> usize {
-    match v {
-        Value::Null => 1,
-        Value::Bool(_) => 1,
-        Value::Number(n) => n.to_string().len(),
-        Value::String(s) => s.len() + 2,
-        Value::Array(arr) => 2 + arr.iter().map(estimate_value_bytes).sum::<usize>() + arr.len(),
-        Value::Object(map) => {
-            2 + map
-                .iter()
-                .map(|(k, vv)| k.len() + 2 + estimate_value_bytes(vv) + 2)
-                .sum::<usize>()
-        }
-    }
-}
 
 fn apply_projection_to_item(
     item: &DynamoItem,
