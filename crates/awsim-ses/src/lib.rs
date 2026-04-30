@@ -1,6 +1,8 @@
 mod operations;
+mod sqlite_store;
 mod state;
 
+pub use sqlite_store::{SentEmailRow, SqliteStore};
 pub use state::SentEmail;
 
 use std::sync::Arc;
