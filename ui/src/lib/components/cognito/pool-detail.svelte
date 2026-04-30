@@ -47,6 +47,7 @@
 	import TriggersTab from './triggers-tab.svelte';
 	import PasswordPolicyEditor from './password-policy-editor.svelte';
 	import MfaConfigEditor from './mfa-config-editor.svelte';
+	import TagsEditor from './tags-editor.svelte';
 
 	interface Props {
 		pool: UserPool | null;

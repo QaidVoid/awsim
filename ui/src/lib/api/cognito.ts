@@ -62,6 +62,28 @@ export interface UserPool {
   creationDate: string;
 }
 
+export interface TagMap {
+  [key: string]: string;
+}
+
+export async function listTagsForResource(arn: string): Promise<TagMap> {
+  const data = (await idpRequest("ListTagsForResource", {
+    ResourceArn: arn,
+  })) as { Tags?: TagMap };
+  return data.Tags ?? {};
+}
+
+export async function tagResource(arn: string, tags: TagMap): Promise<void> {
+  await idpRequest("TagResource", { ResourceArn: arn, Tags: tags });
+}
+
+export async function untagResource(
+  arn: string,
+  tagKeys: string[],
+): Promise<void> {
+  await idpRequest("UntagResource", { ResourceArn: arn, TagKeys: tagKeys });
+}
+
 export interface PasswordPolicy {
   minimumLength?: number;
   requireUppercase?: boolean;
@@ -72,6 +94,7 @@ export interface PasswordPolicy {
 }
 
 export interface UserPoolDetail extends UserPool {
+  arn?: string;
   mfaConfiguration?: string;
   estimatedNumberOfUsers?: number;
   lambdaConfig?: Record<string, string>;
@@ -193,6 +216,7 @@ export async function describeUserPool(id: string): Promise<UserPoolDetail> {
       Name: string;
       Status?: string;
       CreationDate?: number;
+      Arn?: string;
       MfaConfiguration?: string;
       EstimatedNumberOfUsers?: number;
       LambdaConfig?: Record<string, string>;
@@ -223,6 +247,7 @@ export async function describeUserPool(id: string): Promise<UserPoolDetail> {
     creationDate: p.CreationDate
       ? new Date(p.CreationDate * 1000).toISOString()
       : "",
+    arn: p.Arn,
     mfaConfiguration: p.MfaConfiguration,
     estimatedNumberOfUsers: p.EstimatedNumberOfUsers,
     lambdaConfig: p.LambdaConfig,
