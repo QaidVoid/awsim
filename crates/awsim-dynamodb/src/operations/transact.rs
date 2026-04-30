@@ -66,6 +66,11 @@ fn transaction_canceled(total: usize, failed_idx: usize, failed_code: &str) -> A
 const TRANSACT_GET_MAX_ACTIONS: usize = 100;
 const TRANSACT_GET_MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
+/// AWS TransactWriteItems caps a single call at 100 actions per
+/// transaction. Per-item limits (400 KB) are enforced inside the
+/// per-action parsing path.
+const TRANSACT_WRITE_MAX_ACTIONS: usize = 100;
+
 pub fn transact_get_items(
     state: &DynamoState,
     sqlite: &SqliteStore,
@@ -159,6 +164,13 @@ pub fn transact_write_items(
         .get("TransactItems")
         .and_then(|v| v.as_array())
         .ok_or_else(|| AwsError::validation("TransactItems is required"))?;
+
+    if transact_items.len() > TRANSACT_WRITE_MAX_ACTIONS {
+        return Err(AwsError::validation(format!(
+            "TransactWriteItems cannot process more than {TRANSACT_WRITE_MAX_ACTIONS} actions per call ({} supplied)",
+            transact_items.len()
+        )));
+    }
 
     // Translate each transact-item into a fully-resolved Action up front.
     // We do schema-dependent key extraction here while the in-memory
