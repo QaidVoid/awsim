@@ -139,35 +139,39 @@
 	}
 </script>
 
-<div class="space-y-4">
+<div class="flex h-full min-h-0 flex-col">
 	{#if loading}
-		<p class="text-xs text-muted-foreground">
+		<p class="px-6 py-4 text-xs text-muted-foreground">
 			<Loader2 class="inline size-3 animate-spin" /> Loading triggers...
 		</p>
 	{:else}
-		<p class="text-xs text-muted-foreground">
-			Map a Cognito trigger to a Lambda function ARN. Leave blank to disable. ARNs aren't
-			validated; awsim's Lambda emulator must own the function ARN for the trigger to fire.
-		</p>
-		<div class="space-y-2">
-			{#each TRIGGERS as t (t.key)}
-				<div class="rounded border border-border/60 px-3 py-2">
-					<div class="mb-1 flex items-baseline justify-between gap-2">
-						<Label for={`trigger-${t.key}`} class="font-medium">{t.label}</Label>
-						<code class="font-mono text-[10px] text-muted-foreground">{t.key}</code>
+		<div class="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+			<p class="text-xs text-muted-foreground">
+				Map a Cognito trigger to a Lambda function ARN. Leave blank to disable. ARNs aren't
+				validated; awsim's Lambda emulator must own the function ARN for the trigger to fire.
+			</p>
+			<div class="space-y-2">
+				{#each TRIGGERS as t (t.key)}
+					<div class="rounded border border-border/60 px-3 py-2">
+						<div class="mb-1 flex items-baseline justify-between gap-2">
+							<Label for={`trigger-${t.key}`} class="font-medium">{t.label}</Label>
+							<code class="font-mono text-[10px] text-muted-foreground">{t.key}</code>
+						</div>
+						<p class="mb-2 text-xs text-muted-foreground">{t.description}</p>
+						<Input
+							id={`trigger-${t.key}`}
+							bind:value={arns[t.key]}
+							placeholder="arn:aws:lambda:us-east-1:000000000000:function:my-fn"
+							class="h-8 font-mono text-xs"
+							autocomplete="off"
+						/>
 					</div>
-					<p class="mb-2 text-xs text-muted-foreground">{t.description}</p>
-					<Input
-						id={`trigger-${t.key}`}
-						bind:value={arns[t.key]}
-						placeholder="arn:aws:lambda:us-east-1:000000000000:function:my-fn"
-						class="h-8 font-mono text-xs"
-						autocomplete="off"
-					/>
-				</div>
-			{/each}
+				{/each}
+			</div>
 		</div>
-		<div class="sticky bottom-0 -mx-3 flex items-center justify-end gap-2 border-t border-border bg-background px-3 py-2">
+		<!-- Pinned footer outside scroll area — always at the bottom edge,
+		     no gap whether content is short or scrolled. -->
+		<div class="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-background px-6 py-3">
 			<Button variant="ghost" size="sm" onclick={reset} disabled={saving || !dirty}>
 				Discard
 			</Button>

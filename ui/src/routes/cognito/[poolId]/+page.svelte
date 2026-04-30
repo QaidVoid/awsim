@@ -134,9 +134,7 @@
 							<DomainSection {poolId} />
 						</div>
 					{:else if active === 'triggers'}
-						<div class="w-full overflow-y-auto px-6 py-4">
-							<TriggersTab {poolId} />
-						</div>
+						<TriggersTab {poolId} />
 					{:else if active === 'policies'}
 						<div class="w-full space-y-4 overflow-y-auto px-6 py-4">
 							<PasswordPolicyEditor {poolId} />
