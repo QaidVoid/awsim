@@ -46,6 +46,13 @@ impl EventBus {
     pub fn subscribe(&self) -> broadcast::Receiver<InternalEvent> {
         self.sender.subscribe()
     }
+
+    /// Number of currently subscribed receivers — surfaced by the
+    /// `/_awsim/debug/objects` diagnostic to detect leaked SSE
+    /// subscribers.
+    pub fn subscriber_count(&self) -> usize {
+        self.sender.receiver_count()
+    }
 }
 
 impl Default for EventBus {

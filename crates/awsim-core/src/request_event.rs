@@ -56,6 +56,13 @@ impl RequestEventBus {
     pub fn sender(&self) -> &broadcast::Sender<RequestEvent> {
         &self.sender
     }
+
+    /// Number of currently subscribed receivers — surfaced by the
+    /// `/_awsim/debug/objects` diagnostic so SSE subscriber leaks
+    /// are visible.
+    pub fn subscriber_count(&self) -> usize {
+        self.sender.receiver_count()
+    }
 }
 
 impl Default for RequestEventBus {

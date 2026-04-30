@@ -555,6 +555,166 @@ fn sqlite_store_for_ses(
 }
 
 // ---------------------------------------------------------------------------
+// Memory diagnostic — counts entries in every major in-memory store
+// so users can diff snapshots and pinpoint what's growing without a
+// heap profiler. Bring up the page, hammer a workload, refresh — the
+// section that grew is your leak.
+// ---------------------------------------------------------------------------
+
+pub struct DebugObjectsState {
+    pub app: awsim_core::AppState,
+    pub billing: Arc<awsim_billing::BillingMeter>,
+    pub cognito: Arc<awsim_cognito::CognitoState>,
+    pub sqlite: Arc<SqliteStatsState>,
+}
+
+fn read_proc_status(label: &str) -> Option<u64> {
+    let raw = std::fs::read_to_string("/proc/self/status").ok()?;
+    for line in raw.lines() {
+        if let Some(rest) = line.strip_prefix(label) {
+            let kib = rest
+                .trim()
+                .trim_end_matches("kB")
+                .trim()
+                .parse::<u64>()
+                .ok()?;
+            return Some(kib * 1024);
+        }
+    }
+    None
+}
+
+fn proc_section() -> Value {
+    json!({
+        "rss_bytes": read_proc_status("VmRSS:"),
+        "vm_size_bytes": read_proc_status("VmSize:"),
+        "vm_data_bytes": read_proc_status("VmData:"),
+        "vm_peak_bytes": read_proc_status("VmPeak:"),
+        "vm_hwm_bytes":  read_proc_status("VmHWM:"),
+    })
+}
+
+fn cognito_section(cognito: &awsim_cognito::CognitoState) -> Value {
+    let mut total_users: u64 = 0;
+    let mut total_groups: u64 = 0;
+    let mut total_clients: u64 = 0;
+    let mut total_auth_events: u64 = 0;
+    let mut total_devices: u64 = 0;
+    let mut total_revoked_tokens: u64 = 0;
+    let mut per_pool: Vec<Value> = Vec::new();
+    for entry in cognito.user_pools.iter() {
+        let pool = entry.value();
+        let users = pool.users.len() as u64;
+        let groups = pool.groups.len() as u64;
+        let clients = pool.clients.len() as u64;
+        let auth_events: u64 = pool.users.values().map(|u| u.auth_events.len() as u64).sum();
+        let devices: u64 = pool.users.values().map(|u| u.devices.len() as u64).sum();
+        let revoked: u64 = pool
+            .users
+            .values()
+            .map(|u| u.revoked_refresh_tokens.len() as u64)
+            .sum();
+        total_users += users;
+        total_groups += groups;
+        total_clients += clients;
+        total_auth_events += auth_events;
+        total_devices += devices;
+        total_revoked_tokens += revoked;
+        per_pool.push(json!({
+            "id": entry.key(),
+            "users": users,
+            "groups": groups,
+            "clients": clients,
+            "auth_events_total": auth_events,
+            "devices_total": devices,
+            "revoked_refresh_tokens_total": revoked,
+        }));
+    }
+    json!({
+        "user_pools": cognito.user_pools.len(),
+        "mfa_sessions": cognito.mfa_sessions.len(),
+        "totals": {
+            "users": total_users,
+            "groups": total_groups,
+            "clients": total_clients,
+            "auth_events": total_auth_events,
+            "devices": total_devices,
+            "revoked_refresh_tokens": total_revoked_tokens,
+        },
+        "per_pool": per_pool,
+    })
+}
+
+fn billing_section(meter: &awsim_billing::BillingMeter) -> Value {
+    use awsim_core::Snapshottable;
+    let entries = meter.store.iter_all();
+    let mut total_op_counters: u64 = 0;
+    let mut total_storage_rows: u64 = 0;
+    let mut total_compute_rows: u64 = 0;
+    let mut total_resource_rows: u64 = 0;
+    for ((account, region), state) in &entries {
+        let snap = state.to_snapshot(account, region);
+        for ops in snap.services.values() {
+            total_op_counters += ops.len() as u64;
+        }
+        total_storage_rows += snap.storage.len() as u64;
+        total_compute_rows += snap.compute.len() as u64;
+        total_resource_rows += snap.resources.len() as u64;
+    }
+    json!({
+        "account_region_buckets": entries.len(),
+        "op_counters_total": total_op_counters,
+        "storage_rows_total": total_storage_rows,
+        "compute_rows_total": total_compute_rows,
+        "resource_rows_total": total_resource_rows,
+    })
+}
+
+fn app_section(app: &awsim_core::AppState) -> Value {
+    json!({
+        "request_count": app.request_count.load(std::sync::atomic::Ordering::Relaxed),
+        "request_details": app.request_details.recent_ids(usize::MAX).len(),
+        "registered_services": app.services.len(),
+        "request_event_subscribers": app.events.subscriber_count(),
+        "internal_event_subscribers": app.event_bus.subscriber_count(),
+        "chaos_rules": app.chaos.rules().len(),
+        "chaos_recent_injections": app.chaos.recent_injections().len(),
+        "uptime_secs": app.start_time.elapsed().as_secs(),
+    })
+}
+
+fn sqlite_section(s: &SqliteStatsState) -> Value {
+    let cwl_store = sqlite_store_for_logs(&s.cw_logs);
+    let cwm_store = sqlite_store_for_cwm(&s.cw_metrics);
+    let kin_store = sqlite_store_for_kinesis(&s.kinesis);
+    let ses_store = sqlite_store_for_ses(&s.ses);
+    json!({
+        "cloudwatch_logs_rows": cwl_store.as_ref().and_then(|s| s.total_rows().ok()),
+        "cloudwatch_metrics_rows": cwm_store.as_ref().and_then(|s| s.total_rows().ok()),
+        "kinesis_rows": kin_store.as_ref().and_then(|s| s.total_rows().ok()),
+        "ses_rows": ses_store.as_ref().and_then(|s| s.total_rows().ok()),
+        "dynamodb_db_size_bytes": s.dynamodb.tempdir_path()
+            .map(|p| file_size(&p.join("dynamodb.db"))),
+    })
+}
+
+/// GET /_awsim/debug/objects — counts everything that grows in
+/// memory. Snapshot before + after a workload, diff client-side.
+pub async fn debug_objects(State(s): State<Arc<DebugObjectsState>>) -> Json<Value> {
+    Json(json!({
+        "captured_at": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        "process": proc_section(),
+        "app": app_section(&s.app),
+        "cognito": cognito_section(&s.cognito),
+        "billing": billing_section(&s.billing),
+        "sqlite": sqlite_section(&s.sqlite),
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // SES sent-email inspector — reads `SesService::list_sent_emails()` and
 // surfaces every captured outbound message so users can verify what was
 // sent without parsing the SDK call.

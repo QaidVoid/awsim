@@ -784,7 +784,7 @@ async fn async_main() -> Result<()> {
     // `cognito_state` is an Arc<CognitoState> for the default account+region,
     // shared with the CognitoService so OAuth and API calls see the same pools.
     let cognito_oauth_state = Arc::new(awsim_cognito::CognitoOAuthState {
-        cognito: cognito_state,
+        cognito: Arc::clone(&cognito_state),
         default_account_id: cli.account_id.clone(),
         default_region: cli.region.clone(),
         auth_codes: Arc::new(dashmap::DashMap::new()),
@@ -886,13 +886,29 @@ async fn async_main() -> Result<()> {
             "/_awsim/storage/sqlite",
             axum::routing::get(admin::sqlite_stats),
         )
-        .with_state(sqlite_stats_state);
+        .with_state(Arc::clone(&sqlite_stats_state));
 
     // SES outbox inspector. Lets the admin UI list every captured
     // outbound email across all accounts/regions.
     let ses_admin_router: axum::Router<()> = axum::Router::new()
         .route("/_awsim/ses/sent", axum::routing::get(admin::ses_sent))
         .with_state(Arc::clone(&ses_service));
+
+    // Memory diagnostic. Aggregates counts across every major
+    // in-memory store so users can diff snapshots and pinpoint
+    // what's growing.
+    let debug_objects_state = Arc::new(admin::DebugObjectsState {
+        app: state.clone(),
+        billing: Arc::clone(&billing_meter),
+        cognito: Arc::clone(&cognito_state),
+        sqlite: Arc::clone(&sqlite_stats_state),
+    });
+    let debug_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/debug/objects",
+            axum::routing::get(admin::debug_objects),
+        )
+        .with_state(debug_objects_state);
 
     // Named-snapshot sub-router. Bundles ServiceHandler state +
     // billing + chaos under `{data_dir}/named-snapshots/{name}/`.
@@ -927,6 +943,7 @@ async fn async_main() -> Result<()> {
         .merge(ddb_admin_router)
         .merge(sqlite_stats_router)
         .merge(ses_admin_router)
+        .merge(debug_router)
         .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_bytes))
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with
