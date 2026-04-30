@@ -8,10 +8,11 @@
 	import TemplatesTab from '$lib/components/ses/templates-tab.svelte';
 	import ContactListsTab from '$lib/components/ses/contact-lists-tab.svelte';
 	import SuppressionListTab from '$lib/components/ses/suppression-list-tab.svelte';
+	import OutboxTab from '$lib/components/ses/outbox-tab.svelte';
 	import SendEmailDialog from '$lib/components/ses/send-email-dialog.svelte';
 
-	type TabId = 'identities' | 'config-sets' | 'templates' | 'contacts' | 'suppression';
-	let activeTab = $state<TabId>('identities');
+	type TabId = 'outbox' | 'identities' | 'config-sets' | 'templates' | 'contacts' | 'suppression';
+	let activeTab = $state<TabId>('outbox');
 	let composeOpen = $state(false);
 </script>
 
@@ -23,6 +24,7 @@
 	{/snippet}
 	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
+			<TabsTrigger value="outbox">Outbox</TabsTrigger>
 			<TabsTrigger value="identities">Identities</TabsTrigger>
 			<TabsTrigger value="config-sets">Configuration sets</TabsTrigger>
 			<TabsTrigger value="templates">Templates</TabsTrigger>
@@ -30,20 +32,23 @@
 			<TabsTrigger value="suppression">Suppression list</TabsTrigger>
 		</TabsList>
 
-		<div class="min-h-0 flex-1 overflow-y-auto">
-			<TabsContent value="identities" class="m-0">
+		<div class="min-h-0 flex-1 overflow-hidden">
+			<TabsContent value="outbox" class="m-0 h-full data-[state=inactive]:hidden">
+				<OutboxTab />
+			</TabsContent>
+			<TabsContent value="identities" class="m-0 overflow-y-auto data-[state=inactive]:hidden">
 				<IdentitiesTab />
 			</TabsContent>
-			<TabsContent value="config-sets" class="m-0">
+			<TabsContent value="config-sets" class="m-0 overflow-y-auto data-[state=inactive]:hidden">
 				<ConfigurationSetsTab />
 			</TabsContent>
-			<TabsContent value="templates" class="m-0">
+			<TabsContent value="templates" class="m-0 overflow-y-auto data-[state=inactive]:hidden">
 				<TemplatesTab />
 			</TabsContent>
-			<TabsContent value="contacts" class="m-0">
+			<TabsContent value="contacts" class="m-0 overflow-y-auto data-[state=inactive]:hidden">
 				<ContactListsTab />
 			</TabsContent>
-			<TabsContent value="suppression" class="m-0">
+			<TabsContent value="suppression" class="m-0 overflow-y-auto data-[state=inactive]:hidden">
 				<SuppressionListTab />
 			</TabsContent>
 		</div>

@@ -46,6 +46,39 @@ export async function fetchSqliteStats(): Promise<SqliteStatsPayload> {
   return res.json();
 }
 
+// ---------- SES outbox ----------
+
+export interface SesSentEmail {
+  account: string;
+  region: string;
+  messageId: string;
+  from: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string | null;
+  bodyText: string | null;
+  bodyHtml: string | null;
+  raw: string | null;
+  /** Unix epoch seconds. */
+  sentAt: number;
+}
+
+export async function fetchSesSent(opts?: {
+  account?: string;
+  region?: string;
+}): Promise<{ count: number; emails: SesSentEmail[] }> {
+  const qs = new URLSearchParams();
+  if (opts?.account) qs.set("account", opts.account);
+  if (opts?.region) qs.set("region", opts.region);
+  const url = qs.toString()
+    ? `${BASE}/ses/sent?${qs.toString()}`
+    : `${BASE}/ses/sent`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`SES outbox fetch failed: ${res.status}`);
+  return res.json();
+}
+
 // ---------- Billing ----------
 
 export interface BillingDimension {
