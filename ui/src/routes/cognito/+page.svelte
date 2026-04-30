@@ -1,19 +1,16 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
 	import UserPoolList from '$lib/components/cognito/user-pool-list.svelte';
 	import IdentityPoolList from '$lib/components/cognito/identity-pool-list.svelte';
-	import PoolDetail from '$lib/components/cognito/pool-detail.svelte';
 	import JwtDecoder from '$lib/components/cognito/jwt-decoder.svelte';
 	import type { UserPool } from '$lib/api/cognito';
 
 	let active = $state('userpools');
-	let selectedPool = $state<UserPool | null>(null);
-	let detailOpen = $state(false);
 
 	function openPool(p: UserPool) {
-		selectedPool = p;
-		detailOpen = true;
+		void goto(`/cognito/${p.id}`);
 	}
 </script>
 
@@ -47,12 +44,3 @@
 		</TabsContent>
 	</Tabs>
 </ServicePage>
-
-<PoolDetail
-	pool={selectedPool}
-	bind:open={detailOpen}
-	onOpenChange={(v) => {
-		detailOpen = v;
-		if (!v) selectedPool = null;
-	}}
-/>

@@ -879,6 +879,59 @@ export async function deleteAppClient(
   });
 }
 
+// ---- UI customization (hosted UI branding) ----
+
+export interface UiCustomization {
+  /** `null` when scope is the pool default ("ALL" clients). */
+  clientId: string | null;
+  css: string | null;
+  imageUrl: string | null;
+  creationDate?: string;
+  lastModifiedDate?: string;
+}
+
+export async function getUiCustomization(
+  poolId: string,
+  clientId?: string,
+): Promise<UiCustomization> {
+  const body: Record<string, unknown> = { UserPoolId: poolId };
+  if (clientId) body.ClientId = clientId;
+  const data = (await idpRequest("GetUICustomization", body)) as {
+    UICustomization?: {
+      ClientId?: string | null;
+      CSS?: string | null;
+      ImageUrl?: string | null;
+      CreationDate?: number;
+      LastModifiedDate?: number;
+    };
+  };
+  const u = data.UICustomization ?? {};
+  return {
+    clientId: u.ClientId ?? null,
+    css: u.CSS ?? null,
+    imageUrl: u.ImageUrl ?? null,
+    creationDate: u.CreationDate
+      ? new Date(u.CreationDate * 1000).toISOString()
+      : undefined,
+    lastModifiedDate: u.LastModifiedDate
+      ? new Date(u.LastModifiedDate * 1000).toISOString()
+      : undefined,
+  };
+}
+
+export async function setUiCustomization(input: {
+  poolId: string;
+  clientId?: string;
+  css?: string;
+  imageUrl?: string;
+}): Promise<void> {
+  const body: Record<string, unknown> = { UserPoolId: input.poolId };
+  if (input.clientId) body.ClientId = input.clientId;
+  if (input.css !== undefined) body.CSS = input.css;
+  if (input.imageUrl !== undefined) body.ImageFile = input.imageUrl;
+  await idpRequest("SetUICustomization", body);
+}
+
 // ---- Identity providers ----
 
 export type IdpType =
