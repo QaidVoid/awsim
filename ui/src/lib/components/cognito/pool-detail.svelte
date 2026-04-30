@@ -45,6 +45,7 @@
 	import ClientDetail from './client-detail.svelte';
 	import CreateClientDialog from './create-client-dialog.svelte';
 	import TriggersTab from './triggers-tab.svelte';
+	import PasswordPolicyEditor from './password-policy-editor.svelte';
 
 	interface Props {
 		pool: UserPool | null;
@@ -401,6 +402,7 @@
 					<TabsTrigger value="clients">App Clients ({clients.length})</TabsTrigger>
 					<TabsTrigger value="domain">Domain</TabsTrigger>
 					<TabsTrigger value="triggers">Triggers</TabsTrigger>
+					<TabsTrigger value="policies">Policies</TabsTrigger>
 				</TabsList>
 
 				<TabsContent value="users" class="mt-4 space-y-3">
@@ -727,6 +729,14 @@
 					{#if pool}
 						{#key pool.id}
 							<TriggersTab poolId={pool.id} />
+						{/key}
+					{/if}
+				</TabsContent>
+
+				<TabsContent value="policies" class="mt-4 space-y-4">
+					{#if pool}
+						{#key pool.id}
+							<PasswordPolicyEditor poolId={pool.id} />
 						{/key}
 					{/if}
 				</TabsContent>

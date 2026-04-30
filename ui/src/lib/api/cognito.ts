@@ -62,12 +62,22 @@ export interface UserPool {
   creationDate: string;
 }
 
+export interface PasswordPolicy {
+  minimumLength?: number;
+  requireUppercase?: boolean;
+  requireLowercase?: boolean;
+  requireNumbers?: boolean;
+  requireSymbols?: boolean;
+  temporaryPasswordValidityDays?: number;
+}
+
 export interface UserPoolDetail extends UserPool {
   mfaConfiguration?: string;
   estimatedNumberOfUsers?: number;
   lambdaConfig?: Record<string, string>;
   schemaAttributes?: { name: string; type: string; required: boolean }[];
   domain?: string;
+  passwordPolicy?: PasswordPolicy;
 }
 
 export interface CognitoUser {
@@ -192,9 +202,20 @@ export async function describeUserPool(id: string): Promise<UserPoolDetail> {
         Required: boolean;
       }[];
       Domain?: string;
+      Policies?: {
+        PasswordPolicy?: {
+          MinimumLength?: number;
+          RequireUppercase?: boolean;
+          RequireLowercase?: boolean;
+          RequireNumbers?: boolean;
+          RequireSymbols?: boolean;
+          TemporaryPasswordValidityDays?: number;
+        };
+      };
     };
   };
   const p = data.UserPool ?? ({} as NonNullable<typeof data.UserPool>);
+  const pp = p.Policies?.PasswordPolicy;
   return {
     id: p.Id ?? id,
     name: p.Name ?? "",
@@ -211,6 +232,16 @@ export async function describeUserPool(id: string): Promise<UserPoolDetail> {
       required: a.Required,
     })),
     domain: p.Domain,
+    passwordPolicy: pp
+      ? {
+          minimumLength: pp.MinimumLength,
+          requireUppercase: pp.RequireUppercase,
+          requireLowercase: pp.RequireLowercase,
+          requireNumbers: pp.RequireNumbers,
+          requireSymbols: pp.RequireSymbols,
+          temporaryPasswordValidityDays: pp.TemporaryPasswordValidityDays,
+        }
+      : undefined,
   };
 }
 
