@@ -200,10 +200,66 @@ const result = JSON.parse(Buffer.from(responseBody).toString());
 console.log(result.content[0].text);
 ```
 
+## Local LLM Backend
+
+When you set `--bedrock-backend <url>` (or `AWSIM_BEDROCK_BACKEND=…`) to an OpenAI-compatible endpoint, awsim's runtime translates Bedrock requests to OpenAI chat-completions / embeddings calls and proxies them through. Real inference happens against your local LLM; awsim just hosts the AWS-shaped front door.
+
+```bash
+# Ollama (default OpenAI-compat path)
+awsim --bedrock-backend http://localhost:11434/v1
+
+# LM Studio
+awsim --bedrock-backend http://localhost:1234/v1
+
+# llama.cpp server / vLLM / LocalAI / KoboldCpp
+awsim --bedrock-backend http://localhost:8080/v1 \
+      --bedrock-api-key sk-test
+```
+
+Without `--bedrock-backend`, awsim falls back to deterministic canned responses so SDK code that just wires up calls keeps working in CI.
+
+### Translators
+
+| Bedrock model id prefix | Bedrock format | Backend path |
+|-------------------------|----------------|--------------|
+| `anthropic.claude-*`    | Messages API   | `/chat/completions` |
+| `amazon.titan-text-*`   | Titan          | `/chat/completions` |
+| `meta.llama*`           | Llama          | `/chat/completions` |
+| `mistral.*`             | Mistral        | `/chat/completions` |
+| `cohere.command-*`      | Cohere Command | `/chat/completions` |
+| `amazon.titan-embed-*`  | Titan Embed    | `/embeddings` |
+| `cohere.embed-*`        | Cohere Embed   | `/embeddings` |
+| _(everything else)_     | _(canned)_     | _none_ |
+
+`Converse` / `ConverseStream` use the same `/chat/completions` path for every model id since the Bedrock-side shape is unified.
+
+### Model map
+
+Maps AWS-style ids to the tag your backend understands. Built-in defaults skew toward Ollama / Llama (`llama3.1:8b`, `nomic-embed-text`) so `ollama pull llama3.1:8b nomic-embed-text` is enough to make every supported Bedrock id route somewhere. Override per-id via TOML:
+
+```toml
+# my-models.toml
+[invoke]
+"anthropic.claude-3-5-sonnet-20241022-v2:0" = "qwen2.5:32b"
+"meta.llama3-1-70b-instruct-v1:0"           = "llama3.1:8b"
+
+[embed]
+"amazon.titan-embed-text-v2:0" = "mxbai-embed-large"
+```
+
+```bash
+awsim --bedrock-backend http://localhost:11434/v1 \
+      --bedrock-model-map ./my-models.toml
+```
+
+User keys merge on top of defaults — a single override doesn't require restating every other mapping.
+
+See the [Local LLM backend guide](/guide/bedrock-backend) for full setup instructions per backend.
+
 ## Behavior Notes
 
-- `InvokeModel` returns a mock response in the expected format for the requested model — no real LLM inference occurs.
-- `Converse` returns a plausible mock message structure so SDKs parse the response correctly.
-- The management API returns a built-in list of popular foundation model IDs (Claude, Titan, Llama, Mistral, Cohere, etc.) so `ListFoundationModels` works without any setup.
+- When `--bedrock-backend` is set, `InvokeModel` / `InvokeModelWithResponseStream` / `Converse` / `ConverseStream` translate-and-proxy to the configured OpenAI-compatible server. When unset, all four return deterministic canned responses.
+- The management API returns a built-in list of popular foundation model IDs so `ListFoundationModels` works without any setup.
 - Guardrails and customization jobs are recorded but have no effect on inference.
-- The mock response text changes based on the query but is generated locally without any neural network.
+- Streaming events are accumulated and emitted as a JSON array on the response — the wire-level `vnd.amazon.eventstream` binary framing is future work, so SDK clients that parse the binary frame format won't see real chunks-as-they-arrive yet, but inspection tools / curl / the awsim admin UI see real content.
+- Anthropic image / tool-use content blocks are dropped with a warning (text-only backend). Converse system blocks are concatenated with newlines into a single system message. Cohere `top_p` arrives as `p` in the request and is mapped accordingly.
