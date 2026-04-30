@@ -9,6 +9,7 @@
 		adminDisableUser,
 		adminConfirmSignUp,
 		adminResetUserPassword,
+		adminDeleteUser,
 		type UserPool,
 		type UserPoolDetail,
 		type CognitoUserSummary,
@@ -26,7 +27,13 @@
 	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import { toast } from 'svelte-sonner';
+	import Plus from '@lucide/svelte/icons/plus';
+	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+	import CreateUserDialog from './create-user-dialog.svelte';
+	import SetPasswordDialog from './set-password-dialog.svelte';
+	import ConfirmDialog from './confirm-dialog.svelte';
 
 	interface Props {
 		pool: UserPool | null;
@@ -115,6 +122,58 @@
 			toast.error(e instanceof Error ? e.message : 'Reset failed');
 		}
 	}
+
+	let userFilter = $state('');
+	const filteredUsers = $derived(
+		userFilter.trim()
+			? users.filter((u) =>
+					u.username.toLowerCase().includes(userFilter.trim().toLowerCase())
+				)
+			: users
+	);
+
+	let createUserOpen = $state(false);
+	let setPwUser = $state<string | null>(null);
+	let setPwOpen = $state(false);
+	let deleteUser = $state<string | null>(null);
+	let deleteUserOpen = $state(false);
+	let deleteUserBusy = $state(false);
+
+	async function reloadUsers() {
+		if (!pool) return;
+		loadingUsers = true;
+		try {
+			users = await listPoolUsers(pool.id);
+		} finally {
+			loadingUsers = false;
+		}
+	}
+
+	function openSetPassword(username: string) {
+		setPwUser = username;
+		setPwOpen = true;
+	}
+
+	function openDelete(username: string) {
+		deleteUser = username;
+		deleteUserOpen = true;
+	}
+
+	async function confirmDeleteUser() {
+		if (!pool || !deleteUser) return;
+		deleteUserBusy = true;
+		try {
+			await adminDeleteUser(pool.id, deleteUser);
+			toast.success(`Deleted ${deleteUser}`);
+			deleteUserOpen = false;
+			deleteUser = null;
+			await reloadUsers();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteUserBusy = false;
+		}
+	}
 </script>
 
 <Sheet bind:open onOpenChange={(v) => onOpenChange(v)}>
@@ -132,14 +191,31 @@
 					<TabsTrigger value="domain">Domain</TabsTrigger>
 				</TabsList>
 
-				<TabsContent value="users" class="mt-4">
+				<TabsContent value="users" class="mt-4 space-y-3">
+					<div class="flex items-center gap-2">
+						<Input
+							type="search"
+							placeholder="Filter users..."
+							bind:value={userFilter}
+							class="h-8 max-w-xs"
+						/>
+						<div class="flex-1"></div>
+						<Button variant="ghost" size="icon-sm" onclick={reloadUsers} title="Refresh">
+							<RefreshCw class="size-3.5 {loadingUsers ? 'animate-spin' : ''}" />
+						</Button>
+						<Button size="xs" onclick={() => (createUserOpen = true)}>
+							<Plus class="size-3.5" /> User
+						</Button>
+					</div>
 					{#if loadingUsers}
 						<p class="text-xs text-muted-foreground">Loading users...</p>
 					{:else if users.length === 0}
 						<p class="text-xs text-muted-foreground">No users in this pool.</p>
+					{:else if filteredUsers.length === 0}
+						<p class="text-xs text-muted-foreground">No users match "{userFilter}".</p>
 					{:else}
 						<ul class="space-y-1.5">
-							{#each users as u (u.username)}
+							{#each filteredUsers as u (u.username)}
 								<li
 									class="flex flex-wrap items-center gap-2 rounded border border-border/60 px-3 py-2 text-sm"
 								>
@@ -164,6 +240,17 @@
 										{/if}
 										<Button variant="ghost" size="xs" onclick={() => resetPassword(u)}>
 											Reset PW
+										</Button>
+										<Button variant="ghost" size="xs" onclick={() => openSetPassword(u.username)}>
+											Set PW
+										</Button>
+										<Button
+											variant="ghost"
+											size="xs"
+											class="text-destructive hover:text-destructive"
+											onclick={() => openDelete(u.username)}
+										>
+											Delete
 										</Button>
 									</div>
 								</li>
@@ -235,3 +322,36 @@
 		</div>
 	</SheetContent>
 </Sheet>
+
+{#if pool}
+	<CreateUserDialog
+		bind:open={createUserOpen}
+		poolId={pool.id}
+		onClose={() => (createUserOpen = false)}
+		onCreated={() => void reloadUsers()}
+	/>
+	{#if setPwUser}
+		<SetPasswordDialog
+			bind:open={setPwOpen}
+			poolId={pool.id}
+			username={setPwUser}
+			onClose={() => {
+				setPwOpen = false;
+				setPwUser = null;
+			}}
+		/>
+	{/if}
+	{#if deleteUser}
+		<ConfirmDialog
+			bind:open={deleteUserOpen}
+			title="Delete user"
+			description={`Permanently delete ${deleteUser}? This cannot be undone.`}
+			busy={deleteUserBusy}
+			onConfirm={confirmDeleteUser}
+			onClose={() => {
+				deleteUserOpen = false;
+				deleteUser = null;
+			}}
+		/>
+	{/if}
+{/if}
