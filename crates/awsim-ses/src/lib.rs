@@ -1,6 +1,8 @@
 mod operations;
 mod state;
 
+pub use state::SentEmail;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -25,6 +27,25 @@ impl SesService {
 
     fn get_state(&self, ctx: &RequestContext) -> Arc<SesState> {
         self.store.get(&ctx.account_id, &ctx.region)
+    }
+
+    /// Snapshot every sent email across all accounts/regions.
+    /// Returned newest-first by `sent_at`.
+    pub fn list_sent_emails(&self) -> Vec<(String, String, SentEmail)> {
+        let mut out: Vec<(String, String, SentEmail)> = self
+            .store
+            .iter_all()
+            .into_iter()
+            .flat_map(|((account, region), state)| {
+                state
+                    .sent_emails
+                    .iter()
+                    .map(|e| (account.clone(), region.clone(), e.value().clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        out.sort_by(|a, b| b.2.sent_at.cmp(&a.2.sent_at));
+        out
     }
 }
 
