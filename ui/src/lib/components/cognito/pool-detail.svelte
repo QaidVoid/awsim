@@ -48,6 +48,7 @@
 	import PasswordPolicyEditor from './password-policy-editor.svelte';
 	import MfaConfigEditor from './mfa-config-editor.svelte';
 	import TagsEditor from './tags-editor.svelte';
+	import IdpTab from './idp-tab.svelte';
 
 	interface Props {
 		pool: UserPool | null;
@@ -405,6 +406,7 @@
 					<TabsTrigger value="domain">Domain</TabsTrigger>
 					<TabsTrigger value="triggers">Triggers</TabsTrigger>
 					<TabsTrigger value="policies">Policies</TabsTrigger>
+					<TabsTrigger value="federation">Federation</TabsTrigger>
 				</TabsList>
 
 				<TabsContent value="users" class="mt-4 space-y-3">
@@ -740,6 +742,15 @@
 						{#key pool.id}
 							<PasswordPolicyEditor poolId={pool.id} />
 							<MfaConfigEditor poolId={pool.id} />
+							<TagsEditor poolId={pool.id} />
+						{/key}
+					{/if}
+				</TabsContent>
+
+				<TabsContent value="federation" class="mt-4">
+					{#if pool}
+						{#key pool.id}
+							<IdpTab poolId={pool.id} />
 						{/key}
 					{/if}
 				</TabsContent>

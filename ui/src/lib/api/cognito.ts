@@ -814,6 +814,123 @@ export async function deleteAppClient(
   });
 }
 
+// ---- Identity providers ----
+
+export type IdpType =
+  | "SAML"
+  | "OIDC"
+  | "Google"
+  | "Facebook"
+  | "SignInWithApple"
+  | "LoginWithAmazon";
+
+export interface IdentityProvider {
+  name: string;
+  type: IdpType;
+}
+
+export interface IdentityProviderDetail extends IdentityProvider {
+  providerDetails: Record<string, string>;
+  attributeMapping: Record<string, string>;
+  idpIdentifiers: string[];
+}
+
+export async function listIdentityProviders(
+  poolId: string,
+  opts?: { maxResults?: number; nextToken?: string },
+): Promise<{ providers: IdentityProvider[]; nextToken?: string }> {
+  const body: Record<string, unknown> = {
+    UserPoolId: poolId,
+    MaxResults: opts?.maxResults ?? 60,
+  };
+  if (opts?.nextToken) body.NextToken = opts.nextToken;
+  const data = (await idpRequest("ListIdentityProviders", body)) as {
+    Providers?: { ProviderName: string; ProviderType: string }[];
+    NextToken?: string;
+  };
+  return {
+    providers: (data.Providers ?? []).map((p) => ({
+      name: p.ProviderName,
+      type: p.ProviderType as IdpType,
+    })),
+    nextToken: data.NextToken,
+  };
+}
+
+export async function describeIdentityProvider(
+  poolId: string,
+  name: string,
+): Promise<IdentityProviderDetail> {
+  const data = (await idpRequest("DescribeIdentityProvider", {
+    UserPoolId: poolId,
+    ProviderName: name,
+  })) as {
+    IdentityProvider?: {
+      ProviderName: string;
+      ProviderType: string;
+      ProviderDetails?: Record<string, string>;
+      AttributeMapping?: Record<string, string>;
+      IdpIdentifiers?: string[];
+    };
+  };
+  const i = data.IdentityProvider;
+  return {
+    name: i?.ProviderName ?? name,
+    type: (i?.ProviderType ?? "OIDC") as IdpType,
+    providerDetails: i?.ProviderDetails ?? {},
+    attributeMapping: i?.AttributeMapping ?? {},
+    idpIdentifiers: i?.IdpIdentifiers ?? [],
+  };
+}
+
+export async function createIdentityProvider(input: {
+  poolId: string;
+  name: string;
+  type: IdpType;
+  providerDetails: Record<string, string>;
+  attributeMapping?: Record<string, string>;
+  idpIdentifiers?: string[];
+}): Promise<void> {
+  const body: Record<string, unknown> = {
+    UserPoolId: input.poolId,
+    ProviderName: input.name,
+    ProviderType: input.type,
+    ProviderDetails: input.providerDetails,
+  };
+  if (input.attributeMapping && Object.keys(input.attributeMapping).length > 0)
+    body.AttributeMapping = input.attributeMapping;
+  if (input.idpIdentifiers?.length) body.IdpIdentifiers = input.idpIdentifiers;
+  await idpRequest("CreateIdentityProvider", body);
+}
+
+export async function updateIdentityProvider(input: {
+  poolId: string;
+  name: string;
+  providerDetails?: Record<string, string>;
+  attributeMapping?: Record<string, string>;
+  idpIdentifiers?: string[];
+}): Promise<void> {
+  const body: Record<string, unknown> = {
+    UserPoolId: input.poolId,
+    ProviderName: input.name,
+  };
+  if (input.providerDetails) body.ProviderDetails = input.providerDetails;
+  if (input.attributeMapping) body.AttributeMapping = input.attributeMapping;
+  if (input.idpIdentifiers !== undefined)
+    body.IdpIdentifiers = input.idpIdentifiers;
+  await idpRequest("UpdateIdentityProvider", body);
+}
+
+export async function deleteIdentityProvider(
+  poolId: string,
+  name: string,
+): Promise<void> {
+  await idpRequest("DeleteIdentityProvider", {
+    UserPoolId: poolId,
+    ProviderName: name,
+  });
+}
+
 // ---- Domain ----
 
 export async function describeDomain(
