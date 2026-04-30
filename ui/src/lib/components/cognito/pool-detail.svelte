@@ -11,6 +11,7 @@
 		adminResetUserPassword,
 		adminDeleteUser,
 		deleteGroup,
+		deleteAppClient,
 		type UserPool,
 		type UserPoolDetail,
 		type CognitoUserSummary,
@@ -39,6 +40,8 @@
 	import UserDetail from './user-detail.svelte';
 	import CreateGroupDialog from './create-group-dialog.svelte';
 	import GroupDetail from './group-detail.svelte';
+	import ClientDetail from './client-detail.svelte';
+	import CreateClientDialog from './create-client-dialog.svelte';
 
 	interface Props {
 		pool: UserPool | null;
@@ -215,6 +218,46 @@
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
 		} finally {
 			deleteGroupBusy = false;
+		}
+	}
+
+	let expandedClient = $state<string | null>(null);
+	let createClientOpen = $state(false);
+	let deleteClientId = $state<string | null>(null);
+	let deleteClientName = $state<string | null>(null);
+	let deleteClientOpen = $state(false);
+	let deleteClientBusy = $state(false);
+
+	async function reloadClients() {
+		if (!pool) return;
+		loadingClients = true;
+		try {
+			clients = await listAppClients(pool.id);
+		} finally {
+			loadingClients = false;
+		}
+	}
+
+	function openDeleteClient(id: string, name: string) {
+		deleteClientId = id;
+		deleteClientName = name;
+		deleteClientOpen = true;
+	}
+
+	async function confirmDeleteClient() {
+		if (!pool || !deleteClientId) return;
+		deleteClientBusy = true;
+		try {
+			await deleteAppClient(pool.id, deleteClientId);
+			toast.success(`Deleted ${deleteClientName ?? deleteClientId}`);
+			deleteClientOpen = false;
+			deleteClientId = null;
+			deleteClientName = null;
+			await reloadClients();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteClientBusy = false;
 		}
 	}
 </script>
@@ -398,7 +441,16 @@
 					{/if}
 				</TabsContent>
 
-				<TabsContent value="clients" class="mt-4">
+				<TabsContent value="clients" class="mt-4 space-y-3">
+					<div class="flex items-center gap-2">
+						<div class="flex-1"></div>
+						<Button variant="ghost" size="icon-sm" onclick={reloadClients} title="Refresh">
+							<RefreshCw class="size-3.5 {loadingClients ? 'animate-spin' : ''}" />
+						</Button>
+						<Button size="xs" onclick={() => (createClientOpen = true)}>
+							<Plus class="size-3.5" /> Client
+						</Button>
+					</div>
 					{#if loadingClients}
 						<p class="text-xs text-muted-foreground">Loading clients...</p>
 					{:else if clients.length === 0}
@@ -406,9 +458,45 @@
 					{:else}
 						<ul class="space-y-1.5">
 							{#each clients as c (c.clientId)}
-								<li class="rounded border border-border/60 px-3 py-2 text-sm">
-									<div class="font-medium">{c.clientName}</div>
-									<div class="font-mono text-xs text-muted-foreground">{c.clientId}</div>
+								<li class="rounded border border-border/60">
+									<div class="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+										<button
+											type="button"
+											class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+											onclick={() =>
+												(expandedClient = expandedClient === c.clientId ? null : c.clientId)}
+											aria-expanded={expandedClient === c.clientId}
+											aria-label="Toggle details for {c.clientName}"
+										>
+											<ChevronRight
+												class="size-3.5 shrink-0 text-muted-foreground transition-transform {expandedClient ===
+												c.clientId
+													? 'rotate-90'
+													: ''}"
+											/>
+											<div class="min-w-0">
+												<div class="truncate font-medium">{c.clientName}</div>
+												<div class="truncate font-mono text-xs text-muted-foreground">
+													{c.clientId}
+												</div>
+											</div>
+										</button>
+										<Button
+											variant="ghost"
+											size="xs"
+											class="text-destructive hover:text-destructive"
+											onclick={() => openDeleteClient(c.clientId, c.clientName)}
+										>
+											Delete
+										</Button>
+									</div>
+									{#if expandedClient === c.clientId && pool}
+										<div class="border-t border-border/60 px-3 py-3">
+											{#key c.clientId}
+												<ClientDetail poolId={pool.id} clientId={c.clientId} />
+											{/key}
+										</div>
+									{/if}
 								</li>
 							{/each}
 						</ul>
@@ -487,6 +575,29 @@
 			onClose={() => {
 				deleteGroupOpen = false;
 				deleteGroupName = null;
+			}}
+		/>
+	{/if}
+	<CreateClientDialog
+		bind:open={createClientOpen}
+		poolId={pool.id}
+		onClose={() => (createClientOpen = false)}
+		onCreated={(id) => {
+			void reloadClients();
+			expandedClient = id;
+		}}
+	/>
+	{#if deleteClientId}
+		<ConfirmDialog
+			bind:open={deleteClientOpen}
+			title="Delete app client"
+			description={`Delete client ${deleteClientName ?? deleteClientId}? Apps using this client ID will stop working.`}
+			busy={deleteClientBusy}
+			onConfirm={confirmDeleteClient}
+			onClose={() => {
+				deleteClientOpen = false;
+				deleteClientId = null;
+				deleteClientName = null;
 			}}
 		/>
 	{/if}
