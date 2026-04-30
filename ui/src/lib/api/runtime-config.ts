@@ -32,9 +32,14 @@ export interface SesSection {
   retention_hours: number;
 }
 
+export interface IamSection {
+  enforce: boolean;
+}
+
 export interface RuntimeConfig {
   bedrock: BedrockSection;
   ses: SesSection;
+  iam: IamSection;
 }
 
 export interface RuntimeConfigEnvelope {

@@ -51,13 +51,10 @@ fn make_ctx() -> RequestContext {
 }
 
 fn engine(principal: ResolvedPrincipal, scp: Option<Arc<dyn ScpLookup>>) -> AuthzEngine {
-    AuthzEngine {
-        principal_lookup: Arc::new(StubPrincipal { principal }),
-        resource_policy_lookups: Default::default(),
-        grant_lookups: Default::default(),
-        scp_lookup: scp,
-        enabled: true,
-    }
+    let mut e = AuthzEngine::new(true);
+    e.principal_lookup = Arc::new(StubPrincipal { principal });
+    e.scp_lookup = scp;
+    e
 }
 
 const ALLOW_S3_AND_DDB: &str = r#"{

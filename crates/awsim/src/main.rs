@@ -506,6 +506,18 @@ async fn async_main() -> Result<()> {
         )));
     }
 
+    // Apply the runtime-config IAM enforce flag, then register a hook
+    // so flipping it from the UI takes effect on the next request.
+    {
+        let authz = Arc::clone(&state.authz);
+        authz.set_enabled(runtime_config_store.current().iam.enforce);
+        let authz = Arc::clone(&authz);
+        runtime_config_store.on_change(Box::new(move |cfg| {
+            authz.set_enabled(cfg.iam.enforce);
+            info!(enforce = cfg.iam.enforce, "IAM enforcement hot-reloaded");
+        }));
+    }
+
     // Always-on signal handler that removes the DynamoDB tempdir
     // before exit. The richer save-snapshots-on-shutdown handler
     // below is gated on `--data-dir` and supersedes this one — it
@@ -1588,6 +1600,11 @@ fn build_runtime_config_seed(cli: &Cli) -> Result<runtime_config::RuntimeConfig>
         },
         ses: runtime_config::SesSection {
             retention_hours: cli.ses_retention_hours,
+        },
+        iam: runtime_config::IamSection {
+            // Seed from the existing AWSIM_IAM_ENFORCE env var so the
+            // CLI / env-var path keeps working on first run.
+            enforce: std::env::var("AWSIM_IAM_ENFORCE").ok().as_deref() == Some("true"),
         },
     })
 }

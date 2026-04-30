@@ -57,21 +57,14 @@ pub async fn start_server_with_scp(
     let s3_routes = s3.routes();
     state.register(Arc::new(s3), s3_routes);
 
-    let authz = AuthzEngine {
-        enabled: enforce,
-        principal_lookup: Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store)),
-        resource_policy_lookups: {
-            let mut m = std::collections::HashMap::new();
-            m.insert(
-                "s3".to_string(),
-                Arc::new(awsim_s3::S3ResourcePolicyLookup::new(s3_store))
-                    as Arc<dyn awsim_core::ResourcePolicyLookup>,
-            );
-            m
-        },
-        grant_lookups: std::collections::HashMap::new(),
-        scp_lookup: scp,
-    };
+    let mut authz = AuthzEngine::new(enforce);
+    authz.principal_lookup = Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store));
+    authz.resource_policy_lookups.insert(
+        "s3".to_string(),
+        Arc::new(awsim_s3::S3ResourcePolicyLookup::new(s3_store))
+            as Arc<dyn awsim_core::ResourcePolicyLookup>,
+    );
+    authz.scp_lookup = scp;
     state.authz = Arc::new(authz);
 
     let app: axum::Router<()> = axum::Router::new()

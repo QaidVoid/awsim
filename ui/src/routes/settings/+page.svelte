@@ -57,6 +57,7 @@
 	let invokeRows = $state<MapRow[]>([]);
 	let embedRows = $state<MapRow[]>([]);
 	let sesRetentionHours = $state(720);
+	let iamEnforce = $state(false);
 
 	onMount(load);
 
@@ -121,6 +122,7 @@
 		invokeRows = entriesToRows(cfg.bedrock.spec.invoke);
 		embedRows = entriesToRows(cfg.bedrock.spec.embed);
 		sesRetentionHours = cfg.ses.retention_hours;
+		iamEnforce = cfg.iam.enforce;
 	}
 
 	function entriesToRows(record: Record<string, ModelMapEntry>): MapRow[] {
@@ -163,6 +165,7 @@
 				},
 			},
 			ses: { retention_hours: sesRetentionHours },
+			iam: { enforce: iamEnforce },
 		};
 	}
 
@@ -540,6 +543,29 @@
 				<p class="mt-1 text-xs text-muted-foreground">
 					Default: 720 (30 days). Sweep runs once per hour.
 				</p>
+			</div>
+		</section>
+
+		<!-- IAM section -->
+		<section class="rounded-lg border bg-card">
+			<header class="flex items-start justify-between gap-4 border-b p-4">
+				<div>
+					<h2 class="text-base font-semibold">IAM enforcement</h2>
+					<p class="mt-1 text-sm text-muted-foreground">
+						When on, every request runs through the IAM policy engine: identity policies,
+						resource policies, SCPs, KMS grants. When off, all calls are allowed regardless
+						of identity. Off is the default for ergonomic local dev; flip on to test
+						policy logic.
+					</p>
+				</div>
+				<div class="flex items-center gap-2 pt-1">
+					<Label for="iam-enforce" class="text-sm">Enforce</Label>
+					<Switch id="iam-enforce" bind:checked={iamEnforce} />
+				</div>
+			</header>
+			<div class="p-4 text-xs text-muted-foreground">
+				Equivalent CLI flag:
+				<code class="ml-1 rounded bg-muted px-1.5 py-0.5 font-mono">AWSIM_IAM_ENFORCE=true</code>
 			</div>
 		</section>
 

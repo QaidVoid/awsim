@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use awsim_core::{
-    AuthzEngine, NoopPrincipalLookup, PrincipalLookup, RequestContext, ResolvedPrincipal,
-};
+use awsim_core::{AuthzEngine, PrincipalLookup, RequestContext, ResolvedPrincipal};
 use awsim_iam_policy::PolicyDocument;
 
 struct StubLookup {
@@ -44,13 +42,7 @@ fn ctx_with_key(key: Option<&str>) -> RequestContext {
 
 #[test]
 fn enforcement_off_passes() {
-    let engine = AuthzEngine {
-        principal_lookup: Arc::new(NoopPrincipalLookup),
-        resource_policy_lookups: Default::default(),
-        grant_lookups: Default::default(),
-        scp_lookup: None,
-        enabled: false,
-    };
+    let engine = AuthzEngine::new(false);
     let ctx = ctx_with_key(None);
     assert!(
         engine
@@ -61,13 +53,7 @@ fn enforcement_off_passes() {
 
 #[test]
 fn enforcement_on_anonymous_denied() {
-    let engine = AuthzEngine {
-        principal_lookup: Arc::new(NoopPrincipalLookup),
-        resource_policy_lookups: Default::default(),
-        grant_lookups: Default::default(),
-        scp_lookup: None,
-        enabled: true,
-    };
+    let engine = AuthzEngine::new(true);
     let ctx = ctx_with_key(None);
     let err = engine
         .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/key")
@@ -91,15 +77,10 @@ fn enforcement_on_allow_passes() {
         vec![allow_policy],
         false,
     );
-    let engine = AuthzEngine {
-        principal_lookup: Arc::new(StubLookup {
-            principal: Some(principal),
-        }),
-        resource_policy_lookups: Default::default(),
-        grant_lookups: Default::default(),
-        scp_lookup: None,
-        enabled: true,
-    };
+    let mut engine = AuthzEngine::new(true);
+    engine.principal_lookup = Arc::new(StubLookup {
+        principal: Some(principal),
+    });
     let ctx = ctx_with_key(Some("AKIATEST"));
     assert!(
         engine
@@ -131,15 +112,10 @@ fn enforcement_on_deny_blocks() {
         vec![deny_policy],
         false,
     );
-    let engine = AuthzEngine {
-        principal_lookup: Arc::new(StubLookup {
-            principal: Some(principal),
-        }),
-        resource_policy_lookups: Default::default(),
-        grant_lookups: Default::default(),
-        scp_lookup: None,
-        enabled: true,
-    };
+    let mut engine = AuthzEngine::new(true);
+    engine.principal_lookup = Arc::new(StubLookup {
+        principal: Some(principal),
+    });
     let ctx = ctx_with_key(Some("AKIATEST"));
     let err = engine
         .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/key")
@@ -156,15 +132,10 @@ fn enforcement_on_root_bypass() {
         permissions_boundary: None,
         is_root: true,
     };
-    let engine = AuthzEngine {
-        principal_lookup: Arc::new(StubLookup {
-            principal: Some(principal),
-        }),
-        resource_policy_lookups: Default::default(),
-        grant_lookups: Default::default(),
-        scp_lookup: None,
-        enabled: true,
-    };
+    let mut engine = AuthzEngine::new(true);
+    engine.principal_lookup = Arc::new(StubLookup {
+        principal: Some(principal),
+    });
     let ctx = ctx_with_key(Some("AKIAROOT"));
     assert!(
         engine

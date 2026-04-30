@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use awsim_iam_policy::{
     AuthzRequest, ContextValue, Decision, EvalContext, PolicyDocument, evaluate,
@@ -50,7 +51,11 @@ pub struct AuthzEngine {
     pub resource_policy_lookups: HashMap<String, Arc<dyn ResourcePolicyLookup>>,
     pub grant_lookups: HashMap<String, Arc<dyn GrantLookup>>,
     pub scp_lookup: Option<Arc<dyn ScpLookup>>,
-    pub enabled: bool,
+    /// Atomic so the runtime config can flip enforcement on/off
+    /// without rebuilding the engine. Reads on the request path are
+    /// `Relaxed` since enforcement-toggle ordering vs in-flight
+    /// requests doesn't have correctness implications.
+    enforced: AtomicBool,
 }
 
 impl AuthzEngine {
@@ -60,7 +65,7 @@ impl AuthzEngine {
             resource_policy_lookups: HashMap::new(),
             grant_lookups: HashMap::new(),
             scp_lookup: None,
-            enabled,
+            enforced: AtomicBool::new(enabled),
         }
     }
 
@@ -69,13 +74,26 @@ impl AuthzEngine {
         Self::new(enabled)
     }
 
+    /// Enable or disable IAM enforcement. Hot-reload-safe: in-flight
+    /// requests already past the `enabled` check see the previous
+    /// value, which is fine — we don't make any policy decisions
+    /// that depend on this being a stable view across an entire
+    /// request.
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enforced.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enforced.load(Ordering::Relaxed)
+    }
+
     pub fn check(
         &self,
         ctx: &RequestContext,
         action: &str,
         resource: &str,
     ) -> Result<(), AwsError> {
-        if !self.enabled {
+        if !self.enabled() {
             return Ok(());
         }
 

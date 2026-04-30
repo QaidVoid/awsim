@@ -39,6 +39,18 @@ pub struct RuntimeConfig {
     pub bedrock: BedrockSection,
     #[serde(default)]
     pub ses: SesSection,
+    #[serde(default)]
+    pub iam: IamSection,
+}
+
+/// IAM authorization section. When `enforce` is true, every request
+/// runs through the IAM policy engine; when false, all calls are
+/// allowed regardless of identity (useful for local dev where you
+/// don't want to fight policies).
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct IamSection {
+    #[serde(default)]
+    pub enforce: bool,
 }
 
 /// Bedrock proxy config. `enabled = false` puts the proxy into
