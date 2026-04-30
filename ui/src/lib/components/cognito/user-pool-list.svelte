@@ -1,12 +1,23 @@
 <script lang="ts">
-	import { listUserPools, type UserPool } from '$lib/api/cognito';
+	import { listUserPools, deleteUserPool, type UserPool } from '$lib/api/cognito';
 	import { onMount } from 'svelte';
+	import { toast } from 'svelte-sonner';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import {
+		DropdownMenu,
+		DropdownMenuContent,
+		DropdownMenuItem,
+		DropdownMenuTrigger
+	} from '$lib/components/ui/dropdown-menu';
 	import Users from '@lucide/svelte/icons/users';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+	import Plus from '@lucide/svelte/icons/plus';
+	import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
+	import CreatePoolDialog from './create-pool-dialog.svelte';
+	import ConfirmDialog from './confirm-dialog.svelte';
 
 	interface Props {
 		onSelect: (pool: UserPool) => void;
@@ -17,6 +28,11 @@
 	let pools = $state<UserPool[]>([]);
 	let loading = $state(false);
 	let filter = $state('');
+
+	let createOpen = $state(false);
+	let deletePool = $state<UserPool | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	const filtered = $derived(
 		filter.trim()
@@ -37,8 +53,53 @@
 		}
 	}
 
+	async function confirmDelete() {
+		if (!deletePool) return;
+		deleteBusy = true;
+		try {
+			await deleteUserPool(deletePool.id);
+			toast.success(`Deleted ${deletePool.name}`);
+			deleteOpen = false;
+			deletePool = null;
+			await load();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteBusy = false;
+		}
+	}
+
 	onMount(load);
 </script>
+
+{#snippet actionsCell(p: UserPool)}
+	<div
+		class="flex justify-end"
+		role="presentation"
+		onclick={(e) => e.stopPropagation()}
+		onkeydown={(e) => e.stopPropagation()}
+	>
+		<DropdownMenu>
+			<DropdownMenuTrigger>
+				<Button variant="ghost" size="icon-sm" aria-label="Pool actions">
+					<MoreHorizontal class="size-4" />
+				</Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end">
+				<DropdownMenuItem onclick={() => onSelect(p)}>Open</DropdownMenuItem>
+				<DropdownMenuItem
+					class="text-destructive focus:text-destructive"
+					onclick={() => {
+						deletePool = p;
+						deleteOpen = true;
+					}}
+				>
+					Delete
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
+	</div>
+{/snippet}
 
 <div class="flex h-full min-h-0 flex-col">
 	<div class="flex items-center gap-2 border-b border-border px-6 py-3">
@@ -53,16 +114,20 @@
 		<Button variant="ghost" size="icon-sm" onclick={load} disabled={loading} title="Refresh">
 			<RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
 		</Button>
+		<Button size="xs" onclick={() => (createOpen = true)}>
+			<Plus class="size-3.5" /> Pool
+		</Button>
 	</div>
 	<div class="min-h-0 flex-1 overflow-hidden">
 		<DataTable
 			rows={filtered}
 			{loading}
 			columns={[
-				{ key: 'name', label: 'Name', width: '30%' },
-				{ key: 'id', label: 'Pool ID', mono: true, width: '35%' },
-				{ key: 'status', label: 'Status', width: '15%' },
-				{ key: 'creationDate', label: 'Created', width: '20%' }
+				{ key: 'name', label: 'Name', width: '28%' },
+				{ key: 'id', label: 'Pool ID', mono: true, width: '32%' },
+				{ key: 'status', label: 'Status', width: '14%' },
+				{ key: 'creationDate', label: 'Created', width: '18%' },
+				{ key: 'actions', label: '', width: '8%', align: 'right', cell: actionsCell }
 			]}
 			rowKey={(r: UserPool) => r.id}
 			onRowClick={onSelect}
@@ -71,9 +136,28 @@
 				<EmptyState
 					icon={Users}
 					title="No user pools"
-					description="Create one with: aws cognito-idp create-user-pool --pool-name MyPool"
+					description="Click + Pool above, or run: aws cognito-idp create-user-pool --pool-name MyPool"
 				/>
 			{/snippet}
 		</DataTable>
 	</div>
 </div>
+
+<CreatePoolDialog
+	bind:open={createOpen}
+	onClose={() => (createOpen = false)}
+	onCreated={() => void load()}
+/>
+{#if deletePool}
+	<ConfirmDialog
+		bind:open={deleteOpen}
+		title="Delete user pool"
+		description={`Permanently delete pool "${deletePool.name}" (${deletePool.id})? All users, groups, and clients are removed.`}
+		busy={deleteBusy}
+		onConfirm={confirmDelete}
+		onClose={() => {
+			deleteOpen = false;
+			deletePool = null;
+		}}
+	/>
+{/if}
