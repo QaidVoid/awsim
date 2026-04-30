@@ -259,6 +259,36 @@ export interface UpdateUserPoolInput {
   };
 }
 
+export interface MfaConfig {
+  mfaConfiguration: "OFF" | "ON" | "OPTIONAL";
+  softwareTokenEnabled: boolean;
+}
+
+export async function getUserPoolMfaConfig(poolId: string): Promise<MfaConfig> {
+  const data = (await idpRequest("GetUserPoolMfaConfig", {
+    UserPoolId: poolId,
+  })) as {
+    MfaConfiguration?: string;
+    SoftwareTokenMfaConfiguration?: { Enabled?: boolean };
+  };
+  const mfa = (data.MfaConfiguration ?? "OFF") as MfaConfig["mfaConfiguration"];
+  return {
+    mfaConfiguration: mfa,
+    softwareTokenEnabled: data.SoftwareTokenMfaConfiguration?.Enabled ?? false,
+  };
+}
+
+export async function setUserPoolMfaConfig(
+  poolId: string,
+  cfg: MfaConfig,
+): Promise<void> {
+  await idpRequest("SetUserPoolMfaConfig", {
+    UserPoolId: poolId,
+    MfaConfiguration: cfg.mfaConfiguration,
+    SoftwareTokenMfaConfiguration: { Enabled: cfg.softwareTokenEnabled },
+  });
+}
+
 export async function updateUserPool(
   poolId: string,
   patch: UpdateUserPoolInput,

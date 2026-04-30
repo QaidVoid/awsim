@@ -46,6 +46,7 @@
 	import CreateClientDialog from './create-client-dialog.svelte';
 	import TriggersTab from './triggers-tab.svelte';
 	import PasswordPolicyEditor from './password-policy-editor.svelte';
+	import MfaConfigEditor from './mfa-config-editor.svelte';
 
 	interface Props {
 		pool: UserPool | null;
@@ -737,6 +738,7 @@
 					{#if pool}
 						{#key pool.id}
 							<PasswordPolicyEditor poolId={pool.id} />
+							<MfaConfigEditor poolId={pool.id} />
 						{/key}
 					{/if}
 				</TabsContent>
