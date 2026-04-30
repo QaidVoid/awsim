@@ -11,6 +11,7 @@
 ///   POST /cognito/{pool_id}/oauth2/token
 ///   GET  /cognito/{pool_id}/oauth2/userInfo
 ///   POST /cognito/{pool_id}/oauth2/revoke
+///   GET  /cognito/{pool_id}/logout
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -103,6 +104,10 @@ pub fn router(state: Arc<CognitoOAuthState>) -> axum::Router {
         .route(
             "/cognito/{pool_id}/oauth2/revoke",
             axum::routing::post(revoke),
+        )
+        .route(
+            "/cognito/{pool_id}/logout",
+            axum::routing::get(logout),
         )
         .with_state(state)
 }
@@ -1190,6 +1195,100 @@ async fn revoke(
 
     // Per RFC 7009, return 200 with empty body on success.
     StatusCode::OK.into_response()
+}
+
+// ---------------------------------------------------------------------------
+// 7. Logout endpoint (hosted UI)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct LogoutParams {
+    client_id: String,
+    logout_uri: Option<String>,
+    redirect_uri: Option<String>,
+    response_type: Option<String>,
+    scope: Option<String>,
+    state: Option<String>,
+}
+
+async fn logout(
+    State(oauth_state): State<Arc<CognitoOAuthState>>,
+    Path(pool_id): Path<String>,
+    Query(params): Query<LogoutParams>,
+) -> Response {
+    let pool_ref = match oauth_state.cognito.user_pools.get(&pool_id) {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("User pool not found: {pool_id}"),
+            )
+                .into_response();
+        }
+    };
+
+    let client = match pool_ref.clients.get(&params.client_id) {
+        Some(c) => c.clone(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Client not found: {}", params.client_id),
+            )
+                .into_response();
+        }
+    };
+    drop(pool_ref);
+
+    if let Some(logout_uri) = params.logout_uri.as_deref().filter(|s| !s.is_empty()) {
+        if !client.logout_urls.is_empty() && !client.logout_urls.contains(&logout_uri.to_string()) {
+            warn!(
+                client_id = %params.client_id,
+                logout_uri = %logout_uri,
+                "OAuth logout: logout_uri not in LogoutURLs"
+            );
+            return (
+                StatusCode::BAD_REQUEST,
+                "logout_uri does not match any registered LogoutURL",
+            )
+                .into_response();
+        }
+        info!(pool_id = %pool_id, client_id = %params.client_id, "OAuth: logout → logout_uri");
+        return Redirect::to(logout_uri).into_response();
+    }
+
+    if let Some(redirect_uri) = params.redirect_uri.as_deref().filter(|s| !s.is_empty()) {
+        if !client.callback_urls.is_empty()
+            && !client.callback_urls.contains(&redirect_uri.to_string())
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                "redirect_uri does not match any registered callback URL",
+            )
+                .into_response();
+        }
+        let response_type = params.response_type.as_deref().unwrap_or("code");
+        let scope = params.scope.as_deref().unwrap_or("openid");
+        let state_param = params.state.as_deref().unwrap_or("");
+        let mut url = format!(
+            "{}/cognito/{pool_id}/oauth2/authorize?client_id={}&response_type={}&redirect_uri={}&scope={}",
+            oauth_state.base_url(),
+            urlencoding(&params.client_id),
+            urlencoding(response_type),
+            urlencoding(redirect_uri),
+            urlencoding(scope),
+        );
+        if !state_param.is_empty() {
+            url.push_str(&format!("&state={}", urlencoding(state_param)));
+        }
+        info!(pool_id = %pool_id, client_id = %params.client_id, "OAuth: logout → re-authorize");
+        return Redirect::to(&url).into_response();
+    }
+
+    (
+        StatusCode::BAD_REQUEST,
+        "logout requires either logout_uri or redirect_uri",
+    )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
