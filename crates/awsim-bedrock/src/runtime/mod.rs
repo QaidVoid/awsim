@@ -17,7 +17,49 @@ use crate::backend::BedrockBackend;
 
 mod anthropic;
 mod canned;
+mod cohere;
+mod llama;
+mod mistral;
 mod openai;
+mod titan;
+
+/// Shared backend caller for the per-vendor translators.
+/// Builds the OpenAI ChatRequest via `build` (so each translator
+/// owns the per-vendor field name shapes) and POSTs to
+/// `<endpoint>/chat/completions`. Returns the raw OpenAI response;
+/// translators shape it back into their own envelope.
+async fn call_chat(
+    backend: &BedrockBackend,
+    bedrock_id: &str,
+    build: impl FnOnce(&str) -> Result<openai::ChatRequest, AwsError>,
+) -> Result<openai::ChatResponse, AwsError> {
+    let model_tag = backend.resolve_invoke(bedrock_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("No backend mapping for Bedrock model {bedrock_id}"),
+        )
+    })?;
+    let req = build(model_tag)?;
+    let url = format!("{}/chat/completions", backend.endpoint());
+    let mut http_req = backend.client().post(&url).json(&req);
+    if let Some(key) = backend.api_key() {
+        http_req = http_req.bearer_auth(key);
+    }
+    let resp = http_req
+        .send()
+        .await
+        .map_err(|e| AwsError::internal(format!("Bedrock backend POST {url} failed: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(AwsError::internal(format!(
+            "Bedrock backend returned {status}: {body_text}"
+        )));
+    }
+    resp.json::<openai::ChatResponse>()
+        .await
+        .map_err(|e| AwsError::internal(format!("Bedrock backend JSON parse failed: {e}")))
+}
 
 /// Dispatch InvokeModel by Bedrock model-id prefix. Routes Anthropic
 /// (`anthropic.claude-*`) to the proxy translator when a backend is
@@ -34,13 +76,21 @@ pub async fn invoke_model(
 
     let body = extract_body(input)?;
 
-    if let Some(backend) = backend
-        && matches!(ModelFamily::for_id(model_id), Some(ModelFamily::Anthropic))
-    {
-        match anthropic::invoke(backend, model_id, &body).await {
-            Ok(v) => return Ok(v),
-            Err(e) => {
-                warn!(error = %e.message, model_id, "Bedrock backend failed; serving canned response");
+    if let Some(backend) = backend {
+        let routed = match ModelFamily::for_id(model_id) {
+            Some(ModelFamily::Anthropic) => Some(anthropic::invoke(backend, model_id, &body).await),
+            Some(ModelFamily::Titan) => Some(titan::invoke(backend, model_id, &body).await),
+            Some(ModelFamily::Llama) => Some(llama::invoke(backend, model_id, &body).await),
+            Some(ModelFamily::Mistral) => Some(mistral::invoke(backend, model_id, &body).await),
+            Some(ModelFamily::Cohere) => Some(cohere::invoke(backend, model_id, &body).await),
+            Some(ModelFamily::Other) | None => None,
+        };
+        if let Some(result) = routed {
+            match result {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    warn!(error = %e.message, model_id, "Bedrock backend failed; serving canned response");
+                }
             }
         }
     }
@@ -116,8 +166,12 @@ fn kind_of(v: &Value) -> &'static str {
 #[derive(Debug, Clone, Copy)]
 enum ModelFamily {
     Anthropic,
-    /// Catch-all for ids that aren't yet routed to a translator —
-    /// land in canned fallback.
+    Titan,
+    Llama,
+    Mistral,
+    Cohere,
+    /// Catch-all for ids that aren't routed to a translator yet
+    /// (image / embeddings / unknown). Land in canned fallback.
     Other,
 }
 
@@ -125,6 +179,14 @@ impl ModelFamily {
     fn for_id(id: &str) -> Option<Self> {
         if id.starts_with("anthropic.claude") {
             Some(Self::Anthropic)
+        } else if id.starts_with("amazon.titan-text") {
+            Some(Self::Titan)
+        } else if id.starts_with("meta.llama") {
+            Some(Self::Llama)
+        } else if id.starts_with("mistral.") {
+            Some(Self::Mistral)
+        } else if id.starts_with("cohere.command") {
+            Some(Self::Cohere)
         } else {
             Some(Self::Other)
         }
