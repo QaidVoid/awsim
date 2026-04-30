@@ -3,7 +3,7 @@ layout: home
 hero:
   name: AWSim
   text: Fully Offline AWS Dev Environment
-  tagline: Single binary. 61 services. No auth tokens. No paywalls. No cloud dependency.
+  tagline: Single binary. 60+ services. No auth tokens. No paywalls. No cloud dependency.
   actions:
     - theme: brand
       text: Get Started
@@ -15,8 +15,8 @@ hero:
 features:
   - title: Fully Offline
     details: Zero network calls. All state management, crypto, and parsing is local. No internet required.
-  - title: 61 AWS Services
-    details: S3, DynamoDB, SQS, Lambda, Cognito, IAM, EC2, RDS, and 53 more — all in a single binary under 30 MB.
+  - title: 60+ AWS Services
+    details: S3, DynamoDB, SQS, Lambda, Cognito, IAM, EC2, RDS, and 50+ more — all in a single binary under 30 MB.
   - title: Sub-Second Startup
     details: Cold start in under 500ms with less than 10 MiB idle memory. No Docker required.
   - title: Admin Console

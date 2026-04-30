@@ -1,6 +1,6 @@
 # What is AWSim?
 
-AWSim is a fully offline AWS emulator written in Rust. It runs 61 AWS services in a single binary, starts in under 500ms, and requires no internet connection, no AWS account, and no license keys. A built-in billing dashboard projects what your workload would cost on real AWS so you can spot expensive patterns before they hit your real account.
+AWSim is a fully offline AWS emulator written in Rust. It runs 60+ AWS services in a single binary, starts in under 500ms, and requires no internet connection, no AWS account, and no license keys. A built-in billing dashboard projects what your workload would cost on real AWS so you can spot expensive patterns before they hit your real account.
 
 ## Why AWSim?
 

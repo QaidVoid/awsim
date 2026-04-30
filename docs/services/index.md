@@ -1,6 +1,6 @@
 # Services Overview
 
-AWSim registers 61 AWS services. All services share the same endpoint at `http://localhost:4566`.
+AWSim registers 60+ AWS services. All services share the same endpoint at `http://localhost:4566`.
 
 The service is selected automatically from the `X-Amz-Target` header (for JSON/Query protocols) or the URL path (for REST protocols).
 

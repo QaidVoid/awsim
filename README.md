@@ -1,6 +1,6 @@
 # AWSim
 
-A fully offline, free AWS development environment. Single binary, sub-second startup, 61 services, real IAM policy enforcement, and an estimated-bill dashboard so you can watch how much your workload would cost on real AWS.
+A fully offline, free AWS development environment. Single binary, sub-second startup, 60+ services, real IAM policy enforcement, and an estimated-bill dashboard so you can watch how much your workload would cost on real AWS.
 
 ## Quick Start
 
