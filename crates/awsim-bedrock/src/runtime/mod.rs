@@ -18,10 +18,12 @@ use crate::backend::BedrockBackend;
 mod anthropic;
 mod canned;
 mod cohere;
+mod cohere_embed;
 mod llama;
 mod mistral;
 mod openai;
 mod titan;
+mod titan_embed;
 
 /// Shared backend caller for the per-vendor translators.
 /// Builds the OpenAI ChatRequest via `build` (so each translator
@@ -61,6 +63,42 @@ async fn call_chat(
         .map_err(|e| AwsError::internal(format!("Bedrock backend JSON parse failed: {e}")))
 }
 
+/// Same shape as `call_chat` but for `/v1/embeddings`. Resolves the
+/// Bedrock id via `resolve_embed` so the embed-only mappings in the
+/// model map take precedence.
+async fn call_embed(
+    backend: &BedrockBackend,
+    bedrock_id: &str,
+    build: impl FnOnce(&str) -> Result<openai::EmbeddingsRequest, AwsError>,
+) -> Result<openai::EmbeddingsResponse, AwsError> {
+    let model_tag = backend.resolve_embed(bedrock_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("No backend mapping for Bedrock embedding model {bedrock_id}"),
+        )
+    })?;
+    let req = build(model_tag)?;
+    let url = format!("{}/embeddings", backend.endpoint());
+    let mut http_req = backend.client().post(&url).json(&req);
+    if let Some(key) = backend.api_key() {
+        http_req = http_req.bearer_auth(key);
+    }
+    let resp = http_req
+        .send()
+        .await
+        .map_err(|e| AwsError::internal(format!("Bedrock backend POST {url} failed: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(AwsError::internal(format!(
+            "Bedrock backend returned {status}: {body_text}"
+        )));
+    }
+    resp.json::<openai::EmbeddingsResponse>()
+        .await
+        .map_err(|e| AwsError::internal(format!("Bedrock backend JSON parse failed: {e}")))
+}
+
 /// Dispatch InvokeModel by Bedrock model-id prefix. Routes Anthropic
 /// (`anthropic.claude-*`) to the proxy translator when a backend is
 /// configured; everything else still hits the canned fallback (will
@@ -83,6 +121,12 @@ pub async fn invoke_model(
             Some(ModelFamily::Llama) => Some(llama::invoke(backend, model_id, &body).await),
             Some(ModelFamily::Mistral) => Some(mistral::invoke(backend, model_id, &body).await),
             Some(ModelFamily::Cohere) => Some(cohere::invoke(backend, model_id, &body).await),
+            Some(ModelFamily::TitanEmbed) => {
+                Some(titan_embed::invoke(backend, model_id, &body).await)
+            }
+            Some(ModelFamily::CohereEmbed) => {
+                Some(cohere_embed::invoke(backend, model_id, &body).await)
+            }
             Some(ModelFamily::Other) | None => None,
         };
         if let Some(result) = routed {
@@ -170,8 +214,10 @@ enum ModelFamily {
     Llama,
     Mistral,
     Cohere,
+    TitanEmbed,
+    CohereEmbed,
     /// Catch-all for ids that aren't routed to a translator yet
-    /// (image / embeddings / unknown). Land in canned fallback.
+    /// (image / unknown). Land in canned fallback.
     Other,
 }
 
@@ -181,12 +227,16 @@ impl ModelFamily {
             Some(Self::Anthropic)
         } else if id.starts_with("amazon.titan-text") {
             Some(Self::Titan)
+        } else if id.starts_with("amazon.titan-embed") {
+            Some(Self::TitanEmbed)
         } else if id.starts_with("meta.llama") {
             Some(Self::Llama)
         } else if id.starts_with("mistral.") {
             Some(Self::Mistral)
         } else if id.starts_with("cohere.command") {
             Some(Self::Cohere)
+        } else if id.starts_with("cohere.embed") {
+            Some(Self::CohereEmbed)
         } else {
             Some(Self::Other)
         }

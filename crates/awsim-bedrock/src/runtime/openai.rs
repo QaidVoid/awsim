@@ -77,3 +77,41 @@ pub struct Usage {
     #[allow(dead_code)] // total_tokens used by Converse metrics in commit #7
     pub total_tokens: u32,
 }
+
+// ── /v1/embeddings ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum EmbeddingsInput {
+    Single(String),
+    Many(Vec<String>),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EmbeddingsRequest {
+    pub model: String,
+    pub input: EmbeddingsInput,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmbeddingsResponse {
+    #[serde(default)]
+    pub data: Vec<EmbeddingItem>,
+    #[serde(default)]
+    pub usage: Option<EmbeddingsUsage>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmbeddingItem {
+    #[serde(default)]
+    pub embedding: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EmbeddingsUsage {
+    #[serde(default)]
+    pub prompt_tokens: u32,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub total_tokens: u32,
+}
