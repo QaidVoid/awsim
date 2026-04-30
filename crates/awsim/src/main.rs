@@ -410,7 +410,11 @@ async fn async_main() -> Result<()> {
         );
         authz.resource_policy_lookups.insert(
             "secretsmanager".to_string(),
-            Arc::new(awsim_secretsmanager::SecretsManagerResourcePolicyLookup::new(secrets_store)),
+            Arc::new(
+                awsim_secretsmanager::SecretsManagerResourcePolicyLookup::new(
+                    secrets_store.clone(),
+                ),
+            ),
         );
         authz.resource_policy_lookups.insert(
             "lambda".to_string(),
@@ -940,9 +944,21 @@ async fn async_main() -> Result<()> {
     let seed_s3_router: axum::Router<()> = axum::Router::new()
         .route("/_awsim/seed/s3", axum::routing::post(seed::s3::seed))
         .with_state(seed_s3_state);
+    let seed_secrets_state = Arc::new(seed::secrets::SeedSecretsState {
+        store: secrets_store.clone(),
+        default_account: cli.account_id.clone(),
+        default_region: cli.region.clone(),
+    });
+    let seed_secrets_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/seed/secrets",
+            axum::routing::post(seed::secrets::seed),
+        )
+        .with_state(seed_secrets_state);
     let seed_router = seed_cognito_router
         .merge(seed_ddb_router)
-        .merge(seed_s3_router);
+        .merge(seed_s3_router)
+        .merge(seed_secrets_router);
 
     let debug_router: axum::Router<()> = axum::Router::new()
         .route(
