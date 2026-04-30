@@ -80,17 +80,18 @@
 		loadingGroups = true;
 		loadingClients = true;
 		try {
-			const [d, page, g, c] = await Promise.all([
+			const [d, page, g, cPage] = await Promise.all([
 				describeUserPool(p.id),
 				listPoolUsers(p.id, { limit: USERS_PAGE_SIZE }),
 				listGroups(p.id),
-				listAppClients(p.id)
+				listAppClients(p.id, { maxResults: 60 })
 			]);
 			detail = d;
 			users = page.users;
 			usersNextToken = page.nextToken;
 			groups = g;
-			clients = c;
+			clients = cPage.clients;
+			clientsNextToken = cPage.nextToken;
 			if (d.domain) {
 				try {
 					domain = await describeDomain(d.domain);
@@ -277,13 +278,35 @@
 	let deleteClientOpen = $state(false);
 	let deleteClientBusy = $state(false);
 
+	let clientsNextToken = $state<string | undefined>(undefined);
+	let loadingMoreClients = $state(false);
+
 	async function reloadClients() {
 		if (!pool) return;
 		loadingClients = true;
 		try {
-			clients = await listAppClients(pool.id);
+			const page = await listAppClients(pool.id, { maxResults: 60 });
+			clients = page.clients;
+			clientsNextToken = page.nextToken;
 		} finally {
 			loadingClients = false;
+		}
+	}
+
+	async function loadMoreClients() {
+		if (!pool || !clientsNextToken || loadingMoreClients) return;
+		loadingMoreClients = true;
+		try {
+			const page = await listAppClients(pool.id, {
+				maxResults: 60,
+				nextToken: clientsNextToken
+			});
+			clients = [...clients, ...page.clients];
+			clientsNextToken = page.nextToken;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Load more failed');
+		} finally {
+			loadingMoreClients = false;
 		}
 	}
 
@@ -619,6 +642,18 @@
 								</li>
 							{/each}
 						</ul>
+						{#if clientsNextToken}
+							<div class="flex justify-center">
+								<Button
+									variant="outline"
+									size="xs"
+									onclick={loadMoreClients}
+									disabled={loadingMoreClients}
+								>
+									{loadingMoreClients ? 'Loading...' : 'Load more clients'}
+								</Button>
+							</div>
+						{/if}
 					{/if}
 				</TabsContent>
 

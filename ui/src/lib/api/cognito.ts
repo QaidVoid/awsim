@@ -525,23 +525,35 @@ export async function listUsersInGroup(
 
 // ---- App clients ----
 
+export interface ListAppClientsPage {
+  clients: CognitoAppClient[];
+  nextToken?: string;
+}
+
 export async function listAppClients(
   poolId: string,
-): Promise<CognitoAppClient[]> {
-  const data = (await idpRequest("ListUserPoolClients", {
+  opts?: { maxResults?: number; nextToken?: string },
+): Promise<ListAppClientsPage> {
+  const body: Record<string, unknown> = {
     UserPoolId: poolId,
-    MaxResults: 60,
-  })) as {
+    MaxResults: opts?.maxResults ?? 60,
+  };
+  if (opts?.nextToken) body.NextToken = opts.nextToken;
+  const data = (await idpRequest("ListUserPoolClients", body)) as {
     UserPoolClients?: {
       ClientId: string;
       ClientName: string;
       UserPoolId: string;
     }[];
+    NextToken?: string;
   };
-  return (data.UserPoolClients ?? []).map((c) => ({
-    clientId: c.ClientId,
-    clientName: c.ClientName,
-  }));
+  return {
+    clients: (data.UserPoolClients ?? []).map((c) => ({
+      clientId: c.ClientId,
+      clientName: c.ClientName,
+    })),
+    nextToken: data.NextToken,
+  };
 }
 
 export async function describeAppClient(
