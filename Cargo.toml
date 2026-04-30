@@ -199,12 +199,19 @@ regex = "1"
 ipnet = "2"
 chrono = { version = "0.4", features = ["serde"] }
 
+# Allocator — wired into the awsim binary for Linux + macOS only
+# (MSVC builds keep the system allocator). Returns memory to the OS
+# more aggressively than glibc malloc, which keeps idle RSS flat
+# after burst workloads (DDB query loops, bulk imports, etc.).
+tikv-jemallocator = "0.6"
+
 [profile.dev.package.awsim-conformance]
 opt-level = 0
 codegen-units = 256
 
 [profile.release.package.awsim-conformance]
-codegen-units = 16
+opt-level = 1
+codegen-units = 128
 
 [profile.release]
 opt-level = "z"

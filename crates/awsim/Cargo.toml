@@ -96,6 +96,12 @@ reqwest = { workspace = true, features = ["stream"] }
 [target.'cfg(unix)'.dependencies]
 rlimit = "0.10"
 
+# jemalloc keeps idle RSS flat after burst workloads (DDB query loops,
+# bulk imports). Unsupported on MSVC + lacks broad Windows testing, so
+# only wire it on non-msvc targets — Linux + macOS get the upgrade.
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { workspace = true }
+
 [dev-dependencies]
 aws-config = "1"
 aws-sdk-s3 = "1"

@@ -10,6 +10,14 @@ use tower::limit::ConcurrencyLimitLayer;
 use tower::load_shed::LoadShedLayer;
 use tracing::{debug, error, info, warn};
 
+// jemalloc returns memory to the OS more aggressively than glibc
+// malloc, so idle RSS stays flat after burst workloads (DDB query
+// loops, bulk imports). MSVC builds keep the system allocator since
+// jemalloc isn't well supported there.
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use awsim_core::{
     AppState, BlobInventory, BodyStore, BodyStoreHandle, PersistenceManager, RequestContext,
 };
