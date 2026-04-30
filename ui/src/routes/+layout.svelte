@@ -61,6 +61,7 @@
 			{ keys: 'g w', category: 'Navigation', description: 'CloudWatch logs', action: () => goto('/cloudwatch') },
 			{ keys: 'g b', category: 'Navigation', description: 'Bedrock', action: () => goto('/bedrock') },
 			{ keys: 'g p', category: 'Navigation', description: 'API Gateway', action: () => goto('/apigateway') },
+			{ keys: 'g ,', category: 'Navigation', description: 'Settings', action: () => goto('/settings') },
 		]);
 	}
 

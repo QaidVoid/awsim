@@ -8,6 +8,7 @@
 	import Search from '@lucide/svelte/icons/search';
 	import Menu from '@lucide/svelte/icons/menu';
 	import Keyboard from '@lucide/svelte/icons/keyboard';
+	import Settings from '@lucide/svelte/icons/settings';
 
 	interface Props {
 		region?: string;
@@ -116,6 +117,15 @@
 				<Keyboard class="size-4" />
 			</Button>
 		{/if}
+
+		<Button
+			variant="ghost"
+			size="icon"
+			href="/settings"
+			aria-label="Settings"
+		>
+			<Settings class="size-4" />
+		</Button>
 
 		<Button
 			variant="ghost"
