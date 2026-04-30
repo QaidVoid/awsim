@@ -397,7 +397,9 @@ impl ServiceHandler for BedrockRuntimeService {
 
         match operation {
             "InvokeModel" => runtime::invoke_model(self.backend.as_ref(), &input).await,
-            "InvokeModelWithResponseStream" => runtime::invoke_model_with_response_stream(&input),
+            "InvokeModelWithResponseStream" => {
+                runtime::invoke_model_with_response_stream(self.backend.as_ref(), &input).await
+            }
             "Converse" => runtime::converse(&input),
             "ConverseStream" => runtime::converse_stream(&input),
             _ => Err(AwsError::unknown_operation(operation)),

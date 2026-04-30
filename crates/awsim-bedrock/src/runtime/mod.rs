@@ -48,7 +48,26 @@ pub async fn invoke_model(
     canned::invoke_model(input)
 }
 
-pub fn invoke_model_with_response_stream(input: &Value) -> Result<Value, AwsError> {
+pub async fn invoke_model_with_response_stream(
+    backend: Option<&BedrockBackend>,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let model_id = input["modelId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelId is required"))?;
+    debug!(model_id = %model_id, "InvokeModelWithResponseStream");
+    let body = extract_body(input)?;
+
+    if let Some(backend) = backend
+        && matches!(ModelFamily::for_id(model_id), Some(ModelFamily::Anthropic))
+    {
+        match anthropic::invoke_streaming(backend, model_id, &body).await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                warn!(error = %e.message, model_id, "Bedrock streaming backend failed; serving canned response");
+            }
+        }
+    }
     canned::invoke_model_with_response_stream(input)
 }
 
