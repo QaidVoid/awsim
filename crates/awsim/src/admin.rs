@@ -762,6 +762,26 @@ pub async fn ses_sent(
     Json(json!({ "count": emails.len(), "emails": emails }))
 }
 
+/// GET /_awsim/bedrock/config — render the live Bedrock proxy
+/// registry as JSON for the admin UI. API keys are reported as a
+/// boolean (`hasApiKey`) — never the secret itself. Returns
+/// `{ "enabled": false }` when no backend is configured (canned-
+/// response mode).
+pub async fn bedrock_config(
+    State(backends): State<Arc<Option<awsim_bedrock::BedrockBackends>>>,
+) -> Json<Value> {
+    match backends.as_ref() {
+        Some(b) => {
+            let mut view = b.redacted_view();
+            if let Some(obj) = view.as_object_mut() {
+                obj.insert("enabled".to_string(), Value::Bool(true));
+            }
+            Json(view)
+        }
+        None => Json(json!({ "enabled": false })),
+    }
+}
+
 /// POST /_awsim/admin/dynamodb/vacuum — reclaim disk space after
 /// heavy DELETE / UPDATE churn. Runs SQLite VACUUM, which can take
 /// time on large databases, so it's exposed as an explicit admin

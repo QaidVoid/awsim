@@ -13,6 +13,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use serde_json::{Value, json};
+
 use crate::model_map::{ModelEntry, ModelMap};
 
 const DEFAULT_BACKEND_NAME: &str = "default";
@@ -143,6 +145,58 @@ impl BedrockBackends {
         let backend = self.0.backends.get(name)?;
         Some((backend, entry.tag()))
     }
+
+    /// Render the live registry as JSON for the admin endpoint /
+    /// UI surface. API keys are reported as a `hasApiKey` boolean
+    /// rather than the secret itself so this is safe to expose.
+    pub fn redacted_view(&self) -> Value {
+        let mut backends: Vec<Value> = self
+            .0
+            .backends
+            .values()
+            .map(|b| {
+                json!({
+                    "name": b.name(),
+                    "endpoint": b.endpoint(),
+                    "hasApiKey": b.api_key().is_some(),
+                })
+            })
+            .collect();
+        backends.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+
+        let mut invoke: Vec<Value> = self
+            .0
+            .model_map
+            .invoke
+            .iter()
+            .map(|(id, e)| entry_view(id, e))
+            .collect();
+        invoke.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+
+        let mut embed: Vec<Value> = self
+            .0
+            .model_map
+            .embed
+            .iter()
+            .map(|(id, e)| entry_view(id, e))
+            .collect();
+        embed.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+
+        json!({
+            "defaultBackend": self.0.default_name,
+            "backends": backends,
+            "invoke": invoke,
+            "embed": embed,
+        })
+    }
+}
+
+fn entry_view(id: &str, entry: &ModelEntry) -> Value {
+    json!({
+        "id": id,
+        "tag": entry.tag(),
+        "backend": entry.backend(),
+    })
 }
 
 /// Convenience for the common single-endpoint setup driven by
@@ -205,6 +259,60 @@ mod tests {
             .resolve_invoke("anthropic.claude-3-haiku-20240307-v1:0")
             .unwrap();
         assert_eq!(backend.name(), "ollama");
+    }
+
+    #[test]
+    fn redacted_view_omits_api_key_secrets() {
+        let mut backends = HashMap::new();
+        backends.insert(
+            "groq".to_string(),
+            BedrockBackend::new(
+                "groq".into(),
+                "https://api.groq.com/v1".into(),
+                Some("gsk-secret".into()),
+            ),
+        );
+        backends.insert(
+            "ollama".to_string(),
+            BedrockBackend::new("ollama".into(), "http://localhost:11434/v1".into(), None),
+        );
+        let mut map = ModelMap::defaults();
+        map.invoke.insert(
+            "anthropic.claude-v2".into(),
+            ModelEntry::Routed {
+                backend: "groq".into(),
+                tag: "llama-3.3-70b".into(),
+            },
+        );
+        let bs = BedrockBackends::new(backends, Some("ollama".into()), map);
+        let view = bs.redacted_view();
+        assert_eq!(view["defaultBackend"], "ollama");
+
+        let groq = view["backends"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["name"] == "groq")
+            .unwrap();
+        assert_eq!(groq["hasApiKey"], true);
+        assert!(view.to_string().find("gsk-secret").is_none());
+
+        let ollama = view["backends"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["name"] == "ollama")
+            .unwrap();
+        assert_eq!(ollama["hasApiKey"], false);
+
+        let routed = view["invoke"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == "anthropic.claude-v2")
+            .unwrap();
+        assert_eq!(routed["backend"], "groq");
+        assert_eq!(routed["tag"], "llama-3.3-70b");
     }
 
     #[test]

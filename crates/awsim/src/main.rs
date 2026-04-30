@@ -341,6 +341,10 @@ async fn async_main() -> Result<()> {
 
     let mut state = AppState::new(cli.region.clone(), cli.account_id.clone());
 
+    // Bedrock proxy registry — kept as an Option so the admin endpoint
+    // can expose the live config alongside the canned-response fallback.
+    let bedrock_backends = build_bedrock_backend(&cli)?;
+
     // Register all services; get back the ApiGateway Arc for proxy routing and
     // an Arc<CognitoState> for the default account+region so the OAuth router
     // can share user-pool state with the CognitoService.
@@ -376,7 +380,7 @@ async fn async_main() -> Result<()> {
         cli.data_dir.as_deref(),
         cli.port,
         cli.max_blob_bytes,
-        build_bedrock_backend(&cli)?,
+        bedrock_backends.clone(),
     );
 
     let mut body_stores: Vec<BodyStoreHandle> = Vec::new();
@@ -1020,6 +1024,13 @@ async fn async_main() -> Result<()> {
         )
         .with_state(debug_objects_state);
 
+    let bedrock_admin_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/bedrock/config",
+            axum::routing::get(admin::bedrock_config),
+        )
+        .with_state(Arc::new(bedrock_backends.clone()));
+
     // Named-snapshot sub-router. Bundles ServiceHandler state +
     // billing + chaos under `{data_dir}/named-snapshots/{name}/`.
     let snapshot_state = Arc::new(named_snapshots::SnapshotState {
@@ -1054,6 +1065,7 @@ async fn async_main() -> Result<()> {
         .merge(sqlite_stats_router)
         .merge(ses_admin_router)
         .merge(debug_router)
+        .merge(bedrock_admin_router)
         .merge(seed_router)
         .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_bytes))
         // Bounded in-flight requests with shed-on-overload. A misbehaving
