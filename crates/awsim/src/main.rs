@@ -406,7 +406,7 @@ async fn async_main() -> Result<()> {
         );
         authz.resource_policy_lookups.insert(
             "sqs".to_string(),
-            Arc::new(awsim_sqs::SqsResourcePolicyLookup::new(sqs_store)),
+            Arc::new(awsim_sqs::SqsResourcePolicyLookup::new(sqs_store.clone())),
         );
         authz.resource_policy_lookups.insert(
             "secretsmanager".to_string(),
@@ -955,10 +955,20 @@ async fn async_main() -> Result<()> {
             axum::routing::post(seed::secrets::seed),
         )
         .with_state(seed_secrets_state);
+    let seed_sqs_state = Arc::new(seed::sqs::SeedSqsState {
+        store: sqs_store.clone(),
+        default_account: cli.account_id.clone(),
+        default_region: cli.region.clone(),
+        default_port: cli.port,
+    });
+    let seed_sqs_router: axum::Router<()> = axum::Router::new()
+        .route("/_awsim/seed/sqs", axum::routing::post(seed::sqs::seed))
+        .with_state(seed_sqs_state);
     let seed_router = seed_cognito_router
         .merge(seed_ddb_router)
         .merge(seed_s3_router)
-        .merge(seed_secrets_router);
+        .merge(seed_secrets_router)
+        .merge(seed_sqs_router);
 
     let debug_router: axum::Router<()> = axum::Router::new()
         .route(

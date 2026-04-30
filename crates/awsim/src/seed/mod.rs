@@ -15,6 +15,7 @@ pub mod cognito;
 pub mod dynamodb;
 pub mod s3;
 pub mod secrets;
+pub mod sqs;
 
 /// A single random first-name + last-name combo, e.g. "Alice Smith".
 pub fn fake_name() -> String {

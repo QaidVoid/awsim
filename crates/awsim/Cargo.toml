@@ -76,6 +76,8 @@ awsim-pinpoint = { workspace = true }
 awsim-identitystore = { workspace = true }
 fake = { workspace = true }
 rand = { workspace = true }
+md-5 = { workspace = true }
+chrono = { workspace = true }
 axum = { workspace = true }
 dashmap = { workspace = true }
 tower = { workspace = true, features = ["limit", "load-shed"] }
