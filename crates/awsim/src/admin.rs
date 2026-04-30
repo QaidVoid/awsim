@@ -436,6 +436,7 @@ pub struct SqliteStatsState {
     pub cw_logs: Arc<awsim_cloudwatch_logs::CloudWatchLogsService>,
     pub cw_metrics: Arc<awsim_cloudwatch_metrics::CloudWatchMetricsService>,
     pub kinesis: Arc<awsim_kinesis::KinesisService>,
+    pub ses: Arc<awsim_ses::SesService>,
 }
 
 fn file_size(path: &std::path::Path) -> u64 {
@@ -446,6 +447,7 @@ pub async fn sqlite_stats(State(s): State<Arc<SqliteStatsState>>) -> Json<Value>
     use awsim_cloudwatch_logs as cwl;
     use awsim_cloudwatch_metrics as cwm;
     use awsim_kinesis as kin;
+    use awsim_ses as ses;
 
     // DynamoDB doesn't expose a public sqlite handle, so we just
     // report the file size for now. Row counts on the other three
@@ -487,6 +489,16 @@ pub async fn sqlite_stats(State(s): State<Arc<SqliteStatsState>>) -> Json<Value>
         .map(|s| file_size(s.db_path()))
         .unwrap_or(0);
 
+    let ses_store: Option<Arc<ses::SqliteStore>> = sqlite_store_for_ses(&s.ses);
+    let ses_rows = ses_store
+        .as_ref()
+        .and_then(|s| s.total_rows().ok())
+        .unwrap_or(0);
+    let ses_size = ses_store
+        .as_ref()
+        .map(|s| file_size(s.db_path()))
+        .unwrap_or(0);
+
     Json(json!({
         "stores": [
             {
@@ -509,6 +521,11 @@ pub async fn sqlite_stats(State(s): State<Arc<SqliteStatsState>>) -> Json<Value>
                 "rows": kinesis_rows,
                 "size_bytes": kinesis_size,
             },
+            {
+                "service": "ses",
+                "rows": ses_rows,
+                "size_bytes": ses_size,
+            },
         ]
     }))
 }
@@ -529,6 +546,11 @@ fn sqlite_store_for_cwm(
 fn sqlite_store_for_kinesis(
     svc: &Arc<awsim_kinesis::KinesisService>,
 ) -> Option<Arc<awsim_kinesis::SqliteStore>> {
+    svc.sqlite_store_handle()
+}
+fn sqlite_store_for_ses(
+    svc: &Arc<awsim_ses::SesService>,
+) -> Option<Arc<awsim_ses::SqliteStore>> {
     svc.sqlite_store_handle()
 }
 

@@ -84,6 +84,12 @@ struct Cli {
     #[arg(long, env = "AWSIM_MAX_BODY_BYTES", default_value_t = 100 * 1024 * 1024)]
     max_body_bytes: usize,
 
+    /// Hours to retain captured SES outbound emails before the
+    /// hourly sweep deletes them. Default 720 (30 days). Set to 0
+    /// to disable the sweep entirely.
+    #[arg(long, env = "AWSIM_SES_RETENTION_HOURS", default_value_t = 720)]
+    ses_retention_hours: u64,
+
     /// One-shot subcommand. Without one, `awsim` runs the server
     /// (the default for backwards compatibility).
     #[command(subcommand)]
@@ -441,6 +447,37 @@ async fn async_main() -> Result<()> {
             cleanup_tempdir("SES", ses_for_cleanup.tempdir_path());
             info!("Exiting.");
             std::process::exit(0);
+        });
+    }
+
+    // SES outbox retention sweep — drops emails older than
+    // `--ses-retention-hours` once per hour. Set the flag to 0 to
+    // keep emails forever.
+    if cli.ses_retention_hours > 0 {
+        let ses_for_sweep = Arc::clone(&ses_service);
+        let retention_hours = cli.ses_retention_hours;
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+            tick.tick().await; // skip first immediate tick
+            loop {
+                tick.tick().await;
+                if let Some(store) = ses_for_sweep.sqlite_store_handle() {
+                    let cutoff = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0)
+                        - (retention_hours as i64) * 3600;
+                    let store = Arc::clone(&store);
+                    match tokio::task::spawn_blocking(move || store.trim_older_than(cutoff)).await {
+                        Ok(Ok(removed)) if removed > 0 => {
+                            info!(removed, retention_hours, "SES retention sweep")
+                        }
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => warn!(error = %e.message, "SES retention sweep failed"),
+                        Err(e) => warn!(error = %e, "SES retention sweep join error"),
+                    }
+                }
+            }
         });
     }
 
@@ -842,6 +879,7 @@ async fn async_main() -> Result<()> {
         cw_logs: Arc::clone(&logs_service),
         cw_metrics: Arc::clone(&cw_metrics_service),
         kinesis: Arc::clone(&kinesis_service),
+        ses: Arc::clone(&ses_service),
     });
     let sqlite_stats_router: axum::Router<()> = axum::Router::new()
         .route(
