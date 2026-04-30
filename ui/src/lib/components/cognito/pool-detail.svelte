@@ -37,6 +37,7 @@
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import CreateUserDialog from './create-user-dialog.svelte';
+	import ImportUsersDialog from './import-users-dialog.svelte';
 	import SetPasswordDialog from './set-password-dialog.svelte';
 	import ConfirmDialog from './confirm-dialog.svelte';
 	import UserDetail from './user-detail.svelte';
@@ -175,6 +176,7 @@
 
 	let expandedUser = $state<string | null>(null);
 	let createUserOpen = $state(false);
+	let importUsersOpen = $state(false);
 	let setPwUser = $state<string | null>(null);
 	let setPwOpen = $state(false);
 	let deleteUser = $state<string | null>(null);
@@ -421,6 +423,9 @@
 						<div class="flex-1"></div>
 						<Button variant="ghost" size="icon-sm" onclick={reloadUsers} title="Refresh">
 							<RefreshCw class="size-3.5 {loadingUsers ? 'animate-spin' : ''}" />
+						</Button>
+						<Button variant="outline" size="xs" onclick={() => (importUsersOpen = true)}>
+							Import CSV
 						</Button>
 						<Button size="xs" onclick={() => (createUserOpen = true)}>
 							<Plus class="size-3.5" /> User
@@ -777,6 +782,12 @@
 		poolId={pool.id}
 		onClose={() => (createUserOpen = false)}
 		onCreated={() => void reloadUsers()}
+	/>
+	<ImportUsersDialog
+		bind:open={importUsersOpen}
+		poolId={pool.id}
+		onClose={() => (importUsersOpen = false)}
+		onComplete={() => void reloadUsers()}
 	/>
 	{#if setPwUser}
 		<SetPasswordDialog
