@@ -67,6 +67,22 @@ pub async fn invoke(
         .map(to_bedrock_response)
 }
 
+pub async fn invoke_streaming(
+    backend: &BedrockBackend,
+    bedrock_id: &str,
+    body: &Value,
+) -> Result<Value, AwsError> {
+    let acc =
+        super::call_chat_stream(backend, bedrock_id, |tag| to_openai_request(tag, body)).await?;
+    let chunk = json!({
+        "generation": acc.text,
+        "prompt_token_count": acc.prompt_tokens,
+        "generation_token_count": acc.completion_tokens,
+        "stop_reason": acc.finish_reason.unwrap_or_else(|| "stop".to_string()),
+    });
+    Ok(super::stream_envelope(vec![chunk]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

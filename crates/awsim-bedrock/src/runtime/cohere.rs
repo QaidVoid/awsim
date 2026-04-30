@@ -90,6 +90,32 @@ pub async fn invoke(
         .map(|resp| to_bedrock_response(&prompt, resp))
 }
 
+pub async fn invoke_streaming(
+    backend: &BedrockBackend,
+    bedrock_id: &str,
+    body: &Value,
+) -> Result<Value, AwsError> {
+    let acc =
+        super::call_chat_stream(backend, bedrock_id, |tag| to_openai_request(tag, body)).await?;
+    let cohere_finish = match acc.finish_reason.as_deref() {
+        Some("length") => "MAX_TOKENS",
+        _ => "COMPLETE",
+    };
+    // Cohere streams one delta-style chunk plus a final is_finished:true
+    // chunk; we emit both even though both come from the same accumulated
+    // text, to keep the SDK's chunk-counting logic happy.
+    let body = json!({
+        "text": acc.text,
+        "is_finished": false,
+        "finish_reason": Value::Null,
+    });
+    let stop = json!({
+        "is_finished": true,
+        "finish_reason": cohere_finish,
+    });
+    Ok(super::stream_envelope(vec![body, stop]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

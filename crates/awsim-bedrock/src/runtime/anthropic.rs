@@ -160,98 +160,29 @@ pub fn to_bedrock_response(bedrock_id: &str, resp: ChatResponse) -> Value {
     })
 }
 
-/// Hit the backend's `/chat/completions` endpoint with an Anthropic-
-/// shaped request. Returns the proxied response in Bedrock's native
-/// shape, or an `AwsError` if the backend was unreachable.
+/// Hit the backend with `stream:true`, accumulate the SSE chunks,
+/// and emit the Anthropic-flavoured streaming-event sequence.
 pub async fn invoke_streaming(
     backend: &BedrockBackend,
     bedrock_id: &str,
     body: &Value,
 ) -> Result<Value, AwsError> {
-    let model_tag = backend.resolve_invoke(bedrock_id).ok_or_else(|| {
-        AwsError::not_found(
-            "ResourceNotFoundException",
-            format!("No backend mapping for Bedrock model {bedrock_id}"),
-        )
-    })?;
-    let mut req = to_openai_request(model_tag, body)?;
-    req.stream = Some(true);
-
-    let url = format!("{}/chat/completions", backend.endpoint());
-    let mut http_req = backend.client().post(&url).json(&req);
-    if let Some(key) = backend.api_key() {
-        http_req = http_req.bearer_auth(key);
-    }
-    let resp = http_req
-        .send()
-        .await
-        .map_err(|e| AwsError::internal(format!("Bedrock backend POST {url} failed: {e}")))?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body_text = resp.text().await.unwrap_or_default();
-        return Err(AwsError::internal(format!(
-            "Bedrock backend returned {status}: {body_text}"
-        )));
-    }
-    let raw = resp
-        .text()
-        .await
-        .map_err(|e| AwsError::internal(format!("Bedrock backend stream read failed: {e}")))?;
-
-    let events = sse_to_anthropic_events(bedrock_id, &raw);
-    Ok(json!({
-        // Real Bedrock streams use vnd.amazon.eventstream binary
-        // framing; awsim's gateway has no eventstream codec yet, so
-        // we emit the parsed events as a JSON array. Inspection
-        // tools (admin UI / curl) see real content; full SDK
-        // streaming clients still need the wire-level codec.
-        "contentType": "application/vnd.amazon.eventstream",
-        "body": events,
-    }))
+    let acc =
+        super::call_chat_stream(backend, bedrock_id, |tag| to_openai_request(tag, body)).await?;
+    let events = build_events(bedrock_id, &acc);
+    Ok(super::stream_envelope(events))
 }
 
-/// Walk the OpenAI Server-Sent-Events response and emit the
-/// Anthropic-flavoured streaming-event sequence:
+/// Convert an accumulated stream into the Anthropic event sequence:
 ///
 /// 1. `message_start`
 /// 2. `content_block_start` (single text block, index 0)
-/// 3. `content_block_delta` per chunk delta
+/// 3. `content_block_delta` (full text in one chunk for now)
 /// 4. `content_block_stop`
 /// 5. `message_delta` (with stop_reason)
 /// 6. `message_stop`
-fn sse_to_anthropic_events(bedrock_id: &str, raw: &str) -> Vec<Value> {
-    let mut text = String::new();
-    let mut finish_reason: Option<String> = None;
-    let mut prompt_tokens = 0u32;
-    let mut completion_tokens = 0u32;
-
-    for line in raw.lines() {
-        let Some(payload) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let payload = payload.trim();
-        if payload.is_empty() || payload == "[DONE]" {
-            continue;
-        }
-        let chunk: Value = match serde_json::from_str(payload) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if let Some(delta) = chunk["choices"][0]["delta"]["content"].as_str() {
-            text.push_str(delta);
-        }
-        if let Some(fr) = chunk["choices"][0]["finish_reason"].as_str() {
-            finish_reason = Some(fr.to_string());
-        }
-        if let Some(p) = chunk["usage"]["prompt_tokens"].as_u64() {
-            prompt_tokens = p as u32;
-        }
-        if let Some(c) = chunk["usage"]["completion_tokens"].as_u64() {
-            completion_tokens = c as u32;
-        }
-    }
-
-    let stop_reason = match finish_reason.as_deref() {
+fn build_events(bedrock_id: &str, acc: &super::AccumulatedStream) -> Vec<Value> {
+    let stop_reason = match acc.finish_reason.as_deref() {
         Some("stop") => "end_turn",
         Some("length") => "max_tokens",
         Some("tool_calls") => "tool_use",
@@ -271,7 +202,7 @@ fn sse_to_anthropic_events(bedrock_id: &str, raw: &str) -> Vec<Value> {
             "model": bedrock_id,
             "stop_reason": Value::Null,
             "stop_sequence": Value::Null,
-            "usage": { "input_tokens": prompt_tokens, "output_tokens": 0 }
+            "usage": { "input_tokens": acc.prompt_tokens, "output_tokens": 0 }
         }
     }));
     events.push(json!({
@@ -279,22 +210,18 @@ fn sse_to_anthropic_events(bedrock_id: &str, raw: &str) -> Vec<Value> {
         "index": 0,
         "content_block": { "type": "text", "text": "" }
     }));
-    // Emit every byte of accumulated text in a single delta — when we
-    // gain wire-level streaming the parser already handles per-chunk
-    // deltas, so commit #3 stays a content-correct upgrade over the
-    // canned single-line mock.
-    if !text.is_empty() {
+    if !acc.text.is_empty() {
         events.push(json!({
             "type": "content_block_delta",
             "index": 0,
-            "delta": { "type": "text_delta", "text": text }
+            "delta": { "type": "text_delta", "text": &acc.text }
         }));
     }
     events.push(json!({ "type": "content_block_stop", "index": 0 }));
     events.push(json!({
         "type": "message_delta",
         "delta": { "stop_reason": stop_reason, "stop_sequence": Value::Null },
-        "usage": { "output_tokens": completion_tokens }
+        "usage": { "output_tokens": acc.completion_tokens }
     }));
     events.push(json!({ "type": "message_stop" }));
     events
@@ -398,12 +325,14 @@ mod tests {
     }
 
     #[test]
-    fn sse_to_anthropic_events_walks_chunks() {
-        let raw = "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\
-data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\
-data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\
-data: [DONE]\n";
-        let events = sse_to_anthropic_events("anthropic.claude-3-5-sonnet-20241022-v2:0", raw);
+    fn build_events_walks_accumulated_stream() {
+        let acc = super::super::AccumulatedStream {
+            text: "Hello".into(),
+            finish_reason: Some("stop".into()),
+            prompt_tokens: 3,
+            completion_tokens: 2,
+        };
+        let events = build_events("anthropic.claude-3-5-sonnet-20241022-v2:0", &acc);
         assert_eq!(events[0]["type"], "message_start");
         assert_eq!(
             events[0]["message"]["model"],
@@ -420,9 +349,9 @@ data: [DONE]\n";
     }
 
     #[test]
-    fn sse_to_anthropic_events_handles_empty_response() {
-        let events = sse_to_anthropic_events("anthropic.claude-v2", "data: [DONE]\n");
-        // Skips the delta event when no text was emitted; everything else still fires.
+    fn build_events_handles_empty_text() {
+        let acc = super::super::AccumulatedStream::default();
+        let events = build_events("anthropic.claude-v2", &acc);
         assert_eq!(events[0]["type"], "message_start");
         assert_eq!(events[1]["type"], "content_block_start");
         assert_eq!(events[2]["type"], "content_block_stop");

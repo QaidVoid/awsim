@@ -80,6 +80,28 @@ pub async fn invoke(
         .map(to_bedrock_response)
 }
 
+/// Single accumulated chunk in Titan streaming format.
+pub async fn invoke_streaming(
+    backend: &BedrockBackend,
+    bedrock_id: &str,
+    body: &Value,
+) -> Result<Value, AwsError> {
+    let acc =
+        super::call_chat_stream(backend, bedrock_id, |tag| to_openai_request(tag, body)).await?;
+    let completion_reason = match acc.finish_reason.as_deref() {
+        Some("length") => "LENGTH",
+        _ => "FINISH",
+    };
+    let chunk = json!({
+        "outputText": acc.text,
+        "completionReason": completion_reason,
+        "index": 0,
+        "inputTextTokenCount": acc.prompt_tokens,
+        "totalOutputTextTokenCount": acc.completion_tokens,
+    });
+    Ok(super::stream_envelope(vec![chunk]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -63,6 +63,98 @@ async fn call_chat(
         .map_err(|e| AwsError::internal(format!("Bedrock backend JSON parse failed: {e}")))
 }
 
+/// Streaming variant: hits `/chat/completions` with `stream:true`,
+/// drains the SSE response, and accumulates a flat
+/// `(text, finish_reason, prompt_tokens, completion_tokens)` tuple.
+/// Per-family streaming translators wrap the result in their native
+/// chunk envelope. Wire-level vnd.amazon.eventstream framing is
+/// future work — chunks are returned as a JSON array on the response.
+pub(crate) async fn call_chat_stream(
+    backend: &BedrockBackend,
+    bedrock_id: &str,
+    build: impl FnOnce(&str) -> Result<openai::ChatRequest, AwsError>,
+) -> Result<AccumulatedStream, AwsError> {
+    let model_tag = backend.resolve_invoke(bedrock_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("No backend mapping for Bedrock model {bedrock_id}"),
+        )
+    })?;
+    let mut req = build(model_tag)?;
+    req.stream = Some(true);
+
+    let url = format!("{}/chat/completions", backend.endpoint());
+    let mut http_req = backend.client().post(&url).json(&req);
+    if let Some(key) = backend.api_key() {
+        http_req = http_req.bearer_auth(key);
+    }
+    let resp = http_req
+        .send()
+        .await
+        .map_err(|e| AwsError::internal(format!("Bedrock backend POST {url} failed: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(AwsError::internal(format!(
+            "Bedrock backend returned {status}: {body_text}"
+        )));
+    }
+    let raw = resp
+        .text()
+        .await
+        .map_err(|e| AwsError::internal(format!("Bedrock backend stream read failed: {e}")))?;
+    Ok(accumulate_sse(&raw))
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct AccumulatedStream {
+    pub text: String,
+    pub finish_reason: Option<String>,
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+}
+
+pub(crate) fn accumulate_sse(raw: &str) -> AccumulatedStream {
+    let mut acc = AccumulatedStream::default();
+    for line in raw.lines() {
+        let Some(payload) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let payload = payload.trim();
+        if payload.is_empty() || payload == "[DONE]" {
+            continue;
+        }
+        let chunk: Value = match serde_json::from_str(payload) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Some(delta) = chunk["choices"][0]["delta"]["content"].as_str() {
+            acc.text.push_str(delta);
+        }
+        if let Some(fr) = chunk["choices"][0]["finish_reason"].as_str() {
+            acc.finish_reason = Some(fr.to_string());
+        }
+        if let Some(p) = chunk["usage"]["prompt_tokens"].as_u64() {
+            acc.prompt_tokens = p as u32;
+        }
+        if let Some(c) = chunk["usage"]["completion_tokens"].as_u64() {
+            acc.completion_tokens = c as u32;
+        }
+    }
+    acc
+}
+
+/// Wrap per-family streaming chunks in the Bedrock event-stream
+/// envelope. The first array element is the only chunk we emit
+/// today (single accumulated response); the structure is ready for
+/// real per-token chunking once wire-level framing lands.
+pub(crate) fn stream_envelope(chunks: Vec<Value>) -> Value {
+    serde_json::json!({
+        "contentType": "application/vnd.amazon.eventstream",
+        "body": chunks,
+    })
+}
+
 /// Same shape as `call_chat` but for `/v1/embeddings`. Resolves the
 /// Bedrock id via `resolve_embed` so the embed-only mappings in the
 /// model map take precedence.
@@ -152,13 +244,32 @@ pub async fn invoke_model_with_response_stream(
     debug!(model_id = %model_id, "InvokeModelWithResponseStream");
     let body = extract_body(input)?;
 
-    if let Some(backend) = backend
-        && matches!(ModelFamily::for_id(model_id), Some(ModelFamily::Anthropic))
-    {
-        match anthropic::invoke_streaming(backend, model_id, &body).await {
-            Ok(v) => return Ok(v),
-            Err(e) => {
-                warn!(error = %e.message, model_id, "Bedrock streaming backend failed; serving canned response");
+    if let Some(backend) = backend {
+        let routed = match ModelFamily::for_id(model_id) {
+            Some(ModelFamily::Anthropic) => {
+                Some(anthropic::invoke_streaming(backend, model_id, &body).await)
+            }
+            Some(ModelFamily::Titan) => {
+                Some(titan::invoke_streaming(backend, model_id, &body).await)
+            }
+            Some(ModelFamily::Llama) => {
+                Some(llama::invoke_streaming(backend, model_id, &body).await)
+            }
+            Some(ModelFamily::Mistral) => {
+                Some(mistral::invoke_streaming(backend, model_id, &body).await)
+            }
+            Some(ModelFamily::Cohere) => {
+                Some(cohere::invoke_streaming(backend, model_id, &body).await)
+            }
+            // Embeddings + unmapped → canned (embeddings don't stream).
+            _ => None,
+        };
+        if let Some(result) = routed {
+            match result {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    warn!(error = %e.message, model_id, "Bedrock streaming backend failed; serving canned response");
+                }
             }
         }
     }
