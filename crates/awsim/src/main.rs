@@ -352,11 +352,29 @@ async fn async_main() -> Result<()> {
         "Runtime config store initialised"
     );
 
-    // Bedrock proxy registry — built from the live runtime config.
-    // Slice 2 will swap this to a hot-reloadable handle; for now we
-    // build once at startup so behaviour matches the previous flag-
-    // driven path.
-    let bedrock_backends = build_bedrock_backend_from_config(&runtime_config_store.current())?;
+    // Hot-swappable Bedrock backends handle. Built once from the
+    // initial runtime config and swapped in-place whenever the
+    // runtime config changes — request-path readers see the new
+    // value without restarting the service.
+    let initial_bedrock = build_bedrock_backend_from_config(&runtime_config_store.current())?;
+    let bedrock_swap = awsim_bedrock::backends_swap(initial_bedrock);
+
+    // Reload hook: rebuild backends from the new config and swap.
+    // Validation already ran in `apply()` so build failures here are
+    // unexpected; we log and keep the previous registry to avoid
+    // wedging the runtime on a transient env-var read.
+    {
+        let swap = Arc::clone(&bedrock_swap);
+        runtime_config_store.on_change(Box::new(
+            move |cfg| match build_bedrock_backend_from_config(cfg) {
+                Ok(next) => {
+                    swap.store(Arc::new(next));
+                    info!("Bedrock backends hot-reloaded");
+                }
+                Err(e) => warn!(error = %e, "Bedrock hot-reload failed; keeping previous registry"),
+            },
+        ));
+    }
 
     // Register all services; get back the ApiGateway Arc for proxy routing and
     // an Arc<CognitoState> for the default account+region so the OAuth router
@@ -393,7 +411,7 @@ async fn async_main() -> Result<()> {
         cli.data_dir.as_deref(),
         cli.port,
         cli.max_blob_bytes,
-        bedrock_backends.clone(),
+        Arc::clone(&bedrock_swap),
     );
 
     let mut body_stores: Vec<BodyStoreHandle> = Vec::new();
@@ -1042,7 +1060,7 @@ async fn async_main() -> Result<()> {
             "/_awsim/bedrock/config",
             axum::routing::get(admin::bedrock_config),
         )
-        .with_state(Arc::new(bedrock_backends.clone()));
+        .with_state(Arc::clone(&bedrock_swap));
 
     let runtime_config_router: axum::Router<()> = axum::Router::new()
         .route(
@@ -1593,7 +1611,7 @@ fn register_services(
     data_dir: Option<&str>,
     port: u16,
     max_blob_bytes: Option<u64>,
-    bedrock_backend: Option<awsim_bedrock::BedrockBackends>,
+    bedrock_swap: awsim_bedrock::BedrockBackendsSwap,
 ) -> RegisteredServices {
     use std::sync::Arc;
 
@@ -1762,10 +1780,7 @@ fn register_services(
     };
     state.register(Arc::new(bedrock), bedrock_routes);
 
-    let bedrock_runtime = match bedrock_backend {
-        Some(b) => awsim_bedrock::BedrockRuntimeService::with_backends(b),
-        None => awsim_bedrock::BedrockRuntimeService::new(),
-    };
+    let bedrock_runtime = awsim_bedrock::BedrockRuntimeService::with_swap(bedrock_swap);
     let bedrock_runtime_routes = {
         use awsim_core::ServiceHandler;
         bedrock_runtime.routes()

@@ -12,6 +12,7 @@ pub use model_map::{ModelEntry, ModelMap, ModelMapError};
 
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use awsim_core::{
     AccountRegionStore, AwsError, Protocol, RequestContext, RouteDefinition, ServiceHandler,
@@ -309,24 +310,46 @@ impl ServiceHandler for BedrockService {
 
 // ── Runtime service (signing name: bedrock-runtime) ───────────────────────────
 
-/// Bedrock runtime handler. Optionally wraps a `BedrockBackend` —
-/// when set, invocations translate-and-proxy to an OpenAI-compatible
-/// LLM server (Ollama / LM Studio / vLLM / …). When unset, the
-/// service returns deterministic canned responses so SDK code that
-/// just wires up the calls keeps working in CI.
+/// Hot-swappable handle to a Bedrock proxy registry. Cloning the
+/// handle is cheap; the underlying `Option<BedrockBackends>` can be
+/// replaced atomically via [`BedrockBackendsSwap::store`] without
+/// blocking request-path readers.
+pub type BedrockBackendsSwap = Arc<ArcSwap<Option<BedrockBackends>>>;
+
+/// Build an empty (canned-response) swap handle.
+pub fn empty_backends_swap() -> BedrockBackendsSwap {
+    Arc::new(ArcSwap::from_pointee(None))
+}
+
+/// Build a swap handle pre-populated with the given backends.
+pub fn backends_swap(backends: Option<BedrockBackends>) -> BedrockBackendsSwap {
+    Arc::new(ArcSwap::from_pointee(backends))
+}
+
+/// Bedrock runtime handler. Holds a hot-swappable backends registry —
+/// invocations read the live registry on each call. When the swap
+/// holds `None`, the service returns deterministic canned responses
+/// so SDK code that just wires up the calls keeps working in CI.
 pub struct BedrockRuntimeService {
-    backends: Option<BedrockBackends>,
+    backends: BedrockBackendsSwap,
 }
 
 impl BedrockRuntimeService {
     pub fn new() -> Self {
-        Self { backends: None }
+        Self {
+            backends: empty_backends_swap(),
+        }
+    }
+
+    /// Construct from a hot-swappable handle. The runtime reads the
+    /// live value on each request, so callers can swap backends out
+    /// without touching the service.
+    pub fn with_swap(backends: BedrockBackendsSwap) -> Self {
+        Self { backends }
     }
 
     pub fn with_backends(backends: BedrockBackends) -> Self {
-        Self {
-            backends: Some(backends),
-        }
+        Self::with_swap(backends_swap(Some(backends)))
     }
 
     /// Convenience for callers that have just one endpoint.
@@ -392,13 +415,19 @@ impl ServiceHandler for BedrockRuntimeService {
     ) -> Result<Value, AwsError> {
         debug!(operation, "Bedrock runtime request");
 
+        // Snapshot the live registry once per request. The Guard keeps
+        // the inner Arc alive for the duration of the call even if the
+        // admin swaps a new one in mid-flight.
+        let guard = self.backends.load();
+        let snapshot = guard.as_ref().as_ref();
+
         match operation {
-            "InvokeModel" => runtime::invoke_model(self.backends.as_ref(), &input).await,
+            "InvokeModel" => runtime::invoke_model(snapshot, &input).await,
             "InvokeModelWithResponseStream" => {
-                runtime::invoke_model_with_response_stream(self.backends.as_ref(), &input).await
+                runtime::invoke_model_with_response_stream(snapshot, &input).await
             }
-            "Converse" => runtime::converse(self.backends.as_ref(), &input).await,
-            "ConverseStream" => runtime::converse_stream(self.backends.as_ref(), &input).await,
+            "Converse" => runtime::converse(snapshot, &input).await,
+            "ConverseStream" => runtime::converse_stream(snapshot, &input).await,
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

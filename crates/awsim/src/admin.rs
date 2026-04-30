@@ -815,11 +815,14 @@ pub async fn runtime_config_put(
 /// registry as JSON for the admin UI. API keys are reported as a
 /// boolean (`hasApiKey`) — never the secret itself. Returns
 /// `{ "enabled": false }` when no backend is configured (canned-
-/// response mode).
+/// response mode). Reads from the same hot-swappable handle the
+/// runtime service uses, so the view always reflects the live
+/// state even after a runtime-config change.
 pub async fn bedrock_config(
-    State(backends): State<Arc<Option<awsim_bedrock::BedrockBackends>>>,
+    State(backends): State<awsim_bedrock::BedrockBackendsSwap>,
 ) -> Json<Value> {
-    match backends.as_ref() {
+    let guard = backends.load();
+    match guard.as_ref().as_ref() {
         Some(b) => {
             let mut view = b.redacted_view();
             if let Some(obj) = view.as_object_mut() {
