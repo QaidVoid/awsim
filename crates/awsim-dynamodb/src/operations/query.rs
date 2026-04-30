@@ -11,6 +11,45 @@ use crate::{
 use super::{get_expr_attr_names, get_expr_attr_values, opt_str, require_str};
 use crate::operations::item::item_to_json;
 
+/// AWS DynamoDB caps `Query` / `Scan` responses at 1 MiB regardless of
+/// `Limit`. Real clients are written to handle pagination via
+/// `LastEvaluatedKey`, so enforcing the same cap keeps both wire
+/// compatibility and our process memory bounded — without it a single
+/// "fetch the whole partition" call materializes the entire table in
+/// memory as `serde_json::Value` trees.
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+
+/// Approximate the on-the-wire bytes a DynamoItem will contribute to
+/// the `Items` array. Cheaper than a full JSON serialization — walks
+/// the typed AttributeValue tree and sums string lengths + small
+/// constants for structural overhead, matching how AWS bills item
+/// size closely enough for the response cap.
+fn estimate_item_bytes(item: &DynamoItem) -> usize {
+    let mut total = 0usize;
+    for (name, value) in item {
+        total += name.len();
+        total += estimate_value_bytes(value);
+    }
+    // brace + key/value separators per attribute: rough overhead.
+    total + item.len() * 4 + 2
+}
+
+fn estimate_value_bytes(v: &Value) -> usize {
+    match v {
+        Value::Null => 1,
+        Value::Bool(_) => 1,
+        Value::Number(n) => n.to_string().len(),
+        Value::String(s) => s.len() + 2,
+        Value::Array(arr) => 2 + arr.iter().map(estimate_value_bytes).sum::<usize>() + arr.len(),
+        Value::Object(map) => {
+            2 + map
+                .iter()
+                .map(|(k, vv)| k.len() + 2 + estimate_value_bytes(vv) + 2)
+                .sum::<usize>()
+        }
+    }
+}
+
 fn apply_projection_to_item(
     item: &DynamoItem,
     paths: &[String],
@@ -113,6 +152,7 @@ pub fn query(
 
     let mut scanned_count = 0usize;
     let mut items: Vec<DynamoItem> = Vec::new();
+    let mut response_bytes = 0usize;
     let mut last_item: Option<DynamoItem> = None;
     let mut hit_limit = false;
 
@@ -142,12 +182,21 @@ pub fn query(
         } else {
             apply_projection_to_item(&item, &projection_paths, &expr_attr_names)
         };
+        if select != "COUNT" {
+            response_bytes += estimate_item_bytes(&projected);
+        }
         items.push(projected);
         last_item = Some(item);
 
         if let Some(lim) = limit
             && items.len() >= lim
         {
+            hit_limit = true;
+            return Ok(false);
+        }
+        // 1 MiB response cap matches real DynamoDB; clients resume via
+        // LastEvaluatedKey. Skipped for COUNT since payload is empty.
+        if select != "COUNT" && response_bytes >= MAX_RESPONSE_BYTES {
             hit_limit = true;
             return Ok(false);
         }
@@ -262,6 +311,7 @@ pub fn scan(
 
     let mut scanned_count = 0usize;
     let mut items: Vec<DynamoItem> = Vec::new();
+    let mut response_bytes = 0usize;
     let mut last_item: Option<DynamoItem> = None;
     let mut hit_limit = false;
 
@@ -288,12 +338,19 @@ pub fn scan(
             } else {
                 apply_projection_to_item(&item, &projection_paths, &expr_attr_names)
             };
+            if select != "COUNT" {
+                response_bytes += estimate_item_bytes(&projected);
+            }
             items.push(projected);
             last_item = Some(item);
 
             if let Some(lim) = limit
                 && items.len() >= lim
             {
+                hit_limit = true;
+                return Ok(false);
+            }
+            if select != "COUNT" && response_bytes >= MAX_RESPONSE_BYTES {
                 hit_limit = true;
                 return Ok(false);
             }
@@ -316,6 +373,49 @@ pub fn scan(
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item_with(attrs: &[(&str, Value)]) -> DynamoItem {
+        let mut m = DynamoItem::new();
+        for (k, v) in attrs {
+            m.insert(k.to_string(), v.clone());
+        }
+        m
+    }
+
+    #[test]
+    fn estimate_handles_typical_attribute_value() {
+        // {"id": {"S": "abc"}, "n": {"N": "42"}}
+        let item = item_with(&[("id", json!({ "S": "abc" })), ("n", json!({ "N": "42" }))]);
+        let bytes = estimate_item_bytes(&item);
+        // We don't pin the exact figure (varies if we tune overhead),
+        // but it must be small + non-zero so the cap fires sanely.
+        assert!(bytes > 0);
+        assert!(bytes < 256, "tiny item shouldn't estimate huge: {bytes}");
+    }
+
+    #[test]
+    fn estimate_grows_with_string_payload() {
+        let small = item_with(&[("body", json!({ "S": "x".repeat(10) }))]);
+        let large = item_with(&[("body", json!({ "S": "x".repeat(10_000) }))]);
+        let small_bytes = estimate_item_bytes(&small);
+        let large_bytes = estimate_item_bytes(&large);
+        assert!(
+            large_bytes >= small_bytes + 9_000,
+            "large item should grow ~linearly with payload (small={small_bytes}, large={large_bytes})"
+        );
+    }
+
+    #[test]
+    fn cap_is_one_mib() {
+        // Sanity: if someone bumps the const accidentally, fail loudly.
+        // Real AWS DynamoDB Query/Scan response cap is exactly 1 MiB.
+        assert_eq!(MAX_RESPONSE_BYTES, 1024 * 1024);
+    }
 }
 
 /// Try to extract the partition key value from a KeyConditionExpression.

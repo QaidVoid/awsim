@@ -48,9 +48,8 @@ impl SesService {
     /// Persistent store rooted at `{dir}/ses.db`.
     pub fn with_data_dir(dir: impl AsRef<Path>) -> Self {
         let dir = dir.as_ref();
-        std::fs::create_dir_all(dir).unwrap_or_else(|e| {
-            panic!("creating SES data dir {} failed: {e}", dir.display())
-        });
+        std::fs::create_dir_all(dir)
+            .unwrap_or_else(|e| panic!("creating SES data dir {} failed: {e}", dir.display()));
         let path = dir.join("ses.db");
         let sqlite_store = Arc::new(SqliteStore::open(&path).unwrap_or_else(|e| {
             panic!(

@@ -548,9 +548,7 @@ fn sqlite_store_for_kinesis(
 ) -> Option<Arc<awsim_kinesis::SqliteStore>> {
     svc.sqlite_store_handle()
 }
-fn sqlite_store_for_ses(
-    svc: &Arc<awsim_ses::SesService>,
-) -> Option<Arc<awsim_ses::SqliteStore>> {
+fn sqlite_store_for_ses(svc: &Arc<awsim_ses::SesService>) -> Option<Arc<awsim_ses::SqliteStore>> {
     svc.sqlite_store_handle()
 }
 
@@ -607,7 +605,11 @@ fn cognito_section(cognito: &awsim_cognito::CognitoState) -> Value {
         let users = pool.users.len() as u64;
         let groups = pool.groups.len() as u64;
         let clients = pool.clients.len() as u64;
-        let auth_events: u64 = pool.users.values().map(|u| u.auth_events.len() as u64).sum();
+        let auth_events: u64 = pool
+            .users
+            .values()
+            .map(|u| u.auth_events.len() as u64)
+            .sum();
         let devices: u64 = pool.users.values().map(|u| u.devices.len() as u64).sum();
         let revoked: u64 = pool
             .users
@@ -737,10 +739,7 @@ pub async fn ses_sent(
                 .as_ref()
                 .map(|a| a == account)
                 .unwrap_or(true)
-                && region_filter
-                    .as_ref()
-                    .map(|r| r == region)
-                    .unwrap_or(true)
+                && region_filter.as_ref().map(|r| r == region).unwrap_or(true)
         })
         .map(|(account, region, e)| {
             json!({
