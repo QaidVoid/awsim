@@ -202,7 +202,8 @@ pub fn describe_user_pool(
             "Policies": {
                 "PasswordPolicy": password_policy_to_value(&pool.policies)
             },
-            "Domain": pool.domain
+            "Domain": pool.domain,
+            "EstimatedNumberOfUsers": pool.users.len()
         }
     }))
 }
