@@ -7,7 +7,7 @@ use crate::{
     state::DynamoState,
 };
 
-use super::item::{estimate_value_bytes, item_to_json, parse_item};
+use super::item::{estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item};
 
 /// AWS BatchGetItem caps a single call at 100 keys total across all
 /// tables, and at 16 MB of response payload. Items beyond the byte
@@ -16,6 +16,11 @@ use super::item::{estimate_value_bytes, item_to_json, parse_item};
 /// awsim materialises arbitrarily large responses in memory.
 const BATCH_GET_MAX_KEYS: usize = 100;
 const BATCH_GET_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// AWS BatchWriteItem caps a single call at 25 PutRequest /
+/// DeleteRequest entries total, and at 400 KB per item.
+const BATCH_WRITE_MAX_ITEMS: usize = 25;
+const ITEM_MAX_BYTES: usize = 400 * 1024;
 
 pub fn batch_get_item(
     state: &DynamoState,
@@ -147,6 +152,17 @@ pub fn batch_write_item(
         .and_then(|v| v.as_object())
         .ok_or_else(|| AwsError::validation("RequestItems is required"))?;
 
+    let total_requests: usize = request_items
+        .values()
+        .filter_map(|v| v.as_array())
+        .map(|a| a.len())
+        .sum();
+    if total_requests > BATCH_WRITE_MAX_ITEMS {
+        return Err(AwsError::validation(format!(
+            "BatchWriteItem cannot process more than {BATCH_WRITE_MAX_ITEMS} requests per call ({total_requests} supplied)"
+        )));
+    }
+
     let unprocessed_items = serde_json::Map::new();
 
     // Collect SQLite mirror operations while we hold each table lock,
@@ -195,6 +211,12 @@ pub fn batch_write_item(
                     Some(i) => i,
                     None => continue,
                 };
+                let item_bytes = estimate_item_bytes(&item);
+                if item_bytes > ITEM_MAX_BYTES {
+                    return Err(AwsError::validation(format!(
+                        "Item size {item_bytes} bytes exceeds the {ITEM_MAX_BYTES}-byte (400 KB) per-item cap in table {table_name}"
+                    )));
+                }
                 if let Some(keys) = extract_item_keys(&table, &item) {
                     let attrs = item_to_storage_value(&item);
                     sqlite_ops.push(SqliteOp::Put {
