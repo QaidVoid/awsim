@@ -46,6 +46,70 @@ export async function fetchSqliteStats(): Promise<SqliteStatsPayload> {
   return res.json();
 }
 
+// ---------- Memory diagnostic ----------
+
+export interface DebugObjectsPayload {
+  captured_at: number;
+  process: {
+    rss_bytes: number | null;
+    vm_size_bytes: number | null;
+    vm_data_bytes: number | null;
+    vm_peak_bytes: number | null;
+    vm_hwm_bytes: number | null;
+  };
+  app: {
+    request_count: number;
+    request_details: number;
+    registered_services: number;
+    request_event_subscribers: number;
+    internal_event_subscribers: number;
+    chaos_rules: number;
+    chaos_recent_injections: number;
+    uptime_secs: number;
+  };
+  cognito: {
+    user_pools: number;
+    mfa_sessions: number;
+    totals: {
+      users: number;
+      groups: number;
+      clients: number;
+      auth_events: number;
+      devices: number;
+      revoked_refresh_tokens: number;
+    };
+    per_pool: {
+      id: string;
+      users: number;
+      groups: number;
+      clients: number;
+      auth_events_total: number;
+      devices_total: number;
+      revoked_refresh_tokens_total: number;
+    }[];
+  };
+  billing: {
+    account_region_buckets: number;
+    op_counters_total: number;
+    storage_rows_total: number;
+    compute_rows_total: number;
+    resource_rows_total: number;
+  };
+  sqlite: {
+    cloudwatch_logs_rows: number | null;
+    cloudwatch_metrics_rows: number | null;
+    kinesis_rows: number | null;
+    ses_rows: number | null;
+    dynamodb_db_size_bytes: number | null;
+  };
+}
+
+export async function fetchDebugObjects(): Promise<DebugObjectsPayload> {
+  const res = await fetch(`${BASE}/debug/objects`);
+  if (!res.ok) throw new Error(`debug/objects fetch failed: ${res.status}`);
+  return res.json();
+}
+
 // ---------- SES outbox ----------
 
 export interface SesSentEmail {

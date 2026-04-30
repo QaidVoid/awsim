@@ -603,6 +603,23 @@ export const SERVICES: Service[] = [
     icon: Activity,
     keywords: ["flow", "trace", "burst", "fanout", "activity", "timeline"],
   },
+  {
+    id: "observability",
+    name: "Observability",
+    href: "/observability",
+    category: "Admin",
+    icon: Cpu,
+    keywords: [
+      "memory",
+      "rss",
+      "leak",
+      "heap",
+      "debug",
+      "diagnose",
+      "observability",
+      "stats",
+    ],
+  },
 ];
 
 export function servicesByCategory(): Map<ServiceCategory, Service[]> {
