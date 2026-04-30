@@ -14,12 +14,17 @@ AWSim creates the directory if it does not exist.
 
 ## Services That Persist
 
-The following services write and restore snapshots:
+awsim has two distinct persistence layers:
+
+1. **JSON snapshots** for handler state (table schemas, IAM users, queue metadata, etc.) under `{data_dir}/snapshots/`.
+2. **Per-service SQLite databases** for high-volume row data (DDB items, log events, metrics, kinesis records, SES outbox) — sit alongside the snapshots, not replaced by them.
+
+The following services write and restore JSON snapshots on graceful shutdown / startup:
 
 | Service | Signing Name |
 |---------|-------------|
 | SQS | `sqs` |
-| DynamoDB | `dynamodb` |
+| DynamoDB | `dynamodb` (schema only — items live in SQLite, see below) |
 | IAM | `iam` |
 | S3 | `s3` |
 | RDS | `rds` |
@@ -31,9 +36,21 @@ The following services write and restore snapshots:
 | SNS | `sns` |
 | Lambda | `lambda` |
 | ECR | `ecr` |
-| CloudWatch Logs | `logs` |
+| CloudWatch Logs | `logs` (group/stream metadata only — events in SQLite) |
 
-Services not in this list (e.g., KMS, Secrets Manager) are always in-memory only.
+The following services persist their primary row data into a SQLite database under `{data_dir}/`:
+
+| Service | DB file | Holds |
+|---------|---------|-------|
+| DynamoDB | `dynamodb.db` | Items + table-schema rows |
+| CloudWatch Logs | `cloudwatch-logs.db` | Log events (per-group / per-stream rows) |
+| CloudWatch Metrics | `cloudwatch-metrics.db` | Metric data points |
+| Kinesis | `kinesis.db` | Stream records (per-shard, sequence-numbered) |
+| SES | `ses.db` | Captured outbound emails (see [Outbox](/services/ses#outbox)) |
+
+Each DB uses WAL mode + a 16 MiB mmap with a tight 2 MiB page cache and an r2d2 connection pool (`min_idle=1, max_size=4`) so a fresh awsim process holds only ~256 KiB of resident SQLite per service until traffic arrives.
+
+Services not in either list (e.g., KMS, Secrets Manager) are in-memory only and lost on restart.
 
 ## Named Snapshots
 
@@ -195,20 +212,29 @@ When `--data-dir` is not supplied, layer bodies stay in memory and are lost on s
 
 ## CloudWatch Logs events
 
-When `--data-dir` is set, the CloudWatch Logs service appends each `PutLogEvents` batch to a per-stream JSON-lines file under `{data_dir}/cloudwatch-logs/`:
+CloudWatch Logs events live in a single SQLite database at `{data_dir}/cloudwatch-logs.db`. Without `--data-dir`, the events go into a per-process tempdir DB that's cleaned up on shutdown.
 
-```
-/var/lib/awsim/
-  cloudwatch-logs/
-    <log-group-name>/
-      <log-stream-name>      # JSONL: one event per line
-```
+Each `PutLogEvents` batch is committed inside one SQLite transaction. `FilterLogEvents` queries push timestamp + message-pattern filters down into SQL so the index does the work. Group + stream metadata still rides in the regular `logs.json` snapshot — the schema includes `account`, `region`, `log_group`, `log_stream`, `ts`, `ingestion_ts`, `message` columns plus a composite index on the time fields.
 
-Each line is a JSON object of the form `{"ts":<timestamp>,"msg":<message>,"ing":<ingestion-time>}`. A single `PutLogEvents` API call performs one `append`, regardless of batch size. Group and stream metadata still rides in the regular `logs.json` snapshot — the snapshot omits the events themselves. On restore, each stream's JSONL file is parsed and replayed into the in-memory `Vec<LogEvent>` (malformed lines are skipped with a warning). `DeleteLogStream` best-effort removes the per-stream file; `DeleteLogGroup` removes the entire log-group subtree. Append-write failures are logged via `tracing` and do not fail the API call.
+`DeleteLogStream` deletes only that stream's rows; `DeleteLogGroup` cascades to every stream in the group. Both operations run inside a single transaction.
 
-The in-memory event log still grows unbounded (the disk file is a durability layer, not a memory cap). Combine with `--max-blob-bytes` to bound the on-disk side; FIFO eviction may delete the JSONL file of the oldest stream, in which case its events disappear from disk but stay in memory until restart.
+## CloudWatch Metrics
 
-When `--data-dir` is not supplied, log events stay in memory and are lost on shutdown.
+Metric data points live at `{data_dir}/cloudwatch-metrics.db`. Each `PutMetricData` call inserts one row per data point with `account`, `region`, `namespace`, `metric_name`, `value`, `unit`, `timestamp`, `ts_ms`, and a JSON-encoded `dimensions` column. `GetMetricData` queries push the namespace + metric + dimensions filters down to SQL.
+
+A 15-day retention sweep runs on every `PutMetricData` so the DB doesn't grow unbounded — anything older than 15 days is deleted lazily.
+
+## Kinesis records
+
+Each shard's records live in `{data_dir}/kinesis.db`. Schema: `(account, region, stream, shard, seq, partition_key, data, ts_ms)` with `seq` as the AWS-style monotonic sequence number. Iterators that ask for records "after seq N" run a single indexed range scan. The store also tracks per-stream `RetentionPeriodHours` and trims expired records on the next put.
+
+This replaced the original `Vec<KinesisRecord>` per shard that grew without bound and never honoured `RetentionPeriodHours`.
+
+## SES outbound emails
+
+Every `SendEmail` / `SendBulkEmail` / `SendCustomVerificationEmail` call writes one row to `{data_dir}/ses.db`. The Outbox UI tab and `/_awsim/ses/sent` admin endpoint both read from this store. An hourly retention sweep deletes rows older than `--ses-retention-hours` (default 30 days; `0` disables).
+
+See the [SES service doc](/services/ses#outbox) for the full schema + admin endpoint.
 
 ## Snapshot Format
 
