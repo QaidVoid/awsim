@@ -220,6 +220,31 @@ curl -s http://localhost:4566 \
 
 Cognito User Pools expose full OAuth 2.0 / OIDC endpoints. See [Cognito OAuth/OIDC](/guide/cognito-oauth) for the hosted login page, token endpoint, JWKS, and NextAuth.js integration.
 
+The hosted UI also exposes a **logout** endpoint at `GET /cognito/{pool_id}/logout` that mirrors AWS Cognito:
+
+| Query | Behaviour |
+|-------|-----------|
+| `?client_id=X&logout_uri=Y` | Validates `Y` against the client's `LogoutURLs` and 302s there. |
+| `?client_id=X&redirect_uri=Y&response_type=code` | Validates `Y` against the client's `CallbackURLs` and 302s back through `/oauth2/authorize`. |
+| _(neither)_ | `400 Bad Request` — same as real Cognito. |
+
+## Admin Console UI
+
+The pool list lives at `/cognito`. Clicking a pool navigates to `/cognito/[poolId]` — a full-route detail page with a left-nav covering eight sections:
+
+| Section | What it covers |
+|---------|----------------|
+| **Users** | Server-side filter (Cognito `username ^=` prefix), `25 / 50 / 100 per page`, Prev/Next pagination via `PaginationToken`, inline detail (attributes editor + group memberships + auth events viewer), bulk **Import CSV** that loops `AdminCreateUser` with progress + error reporting. |
+| **Groups** | Create / delete / inline member-list editor with `AdminAddUserToGroup` / `AdminRemoveUserFromGroup`. |
+| **App clients** | Create + delete with Prev/Next pagination. Inline editor for `CallbackURLs`, `LogoutURLs`, `AllowedOAuthFlows`, `AllowedOAuthScopes`, `ExplicitAuthFlows`, plus the `AllowedOAuthFlowsUserPoolClient` toggle. Client secret is masked with reveal + copy. |
+| **Domain** | Hosted-UI `Domain` from `DescribeUserPool` plus inline create / delete via `CreateUserPoolDomain` / `DeleteUserPoolDomain`. |
+| **Triggers** | Editable map of every Cognito Lambda trigger (`PreSignUp`, `PostConfirmation`, `CustomMessage`, `DefineAuthChallenge`, `CreateAuthChallenge`, `VerifyAuthChallengeResponse`, `PreTokenGeneration`, `UserMigration`, `CustomEmailSender`, `CustomSMSSender`, …) → Lambda function ARN. Saves via `UpdateUserPool.LambdaConfig`. |
+| **Policies** | Password policy editor (`MinimumLength`, `Require*`, `TemporaryPasswordValidityDays`), MFA mode (`OFF` / `OPTIONAL` / `ON`) + TOTP factor toggle, tag editor (`ListTagsForResource` / `TagResource` / `UntagResource`). |
+| **Federation** | List / create / edit / delete identity providers (`OIDC`, `SAML`, `Google`, `Facebook`, `SignInWithApple`, `LoginWithAmazon`) with `ProviderDetails` + `AttributeMapping` key-value editors. Per-IdP suggested-keys datalist matches the AWS shape. Resource servers + custom OAuth scopes managed in the same tab. |
+| **Appearance** | UI customization editor — pick scope (pool default or per-app-client), set logo URL + CSS, save via `SetUICustomization`. Stored for SDK round-trip parity even though awsim's hosted UI doesn't apply the CSS yet. |
+
+The active section is URL-synced as `?section=<id>` so reloads + share-links land where you left.
+
 ## SDK Example (User Pools)
 
 ```typescript
