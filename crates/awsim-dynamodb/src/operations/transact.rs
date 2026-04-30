@@ -10,7 +10,7 @@ use crate::{
 
 use super::{
     get_expr_attr_names, get_expr_attr_values,
-    item::{item_to_json, parse_item},
+    item::{estimate_value_bytes, item_to_json, parse_item},
     opt_str,
 };
 
@@ -58,6 +58,14 @@ fn transaction_canceled(total: usize, failed_idx: usize, failed_code: &str) -> A
         .with_extra("CancellationReasons", Value::Array(reasons))
 }
 
+/// AWS TransactGetItems caps a single call at 100 actions and 4 MB
+/// of response payload. Unlike BatchGetItem, transactions don't
+/// paginate — exceeding the response cap is a hard
+/// ValidationException, so the workload doesn't quietly leak memory
+/// while building a 100 MB Value tree.
+const TRANSACT_GET_MAX_ACTIONS: usize = 100;
+const TRANSACT_GET_MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
 pub fn transact_get_items(
     state: &DynamoState,
     sqlite: &SqliteStore,
@@ -68,6 +76,13 @@ pub fn transact_get_items(
         .get("TransactItems")
         .and_then(|v| v.as_array())
         .ok_or_else(|| AwsError::validation("TransactItems is required"))?;
+
+    if transact_items.len() > TRANSACT_GET_MAX_ACTIONS {
+        return Err(AwsError::validation(format!(
+            "TransactGetItems cannot process more than {TRANSACT_GET_MAX_ACTIONS} actions per call ({} supplied)",
+            transact_items.len()
+        )));
+    }
 
     // Resolve every (table, pk, sk) tuple before opening the read txn so
     // we don't hold the dashmap guard across SQLite IO.
@@ -112,13 +127,21 @@ pub fn transact_get_items(
     let responses =
         sqlite.with_read_transaction(|tx: &ReadTx<'_>| -> Result<Vec<Value>, AwsError> {
             let mut out = Vec::with_capacity(gets.len());
+            let mut response_bytes = 0usize;
             for g in &gets {
                 let stored =
                     tx.get_item(&ctx.account_id, &ctx.region, &g.table_name, &g.pk, &g.sk)?;
-                match decode_existing(stored)? {
-                    None => out.push(json!({})),
-                    Some(item) => out.push(json!({ "Item": item_to_json(&item) })),
+                let entry = match decode_existing(stored)? {
+                    None => json!({}),
+                    Some(item) => json!({ "Item": item_to_json(&item) }),
+                };
+                response_bytes += estimate_value_bytes(&entry);
+                if response_bytes > TRANSACT_GET_MAX_RESPONSE_BYTES {
+                    return Err(AwsError::validation(format!(
+                        "TransactGetItems response exceeds the {TRANSACT_GET_MAX_RESPONSE_BYTES}-byte cap"
+                    )));
                 }
+                out.push(entry);
             }
             Ok(out)
         })?;
