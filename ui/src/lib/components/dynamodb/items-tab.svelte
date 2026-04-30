@@ -142,7 +142,7 @@
 	}
 </script>
 
-<div class="flex h-full min-h-0 flex-col">
+<div class="flex h-full min-h-0 min-w-0 flex-col">
 	<div class="shrink-0 border-b border-border bg-background/40 p-3">
 		<div class="mb-3 flex items-center gap-2">
 			<div class="flex rounded-md border border-border p-0.5">

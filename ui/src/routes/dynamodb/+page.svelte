@@ -148,7 +148,7 @@
 		</Button>
 	{/snippet}
 
-	<div class="grid h-full min-h-0 grid-cols-[280px_1fr] divide-x divide-border">
+	<div class="grid h-full min-h-0 grid-cols-[280px_minmax(0,1fr)] divide-x divide-border">
 		<aside class="min-h-0 overflow-hidden">
 			<TableList
 				{tables}
@@ -159,7 +159,7 @@
 			/>
 		</aside>
 
-		<section class="flex min-h-0 flex-col">
+		<section class="flex min-h-0 min-w-0 flex-col">
 			{#if !selected}
 				<div
 					class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground"
@@ -193,7 +193,7 @@
 					</div>
 				</div>
 
-				<Tabs bind:value={activeTab} class="flex min-h-0 flex-1 flex-col gap-0">
+				<Tabs bind:value={activeTab} class="flex min-h-0 min-w-0 flex-1 flex-col gap-0">
 					<TabsList class="mx-4 mt-2 self-start">
 						<TabsTrigger value="items">Items</TabsTrigger>
 						<TabsTrigger value="partiql">PartiQL</TabsTrigger>
@@ -201,17 +201,17 @@
 						<TabsTrigger value="schema">Schema</TabsTrigger>
 					</TabsList>
 
-					<div class="min-h-0 flex-1">
-						<TabsContent value="items" class="m-0 h-full">
+					<div class="min-h-0 min-w-0 flex-1">
+						<TabsContent value="items" class="m-0 h-full min-w-0">
 							<ItemsTab {detail} onEdit={openEditor} />
 						</TabsContent>
-						<TabsContent value="partiql" class="m-0 h-full">
+						<TabsContent value="partiql" class="m-0 h-full min-w-0">
 							<PartiqlTab tableName={selected.name} />
 						</TabsContent>
-						<TabsContent value="indexes" class="m-0 h-full">
+						<TabsContent value="indexes" class="m-0 h-full min-w-0">
 							<IndexesTab {detail} />
 						</TabsContent>
-						<TabsContent value="schema" class="m-0 h-full">
+						<TabsContent value="schema" class="m-0 h-full min-w-0">
 							<SchemaTab {detail} />
 						</TabsContent>
 					</div>
