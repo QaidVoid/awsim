@@ -98,8 +98,13 @@ pub fn batch_get_item(
             continue;
         }
 
-        let stored =
-            sqlite.get_item(&ctx.account_id, &ctx.region, &key.table_name, &key.pk, &key.sk)?;
+        let stored = sqlite.get_item(
+            &ctx.account_id,
+            &ctx.region,
+            &key.table_name,
+            &key.pk,
+            &key.sk,
+        )?;
         let Some(stored) = stored else {
             continue;
         };

@@ -344,49 +344,6 @@ pub fn scan(
     Ok(result)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn item_with(attrs: &[(&str, Value)]) -> DynamoItem {
-        let mut m = DynamoItem::new();
-        for (k, v) in attrs {
-            m.insert(k.to_string(), v.clone());
-        }
-        m
-    }
-
-    #[test]
-    fn estimate_handles_typical_attribute_value() {
-        // {"id": {"S": "abc"}, "n": {"N": "42"}}
-        let item = item_with(&[("id", json!({ "S": "abc" })), ("n", json!({ "N": "42" }))]);
-        let bytes = estimate_item_bytes(&item);
-        // We don't pin the exact figure (varies if we tune overhead),
-        // but it must be small + non-zero so the cap fires sanely.
-        assert!(bytes > 0);
-        assert!(bytes < 256, "tiny item shouldn't estimate huge: {bytes}");
-    }
-
-    #[test]
-    fn estimate_grows_with_string_payload() {
-        let small = item_with(&[("body", json!({ "S": "x".repeat(10) }))]);
-        let large = item_with(&[("body", json!({ "S": "x".repeat(10_000) }))]);
-        let small_bytes = estimate_item_bytes(&small);
-        let large_bytes = estimate_item_bytes(&large);
-        assert!(
-            large_bytes >= small_bytes + 9_000,
-            "large item should grow ~linearly with payload (small={small_bytes}, large={large_bytes})"
-        );
-    }
-
-    #[test]
-    fn cap_is_one_mib() {
-        // Sanity: if someone bumps the const accidentally, fail loudly.
-        // Real AWS DynamoDB Query/Scan response cap is exactly 1 MiB.
-        assert_eq!(MAX_RESPONSE_BYTES, 1024 * 1024);
-    }
-}
-
 /// Try to extract the partition key value from a KeyConditionExpression.
 /// This enables a single-partition lookup against SQLite instead of a
 /// full table scan.
@@ -435,4 +392,47 @@ fn extract_pk_from_condition(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item_with(attrs: &[(&str, Value)]) -> DynamoItem {
+        let mut m = DynamoItem::new();
+        for (k, v) in attrs {
+            m.insert(k.to_string(), v.clone());
+        }
+        m
+    }
+
+    #[test]
+    fn estimate_handles_typical_attribute_value() {
+        // {"id": {"S": "abc"}, "n": {"N": "42"}}
+        let item = item_with(&[("id", json!({ "S": "abc" })), ("n", json!({ "N": "42" }))]);
+        let bytes = estimate_item_bytes(&item);
+        // We don't pin the exact figure (varies if we tune overhead),
+        // but it must be small + non-zero so the cap fires sanely.
+        assert!(bytes > 0);
+        assert!(bytes < 256, "tiny item shouldn't estimate huge: {bytes}");
+    }
+
+    #[test]
+    fn estimate_grows_with_string_payload() {
+        let small = item_with(&[("body", json!({ "S": "x".repeat(10) }))]);
+        let large = item_with(&[("body", json!({ "S": "x".repeat(10_000) }))]);
+        let small_bytes = estimate_item_bytes(&small);
+        let large_bytes = estimate_item_bytes(&large);
+        assert!(
+            large_bytes >= small_bytes + 9_000,
+            "large item should grow ~linearly with payload (small={small_bytes}, large={large_bytes})"
+        );
+    }
+
+    #[test]
+    fn cap_is_one_mib() {
+        // Sanity: if someone bumps the const accidentally, fail loudly.
+        // Real AWS DynamoDB Query/Scan response cap is exactly 1 MiB.
+        assert_eq!(MAX_RESPONSE_BYTES, 1024 * 1024);
+    }
 }
