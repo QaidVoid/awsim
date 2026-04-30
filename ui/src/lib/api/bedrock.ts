@@ -391,6 +391,43 @@ export async function getKnowledgeBase(
   return mapKnowledgeBaseDetail(res.knowledgeBase ?? {});
 }
 
+// ---------- Admin: bedrock proxy config ----------
+
+export interface BedrockBackendInfo {
+  name: string;
+  endpoint: string;
+  hasApiKey: boolean;
+}
+
+export interface BedrockModelMapEntry {
+  id: string;
+  tag: string;
+  backend: string | null;
+}
+
+export interface BedrockProxyConfig {
+  enabled: boolean;
+  defaultBackend: string | null;
+  backends: BedrockBackendInfo[];
+  invoke: BedrockModelMapEntry[];
+  embed: BedrockModelMapEntry[];
+}
+
+export async function getBedrockProxyConfig(): Promise<BedrockProxyConfig> {
+  const res = await fetch("/_awsim/bedrock/config");
+  if (!res.ok) {
+    throw new Error(`bedrock/config failed (HTTP ${res.status})`);
+  }
+  const raw = (await res.json()) as Partial<BedrockProxyConfig>;
+  return {
+    enabled: raw.enabled ?? false,
+    defaultBackend: raw.defaultBackend ?? null,
+    backends: raw.backends ?? [],
+    invoke: raw.invoke ?? [],
+    embed: raw.embed ?? [],
+  };
+}
+
 // ---------- Runtime: invoke model ----------
 
 export async function invokeModel(
