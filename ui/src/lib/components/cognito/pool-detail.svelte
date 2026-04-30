@@ -118,7 +118,7 @@
 </script>
 
 <Sheet bind:open onOpenChange={(v) => onOpenChange(v)}>
-	<SheetContent side="right" class="w-full max-w-3xl overflow-y-auto sm:max-w-3xl">
+	<SheetContent side="right" class="w-full overflow-y-auto sm:max-w-[min(900px,90vw)]">
 		<SheetHeader>
 			<SheetTitle>{pool?.name ?? ''}</SheetTitle>
 			<SheetDescription class="font-mono text-xs">{pool?.id ?? ''}</SheetDescription>
@@ -141,19 +141,19 @@
 						<ul class="space-y-1.5">
 							{#each users as u (u.username)}
 								<li
-									class="flex items-center justify-between rounded border border-border/60 px-3 py-2 text-sm"
+									class="flex flex-wrap items-center gap-2 rounded border border-border/60 px-3 py-2 text-sm"
 								>
-									<div class="min-w-0">
-										<div class="flex items-center gap-2 font-medium">
-											{u.username}
+									<div class="min-w-0 flex-1">
+										<div class="flex flex-wrap items-center gap-2">
+											<span class="truncate font-medium">{u.username}</span>
 											<Badge variant={u.enabled ? 'secondary' : 'destructive'}>
 												{u.enabled ? 'enabled' : 'disabled'}
 											</Badge>
-											<Badge variant="outline">{u.status}</Badge>
+											<Badge variant="outline" class="font-mono text-[10px]">{u.status}</Badge>
 										</div>
 										<div class="text-xs text-muted-foreground">{u.createDate}</div>
 									</div>
-									<div class="flex shrink-0 gap-1">
+									<div class="flex shrink-0 flex-wrap gap-1">
 										<Button variant="ghost" size="xs" onclick={() => toggleEnabled(u)}>
 											{u.enabled ? 'Disable' : 'Enable'}
 										</Button>
