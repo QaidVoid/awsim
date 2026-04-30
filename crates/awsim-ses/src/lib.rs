@@ -5,6 +5,7 @@ mod state;
 pub use sqlite_store::{SentEmailRow, SqliteStore};
 pub use state::SentEmail;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -18,36 +19,83 @@ use state::SesState;
 
 pub struct SesService {
     store: AccountRegionStore<SesState>,
+    sqlite_store: Arc<SqliteStore>,
+    /// Holds the per-process tempdir when running without
+    /// `--data-dir` so the `.db` files are removed on graceful
+    /// shutdown via Drop.
+    _tempdir: Option<tempfile::TempDir>,
 }
 
 impl SesService {
+    /// Ephemeral in-process store. Files live in a `TempDir`
+    /// cleaned up on Drop.
     pub fn new() -> Self {
+        let dir = tempfile::Builder::new()
+            .prefix("awsim-ses-")
+            .tempdir()
+            .expect("creating ephemeral SES tempdir should not fail");
+        let path = dir.path().join("ses.db");
+        let sqlite_store = Arc::new(
+            SqliteStore::open(&path).expect("opening ephemeral SES sqlite store should not fail"),
+        );
         Self {
             store: AccountRegionStore::new(),
+            sqlite_store,
+            _tempdir: Some(dir),
         }
     }
 
-    fn get_state(&self, ctx: &RequestContext) -> Arc<SesState> {
-        self.store.get(&ctx.account_id, &ctx.region)
+    /// Persistent store rooted at `{dir}/ses.db`.
+    pub fn with_data_dir(dir: impl AsRef<Path>) -> Self {
+        let dir = dir.as_ref();
+        std::fs::create_dir_all(dir).unwrap_or_else(|e| {
+            panic!("creating SES data dir {} failed: {e}", dir.display())
+        });
+        let path = dir.join("ses.db");
+        let sqlite_store = Arc::new(SqliteStore::open(&path).unwrap_or_else(|e| {
+            panic!(
+                "opening persistent SES sqlite store at {} failed: {e}",
+                path.display()
+            )
+        }));
+        Self {
+            store: AccountRegionStore::new(),
+            sqlite_store,
+            _tempdir: None,
+        }
     }
 
-    /// Snapshot every sent email across all accounts/regions.
-    /// Returned newest-first by `sent_at`.
+    /// Tempdir path for the awsim binary's shutdown cleanup.
+    pub fn tempdir_path(&self) -> Option<&Path> {
+        self._tempdir.as_ref().map(|d| d.path())
+    }
+
+    /// Internal Arc to the sqlite store — exposed so the awsim
+    /// binary's `/_awsim/storage/sqlite` endpoint can surface row
+    /// counts + file size, and so the retention sweep can run.
+    pub fn sqlite_store_handle(&self) -> Option<Arc<SqliteStore>> {
+        Some(Arc::clone(&self.sqlite_store))
+    }
+
+    fn get_state(&self, ctx: &RequestContext) -> Arc<SesState> {
+        let state = self.store.get(&ctx.account_id, &ctx.region);
+        state.set_sqlite(Arc::clone(&self.sqlite_store));
+        state
+    }
+
+    /// Snapshot every sent email across all accounts/regions, newest
+    /// first. Reads straight from SQLite — survives restarts.
     pub fn list_sent_emails(&self) -> Vec<(String, String, SentEmail)> {
-        let mut out: Vec<(String, String, SentEmail)> = self
-            .store
-            .iter_all()
-            .into_iter()
-            .flat_map(|((account, region), state)| {
-                state
-                    .sent_emails
-                    .iter()
-                    .map(|e| (account.clone(), region.clone(), e.value().clone()))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        out.sort_by(|a, b| b.2.sent_at.cmp(&a.2.sent_at));
-        out
+        match self.sqlite_store.list_all() {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|r| (r.account, r.region, r.email))
+                .collect(),
+            Err(e) => {
+                tracing::warn!(error = %e.message, "SES list_sent_emails failed");
+                Vec::new()
+            }
+        }
     }
 }
 

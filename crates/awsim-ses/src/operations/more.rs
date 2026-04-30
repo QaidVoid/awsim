@@ -20,7 +20,7 @@ fn now() -> u64 {
 pub fn send_bulk_email(
     state: &SesState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let from = input["FromEmailAddress"]
         .as_str()
@@ -55,7 +55,9 @@ pub fn send_bulk_email(
             raw: None,
             sent_at: now(),
         };
-        state.sent_emails.insert(message_id.clone(), email);
+        if let Some(store) = state.sqlite() {
+            store.put_email(&ctx.account_id, &ctx.region, &email)?;
+        }
         results.push(json!({
             "MessageId": message_id,
             "Status": "SUCCESS",
@@ -68,7 +70,7 @@ pub fn send_bulk_email(
 pub fn send_custom_verification_email(
     state: &SesState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let email = input["EmailAddress"]
         .as_str()
@@ -87,7 +89,9 @@ pub fn send_custom_verification_email(
         raw: None,
         sent_at: now(),
     };
-    state.sent_emails.insert(message_id.clone(), entry);
+    if let Some(store) = state.sqlite() {
+        store.put_email(&ctx.account_id, &ctx.region, &entry)?;
+    }
     Ok(json!({ "MessageId": message_id }))
 }
 

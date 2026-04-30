@@ -22,7 +22,7 @@ fn now_epoch() -> u64 {
 pub fn send_email(
     state: &SesState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let from = input["FromEmailAddress"]
         .as_str()
@@ -97,7 +97,9 @@ pub fn send_email(
     };
 
     info!(message_id = %message_id, "SES: email sent");
-    state.sent_emails.insert(message_id.clone(), email);
+    if let Some(store) = state.sqlite() {
+        store.put_email(&ctx.account_id, &ctx.region, &email)?;
+    }
 
     Ok(json!({ "MessageId": message_id }))
 }

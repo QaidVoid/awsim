@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use dashmap::DashMap;
 
@@ -95,7 +96,6 @@ pub struct CustomVerificationTemplate {
 
 #[derive(Debug, Default)]
 pub struct SesState {
-    pub sent_emails: DashMap<String, SentEmail>,
     pub identities: DashMap<String, EmailIdentity>,
     pub templates: DashMap<String, EmailTemplate>,
     pub configuration_sets: DashMap<String, ConfigurationSet>,
@@ -106,4 +106,18 @@ pub struct SesState {
     pub custom_verification_templates: DashMap<String, CustomVerificationTemplate>,
     pub identity_policies: DashMap<String, HashMap<String, String>>,
     pub identity_tags: DashMap<String, HashMap<String, String>>,
+    /// Outbound email persistence — populated by `SesService` on the
+    /// first `get_state()` call so operations can write to it without
+    /// holding a service handle.
+    pub sqlite: OnceLock<Arc<crate::SqliteStore>>,
+}
+
+impl SesState {
+    pub fn sqlite(&self) -> Option<&Arc<crate::SqliteStore>> {
+        self.sqlite.get()
+    }
+
+    pub fn set_sqlite(&self, store: Arc<crate::SqliteStore>) {
+        let _ = self.sqlite.set(store);
+    }
 }

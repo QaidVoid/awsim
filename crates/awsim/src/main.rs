@@ -418,6 +418,7 @@ async fn async_main() -> Result<()> {
         let logs_for_cleanup = Arc::clone(&logs_service);
         let cw_metrics_for_cleanup = Arc::clone(&cw_metrics_service);
         let kinesis_for_cleanup = Arc::clone(&kinesis_service);
+        let ses_for_cleanup = Arc::clone(&ses_service);
         tokio::spawn(async move {
             #[cfg(unix)]
             {
@@ -437,6 +438,7 @@ async fn async_main() -> Result<()> {
             cleanup_tempdir("CloudWatch Logs", logs_for_cleanup.tempdir_path());
             cleanup_tempdir("CloudWatch Metrics", cw_metrics_for_cleanup.tempdir_path());
             cleanup_tempdir("Kinesis", kinesis_for_cleanup.tempdir_path());
+            cleanup_tempdir("SES", ses_for_cleanup.tempdir_path());
             info!("Exiting.");
             std::process::exit(0);
         });
@@ -500,6 +502,7 @@ async fn async_main() -> Result<()> {
         let logs_for_shutdown = Arc::clone(&logs_service);
         let cw_metrics_for_shutdown = Arc::clone(&cw_metrics_service);
         let kinesis_for_shutdown = Arc::clone(&kinesis_service);
+        let ses_for_shutdown = Arc::clone(&ses_service);
         tokio::spawn(async move {
             #[cfg(unix)]
             {
@@ -534,6 +537,7 @@ async fn async_main() -> Result<()> {
             cleanup_tempdir("CloudWatch Logs", logs_for_shutdown.tempdir_path());
             cleanup_tempdir("CloudWatch Metrics", cw_metrics_for_shutdown.tempdir_path());
             cleanup_tempdir("Kinesis", kinesis_for_shutdown.tempdir_path());
+            cleanup_tempdir("SES", ses_for_shutdown.tempdir_path());
 
             info!("Snapshots saved. Exiting.");
             std::process::exit(0);
@@ -1406,7 +1410,10 @@ fn register_services(
     let kinesis_clone = Arc::clone(&kinesis);
     state.register(kinesis, vec![]);
 
-    let ses_service = Arc::new(awsim_ses::SesService::new());
+    let ses_service = Arc::new(match data_dir {
+        Some(dir) => awsim_ses::SesService::with_data_dir(dir),
+        None => awsim_ses::SesService::new(),
+    });
     let ses_routes = {
         use awsim_core::ServiceHandler;
         ses_service.routes()
