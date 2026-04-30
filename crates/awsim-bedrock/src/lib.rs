@@ -396,7 +396,7 @@ impl ServiceHandler for BedrockRuntimeService {
         debug!(operation, "Bedrock runtime request");
 
         match operation {
-            "InvokeModel" => runtime::invoke_model(&input),
+            "InvokeModel" => runtime::invoke_model(self.backend.as_ref(), &input).await,
             "InvokeModelWithResponseStream" => runtime::invoke_model_with_response_stream(&input),
             "Converse" => runtime::converse(&input),
             "ConverseStream" => runtime::converse_stream(&input),
