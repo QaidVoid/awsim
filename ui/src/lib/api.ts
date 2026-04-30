@@ -110,6 +110,86 @@ export async function fetchDebugObjects(): Promise<DebugObjectsPayload> {
   return res.json();
 }
 
+// ---------- Seed admin endpoints ----------
+
+async function seedPost<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}/seed/${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  const parsed = text ? (JSON.parse(text) as Record<string, unknown>) : ({} as Record<string, unknown>);
+  if (!res.ok) {
+    const msg =
+      typeof parsed.message === "string" ? parsed.message : `Seed ${path} failed: ${res.status}`;
+    throw new Error(msg);
+  }
+  return parsed as T;
+}
+
+export interface SeedCognitoResult {
+  created: number;
+  skipped: number;
+  pool_id?: string;
+}
+export async function seedCognitoUsers(input: {
+  pool_id: string;
+  count: number;
+  prefix?: string;
+  password?: string;
+}): Promise<SeedCognitoResult> {
+  return seedPost("cognito-users", input);
+}
+
+export interface SeedDdbResult {
+  tables_created: number;
+  items_created: number;
+  errors: string[];
+}
+export async function seedDynamoDb(input: {
+  tables: number;
+  items_per_table?: number;
+  prefix?: string;
+}): Promise<SeedDdbResult> {
+  return seedPost("dynamodb", input);
+}
+
+export interface SeedS3Result {
+  buckets_created: number;
+  objects_created: number;
+}
+export async function seedS3(input: {
+  buckets: number;
+  objects_per_bucket?: number;
+  body_bytes?: number;
+  prefix?: string;
+}): Promise<SeedS3Result> {
+  return seedPost("s3", input);
+}
+
+export interface SeedSecretsResult {
+  created: number;
+}
+export async function seedSecrets(input: {
+  count: number;
+  prefix?: string;
+}): Promise<SeedSecretsResult> {
+  return seedPost("secrets", input);
+}
+
+export interface SeedSqsResult {
+  queues_created: number;
+  messages_created: number;
+}
+export async function seedSqs(input: {
+  queues: number;
+  messages_per_queue?: number;
+  prefix?: string;
+}): Promise<SeedSqsResult> {
+  return seedPost("sqs", input);
+}
+
 // ---------- SES outbox ----------
 
 export interface SesSentEmail {

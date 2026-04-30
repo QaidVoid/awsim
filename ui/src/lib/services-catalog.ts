@@ -53,6 +53,7 @@ import ShieldCheck from "@lucide/svelte/icons/shield-check";
 import Snowflake from "@lucide/svelte/icons/snowflake";
 import SquareTerminal from "@lucide/svelte/icons/square-terminal";
 import Tag from "@lucide/svelte/icons/tag";
+import Sprout from "@lucide/svelte/icons/sprout";
 import Upload from "@lucide/svelte/icons/upload";
 import UsersRound from "@lucide/svelte/icons/users-round";
 import ToggleLeft from "@lucide/svelte/icons/toggle-left";
@@ -618,6 +619,25 @@ export const SERVICES: Service[] = [
       "diagnose",
       "observability",
       "stats",
+    ],
+  },
+  {
+    id: "seed",
+    name: "Seed data",
+    href: "/seed",
+    category: "Admin",
+    icon: Sprout,
+    keywords: [
+      "seed",
+      "fake",
+      "sample",
+      "data",
+      "populate",
+      "users",
+      "items",
+      "buckets",
+      "queues",
+      "secrets",
     ],
   },
 ];
