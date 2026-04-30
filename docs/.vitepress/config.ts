@@ -33,6 +33,7 @@ export default defineConfig({
             { text: 'API Gateway Proxy', link: '/guide/api-gateway' },
             { text: 'OpenSearch', link: '/guide/opensearch' },
             { text: 'Seeding Test Data', link: '/guide/seeding' },
+            { text: 'Memory & Diagnostics', link: '/guide/memory' },
           ]
         },
         {
