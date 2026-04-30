@@ -31,9 +31,11 @@
 	import { toast } from 'svelte-sonner';
 	import Plus from '@lucide/svelte/icons/plus';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import CreateUserDialog from './create-user-dialog.svelte';
 	import SetPasswordDialog from './set-password-dialog.svelte';
 	import ConfirmDialog from './confirm-dialog.svelte';
+	import UserDetail from './user-detail.svelte';
 
 	interface Props {
 		pool: UserPool | null;
@@ -132,6 +134,7 @@
 			: users
 	);
 
+	let expandedUser = $state<string | null>(null);
 	let createUserOpen = $state(false);
 	let setPwUser = $state<string | null>(null);
 	let setPwOpen = $state(false);
@@ -216,20 +219,34 @@
 					{:else}
 						<ul class="space-y-1.5">
 							{#each filteredUsers as u (u.username)}
-								<li
-									class="flex flex-wrap items-center gap-2 rounded border border-border/60 px-3 py-2 text-sm"
-								>
-									<div class="min-w-0 flex-1">
-										<div class="flex flex-wrap items-center gap-2">
-											<span class="truncate font-medium">{u.username}</span>
-											<Badge variant={u.enabled ? 'secondary' : 'destructive'}>
-												{u.enabled ? 'enabled' : 'disabled'}
-											</Badge>
-											<Badge variant="outline" class="font-mono text-[10px]">{u.status}</Badge>
-										</div>
-										<div class="text-xs text-muted-foreground">{u.createDate}</div>
-									</div>
-									<div class="flex shrink-0 flex-wrap gap-1">
+								<li class="rounded border border-border/60">
+									<div class="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+										<button
+											type="button"
+											class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+											onclick={() =>
+												(expandedUser = expandedUser === u.username ? null : u.username)}
+											aria-expanded={expandedUser === u.username}
+											aria-label="Toggle details for {u.username}"
+										>
+											<ChevronRight
+												class="size-3.5 shrink-0 text-muted-foreground transition-transform {expandedUser ===
+												u.username
+													? 'rotate-90'
+													: ''}"
+											/>
+											<div class="min-w-0">
+												<div class="flex flex-wrap items-center gap-2">
+													<span class="truncate font-medium">{u.username}</span>
+													<Badge variant={u.enabled ? 'secondary' : 'destructive'}>
+														{u.enabled ? 'enabled' : 'disabled'}
+													</Badge>
+													<Badge variant="outline" class="font-mono text-[10px]">{u.status}</Badge>
+												</div>
+												<div class="text-xs text-muted-foreground">{u.createDate}</div>
+											</div>
+										</button>
+										<div class="flex shrink-0 flex-wrap gap-1">
 										<Button variant="ghost" size="xs" onclick={() => toggleEnabled(u)}>
 											{u.enabled ? 'Disable' : 'Enable'}
 										</Button>
@@ -253,6 +270,14 @@
 											Delete
 										</Button>
 									</div>
+									</div>
+									{#if expandedUser === u.username && pool}
+										<div class="border-t border-border/60 px-3 py-3">
+											{#key u.username}
+												<UserDetail poolId={pool.id} username={u.username} />
+											{/key}
+										</div>
+									{/if}
 								</li>
 							{/each}
 						</ul>
