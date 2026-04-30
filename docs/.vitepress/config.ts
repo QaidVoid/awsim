@@ -32,6 +32,7 @@ export default defineConfig({
             { text: 'Lambda Execution', link: '/guide/lambda-execution' },
             { text: 'API Gateway Proxy', link: '/guide/api-gateway' },
             { text: 'OpenSearch', link: '/guide/opensearch' },
+            { text: 'Seeding Test Data', link: '/guide/seeding' },
           ]
         },
         {
