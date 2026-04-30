@@ -12,6 +12,8 @@
 		adminDeleteUser,
 		deleteGroup,
 		deleteAppClient,
+		createDomain,
+		deleteDomain,
 		type UserPool,
 		type UserPoolDetail,
 		type CognitoUserSummary,
@@ -88,6 +90,13 @@
 			users = u;
 			groups = g;
 			clients = c;
+			if (d.domain) {
+				try {
+					domain = await describeDomain(d.domain);
+				} catch {
+					domain = { domain: d.domain };
+				}
+			}
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to load pool');
 		} finally {
@@ -258,6 +267,55 @@
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
 		} finally {
 			deleteClientBusy = false;
+		}
+	}
+
+	let domainInput = $state('');
+	let domainBusy = $state(false);
+	let deleteDomainOpen = $state(false);
+	let deleteDomainBusy = $state(false);
+
+	async function refreshDomain() {
+		if (!pool) return;
+		try {
+			detail = await describeUserPool(pool.id);
+			if (detail?.domain) {
+				domain = (await describeDomain(detail.domain)) ?? { domain: detail.domain };
+			} else {
+				domain = null;
+			}
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Refresh failed');
+		}
+	}
+
+	async function submitDomain() {
+		if (!pool || !domainInput.trim()) return;
+		domainBusy = true;
+		try {
+			await createDomain(pool.id, domainInput.trim());
+			toast.success(`Domain ${domainInput.trim()} created`);
+			domainInput = '';
+			await refreshDomain();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Create domain failed');
+		} finally {
+			domainBusy = false;
+		}
+	}
+
+	async function confirmDeleteDomain() {
+		if (!pool || !domain) return;
+		deleteDomainBusy = true;
+		try {
+			await deleteDomain(pool.id, domain.domain);
+			toast.success('Domain deleted');
+			deleteDomainOpen = false;
+			await refreshDomain();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteDomainBusy = false;
 		}
 	}
 </script>
@@ -503,7 +561,7 @@
 					{/if}
 				</TabsContent>
 
-				<TabsContent value="domain" class="mt-4">
+				<TabsContent value="domain" class="mt-4 space-y-4">
 					{#if loadingDetail}
 						<p class="text-xs text-muted-foreground">Loading...</p>
 					{:else}
@@ -516,11 +574,54 @@
 							<dd class="col-span-2">{detail?.mfaConfiguration ?? 'OFF'}</dd>
 							<dt class="text-muted-foreground">Estimated users</dt>
 							<dd class="col-span-2">{detail?.estimatedNumberOfUsers ?? 0}</dd>
-							{#if domain}
-								<dt class="text-muted-foreground">Domain</dt>
-								<dd class="col-span-2 font-mono text-xs">{domain.domain}</dd>
-							{/if}
 						</dl>
+
+						<div class="space-y-2 rounded border border-border/60 px-3 py-3">
+							<div class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+								Hosted UI domain
+							</div>
+							{#if domain}
+								<div class="flex flex-wrap items-center gap-2 text-sm">
+									<code class="font-mono text-xs">{domain.domain}</code>
+									{#if domain.status}
+										<Badge variant="outline">{domain.status}</Badge>
+									{/if}
+									<div class="flex-1"></div>
+									<Button
+										variant="ghost"
+										size="xs"
+										class="text-destructive hover:text-destructive"
+										onclick={() => (deleteDomainOpen = true)}
+									>
+										Delete
+									</Button>
+								</div>
+							{:else}
+								<form
+									class="flex items-end gap-2"
+									onsubmit={(e) => {
+										e.preventDefault();
+										void submitDomain();
+									}}
+								>
+									<div class="flex-1 space-y-1">
+										<label for="domain-input" class="text-xs text-muted-foreground">
+											Domain prefix
+										</label>
+										<Input
+											id="domain-input"
+											bind:value={domainInput}
+											placeholder="my-pool"
+											class="h-8 font-mono text-xs"
+											autocomplete="off"
+										/>
+									</div>
+									<Button size="sm" type="submit" disabled={domainBusy || !domainInput.trim()}>
+										Create
+									</Button>
+								</form>
+							{/if}
+						</div>
 					{/if}
 				</TabsContent>
 			</Tabs>
@@ -599,6 +700,16 @@
 				deleteClientId = null;
 				deleteClientName = null;
 			}}
+		/>
+	{/if}
+	{#if domain}
+		<ConfirmDialog
+			bind:open={deleteDomainOpen}
+			title="Delete domain"
+			description={`Delete the hosted UI domain ${domain.domain}? Sign-ins to it will stop working.`}
+			busy={deleteDomainBusy}
+			onConfirm={confirmDeleteDomain}
+			onClose={() => (deleteDomainOpen = false)}
 		/>
 	{/if}
 {/if}

@@ -67,6 +67,7 @@ export interface UserPoolDetail extends UserPool {
   estimatedNumberOfUsers?: number;
   lambdaConfig?: Record<string, string>;
   schemaAttributes?: { name: string; type: string; required: boolean }[];
+  domain?: string;
 }
 
 export interface CognitoUser {
@@ -174,6 +175,7 @@ export async function describeUserPool(id: string): Promise<UserPoolDetail> {
         AttributeDataType: string;
         Required: boolean;
       }[];
+      Domain?: string;
     };
   };
   const p = data.UserPool ?? ({} as NonNullable<typeof data.UserPool>);
@@ -192,6 +194,7 @@ export async function describeUserPool(id: string): Promise<UserPoolDetail> {
       type: a.AttributeDataType,
       required: a.Required,
     })),
+    domain: p.Domain,
   };
 }
 
