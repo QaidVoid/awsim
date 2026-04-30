@@ -143,22 +143,30 @@
 			</div>
 			<ul class="space-y-1.5">
 				{#each user.attributes as a (a.name)}
-					<li class="flex items-center gap-2 text-sm">
-						<span class="w-32 shrink-0 font-mono text-xs text-muted-foreground">{a.name}</span>
+					<li class="grid grid-cols-[minmax(0,12rem)_minmax(0,1fr)_auto] items-center gap-2 text-sm">
+						<span
+							class="truncate font-mono text-xs text-muted-foreground"
+							title={a.name}
+						>
+							{a.name}
+						</span>
 						{#if editing?.name === a.name}
-							<Input bind:value={editValue} class="h-7 flex-1" />
-							<Button size="xs" onclick={saveEdit} disabled={savingAttr}>Save</Button>
-							<Button
-								size="xs"
-								variant="ghost"
-								onclick={() => (editing = null)}
-								disabled={savingAttr}>Cancel</Button
-							>
+							<Input bind:value={editValue} class="h-7 min-w-0" />
+							<div class="flex shrink-0 gap-1">
+								<Button size="xs" onclick={saveEdit} disabled={savingAttr}>Save</Button>
+								<Button
+									size="xs"
+									variant="ghost"
+									onclick={() => (editing = null)}
+									disabled={savingAttr}>Cancel</Button
+								>
+							</div>
 						{:else}
-							<span class="flex-1 truncate font-mono text-xs">{a.value}</span>
+							<span class="min-w-0 truncate font-mono text-xs" title={a.value}>{a.value}</span>
 							<Button
 								variant="ghost"
 								size="xs"
+								class="shrink-0"
 								onclick={() => startEdit(a.name, a.value)}
 								disabled={a.name === 'sub'}
 							>
@@ -167,15 +175,16 @@
 						{/if}
 					</li>
 				{/each}
-				<li class="flex items-center gap-2 pt-1">
+				<li class="grid grid-cols-[minmax(0,12rem)_minmax(0,1fr)_auto] items-center gap-2 pt-1">
 					<Input
 						placeholder="custom:foo or given_name"
 						bind:value={newAttrName}
-						class="h-7 w-48 font-mono text-xs"
+						class="h-7 min-w-0 font-mono text-xs"
 					/>
-					<Input bind:value={newAttrValue} placeholder="value" class="h-7 flex-1 text-xs" />
+					<Input bind:value={newAttrValue} placeholder="value" class="h-7 min-w-0 text-xs" />
 					<Button
 						size="xs"
+						class="shrink-0"
 						onclick={addAttribute}
 						disabled={savingAttr || !newAttrName.trim() || !newAttrValue.trim()}
 					>
