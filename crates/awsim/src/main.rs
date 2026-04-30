@@ -915,12 +915,24 @@ async fn async_main() -> Result<()> {
     // Bulk-seed router. Each /_awsim/seed/<service> writes directly
     // to the service's internal state — no SigV4, no per-request
     // overhead — so a 10k-row seed lands in well under a second.
-    let seed_router: axum::Router<()> = axum::Router::new()
+    let seed_ddb_state = Arc::new(seed::dynamodb::SeedDdbState {
+        service: Arc::clone(&dynamodb_service),
+        default_account: cli.account_id.clone(),
+        default_region: cli.region.clone(),
+    });
+    let seed_cognito_router: axum::Router<()> = axum::Router::new()
         .route(
             "/_awsim/seed/cognito-users",
             axum::routing::post(seed::cognito::seed),
         )
         .with_state(Arc::clone(&cognito_state));
+    let seed_ddb_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/seed/dynamodb",
+            axum::routing::post(seed::dynamodb::seed),
+        )
+        .with_state(seed_ddb_state);
+    let seed_router = seed_cognito_router.merge(seed_ddb_router);
 
     let debug_router: axum::Router<()> = axum::Router::new()
         .route(

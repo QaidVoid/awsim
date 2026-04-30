@@ -104,6 +104,109 @@ impl DynamoDbService {
     fn get_state(&self, ctx: &RequestContext) -> Arc<DynamoState> {
         self.store.get(&ctx.account_id, &ctx.region)
     }
+
+    /// Bulk-seed `tables` tables, each with `items_per_table` items,
+    /// directly into state + SQLite — bypasses the SigV4 / gateway path
+    /// so a 1k-table × 100-item seed completes in well under a second.
+    /// Each table gets a single `id` (String) hash key. The `id_prefix`
+    /// is used as the basename for the generated table names so seed
+    /// data is easy to spot / clean up later.
+    pub fn seed(&self, input: SeedDatasetInput) -> SeedDatasetOutput {
+        use serde_json::json;
+        use uuid::Uuid;
+        let state = self.store.get(&input.account, &input.region);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+
+        let mut tables_created = 0u64;
+        let mut items_created = 0u64;
+        let mut errors: Vec<String> = Vec::new();
+        let empty_gsi: [(Option<String>, Option<String>); MAX_GSI_SLOTS] = Default::default();
+
+        for t in 0..input.tables {
+            let table_name = format!("{}-{}-{}", input.id_prefix, t, Uuid::new_v4().simple());
+            let table = state::Table {
+                name: table_name.clone(),
+                arn: format!(
+                    "arn:aws:dynamodb:{}:{}:table/{table_name}",
+                    input.region, input.account
+                ),
+                key_schema: vec![state::KeySchemaElement {
+                    attribute_name: "id".to_string(),
+                    key_type: "HASH".to_string(),
+                }],
+                attribute_definitions: vec![state::AttributeDefinition {
+                    attribute_name: "id".to_string(),
+                    attribute_type: "S".to_string(),
+                }],
+                billing_mode: "PAY_PER_REQUEST".to_string(),
+                status: "ACTIVE".to_string(),
+                created_at: now,
+                gsi: Vec::new(),
+                lsi: Vec::new(),
+                stream_enabled: false,
+                stream_arn: None,
+                stream_view_type: None,
+                stream_records: Vec::new(),
+                stream_sequence: 0,
+                ttl: state::TtlSpecification::default(),
+                tags: std::collections::HashMap::new(),
+            };
+            state.tables.insert(table_name.clone(), table);
+            tables_created += 1;
+
+            for i in 0..input.items_per_table {
+                let pk = Uuid::new_v4().to_string();
+                let attrs = json!({
+                    "id":     { "S": pk },
+                    "name":   { "S": format!("seed-name-{i}") },
+                    "email":  { "S": format!("seed-{i}@example.test") },
+                    "score":  { "N": (i % 1000).to_string() },
+                    "active": { "BOOL": (i % 2 == 0) }
+                });
+                if let Err(e) = self.sqlite.put_item(
+                    &input.account,
+                    &input.region,
+                    &table_name,
+                    &pk,
+                    "",
+                    &attrs,
+                    &empty_gsi,
+                ) {
+                    errors.push(format!("{table_name}/{pk}: {}", e.message));
+                    if errors.len() > 10 {
+                        break;
+                    }
+                    continue;
+                }
+                items_created += 1;
+            }
+        }
+
+        SeedDatasetOutput {
+            tables_created,
+            items_created,
+            errors,
+        }
+    }
+}
+
+/// Input shape for `DynamoDbService::seed`.
+pub struct SeedDatasetInput {
+    pub account: String,
+    pub region: String,
+    pub tables: u64,
+    pub items_per_table: u64,
+    pub id_prefix: String,
+}
+
+/// Result shape returned by `DynamoDbService::seed`.
+pub struct SeedDatasetOutput {
+    pub tables_created: u64,
+    pub items_created: u64,
+    pub errors: Vec<String>,
 }
 
 impl Default for DynamoDbService {

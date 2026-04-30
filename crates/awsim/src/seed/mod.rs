@@ -12,6 +12,7 @@ use rand::Rng;
 use rand::seq::SliceRandom;
 
 pub mod cognito;
+pub mod dynamodb;
 
 /// A single random first-name + last-name combo, e.g. "Alice Smith".
 pub fn fake_name() -> String {
