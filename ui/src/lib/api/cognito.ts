@@ -101,12 +101,30 @@ export interface CognitoAppClientDetail extends CognitoAppClient {
   clientSecret?: string;
   explicitAuthFlows: string[];
   callbackURLs: string[];
+  logoutURLs: string[];
+  allowedOAuthFlows: string[];
   allowedOAuthScopes: string[];
+  allowedOAuthFlowsUserPoolClient?: boolean;
+  supportedIdentityProviders: string[];
+  refreshTokenValidity?: number;
+  accessTokenValidity?: number;
+  idTokenValidity?: number;
 }
 
 export interface CognitoDomain {
   domain: string;
   status?: string;
+}
+
+export interface AppClientUpdateInput {
+  clientName?: string;
+  callbackURLs?: string[];
+  logoutURLs?: string[];
+  allowedOAuthFlows?: string[];
+  allowedOAuthScopes?: string[];
+  allowedOAuthFlowsUserPoolClient?: boolean;
+  supportedIdentityProviders?: string[];
+  explicitAuthFlows?: string[];
 }
 
 export interface IdentityPool {
@@ -268,6 +286,114 @@ export async function adminResetUserPassword(
   });
 }
 
+export async function adminCreateUser(input: {
+  poolId: string;
+  username: string;
+  temporaryPassword?: string;
+  attributes?: { name: string; value: string }[];
+  messageAction?: "SUPPRESS" | "RESEND";
+}): Promise<void> {
+  const body: Record<string, unknown> = {
+    UserPoolId: input.poolId,
+    Username: input.username,
+  };
+  if (input.temporaryPassword) body.TemporaryPassword = input.temporaryPassword;
+  if (input.messageAction) body.MessageAction = input.messageAction;
+  if (input.attributes && input.attributes.length > 0) {
+    body.UserAttributes = input.attributes.map((a) => ({
+      Name: a.name,
+      Value: a.value,
+    }));
+  }
+  await idpRequest("AdminCreateUser", body);
+}
+
+export async function adminDeleteUser(
+  poolId: string,
+  username: string,
+): Promise<void> {
+  await idpRequest("AdminDeleteUser", {
+    UserPoolId: poolId,
+    Username: username,
+  });
+}
+
+export async function adminSetUserPassword(input: {
+  poolId: string;
+  username: string;
+  password: string;
+  permanent: boolean;
+}): Promise<void> {
+  await idpRequest("AdminSetUserPassword", {
+    UserPoolId: input.poolId,
+    Username: input.username,
+    Password: input.password,
+    Permanent: input.permanent,
+  });
+}
+
+export async function adminUpdateUserAttributes(input: {
+  poolId: string;
+  username: string;
+  attributes: { name: string; value: string }[];
+}): Promise<void> {
+  await idpRequest("AdminUpdateUserAttributes", {
+    UserPoolId: input.poolId,
+    Username: input.username,
+    UserAttributes: input.attributes.map((a) => ({
+      Name: a.name,
+      Value: a.value,
+    })),
+  });
+}
+
+export async function adminListGroupsForUser(
+  poolId: string,
+  username: string,
+): Promise<CognitoGroup[]> {
+  const data = (await idpRequest("AdminListGroupsForUser", {
+    UserPoolId: poolId,
+    Username: username,
+  })) as {
+    Groups?: {
+      GroupName: string;
+      Description?: string;
+      RoleArn?: string;
+      Precedence?: number;
+    }[];
+  };
+  return (data.Groups ?? []).map((g) => ({
+    name: g.GroupName,
+    description: g.Description ?? "",
+    roleArn: g.RoleArn ?? "",
+    precedence: g.Precedence,
+  }));
+}
+
+export async function adminAddUserToGroup(
+  poolId: string,
+  username: string,
+  groupName: string,
+): Promise<void> {
+  await idpRequest("AdminAddUserToGroup", {
+    UserPoolId: poolId,
+    Username: username,
+    GroupName: groupName,
+  });
+}
+
+export async function adminRemoveUserFromGroup(
+  poolId: string,
+  username: string,
+  groupName: string,
+): Promise<void> {
+  await idpRequest("AdminRemoveUserFromGroup", {
+    UserPoolId: poolId,
+    Username: username,
+    GroupName: groupName,
+  });
+}
+
 // ---- Groups ----
 
 export async function listGroups(poolId: string): Promise<CognitoGroup[]> {
@@ -284,6 +410,75 @@ export async function listGroups(poolId: string): Promise<CognitoGroup[]> {
     description: g.Description ?? "",
     roleArn: g.RoleArn ?? "",
     precedence: g.Precedence,
+  }));
+}
+
+export async function createGroup(input: {
+  poolId: string;
+  name: string;
+  description?: string;
+  roleArn?: string;
+  precedence?: number;
+}): Promise<void> {
+  const body: Record<string, unknown> = {
+    UserPoolId: input.poolId,
+    GroupName: input.name,
+  };
+  if (input.description) body.Description = input.description;
+  if (input.roleArn) body.RoleArn = input.roleArn;
+  if (input.precedence !== undefined) body.Precedence = input.precedence;
+  await idpRequest("CreateGroup", body);
+}
+
+export async function updateGroup(input: {
+  poolId: string;
+  name: string;
+  description?: string;
+  roleArn?: string;
+  precedence?: number;
+}): Promise<void> {
+  const body: Record<string, unknown> = {
+    UserPoolId: input.poolId,
+    GroupName: input.name,
+  };
+  if (input.description !== undefined) body.Description = input.description;
+  if (input.roleArn !== undefined) body.RoleArn = input.roleArn;
+  if (input.precedence !== undefined) body.Precedence = input.precedence;
+  await idpRequest("UpdateGroup", body);
+}
+
+export async function deleteGroup(
+  poolId: string,
+  groupName: string,
+): Promise<void> {
+  await idpRequest("DeleteGroup", {
+    UserPoolId: poolId,
+    GroupName: groupName,
+  });
+}
+
+export async function listUsersInGroup(
+  poolId: string,
+  groupName: string,
+): Promise<CognitoUserSummary[]> {
+  const data = (await idpRequest("ListUsersInGroup", {
+    UserPoolId: poolId,
+    GroupName: groupName,
+  })) as {
+    Users?: {
+      Username: string;
+      UserStatus?: string;
+      Enabled?: boolean;
+      UserCreateDate?: number;
+    }[];
+  };
+  return (data.Users ?? []).map((u) => ({
+    username: u.Username,
+    status: u.UserStatus ?? "",
+    enabled: u.Enabled ?? true,
+    createDate: u.UserCreateDate
+      ? new Date(u.UserCreateDate * 1000).toISOString()
+      : "",
   }));
 }
 
@@ -322,7 +517,14 @@ export async function describeAppClient(
       ClientSecret?: string;
       ExplicitAuthFlows?: string[];
       CallbackURLs?: string[];
+      LogoutURLs?: string[];
+      AllowedOAuthFlows?: string[];
       AllowedOAuthScopes?: string[];
+      AllowedOAuthFlowsUserPoolClient?: boolean;
+      SupportedIdentityProviders?: string[];
+      RefreshTokenValidity?: number;
+      AccessTokenValidity?: number;
+      IdTokenValidity?: number;
     };
   };
   const c =
@@ -333,8 +535,102 @@ export async function describeAppClient(
     clientSecret: c.ClientSecret,
     explicitAuthFlows: c.ExplicitAuthFlows ?? [],
     callbackURLs: c.CallbackURLs ?? [],
+    logoutURLs: c.LogoutURLs ?? [],
+    allowedOAuthFlows: c.AllowedOAuthFlows ?? [],
     allowedOAuthScopes: c.AllowedOAuthScopes ?? [],
+    allowedOAuthFlowsUserPoolClient: c.AllowedOAuthFlowsUserPoolClient,
+    supportedIdentityProviders: c.SupportedIdentityProviders ?? [],
+    refreshTokenValidity: c.RefreshTokenValidity,
+    accessTokenValidity: c.AccessTokenValidity,
+    idTokenValidity: c.IdTokenValidity,
   };
+}
+
+export async function createAppClient(input: {
+  poolId: string;
+  clientName: string;
+  generateSecret?: boolean;
+  explicitAuthFlows?: string[];
+  callbackURLs?: string[];
+  logoutURLs?: string[];
+  allowedOAuthFlows?: string[];
+  allowedOAuthScopes?: string[];
+  allowedOAuthFlowsUserPoolClient?: boolean;
+  supportedIdentityProviders?: string[];
+}): Promise<CognitoAppClientDetail> {
+  const body: Record<string, unknown> = {
+    UserPoolId: input.poolId,
+    ClientName: input.clientName,
+  };
+  if (input.generateSecret) body.GenerateSecret = true;
+  if (input.explicitAuthFlows?.length)
+    body.ExplicitAuthFlows = input.explicitAuthFlows;
+  if (input.callbackURLs?.length) body.CallbackURLs = input.callbackURLs;
+  if (input.logoutURLs?.length) body.LogoutURLs = input.logoutURLs;
+  if (input.allowedOAuthFlows?.length)
+    body.AllowedOAuthFlows = input.allowedOAuthFlows;
+  if (input.allowedOAuthScopes?.length)
+    body.AllowedOAuthScopes = input.allowedOAuthScopes;
+  if (input.allowedOAuthFlowsUserPoolClient !== undefined)
+    body.AllowedOAuthFlowsUserPoolClient = input.allowedOAuthFlowsUserPoolClient;
+  if (input.supportedIdentityProviders?.length)
+    body.SupportedIdentityProviders = input.supportedIdentityProviders;
+  const data = (await idpRequest("CreateUserPoolClient", body)) as {
+    UserPoolClient?: {
+      ClientId?: string;
+      ClientName?: string;
+      ClientSecret?: string;
+    };
+  };
+  const c = data.UserPoolClient ?? {};
+  return {
+    clientId: c.ClientId ?? "",
+    clientName: c.ClientName ?? input.clientName,
+    clientSecret: c.ClientSecret,
+    explicitAuthFlows: input.explicitAuthFlows ?? [],
+    callbackURLs: input.callbackURLs ?? [],
+    logoutURLs: input.logoutURLs ?? [],
+    allowedOAuthFlows: input.allowedOAuthFlows ?? [],
+    allowedOAuthScopes: input.allowedOAuthScopes ?? [],
+    allowedOAuthFlowsUserPoolClient: input.allowedOAuthFlowsUserPoolClient,
+    supportedIdentityProviders: input.supportedIdentityProviders ?? [],
+  };
+}
+
+export async function updateAppClient(input: {
+  poolId: string;
+  clientId: string;
+  patch: AppClientUpdateInput;
+}): Promise<void> {
+  const body: Record<string, unknown> = {
+    UserPoolId: input.poolId,
+    ClientId: input.clientId,
+  };
+  const p = input.patch;
+  if (p.clientName !== undefined) body.ClientName = p.clientName;
+  if (p.callbackURLs !== undefined) body.CallbackURLs = p.callbackURLs;
+  if (p.logoutURLs !== undefined) body.LogoutURLs = p.logoutURLs;
+  if (p.allowedOAuthFlows !== undefined)
+    body.AllowedOAuthFlows = p.allowedOAuthFlows;
+  if (p.allowedOAuthScopes !== undefined)
+    body.AllowedOAuthScopes = p.allowedOAuthScopes;
+  if (p.allowedOAuthFlowsUserPoolClient !== undefined)
+    body.AllowedOAuthFlowsUserPoolClient = p.allowedOAuthFlowsUserPoolClient;
+  if (p.supportedIdentityProviders !== undefined)
+    body.SupportedIdentityProviders = p.supportedIdentityProviders;
+  if (p.explicitAuthFlows !== undefined)
+    body.ExplicitAuthFlows = p.explicitAuthFlows;
+  await idpRequest("UpdateUserPoolClient", body);
+}
+
+export async function deleteAppClient(
+  poolId: string,
+  clientId: string,
+): Promise<void> {
+  await idpRequest("DeleteUserPoolClient", {
+    UserPoolId: poolId,
+    ClientId: clientId,
+  });
 }
 
 // ---- Domain ----
@@ -356,6 +652,69 @@ export async function describeDomain(
   } catch {
     return null;
   }
+}
+
+export async function createDomain(
+  poolId: string,
+  domain: string,
+): Promise<void> {
+  await idpRequest("CreateUserPoolDomain", {
+    UserPoolId: poolId,
+    Domain: domain,
+  });
+}
+
+export async function deleteDomain(
+  poolId: string,
+  domain: string,
+): Promise<void> {
+  await idpRequest("DeleteUserPoolDomain", {
+    UserPoolId: poolId,
+    Domain: domain,
+  });
+}
+
+// ---- Pool create/delete ----
+
+export async function createUserPool(input: {
+  name: string;
+  autoVerifyEmail?: boolean;
+  passwordMinLength?: number;
+}): Promise<UserPool> {
+  const body: Record<string, unknown> = { PoolName: input.name };
+  if (input.autoVerifyEmail) body.AutoVerifiedAttributes = ["email"];
+  if (input.passwordMinLength !== undefined) {
+    body.Policies = {
+      PasswordPolicy: {
+        MinimumLength: input.passwordMinLength,
+        RequireUppercase: false,
+        RequireLowercase: false,
+        RequireNumbers: false,
+        RequireSymbols: false,
+      },
+    };
+  }
+  const data = (await idpRequest("CreateUserPool", body)) as {
+    UserPool?: {
+      Id?: string;
+      Name?: string;
+      Status?: string;
+      CreationDate?: number;
+    };
+  };
+  const p = data.UserPool ?? {};
+  return {
+    id: p.Id ?? "",
+    name: p.Name ?? input.name,
+    status: p.Status ?? "ACTIVE",
+    creationDate: p.CreationDate
+      ? new Date(p.CreationDate * 1000).toISOString()
+      : "",
+  };
+}
+
+export async function deleteUserPool(poolId: string): Promise<void> {
+  await idpRequest("DeleteUserPool", { UserPoolId: poolId });
 }
 
 // ---- Identity Pools ----
