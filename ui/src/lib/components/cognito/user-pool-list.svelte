@@ -44,12 +44,31 @@
 			: pools
 	);
 
+	let nextToken = $state<string | undefined>(undefined);
+	let loadingMore = $state(false);
+
 	async function load() {
 		loading = true;
 		try {
-			pools = await listUserPools();
+			const page = await listUserPools({ maxResults: 60 });
+			pools = page.pools;
+			nextToken = page.nextToken;
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function loadMore() {
+		if (!nextToken || loadingMore) return;
+		loadingMore = true;
+		try {
+			const page = await listUserPools({ maxResults: 60, nextToken });
+			pools = [...pools, ...page.pools];
+			nextToken = page.nextToken;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Load more failed');
+		} finally {
+			loadingMore = false;
 		}
 	}
 
@@ -110,7 +129,9 @@
 			class="h-8 max-w-xs"
 		/>
 		<div class="flex-1"></div>
-		<Badge variant="secondary">{filtered.length} of {pools.length}</Badge>
+		<Badge variant="secondary">
+			{filtered.length} of {pools.length}{nextToken ? '+' : ''}
+		</Badge>
 		<Button variant="ghost" size="icon-sm" onclick={load} disabled={loading} title="Refresh">
 			<RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
 		</Button>
@@ -141,6 +162,13 @@
 			{/snippet}
 		</DataTable>
 	</div>
+	{#if nextToken}
+		<div class="flex justify-center border-t border-border px-6 py-3">
+			<Button variant="outline" size="xs" onclick={loadMore} disabled={loadingMore}>
+				{loadingMore ? 'Loading...' : 'Load more pools'}
+			</Button>
+		</div>
+	{/if}
 </div>
 
 <CreatePoolDialog

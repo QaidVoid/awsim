@@ -141,23 +141,39 @@ export interface IdentityPoolDetail extends IdentityPool {
 
 // ---- User Pools ----
 
-export async function listUserPools(): Promise<UserPool[]> {
-  const data = (await idpRequest("ListUserPools", { MaxResults: 60 })) as {
+export interface ListUserPoolsPage {
+  pools: UserPool[];
+  nextToken?: string;
+}
+
+export async function listUserPools(opts?: {
+  maxResults?: number;
+  nextToken?: string;
+}): Promise<ListUserPoolsPage> {
+  const body: Record<string, unknown> = {
+    MaxResults: opts?.maxResults ?? 60,
+  };
+  if (opts?.nextToken) body.NextToken = opts.nextToken;
+  const data = (await idpRequest("ListUserPools", body)) as {
     UserPools?: {
       Id: string;
       Name: string;
       Status?: string;
       CreationDate?: number;
     }[];
+    NextToken?: string;
   };
-  return (data.UserPools ?? []).map((p) => ({
-    id: p.Id,
-    name: p.Name,
-    status: p.Status ?? "ACTIVE",
-    creationDate: p.CreationDate
-      ? new Date(p.CreationDate * 1000).toISOString()
-      : "",
-  }));
+  return {
+    pools: (data.UserPools ?? []).map((p) => ({
+      id: p.Id,
+      name: p.Name,
+      status: p.Status ?? "ACTIVE",
+      creationDate: p.CreationDate
+        ? new Date(p.CreationDate * 1000).toISOString()
+        : "",
+    })),
+    nextToken: data.NextToken,
+  };
 }
 
 export async function describeUserPool(id: string): Promise<UserPoolDetail> {
