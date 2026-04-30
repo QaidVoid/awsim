@@ -25,11 +25,26 @@ AWSim exposes a lightweight admin API independent of the AWS wire protocol:
 | `/_awsim/config` | GET | Active configuration (port, region, account ID, data-dir) |
 | `/_awsim/stats` | GET | Runtime statistics |
 | `/_awsim/storage` | GET | Per-service `BodyStore` disk usage (when `--data-dir` is set) |
+| `/_awsim/storage/sqlite` | GET | Per-service SQLite store row counts + database file sizes (DynamoDB, CloudWatch Logs, CloudWatch Metrics, Kinesis, SES) |
 | `/_awsim/events` | GET | Server-Sent Events stream of every gateway request |
 | `/_awsim/requests` | GET | Most recent captured request ids (newest first) |
 | `/_awsim/requests/{id}` | GET | Full captured detail for one request — headers + bodies |
 | `/_awsim/requests/{id}/replay` | POST | Re-issue the captured request through the gateway |
 | `/_awsim/billing` | GET | Rolling estimated AWS bill — running cost, projected monthly, per-service breakdown. See the [Billing guide](/guide/billing). |
+| `/_awsim/debug/objects` | GET | Memory diagnostic — process RSS plus per-subsystem object counts. See [Observability](#observability) below. |
+| `/_awsim/ses/sent` | GET | List every captured outbound email (newest first). Optional `?account=` and `?region=` filters. See the [SES service doc](/services/ses). |
+| `/_awsim/admin/dynamodb/vacuum` | POST | Reclaim disk space in the DynamoDB SQLite store after heavy DELETE / UPDATE churn. |
+| `/_awsim/snapshots` | GET | List saved named snapshots (see [Persistence](/guide/persistence#named-snapshots)). |
+| `/_awsim/snapshots/{name}` | POST / DELETE | Save / delete a named snapshot bundle. |
+| `/_awsim/snapshots/{name}/load` | POST | Restore a previously saved snapshot. |
+| `/_awsim/chaos/rules` | GET / POST | List or append chaos-injection rules. |
+| `/_awsim/chaos/rules/{id}` | DELETE | Remove a chaos rule. |
+| `/_awsim/chaos/presets/{name}` | POST | Apply a built-in chaos preset (`s3-flaky`, `ddb-throttled`, etc). See the [Chaos guide](/guide/chaos). |
+| `/_awsim/seed/cognito-users` | POST | Bulk-seed N users into a Cognito user pool. See [Seeding](#seeding). |
+| `/_awsim/seed/dynamodb` | POST | Bulk-seed N tables × M items. |
+| `/_awsim/seed/s3` | POST | Bulk-seed N buckets × M small objects. |
+| `/_awsim/seed/secrets` | POST | Bulk-seed N secrets with credential-shaped JSON bodies. |
+| `/_awsim/seed/sqs` | POST | Bulk-seed N queues × M messages. |
 
 Example:
 
@@ -176,19 +191,87 @@ The main dashboard composes a live overview of the running emulator:
 - **KPI strip** — total requests since boot, live RPS over a trailing 5s window, on-disk usage across BodyStores, and uptime.
 - **Live request stream** — auto-tailing table of recent requests, filterable by 4xx / 5xx. Click any row to open the inspect drawer.
 - **Service status list** — per-service blob counts and disk usage from `/_awsim/storage`.
-- **Insights panel** — config + storage breakdown.
+- **Insights panel** — config + BodyStore + SQLite-store summary (top service by row count, total bytes on disk).
+
+## Observability
+
+Open `/observability` from **Admin → Observability** in the sidebar. It polls `/_awsim/debug/objects` every 5 s and renders:
+
+- **Process** — current RSS plus VmHWM (peak), VmSize, VmData, VmPeak, with a 60-sample RSS sparkline below.
+- **Gateway / app** — request-details ring size, SSE subscriber counts (catches leaked subscribers), chaos rule + recent injection counts, registered services, uptime.
+- **Cognito** — user-pool count, mfa-sessions, totals across all pools, plus a per-pool breakdown table (users, groups, clients, auth events, devices, revoked refresh tokens).
+- **Billing meter** — account-region buckets and total op-counter / storage / compute / resource rows.
+- **SQLite-backed stores** — row counts per service plus the DynamoDB DB file size.
+
+Hit **Snapshot baseline** to capture the current values; subsequent renders show signed deltas next to every cell so a leak shows up as a stream of orange `+N` annotations against the structure that's growing. See the [Memory + diagnostics guide](/guide/admin-console#observability).
+
+## Seeding
+
+The `/_awsim/seed/<service>` endpoints fill services with realistic fake data, skipping SigV4 + the gateway so a 10k-row seed completes in well under a second. Three ways to drive them:
+
+```bash
+# 1. UI: Admin → Seed data — service cards with count inputs + Run buttons.
+
+# 2. curl directly:
+curl -XPOST http://localhost:4566/_awsim/seed/cognito-users \
+  -d '{"pool_id":"us-east-1_abc","count":10000}'
+curl -XPOST http://localhost:4566/_awsim/seed/dynamodb \
+  -d '{"tables":5,"items_per_table":1000}'
+
+# 3. Repeatable scenario file (CI-friendly):
+awsim seed --file ci-fixtures.toml
+```
+
+Per-call caps to keep the writer responsive:
+
+| Endpoint | Cap |
+|---------|-----|
+| `cognito-users` | 100 000 users / call |
+| `dynamodb` | 1 000 tables / 100 000 items per table |
+| `s3` | 500 buckets / 10 000 objects per bucket / 64 KiB body |
+| `secrets` | 50 000 / call |
+| `sqs` | 1 000 queues / 100 000 messages per queue |
+
+TOML scenario shape:
+
+```toml
+endpoint = "http://localhost:4566"   # optional
+
+[[cognito_users]]
+pool_id = "us-east-1_abcdef"
+count   = 1000
+
+[dynamodb]
+tables          = 5
+items_per_table = 1000
+
+[s3]
+buckets             = 5
+objects_per_bucket  = 100
+body_bytes          = 256
+
+[secrets]
+count = 20
+
+[sqs]
+queues             = 5
+messages_per_queue = 50
+```
 
 ## Service Pages
 
-The UI ships a service-specific page for every backend that AWSim emulates. Each one is built on a shared `ServicePage` shell with viewport-bound scrolling, a typed API client, and decomposed sub-components (list, detail-sheet, create dialogs). Examples:
+The UI ships a service-specific page for every backend that AWSim emulates. Each one is built on a shared `ServicePage` shell with viewport-bound scrolling, a typed API client, and decomposed sub-components (list, detail panels, create dialogs). Examples:
 
 - **S3**: Browse buckets, list objects, upload/download
 - **DynamoDB**: View tables, scan items, run queries
 - **SQS**: List queues, send and receive messages
 - **Lambda**: List functions, invoke them
-- **Cognito**: Manage user pools, users, groups
+- **Cognito**: Pool list at `/cognito`, full per-pool dashboard at `/cognito/[poolId]` with a left-nav covering Users (Prev/Next pagination + server-side filter + CSV import), Groups, App clients, Domain, Triggers (Lambda integration editor), Policies (password policy + MFA + tags), Federation (identity providers + resource servers), Appearance (UI customization). See the [Cognito service doc](/services/cognito).
+- **SES**: Identity / template / config-set management + an **Outbox** tab listing every captured outbound email with sandboxed-HTML preview. See the [SES service doc](/services/ses).
 - **IAM**: Manage users, roles, policies, access keys
 - **Step Functions**: View state machines, executions, execution history (ASL viewer included)
+- **Observability** (admin): Live RSS sparkline + per-subsystem counts with snapshot/diff. Detailed above.
+- **Seed data** (admin): Service cards with count inputs to bulk-fill via the seed admin endpoints.
 
 ## Keyboard Shortcuts
 
