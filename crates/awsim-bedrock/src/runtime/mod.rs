@@ -13,7 +13,7 @@ use awsim_core::AwsError;
 use serde_json::Value;
 use tracing::{debug, warn};
 
-use crate::backend::BedrockBackend;
+use crate::backend::BedrockBackends;
 
 mod anthropic;
 mod canned;
@@ -32,11 +32,11 @@ mod titan_embed;
 /// `<endpoint>/chat/completions`. Returns the raw OpenAI response;
 /// translators shape it back into their own envelope.
 async fn call_chat(
-    backend: &BedrockBackend,
+    backends: &BedrockBackends,
     bedrock_id: &str,
     build: impl FnOnce(&str) -> Result<openai::ChatRequest, AwsError>,
 ) -> Result<openai::ChatResponse, AwsError> {
-    let model_tag = backend.resolve_invoke(bedrock_id).ok_or_else(|| {
+    let (backend, model_tag) = backends.resolve_invoke(bedrock_id).ok_or_else(|| {
         AwsError::not_found(
             "ResourceNotFoundException",
             format!("No backend mapping for Bedrock model {bedrock_id}"),
@@ -71,11 +71,11 @@ async fn call_chat(
 /// chunk envelope. Wire-level vnd.amazon.eventstream framing is
 /// future work — chunks are returned as a JSON array on the response.
 pub(crate) async fn call_chat_stream(
-    backend: &BedrockBackend,
+    backends: &BedrockBackends,
     bedrock_id: &str,
     build: impl FnOnce(&str) -> Result<openai::ChatRequest, AwsError>,
 ) -> Result<AccumulatedStream, AwsError> {
-    let model_tag = backend.resolve_invoke(bedrock_id).ok_or_else(|| {
+    let (backend, model_tag) = backends.resolve_invoke(bedrock_id).ok_or_else(|| {
         AwsError::not_found(
             "ResourceNotFoundException",
             format!("No backend mapping for Bedrock model {bedrock_id}"),
@@ -160,11 +160,11 @@ pub(crate) fn stream_envelope(chunks: Vec<Value>) -> Value {
 /// Bedrock id via `resolve_embed` so the embed-only mappings in the
 /// model map take precedence.
 async fn call_embed(
-    backend: &BedrockBackend,
+    backends: &BedrockBackends,
     bedrock_id: &str,
     build: impl FnOnce(&str) -> Result<openai::EmbeddingsRequest, AwsError>,
 ) -> Result<openai::EmbeddingsResponse, AwsError> {
-    let model_tag = backend.resolve_embed(bedrock_id).ok_or_else(|| {
+    let (backend, model_tag) = backends.resolve_embed(bedrock_id).ok_or_else(|| {
         AwsError::not_found(
             "ResourceNotFoundException",
             format!("No backend mapping for Bedrock embedding model {bedrock_id}"),
@@ -197,7 +197,7 @@ async fn call_embed(
 /// configured; everything else still hits the canned fallback (will
 /// be expanded in subsequent commits).
 pub async fn invoke_model(
-    backend: Option<&BedrockBackend>,
+    backends: Option<&BedrockBackends>,
     input: &Value,
 ) -> Result<Value, AwsError> {
     let model_id = input["modelId"]
@@ -207,18 +207,20 @@ pub async fn invoke_model(
 
     let body = extract_body(input)?;
 
-    if let Some(backend) = backend {
+    if let Some(backends) = backends {
         let routed = match ModelFamily::for_id(model_id) {
-            Some(ModelFamily::Anthropic) => Some(anthropic::invoke(backend, model_id, &body).await),
-            Some(ModelFamily::Titan) => Some(titan::invoke(backend, model_id, &body).await),
-            Some(ModelFamily::Llama) => Some(llama::invoke(backend, model_id, &body).await),
-            Some(ModelFamily::Mistral) => Some(mistral::invoke(backend, model_id, &body).await),
-            Some(ModelFamily::Cohere) => Some(cohere::invoke(backend, model_id, &body).await),
+            Some(ModelFamily::Anthropic) => {
+                Some(anthropic::invoke(backends, model_id, &body).await)
+            }
+            Some(ModelFamily::Titan) => Some(titan::invoke(backends, model_id, &body).await),
+            Some(ModelFamily::Llama) => Some(llama::invoke(backends, model_id, &body).await),
+            Some(ModelFamily::Mistral) => Some(mistral::invoke(backends, model_id, &body).await),
+            Some(ModelFamily::Cohere) => Some(cohere::invoke(backends, model_id, &body).await),
             Some(ModelFamily::TitanEmbed) => {
-                Some(titan_embed::invoke(backend, model_id, &body).await)
+                Some(titan_embed::invoke(backends, model_id, &body).await)
             }
             Some(ModelFamily::CohereEmbed) => {
-                Some(cohere_embed::invoke(backend, model_id, &body).await)
+                Some(cohere_embed::invoke(backends, model_id, &body).await)
             }
             Some(ModelFamily::Other) | None => None,
         };
@@ -236,7 +238,7 @@ pub async fn invoke_model(
 }
 
 pub async fn invoke_model_with_response_stream(
-    backend: Option<&BedrockBackend>,
+    backends: Option<&BedrockBackends>,
     input: &Value,
 ) -> Result<Value, AwsError> {
     let model_id = input["modelId"]
@@ -245,22 +247,22 @@ pub async fn invoke_model_with_response_stream(
     debug!(model_id = %model_id, "InvokeModelWithResponseStream");
     let body = extract_body(input)?;
 
-    if let Some(backend) = backend {
+    if let Some(backends) = backends {
         let routed = match ModelFamily::for_id(model_id) {
             Some(ModelFamily::Anthropic) => {
-                Some(anthropic::invoke_streaming(backend, model_id, &body).await)
+                Some(anthropic::invoke_streaming(backends, model_id, &body).await)
             }
             Some(ModelFamily::Titan) => {
-                Some(titan::invoke_streaming(backend, model_id, &body).await)
+                Some(titan::invoke_streaming(backends, model_id, &body).await)
             }
             Some(ModelFamily::Llama) => {
-                Some(llama::invoke_streaming(backend, model_id, &body).await)
+                Some(llama::invoke_streaming(backends, model_id, &body).await)
             }
             Some(ModelFamily::Mistral) => {
-                Some(mistral::invoke_streaming(backend, model_id, &body).await)
+                Some(mistral::invoke_streaming(backends, model_id, &body).await)
             }
             Some(ModelFamily::Cohere) => {
-                Some(cohere::invoke_streaming(backend, model_id, &body).await)
+                Some(cohere::invoke_streaming(backends, model_id, &body).await)
             }
             // Embeddings + unmapped → canned (embeddings don't stream).
             _ => None,
@@ -277,13 +279,16 @@ pub async fn invoke_model_with_response_stream(
     canned::invoke_model_with_response_stream(input)
 }
 
-pub async fn converse(backend: Option<&BedrockBackend>, input: &Value) -> Result<Value, AwsError> {
+pub async fn converse(
+    backends: Option<&BedrockBackends>,
+    input: &Value,
+) -> Result<Value, AwsError> {
     let model_id = input["modelId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelId is required"))?;
     debug!(model_id = %model_id, "Converse");
-    if let Some(backend) = backend {
-        match converse::invoke(backend, model_id, input).await {
+    if let Some(backends) = backends {
+        match converse::invoke(backends, model_id, input).await {
             Ok(v) => return Ok(v),
             Err(e) => {
                 warn!(error = %e.message, model_id, "Bedrock Converse backend failed; serving canned")
@@ -294,15 +299,15 @@ pub async fn converse(backend: Option<&BedrockBackend>, input: &Value) -> Result
 }
 
 pub async fn converse_stream(
-    backend: Option<&BedrockBackend>,
+    backends: Option<&BedrockBackends>,
     input: &Value,
 ) -> Result<Value, AwsError> {
     let model_id = input["modelId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelId is required"))?;
     debug!(model_id = %model_id, "ConverseStream");
-    if let Some(backend) = backend {
-        match converse::invoke_streaming(backend, model_id, input).await {
+    if let Some(backends) = backends {
+        match converse::invoke_streaming(backends, model_id, input).await {
             Ok(v) => return Ok(v),
             Err(e) => {
                 warn!(error = %e.message, model_id, "Bedrock ConverseStream backend failed; serving canned")

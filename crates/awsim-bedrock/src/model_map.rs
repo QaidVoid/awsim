@@ -5,6 +5,11 @@
 //! actually understands is different from the AWS-side
 //! `anthropic.claude-3-5-sonnet-20241022-v2:0`.
 //!
+//! Each entry can either be a bare backend tag (route through the
+//! default backend) or `{ backend, tag }` to pin a specific id to
+//! a specific named backend — useful for fan-out setups where
+//! e.g. Sonnet → Groq's hosted Llama, Haiku → local Ollama.
+//!
 //! The default map skews toward Ollama / Llama because that's the
 //! most common local-LLM setup. Users override anything they need
 //! via a TOML file passed with `--bedrock-model-map`.
@@ -15,18 +20,53 @@ use std::path::Path;
 use serde::Deserialize;
 use thiserror::Error;
 
+/// Per-id mapping in the model map. Either a bare backend tag
+/// (route through the default backend) or a fully-qualified
+/// `{ backend, tag }` pair routing the id to a specific named
+/// backend.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum ModelEntry {
+    /// Shorthand: just the backend-side tag. Routes through
+    /// whichever backend is the registry's default.
+    Tag(String),
+    /// Fully-qualified: pin this Bedrock id to a specific backend.
+    Routed {
+        /// Name of an entry in `[backends.<name>]`.
+        backend: String,
+        /// Backend-side model tag.
+        tag: String,
+    },
+}
+
+impl ModelEntry {
+    pub fn tag(&self) -> &str {
+        match self {
+            Self::Tag(t) => t,
+            Self::Routed { tag, .. } => tag,
+        }
+    }
+
+    pub fn backend(&self) -> Option<&str> {
+        match self {
+            Self::Tag(_) => None,
+            Self::Routed { backend, .. } => Some(backend),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct ModelMap {
-    /// `bedrock-id → backend-model-tag` for chat / completion / Converse
+    /// `bedrock-id → entry` for chat / completion / Converse
     /// dispatch. Used by `InvokeModel`, `InvokeModelWithResponseStream`,
     /// `Converse`, `ConverseStream`.
     #[serde(default)]
-    pub invoke: HashMap<String, String>,
-    /// `bedrock-id → backend-model-tag` for `/v1/embeddings` dispatch.
+    pub invoke: HashMap<String, ModelEntry>,
+    /// `bedrock-id → entry` for `/v1/embeddings` dispatch.
     /// Used by `InvokeModel` when the bedrock id is an embedding model
     /// (Titan Embed, Cohere Embed).
     #[serde(default)]
-    pub embed: HashMap<String, String>,
+    pub embed: HashMap<String, ModelEntry>,
 }
 
 #[derive(Debug, Error)]
@@ -85,7 +125,7 @@ impl ModelMap {
             ("cohere.command-light-text-v14", "llama3.1:8b"),
         ]
         .into_iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .map(|(k, v)| (k.to_string(), ModelEntry::Tag(v.to_string())))
         .collect();
 
         let embed = [
@@ -98,7 +138,7 @@ impl ModelMap {
             ("cohere.embed-multilingual-v3", "nomic-embed-text"),
         ]
         .into_iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .map(|(k, v)| (k.to_string(), ModelEntry::Tag(v.to_string())))
         .collect();
 
         Self { invoke, embed }
@@ -135,20 +175,18 @@ impl ModelMap {
         base
     }
 
-    /// Resolve a Bedrock id to a backend model tag. Tries `embed` first
+    /// Resolve a Bedrock id to a `ModelEntry`. Tries `embed` first
     /// when `for_embedding` is true so an `amazon.titan-embed-…` id
     /// doesn't accidentally fall through to a chat-tier mapping.
-    pub fn lookup(&self, bedrock_id: &str, for_embedding: bool) -> Option<&str> {
+    pub fn lookup(&self, bedrock_id: &str, for_embedding: bool) -> Option<&ModelEntry> {
         if for_embedding {
             self.embed
                 .get(bedrock_id)
                 .or_else(|| self.invoke.get(bedrock_id))
-                .map(|s| s.as_str())
         } else {
             self.invoke
                 .get(bedrock_id)
                 .or_else(|| self.embed.get(bedrock_id))
-                .map(|s| s.as_str())
         }
     }
 }
@@ -161,11 +199,13 @@ mod tests {
     fn defaults_cover_common_ids() {
         let m = ModelMap::defaults();
         assert_eq!(
-            m.lookup("anthropic.claude-3-5-sonnet-20241022-v2:0", false),
+            m.lookup("anthropic.claude-3-5-sonnet-20241022-v2:0", false)
+                .map(ModelEntry::tag),
             Some("llama3.1:8b")
         );
         assert_eq!(
-            m.lookup("amazon.titan-embed-text-v2:0", true),
+            m.lookup("amazon.titan-embed-text-v2:0", true)
+                .map(ModelEntry::tag),
             Some("nomic-embed-text")
         );
     }
@@ -181,16 +221,19 @@ mod tests {
 "#;
         let m = ModelMap::from_toml_str_with_defaults(toml_src).unwrap();
         assert_eq!(
-            m.lookup("anthropic.claude-3-5-sonnet-20241022-v2:0", false),
+            m.lookup("anthropic.claude-3-5-sonnet-20241022-v2:0", false)
+                .map(ModelEntry::tag),
             Some("qwen2.5:32b")
         );
         assert_eq!(
-            m.lookup("amazon.titan-embed-text-v2:0", true),
+            m.lookup("amazon.titan-embed-text-v2:0", true)
+                .map(ModelEntry::tag),
             Some("mxbai-embed-large")
         );
         // Unrelated default still present
         assert_eq!(
-            m.lookup("anthropic.claude-3-haiku-20240307-v1:0", false),
+            m.lookup("anthropic.claude-3-haiku-20240307-v1:0", false)
+                .map(ModelEntry::tag),
             Some("llama3.1:8b")
         );
     }
@@ -198,7 +241,7 @@ mod tests {
     #[test]
     fn unknown_id_returns_none() {
         let m = ModelMap::defaults();
-        assert_eq!(m.lookup("not.a.real-model", false), None);
+        assert!(m.lookup("not.a.real-model", false).is_none());
     }
 
     #[test]
@@ -208,11 +251,31 @@ mod tests {
         let mut m = ModelMap::defaults();
         m.invoke.insert(
             "amazon.titan-embed-text-v1".to_string(),
-            "wrong".to_string(),
+            ModelEntry::Tag("wrong".to_string()),
         );
         assert_eq!(
-            m.lookup("amazon.titan-embed-text-v1", true),
+            m.lookup("amazon.titan-embed-text-v1", true)
+                .map(ModelEntry::tag),
             Some("nomic-embed-text")
         );
+    }
+
+    #[test]
+    fn routed_entry_parses_with_backend_field() {
+        let toml_src = r#"
+[invoke]
+"anthropic.claude-3-5-sonnet-20241022-v2:0" = { backend = "groq", tag = "llama-3.3-70b-versatile" }
+"meta.llama3-1-8b-instruct-v1:0" = "llama3.1:8b"
+"#;
+        let m = ModelMap::from_toml_str_with_defaults(toml_src).unwrap();
+        let claude = m
+            .lookup("anthropic.claude-3-5-sonnet-20241022-v2:0", false)
+            .unwrap();
+        assert_eq!(claude.tag(), "llama-3.3-70b-versatile");
+        assert_eq!(claude.backend(), Some("groq"));
+
+        let llama = m.lookup("meta.llama3-1-8b-instruct-v1:0", false).unwrap();
+        assert_eq!(llama.tag(), "llama3.1:8b");
+        assert_eq!(llama.backend(), None);
     }
 }

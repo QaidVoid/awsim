@@ -5,8 +5,8 @@ mod models;
 mod runtime;
 mod state;
 
-pub use backend::BedrockBackend;
-pub use model_map::{ModelMap, ModelMapError};
+pub use backend::{BedrockBackend, BedrockBackends, single_default};
+pub use model_map::{ModelEntry, ModelMap, ModelMapError};
 
 use std::sync::Arc;
 
@@ -313,28 +313,23 @@ impl ServiceHandler for BedrockService {
 /// service returns deterministic canned responses so SDK code that
 /// just wires up the calls keeps working in CI.
 pub struct BedrockRuntimeService {
-    // Wired in this commit; consumed by the Anthropic / Titan / etc.
-    // translators in subsequent commits, hence the allow.
-    #[allow(dead_code)]
-    backend: Option<BedrockBackend>,
+    backends: Option<BedrockBackends>,
 }
 
 impl BedrockRuntimeService {
     pub fn new() -> Self {
-        Self { backend: None }
+        Self { backends: None }
     }
 
-    pub fn with_backend(backend: BedrockBackend) -> Self {
+    pub fn with_backends(backends: BedrockBackends) -> Self {
         Self {
-            backend: Some(backend),
+            backends: Some(backends),
         }
     }
 
-    /// Internal accessor for the runtime translators. Returns `None`
-    /// when no backend is wired, signalling the canned-response fallback.
-    #[allow(dead_code)] // consumed by translators in subsequent commits
-    pub(crate) fn backend(&self) -> Option<&BedrockBackend> {
-        self.backend.as_ref()
+    /// Convenience for callers that have just one endpoint.
+    pub fn with_backend(backend: BedrockBackend, model_map: ModelMap) -> Self {
+        Self::with_backends(BedrockBackends::single(backend, model_map))
     }
 }
 
@@ -396,12 +391,12 @@ impl ServiceHandler for BedrockRuntimeService {
         debug!(operation, "Bedrock runtime request");
 
         match operation {
-            "InvokeModel" => runtime::invoke_model(self.backend.as_ref(), &input).await,
+            "InvokeModel" => runtime::invoke_model(self.backends.as_ref(), &input).await,
             "InvokeModelWithResponseStream" => {
-                runtime::invoke_model_with_response_stream(self.backend.as_ref(), &input).await
+                runtime::invoke_model_with_response_stream(self.backends.as_ref(), &input).await
             }
-            "Converse" => runtime::converse(self.backend.as_ref(), &input).await,
-            "ConverseStream" => runtime::converse_stream(self.backend.as_ref(), &input).await,
+            "Converse" => runtime::converse(self.backends.as_ref(), &input).await,
+            "ConverseStream" => runtime::converse_stream(self.backends.as_ref(), &input).await,
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }

@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 use tracing::warn;
 
 use super::openai::{ChatMessage, ChatRequest, ChatResponse};
-use crate::backend::BedrockBackend;
+use crate::backend::BedrockBackends;
 
 /// Convert a Bedrock-flavoured Anthropic Messages request body into
 /// an OpenAI-compatible chat.completions request.
@@ -163,12 +163,12 @@ pub fn to_bedrock_response(bedrock_id: &str, resp: ChatResponse) -> Value {
 /// Hit the backend with `stream:true`, accumulate the SSE chunks,
 /// and emit the Anthropic-flavoured streaming-event sequence.
 pub async fn invoke_streaming(
-    backend: &BedrockBackend,
+    backends: &BedrockBackends,
     bedrock_id: &str,
     body: &Value,
 ) -> Result<Value, AwsError> {
     let acc =
-        super::call_chat_stream(backend, bedrock_id, |tag| to_openai_request(tag, body)).await?;
+        super::call_chat_stream(backends, bedrock_id, |tag| to_openai_request(tag, body)).await?;
     let events = build_events(bedrock_id, &acc);
     Ok(super::stream_envelope(events))
 }
@@ -231,40 +231,12 @@ fn build_events(bedrock_id: &str, acc: &super::AccumulatedStream) -> Vec<Value> 
 /// shaped request. Returns the proxied response in Bedrock's native
 /// shape, or an `AwsError` if the backend was unreachable.
 pub async fn invoke(
-    backend: &BedrockBackend,
+    backends: &BedrockBackends,
     bedrock_id: &str,
     body: &Value,
 ) -> Result<Value, AwsError> {
-    let model_tag = backend.resolve_invoke(bedrock_id).ok_or_else(|| {
-        AwsError::not_found(
-            "ResourceNotFoundException",
-            format!("No backend mapping for Bedrock model {bedrock_id}"),
-        )
-    })?;
-
-    let req = to_openai_request(model_tag, body)?;
-    let url = format!("{}/chat/completions", backend.endpoint());
-    let mut http_req = backend.client().post(&url).json(&req);
-    if let Some(key) = backend.api_key() {
-        http_req = http_req.bearer_auth(key);
-    }
-
-    let resp = http_req
-        .send()
-        .await
-        .map_err(|e| AwsError::internal(format!("Bedrock backend POST {url} failed: {e}")))?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body_text = resp.text().await.unwrap_or_default();
-        return Err(AwsError::internal(format!(
-            "Bedrock backend returned {status}: {body_text}"
-        )));
-    }
-    let parsed: ChatResponse = resp
-        .json()
-        .await
-        .map_err(|e| AwsError::internal(format!("Bedrock backend JSON parse failed: {e}")))?;
-    Ok(to_bedrock_response(bedrock_id, parsed))
+    let resp = super::call_chat(backends, bedrock_id, |tag| to_openai_request(tag, body)).await?;
+    Ok(to_bedrock_response(bedrock_id, resp))
 }
 
 #[cfg(test)]

@@ -14,7 +14,7 @@ use awsim_core::AwsError;
 use serde_json::{Value, json};
 
 use super::openai::{EmbeddingsInput, EmbeddingsRequest, EmbeddingsResponse};
-use crate::backend::BedrockBackend;
+use crate::backend::BedrockBackends;
 
 fn to_openai_request(model_tag: &str, body: &Value) -> Result<EmbeddingsRequest, AwsError> {
     let input = body
@@ -42,11 +42,11 @@ fn to_bedrock_response(resp: EmbeddingsResponse) -> Value {
 }
 
 pub async fn invoke(
-    backend: &BedrockBackend,
+    backends: &BedrockBackends,
     bedrock_id: &str,
     body: &Value,
 ) -> Result<Value, AwsError> {
-    super::call_embed(backend, bedrock_id, |tag| to_openai_request(tag, body))
+    super::call_embed(backends, bedrock_id, |tag| to_openai_request(tag, body))
         .await
         .map(to_bedrock_response)
 }

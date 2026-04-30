@@ -1456,7 +1456,7 @@ type RegisteredServices = (
 // Returns `Ok(None)` when `--bedrock-backend` is unset (canned-response
 // mode); returns `Err` when a model-map file was supplied but couldn't
 // be loaded.
-fn build_bedrock_backend(cli: &Cli) -> Result<Option<awsim_bedrock::BedrockBackend>> {
+fn build_bedrock_backend(cli: &Cli) -> Result<Option<awsim_bedrock::BedrockBackends>> {
     let Some(endpoint) = cli.bedrock_backend.as_deref() else {
         return Ok(None);
     };
@@ -1466,7 +1466,7 @@ fn build_bedrock_backend(cli: &Cli) -> Result<Option<awsim_bedrock::BedrockBacke
         None => awsim_bedrock::ModelMap::defaults(),
     };
     info!(endpoint, "Bedrock proxy backend enabled");
-    Ok(Some(awsim_bedrock::BedrockBackend::new(
+    Ok(Some(awsim_bedrock::single_default(
         endpoint.to_string(),
         cli.bedrock_api_key.clone(),
         model_map,
@@ -1480,7 +1480,7 @@ fn register_services(
     data_dir: Option<&str>,
     port: u16,
     max_blob_bytes: Option<u64>,
-    bedrock_backend: Option<awsim_bedrock::BedrockBackend>,
+    bedrock_backend: Option<awsim_bedrock::BedrockBackends>,
 ) -> RegisteredServices {
     use std::sync::Arc;
 
@@ -1650,7 +1650,7 @@ fn register_services(
     state.register(Arc::new(bedrock), bedrock_routes);
 
     let bedrock_runtime = match bedrock_backend {
-        Some(b) => awsim_bedrock::BedrockRuntimeService::with_backend(b),
+        Some(b) => awsim_bedrock::BedrockRuntimeService::with_backends(b),
         None => awsim_bedrock::BedrockRuntimeService::new(),
     };
     let bedrock_runtime_routes = {

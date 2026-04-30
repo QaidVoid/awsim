@@ -23,7 +23,7 @@ use awsim_core::AwsError;
 use serde_json::{Value, json};
 
 use super::openai::{ChatMessage, ChatRequest, ChatResponse};
-use crate::backend::BedrockBackend;
+use crate::backend::BedrockBackends;
 
 fn to_openai_request(model_tag: &str, input: &Value) -> Result<ChatRequest, AwsError> {
     let cfg = &input["inferenceConfig"];
@@ -133,12 +133,12 @@ fn to_bedrock_response(resp: ChatResponse, latency_ms: u64) -> Value {
 }
 
 pub async fn invoke(
-    backend: &BedrockBackend,
+    backends: &BedrockBackends,
     bedrock_id: &str,
     input: &Value,
 ) -> Result<Value, AwsError> {
     let started = std::time::Instant::now();
-    let resp = super::call_chat(backend, bedrock_id, |tag| to_openai_request(tag, input)).await?;
+    let resp = super::call_chat(backends, bedrock_id, |tag| to_openai_request(tag, input)).await?;
     Ok(to_bedrock_response(
         resp,
         started.elapsed().as_millis() as u64,
@@ -146,13 +146,13 @@ pub async fn invoke(
 }
 
 pub async fn invoke_streaming(
-    backend: &BedrockBackend,
+    backends: &BedrockBackends,
     bedrock_id: &str,
     input: &Value,
 ) -> Result<Value, AwsError> {
     let started = std::time::Instant::now();
     let acc =
-        super::call_chat_stream(backend, bedrock_id, |tag| to_openai_request(tag, input)).await?;
+        super::call_chat_stream(backends, bedrock_id, |tag| to_openai_request(tag, input)).await?;
     let stop_reason = map_stop_reason(acc.finish_reason.as_deref());
     let mut events = Vec::new();
     events.push(json!({ "messageStart": { "role": "assistant" } }));

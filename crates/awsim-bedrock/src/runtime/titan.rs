@@ -15,7 +15,7 @@ use awsim_core::AwsError;
 use serde_json::{Value, json};
 
 use super::openai::{ChatMessage, ChatRequest, ChatResponse};
-use crate::backend::BedrockBackend;
+use crate::backend::BedrockBackends;
 
 fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, AwsError> {
     let prompt = body
@@ -71,23 +71,23 @@ fn to_bedrock_response(resp: ChatResponse) -> Value {
 }
 
 pub async fn invoke(
-    backend: &BedrockBackend,
+    backends: &BedrockBackends,
     bedrock_id: &str,
     body: &Value,
 ) -> Result<Value, AwsError> {
-    super::call_chat(backend, bedrock_id, |tag| to_openai_request(tag, body))
+    super::call_chat(backends, bedrock_id, |tag| to_openai_request(tag, body))
         .await
         .map(to_bedrock_response)
 }
 
 /// Single accumulated chunk in Titan streaming format.
 pub async fn invoke_streaming(
-    backend: &BedrockBackend,
+    backends: &BedrockBackends,
     bedrock_id: &str,
     body: &Value,
 ) -> Result<Value, AwsError> {
     let acc =
-        super::call_chat_stream(backend, bedrock_id, |tag| to_openai_request(tag, body)).await?;
+        super::call_chat_stream(backends, bedrock_id, |tag| to_openai_request(tag, body)).await?;
     let completion_reason = match acc.finish_reason.as_deref() {
         Some("length") => "LENGTH",
         _ => "FINISH",

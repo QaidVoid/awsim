@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::openai::{EmbeddingsInput, EmbeddingsRequest, EmbeddingsResponse};
-use crate::backend::BedrockBackend;
+use crate::backend::BedrockBackends;
 
 fn to_openai_request(model_tag: &str, body: &Value) -> Result<EmbeddingsRequest, AwsError> {
     let texts = body
@@ -53,7 +53,7 @@ fn to_bedrock_response(texts: &[String], resp: EmbeddingsResponse) -> Value {
 }
 
 pub async fn invoke(
-    backend: &BedrockBackend,
+    backends: &BedrockBackends,
     bedrock_id: &str,
     body: &Value,
 ) -> Result<Value, AwsError> {
@@ -67,7 +67,7 @@ pub async fn invoke(
                 .collect()
         })
         .unwrap_or_default();
-    super::call_embed(backend, bedrock_id, |tag| to_openai_request(tag, body))
+    super::call_embed(backends, bedrock_id, |tag| to_openai_request(tag, body))
         .await
         .map(|resp| to_bedrock_response(&texts, resp))
 }
