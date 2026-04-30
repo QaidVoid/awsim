@@ -207,6 +207,12 @@ pub(crate) fn estimate_item_bytes(item: &DynamoItem) -> usize {
     total + item.len() * 4 + 2
 }
 
+/// AWS caps every persisted DynamoDB item at 400 KB — applies to
+/// PutItem, UpdateItem, BatchWriteItem.PutRequest, and TransactWriteItems
+/// Put / Update. Shared via this constant so all writers reject the
+/// same threshold.
+pub(crate) const ITEM_MAX_BYTES: usize = 400 * 1024;
+
 pub fn put_item(
     state: &DynamoState,
     sqlite: &SqliteStore,
@@ -217,6 +223,13 @@ pub fn put_item(
 
     let item = parse_item(&input["Item"])
         .ok_or_else(|| AwsError::validation("Item is required and must be a map"))?;
+
+    let item_bytes = estimate_item_bytes(&item);
+    if item_bytes > ITEM_MAX_BYTES {
+        return Err(AwsError::validation(format!(
+            "Item size {item_bytes} bytes exceeds the {ITEM_MAX_BYTES}-byte (400 KB) per-item cap"
+        )));
+    }
 
     // Extracted SQLite keys (pk/sk + per-GSI key columns) computed inside
     // the lock so we get them while we hold the canonical schema view.
@@ -493,6 +506,13 @@ pub fn update_item(
         extract_item_keys(&table, &new_item)
             .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?
     };
+
+    let new_item_bytes = estimate_item_bytes(&new_item);
+    if new_item_bytes > ITEM_MAX_BYTES {
+        return Err(AwsError::validation(format!(
+            "Updated item size {new_item_bytes} bytes exceeds the {ITEM_MAX_BYTES}-byte (400 KB) per-item cap"
+        )));
+    }
 
     let attrs_value = item_to_storage_value(&new_item);
     sqlite.put_item(

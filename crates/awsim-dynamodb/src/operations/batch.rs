@@ -7,7 +7,9 @@ use crate::{
     state::DynamoState,
 };
 
-use super::item::{estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item};
+use super::item::{
+    ITEM_MAX_BYTES, estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item,
+};
 
 /// AWS BatchGetItem caps a single call at 100 keys total across all
 /// tables, and at 16 MB of response payload. Items beyond the byte
@@ -18,9 +20,9 @@ const BATCH_GET_MAX_KEYS: usize = 100;
 const BATCH_GET_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// AWS BatchWriteItem caps a single call at 25 PutRequest /
-/// DeleteRequest entries total, and at 400 KB per item.
+/// DeleteRequest entries total. The 400 KB per-item cap is shared
+/// with PutItem via `ITEM_MAX_BYTES`.
 const BATCH_WRITE_MAX_ITEMS: usize = 25;
-const ITEM_MAX_BYTES: usize = 400 * 1024;
 
 pub fn batch_get_item(
     state: &DynamoState,
