@@ -120,7 +120,7 @@
 		</nav>
 
 		<!-- Section content -->
-		<main class="flex min-w-0 flex-1 overflow-hidden">
+		<main class="flex min-w-0 flex-1 flex-col overflow-hidden">
 			{#if poolId}
 				{#key poolId}
 					{#if active === 'users'}
