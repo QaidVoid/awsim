@@ -49,6 +49,7 @@
 	import MfaConfigEditor from './mfa-config-editor.svelte';
 	import TagsEditor from './tags-editor.svelte';
 	import IdpTab from './idp-tab.svelte';
+	import ResourceServersTab from './resource-servers-tab.svelte';
 
 	interface Props {
 		pool: UserPool | null;
@@ -747,10 +748,21 @@
 					{/if}
 				</TabsContent>
 
-				<TabsContent value="federation" class="mt-4">
+				<TabsContent value="federation" class="mt-4 space-y-6">
 					{#if pool}
 						{#key pool.id}
-							<IdpTab poolId={pool.id} />
+							<section class="space-y-2">
+								<h3 class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+									Identity providers
+								</h3>
+								<IdpTab poolId={pool.id} />
+							</section>
+							<section class="space-y-2">
+								<h3 class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+									Resource servers
+								</h3>
+								<ResourceServersTab poolId={pool.id} />
+							</section>
 						{/key}
 					{/if}
 				</TabsContent>

@@ -931,6 +931,93 @@ export async function deleteIdentityProvider(
   });
 }
 
+// ---- Resource servers ----
+
+export interface ResourceScope {
+  name: string;
+  description: string;
+}
+
+export interface ResourceServer {
+  identifier: string;
+  name: string;
+  scopes: ResourceScope[];
+}
+
+export async function listResourceServers(
+  poolId: string,
+  opts?: { maxResults?: number; nextToken?: string },
+): Promise<{ servers: ResourceServer[]; nextToken?: string }> {
+  const body: Record<string, unknown> = {
+    UserPoolId: poolId,
+    MaxResults: opts?.maxResults ?? 60,
+  };
+  if (opts?.nextToken) body.NextToken = opts.nextToken;
+  const data = (await idpRequest("ListResourceServers", body)) as {
+    ResourceServers?: {
+      Identifier: string;
+      Name: string;
+      Scopes?: { ScopeName: string; ScopeDescription: string }[];
+    }[];
+    NextToken?: string;
+  };
+  return {
+    servers: (data.ResourceServers ?? []).map((s) => ({
+      identifier: s.Identifier,
+      name: s.Name,
+      scopes: (s.Scopes ?? []).map((sc) => ({
+        name: sc.ScopeName,
+        description: sc.ScopeDescription,
+      })),
+    })),
+    nextToken: data.NextToken,
+  };
+}
+
+export async function createResourceServer(input: {
+  poolId: string;
+  identifier: string;
+  name: string;
+  scopes: ResourceScope[];
+}): Promise<void> {
+  await idpRequest("CreateResourceServer", {
+    UserPoolId: input.poolId,
+    Identifier: input.identifier,
+    Name: input.name,
+    Scopes: input.scopes.map((s) => ({
+      ScopeName: s.name,
+      ScopeDescription: s.description,
+    })),
+  });
+}
+
+export async function updateResourceServer(input: {
+  poolId: string;
+  identifier: string;
+  name: string;
+  scopes: ResourceScope[];
+}): Promise<void> {
+  await idpRequest("UpdateResourceServer", {
+    UserPoolId: input.poolId,
+    Identifier: input.identifier,
+    Name: input.name,
+    Scopes: input.scopes.map((s) => ({
+      ScopeName: s.name,
+      ScopeDescription: s.description,
+    })),
+  });
+}
+
+export async function deleteResourceServer(
+  poolId: string,
+  identifier: string,
+): Promise<void> {
+  await idpRequest("DeleteResourceServer", {
+    UserPoolId: poolId,
+    Identifier: identifier,
+  });
+}
+
 // ---- Domain ----
 
 export async function describeDomain(
