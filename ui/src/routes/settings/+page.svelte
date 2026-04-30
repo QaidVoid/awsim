@@ -187,7 +187,30 @@
 		];
 	}
 	function removeBackend(i: number) {
+		const removedName = backendRows[i].name;
 		backendRows = backendRows.filter((_, idx) => idx !== i);
+		// Cascade: anything that referenced this backend by name now
+		// has a dangling pointer. Wipe to empty (= "use default" for
+		// mappings, "no default" for the default-backend field).
+		if (removedName) cascadeBackendChange(removedName, '');
+	}
+	function onBackendNameChange(i: number, newName: string) {
+		const oldName = backendRows[i].name;
+		backendRows[i].name = newName;
+		if (oldName === newName || !oldName) return;
+		// Renames propagate to every field referencing the old name so
+		// the UI doesn't end up with stale references that vanish from
+		// the dropdown options.
+		cascadeBackendChange(oldName, newName);
+	}
+	function cascadeBackendChange(from: string, to: string) {
+		if (defaultBackend === from) defaultBackend = to;
+		for (let j = 0; j < invokeRows.length; j++) {
+			if (invokeRows[j].backend === from) invokeRows[j].backend = to;
+		}
+		for (let j = 0; j < embedRows.length; j++) {
+			if (embedRows[j].backend === from) embedRows[j].backend = to;
+		}
 	}
 	function addInvoke() {
 		invokeRows = [...invokeRows, { id: '', tag: '', backend: '' }];
@@ -298,7 +321,11 @@
 							<div class="grid grid-cols-12 items-end gap-2 rounded border p-3">
 								<div class="col-span-12 sm:col-span-3">
 									<Label class="text-xs">Name</Label>
-									<Input bind:value={row.name} placeholder="ollama" />
+									<Input
+									value={row.name}
+									oninput={(e) => onBackendNameChange(i, e.currentTarget.value)}
+									placeholder="ollama"
+								/>
 								</div>
 								<div class="col-span-12 sm:col-span-5">
 									<Label class="text-xs">Endpoint</Label>
