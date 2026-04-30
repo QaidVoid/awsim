@@ -19,6 +19,7 @@ mod anthropic;
 mod canned;
 mod cohere;
 mod cohere_embed;
+mod converse;
 mod llama;
 mod mistral;
 mod openai;
@@ -276,11 +277,38 @@ pub async fn invoke_model_with_response_stream(
     canned::invoke_model_with_response_stream(input)
 }
 
-pub fn converse(input: &Value) -> Result<Value, AwsError> {
+pub async fn converse(backend: Option<&BedrockBackend>, input: &Value) -> Result<Value, AwsError> {
+    let model_id = input["modelId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelId is required"))?;
+    debug!(model_id = %model_id, "Converse");
+    if let Some(backend) = backend {
+        match converse::invoke(backend, model_id, input).await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                warn!(error = %e.message, model_id, "Bedrock Converse backend failed; serving canned")
+            }
+        }
+    }
     canned::converse(input)
 }
 
-pub fn converse_stream(input: &Value) -> Result<Value, AwsError> {
+pub async fn converse_stream(
+    backend: Option<&BedrockBackend>,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let model_id = input["modelId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelId is required"))?;
+    debug!(model_id = %model_id, "ConverseStream");
+    if let Some(backend) = backend {
+        match converse::invoke_streaming(backend, model_id, input).await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                warn!(error = %e.message, model_id, "Bedrock ConverseStream backend failed; serving canned")
+            }
+        }
+    }
     canned::converse_stream(input)
 }
 
