@@ -20,12 +20,18 @@ pub const IAM_REGION: &str = "global";
 /// The AWSim IAM service handler.
 pub struct IamService {
     store: AccountRegionStore<IamState>,
+    /// Optional handle to the gateway authz engine. When set, the
+    /// policy simulator pulls in resource policies, SCPs, KMS grants
+    /// — i.e. evaluates the same way the live request path would —
+    /// instead of identity-only.
+    authz: std::sync::OnceLock<Arc<awsim_core::AuthzEngine>>,
 }
 
 impl IamService {
     pub fn new() -> Self {
         Self {
             store: AccountRegionStore::new(),
+            authz: std::sync::OnceLock::new(),
         }
     }
 
@@ -37,6 +43,19 @@ impl IamService {
     /// principal lookup into the authz engine.
     pub fn store(&self) -> AccountRegionStore<IamState> {
         self.store.clone()
+    }
+
+    /// Wire in a handle to the gateway authz engine. Done after the
+    /// engine is fully built (lookups registered) so the simulator
+    /// can use the same trait-object lookups for resource policies,
+    /// SCPs, and grants. Idempotent — first call wins; subsequent
+    /// calls are no-ops.
+    pub fn set_authz(&self, authz: Arc<awsim_core::AuthzEngine>) {
+        let _ = self.authz.set(authz);
+    }
+
+    pub(crate) fn authz(&self) -> Option<&Arc<awsim_core::AuthzEngine>> {
+        self.authz.get()
     }
 }
 
@@ -311,9 +330,11 @@ impl ServiceHandler for IamService {
             "ListSigningCertificates" => {
                 operations::misc::list_signing_certificates(&state, &input)
             }
-            "SimulateCustomPolicy" => operations::misc::simulate_custom_policy(&state, &input),
+            "SimulateCustomPolicy" => {
+                operations::misc::simulate_custom_policy(&state, self.authz(), &input)
+            }
             "SimulatePrincipalPolicy" => {
-                operations::misc::simulate_principal_policy(&state, &input)
+                operations::misc::simulate_principal_policy(&state, self.authz(), &input)
             }
             "GetContextKeysForCustomPolicy" => {
                 operations::misc::get_context_keys_for_custom_policy(&state, &input)

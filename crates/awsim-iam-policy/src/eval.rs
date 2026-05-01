@@ -64,6 +64,243 @@ pub struct EvalContext<'a> {
     pub session_policy: Option<&'a PolicyDocument>,
 }
 
+/// Where a policy came from, for the simulator's `MatchedStatements`
+/// output. AWS uses string sentinels like "IAM Policy", "Resource",
+/// "User", "Group"; we use a typed enum and stringify at the API
+/// boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicySource {
+    /// Identity-based: user inline, group inline, attached managed.
+    Identity,
+    PermissionsBoundary,
+    Resource,
+    Scp,
+    Session,
+}
+
+/// Provenance for a single policy passed into the evaluator.
+#[derive(Debug, Clone)]
+pub struct PolicyAttribution {
+    pub source_id: String,
+    pub source_type: PolicySource,
+}
+
+/// Slice of attribution metadata aligned by index with the
+/// corresponding policies in [`EvalContext`]. Pass empty slices /
+/// `None` when you don't need matched-statement reporting (e.g. the
+/// hot-path authz check).
+#[derive(Default, Clone)]
+pub struct PolicyAttributions<'a> {
+    pub identity: &'a [PolicyAttribution],
+    pub permissions_boundary: Option<&'a PolicyAttribution>,
+    pub resource: Option<&'a PolicyAttribution>,
+    pub scps: &'a [PolicyAttribution],
+    pub session: Option<&'a PolicyAttribution>,
+}
+
+/// One row in the simulator's `MatchedStatements` array — a statement
+/// from one of the input policies whose `Action` + `Resource` (+
+/// `Principal`, for resource policies) + `Condition` all matched the
+/// simulated request.
+#[derive(Debug, Clone)]
+pub struct MatchedStatement {
+    pub source_id: String,
+    pub source_type: PolicySource,
+    pub statement_index: usize,
+    pub statement_id: Option<String>,
+}
+
+/// Richer result for the policy simulator. The decision is the same
+/// one [`evaluate`] returns; `matched_statements` lists every
+/// statement that contributed (Allow + Deny alike); and
+/// `missing_context_values` lists condition keys referenced by a
+/// matched statement that the request didn't supply.
+#[derive(Debug, Clone)]
+pub struct EvaluationDetails {
+    pub decision: Decision,
+    pub matched_statements: Vec<MatchedStatement>,
+    pub missing_context_values: Vec<String>,
+}
+
+/// Same evaluation logic as [`evaluate`], plus matched-statement and
+/// missing-context-key tracking. Used by the IAM simulator; not on
+/// the hot authz path.
+pub fn evaluate_detailed(
+    req: &AuthzRequest,
+    ctx: &EvalContext,
+    attrs: &PolicyAttributions,
+) -> EvaluationDetails {
+    let decision = evaluate(req, ctx);
+
+    let mut matched: Vec<MatchedStatement> = Vec::new();
+    collect_matches(
+        &mut matched,
+        ctx.identity_policies,
+        attrs.identity,
+        req,
+        false,
+        PolicySource::Identity,
+    );
+    if let Some(p) = ctx.permissions_boundary {
+        collect_matches_one(
+            &mut matched,
+            p,
+            attrs.permissions_boundary,
+            req,
+            false,
+            PolicySource::PermissionsBoundary,
+        );
+    }
+    if let Some(p) = ctx.session_policy {
+        collect_matches_one(
+            &mut matched,
+            p,
+            attrs.session,
+            req,
+            false,
+            PolicySource::Session,
+        );
+    }
+    collect_matches(
+        &mut matched,
+        ctx.scps,
+        attrs.scps,
+        req,
+        false,
+        PolicySource::Scp,
+    );
+    if let Some(p) = ctx.resource_policy {
+        collect_matches_one(
+            &mut matched,
+            p,
+            attrs.resource,
+            req,
+            true,
+            PolicySource::Resource,
+        );
+    }
+
+    let missing_context_values = collect_missing_context_keys(req, ctx);
+
+    EvaluationDetails {
+        decision,
+        matched_statements: matched,
+        missing_context_values,
+    }
+}
+
+fn collect_matches(
+    out: &mut Vec<MatchedStatement>,
+    policies: &[PolicyDocument],
+    attributions: &[PolicyAttribution],
+    req: &AuthzRequest,
+    resource_policy: bool,
+    fallback_source: PolicySource,
+) {
+    for (i, p) in policies.iter().enumerate() {
+        let attr = attributions.get(i);
+        for (j, s) in p.statements.iter().enumerate() {
+            if stmt_matches(s, req, resource_policy) {
+                out.push(MatchedStatement {
+                    source_id: attr
+                        .map(|a| a.source_id.clone())
+                        .unwrap_or_else(|| format!("policy-{i}")),
+                    source_type: attr
+                        .map(|a| a.source_type.clone())
+                        .unwrap_or_else(|| fallback_source.clone()),
+                    statement_index: j,
+                    statement_id: s.sid.clone(),
+                });
+            }
+        }
+    }
+}
+
+fn collect_matches_one(
+    out: &mut Vec<MatchedStatement>,
+    policy: &PolicyDocument,
+    attribution: Option<&PolicyAttribution>,
+    req: &AuthzRequest,
+    resource_policy: bool,
+    fallback_source: PolicySource,
+) {
+    for (j, s) in policy.statements.iter().enumerate() {
+        if stmt_matches(s, req, resource_policy) {
+            out.push(MatchedStatement {
+                source_id: attribution
+                    .map(|a| a.source_id.clone())
+                    .unwrap_or_else(|| "policy".to_string()),
+                source_type: attribution
+                    .map(|a| a.source_type.clone())
+                    .unwrap_or_else(|| fallback_source.clone()),
+                statement_index: j,
+                statement_id: s.sid.clone(),
+            });
+        }
+    }
+}
+
+/// Walk the matched-statement set's condition blocks and report any
+/// referenced key that the request didn't supply. Best-effort:
+/// statements that didn't match wouldn't have surfaced their keys at
+/// runtime anyway, so they're omitted.
+fn collect_missing_context_keys(req: &AuthzRequest, ctx: &EvalContext) -> Vec<String> {
+    let mut missing: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut visit = |policies: &[PolicyDocument], resource_policy: bool| {
+        for p in policies {
+            for s in &p.statements {
+                if !stmt_matches_ignoring_condition(s, req, resource_policy) {
+                    continue;
+                }
+                let Some(cb) = &s.condition else { continue };
+                for c in &cb.conditions {
+                    let key = c.key.as_str();
+                    let stripped = key
+                        .strip_prefix("ForAllValues:")
+                        .or_else(|| key.strip_prefix("ForAnyValue:"))
+                        .unwrap_or(key);
+                    if !req.context.contains_key(stripped) && seen.insert(stripped.to_string()) {
+                        missing.push(stripped.to_string());
+                    }
+                }
+            }
+        }
+    };
+    visit(ctx.identity_policies, false);
+    if let Some(p) = ctx.permissions_boundary {
+        visit(std::slice::from_ref(p), false);
+    }
+    if let Some(p) = ctx.session_policy {
+        visit(std::slice::from_ref(p), false);
+    }
+    visit(ctx.scps, false);
+    if let Some(p) = ctx.resource_policy {
+        visit(std::slice::from_ref(p), true);
+    }
+    missing
+}
+
+/// Same as `stmt_matches` but skips the condition check. Used by the
+/// missing-context-keys scan so a condition key not yet supplied
+/// doesn't disqualify the statement from contributing its key list.
+fn stmt_matches_ignoring_condition(
+    s: &Statement,
+    req: &AuthzRequest,
+    resource_policy: bool,
+) -> bool {
+    if !action_matches(s, req.action) {
+        return false;
+    }
+    if !resource_matches(s, req.resource_arn) {
+        return false;
+    }
+    if resource_policy && !principal_matches(s, req) {
+        return false;
+    }
+    true
+}
+
 pub fn evaluate(req: &AuthzRequest, ctx: &EvalContext) -> Decision {
     for p in ctx.identity_policies {
         if any_explicit_deny(p, req, false) {

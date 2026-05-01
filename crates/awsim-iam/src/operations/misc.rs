@@ -1,9 +1,12 @@
 /// Miscellaneous IAM operations that are stubs or return empty data.
 use std::collections::HashMap;
 
-use awsim_core::AwsError;
+use std::sync::Arc;
+
+use awsim_core::{AuthzEngine, AwsError};
 use awsim_iam_policy::{
-    AuthzRequest, ContextValue, Decision, EvalContext, PolicyDocument, evaluate,
+    AuthzRequest, ContextValue, Decision, EvalContext, MatchedStatement, PolicyAttribution,
+    PolicyAttributions, PolicyDocument, PolicySource, evaluate_detailed,
 };
 use serde_json::{Value, json};
 
@@ -383,17 +386,36 @@ fn decision_to_str(d: Decision) -> &'static str {
     }
 }
 
+/// Bundle of policies attributed to their source, plus parallel
+/// attribution metadata so the simulator can report
+/// `MatchedStatements` with meaningful `SourcePolicyId`s.
+struct AttributedPolicies {
+    identity: Vec<PolicyDocument>,
+    identity_attributions: Vec<PolicyAttribution>,
+    permissions_boundary: Option<PolicyDocument>,
+    permissions_boundary_attribution: Option<PolicyAttribution>,
+    scps: Vec<PolicyDocument>,
+    scp_attributions: Vec<PolicyAttribution>,
+}
+
 fn build_evaluation_results(
-    identity_policies: &[PolicyDocument],
+    bundle: &AttributedPolicies,
     actions: &[String],
     resources: &[String],
     principal_arn: &str,
     principal_account: &str,
     context: &HashMap<String, ContextValue>,
+    authz: Option<&Arc<AuthzEngine>>,
 ) -> Vec<Value> {
     let mut out = Vec::new();
     for action in actions {
         for resource in resources {
+            // Resource policy lookups happen per (resource, action) so
+            // we re-fetch on each iteration. Cheap — service lookups
+            // are HashMap reads behind an Arc.
+            let (resource_policy_doc, resource_attr) =
+                lookup_resource_policy(authz, action, resource);
+
             let req = AuthzRequest {
                 principal_arn,
                 principal_account,
@@ -402,38 +424,125 @@ fn build_evaluation_results(
                 context,
             };
             let ctx = EvalContext {
-                identity_policies,
-                ..Default::default()
+                identity_policies: &bundle.identity,
+                permissions_boundary: bundle.permissions_boundary.as_ref(),
+                resource_policy: resource_policy_doc.as_ref(),
+                scps: &bundle.scps,
+                session_policy: None,
             };
-            let decision = evaluate(&req, &ctx);
+            let attrs = PolicyAttributions {
+                identity: &bundle.identity_attributions,
+                permissions_boundary: bundle.permissions_boundary_attribution.as_ref(),
+                resource: resource_attr.as_ref(),
+                scps: &bundle.scp_attributions,
+                session: None,
+            };
+            let details = evaluate_detailed(&req, &ctx, &attrs);
+
             out.push(json!({
                 "EvalActionName": action,
                 "EvalResourceName": resource,
-                "EvalDecision": decision_to_str(decision),
-                "MatchedStatements": { "member": [] },
-                "MissingContextValues": { "member": [] }
+                "EvalDecision": decision_to_str(details.decision),
+                "MatchedStatements": {
+                    "member": details.matched_statements.iter().map(matched_statement_to_xml).collect::<Vec<_>>()
+                },
+                "MissingContextValues": {
+                    "member": details.missing_context_values.clone()
+                }
             }));
         }
     }
     out
 }
 
-pub fn simulate_custom_policy(_state: &IamState, input: &Value) -> Result<Value, AwsError> {
+fn matched_statement_to_xml(m: &MatchedStatement) -> Value {
+    json!({
+        "SourcePolicyId": m.source_id,
+        "SourcePolicyType": policy_source_to_str(&m.source_type),
+        "StartPosition": { "Line": m.statement_index + 1, "Column": 1 },
+        "EndPosition": { "Line": m.statement_index + 1, "Column": 1 },
+    })
+}
+
+fn policy_source_to_str(s: &PolicySource) -> &'static str {
+    match s {
+        PolicySource::Identity => "IAM Policy",
+        PolicySource::PermissionsBoundary => "Permissions Boundary",
+        PolicySource::Resource => "Resource",
+        PolicySource::Scp => "Organizations Service Control Policy",
+        PolicySource::Session => "Session Policy",
+    }
+}
+
+/// Pull the resource policy that would gate `action` on `resource_arn`
+/// from the gateway's authz lookups. Returns `(doc, attribution)`
+/// when a service owns the ARN's prefix and has a policy for it;
+/// otherwise `(None, None)`.
+fn lookup_resource_policy(
+    authz: Option<&Arc<AuthzEngine>>,
+    action: &str,
+    resource_arn: &str,
+) -> (Option<PolicyDocument>, Option<PolicyAttribution>) {
+    let Some(authz) = authz else {
+        return (None, None);
+    };
+    // Service prefix is the part before ':' in the action (e.g.
+    // "s3:GetObject" → "s3"). The lookup map is keyed by service
+    // name, mirroring how the gateway authz path resolves them.
+    let service = action.split(':').next().unwrap_or(action);
+    let Some(lookup) = authz.resource_policy_lookups.get(service) else {
+        return (None, None);
+    };
+    let Some(doc) = lookup.lookup(resource_arn) else {
+        return (None, None);
+    };
+    let attr = PolicyAttribution {
+        source_id: resource_arn.to_string(),
+        source_type: PolicySource::Resource,
+    };
+    (Some(doc), Some(attr))
+}
+
+pub fn simulate_custom_policy(
+    _state: &IamState,
+    authz: Option<&Arc<AuthzEngine>>,
+    input: &Value,
+) -> Result<Value, AwsError> {
     let actions = extract_string_list(input, "ActionNames");
     let mut resources = extract_string_list(input, "ResourceArns");
     if resources.is_empty() {
         resources.push("*".to_string());
     }
-    let identity_policies = parse_policy_input_list(input, "PolicyInputList")?;
     let context = extract_context_entries(input);
 
+    // Treat each PolicyInputList entry as an inline identity-style
+    // policy. Attribute by 1-based index since the user provides the
+    // raw documents — we don't have a stable name to use.
+    let identity_docs = parse_policy_input_list(input, "PolicyInputList")?;
+    let identity_attrs: Vec<PolicyAttribution> = (0..identity_docs.len())
+        .map(|i| PolicyAttribution {
+            source_id: format!("PolicyInputList #{}", i + 1),
+            source_type: PolicySource::Identity,
+        })
+        .collect();
+
+    let bundle = AttributedPolicies {
+        identity: identity_docs,
+        identity_attributions: identity_attrs,
+        permissions_boundary: None,
+        permissions_boundary_attribution: None,
+        scps: Vec::new(),
+        scp_attributions: Vec::new(),
+    };
+
     let results = build_evaluation_results(
-        &identity_policies,
+        &bundle,
         &actions,
         &resources,
         "arn:aws:iam::000000000000:user/simulated",
         "000000000000",
         &context,
+        authz,
     );
 
     Ok(json!({
@@ -442,27 +551,59 @@ pub fn simulate_custom_policy(_state: &IamState, input: &Value) -> Result<Value,
     }))
 }
 
-pub fn simulate_principal_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+pub fn simulate_principal_policy(
+    state: &IamState,
+    authz: Option<&Arc<AuthzEngine>>,
+    input: &Value,
+) -> Result<Value, AwsError> {
     let principal_arn = require_str(input, "PolicySourceArn")?.to_string();
     let actions = extract_string_list(input, "ActionNames");
     let mut resources = extract_string_list(input, "ResourceArns");
     if resources.is_empty() {
         resources.push("*".to_string());
     }
-    let mut identity_policies = parse_policy_input_list(input, "PolicyInputList")?;
     let context = extract_context_entries(input);
 
-    let (principal_policies, principal_account) =
-        collect_principal_policies(state, &principal_arn)?;
-    identity_policies.extend(principal_policies);
+    // Inline PolicyInputList entries supplement the principal's own
+    // policies — same as AWS, where you can add ad-hoc policies on
+    // top of what the principal already has.
+    let inline_docs = parse_policy_input_list(input, "PolicyInputList")?;
+    let inline_attrs: Vec<PolicyAttribution> = (0..inline_docs.len())
+        .map(|i| PolicyAttribution {
+            source_id: format!("PolicyInputList #{}", i + 1),
+            source_type: PolicySource::Identity,
+        })
+        .collect();
+
+    let mut bundle = collect_principal_policies(state, &principal_arn)?;
+    let principal_account = bundle_account(&principal_arn);
+
+    bundle.identity.extend(inline_docs);
+    bundle.identity_attributions.extend(inline_attrs);
+
+    // SCPs — the gateway's Organizations lookup gives us the
+    // org-scoped SCPs that apply to this principal. Same source we
+    // use on the live request path, so the simulator output matches.
+    if let Some(authz) = authz
+        && let Some(scp_lookup) = authz.scp_lookup.as_ref()
+    {
+        for (i, doc) in scp_lookup.lookup(&principal_arn).into_iter().enumerate() {
+            bundle.scps.push(doc);
+            bundle.scp_attributions.push(PolicyAttribution {
+                source_id: format!("SCP #{}", i + 1),
+                source_type: PolicySource::Scp,
+            });
+        }
+    }
 
     let results = build_evaluation_results(
-        &identity_policies,
+        &bundle,
         &actions,
         &resources,
         &principal_arn,
         &principal_account,
         &context,
+        authz,
     );
 
     Ok(json!({
@@ -471,55 +612,105 @@ pub fn simulate_principal_policy(state: &IamState, input: &Value) -> Result<Valu
     }))
 }
 
-fn collect_principal_policies(
-    state: &IamState,
-    arn: &str,
-) -> Result<(Vec<PolicyDocument>, String), AwsError> {
-    let account = arn
-        .split(':')
+fn bundle_account(arn: &str) -> String {
+    arn.split(':')
         .nth(4)
         .map(|s| s.to_string())
-        .unwrap_or_else(|| "000000000000".to_string());
+        .unwrap_or_else(|| "000000000000".to_string())
+}
+
+fn collect_principal_policies(state: &IamState, arn: &str) -> Result<AttributedPolicies, AwsError> {
+    let mut bundle = AttributedPolicies {
+        identity: Vec::new(),
+        identity_attributions: Vec::new(),
+        permissions_boundary: None,
+        permissions_boundary_attribution: None,
+        scps: Vec::new(),
+        scp_attributions: Vec::new(),
+    };
+
+    let push_inline = |bundle: &mut AttributedPolicies,
+                       prefix: &str,
+                       name: &str,
+                       policy_name: &str,
+                       raw: &str|
+     -> Result<(), AwsError> {
+        let doc = parse_required(raw)?;
+        bundle.identity.push(doc);
+        bundle.identity_attributions.push(PolicyAttribution {
+            source_id: format!("{prefix}/{name}/{policy_name}"),
+            source_type: PolicySource::Identity,
+        });
+        Ok(())
+    };
+    let push_managed = |bundle: &mut AttributedPolicies,
+                        policy_arn: &str,
+                        doc_raw: &str|
+     -> Result<(), AwsError> {
+        let doc = parse_required(doc_raw)?;
+        bundle.identity.push(doc);
+        bundle.identity_attributions.push(PolicyAttribution {
+            source_id: policy_arn.to_string(),
+            source_type: PolicySource::Identity,
+        });
+        Ok(())
+    };
 
     if let Some(user_entry) = state.users.iter().find(|e| e.value().arn == arn) {
         let user = user_entry.value().clone();
-        let mut docs = Vec::new();
-        for raw in user.inline_policies.values() {
-            docs.push(parse_required(raw)?);
+        for (policy_name, raw) in &user.inline_policies {
+            push_inline(&mut bundle, "user", &user.user_name, policy_name, raw)?;
         }
-        for arn in &user.attached_policies {
-            if let Some(p) = state.policies.get(arn) {
-                docs.push(parse_required(&p.value().policy_document)?);
+        for policy_arn in &user.attached_policies {
+            if let Some(p) = state.policies.get(policy_arn) {
+                push_managed(&mut bundle, policy_arn, &p.value().policy_document)?;
             }
         }
         for group_name in &user.groups {
             if let Some(group) = state.groups.get(group_name) {
                 let group = group.value();
-                for raw in group.inline_policies.values() {
-                    docs.push(parse_required(raw)?);
+                for (policy_name, raw) in &group.inline_policies {
+                    push_inline(&mut bundle, "group", &group.group_name, policy_name, raw)?;
                 }
-                for arn in &group.attached_policies {
-                    if let Some(p) = state.policies.get(arn) {
-                        docs.push(parse_required(&p.value().policy_document)?);
+                for policy_arn in &group.attached_policies {
+                    if let Some(p) = state.policies.get(policy_arn) {
+                        push_managed(&mut bundle, policy_arn, &p.value().policy_document)?;
                     }
                 }
             }
         }
-        return Ok((docs, account));
+        if let Some(boundary_arn) = state.user_permissions_boundaries.get(&user.user_name)
+            && let Some(p) = state.policies.get(boundary_arn.value())
+        {
+            bundle.permissions_boundary = Some(parse_required(&p.value().policy_document)?);
+            bundle.permissions_boundary_attribution = Some(PolicyAttribution {
+                source_id: boundary_arn.value().clone(),
+                source_type: PolicySource::PermissionsBoundary,
+            });
+        }
+        return Ok(bundle);
     }
 
     if let Some(role_entry) = state.roles.iter().find(|e| e.value().arn == arn) {
         let role = role_entry.value().clone();
-        let mut docs = Vec::new();
-        for raw in role.inline_policies.values() {
-            docs.push(parse_required(raw)?);
+        for (policy_name, raw) in &role.inline_policies {
+            push_inline(&mut bundle, "role", &role.role_name, policy_name, raw)?;
         }
-        for arn in &role.attached_policies {
-            if let Some(p) = state.policies.get(arn) {
-                docs.push(parse_required(&p.value().policy_document)?);
+        for policy_arn in &role.attached_policies {
+            if let Some(p) = state.policies.get(policy_arn) {
+                push_managed(&mut bundle, policy_arn, &p.value().policy_document)?;
             }
         }
-        return Ok((docs, account));
+        if let Some(boundary_arn) = state.role_permissions_boundaries.get(&role.role_name)
+            && let Some(p) = state.policies.get(boundary_arn.value())
+        {
+            bundle.permissions_boundary = Some(parse_required(&p.value().policy_document)?);
+            bundle.permissions_boundary_attribution = Some(PolicyAttribution {
+                source_id: boundary_arn.value().clone(),
+                source_type: PolicySource::PermissionsBoundary,
+            });
+        }
+        return Ok(bundle);
     }
 
     Err(no_such_entity("Principal", arn))

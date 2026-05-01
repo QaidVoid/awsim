@@ -398,6 +398,7 @@ async fn async_main() -> Result<()> {
         apigw_service,
         apigw_v1_service,
         cognito_state,
+        iam_service,
         iam_store,
         s3_store,
         kms_store,
@@ -520,6 +521,12 @@ async fn async_main() -> Result<()> {
             &cli.account_id,
         )));
     }
+
+    // Now that the authz engine is fully built (lookups + SCP + grants),
+    // hand a clone to the IAM service so its policy simulator can
+    // evaluate against the same lookups the live request path uses —
+    // identity policies *plus* resource policies, SCPs, KMS grants.
+    iam_service.set_authz(Arc::clone(&state.authz));
 
     // Apply the runtime-config IAM enforce flag, then register a hook
     // so flipping it from the UI takes effect on the next request.
@@ -1555,6 +1562,7 @@ type RegisteredServices = (
     Arc<awsim_apigateway::ApiGatewayService>,
     Arc<awsim_apigateway::ApiGatewayV1Service>,
     Arc<awsim_cognito::CognitoState>,
+    Arc<awsim_iam::IamService>,
     awsim_core::AccountRegionStore<awsim_iam::state::IamState>,
     awsim_core::AccountRegionStore<awsim_s3::state::S3State>,
     awsim_core::AccountRegionStore<awsim_kms::state::KmsState>,
@@ -1697,6 +1705,7 @@ fn register_services(
 
     let iam = Arc::new(awsim_iam::IamService::new());
     let iam_store = iam.store();
+    let iam_service_clone = Arc::clone(&iam);
     state.register(iam, vec![]);
 
     let sts = Arc::new(awsim_sts::StsService::new());
@@ -2072,6 +2081,7 @@ fn register_services(
         apigw_clone,
         apigw_v1_clone,
         cognito_arc_state,
+        iam_service_clone,
         iam_store,
         s3_store,
         kms_store,

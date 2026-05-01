@@ -8,4 +8,7 @@ pub use document::{
     Principal, ResourceList, SetQualifier, Statement, parse, parse_value,
 };
 pub use error::ParseError;
-pub use eval::{AuthzRequest, ContextValue, Decision, EvalContext, evaluate};
+pub use eval::{
+    AuthzRequest, ContextValue, Decision, EvalContext, EvaluationDetails, MatchedStatement,
+    PolicyAttribution, PolicyAttributions, PolicySource, evaluate, evaluate_detailed,
+};
