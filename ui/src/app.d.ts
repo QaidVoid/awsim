@@ -8,6 +8,10 @@ declare global {
     // interface PageState {}
     // interface Platform {}
   }
+
+  // Injected by vite.config.ts at build time from the workspace
+  // Cargo.toml so the UI version stays glued to the Rust app version.
+  const __APP_VERSION__: string;
 }
 
 export {};

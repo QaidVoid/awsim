@@ -22,7 +22,10 @@
 	let {
 		region = 'us-east-1',
 		accountId = '000000000000',
-		version = '0.1.0',
+		// Defaults to the build-time version baked in by vite.config.ts
+		// (read from the workspace Cargo.toml). Callers can still pass
+		// an explicit version when needed (tests, server-supplied).
+		version = __APP_VERSION__,
 		onOpenPalette,
 		onOpenHelp,
 		onOpenMobileNav,

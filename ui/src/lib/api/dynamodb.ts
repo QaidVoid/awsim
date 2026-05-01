@@ -181,8 +181,29 @@ function mapTable(raw: RawTableDescription, fallbackName = ""): TableDetail {
 }
 
 export async function listTables(): Promise<TableSummary[]> {
-  const data = await request<{ TableNames?: string[] }>("ListTables", {});
-  return (data.TableNames ?? []).map((name) => ({ name }));
+  // ListTables caps at 100 names per response and returns
+  // `LastEvaluatedTableName` to continue. Walk the cursor until it's
+  // gone so the caller sees the full list. AWS's per-account-per-
+  // region table cap is 2500 so this is bounded in practice; the
+  // loop terminates naturally when the cursor is omitted, and a
+  // monotonic cursor check guards against a stuck server.
+  const out: TableSummary[] = [];
+  let cursor: string | undefined;
+  while (true) {
+    const body: Record<string, unknown> = { Limit: 100 };
+    if (cursor) body.ExclusiveStartTableName = cursor;
+    const data = await request<{
+      TableNames?: string[];
+      LastEvaluatedTableName?: string;
+    }>("ListTables", body);
+    for (const name of data.TableNames ?? []) {
+      out.push({ name });
+    }
+    const next = data.LastEvaluatedTableName;
+    if (!next || next === cursor) break;
+    cursor = next;
+  }
+  return out;
 }
 
 export async function describeTable(name: string): Promise<TableDetail> {

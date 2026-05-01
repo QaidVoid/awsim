@@ -1,7 +1,7 @@
 {
 	"name": "ui",
 	"private": true,
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
@@ -19,6 +19,7 @@
 		"@sveltejs/kit": "^2.57.0",
 		"@sveltejs/vite-plugin-svelte": "^7.0.0",
 		"@tailwindcss/vite": "^4.2.3",
+		"@types/node": "^25.6.0",
 		"bits-ui": "^2.16.3",
 		"clsx": "^2.1.1",
 		"mode-watcher": "^1.1.0",
