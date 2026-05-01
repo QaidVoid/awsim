@@ -610,6 +610,8 @@ mod tests {
             tags: Default::default(),
             deletion_protection_enabled: false,
             sse: Default::default(),
+            read_capacity_units: 0,
+            write_capacity_units: 0,
         };
         state.tables.insert("t".into(), table);
         state

@@ -65,6 +65,8 @@ export interface TableDetail {
   billingMode: string;
   deletionProtectionEnabled: boolean;
   sse: SseDescription;
+  readCapacityUnits: number;
+  writeCapacityUnits: number;
 }
 
 export interface TtlState {
@@ -146,6 +148,10 @@ interface RawTableDescription {
     SSEType?: string;
     KMSMasterKeyArn?: string;
   };
+  ProvisionedThroughput?: {
+    ReadCapacityUnits?: number;
+    WriteCapacityUnits?: number;
+  };
   KeySchema?: { AttributeName: string; KeyType: string }[];
   AttributeDefinitions?: { AttributeName: string; AttributeType: string }[];
   GlobalSecondaryIndexes?: {
@@ -207,6 +213,8 @@ function mapTable(raw: RawTableDescription, fallbackName = ""): TableDetail {
       sseType: raw.SSEDescription?.SSEType ?? "",
       kmsMasterKeyArn: raw.SSEDescription?.KMSMasterKeyArn ?? null,
     },
+    readCapacityUnits: raw.ProvisionedThroughput?.ReadCapacityUnits ?? 0,
+    writeCapacityUnits: raw.ProvisionedThroughput?.WriteCapacityUnits ?? 0,
   };
 }
 
@@ -306,6 +314,20 @@ export async function setBillingMode(
   await request("UpdateTable", {
     TableName: name,
     BillingMode: mode,
+  });
+}
+
+export async function setProvisionedThroughput(
+  name: string,
+  read: number,
+  write: number,
+): Promise<void> {
+  await request("UpdateTable", {
+    TableName: name,
+    ProvisionedThroughput: {
+      ReadCapacityUnits: read,
+      WriteCapacityUnits: write,
+    },
   });
 }
 

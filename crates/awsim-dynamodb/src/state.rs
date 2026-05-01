@@ -154,6 +154,16 @@ pub struct Table {
     /// code that reads `SSEDescription` happy.
     #[serde(default)]
     pub sse: SseSpecification,
+    /// Provisioned read capacity units. Only meaningful when
+    /// `billing_mode == "PROVISIONED"`; PAY_PER_REQUEST always
+    /// reports 0. Awsim doesn't actually rate-limit — the value
+    /// round-trips through DescribeTable for SDK code that reads it.
+    #[serde(default)]
+    pub read_capacity_units: u64,
+    /// Provisioned write capacity units. Same caveat as
+    /// `read_capacity_units`.
+    #[serde(default)]
+    pub write_capacity_units: u64,
 }
 
 /// Serializable snapshot of `DynamoState`.

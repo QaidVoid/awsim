@@ -282,6 +282,8 @@ pub fn restore_table_from_backup(
             tags: src.tags.clone(),
             deletion_protection_enabled: src.deletion_protection_enabled,
             sse: src.sse.clone(),
+            read_capacity_units: src.read_capacity_units,
+            write_capacity_units: src.write_capacity_units,
         }
     } else {
         Table {
@@ -303,6 +305,8 @@ pub fn restore_table_from_backup(
             tags: std::collections::HashMap::new(),
             deletion_protection_enabled: false,
             sse: Default::default(),
+            read_capacity_units: 0,
+            write_capacity_units: 0,
         }
     };
 
@@ -399,6 +403,8 @@ pub fn restore_table_to_point_in_time(
         tags: source.tags.clone(),
         deletion_protection_enabled: source.deletion_protection_enabled,
         sse: source.sse.clone(),
+        read_capacity_units: source.read_capacity_units,
+        write_capacity_units: source.write_capacity_units,
     };
 
     // Restored tables start empty — actual point-in-time replay isn't

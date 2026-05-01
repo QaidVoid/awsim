@@ -2,6 +2,7 @@
 	import {
 		setDeletionProtection,
 		setBillingMode,
+		setProvisionedThroughput,
 		describeTtl,
 		updateTtl,
 		listTags,
@@ -33,6 +34,9 @@
 	let savingBillingMode = $state(false);
 	let savingSse = $state(false);
 	let kmsKeyDraft = $state('');
+	let savingCapacity = $state(false);
+	let readDraft = $state(0);
+	let writeDraft = $state(0);
 
 	// TTL state — loaded async because it has its own DescribeTimeToLive
 	// op (the table description doesn't include it).
@@ -56,6 +60,8 @@
 		ttlLoaded = false;
 		tags = [];
 		kmsKeyDraft = detail.sse.kmsMasterKeyArn ?? '';
+		readDraft = detail.readCapacityUnits;
+		writeDraft = detail.writeCapacityUnits;
 		Promise.all([
 			describeTtl(name).catch(() => ({ enabled: false, attributeName: '' })),
 			arn ? listTags(arn).catch(() => []) : Promise.resolve([]),
@@ -214,6 +220,28 @@
 	let kmsKeyModified = $derived(
 		kmsKeyDraft.trim() !== (detail.sse.kmsMasterKeyArn ?? '').trim()
 	);
+
+	let capacityModified = $derived(
+		readDraft !== detail.readCapacityUnits ||
+			writeDraft !== detail.writeCapacityUnits
+	);
+
+	async function saveCapacity() {
+		if (readDraft < 0 || writeDraft < 0) {
+			toast.error('Capacity values must be non-negative');
+			return;
+		}
+		savingCapacity = true;
+		try {
+			await setProvisionedThroughput(detail.name, readDraft, writeDraft);
+			toast.success('Provisioned throughput updated');
+			onUpdated?.();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Update failed');
+		} finally {
+			savingCapacity = false;
+		}
+	}
 </script>
 
 <div class="flex h-full min-h-0 flex-col gap-6 overflow-y-auto p-4">
@@ -294,6 +322,47 @@
 					<option value="PAY_PER_REQUEST">PAY_PER_REQUEST</option>
 					<option value="PROVISIONED">PROVISIONED</option>
 				</select>
+			</div>
+
+			<!-- Provisioned throughput. AWS only honours these in PROVISIONED
+			     mode; we surface them when relevant + show read-only zeros
+			     under PAY_PER_REQUEST. -->
+			<div class="rounded-md border border-border p-3">
+				<div class="mb-2">
+					<Label class="text-sm">Provisioned throughput</Label>
+					<p class="mt-0.5 text-xs text-muted-foreground">
+						Capacity units. Honoured by SDK code that reads them; awsim doesn't actually
+						rate-limit. Only relevant when billing mode is <code>PROVISIONED</code>.
+					</p>
+				</div>
+				<div class="flex items-end gap-2">
+					<div class="flex-1">
+						<Label class="text-xs text-muted-foreground">Read capacity units</Label>
+						<Input
+							type="number"
+							min="0"
+							bind:value={readDraft}
+							disabled={detail.billingMode !== 'PROVISIONED' || savingCapacity}
+							class="h-8 font-mono text-xs"
+						/>
+					</div>
+					<div class="flex-1">
+						<Label class="text-xs text-muted-foreground">Write capacity units</Label>
+						<Input
+							type="number"
+							min="0"
+							bind:value={writeDraft}
+							disabled={detail.billingMode !== 'PROVISIONED' || savingCapacity}
+							class="h-8 font-mono text-xs"
+						/>
+					</div>
+					{#if capacityModified && detail.billingMode === 'PROVISIONED'}
+						<Button size="sm" onclick={saveCapacity} disabled={savingCapacity}>
+							<Save class="size-3.5" />
+							<span class="ml-1">Save</span>
+						</Button>
+					{/if}
+				</div>
 			</div>
 
 			<!-- TTL -->

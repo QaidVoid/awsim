@@ -378,6 +378,8 @@ pub fn transact_write_items(
                     tags: table.tags.clone(),
                     deletion_protection_enabled: table.deletion_protection_enabled,
                     sse: table.sse.clone(),
+                    read_capacity_units: table.read_capacity_units,
+                    write_capacity_units: table.write_capacity_units,
                 },
             );
         }
@@ -604,6 +606,8 @@ mod tests {
             tags: Default::default(),
             deletion_protection_enabled: false,
             sse: Default::default(),
+            read_capacity_units: 0,
+            write_capacity_units: 0,
         };
         state.tables.insert("t".into(), table);
         state

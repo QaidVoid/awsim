@@ -188,7 +188,11 @@ pub fn table_description(table: &Table, item_count: u64) -> Value {
         "BillingModeSummary": { "BillingMode": table.billing_mode },
         "ItemCount": item_count,
         "TableSizeBytes": 0,
-        "ProvisionedThroughput": { "ReadCapacityUnits": 0, "WriteCapacityUnits": 0 },
+        "ProvisionedThroughput": {
+            "ReadCapacityUnits": table.read_capacity_units,
+            "WriteCapacityUnits": table.write_capacity_units,
+            "NumberOfDecreasesToday": 0,
+        },
         "DeletionProtectionEnabled": table.deletion_protection_enabled,
     });
 
@@ -225,6 +229,22 @@ pub fn table_description(table: &Table, item_count: u64) -> Value {
     }
 
     desc
+}
+
+/// Parse a `ProvisionedThroughput` block. Returns `(read, write)`
+/// in capacity units. Missing block / fields default to 0 — that
+/// matches the AWS shape where PAY_PER_REQUEST tables report 0/0.
+fn parse_provisioned_throughput(spec: Option<&Value>) -> (u64, u64) {
+    let Some(spec) = spec else { return (0, 0) };
+    let r = spec
+        .get("ReadCapacityUnits")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let w = spec
+        .get("WriteCapacityUnits")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    (r, w)
 }
 
 /// Parse an `SSESpecification` block from a CreateTable / UpdateTable
@@ -351,6 +371,12 @@ pub fn create_table(
 
     let sse = parse_sse_specification(input.get("SSESpecification"));
 
+    // Provisioned capacity: only meaningful for the PROVISIONED
+    // billing mode, but we honour explicit values regardless so a
+    // round-trip preserves them when the user later switches modes.
+    let (read_capacity_units, write_capacity_units) =
+        parse_provisioned_throughput(input.get("ProvisionedThroughput"));
+
     let table = Table {
         name: table_name.to_string(),
         arn,
@@ -370,6 +396,8 @@ pub fn create_table(
         tags,
         deletion_protection_enabled,
         sse,
+        read_capacity_units,
+        write_capacity_units,
     };
 
     // Brand new table — item count is always 0, no need to query SQLite.
@@ -548,6 +576,15 @@ pub fn update_table(
     // we accept either direction for ergonomic use.
     if let Some(sse_spec) = input.get("SSESpecification") {
         table.sse = parse_sse_specification(Some(sse_spec));
+    }
+
+    // Update provisioned capacity if a `ProvisionedThroughput` block
+    // is supplied. AWS allows this without changing billing mode in
+    // the same call, so we apply it independently.
+    if let Some(pt) = input.get("ProvisionedThroughput") {
+        let (r, w) = parse_provisioned_throughput(Some(pt));
+        table.read_capacity_units = r;
+        table.write_capacity_units = w;
     }
 
     // Update StreamSpecification if provided
@@ -1435,6 +1472,8 @@ mod tests {
                 tags: Default::default(),
                 deletion_protection_enabled: false,
                 sse: Default::default(),
+                read_capacity_units: 0,
+                write_capacity_units: 0,
             },
         );
         state
@@ -1563,6 +1602,8 @@ mod tests {
                 tags: Default::default(),
                 deletion_protection_enabled: false,
                 sse: Default::default(),
+                read_capacity_units: 0,
+                write_capacity_units: 0,
             },
         );
         create_global_table(
