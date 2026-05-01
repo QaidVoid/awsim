@@ -1,13 +1,23 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { listGroups, getGroup, type IamGroup, type IamUser } from '$lib/api/iam';
+	import {
+		listGroups,
+		getGroup,
+		deleteGroup,
+		type IamGroup,
+		type IamUser,
+	} from '$lib/api/iam';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import EntityDetailSheet from './entity-detail-sheet.svelte';
+	import CreateEntityDialog from './create-entity-dialog.svelte';
 	import UsersRound from '@lucide/svelte/icons/users-round';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+	import Plus from '@lucide/svelte/icons/plus';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import { toast } from 'svelte-sonner';
 
 	let groups = $state<IamGroup[]>([]);
 	let loading = $state(false);
@@ -15,6 +25,8 @@
 	let selected = $state<IamGroup | null>(null);
 	let members = $state<IamUser[]>([]);
 	let detailLoading = $state(false);
+	let createOpen = $state(false);
+	let deleting = $state(false);
 
 	const filtered = $derived(
 		filter.trim()
@@ -44,6 +56,21 @@
 		}
 	}
 
+	async function handleDelete(g: IamGroup) {
+		if (!confirm(`Delete group "${g.groupName}"? This cannot be undone.`)) return;
+		deleting = true;
+		try {
+			await deleteGroup(g.groupName);
+			toast.success(`Deleted ${g.groupName}`);
+			selected = null;
+			await load();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleting = false;
+		}
+	}
+
 	onMount(load);
 </script>
 
@@ -52,6 +79,10 @@
 		<Input type="search" placeholder="Filter groups..." bind:value={filter} class="h-8 max-w-xs" />
 		<div class="flex-1"></div>
 		<Badge variant="secondary">{filtered.length} of {groups.length}</Badge>
+		<Button size="sm" onclick={() => (createOpen = true)}>
+			<Plus class="size-3.5" />
+			<span class="ml-1">New group</span>
+		</Button>
 		<Button variant="ghost" size="icon-sm" onclick={load} disabled={loading} title="Refresh">
 			<RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
 		</Button>
@@ -114,5 +145,23 @@
 				</ul>
 			{/if}
 		</div>
+		<div class="flex justify-end pt-4">
+			<Button
+				variant="destructive"
+				size="sm"
+				disabled={deleting}
+				onclick={() => selected && handleDelete(selected)}
+			>
+				<Trash2 class="size-4" />
+				<span class="ml-1">Delete group</span>
+			</Button>
+		</div>
 	{/if}
 </EntityDetailSheet>
+
+<CreateEntityDialog
+	bind:open={createOpen}
+	kind="group"
+	onOpenChange={(v) => (createOpen = v)}
+	onCreated={load}
+/>

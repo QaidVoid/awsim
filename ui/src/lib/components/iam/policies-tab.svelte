@@ -7,6 +7,7 @@
 		getPolicyVersion,
 		createPolicyVersion,
 		setDefaultPolicyVersion,
+		deletePolicy,
 		type IamPolicy,
 		type IamPolicyVersion
 	} from '$lib/api/iam';
@@ -15,9 +16,12 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import EntityDetailSheet from './entity-detail-sheet.svelte';
+	import CreateEntityDialog from './create-entity-dialog.svelte';
 	import PolicyEditor from './policy-editor.svelte';
 	import FileBadge from '@lucide/svelte/icons/file-badge';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+	import Plus from '@lucide/svelte/icons/plus';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import { toast } from 'svelte-sonner';
 
 	let policies = $state<IamPolicy[]>([]);
@@ -29,6 +33,23 @@
 	let policyDoc = $state('');
 	let detailLoading = $state(false);
 	let saving = $state(false);
+	let createOpen = $state(false);
+	let deleting = $state(false);
+
+	async function handleDelete(p: IamPolicy) {
+		if (!confirm(`Delete policy "${p.policyName}"? This cannot be undone.`)) return;
+		deleting = true;
+		try {
+			await deletePolicy(p.arn);
+			toast.success(`Deleted ${p.policyName}`);
+			selected = null;
+			await load();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleting = false;
+		}
+	}
 
 	const filtered = $derived(
 		filter.trim()
@@ -118,6 +139,10 @@
 		/>
 		<div class="flex-1"></div>
 		<Badge variant="secondary">{filtered.length} of {policies.length}</Badge>
+		<Button size="sm" onclick={() => (createOpen = true)}>
+			<Plus class="size-3.5" />
+			<span class="ml-1">New policy</span>
+		</Button>
 		<Button variant="ghost" size="icon-sm" onclick={load} disabled={loading} title="Refresh">
 			<RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
 		</Button>
@@ -210,5 +235,23 @@
 				</Button>
 			</div>
 		</div>
+		<div class="flex justify-end pt-4">
+			<Button
+				variant="destructive"
+				size="sm"
+				disabled={deleting}
+				onclick={() => selected && handleDelete(selected)}
+			>
+				<Trash2 class="size-4" />
+				<span class="ml-1">Delete policy</span>
+			</Button>
+		</div>
 	{/if}
 </EntityDetailSheet>
+
+<CreateEntityDialog
+	bind:open={createOpen}
+	kind="policy"
+	onOpenChange={(v) => (createOpen = v)}
+	onCreated={load}
+/>

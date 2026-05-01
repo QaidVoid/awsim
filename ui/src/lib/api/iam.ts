@@ -135,6 +135,99 @@ export async function getUser(userName: string): Promise<IamUser> {
   };
 }
 
+export async function createUser(
+  userName: string,
+  path?: string,
+): Promise<IamUser> {
+  const params: Record<string, string> = { UserName: userName };
+  if (path) params["Path"] = path;
+  const xml = await iamRequest("CreateUser", params);
+  return {
+    userName: xmlValue(xml, "UserName"),
+    userId: xmlValue(xml, "UserId"),
+    arn: xmlValue(xml, "Arn"),
+    createDate: xmlValue(xml, "CreateDate"),
+  };
+}
+
+export async function deleteUser(userName: string): Promise<void> {
+  await iamRequest("DeleteUser", { UserName: userName });
+}
+
+export async function listAttachedUserPolicies(
+  userName: string,
+): Promise<IamAttachedPolicy[]> {
+  const xml = await iamRequest("ListAttachedUserPolicies", {
+    UserName: userName,
+  });
+  const raw = xmlArray(xml, "member", ["PolicyName", "PolicyArn"]);
+  return raw.map((p) => ({
+    policyName: p["PolicyName"] ?? "",
+    policyArn: p["PolicyArn"] ?? "",
+  }));
+}
+
+export async function attachUserPolicy(
+  userName: string,
+  policyArn: string,
+): Promise<void> {
+  await iamRequest("AttachUserPolicy", {
+    UserName: userName,
+    PolicyArn: policyArn,
+  });
+}
+
+export async function detachUserPolicy(
+  userName: string,
+  policyArn: string,
+): Promise<void> {
+  await iamRequest("DetachUserPolicy", {
+    UserName: userName,
+    PolicyArn: policyArn,
+  });
+}
+
+export async function listUserPolicies(userName: string): Promise<string[]> {
+  const xml = await iamRequest("ListUserPolicies", { UserName: userName });
+  // Response is `<PolicyNames><member>name</member>...</PolicyNames>` —
+  // a flat list of inline policy names.
+  return [...xml.matchAll(/<member>([^<]+)<\/member>/g)].map((m) => m[1]);
+}
+
+export async function getUserPolicy(
+  userName: string,
+  policyName: string,
+): Promise<string> {
+  const xml = await iamRequest("GetUserPolicy", {
+    UserName: userName,
+    PolicyName: policyName,
+  });
+  const doc = xmlValue(xml, "PolicyDocument");
+  return doc ? decodeURIComponent(doc) : "";
+}
+
+export async function putUserPolicy(
+  userName: string,
+  policyName: string,
+  document: string,
+): Promise<void> {
+  await iamRequest("PutUserPolicy", {
+    UserName: userName,
+    PolicyName: policyName,
+    PolicyDocument: document,
+  });
+}
+
+export async function deleteUserPolicy(
+  userName: string,
+  policyName: string,
+): Promise<void> {
+  await iamRequest("DeleteUserPolicy", {
+    UserName: userName,
+    PolicyName: policyName,
+  });
+}
+
 // ---- Roles ----
 
 export async function listRoles(): Promise<IamRole[]> {
@@ -166,6 +259,111 @@ export async function getRole(roleName: string): Promise<IamRole> {
     createDate: xmlValue(xml, "CreateDate") || undefined,
     assumeRolePolicyDocument: doc ? decodeURIComponent(doc) : "",
   };
+}
+
+export async function createRole(
+  roleName: string,
+  assumeRolePolicyDocument: string,
+  description?: string,
+): Promise<IamRole> {
+  const params: Record<string, string> = {
+    RoleName: roleName,
+    AssumeRolePolicyDocument: assumeRolePolicyDocument,
+  };
+  if (description) params["Description"] = description;
+  const xml = await iamRequest("CreateRole", params);
+  return {
+    roleName: xmlValue(xml, "RoleName"),
+    roleId: xmlValue(xml, "RoleId"),
+    arn: xmlValue(xml, "Arn"),
+    createDate: xmlValue(xml, "CreateDate"),
+  };
+}
+
+export async function deleteRole(roleName: string): Promise<void> {
+  await iamRequest("DeleteRole", { RoleName: roleName });
+}
+
+export async function listAttachedRolePolicies(
+  roleName: string,
+): Promise<IamAttachedPolicy[]> {
+  const xml = await iamRequest("ListAttachedRolePolicies", {
+    RoleName: roleName,
+  });
+  const raw = xmlArray(xml, "member", ["PolicyName", "PolicyArn"]);
+  return raw.map((p) => ({
+    policyName: p["PolicyName"] ?? "",
+    policyArn: p["PolicyArn"] ?? "",
+  }));
+}
+
+export async function attachRolePolicy(
+  roleName: string,
+  policyArn: string,
+): Promise<void> {
+  await iamRequest("AttachRolePolicy", {
+    RoleName: roleName,
+    PolicyArn: policyArn,
+  });
+}
+
+export async function detachRolePolicy(
+  roleName: string,
+  policyArn: string,
+): Promise<void> {
+  await iamRequest("DetachRolePolicy", {
+    RoleName: roleName,
+    PolicyArn: policyArn,
+  });
+}
+
+export async function listRolePolicies(roleName: string): Promise<string[]> {
+  const xml = await iamRequest("ListRolePolicies", { RoleName: roleName });
+  return [...xml.matchAll(/<member>([^<]+)<\/member>/g)].map((m) => m[1]);
+}
+
+export async function getRolePolicy(
+  roleName: string,
+  policyName: string,
+): Promise<string> {
+  const xml = await iamRequest("GetRolePolicy", {
+    RoleName: roleName,
+    PolicyName: policyName,
+  });
+  const doc = xmlValue(xml, "PolicyDocument");
+  return doc ? decodeURIComponent(doc) : "";
+}
+
+export async function putRolePolicy(
+  roleName: string,
+  policyName: string,
+  document: string,
+): Promise<void> {
+  await iamRequest("PutRolePolicy", {
+    RoleName: roleName,
+    PolicyName: policyName,
+    PolicyDocument: document,
+  });
+}
+
+export async function deleteRolePolicy(
+  roleName: string,
+  policyName: string,
+): Promise<void> {
+  await iamRequest("DeleteRolePolicy", {
+    RoleName: roleName,
+    PolicyName: policyName,
+  });
+}
+
+export async function updateAssumeRolePolicy(
+  roleName: string,
+  document: string,
+): Promise<void> {
+  await iamRequest("UpdateAssumeRolePolicy", {
+    RoleName: roleName,
+    PolicyDocument: document,
+  });
 }
 
 // ---- Groups ----
@@ -206,6 +404,82 @@ export async function getGroup(
   return { group, users };
 }
 
+export async function createGroup(groupName: string): Promise<IamGroup> {
+  const xml = await iamRequest("CreateGroup", { GroupName: groupName });
+  return {
+    groupName: xmlValue(xml, "GroupName"),
+    groupId: xmlValue(xml, "GroupId"),
+    arn: xmlValue(xml, "Arn"),
+  };
+}
+
+export async function deleteGroup(groupName: string): Promise<void> {
+  await iamRequest("DeleteGroup", { GroupName: groupName });
+}
+
+export async function listAttachedGroupPolicies(
+  groupName: string,
+): Promise<IamAttachedPolicy[]> {
+  const xml = await iamRequest("ListAttachedGroupPolicies", {
+    GroupName: groupName,
+  });
+  const raw = xmlArray(xml, "member", ["PolicyName", "PolicyArn"]);
+  return raw.map((p) => ({
+    policyName: p["PolicyName"] ?? "",
+    policyArn: p["PolicyArn"] ?? "",
+  }));
+}
+
+export async function attachGroupPolicy(
+  groupName: string,
+  policyArn: string,
+): Promise<void> {
+  await iamRequest("AttachGroupPolicy", {
+    GroupName: groupName,
+    PolicyArn: policyArn,
+  });
+}
+
+export async function detachGroupPolicy(
+  groupName: string,
+  policyArn: string,
+): Promise<void> {
+  await iamRequest("DetachGroupPolicy", {
+    GroupName: groupName,
+    PolicyArn: policyArn,
+  });
+}
+
+export async function addUserToGroup(
+  groupName: string,
+  userName: string,
+): Promise<void> {
+  await iamRequest("AddUserToGroup", {
+    GroupName: groupName,
+    UserName: userName,
+  });
+}
+
+export async function removeUserFromGroup(
+  groupName: string,
+  userName: string,
+): Promise<void> {
+  await iamRequest("RemoveUserFromGroup", {
+    GroupName: groupName,
+    UserName: userName,
+  });
+}
+
+export async function listGroupsForUser(userName: string): Promise<IamGroup[]> {
+  const xml = await iamRequest("ListGroupsForUser", { UserName: userName });
+  const raw = xmlArray(xml, "member", ["GroupName", "GroupId", "Arn"]);
+  return raw.map((g) => ({
+    groupName: g["GroupName"] ?? "",
+    groupId: g["GroupId"] ?? "",
+    arn: g["Arn"] ?? "",
+  }));
+}
+
 // ---- Policies ----
 
 export async function listPolicies(
@@ -240,6 +514,31 @@ export async function getPolicy(arn: string): Promise<IamPolicy> {
     description: xmlValue(xml, "Description") || undefined,
     createDate: xmlValue(xml, "CreateDate") || undefined,
   };
+}
+
+export async function createPolicy(
+  policyName: string,
+  document: string,
+  description?: string,
+): Promise<IamPolicy> {
+  const params: Record<string, string> = {
+    PolicyName: policyName,
+    PolicyDocument: document,
+  };
+  if (description) params["Description"] = description;
+  const xml = await iamRequest("CreatePolicy", params);
+  return {
+    policyName: xmlValue(xml, "PolicyName"),
+    arn: xmlValue(xml, "Arn"),
+    attachmentCount: xmlValue(xml, "AttachmentCount") || "0",
+    defaultVersionId: xmlValue(xml, "DefaultVersionId") || undefined,
+    description: xmlValue(xml, "Description") || undefined,
+    createDate: xmlValue(xml, "CreateDate") || undefined,
+  };
+}
+
+export async function deletePolicy(arn: string): Promise<void> {
+  await iamRequest("DeletePolicy", { PolicyArn: arn });
 }
 
 export async function listPolicyVersions(

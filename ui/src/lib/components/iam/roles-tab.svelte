@@ -1,14 +1,18 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { listRoles, getRole, type IamRole } from '$lib/api/iam';
+	import { listRoles, getRole, deleteRole, type IamRole } from '$lib/api/iam';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import EntityDetailSheet from './entity-detail-sheet.svelte';
+	import CreateEntityDialog from './create-entity-dialog.svelte';
 	import PolicyEditor from './policy-editor.svelte';
 	import ShieldCheck from '@lucide/svelte/icons/shield-check';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+	import Plus from '@lucide/svelte/icons/plus';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import { toast } from 'svelte-sonner';
 
 	let roles = $state<IamRole[]>([]);
 	let loading = $state(false);
@@ -16,6 +20,8 @@
 	let selected = $state<IamRole | null>(null);
 	let trustDoc = $state('');
 	let detailLoading = $state(false);
+	let createOpen = $state(false);
+	let deleting = $state(false);
 
 	const filtered = $derived(
 		filter.trim()
@@ -51,6 +57,21 @@
 		}
 	}
 
+	async function handleDelete(r: IamRole) {
+		if (!confirm(`Delete role "${r.roleName}"? This cannot be undone.`)) return;
+		deleting = true;
+		try {
+			await deleteRole(r.roleName);
+			toast.success(`Deleted ${r.roleName}`);
+			selected = null;
+			await load();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleting = false;
+		}
+	}
+
 	onMount(load);
 </script>
 
@@ -59,6 +80,10 @@
 		<Input type="search" placeholder="Filter roles..." bind:value={filter} class="h-8 max-w-xs" />
 		<div class="flex-1"></div>
 		<Badge variant="secondary">{filtered.length} of {roles.length}</Badge>
+		<Button size="sm" onclick={() => (createOpen = true)}>
+			<Plus class="size-3.5" />
+			<span class="ml-1">New role</span>
+		</Button>
 		<Button variant="ghost" size="icon-sm" onclick={load} disabled={loading} title="Refresh">
 			<RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
 		</Button>
@@ -118,5 +143,23 @@
 				<p class="mt-2 text-xs text-muted-foreground">Loading trust policy...</p>
 			{/if}
 		</div>
+		<div class="flex justify-end pt-4">
+			<Button
+				variant="destructive"
+				size="sm"
+				disabled={deleting}
+				onclick={() => selected && handleDelete(selected)}
+			>
+				<Trash2 class="size-4" />
+				<span class="ml-1">Delete role</span>
+			</Button>
+		</div>
 	{/if}
 </EntityDetailSheet>
+
+<CreateEntityDialog
+	bind:open={createOpen}
+	kind="role"
+	onOpenChange={(v) => (createOpen = v)}
+	onCreated={load}
+/>
