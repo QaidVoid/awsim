@@ -514,6 +514,14 @@ export const SERVICES: Service[] = [
     icon: Cloud,
     keywords: ["transfer"],
   },
+  {
+    id: "opensearch",
+    name: "OpenSearch",
+    href: "/opensearch",
+    category: "Data",
+    icon: Search,
+    keywords: ["elasticsearch", "search", "indexes"],
+  },
 
   // Admin
   {
