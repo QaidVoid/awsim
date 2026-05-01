@@ -555,12 +555,12 @@ impl ServiceHandler for DynamoDbService {
             "DescribeLimits" => operations::table::describe_limits(&state, &input, ctx),
 
             // Backup
-            "CreateBackup" => operations::backup::create_backup(&state, &input, ctx),
+            "CreateBackup" => operations::backup::create_backup(&state, &self.sqlite, &input, ctx),
             "DeleteBackup" => operations::backup::delete_backup(&state, &input, ctx),
             "DescribeBackup" => operations::backup::describe_backup(&state, &input, ctx),
             "ListBackups" => operations::backup::list_backups(&state, &input, ctx),
             "RestoreTableFromBackup" => {
-                operations::backup::restore_table_from_backup(&state, &input, ctx)
+                operations::backup::restore_table_from_backup(&state, &self.sqlite, &input, ctx)
             }
             "RestoreTableToPointInTime" => {
                 operations::backup::restore_table_to_point_in_time(&state, &input, ctx)

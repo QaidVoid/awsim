@@ -3,7 +3,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-use crate::state::{BackupRecord, DynamoState, Table};
+use crate::sqlite_store::{MAX_GSI_SLOTS, SqliteStore};
+use crate::state::{BackupItem, BackupRecord, DynamoState, Table};
 
 use super::{opt_str, require_str};
 
@@ -16,21 +17,47 @@ fn now_secs_f64() -> f64 {
 
 pub fn create_backup(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?;
     let backup_name = require_str(input, "BackupName")?;
 
-    let table_arn = {
+    let (table_arn, schema_snapshot) = {
         let t = state.tables.get(table_name).ok_or_else(|| {
             AwsError::service_not_found(
                 "TableNotFoundException",
                 format!("Table '{table_name}' not found"),
             )
         })?;
-        t.arn.clone()
+        // Clone the full schema so a future restore can rebuild the
+        // table even if the original gets deleted in between.
+        (t.arn.clone(), Some(t.value().clone()))
     };
+
+    // Snapshot every item via the same SqliteStore the CRUD path
+    // uses. Cheap O(N) read; bounded by table size. We deliberately
+    // serialise rather than streaming to S3 — `--data-dir` snapshots
+    // pick up the full backup record including these items.
+    let mut items: Vec<BackupItem> = Vec::new();
+    sqlite.scan_table(
+        &ctx.account_id,
+        &ctx.region,
+        table_name,
+        None,
+        |pk, sk, attrs| {
+            items.push(BackupItem {
+                pk: pk.to_string(),
+                sk: sk.to_string(),
+                attrs,
+            });
+            Ok(true)
+        },
+    )?;
+    let backup_size_bytes = serde_json::to_vec(&items)
+        .map(|v| v.len() as u64)
+        .unwrap_or(0);
 
     let now = now_secs_f64();
     let backup_arn = format!(
@@ -46,7 +73,9 @@ pub fn create_backup(
         backup_status: "AVAILABLE".to_string(),
         backup_type: "USER".to_string(),
         backup_creation_date_time: now,
-        backup_size_bytes: 0,
+        backup_size_bytes,
+        schema_snapshot,
+        items,
     };
 
     state.backups.insert(backup_arn.clone(), record);
@@ -58,7 +87,7 @@ pub fn create_backup(
             "BackupStatus": "AVAILABLE",
             "BackupType": "USER",
             "BackupCreationDateTime": now,
-            "BackupSizeBytes": 0
+            "BackupSizeBytes": backup_size_bytes
         }
     }))
 }
@@ -188,6 +217,7 @@ pub fn list_backups(
 
 pub fn restore_table_from_backup(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
@@ -208,14 +238,31 @@ pub fn restore_table_from_backup(
         ));
     }
 
-    let source = state.tables.get(&backup.table_name);
     let now = now_secs_f64();
     let new_arn = format!(
         "arn:aws:dynamodb:{}:{}:table/{}",
         ctx.region, ctx.account_id, target_name
     );
 
-    let new_table = if let Some(src) = source {
+    // Schema preference order:
+    //   1. Schema snapshot captured at backup time — survives even
+    //      after the source table is deleted.
+    //   2. Live source table (if backup pre-dates schema snapshots).
+    //   3. Empty stub (last-ditch — backup is malformed).
+    let new_table = if let Some(snap) = backup.schema_snapshot.as_ref() {
+        let mut t = snap.clone();
+        t.name = target_name.to_string();
+        t.arn = new_arn.clone();
+        t.created_at = now;
+        // Streams + records start fresh on a restored table to match
+        // AWS behaviour.
+        t.stream_enabled = false;
+        t.stream_arn = None;
+        t.stream_view_type = None;
+        t.stream_records = Vec::new();
+        t.stream_sequence = 0;
+        t
+    } else if let Some(src) = state.tables.get(&backup.table_name) {
         Table {
             name: target_name.to_string(),
             arn: new_arn.clone(),
@@ -259,9 +306,33 @@ pub fn restore_table_from_backup(
         }
     };
 
-    // Restored tables start empty — actual point-in-time replay isn't
-    // implemented (it never was; this op was always a stub).
-    let desc = crate::operations::table::table_description(&new_table, 0);
+    // Mirror the schema to SQLite so item writes via the new table
+    // have the right `(account, region, table)` namespace established.
+    let schema_value = serde_json::to_value(&new_table)
+        .map_err(|e| AwsError::internal(format!("DynamoDB schema serialize failed: {e}")))?;
+    sqlite.put_table_schema(&ctx.account_id, &ctx.region, target_name, &schema_value)?;
+
+    // Replay every captured item. We pass empty GSI key slots —
+    // recomputing them would require knowing the GSI hash/range
+    // attribute names; for simplicity restored items skip GSI
+    // materialisation and rely on a future operation that reads them
+    // through the base table only. (UI Query/Scan against the base
+    // table works regardless.)
+    let empty_gsi: [(Option<String>, Option<String>); MAX_GSI_SLOTS] = Default::default();
+    for item in &backup.items {
+        sqlite.put_item(
+            &ctx.account_id,
+            &ctx.region,
+            target_name,
+            &item.pk,
+            &item.sk,
+            &item.attrs,
+            &empty_gsi,
+        )?;
+    }
+    let restored_count = backup.items.len() as u64;
+
+    let desc = crate::operations::table::table_description(&new_table, restored_count);
     state.tables.insert(target_name.to_string(), new_table);
 
     Ok(json!({

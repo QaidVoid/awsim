@@ -365,6 +365,87 @@ export async function untagResource(
   });
 }
 
+// ---- Backups ----
+
+export interface BackupSummary {
+  arn: string;
+  name: string;
+  tableName: string;
+  status: string;
+  type: string;
+  createdAt: string;
+  sizeBytes: number;
+}
+
+export async function listBackups(tableName?: string): Promise<BackupSummary[]> {
+  const body: Record<string, unknown> = {};
+  if (tableName) body.TableName = tableName;
+  const data = await request<{
+    BackupSummaries?: {
+      BackupArn?: string;
+      BackupName?: string;
+      TableName?: string;
+      BackupStatus?: string;
+      BackupType?: string;
+      BackupCreationDateTime?: number;
+      BackupSizeBytes?: number;
+    }[];
+  }>("ListBackups", body);
+  return (data.BackupSummaries ?? []).map((b) => ({
+    arn: b.BackupArn ?? "",
+    name: b.BackupName ?? "",
+    tableName: b.TableName ?? "",
+    status: b.BackupStatus ?? "",
+    type: b.BackupType ?? "",
+    createdAt: b.BackupCreationDateTime
+      ? new Date(b.BackupCreationDateTime * 1000).toISOString()
+      : "",
+    sizeBytes: b.BackupSizeBytes ?? 0,
+  }));
+}
+
+export async function createBackup(
+  tableName: string,
+  backupName: string,
+): Promise<BackupSummary> {
+  const data = await request<{
+    BackupDetails?: {
+      BackupArn?: string;
+      BackupName?: string;
+      BackupStatus?: string;
+      BackupType?: string;
+      BackupCreationDateTime?: number;
+      BackupSizeBytes?: number;
+    };
+  }>("CreateBackup", { TableName: tableName, BackupName: backupName });
+  const d = data.BackupDetails ?? {};
+  return {
+    arn: d.BackupArn ?? "",
+    name: d.BackupName ?? "",
+    tableName,
+    status: d.BackupStatus ?? "",
+    type: d.BackupType ?? "USER",
+    createdAt: d.BackupCreationDateTime
+      ? new Date(d.BackupCreationDateTime * 1000).toISOString()
+      : "",
+    sizeBytes: d.BackupSizeBytes ?? 0,
+  };
+}
+
+export async function deleteBackup(arn: string): Promise<void> {
+  await request("DeleteBackup", { BackupArn: arn });
+}
+
+export async function restoreFromBackup(
+  backupArn: string,
+  targetTableName: string,
+): Promise<void> {
+  await request("RestoreTableFromBackup", {
+    BackupArn: backupArn,
+    TargetTableName: targetTableName,
+  });
+}
+
 /**
  * Update the table's server-side-encryption spec. AWS only allows
  * enabling via UpdateTable; awsim accepts both directions. When

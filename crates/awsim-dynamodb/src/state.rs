@@ -111,7 +111,7 @@ pub struct SseSpecification {
 /// Items live in SQLite (see `SqliteStore`); this struct holds the
 /// metadata that operation handlers need to answer DescribeTable,
 /// resolve key schemas for indexing, and run stream emission.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Table {
     pub name: String,
     pub arn: String,
@@ -205,6 +205,23 @@ pub struct BackupRecord {
     pub backup_type: String,
     pub backup_creation_date_time: f64,
     pub backup_size_bytes: u64,
+    /// Captured table schema at backup time. Used by
+    /// `RestoreTableFromBackup` to rebuild the table.
+    #[serde(default)]
+    pub schema_snapshot: Option<Table>,
+    /// Captured items as raw `(pk, sk, attrs_json)` triples — same
+    /// shape SqliteStore stores them. Restored verbatim. Empty when
+    /// the backup pre-dates this field on disk.
+    #[serde(default)]
+    pub items: Vec<BackupItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupItem {
+    pub pk: String,
+    pub sk: String,
+    /// JSON-encoded item attributes — DynamoDB wire shape.
+    pub attrs: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

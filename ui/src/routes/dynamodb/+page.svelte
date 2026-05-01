@@ -19,6 +19,7 @@
 	import IndexesTab from '$lib/components/dynamodb/indexes-tab.svelte';
 	import SchemaTab from '$lib/components/dynamodb/schema-tab.svelte';
 	import PartiqlTab from '$lib/components/dynamodb/partiql-tab.svelte';
+	import BackupsTab from '$lib/components/dynamodb/backups-tab.svelte';
 	import ItemEditor from '$lib/components/dynamodb/item-editor.svelte';
 	import CreateTableDialog from '$lib/components/dynamodb/create-table-dialog.svelte';
 	import ConfirmDialog from '$lib/components/dynamodb/confirm-dialog.svelte';
@@ -55,7 +56,7 @@
 	let editorOpen = $state(false);
 	let editingItem = $state<Item | null>(null);
 
-	let activeTab = $state<'items' | 'partiql' | 'indexes' | 'schema'>('items');
+	let activeTab = $state<'items' | 'partiql' | 'indexes' | 'schema' | 'backups'>('items');
 
 	onMount(loadTables);
 
@@ -255,6 +256,7 @@
 						<TabsTrigger value="partiql">PartiQL</TabsTrigger>
 						<TabsTrigger value="indexes">Indexes</TabsTrigger>
 						<TabsTrigger value="schema">Schema</TabsTrigger>
+						<TabsTrigger value="backups">Backups</TabsTrigger>
 					</TabsList>
 
 					<div class="min-h-0 min-w-0 flex-1">
@@ -269,6 +271,16 @@
 						</TabsContent>
 						<TabsContent value="schema" class="m-0 h-full min-w-0">
 							<SchemaTab {detail} onUpdated={refreshDetail} />
+						</TabsContent>
+						<TabsContent value="backups" class="m-0 h-full min-w-0">
+							<BackupsTab
+								{detail}
+								onRestored={async (name) => {
+									await loadTables();
+									const t = tables.find((x) => x.name === name);
+									if (t) await selectTable(t);
+								}}
+							/>
 						</TabsContent>
 					</div>
 				</Tabs>
