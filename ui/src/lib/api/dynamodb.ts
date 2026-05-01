@@ -56,6 +56,7 @@ export interface TableDetail {
   localSecondaryIndexes: LocalSecondaryIndex[];
   createdAt: string;
   billingMode: string;
+  deletionProtectionEnabled: boolean;
 }
 
 export type AttributeValue =
@@ -120,6 +121,7 @@ interface RawTableDescription {
   TableSizeBytes?: number;
   CreationDateTime?: number;
   BillingModeSummary?: { BillingMode?: string };
+  DeletionProtectionEnabled?: boolean;
   KeySchema?: { AttributeName: string; KeyType: string }[];
   AttributeDefinitions?: { AttributeName: string; AttributeType: string }[];
   GlobalSecondaryIndexes?: {
@@ -174,6 +176,7 @@ function mapTable(raw: RawTableDescription, fallbackName = ""): TableDetail {
       ? new Date(raw.CreationDateTime * 1000).toISOString()
       : "",
     billingMode: raw.BillingModeSummary?.BillingMode ?? "PAY_PER_REQUEST",
+    deletionProtectionEnabled: raw.DeletionProtectionEnabled ?? false,
   };
 }
 
@@ -195,6 +198,7 @@ export interface CreateTableParams {
   partitionKeyType: ScalarType;
   sortKey?: string;
   sortKeyType?: ScalarType;
+  deletionProtectionEnabled?: boolean;
 }
 
 export async function createTable(params: CreateTableParams): Promise<void> {
@@ -222,11 +226,26 @@ export async function createTable(params: CreateTableParams): Promise<void> {
     AttributeDefinitions: attributeDefinitions,
     KeySchema: keySchema,
     BillingMode: "PAY_PER_REQUEST",
+    DeletionProtectionEnabled: params.deletionProtectionEnabled ?? false,
   });
 }
 
 export async function deleteTable(name: string): Promise<void> {
   await request("DeleteTable", { TableName: name });
+}
+
+/**
+ * Toggle DeletionProtectionEnabled. AWS rejects DeleteTable when this
+ * is true; flip it off via this call before retrying a delete.
+ */
+export async function setDeletionProtection(
+  name: string,
+  enabled: boolean,
+): Promise<void> {
+  await request("UpdateTable", {
+    TableName: name,
+    DeletionProtectionEnabled: enabled,
+  });
 }
 
 /**

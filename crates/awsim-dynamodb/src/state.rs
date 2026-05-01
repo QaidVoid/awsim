@@ -125,6 +125,11 @@ pub struct Table {
     /// Resource tags (key → value).
     #[serde(default)]
     pub tags: HashMap<String, String>,
+    /// When true, `DeleteTable` rejects the request — callers must
+    /// flip this off via `UpdateTable` first. Mirrors the AWS
+    /// `DeletionProtectionEnabled` table attribute.
+    #[serde(default)]
+    pub deletion_protection_enabled: bool,
 }
 
 /// Serializable snapshot of `DynamoState`.

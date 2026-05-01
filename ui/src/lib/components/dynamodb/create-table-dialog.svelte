@@ -12,6 +12,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Switch } from '$lib/components/ui/switch';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 
 	interface Props {
@@ -27,6 +28,7 @@
 	let pkType = $state<ScalarType>('S');
 	let skName = $state('');
 	let skType = $state<ScalarType>('S');
+	let deletionProtection = $state(false);
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 
@@ -37,6 +39,7 @@
 			pkType = 'S';
 			skName = '';
 			skType = 'S';
+			deletionProtection = false;
 			saving = false;
 			error = null;
 		}
@@ -55,7 +58,8 @@
 				partitionKey: pkName.trim(),
 				partitionKeyType: pkType,
 				sortKey: skName.trim() || undefined,
-				sortKeyType: skType
+				sortKeyType: skType,
+				deletionProtectionEnabled: deletionProtection
 			});
 			toast.success(`Created table ${name.trim()}`);
 			onCreated(name.trim());
@@ -116,6 +120,15 @@
 						<option value="B">Binary</option>
 					</select>
 				</div>
+			</div>
+			<div class="flex items-start justify-between gap-4 rounded-md border border-border p-3">
+				<div>
+					<Label for="ddb-deletion-protection" class="text-sm">Deletion protection</Label>
+					<p class="mt-0.5 text-xs text-muted-foreground">
+						Reject DeleteTable requests until disabled. Toggle off later via the Schema tab.
+					</p>
+				</div>
+				<Switch id="ddb-deletion-protection" bind:checked={deletionProtection} />
 			</div>
 			{#if error}
 				<p class="text-xs text-destructive">{error}</p>

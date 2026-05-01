@@ -233,6 +233,7 @@ pub fn restore_table_from_backup(
             stream_sequence: 0,
             ttl: src.ttl.clone(),
             tags: src.tags.clone(),
+            deletion_protection_enabled: src.deletion_protection_enabled,
         }
     } else {
         Table {
@@ -252,6 +253,7 @@ pub fn restore_table_from_backup(
             stream_sequence: 0,
             ttl: Default::default(),
             tags: std::collections::HashMap::new(),
+            deletion_protection_enabled: false,
         }
     };
 
@@ -322,6 +324,7 @@ pub fn restore_table_to_point_in_time(
         stream_sequence: 0,
         ttl: source.ttl.clone(),
         tags: source.tags.clone(),
+        deletion_protection_enabled: source.deletion_protection_enabled,
     };
 
     // Restored tables start empty — actual point-in-time replay isn't

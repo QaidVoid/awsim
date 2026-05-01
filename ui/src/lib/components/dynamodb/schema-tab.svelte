@@ -1,12 +1,33 @@
 <script lang="ts">
-	import type { TableDetail } from '$lib/api/dynamodb';
+	import { setDeletionProtection, type TableDetail } from '$lib/api/dynamodb';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Switch } from '$lib/components/ui/switch';
+	import { Label } from '$lib/components/ui/label';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		detail: TableDetail;
+		onUpdated?: () => void;
 	}
 
-	let { detail }: Props = $props();
+	let { detail, onUpdated }: Props = $props();
+
+	let togglingDeletionProtection = $state(false);
+
+	async function toggleDeletionProtection(next: boolean) {
+		togglingDeletionProtection = true;
+		try {
+			await setDeletionProtection(detail.name, next);
+			toast.success(
+				next ? 'Deletion protection enabled' : 'Deletion protection disabled'
+			);
+			onUpdated?.();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Update failed');
+		} finally {
+			togglingDeletionProtection = false;
+		}
+	}
 
 	function formatBytes(n: number): string {
 		if (!n) return '0 B';
@@ -51,6 +72,28 @@
 				</dd>
 			{/if}
 		</dl>
+	</section>
+
+	<section>
+		<h3 class="mb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+			Settings
+		</h3>
+		<div class="flex items-start justify-between gap-4 rounded-md border border-border p-3">
+			<div class="min-w-0">
+				<Label for="ddb-schema-deletion-protection" class="text-sm">
+					Deletion protection
+				</Label>
+				<p class="mt-0.5 text-xs text-muted-foreground">
+					When on, <code>DeleteTable</code> rejects the request. Disable here before deleting.
+				</p>
+			</div>
+			<Switch
+				id="ddb-schema-deletion-protection"
+				checked={detail.deletionProtectionEnabled}
+				onCheckedChange={(v) => toggleDeletionProtection(v)}
+				disabled={togglingDeletionProtection}
+			/>
+		</div>
 	</section>
 
 	<section>

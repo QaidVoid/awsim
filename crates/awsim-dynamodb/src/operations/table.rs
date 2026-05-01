@@ -188,7 +188,8 @@ pub fn table_description(table: &Table, item_count: u64) -> Value {
         "BillingModeSummary": { "BillingMode": table.billing_mode },
         "ItemCount": item_count,
         "TableSizeBytes": 0,
-        "ProvisionedThroughput": { "ReadCapacityUnits": 0, "WriteCapacityUnits": 0 }
+        "ProvisionedThroughput": { "ReadCapacityUnits": 0, "WriteCapacityUnits": 0 },
+        "DeletionProtectionEnabled": table.deletion_protection_enabled,
     });
 
     if !gsi.is_empty() {
@@ -298,6 +299,11 @@ pub fn create_table(
         map
     };
 
+    let deletion_protection_enabled = input
+        .get("DeletionProtectionEnabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
     let table = Table {
         name: table_name.to_string(),
         arn,
@@ -315,6 +321,7 @@ pub fn create_table(
         stream_sequence: 0,
         ttl: TtlSpecification::default(),
         tags,
+        deletion_protection_enabled,
     };
 
     // Brand new table — item count is always 0, no need to query SQLite.
@@ -366,6 +373,18 @@ pub fn delete_table(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?;
+
+    // Reject the request if deletion protection is on. Mirrors AWS:
+    // the table stays put and the caller must flip the flag off via
+    // UpdateTable first. Done before `remove` so we don't need to
+    // re-insert on rejection.
+    if let Some(table_ref) = state.tables.get(table_name)
+        && table_ref.value().deletion_protection_enabled
+    {
+        return Err(AwsError::validation(format!(
+            "Table '{table_name}' has deletion protection enabled. Disable it via UpdateTable first."
+        )));
+    }
 
     let (_, table) = state.tables.remove(table_name).ok_or_else(|| {
         AwsError::service_not_found(
@@ -466,6 +485,14 @@ pub fn update_table(
     // Update billing mode if provided
     if let Some(billing_mode) = opt_str(input, "BillingMode") {
         table.billing_mode = billing_mode.to_string();
+    }
+
+    // Update DeletionProtectionEnabled if provided.
+    if let Some(flag) = input
+        .get("DeletionProtectionEnabled")
+        .and_then(Value::as_bool)
+    {
+        table.deletion_protection_enabled = flag;
     }
 
     // Update StreamSpecification if provided
@@ -1351,6 +1378,7 @@ mod tests {
                 stream_sequence: 0,
                 ttl: Default::default(),
                 tags: Default::default(),
+                deletion_protection_enabled: false,
             },
         );
         state
@@ -1477,6 +1505,7 @@ mod tests {
                 stream_sequence: 0,
                 ttl: Default::default(),
                 tags: Default::default(),
+                deletion_protection_enabled: false,
             },
         );
         create_global_table(

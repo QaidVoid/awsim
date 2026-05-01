@@ -608,6 +608,7 @@ mod tests {
             stream_sequence: 0,
             ttl: Default::default(),
             tags: Default::default(),
+            deletion_protection_enabled: false,
         };
         state.tables.insert("t".into(), table);
         state

@@ -212,7 +212,7 @@
 							<IndexesTab {detail} />
 						</TabsContent>
 						<TabsContent value="schema" class="m-0 h-full min-w-0">
-							<SchemaTab {detail} />
+							<SchemaTab {detail} onUpdated={refreshDetail} />
 						</TabsContent>
 					</div>
 				</Tabs>
