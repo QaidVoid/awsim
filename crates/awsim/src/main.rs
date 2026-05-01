@@ -974,10 +974,68 @@ async fn async_main() -> Result<()> {
 
     // Build the OpenSearch (Elasticsearch-compatible) sub-router.
     // Nest OpenSearch under /opensearch prefix so it doesn't conflict with AWS routes.
-    let opensearch_nested: axum::Router<()> = axum::Router::new().nest(
-        "/opensearch",
-        awsim_opensearch::router(Arc::new(awsim_opensearch::state::OpenSearchState::default())),
-    );
+    // OpenSearch isn't a ServiceHandler (different protocol surface),
+    // so we wire its persistence directly: load any prior snapshot
+    // here, and save back via a dedicated signal handler + autosave
+    // task below.
+    let opensearch_state = Arc::new(awsim_opensearch::state::OpenSearchState::default());
+    if let Some(dir) = cli.data_dir.as_deref() {
+        let pm = awsim_core::PersistenceManager::new(dir);
+        if let Some(data) = pm.load_snapshot("opensearch")
+            && let Err(e) = opensearch_state.restore(&data)
+        {
+            warn!(error = %e, "Failed to restore opensearch snapshot");
+        }
+
+        // Periodic auto-save (mirrors the pattern used for other
+        // services). 30s cadence keeps the window of in-flight data
+        // bounded if awsim crashes.
+        let pm_auto = Arc::new(awsim_core::PersistenceManager::new(dir));
+        let state_auto = Arc::clone(&opensearch_state);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let bytes = state_auto.snapshot();
+                if !bytes.is_empty()
+                    && let Err(e) = pm_auto.save_snapshot("opensearch", &bytes)
+                {
+                    warn!(error = %e, "Failed to autosave opensearch snapshot");
+                }
+            }
+        });
+
+        // Save once more on graceful shutdown so we don't lose the
+        // last 30s of writes. Lives alongside the main shutdown
+        // handler — both subscribe to SIGINT/SIGTERM independently.
+        let pm_signal = Arc::new(awsim_core::PersistenceManager::new(dir));
+        let state_signal = Arc::clone(&opensearch_state);
+        tokio::spawn(async move {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{SignalKind, signal};
+                let mut sigint = signal(SignalKind::interrupt()).expect("SIGINT");
+                let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM");
+                tokio::select! {
+                    _ = sigint.recv() => {}
+                    _ = sigterm.recv() => {}
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                tokio::signal::ctrl_c().await.ok();
+            }
+            let bytes = state_signal.snapshot();
+            if !bytes.is_empty()
+                && let Err(e) = pm_signal.save_snapshot("opensearch", &bytes)
+            {
+                warn!(error = %e, "Failed to save opensearch snapshot on shutdown");
+            }
+        });
+    }
+    let opensearch_nested: axum::Router<()> =
+        axum::Router::new().nest("/opensearch", awsim_opensearch::router(opensearch_state));
 
     let ecr_router = awsim_ecr::router(ecr_service);
 
