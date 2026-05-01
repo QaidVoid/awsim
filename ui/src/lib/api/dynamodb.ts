@@ -47,6 +47,7 @@ export interface TableSummary {
 
 export interface TableDetail {
   name: string;
+  arn: string;
   status: string;
   itemCount: number;
   tableSizeBytes: number;
@@ -57,6 +58,16 @@ export interface TableDetail {
   createdAt: string;
   billingMode: string;
   deletionProtectionEnabled: boolean;
+}
+
+export interface TtlState {
+  enabled: boolean;
+  attributeName: string;
+}
+
+export interface ResourceTag {
+  key: string;
+  value: string;
 }
 
 export type AttributeValue =
@@ -116,6 +127,7 @@ async function request<T>(action: string, body: unknown): Promise<T> {
 
 interface RawTableDescription {
   TableName?: string;
+  TableArn?: string;
   TableStatus?: string;
   ItemCount?: number;
   TableSizeBytes?: number;
@@ -151,6 +163,7 @@ function mapKeySchema(
 function mapTable(raw: RawTableDescription, fallbackName = ""): TableDetail {
   return {
     name: raw.TableName ?? fallbackName,
+    arn: raw.TableArn ?? "",
     status: raw.TableStatus ?? "",
     itemCount: raw.ItemCount ?? 0,
     tableSizeBytes: raw.TableSizeBytes ?? 0,
@@ -266,6 +279,72 @@ export async function setDeletionProtection(
   await request("UpdateTable", {
     TableName: name,
     DeletionProtectionEnabled: enabled,
+  });
+}
+
+export async function setBillingMode(
+  name: string,
+  mode: "PAY_PER_REQUEST" | "PROVISIONED",
+): Promise<void> {
+  await request("UpdateTable", {
+    TableName: name,
+    BillingMode: mode,
+  });
+}
+
+export async function describeTtl(name: string): Promise<TtlState> {
+  const data = await request<{
+    TimeToLiveDescription?: {
+      TimeToLiveStatus?: string;
+      AttributeName?: string;
+    };
+  }>("DescribeTimeToLive", { TableName: name });
+  const desc = data.TimeToLiveDescription ?? {};
+  return {
+    enabled: desc.TimeToLiveStatus === "ENABLED",
+    attributeName: desc.AttributeName ?? "",
+  };
+}
+
+export async function updateTtl(
+  name: string,
+  enabled: boolean,
+  attributeName: string,
+): Promise<void> {
+  await request("UpdateTimeToLive", {
+    TableName: name,
+    TimeToLiveSpecification: {
+      Enabled: enabled,
+      AttributeName: attributeName,
+    },
+  });
+}
+
+export async function listTags(arn: string): Promise<ResourceTag[]> {
+  const data = await request<{ Tags?: { Key: string; Value: string }[] }>(
+    "ListTagsOfResource",
+    { ResourceArn: arn },
+  );
+  return (data.Tags ?? []).map((t) => ({ key: t.Key, value: t.Value }));
+}
+
+export async function tagResource(
+  arn: string,
+  tags: ResourceTag[],
+): Promise<void> {
+  await request("TagResource", {
+    ResourceArn: arn,
+    Tags: tags.map((t) => ({ Key: t.key, Value: t.value })),
+  });
+}
+
+export async function untagResource(
+  arn: string,
+  keys: string[],
+): Promise<void> {
+  await request("UntagResource", {
+    ResourceArn: arn,
+    TagKeys: keys,
   });
 }
 

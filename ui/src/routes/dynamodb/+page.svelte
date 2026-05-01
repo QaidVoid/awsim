@@ -6,7 +6,6 @@
 		describeTable,
 		deleteTable,
 		truncateTable,
-		setDeletionProtection,
 		type TableSummary,
 		type TableDetail,
 		type Item
@@ -138,12 +137,6 @@
 		if (!selected) return;
 		confirmBusy = true;
 		try {
-			// If the user crossed the protection warning, drop the
-			// flag first. Atomic from the user's perspective even
-			// though it's two server calls.
-			if (detail?.deletionProtectionEnabled) {
-				await setDeletionProtection(selected.name, false);
-			}
 			await deleteTable(selected.name);
 			toast.success(`Deleted table ${selected.name}`);
 			confirmOpen = false;
@@ -241,7 +234,15 @@
 							<Eraser class="size-3.5" />
 							Truncate
 						</Button>
-						<Button variant="ghost" size="sm" onclick={() => (confirmOpen = true)}>
+						<Button
+							variant="ghost"
+							size="sm"
+							onclick={() => (confirmOpen = true)}
+							disabled={detail.deletionProtectionEnabled}
+							title={detail.deletionProtectionEnabled
+								? 'Deletion protection is on. Disable it in the Schema tab to delete this table.'
+								: undefined}
+						>
 							<Trash2 class="size-3.5 text-destructive" />
 							Delete
 						</Button>
@@ -297,11 +298,8 @@
 
 <ConfirmDialog
 	bind:open={confirmOpen}
-	title={detail?.deletionProtectionEnabled ? 'Delete protected table?' : 'Delete table?'}
-	description={detail?.deletionProtectionEnabled
-		? `"${selected?.name ?? ''}" has deletion protection enabled. Continuing will turn protection off and then delete the table and all its items.`
-		: `Permanently delete "${selected?.name ?? ''}" and all its items.`}
-	confirmLabel={detail?.deletionProtectionEnabled ? 'Disable & delete' : 'Delete'}
+	title="Delete table?"
+	description={`Permanently delete "${selected?.name ?? ''}" and all its items.`}
 	busy={confirmBusy}
 	onConfirm={confirmDelete}
 	onClose={() => (confirmOpen = false)}
