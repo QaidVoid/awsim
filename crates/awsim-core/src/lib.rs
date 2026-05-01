@@ -16,6 +16,8 @@ pub use authz::{
     AuthzEngine, GrantLookup, NoopPrincipalLookup, PrincipalLookup, ResolvedPrincipal,
     ResourcePolicyLookup, ScpLookup,
 };
+// `HandlerByteStream` and `HandlerResult` are defined further down in
+// this file; re-exported here for crate consumers.
 pub use body::Body;
 pub use body_store::{BlobInventory, BodyStore};
 pub use error::AwsError;
@@ -31,7 +33,39 @@ pub use request_event::{RequestEvent, RequestEventBus};
 pub use router::RequestContext;
 pub use state::{AccountRegionStore, Snapshottable};
 
+use bytes::Bytes;
+use futures::stream::BoxStream;
 use serde_json::Value;
+
+/// Boxed byte stream a handler may return when it wants to drive an
+/// HTTP response chunk-by-chunk (e.g. Bedrock's event-stream APIs)
+/// instead of buffering the whole response into a single `Value`.
+pub type HandlerByteStream = BoxStream<'static, Result<Bytes, AwsError>>;
+
+/// What `ServiceHandler::handle_streaming` returns. Most operations
+/// produce a single JSON `Value` (the existing path); a small set —
+/// notably Bedrock's `ConverseStream` and
+/// `InvokeModelWithResponseStream` — produce a continuous stream of
+/// already-encoded body bytes plus a content-type the gateway puts
+/// straight on the wire.
+pub enum HandlerResult {
+    /// Conventional single-shot response. The gateway runs it
+    /// through the normal protocol serializer.
+    Json(Value),
+    /// Streamed binary body. The gateway sends it via axum's
+    /// chunked-transfer body so the client sees bytes as they're
+    /// produced — no buffering on our side.
+    Streaming {
+        body: HandlerByteStream,
+        content_type: &'static str,
+    },
+}
+
+impl From<Value> for HandlerResult {
+    fn from(v: Value) -> Self {
+        HandlerResult::Json(v)
+    }
+}
 
 /// Trait that every AWS service crate must implement.
 ///
@@ -64,6 +98,21 @@ pub trait ServiceHandler: Send + Sync {
         input: Value,
         ctx: &RequestContext,
     ) -> Result<Value, AwsError>;
+
+    /// Streaming-aware variant. The default delegates to `handle` and
+    /// wraps the JSON result so existing services don't need to do
+    /// anything; services that genuinely stream (Bedrock data plane)
+    /// override this and return `HandlerResult::Streaming`.
+    async fn handle_streaming(
+        &self,
+        operation: &str,
+        input: Value,
+        ctx: &RequestContext,
+    ) -> Result<HandlerResult, AwsError> {
+        self.handle(operation, input, ctx)
+            .await
+            .map(HandlerResult::from)
+    }
 
     /// Serialize the service's state to bytes for persistence.
     ///

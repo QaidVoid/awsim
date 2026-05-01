@@ -9,7 +9,13 @@
 //! we fall back to deterministic canned responses so SDK code that
 //! just wires up the calls keeps working in CI.
 
-use awsim_core::AwsError;
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
+use awsim_core::{AwsError, HandlerByteStream, HandlerResult};
+use bytes::Bytes;
+use futures::StreamExt;
+use futures::stream::{self, BoxStream};
 use serde_json::Value;
 use tracing::{debug, warn};
 
@@ -429,6 +435,366 @@ impl ModelFamily {
         } else {
             Some(Self::Other)
         }
+    }
+}
+
+// ── Real streaming entry point ───────────────────────────────────────────────
+
+/// Open a streaming response for `ConverseStream` /
+/// `InvokeModelWithResponseStream`. Forwards each Ollama SSE chunk
+/// to the client as its own AWS event-stream binary frame so the
+/// caller sees tokens as they're produced, not after the full
+/// response buffers.
+///
+/// Falls back to a single-frame canned stream when no backend is
+/// configured or the resolved backend can't be reached — same
+/// behaviour as the buffered path, just shipped as proper binary
+/// frames.
+pub(crate) async fn stream_response(
+    backends: Arc<ArcSwap<Option<BedrockBackends>>>,
+    operation: &str,
+    input: Value,
+) -> Result<HandlerResult, AwsError> {
+    let model_id = input["modelId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelId is required"))?
+        .to_string();
+    let body = extract_body(&input)?;
+    let is_converse = operation == "ConverseStream";
+
+    let guard = backends.load();
+    let registry = guard.as_ref().as_ref();
+
+    let resolved = registry.and_then(|r| r.resolve_invoke(&model_id));
+    let Some((backend, model_tag)) = resolved else {
+        // No backend mapping — emit a single canned frame.
+        return Ok(canned_stream(&model_id, is_converse));
+    };
+
+    if !is_converse {
+        // Vendor-family chunked streaming is more involved — we'd
+        // need per-family chunk translators that base64-wrap each
+        // partial. Fall back to the buffered path (which already
+        // emits proper binary frames) until we wire those up.
+        let value = invoke_model_with_response_stream(registry, &input).await?;
+        return Ok(buffered_stream_to_streaming(value));
+    }
+
+    // Build the OpenAI-compat chat request from the Converse input.
+    let mut req = converse::to_openai_request(model_tag, &input)?;
+    req.stream = Some(true);
+
+    let url = format!("{}/chat/completions", backend.endpoint());
+    let mut http_req = backend.client().post(&url).json(&req);
+    if let Some(key) = backend.api_key() {
+        http_req = http_req.bearer_auth(key);
+    }
+    let resp = http_req
+        .send()
+        .await
+        .map_err(|e| AwsError::internal(format!("Bedrock backend POST {url} failed: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(AwsError::internal(format!(
+            "Bedrock backend returned {status}: {body_text}"
+        )));
+    }
+
+    // Header frame goes out before the SSE proxy starts so the
+    // client sees the messageStart event right away even if the
+    // model takes a few seconds to emit its first token.
+    let header_frame =
+        encode_event_frame("messageStart", &serde_json::json!({ "role": "assistant" }));
+
+    let started = std::time::Instant::now();
+    let translated = converse_stream_from_sse(resp.bytes_stream(), started);
+    let header_stream =
+        stream::once(async move { Ok::<Bytes, AwsError>(Bytes::from(header_frame)) });
+    let combined: BoxStream<'static, Result<Bytes, AwsError>> =
+        header_stream.chain(translated).boxed();
+    void_use(body); // silence unused warning — body parsed for validation only
+    Ok(HandlerResult::Streaming {
+        body: combined,
+        content_type: "application/vnd.amazon.eventstream",
+    })
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn void_use<T>(_: T) {}
+
+/// State carried across each `unfold` step of the Converse SSE
+/// translator. Public-in-private because `unfold`'s closure captures
+/// it and recursive `state machine` patterns need a named type.
+struct ConverseStreamState {
+    inner: std::pin::Pin<Box<dyn futures::Stream<Item = reqwest::Result<Bytes>> + Send>>,
+    buffer: String,
+    prompt_tokens: u32,
+    completion_tokens: u32,
+    finish_reason: Option<String>,
+    started: std::time::Instant,
+    done: bool,
+    /// After upstream EOF we still have to emit closing frames in
+    /// sequence — this queue holds them.
+    trailing: std::collections::VecDeque<Bytes>,
+}
+
+/// Translate Ollama's SSE chat-completion stream into AWS event-stream
+/// binary frames (Converse format). Each token-bearing chunk becomes
+/// a `contentBlockDelta` event; the final chunk emits the closing
+/// `contentBlockStop` + `messageStop` + `metadata` frames.
+fn converse_stream_from_sse(
+    upstream: impl futures::Stream<Item = reqwest::Result<Bytes>> + Send + 'static,
+    started: std::time::Instant,
+) -> BoxStream<'static, Result<Bytes, AwsError>> {
+    use futures::stream::unfold;
+
+    let initial = ConverseStreamState {
+        inner: Box::pin(upstream),
+        buffer: String::new(),
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        finish_reason: None,
+        started,
+        done: false,
+        trailing: std::collections::VecDeque::new(),
+    };
+
+    unfold(initial, |mut st| async move {
+        if st.done {
+            return None;
+        }
+        if let Some(frame) = st.trailing.pop_front() {
+            if st.trailing.is_empty() {
+                st.done = true;
+            }
+            return Some((Ok(frame), st));
+        }
+
+        loop {
+            if let Some(frame) = take_next_delta(&mut st) {
+                return Some((Ok(frame), st));
+            }
+            match st.inner.next().await {
+                Some(Ok(chunk)) => {
+                    st.buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    continue;
+                }
+                Some(Err(e)) => {
+                    st.done = true;
+                    return Some((
+                        Err(AwsError::internal(format!(
+                            "Bedrock backend stream read failed: {e}"
+                        ))),
+                        st,
+                    ));
+                }
+                None => {
+                    let stop_reason = converse::map_stop_reason(st.finish_reason.as_deref());
+                    st.trailing.push_back(Bytes::from(encode_event_frame(
+                        "contentBlockStop",
+                        &serde_json::json!({ "contentBlockIndex": 0 }),
+                    )));
+                    st.trailing.push_back(Bytes::from(encode_event_frame(
+                        "messageStop",
+                        &serde_json::json!({ "stopReason": stop_reason }),
+                    )));
+                    st.trailing.push_back(Bytes::from(encode_event_frame(
+                        "metadata",
+                        &serde_json::json!({
+                            "usage": {
+                                "inputTokens":  st.prompt_tokens,
+                                "outputTokens": st.completion_tokens,
+                                "totalTokens":  st.prompt_tokens + st.completion_tokens,
+                            },
+                            "metrics": { "latencyMs": st.started.elapsed().as_millis() as u64 }
+                        }),
+                    )));
+                    let frame = st.trailing.pop_front().expect("trailing seeded above");
+                    if st.trailing.is_empty() {
+                        st.done = true;
+                    }
+                    return Some((Ok(frame), st));
+                }
+            }
+        }
+    })
+    .boxed()
+}
+
+/// Pull complete `data: …` lines out of the buffer one at a time.
+/// Returns a `contentBlockDelta` frame when a chunk has text, or
+/// `None` when the buffer doesn't yet hold a full event. Updates
+/// usage/finish-reason counters as it sees them.
+fn take_next_delta(st: &mut ConverseStreamState) -> Option<Bytes> {
+    while let Some(newline_pos) = st.buffer.find('\n') {
+        let line: String = st.buffer.drain(..=newline_pos).collect();
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some(payload) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let payload = payload.trim();
+        if payload == "[DONE]" || payload.is_empty() {
+            continue;
+        }
+        let chunk: Value = match serde_json::from_str(payload) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Some(p) = chunk["usage"]["prompt_tokens"].as_u64() {
+            st.prompt_tokens = p as u32;
+        }
+        if let Some(c) = chunk["usage"]["completion_tokens"].as_u64() {
+            st.completion_tokens = c as u32;
+        }
+        if let Some(fr) = chunk["choices"][0]["finish_reason"].as_str() {
+            st.finish_reason = Some(fr.to_string());
+        }
+        if let Some(text) = chunk["choices"][0]["delta"]["content"].as_str()
+            && !text.is_empty()
+        {
+            return Some(Bytes::from(encode_event_frame(
+                "contentBlockDelta",
+                &serde_json::json!({
+                    "delta": { "text": text },
+                    "contentBlockIndex": 0
+                }),
+            )));
+        }
+    }
+    None
+}
+
+/// Encode a single Converse event into an AWS event-stream binary
+/// frame (headers + JSON payload + CRC). Re-uses the encoder in
+/// awsim-core::protocol::eventstream.
+fn encode_event_frame(event_type: &str, payload: &Value) -> Vec<u8> {
+    use awsim_core::protocol::eventstream::{EventHeader, append_message};
+    let payload_bytes = serde_json::to_vec(payload).unwrap_or_default();
+    let headers = vec![
+        EventHeader {
+            name: ":event-type".to_string(),
+            value: event_type.to_string(),
+        },
+        EventHeader {
+            name: ":content-type".to_string(),
+            value: "application/json".to_string(),
+        },
+        EventHeader {
+            name: ":message-type".to_string(),
+            value: "event".to_string(),
+        },
+    ];
+    let mut buf = Vec::with_capacity(64 + payload_bytes.len());
+    append_message(&mut buf, &headers, &payload_bytes);
+    buf
+}
+
+/// Single-frame canned stream — used when no backend is configured
+/// or the model id has no mapping. Keeps the stream interface
+/// consistent so the AI SDK's stream parser sees a valid (if short)
+/// event sequence.
+fn canned_stream(model_id: &str, is_converse: bool) -> HandlerResult {
+    let canned_text = format!(
+        "AWSim canned response for {model_id} — configure a Bedrock backend to proxy to a real LLM."
+    );
+    let frames: Vec<Vec<u8>> = if is_converse {
+        vec![
+            encode_event_frame("messageStart", &serde_json::json!({ "role": "assistant" })),
+            encode_event_frame(
+                "contentBlockDelta",
+                &serde_json::json!({
+                    "delta": { "text": &canned_text },
+                    "contentBlockIndex": 0
+                }),
+            ),
+            encode_event_frame(
+                "contentBlockStop",
+                &serde_json::json!({ "contentBlockIndex": 0 }),
+            ),
+            encode_event_frame(
+                "messageStop",
+                &serde_json::json!({ "stopReason": "end_turn" }),
+            ),
+            encode_event_frame(
+                "metadata",
+                &serde_json::json!({
+                    "usage": { "inputTokens": 0, "outputTokens": 0, "totalTokens": 0 },
+                    "metrics": { "latencyMs": 0 }
+                }),
+            ),
+        ]
+    } else {
+        // InvokeModelWithResponseStream: single chunk event with the
+        // canned text base64-wrapped under `bytes`.
+        use base64::Engine;
+        let payload = serde_json::json!({
+            "completion": canned_text,
+            "stop_reason": "end_turn",
+        });
+        let payload_b = serde_json::to_vec(&payload).unwrap_or_default();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&payload_b);
+        vec![encode_chunk_frame(&b64)]
+    };
+
+    let body: HandlerByteStream = stream::iter(
+        frames
+            .into_iter()
+            .map(|f| Ok::<Bytes, AwsError>(Bytes::from(f))),
+    )
+    .boxed();
+    HandlerResult::Streaming {
+        body,
+        content_type: "application/vnd.amazon.eventstream",
+    }
+}
+
+/// Single-chunk frame for `InvokeModelWithResponseStream` — wraps a
+/// base64-encoded vendor JSON payload under `bytes`.
+fn encode_chunk_frame(b64_payload: &str) -> Vec<u8> {
+    use awsim_core::protocol::eventstream::{EventHeader, append_message};
+    let payload = serde_json::json!({ "bytes": b64_payload });
+    let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
+    let headers = vec![
+        EventHeader {
+            name: ":event-type".to_string(),
+            value: "chunk".to_string(),
+        },
+        EventHeader {
+            name: ":content-type".to_string(),
+            value: "application/json".to_string(),
+        },
+        EventHeader {
+            name: ":message-type".to_string(),
+            value: "event".to_string(),
+        },
+    ];
+    let mut buf = Vec::with_capacity(64 + payload_bytes.len());
+    append_message(&mut buf, &headers, &payload_bytes);
+    buf
+}
+
+/// Fallback for InvokeModelWithResponseStream — re-uses the existing
+/// buffered translator and converts the resulting marker-shaped
+/// Value into a single-shot streaming response. Same content as
+/// before, just delivered through the streaming pipeline so the
+/// gateway uses chunked transfer.
+fn buffered_stream_to_streaming(value: Value) -> HandlerResult {
+    use awsim_core::protocol::eventstream::try_encode;
+    let bytes = try_encode(&value).unwrap_or_else(|| {
+        // Shouldn't happen — invoke_model_with_response_stream always
+        // wraps in the marker — but we keep the response shape
+        // sensible by encoding the value as-is if not.
+        serde_json::to_vec(&value).unwrap_or_default()
+    });
+    let body: HandlerByteStream =
+        stream::once(async move { Ok::<Bytes, AwsError>(Bytes::from(bytes)) }).boxed();
+    HandlerResult::Streaming {
+        body,
+        content_type: "application/vnd.amazon.eventstream",
     }
 }
 

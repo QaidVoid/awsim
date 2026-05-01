@@ -35,6 +35,23 @@ pub struct CapturedBody {
     pub truncated: bool,
 }
 
+impl CapturedBody {
+    /// A no-content placeholder used for streaming responses, where
+    /// there's nothing to capture — the body is forwarded chunk by
+    /// chunk to the client without buffering. The inspect drawer
+    /// renders the message as the body so users see *why* there's
+    /// no data.
+    pub fn placeholder(message: &str) -> Self {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(message.as_bytes());
+        Self {
+            data_b64: Some(encoded),
+            size: message.len() as u64,
+            truncated: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RequestDetail {
     pub id: String,

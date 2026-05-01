@@ -431,4 +431,24 @@ impl ServiceHandler for BedrockRuntimeService {
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
+
+    async fn handle_streaming(
+        &self,
+        operation: &str,
+        input: Value,
+        ctx: &RequestContext,
+    ) -> Result<awsim_core::HandlerResult, AwsError> {
+        // Only the two event-stream operations override; everything
+        // else delegates to the buffered `handle` path. We resolve a
+        // snapshot here too so the request sees a consistent backend
+        // even if the admin hot-swaps mid-stream.
+        match operation {
+            "ConverseStream" | "InvokeModelWithResponseStream" => {
+                let backends = Arc::clone(&self.backends);
+                debug!(operation, "Bedrock runtime streaming");
+                runtime::stream_response(backends, operation, input).await
+            }
+            _ => self.handle(operation, input, ctx).await.map(Into::into),
+        }
+    }
 }

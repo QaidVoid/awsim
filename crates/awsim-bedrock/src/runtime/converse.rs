@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use super::openai::{ChatMessage, ChatRequest, ChatResponse};
 use crate::backend::BedrockBackends;
 
-fn to_openai_request(model_tag: &str, input: &Value) -> Result<ChatRequest, AwsError> {
+pub(crate) fn to_openai_request(model_tag: &str, input: &Value) -> Result<ChatRequest, AwsError> {
     let cfg = &input["inferenceConfig"];
     let max_tokens = cfg
         .get("maxTokens")
@@ -98,7 +98,7 @@ fn to_openai_request(model_tag: &str, input: &Value) -> Result<ChatRequest, AwsE
     })
 }
 
-fn map_stop_reason(finish: Option<&str>) -> &'static str {
+pub(crate) fn map_stop_reason(finish: Option<&str>) -> &'static str {
     match finish {
         Some("stop") => "end_turn",
         Some("length") => "max_tokens",

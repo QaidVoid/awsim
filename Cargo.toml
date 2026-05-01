@@ -152,6 +152,7 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 hyper = { version = "1", features = ["full"] }
 bytes = "1"
+futures = "0.3"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

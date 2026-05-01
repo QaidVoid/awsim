@@ -16,7 +16,9 @@ use crate::body_store::BodyStore;
 use crate::error::AwsError;
 use crate::events::EventBus;
 use crate::protocol::{self, Protocol, RouteDefinition};
-use crate::request_detail::{RequestDetail, RequestDetailStore, capture_body, capture_headers};
+use crate::request_detail::{
+    CapturedBody, RequestDetail, RequestDetailStore, capture_body, capture_headers,
+};
 use crate::request_event::{RequestEvent, RequestEventBus};
 
 #[derive(Clone)]
@@ -105,8 +107,26 @@ impl AppState {
 struct ProcessOk {
     status: StatusCode,
     headers: HeaderMap,
-    body: Bytes,
+    body: ProcessBody,
     operation: String,
+}
+
+/// Response payload returned from request processing. Most operations
+/// produce a single buffered `Bytes` payload; streaming endpoints
+/// (Bedrock event-stream APIs) return an open stream of chunks the
+/// gateway forwards via chunked HTTP transfer.
+enum ProcessBody {
+    Bytes(Bytes),
+    Stream(crate::HandlerByteStream),
+}
+
+impl ProcessBody {
+    fn buffered_len(&self) -> Option<usize> {
+        match self {
+            ProcessBody::Bytes(b) => Some(b.len()),
+            ProcessBody::Stream(_) => None,
+        }
+    }
 }
 
 struct ProcessMeta {
@@ -214,15 +234,29 @@ pub async fn dispatch_request(
             let err_code = error.code.clone();
             let (status, resp_headers, resp_body) =
                 protocol::serialize_error(protocol, &error, &request_id);
-            (status, resp_headers, resp_body, None, Some(err_code))
+            (
+                status,
+                resp_headers,
+                ProcessBody::Bytes(resp_body),
+                None,
+                Some(err_code),
+            )
         }
     };
     let status_code = status.as_u16();
-    let response_size = resp_body.len() as u64;
+    // Streaming responses don't have a known length up front and we
+    // never buffer them — report 0 for now (they show up in the log
+    // with a fixed marker).
+    let response_size = resp_body.buffered_len().unwrap_or(0) as u64;
 
-    // Capture detail for the inspect drawer before the body is moved into
-    // the response. Bodies are size-capped inside `capture_body`.
+    // Capture detail for the inspect drawer. Streaming bodies bypass
+    // capture (no full payload to store); buffered bodies go through
+    // the existing size-capped path.
     let body_cap = state.request_details.body_cap();
+    let captured_response = match &resp_body {
+        ProcessBody::Bytes(b) => capture_body(b, body_cap),
+        ProcessBody::Stream(_) => CapturedBody::placeholder("<streaming response>"),
+    };
     let detail = RequestDetail {
         id: request_id.clone(),
         method: method.to_string(),
@@ -232,7 +266,7 @@ pub async fn dispatch_request(
         request_headers: capture_headers(&headers),
         response_headers: capture_headers(&resp_headers),
         request_body: capture_body(&body, body_cap),
-        response_body: capture_body(&resp_body, body_cap),
+        response_body: captured_response,
     };
     state.request_details.insert(detail);
 
@@ -257,7 +291,26 @@ pub async fn dispatch_request(
             builder = builder.header(key, value);
         }
     }
-    let response = builder.body(Body::from(resp_body)).unwrap();
+    let body_for_response = match resp_body {
+        ProcessBody::Bytes(b) => Body::from(b),
+        ProcessBody::Stream(s) => {
+            // Wrap each chunk as a Frame so axum can stream it via
+            // chunked transfer. The error case yields the AWS error
+            // message inline so a downstream parse can surface it
+            // (the connection has already been opened with HTTP 200,
+            // so we can't switch to a 5xx mid-stream).
+            use futures::StreamExt;
+            let mapped = s.map(|res| match res {
+                Ok(b) => Ok::<_, std::io::Error>(b),
+                Err(e) => {
+                    let payload = format!("{{\"error\":\"{}\"}}", e.message);
+                    Ok(Bytes::from(payload))
+                }
+            });
+            Body::from_stream(mapped)
+        }
+    };
+    let response = builder.body(body_for_response).unwrap();
 
     let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
     let ts = SystemTime::now()
@@ -454,24 +507,48 @@ async fn process_request(
         }
     }
 
-    // 7. Dispatch to service handler
-    let result = handler
-        .handle(&parsed.operation, parsed.input, &ctx)
+    // 7. Dispatch to service handler. Use `handle_streaming` so the
+    // handler can opt into chunked transfer when it has a real
+    // streaming source (e.g. Bedrock proxying Ollama's SSE).
+    let handler_result = handler
+        .handle_streaming(&parsed.operation, parsed.input, &ctx)
         .await
         .map_err(|e| (detected, e))?;
 
-    // 8. Serialize response using the *detected* protocol so that the wire
-    // format matches what the client expects.  A client that sends an
-    // awsQuery (form-encoded) request expects an XML response, even if the
-    // service declares AwsJson as its primary protocol.
-    let (status, headers, body) =
-        protocol::serialize_response(detected, &parsed.operation, &result, request_id);
-    Ok(ProcessOk {
-        status,
-        headers,
-        body,
-        operation,
-    })
+    // 8. Build the response. Streaming results bypass the per-protocol
+    // serializer — the handler has already encoded the bytes (e.g.
+    // AWS event-stream binary frames) and supplied the wire-level
+    // content-type. For everything else, serialize the JSON
+    // response using the detected protocol so the wire format
+    // matches what the client expects (an awsQuery client gets XML
+    // back even if the service is awsJson-native, etc.).
+    match handler_result {
+        crate::HandlerResult::Streaming { body, content_type } => {
+            let mut headers = HeaderMap::new();
+            if let Ok(v) = content_type.parse() {
+                headers.insert(axum::http::header::CONTENT_TYPE, v);
+            }
+            if let Ok(v) = request_id.parse() {
+                headers.insert("x-amzn-requestid", v);
+            }
+            Ok(ProcessOk {
+                status: StatusCode::OK,
+                headers,
+                body: ProcessBody::Stream(body),
+                operation,
+            })
+        }
+        crate::HandlerResult::Json(value) => {
+            let (status, headers, body) =
+                protocol::serialize_response(detected, &parsed.operation, &value, request_id);
+            Ok(ProcessOk {
+                status,
+                headers,
+                body: ProcessBody::Bytes(body),
+                operation,
+            })
+        }
+    }
 }
 
 /// Extract service name, region, account ID, and access key from the request.

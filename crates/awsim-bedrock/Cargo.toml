@@ -19,3 +19,5 @@ toml = { workspace = true }
 thiserror = { workspace = true }
 arc-swap = { workspace = true }
 base64 = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
