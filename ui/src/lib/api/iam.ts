@@ -722,46 +722,57 @@ function applyContext(
 }
 
 function parseSimulationResult(xml: string): SimulationResult {
+  // The simulator response has nested `<member>` tags
+  // (EvaluationResults > member > MatchedStatements > member). A
+  // naive lazy regex like `/<member>(.*?)</member>/` matches the
+  // first inner closing tag and corrupts the outer capture, so use
+  // a real XML parser here.
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  if (doc.querySelector("parsererror")) {
+    return { results: [] };
+  }
+  const text = (parent: Element | null, tag: string): string =>
+    parent?.getElementsByTagName(tag)[0]?.textContent?.trim() ?? "";
+
   const results: EvaluationResult[] = [];
-  const evalRegex = /<EvaluationResult>([\s\S]*?)<\/EvaluationResult>/g;
-  let m: RegExpExecArray | null;
-  while ((m = evalRegex.exec(xml)) !== null) {
-    const block = m[1];
-    const decisionRaw = xmlValue(block, "EvalDecision");
+  const evalsList = doc.getElementsByTagName("EvaluationResults")[0];
+  if (!evalsList) return { results };
+
+  // Top-level <member>s are direct children of EvaluationResults —
+  // children, not getElementsByTagName which would also pick up
+  // nested members from MatchedStatements / MissingContextValues.
+  for (const member of Array.from(evalsList.children)) {
+    if (member.tagName !== "member") continue;
+    const decisionRaw = text(member, "EvalDecision");
     let decision: EvalDecision = "implicitDeny";
     if (decisionRaw === "allowed") decision = "allowed";
     else if (decisionRaw === "explicitDeny") decision = "explicitDeny";
 
-    // matched statements
     const matched: MatchedStatement[] = [];
-    const stmtRegex = /<MatchedStatements>([\s\S]*?)<\/MatchedStatements>/g;
-    let sm: RegExpExecArray | null;
-    while ((sm = stmtRegex.exec(block)) !== null) {
-      const sBlock = sm[1];
-      const memberRegex = /<member>([\s\S]*?)<\/member>/g;
-      let mm: RegExpExecArray | null;
-      while ((mm = memberRegex.exec(sBlock)) !== null) {
+    const stmtsList = member.getElementsByTagName("MatchedStatements")[0];
+    if (stmtsList) {
+      for (const sm of Array.from(stmtsList.children)) {
+        if (sm.tagName !== "member") continue;
         matched.push({
-          sourcePolicyId: xmlValue(mm[1], "SourcePolicyId"),
-          sourcePolicyType: xmlValue(mm[1], "SourcePolicyType"),
+          sourcePolicyId: text(sm, "SourcePolicyId"),
+          sourcePolicyType: text(sm, "SourcePolicyType"),
         });
       }
     }
 
-    // missing context
     const missing: string[] = [];
-    const missRegex =
-      /<MissingContextValues>([\s\S]*?)<\/MissingContextValues>/g;
-    let mc: RegExpExecArray | null;
-    while ((mc = missRegex.exec(block)) !== null) {
-      const innerRegex = /<member>([^<]+)<\/member>/g;
-      let im: RegExpExecArray | null;
-      while ((im = innerRegex.exec(mc[1])) !== null) missing.push(im[1]);
+    const missList = member.getElementsByTagName("MissingContextValues")[0];
+    if (missList) {
+      for (const im of Array.from(missList.children)) {
+        if (im.tagName !== "member") continue;
+        const key = (im.textContent ?? "").trim();
+        if (key) missing.push(key);
+      }
     }
 
     results.push({
-      evalActionName: xmlValue(block, "EvalActionName"),
-      evalResourceName: xmlValue(block, "EvalResourceName") || undefined,
+      evalActionName: text(member, "EvalActionName"),
+      evalResourceName: text(member, "EvalResourceName") || undefined,
       evalDecision: decision,
       matchedStatements: matched,
       missingContextValues: missing,
