@@ -11,6 +11,9 @@ use crate::state::OpenSearchState;
 /// - `bool` queries with `must`, `should`, `filter`
 /// - `term` queries (exact match)
 /// - `query_string` queries
+/// - `knn` queries (brute-force cosine similarity over a numeric
+///   vector field — no ANN index, but correct enough for emulator
+///   workloads up to a few thousand vectors)
 pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u16, Value) {
     let size = body["size"].as_u64().unwrap_or(10) as usize;
     let from = body["from"].as_u64().unwrap_or(0) as usize;
@@ -19,47 +22,31 @@ pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u1
         .cloned()
         .unwrap_or(json!({"match_all": {}}));
 
-    // Resolve index pattern (support wildcards like "captify-*")
-    let matching_indices: Vec<String> = if index_pattern.contains('*') {
-        let prefix = index_pattern.trim_end_matches('*');
-        state
-            .indices
-            .iter()
-            .filter(|e| e.key().starts_with(prefix))
-            .map(|e| e.key().clone())
-            .collect()
-    } else {
-        // Could be comma-separated; resolve aliases as well
-        index_pattern
-            .split(',')
-            .flat_map(|s| {
-                let name = s.trim().to_string();
-                // If the name matches an alias, expand to the aliased indices
-                if let Some(aliased) = state.aliases.get(&name) {
-                    aliased.clone()
-                } else {
-                    vec![name]
-                }
-            })
-            .collect()
-    };
+    let matching_indices = resolve_indices(state, index_pattern);
+
+    // k-NN is special: it returns top-k by similarity rather than a
+    // per-doc match score, so collect-then-sort happens here instead
+    // of going through `match_score`. Falls through to standard search
+    // when the query is not a `knn` body.
+    if let Some((field, vector, k)) = parse_knn(&query) {
+        return knn_search(state, &matching_indices, &field, &vector, k, from, size);
+    }
 
     let mut hits: Vec<Value> = Vec::new();
 
     for idx_name in &matching_indices {
-        if let Some(idx) = state.indices.get(idx_name) {
-            for (doc_id, doc) in &idx.documents {
-                let score = match_score(&query, doc);
-                if score > 0.0 {
-                    hits.push(json!({
-                        "_index": idx_name,
-                        "_id": doc_id,
-                        "_score": score,
-                        "_source": doc,
-                    }));
-                }
+        let _ = state.for_each_doc(idx_name, |doc_id, doc| {
+            let score = match_score(&query, doc);
+            if score > 0.0 {
+                hits.push(json!({
+                    "_index": idx_name,
+                    "_id": doc_id,
+                    "_score": score,
+                    "_source": doc,
+                }));
             }
-        }
+            true
+        });
     }
 
     // Sort by score descending
@@ -94,23 +81,20 @@ pub fn count(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, V
         .cloned()
         .unwrap_or(json!({"match_all": {}}));
 
-    // Resolve alias if needed
-    let resolved: Vec<String> = if let Some(aliased) = state.aliases.get(index_name) {
-        aliased.clone()
-    } else {
-        vec![index_name.to_string()]
-    };
+    let resolved = state.resolve_alias(index_name);
+    let mut count: usize = 0;
 
-    let count: usize = resolved
-        .iter()
-        .filter_map(|name| state.indices.get(name))
-        .map(|idx| {
-            idx.documents
-                .values()
-                .filter(|doc| match_score(&query, doc) > 0.0)
-                .count()
-        })
-        .sum();
+    for name in &resolved {
+        if !state.index_exists(name) {
+            continue;
+        }
+        let _ = state.for_each_doc(name, |_, doc| {
+            if match_score(&query, doc) > 0.0 {
+                count += 1;
+            }
+            true
+        });
+    }
 
     (
         200,
@@ -119,6 +103,29 @@ pub fn count(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, V
             "_shards": { "total": 1, "successful": 1, "skipped": 0, "failed": 0 },
         }),
     )
+}
+
+/// Resolve an index pattern (wildcard, alias, or comma-separated list)
+/// down to a concrete list of index names.
+fn resolve_indices(state: &OpenSearchState, pattern: &str) -> Vec<String> {
+    if pattern.contains('*') {
+        let prefix = pattern.trim_end_matches('*');
+        return state
+            .list_indices()
+            .into_iter()
+            .filter_map(|(name, _)| {
+                if name.starts_with(prefix) {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect();
+    }
+    pattern
+        .split(',')
+        .flat_map(|s| state.resolve_alias(s.trim()))
+        .collect()
 }
 
 /// Score a document against a query. Returns 0.0 for no match.
@@ -287,6 +294,118 @@ fn get_nested_field<'a>(doc: &'a Value, field: &str) -> Option<&'a Value> {
     Some(current)
 }
 
+/// Pull the field name, query vector, and `k` out of a `knn` query
+/// body. Returns `None` for any other query shape so the caller can
+/// fall through to the lexical search path.
+fn parse_knn(query: &Value) -> Option<(String, Vec<f64>, usize)> {
+    let knn_obj = query.get("knn")?.as_object()?;
+    // OpenSearch puts the field name as the key:
+    //   { "knn": { "embedding": { "vector": [...], "k": 10 } } }
+    let (field, spec) = knn_obj.iter().next()?;
+    let vector = spec
+        .get("vector")
+        .and_then(|v| v.as_array())?
+        .iter()
+        .filter_map(|n| n.as_f64())
+        .collect::<Vec<_>>();
+    if vector.is_empty() {
+        return None;
+    }
+    let k = spec.get("k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+    Some((field.clone(), vector, k))
+}
+
+/// Brute-force k-NN: walk every document in the matching indices,
+/// compute cosine similarity against the query vector, and return the
+/// top `k` (then apply `from`/`size` for paging on top of that).
+///
+/// Score is `(1 + cos) / 2` so the result lands in `[0, 1]` like the
+/// real k-NN plugin's normalised score, and unrelated vectors don't
+/// produce negative scores that would be filtered downstream.
+fn knn_search(
+    state: &OpenSearchState,
+    matching_indices: &[String],
+    field: &str,
+    vector: &[f64],
+    k: usize,
+    from: usize,
+    size: usize,
+) -> (u16, Value) {
+    let mut scored: Vec<(f64, Value)> = Vec::new();
+    for idx_name in matching_indices {
+        if !state.index_exists(idx_name) {
+            continue;
+        }
+        let _ = state.for_each_doc(idx_name, |doc_id, doc| {
+            let Some(doc_vec) = get_nested_field(doc, field).and_then(extract_vector) else {
+                return true;
+            };
+            if doc_vec.len() != vector.len() {
+                return true;
+            }
+            let sim = cosine_similarity(vector, &doc_vec);
+            let score = (1.0 + sim) / 2.0;
+            scored.push((
+                score,
+                json!({
+                    "_index": idx_name,
+                    "_id": doc_id,
+                    "_score": score,
+                    "_source": doc,
+                }),
+            ));
+            true
+        });
+    }
+
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(k);
+
+    let total = scored.len();
+    let max_score = scored.first().map(|(s, _)| *s).unwrap_or(0.0);
+    let paged: Vec<Value> = scored
+        .into_iter()
+        .map(|(_, v)| v)
+        .skip(from)
+        .take(size)
+        .collect();
+
+    (
+        200,
+        json!({
+            "took": 1,
+            "timed_out": false,
+            "_shards": { "total": 1, "successful": 1, "skipped": 0, "failed": 0 },
+            "hits": {
+                "total": { "value": total, "relation": "eq" },
+                "max_score": max_score,
+                "hits": paged,
+            }
+        }),
+    )
+}
+
+fn extract_vector(v: &Value) -> Option<Vec<f64>> {
+    let arr = v.as_array()?;
+    let out: Vec<f64> = arr.iter().filter_map(|n| n.as_f64()).collect();
+    if out.len() == arr.len() { Some(out) } else { None }
+}
+
+fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
+    let mut dot = 0.0;
+    let mut na = 0.0;
+    let mut nb = 0.0;
+    for i in 0..a.len() {
+        dot += a[i] * b[i];
+        na += a[i] * a[i];
+        nb += b[i] * b[i];
+    }
+    if na == 0.0 || nb == 0.0 {
+        return 0.0;
+    }
+    dot / (na.sqrt() * nb.sqrt())
+}
+
 /// Convert a Value to a searchable string.
 fn value_to_string(v: &Value) -> String {
     match v {
@@ -310,25 +429,29 @@ fn value_to_string(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::OpenSearchIndex;
+    use crate::state::IndexMeta;
 
     fn test_state() -> OpenSearchState {
-        let state = OpenSearchState::default();
-        let mut docs = std::collections::HashMap::new();
-        docs.insert("1".to_string(), json!({"title": "Rust Programming", "body": "Learn Rust for systems programming", "tags": ["rust", "systems"]}));
-        docs.insert("2".to_string(), json!({"title": "Python Guide", "body": "Python is great for data science", "tags": ["python", "data"]}));
-        docs.insert("3".to_string(), json!({"title": "AWS Lambda", "body": "Serverless computing with AWS Lambda and Rust", "tags": ["aws", "lambda", "rust"]}));
-
-        state.indices.insert(
-            "articles".to_string(),
-            OpenSearchIndex {
-                name: "articles".to_string(),
-                mappings: json!({}),
-                settings: json!({}),
-                documents: docs,
-                created_at: "2026-01-01".to_string(),
-            },
-        );
+        let state = OpenSearchState::ephemeral().expect("ephemeral state");
+        state
+            .create_index_meta(
+                "articles",
+                IndexMeta {
+                    mappings: json!({}),
+                    settings: json!({}),
+                    created_at: "2026-01-01".to_string(),
+                },
+            )
+            .unwrap();
+        state
+            .put_doc("articles", "1", &json!({"title": "Rust Programming", "body": "Learn Rust for systems programming", "tags": ["rust", "systems"]}))
+            .unwrap();
+        state
+            .put_doc("articles", "2", &json!({"title": "Python Guide", "body": "Python is great for data science", "tags": ["python", "data"]}))
+            .unwrap();
+        state
+            .put_doc("articles", "3", &json!({"title": "AWS Lambda", "body": "Serverless computing with AWS Lambda and Rust", "tags": ["aws", "lambda", "rust"]}))
+            .unwrap();
         state
     }
 
@@ -403,5 +526,47 @@ mod tests {
         let hits = result["hits"]["hits"].as_array().unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!(result["hits"]["total"]["value"], 3);
+    }
+
+    /// Brute-force k-NN: query `[1,0,0]` should rank the identical
+    /// vector first, the orthogonal one last.
+    #[test]
+    fn test_knn_search() {
+        let state = OpenSearchState::ephemeral().expect("ephemeral");
+        state
+            .create_index_meta(
+                "vecs",
+                IndexMeta {
+                    mappings: json!({}),
+                    settings: json!({}),
+                    created_at: "2026-01-01".to_string(),
+                },
+            )
+            .unwrap();
+        state
+            .put_doc("vecs", "a", &json!({"embedding": [1.0, 0.0, 0.0]}))
+            .unwrap();
+        state
+            .put_doc("vecs", "b", &json!({"embedding": [0.9, 0.1, 0.0]}))
+            .unwrap();
+        state
+            .put_doc("vecs", "c", &json!({"embedding": [0.0, 1.0, 0.0]}))
+            .unwrap();
+
+        let (_, result) = search(
+            &state,
+            "vecs",
+            &json!({
+                "query": {"knn": {"embedding": {"vector": [1.0, 0.0, 0.0], "k": 3}}}
+            }),
+        );
+        let hits = result["hits"]["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0]["_id"], "a");
+        assert_eq!(hits[1]["_id"], "b");
+        assert_eq!(hits[2]["_id"], "c");
+        // Identical vector → cosine = 1.0 → score = 1.0
+        let top = hits[0]["_score"].as_f64().unwrap();
+        assert!((top - 1.0).abs() < 1e-9, "top score {} ≠ 1.0", top);
     }
 }

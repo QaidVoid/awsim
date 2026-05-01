@@ -1,7 +1,6 @@
 use serde_json::{Value, json};
-use std::collections::HashMap;
 
-use crate::state::OpenSearchState;
+use crate::state::{IndexMeta, OpenSearchState};
 
 /// GET /_cluster/health
 pub fn cluster_health(state: &OpenSearchState) -> (u16, Value) {
@@ -102,41 +101,37 @@ pub fn reindex(state: &OpenSearchState, body: &Value, wait_for_completion: bool)
         );
     }
 
-    // Collect documents from source
-    let docs: HashMap<String, Value> = if let Some(idx) = state.indices.get(source_index) {
-        idx.documents.clone()
-    } else {
-        HashMap::new()
-    };
+    // Snapshot the source so the read transaction is dropped before
+    // we open the write transaction for the destination puts.
+    let mut docs: Vec<(String, Value)> = Vec::new();
+    if state.index_exists(source_index) {
+        let _ = state.for_each_doc(source_index, |id, doc| {
+            docs.push((id.to_string(), doc.clone()));
+            true
+        });
+    }
 
     let count = docs.len();
 
-    // Auto-create dest index if needed
-    if !state.indices.contains_key(dest_index) {
-        // Copy mappings/settings from source if available
-        let (mappings, settings) = if let Some(src) = state.indices.get(source_index) {
-            (src.mappings.clone(), src.settings.clone())
-        } else {
-            (json!({}), json!({}))
-        };
+    // Auto-create dest index if needed.
+    if !state.index_exists(dest_index) {
+        let (mappings, settings) = state
+            .get_index_meta(source_index)
+            .map(|m| (m.mappings, m.settings))
+            .unwrap_or((json!({}), json!({})));
 
-        state.indices.insert(
-            dest_index.to_string(),
-            crate::state::OpenSearchIndex {
-                name: dest_index.to_string(),
+        let _ = state.create_index_meta(
+            dest_index,
+            IndexMeta {
                 mappings,
                 settings,
-                documents: HashMap::new(),
                 created_at: crate::util::now_iso8601(),
             },
         );
     }
 
-    // Copy documents
-    if let Some(mut dest) = state.indices.get_mut(dest_index) {
-        for (id, doc) in docs {
-            dest.documents.insert(id, doc);
-        }
+    for (id, doc) in &docs {
+        let _ = state.put_doc(dest_index, id, doc);
     }
 
     let task_id = format!("awsim-task-{}", uuid::Uuid::new_v4());
@@ -187,33 +182,29 @@ pub fn update_aliases(state: &OpenSearchState, body: &Value) -> (u16, Value) {
             let index = add["index"].as_str().unwrap_or("").to_string();
             let alias = add["alias"].as_str().unwrap_or("").to_string();
             if !index.is_empty() && !alias.is_empty() {
-                state
+                let mut members = state
                     .aliases
-                    .entry(alias)
-                    .and_modify(|v| {
-                        if !v.contains(&index) {
-                            v.push(index.clone());
-                        }
-                    })
-                    .or_insert_with(|| vec![index]);
+                    .get(&alias)
+                    .map(|v| v.clone())
+                    .unwrap_or_default();
+                if !members.contains(&index) {
+                    members.push(index);
+                }
+                let _ = state.put_alias(&alias, members);
             }
         }
 
         if let Some(remove) = action.get("remove") {
             let index = remove["index"].as_str().unwrap_or("");
             let alias = remove["alias"].as_str().unwrap_or("").to_string();
-            if !alias.is_empty() {
-                if let Some(mut entry) = state.aliases.get_mut(&alias) {
-                    entry.retain(|i| i != index);
-                }
-                // Remove the alias entry entirely if empty
-                let is_empty = state
-                    .aliases
-                    .get(&alias)
-                    .map(|v| v.is_empty())
-                    .unwrap_or(false);
-                if is_empty {
-                    state.aliases.remove(&alias);
+            if !alias.is_empty()
+                && let Some(mut members) = state.aliases.get(&alias).map(|v| v.clone())
+            {
+                members.retain(|i| i != index);
+                if members.is_empty() {
+                    let _ = state.delete_alias(&alias);
+                } else {
+                    let _ = state.put_alias(&alias, members);
                 }
             }
         }

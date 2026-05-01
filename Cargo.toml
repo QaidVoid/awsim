@@ -181,6 +181,10 @@ r2d2 = "0.8"
 r2d2_sqlite = "0.25"
 tempfile = "3"
 
+# Embedded KV — used by OpenSearch so the working set isn't bounded
+# by RAM and writes are durable without a snapshot save/restore loop.
+redb = "2"
+
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 

@@ -1,11 +1,10 @@
 use serde_json::{Value, json};
-use std::collections::HashMap;
 
-use crate::state::{OpenSearchIndex, OpenSearchState};
+use crate::state::{IndexMeta, OpenSearchState};
 
 /// Create an index.
 pub fn create_index(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, Value) {
-    if state.indices.contains_key(index_name) {
+    if state.index_exists(index_name) {
         return (
             400,
             json!({
@@ -22,16 +21,16 @@ pub fn create_index(state: &OpenSearchState, index_name: &str, body: &Value) -> 
     let mappings = body.get("mappings").cloned().unwrap_or(json!({}));
     let settings = body.get("settings").cloned().unwrap_or(json!({}));
 
-    state.indices.insert(
-        index_name.to_string(),
-        OpenSearchIndex {
-            name: index_name.to_string(),
+    if let Err(e) = state.create_index_meta(
+        index_name,
+        IndexMeta {
             mappings,
             settings,
-            documents: HashMap::new(),
             created_at: crate::util::now_iso8601(),
         },
-    );
+    ) {
+        return (500, storage_error(&e));
+    }
 
     (
         200,
@@ -45,43 +44,33 @@ pub fn create_index(state: &OpenSearchState, index_name: &str, body: &Value) -> 
 
 /// Delete an index.
 pub fn delete_index(state: &OpenSearchState, index_name: &str) -> (u16, Value) {
-    if state.indices.remove(index_name).is_some() {
-        (200, json!({ "acknowledged": true }))
-    } else {
-        (
-            404,
-            json!({
-                "error": {
-                    "root_cause": [{"type": "index_not_found_exception", "reason": format!("no such index [{}]", index_name)}],
-                    "type": "index_not_found_exception",
-                    "reason": format!("no such index [{}]", index_name),
-                },
-                "status": 404,
-            }),
-        )
+    match state.delete_index_meta(index_name) {
+        Ok(true) => (200, json!({ "acknowledged": true })),
+        Ok(false) => (404, index_not_found(index_name)),
+        Err(e) => (500, storage_error(&e)),
     }
 }
 
 /// Get index mapping.
 pub fn get_mapping(state: &OpenSearchState, index_name: &str) -> (u16, Value) {
-    match state.indices.get(index_name) {
-        Some(idx) => (200, json!({ index_name: { "mappings": idx.mappings } })),
+    match state.get_index_meta(index_name) {
+        Some(meta) => (200, json!({ index_name: { "mappings": meta.mappings } })),
         None => (404, index_not_found(index_name)),
     }
 }
 
 /// Get index settings.
 pub fn get_index(state: &OpenSearchState, index_name: &str) -> (u16, Value) {
-    match state.indices.get(index_name) {
-        Some(idx) => (
+    match state.get_index_meta(index_name) {
+        Some(meta) => (
             200,
             json!({
                 index_name: {
                     "aliases": {},
-                    "mappings": idx.mappings,
+                    "mappings": meta.mappings,
                     "settings": {
                         "index": {
-                            "creation_date": idx.created_at,
+                            "creation_date": meta.created_at,
                             "number_of_shards": "1",
                             "number_of_replicas": "1",
                             "uuid": uuid::Uuid::new_v4().to_string(),
@@ -96,7 +85,7 @@ pub fn get_index(state: &OpenSearchState, index_name: &str) -> (u16, Value) {
 
 /// Check if index exists (HEAD request).
 pub fn index_exists(state: &OpenSearchState, index_name: &str) -> u16 {
-    if state.indices.contains_key(index_name) {
+    if state.index_exists(index_name) {
         200
     } else {
         404
@@ -106,17 +95,17 @@ pub fn index_exists(state: &OpenSearchState, index_name: &str) -> u16 {
 /// List all indices (cat/indices).
 pub fn cat_indices(state: &OpenSearchState) -> (u16, Value) {
     let indices: Vec<Value> = state
-        .indices
-        .iter()
-        .map(|entry| {
-            let idx = entry.value();
+        .list_indices()
+        .into_iter()
+        .map(|(name, _meta)| {
+            let count = state.count_docs(&name).unwrap_or(0);
             json!({
-                "index": idx.name,
+                "index": name,
                 "health": "green",
                 "status": "open",
                 "pri": "1",
                 "rep": "1",
-                "docs.count": idx.documents.len().to_string(),
+                "docs.count": count.to_string(),
                 "store.size": "1kb",
             })
         })
@@ -133,5 +122,15 @@ fn index_not_found(name: &str) -> Value {
             "reason": format!("no such index [{}]", name),
         },
         "status": 404,
+    })
+}
+
+pub(crate) fn storage_error(e: &impl std::fmt::Display) -> Value {
+    json!({
+        "error": {
+            "type": "internal_server_error",
+            "reason": e.to_string(),
+        },
+        "status": 500,
     })
 }
