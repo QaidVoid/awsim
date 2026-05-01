@@ -1007,3 +1007,115 @@ fn principal_root_arn_match() {
     );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
+
+// ── Policy variable substitution ─────────────────────────────────────────────
+
+#[test]
+fn substitutes_aws_username_in_resource() {
+    // Policy says alice can read her own home directory.
+    let policy = parse(
+        r#"{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::home/${aws:username}/*"}]}"#,
+    )
+    .unwrap();
+    let identity = vec![policy];
+    let ec = EvalContext {
+        identity_policies: &identity,
+        ..Default::default()
+    };
+    let ctx = HashMap::new();
+
+    // Alice reading her own object → allowed
+    let r = req(
+        "arn:aws:iam::1:user/alice",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::home/alice/photo.jpg",
+        &ctx,
+    );
+    assert_eq!(evaluate(&r, &ec), Decision::Allow);
+
+    // Alice reading bob's object → denied (substitution gives wrong path)
+    let r = req(
+        "arn:aws:iam::1:user/alice",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::home/bob/photo.jpg",
+        &ctx,
+    );
+    assert_eq!(evaluate(&r, &ec), Decision::ImplicitDeny);
+}
+
+#[test]
+fn substitutes_principal_arn_in_condition() {
+    // Allow s3:GetObject only when the resource tag matches the
+    // requesting principal's ARN.
+    let policy = parse(
+        r#"{"Statement":[{
+            "Effect":"Allow",
+            "Action":"s3:GetObject",
+            "Resource":"*",
+            "Condition":{"StringEquals":{"aws:ResourceTag/Owner":"${aws:PrincipalArn}"}}
+        }]}"#,
+    )
+    .unwrap();
+    let identity = vec![policy];
+    let ec = EvalContext {
+        identity_policies: &identity,
+        ..Default::default()
+    };
+
+    let mut ctx = HashMap::new();
+    ctx.insert(
+        "aws:ResourceTag/Owner".to_string(),
+        ContextValue::String("arn:aws:iam::1:user/alice".to_string()),
+    );
+    {
+        let r = req(
+            "arn:aws:iam::1:user/alice",
+            "1",
+            "s3:GetObject",
+            "arn:aws:s3:::b/k",
+            &ctx,
+        );
+        assert_eq!(evaluate(&r, &ec), Decision::Allow);
+    }
+
+    // Owner tag belongs to bob → implicit deny for alice
+    ctx.insert(
+        "aws:ResourceTag/Owner".to_string(),
+        ContextValue::String("arn:aws:iam::1:user/bob".to_string()),
+    );
+    let r = req(
+        "arn:aws:iam::1:user/alice",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/k",
+        &ctx,
+    );
+    assert_eq!(evaluate(&r, &ec), Decision::ImplicitDeny);
+}
+
+#[test]
+fn unknown_policy_variable_left_literal() {
+    // A typo in a policy variable should NOT silently widen the
+    // policy. With the literal `${aws:notavar}` as the resource,
+    // no real ARN can match.
+    let policy = parse(
+        r#"{"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::b/${aws:notavar}/*"}]}"#,
+    )
+    .unwrap();
+    let identity = vec![policy];
+    let ec = EvalContext {
+        identity_policies: &identity,
+        ..Default::default()
+    };
+    let ctx = HashMap::new();
+    let r = req(
+        "arn:aws:iam::1:user/alice",
+        "1",
+        "s3:GetObject",
+        "arn:aws:s3:::b/alice/photo.jpg",
+        &ctx,
+    );
+    assert_eq!(evaluate(&r, &ec), Decision::ImplicitDeny);
+}

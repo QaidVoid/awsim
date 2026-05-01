@@ -292,7 +292,7 @@ fn stmt_matches_ignoring_condition(
     if !action_matches(s, req.action) {
         return false;
     }
-    if !resource_matches(s, req.resource_arn) {
+    if !resource_matches_with_subst(s, req) {
         return false;
     }
     if resource_policy && !principal_matches(s, req) {
@@ -400,14 +400,14 @@ fn stmt_matches(s: &Statement, req: &AuthzRequest, resource_policy: bool) -> boo
     if !action_matches(s, req.action) {
         return false;
     }
-    if !resource_matches(s, req.resource_arn) {
+    if !resource_matches_with_subst(s, req) {
         return false;
     }
     if resource_policy && !principal_matches(s, req) {
         return false;
     }
     if let Some(cb) = &s.condition
-        && !condition_matches(cb, req.context)
+        && !condition_matches_with_subst(cb, req)
     {
         return false;
     }
@@ -415,6 +415,9 @@ fn stmt_matches(s: &Statement, req: &AuthzRequest, resource_policy: bool) -> boo
 }
 
 fn action_matches(s: &Statement, action: &str) -> bool {
+    // Actions don't typically use policy variables — but substituting
+    // is cheap and correct for the rare case someone sticks a var in
+    // an action string (e.g. via templating).
     if let Some(actions) = &s.action {
         return actions
             .iter()
@@ -428,12 +431,16 @@ fn action_matches(s: &Statement, action: &str) -> bool {
     false
 }
 
-fn resource_matches(s: &Statement, resource: &str) -> bool {
+fn resource_matches_with_subst(s: &Statement, req: &AuthzRequest) -> bool {
     if let Some(rs) = &s.resource {
-        return rs.iter().any(|p| glob::matches_arn(p, resource));
+        return rs
+            .iter()
+            .any(|p| glob::matches_arn(&substitute(p, req), req.resource_arn));
     }
     if let Some(rs) = &s.not_resource {
-        return !rs.iter().any(|p| glob::matches_arn(p, resource));
+        return !rs
+            .iter()
+            .any(|p| glob::matches_arn(&substitute(p, req), req.resource_arn));
     }
     true
 }
@@ -480,8 +487,96 @@ fn resource_account(arn: &str) -> Option<String> {
     }
 }
 
-fn condition_matches(block: &ConditionBlock, context: &HashMap<String, ContextValue>) -> bool {
-    block.conditions.iter().all(|c| condition_eval(c, context))
+fn condition_matches_with_subst(block: &ConditionBlock, req: &AuthzRequest) -> bool {
+    block.conditions.iter().all(|c| {
+        // Substitute variables in policy-side condition values before
+        // matching. Most commonly used with `${aws:PrincipalTag/<key>}`
+        // and `${aws:username}` in resource-style condition values.
+        let substituted: Condition = if c.values.iter().any(|v| v.contains("${")) {
+            Condition {
+                key: c.key.clone(),
+                operator: c.operator,
+                values: c.values.iter().map(|v| substitute(v, req)).collect(),
+            }
+        } else {
+            c.clone()
+        };
+        condition_eval(&substituted, req.context)
+    })
+}
+
+/// Substitute IAM policy variables in `template` using values
+/// derived from the request. Supported:
+///
+///   `${aws:PrincipalArn}`     — full principal ARN
+///   `${aws:PrincipalAccount}` — principal account ID
+///   `${aws:username}`         — IAM user name (suffix of user ARN)
+///   `${aws:userid}`           — same as `${aws:username}` for users
+///   `${<context-key>}`        — any key in the request context map
+///
+/// Unknown variables are left as the literal `${...}` string so a
+/// typo doesn't accidentally widen a policy. AWS documents this
+/// "leave literal" behavior for unrecognised variables, which is
+/// safer than silently dropping the variable to an empty string.
+pub fn substitute(template: &str, req: &AuthzRequest) -> String {
+    if !template.contains("${") {
+        return template.to_string();
+    }
+    let mut out = String::with_capacity(template.len());
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len()
+            && bytes[i] == b'$'
+            && bytes[i + 1] == b'{'
+            && let Some(end_rel) = template[i + 2..].find('}')
+        {
+            let var = &template[i + 2..i + 2 + end_rel];
+            if let Some(value) = lookup_variable(var, req) {
+                out.push_str(&value);
+            } else {
+                // Unrecognised — keep the literal.
+                out.push_str(&template[i..i + 2 + end_rel + 1]);
+            }
+            i += 2 + end_rel + 1;
+            continue;
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+fn lookup_variable(var: &str, req: &AuthzRequest) -> Option<String> {
+    match var {
+        "aws:PrincipalArn" => Some(req.principal_arn.to_string()),
+        "aws:PrincipalAccount" => Some(req.principal_account.to_string()),
+        "aws:username" | "aws:userid" => Some(extract_principal_name(req.principal_arn)),
+        // The wildcard literal ${*}, ${$}, ${?} are supported by AWS to
+        // emit `*`, `$`, `?` literally. Pass through.
+        "*" => Some("*".to_string()),
+        "$" => Some("$".to_string()),
+        "?" => Some("?".to_string()),
+        other => req.context.get(other).map(|v| match v {
+            ContextValue::String(s) => s.clone(),
+            ContextValue::StringList(v) => v.first().cloned().unwrap_or_default(),
+            ContextValue::Number(n) => format_number(*n),
+            ContextValue::Bool(b) => b.to_string(),
+            ContextValue::Date(d) => d.to_rfc3339(),
+            ContextValue::Ip(s) => s.clone(),
+        }),
+    }
+}
+
+/// Extract the trailing name from a principal ARN. For
+/// `arn:aws:iam::123:user/alice` returns `alice`; for
+/// `arn:aws:iam::123:role/MyRole` returns `MyRole`. Everything else
+/// (federated, root, malformed) falls back to the full ARN.
+fn extract_principal_name(arn: &str) -> String {
+    if let Some(slash) = arn.rfind('/') {
+        return arn[slash + 1..].to_string();
+    }
+    arn.to_string()
 }
 
 fn condition_eval(c: &Condition, context: &HashMap<String, ContextValue>) -> bool {
