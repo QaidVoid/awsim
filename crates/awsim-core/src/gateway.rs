@@ -303,14 +303,14 @@ async fn process_request(
     meta: &mut ProcessMeta,
 ) -> Result<ProcessOk, (Protocol, AwsError)> {
     // 1. Extract service identification from auth header
-    let (service_name, region, account_id, access_key) = extract_service_info(state, headers, uri);
-    meta.service = service_name.clone();
+    let (mut service_name, region, account_id, access_key) =
+        extract_service_info(state, headers, uri);
     meta.region = region.clone();
     meta.account_id = account_id.clone();
     meta.access_key = access_key.clone();
 
     // 2. Find the service handler
-    let handler = state.services.get(&service_name).ok_or_else(|| {
+    let mut handler = state.services.get(&service_name).ok_or_else(|| {
         let protocol = protocol::detect_protocol(headers, body).unwrap_or(Protocol::RestJson1);
         (
             protocol,
@@ -324,15 +324,68 @@ async fn process_request(
     let protocol = handler.protocol();
 
     // 3. Determine effective protocol (use service's declared protocol if detection fails)
-    let detected = protocol::detect_protocol(headers, body).unwrap_or(protocol);
+    let mut detected = protocol::detect_protocol(headers, body).unwrap_or(protocol);
 
     // 4. Get routes for REST protocols
     let empty_routes = Vec::new();
     let routes = state.routes.get(&service_name).unwrap_or(&empty_routes);
 
-    // 5. Parse the request
-    let parsed = protocol::parse_request(detected, method, uri, headers, body, routes)
-        .map_err(|e| (detected, e))?;
+    // 5. Parse the request. If the auth-derived service has no
+    // matching route, fall back to path-based service detection
+    // before erroring. This is the magic that makes tools like
+    // Vercel's `@ai-sdk/amazon-bedrock` work — when pointed at a
+    // localhost endpoint the underlying signer can't infer the
+    // right service from the hostname (no `bedrock-runtime.`
+    // subdomain), so it signs with `bedrock` (control plane) even
+    // though the path is a `bedrock-runtime` data-plane operation.
+    // Routing strictly by the auth-signed service would surface as
+    // `UnknownOperationException` here. Instead we look at the
+    // path: if it uniquely identifies a different registered
+    // service AND that service knows how to handle this route, we
+    // switch over and dispatch there.
+    let parsed = match protocol::parse_request(detected, method, uri, headers, body, routes) {
+        Ok(p) => p,
+        Err(e) if e.code == "UnknownOperationException" => {
+            if let Some(path_service) = resolve_service_from_path(uri.path())
+                && path_service != service_name
+                && let Some(fallback_handler) = state.services.get(&path_service)
+            {
+                let fallback_routes = state.routes.get(&path_service).unwrap_or(&empty_routes);
+                let fallback_protocol = fallback_handler.protocol();
+                let fallback_detected =
+                    protocol::detect_protocol(headers, body).unwrap_or(fallback_protocol);
+                match protocol::parse_request(
+                    fallback_detected,
+                    method,
+                    uri,
+                    headers,
+                    body,
+                    fallback_routes,
+                ) {
+                    Ok(p) => {
+                        debug!(
+                            auth_service = %service_name,
+                            path_service = %path_service,
+                            "Auth-derived service had no matching route; falling back to path-derived service"
+                        );
+                        service_name = path_service;
+                        handler = fallback_handler;
+                        detected = fallback_detected;
+                        // `protocol` and `routes` are unused after
+                        // parse completes; no need to update them.
+                        let _ = fallback_protocol;
+                        let _ = fallback_routes;
+                        p
+                    }
+                    Err(_) => return Err((detected, e)),
+                }
+            } else {
+                return Err((detected, e));
+            }
+        }
+        Err(e) => return Err((detected, e)),
+    };
+    meta.service = service_name.clone();
 
     debug!(
         service = %service_name,
