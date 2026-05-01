@@ -21,6 +21,7 @@
 	import EntityDetailSheet from './entity-detail-sheet.svelte';
 	import CreateEntityDialog from './create-entity-dialog.svelte';
 	import EntityPoliciesEditor from './entity-policies-editor.svelte';
+	import AccessKeysPanel from './access-keys-panel.svelte';
 	import Users from '@lucide/svelte/icons/users';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -158,7 +159,10 @@
 		{#if detailLoading}
 			<p class="text-xs text-muted-foreground">Loading details...</p>
 		{/if}
-		<div class="pt-4">
+		<div class="pt-6">
+			<AccessKeysPanel userName={selected.userName} />
+		</div>
+		<div class="pt-6">
 			<EntityPoliciesEditor
 				{attached}
 				{inlineNames}

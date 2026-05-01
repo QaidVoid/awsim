@@ -235,6 +235,64 @@ export async function deleteUserPolicy(
   });
 }
 
+// ---- Access keys ----
+
+export interface IamAccessKey {
+  accessKeyId: string;
+  status: string; // "Active" | "Inactive"
+  createDate: string;
+}
+
+export interface IamAccessKeyWithSecret extends IamAccessKey {
+  secretAccessKey: string;
+}
+
+export async function listAccessKeys(
+  userName: string,
+): Promise<IamAccessKey[]> {
+  const xml = await iamRequest("ListAccessKeys", { UserName: userName });
+  const raw = xmlArray(xml, "member", ["AccessKeyId", "Status", "CreateDate"]);
+  return raw.map((k) => ({
+    accessKeyId: k["AccessKeyId"] ?? "",
+    status: k["Status"] ?? "",
+    createDate: k["CreateDate"] ?? "",
+  }));
+}
+
+export async function createAccessKey(
+  userName: string,
+): Promise<IamAccessKeyWithSecret> {
+  const xml = await iamRequest("CreateAccessKey", { UserName: userName });
+  return {
+    accessKeyId: xmlValue(xml, "AccessKeyId"),
+    secretAccessKey: xmlValue(xml, "SecretAccessKey"),
+    status: xmlValue(xml, "Status") || "Active",
+    createDate: xmlValue(xml, "CreateDate"),
+  };
+}
+
+export async function updateAccessKey(
+  userName: string,
+  accessKeyId: string,
+  status: "Active" | "Inactive",
+): Promise<void> {
+  await iamRequest("UpdateAccessKey", {
+    UserName: userName,
+    AccessKeyId: accessKeyId,
+    Status: status,
+  });
+}
+
+export async function deleteAccessKey(
+  userName: string,
+  accessKeyId: string,
+): Promise<void> {
+  await iamRequest("DeleteAccessKey", {
+    UserName: userName,
+    AccessKeyId: accessKeyId,
+  });
+}
+
 // ---- Roles ----
 
 export async function listRoles(): Promise<IamRole[]> {
