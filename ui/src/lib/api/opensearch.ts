@@ -3,11 +3,19 @@
  *
  * AWSim implements the OpenSearch / Elasticsearch REST data plane
  * (no AWS control plane — no CreateDomain etc.) under the
- * `/opensearch/` URL prefix. Every call here is a plain HTTP request
- * — no SigV4 signing.
+ * `/opensearch/` URL prefix on the awsim host. Every call here is a
+ * plain HTTP request — no SigV4 signing.
+ *
+ * We use the absolute awsim endpoint (not a relative path) because
+ * the UI is served at the same `/opensearch` route as a SvelteKit
+ * page; a relative `fetch('/opensearch/...')` from the browser would
+ * either hit the SPA HTML or 404 depending on the dev server, never
+ * reaching the awsim API.
  */
 
-const BASE = "/opensearch";
+import { ENDPOINT } from "$lib/aws";
+
+const BASE = `${ENDPOINT}/opensearch`;
 
 async function request<T>(
   method: string,
@@ -31,9 +39,14 @@ async function request<T>(
     throw new Error(`OpenSearch ${method} ${path} failed (${res.status}): ${text}`);
   }
   if (!text) return undefined as T;
-  // _cat returns plain text; everything else is JSON.
-  if (path.startsWith("/_cat/")) return text as unknown as T;
-  return JSON.parse(text) as T;
+  // Best-effort: try JSON, fall back to raw text. The _cat APIs
+  // return plain text without `?format=json`; with the query param
+  // (which we always send for cat) the response is JSON.
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return text as unknown as T;
+  }
 }
 
 export interface IndexSummary {
@@ -50,13 +63,16 @@ export interface IndexSummary {
 }
 
 /**
- * `_cat/indices` returns whitespace-aligned text rows. Parse into
- * structured rows so the UI can render a table.
+ * `_cat/indices?format=json` returns an array of objects. Defensive
+ * here because awsim's response shape may evolve and a non-array
+ * would otherwise blow up the page with a `.map is not a function`
+ * runtime error.
  */
 export async function listIndices(): Promise<IndexSummary[]> {
-  // `?v` adds a header row; `?format=json` is more reliable.
   const data = await request<unknown>("GET", "/_cat/indices?format=json");
-  const rows = (data as Array<Record<string, string>>) ?? [];
+  const rows: Array<Record<string, string>> = Array.isArray(data)
+    ? (data as Array<Record<string, string>>)
+    : [];
   return rows.map((r) => ({
     health: r.health ?? "",
     status: r.status ?? "",
