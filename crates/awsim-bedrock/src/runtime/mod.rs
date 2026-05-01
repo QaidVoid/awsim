@@ -145,14 +145,59 @@ pub(crate) fn accumulate_sse(raw: &str) -> AccumulatedStream {
     acc
 }
 
-/// Wrap per-family streaming chunks in the Bedrock event-stream
-/// envelope. The first array element is the only chunk we emit
-/// today (single accumulated response); the structure is ready for
-/// real per-token chunking once wire-level framing lands.
+/// Wrap per-family streaming chunks for `InvokeModelWithResponseStream`.
+/// AWS emits each vendor chunk under an event-stream message tagged
+/// `:event-type=chunk`, with the chunk JSON base64-encoded under a
+/// `bytes` field. The protocol layer recognises the
+/// `__awsim_eventstream__` marker and turns these descriptors into
+/// the right binary frame format on the wire.
 pub(crate) fn stream_envelope(chunks: Vec<Value>) -> Value {
+    use base64::Engine;
+    let frames: Vec<Value> = chunks
+        .into_iter()
+        .map(|chunk| {
+            let json = serde_json::to_vec(&chunk).unwrap_or_default();
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&json);
+            serde_json::json!({
+                "headers": {
+                    ":event-type": "chunk",
+                    ":content-type": "application/json",
+                    ":message-type": "event",
+                },
+                "payload": { "bytes": b64 }
+            })
+        })
+        .collect();
     serde_json::json!({
-        "contentType": "application/vnd.amazon.eventstream",
-        "body": chunks,
+        "__awsim_eventstream__": frames
+    })
+}
+
+/// Wrap a list of typed Converse-stream events (each is `{ "<eventType>":
+/// <payload> }`) into the protocol-layer event-stream marker shape.
+/// Each event becomes its own binary frame whose `:event-type` header
+/// names the variant — `messageStart`, `contentBlockDelta`,
+/// `contentBlockStop`, `messageStop`, `metadata`.
+pub(crate) fn converse_stream_envelope(events: Vec<Value>) -> Value {
+    let frames: Vec<Value> = events
+        .into_iter()
+        .filter_map(|event| {
+            // Each event is a single-key object whose key is the
+            // event-type and whose value is the payload.
+            let obj = event.as_object()?;
+            let (event_type, payload) = obj.iter().next()?;
+            Some(serde_json::json!({
+                "headers": {
+                    ":event-type": event_type,
+                    ":content-type": "application/json",
+                    ":message-type": "event",
+                },
+                "payload": payload
+            }))
+        })
+        .collect();
+    serde_json::json!({
+        "__awsim_eventstream__": frames
     })
 }
 

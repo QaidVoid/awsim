@@ -1,3 +1,4 @@
+pub mod eventstream;
 pub mod json;
 pub mod query;
 pub mod rest;
@@ -122,6 +123,22 @@ pub fn serialize_response(
     output: &Value,
     request_id: &str,
 ) -> (axum::http::StatusCode, HeaderMap, Bytes) {
+    // Streaming responses (Bedrock ConverseStream / InvokeModelWith
+    // ResponseStream, etc.) tag their output with an event-stream
+    // marker. Detect it before falling through to the per-protocol
+    // JSON/XML/Query encoders so the SDK gets the binary frames it
+    // expects under `application/vnd.amazon.eventstream`.
+    if let Some(body) = eventstream::try_encode(output) {
+        let mut headers = HeaderMap::new();
+        if let Ok(v) = "application/vnd.amazon.eventstream".parse() {
+            headers.insert(axum::http::header::CONTENT_TYPE, v);
+        }
+        if let Ok(v) = request_id.parse() {
+            headers.insert("x-amzn-requestid", v);
+        }
+        return (axum::http::StatusCode::OK, headers, Bytes::from(body));
+    }
+
     match protocol {
         Protocol::AwsJson1_0 | Protocol::AwsJson1_1 | Protocol::RestJson1 => {
             json::serialize_response(output, request_id)

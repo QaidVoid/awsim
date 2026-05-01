@@ -1767,6 +1767,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "awsim-core",
+ "base64",
  "dashmap",
  "reqwest",
  "serde",

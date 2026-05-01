@@ -176,7 +176,7 @@ pub async fn invoke_streaming(
             "metrics": { "latencyMs": started.elapsed().as_millis() as u64 }
         }
     }));
-    Ok(json!({ "stream": events }))
+    Ok(super::converse_stream_envelope(events))
 }
 
 #[cfg(test)]

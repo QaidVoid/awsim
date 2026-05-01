@@ -81,8 +81,10 @@ pub fn converse(input: &Value) -> Result<Value, AwsError> {
     }))
 }
 
-/// InvokeModelWithResponseStream — returns the same mock response as InvokeModel
-/// but in a single-chunk streaming envelope (we cannot truly stream in our architecture).
+/// InvokeModelWithResponseStream — single-chunk mock wrapped in the
+/// AWS event-stream marker so the protocol layer emits proper binary
+/// frames. SDKs that decode the stream see exactly one `chunk` event
+/// containing the full mock response.
 pub fn invoke_model_with_response_stream(input: &Value) -> Result<Value, AwsError> {
     let model_id = input["modelId"]
         .as_str()
@@ -90,16 +92,14 @@ pub fn invoke_model_with_response_stream(input: &Value) -> Result<Value, AwsErro
 
     debug!(model_id = %model_id, "InvokeModelWithResponseStream (mock single-chunk)");
 
-    // Return the same body as InvokeModel but wrapped in a streaming event envelope.
     let body = invoke_model(input)?;
-
-    Ok(json!({
-        "contentType": "application/json",
-        "body": body,
-    }))
+    Ok(super::stream_envelope(vec![body]))
 }
 
-/// ConverseStream — same as Converse but with a streaming response mock.
+/// ConverseStream — mock streaming response wrapped in the AWS
+/// event-stream marker. Emits the same sequence (`messageStart`,
+/// `contentBlockDelta`, `contentBlockStop`, `messageStop`,
+/// `metadata`) the live translator emits.
 pub fn converse_stream(input: &Value) -> Result<Value, AwsError> {
     let model_id = input["modelId"]
         .as_str()
@@ -107,38 +107,22 @@ pub fn converse_stream(input: &Value) -> Result<Value, AwsError> {
 
     debug!(model_id = %model_id, "ConverseStream (mock single-chunk)");
 
-    Ok(json!({
-        "stream": [
-            {
-                "messageStart": {
-                    "role": "assistant"
-                }
-            },
-            {
-                "contentBlockDelta": {
-                    "delta": {
-                        "text": "This is a mock streaming response from AWSim Bedrock."
-                    },
-                    "contentBlockIndex": 0
-                }
-            },
-            {
-                "messageStop": {
-                    "stopReason": "end_turn"
-                }
-            },
-            {
-                "metadata": {
-                    "usage": {
-                        "inputTokens": 10,
-                        "outputTokens": 20,
-                        "totalTokens": 30
-                    },
-                    "metrics": {
-                        "latencyMs": 1
-                    }
-                }
+    let events = vec![
+        json!({ "messageStart": { "role": "assistant" } }),
+        json!({
+            "contentBlockDelta": {
+                "delta": { "text": "This is a mock streaming response from AWSim Bedrock." },
+                "contentBlockIndex": 0
             }
-        ]
-    }))
+        }),
+        json!({ "contentBlockStop": { "contentBlockIndex": 0 } }),
+        json!({ "messageStop": { "stopReason": "end_turn" } }),
+        json!({
+            "metadata": {
+                "usage": { "inputTokens": 10, "outputTokens": 20, "totalTokens": 30 },
+                "metrics": { "latencyMs": 1 }
+            }
+        }),
+    ];
+    Ok(super::converse_stream_envelope(events))
 }
