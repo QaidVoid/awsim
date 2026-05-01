@@ -1,17 +1,33 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { listRoles, getRole, deleteRole, type IamRole } from '$lib/api/iam';
+	import {
+		listRoles,
+		getRole,
+		deleteRole,
+		listAttachedRolePolicies,
+		attachRolePolicy,
+		detachRolePolicy,
+		listRolePolicies,
+		getRolePolicy,
+		putRolePolicy,
+		deleteRolePolicy,
+		updateAssumeRolePolicy,
+		type IamAttachedPolicy,
+		type IamRole,
+	} from '$lib/api/iam';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import EntityDetailSheet from './entity-detail-sheet.svelte';
 	import CreateEntityDialog from './create-entity-dialog.svelte';
+	import EntityPoliciesEditor from './entity-policies-editor.svelte';
 	import PolicyEditor from './policy-editor.svelte';
 	import ShieldCheck from '@lucide/svelte/icons/shield-check';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import Save from '@lucide/svelte/icons/save';
 	import { toast } from 'svelte-sonner';
 
 	let roles = $state<IamRole[]>([]);
@@ -19,9 +35,16 @@
 	let filter = $state('');
 	let selected = $state<IamRole | null>(null);
 	let trustDoc = $state('');
+	let trustDocOriginal = $state('');
+	let savingTrust = $state(false);
 	let detailLoading = $state(false);
 	let createOpen = $state(false);
 	let deleting = $state(false);
+
+	let attached = $state<IamAttachedPolicy[]>([]);
+	let inlineNames = $state<string[]>([]);
+
+	const trustModified = $derived(trustDoc.trim() !== trustDocOriginal.trim());
 
 	const filtered = $derived(
 		filter.trim()
@@ -41,6 +64,9 @@
 	async function openDetail(r: IamRole) {
 		selected = r;
 		trustDoc = '';
+		trustDocOriginal = '';
+		attached = [];
+		inlineNames = [];
 		detailLoading = true;
 		try {
 			const detail = await getRole(r.roleName);
@@ -51,9 +77,40 @@
 				} catch {
 					trustDoc = detail.assumeRolePolicyDocument;
 				}
+				trustDocOriginal = trustDoc;
 			}
+			await reloadPolicies(r.roleName);
 		} finally {
 			detailLoading = false;
+		}
+	}
+
+	async function reloadPolicies(roleName: string) {
+		const [a, i] = await Promise.all([
+			listAttachedRolePolicies(roleName).catch(() => []),
+			listRolePolicies(roleName).catch(() => []),
+		]);
+		attached = a;
+		inlineNames = i;
+	}
+
+	async function saveTrustPolicy() {
+		if (!selected) return;
+		try {
+			JSON.parse(trustDoc);
+		} catch {
+			toast.error('Trust policy is not valid JSON');
+			return;
+		}
+		savingTrust = true;
+		try {
+			await updateAssumeRolePolicy(selected.roleName, trustDoc);
+			toast.success('Trust policy updated');
+			trustDocOriginal = trustDoc;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Update failed');
+		} finally {
+			savingTrust = false;
 		}
 	}
 
@@ -136,12 +193,30 @@
 				bind:value={trustDoc}
 				id="role-trust-policy"
 				label="Trust policy"
-				readonly
-				rows={16}
+				rows={14}
 			/>
 			{#if detailLoading}
 				<p class="mt-2 text-xs text-muted-foreground">Loading trust policy...</p>
+			{:else if trustModified}
+				<div class="mt-2 flex justify-end">
+					<Button size="sm" onclick={saveTrustPolicy} disabled={savingTrust}>
+						<Save class="size-4" />
+						<span class="ml-1">{savingTrust ? 'Saving…' : 'Save trust policy'}</span>
+					</Button>
+				</div>
 			{/if}
+		</div>
+		<div class="pt-6">
+			<EntityPoliciesEditor
+				{attached}
+				{inlineNames}
+				onAttach={(arn) => attachRolePolicy(selected!.roleName, arn)}
+				onDetach={(arn) => detachRolePolicy(selected!.roleName, arn)}
+				onLoadInline={(name) => getRolePolicy(selected!.roleName, name)}
+				onPutInline={(name, doc) => putRolePolicy(selected!.roleName, name, doc)}
+				onDeleteInline={(name) => deleteRolePolicy(selected!.roleName, name)}
+				onMutated={() => selected && reloadPolicies(selected.roleName)}
+			/>
 		</div>
 		<div class="flex justify-end pt-4">
 			<Button

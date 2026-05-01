@@ -189,9 +189,16 @@ export async function detachUserPolicy(
 
 export async function listUserPolicies(userName: string): Promise<string[]> {
   const xml = await iamRequest("ListUserPolicies", { UserName: userName });
-  // Response is `<PolicyNames><member>name</member>...</PolicyNames>` —
-  // a flat list of inline policy names.
-  return [...xml.matchAll(/<member>([^<]+)<\/member>/g)].map((m) => m[1]);
+  return parseInlinePolicyNames(xml);
+}
+
+// `<PolicyNames><member>name</member>…</PolicyNames>` lists from
+// IAM put extra whitespace inside the `<member>` tags, so we trim
+// before returning. Shared by user/role list functions.
+function parseInlinePolicyNames(xml: string): string[] {
+  return [...xml.matchAll(/<member>([\s\S]*?)<\/member>/g)]
+    .map((m) => m[1].trim())
+    .filter((s) => s.length > 0);
 }
 
 export async function getUserPolicy(
@@ -319,7 +326,7 @@ export async function detachRolePolicy(
 
 export async function listRolePolicies(roleName: string): Promise<string[]> {
   const xml = await iamRequest("ListRolePolicies", { RoleName: roleName });
-  return [...xml.matchAll(/<member>([^<]+)<\/member>/g)].map((m) => m[1]);
+  return parseInlinePolicyNames(xml);
 }
 
 export async function getRolePolicy(

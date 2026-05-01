@@ -1,12 +1,26 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { listUsers, getUser, deleteUser, type IamUser } from '$lib/api/iam';
+	import {
+		listUsers,
+		getUser,
+		deleteUser,
+		listAttachedUserPolicies,
+		attachUserPolicy,
+		detachUserPolicy,
+		listUserPolicies,
+		getUserPolicy,
+		putUserPolicy,
+		deleteUserPolicy,
+		type IamAttachedPolicy,
+		type IamUser,
+	} from '$lib/api/iam';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import EntityDetailSheet from './entity-detail-sheet.svelte';
 	import CreateEntityDialog from './create-entity-dialog.svelte';
+	import EntityPoliciesEditor from './entity-policies-editor.svelte';
 	import Users from '@lucide/svelte/icons/users';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -20,6 +34,9 @@
 	let detailLoading = $state(false);
 	let createOpen = $state(false);
 	let deleting = $state(false);
+
+	let attached = $state<IamAttachedPolicy[]>([]);
+	let inlineNames = $state<string[]>([]);
 
 	const filtered = $derived(
 		filter.trim()
@@ -39,11 +56,23 @@
 	async function openDetail(u: IamUser) {
 		selected = u;
 		detailLoading = true;
+		attached = [];
+		inlineNames = [];
 		try {
 			selected = await getUser(u.userName);
+			await reloadPolicies(u.userName);
 		} finally {
 			detailLoading = false;
 		}
+	}
+
+	async function reloadPolicies(userName: string) {
+		const [a, i] = await Promise.all([
+			listAttachedUserPolicies(userName).catch(() => []),
+			listUserPolicies(userName).catch(() => []),
+		]);
+		attached = a;
+		inlineNames = i;
 	}
 
 	async function handleDelete(u: IamUser) {
@@ -129,6 +158,18 @@
 		{#if detailLoading}
 			<p class="text-xs text-muted-foreground">Loading details...</p>
 		{/if}
+		<div class="pt-4">
+			<EntityPoliciesEditor
+				{attached}
+				{inlineNames}
+				onAttach={(arn) => attachUserPolicy(selected!.userName, arn)}
+				onDetach={(arn) => detachUserPolicy(selected!.userName, arn)}
+				onLoadInline={(name) => getUserPolicy(selected!.userName, name)}
+				onPutInline={(name, doc) => putUserPolicy(selected!.userName, name, doc)}
+				onDeleteInline={(name) => deleteUserPolicy(selected!.userName, name)}
+				onMutated={() => selected && reloadPolicies(selected.userName)}
+			/>
+		</div>
 		<div class="flex justify-end pt-4">
 			<Button
 				variant="destructive"
