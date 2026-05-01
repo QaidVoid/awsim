@@ -6,6 +6,7 @@
 		describeTable,
 		deleteTable,
 		truncateTable,
+		setDeletionProtection,
 		type TableSummary,
 		type TableDetail,
 		type Item
@@ -28,6 +29,7 @@
 	import Eraser from '@lucide/svelte/icons/eraser';
 	import Globe from '@lucide/svelte/icons/globe';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
+	import ShieldCheck from '@lucide/svelte/icons/shield-check';
 
 	let tables = $state<TableSummary[]>([]);
 	let tablesLoading = $state(true);
@@ -44,6 +46,13 @@
 	let truncateOpen = $state(false);
 	let truncateBusy = $state(false);
 
+	// Names of tables currently known to be deletion-protected. Lazy
+	// to avoid an N+1 describe storm on first paint — populated
+	// asynchronously after the table list arrives, with a cap to keep
+	// large lists responsive.
+	let protectedNames = $state<Set<string>>(new Set());
+	const PREFETCH_DESCRIBE_CAP = 50;
+
 	let editorOpen = $state(false);
 	let editingItem = $state<Item | null>(null);
 
@@ -55,11 +64,38 @@
 		tablesLoading = true;
 		try {
 			tables = await listTables();
+			void prefetchProtection(tables);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to list tables');
 		} finally {
 			tablesLoading = false;
 		}
+	}
+
+	// Fan out describes in parallel to find which tables have
+	// deletion protection enabled, so the sidebar can show a lock
+	// icon without a per-row describe on click. Capped so a thousand-
+	// table dev environment doesn't fire a thousand round-trips.
+	async function prefetchProtection(list: TableSummary[]) {
+		const next = new Set<string>();
+		await Promise.all(
+			list.slice(0, PREFETCH_DESCRIBE_CAP).map(async (t) => {
+				try {
+					const d = await describeTable(t.name);
+					if (d.deletionProtectionEnabled) next.add(t.name);
+				} catch {
+					/* unreachable / restarted server — ignore for the badge */
+				}
+			})
+		);
+		protectedNames = next;
+	}
+
+	function syncProtection(name: string, enabled: boolean) {
+		const next = new Set(protectedNames);
+		if (enabled) next.add(name);
+		else next.delete(name);
+		protectedNames = next;
 	}
 
 	async function selectTable(t: TableSummary) {
@@ -69,6 +105,7 @@
 		activeTab = 'items';
 		try {
 			detail = await describeTable(t.name);
+			syncProtection(detail.name, detail.deletionProtectionEnabled);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to describe table');
 		} finally {
@@ -80,6 +117,7 @@
 		if (!selected) return;
 		try {
 			detail = await describeTable(selected.name);
+			syncProtection(detail.name, detail.deletionProtectionEnabled);
 		} catch {
 			/* swallow */
 		}
@@ -100,6 +138,12 @@
 		if (!selected) return;
 		confirmBusy = true;
 		try {
+			// If the user crossed the protection warning, drop the
+			// flag first. Atomic from the user's perspective even
+			// though it's two server calls.
+			if (detail?.deletionProtectionEnabled) {
+				await setDeletionProtection(selected.name, false);
+			}
 			await deleteTable(selected.name);
 			toast.success(`Deleted table ${selected.name}`);
 			confirmOpen = false;
@@ -155,6 +199,7 @@
 				selectedName={selected?.name ?? null}
 				loading={tablesLoading}
 				onSelect={selectTable}
+				{protectedNames}
 				bind:filter
 			/>
 		</aside>
@@ -180,6 +225,16 @@
 						<Badge variant={detail.status === 'ACTIVE' ? 'secondary' : 'outline'}>
 							{detail.status || 'UNKNOWN'}
 						</Badge>
+						{#if detail.deletionProtectionEnabled}
+							<Badge
+								variant="outline"
+								class="gap-1 text-amber-500"
+								title="Deletion protection is on. Toggle off in the Schema tab, or use Delete to disable + delete in one step."
+							>
+								<ShieldCheck class="size-3" />
+								Protected
+							</Badge>
+						{/if}
 					</div>
 					<div class="flex items-center gap-1">
 						<Button variant="ghost" size="sm" onclick={() => (truncateOpen = true)}>
@@ -242,8 +297,11 @@
 
 <ConfirmDialog
 	bind:open={confirmOpen}
-	title="Delete table?"
-	description={`Permanently delete "${selected?.name ?? ''}" and all its items.`}
+	title={detail?.deletionProtectionEnabled ? 'Delete protected table?' : 'Delete table?'}
+	description={detail?.deletionProtectionEnabled
+		? `"${selected?.name ?? ''}" has deletion protection enabled. Continuing will turn protection off and then delete the table and all its items.`
+		: `Permanently delete "${selected?.name ?? ''}" and all its items.`}
+	confirmLabel={detail?.deletionProtectionEnabled ? 'Disable & delete' : 'Delete'}
 	busy={confirmBusy}
 	onConfirm={confirmDelete}
 	onClose={() => (confirmOpen = false)}

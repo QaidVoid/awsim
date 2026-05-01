@@ -4,6 +4,7 @@
 	import Search from '@lucide/svelte/icons/search';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import Table2 from '@lucide/svelte/icons/table-2';
+	import ShieldCheck from '@lucide/svelte/icons/shield-check';
 
 	interface Props {
 		tables: TableSummary[];
@@ -11,6 +12,12 @@
 		loading: boolean;
 		onSelect: (table: TableSummary) => void;
 		filter: string;
+		// Names of tables currently known to have deletion protection
+		// enabled. Populated lazily by the parent as describes return,
+		// so a row may flip from no-icon to locked after page load —
+		// that's intentional, we don't want to block the list on N
+		// describe round-trips.
+		protectedNames?: Set<string>;
 	}
 
 	let {
@@ -18,7 +25,8 @@
 		selectedName,
 		loading,
 		onSelect,
-		filter = $bindable('')
+		filter = $bindable(''),
+		protectedNames = new Set<string>()
 	}: Props = $props();
 
 	let visible = $derived(
@@ -68,7 +76,13 @@
 							)}
 						>
 							<Table2 class="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-							<span class="truncate font-mono text-sm">{table.name}</span>
+							<span class="flex-1 truncate font-mono text-sm">{table.name}</span>
+							{#if protectedNames.has(table.name)}
+								<ShieldCheck
+									class="mt-0.5 size-3.5 shrink-0 text-amber-500"
+									aria-label="Deletion protection enabled"
+								/>
+							{/if}
 						</button>
 					</li>
 				{/each}
