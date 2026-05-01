@@ -249,6 +249,47 @@ impl SqliteStore {
         Ok(n > 0)
     }
 
+    /// Delete every item in `table` whose attribute named
+    /// `ttl_attribute` is a number ≤ `now_secs`. Returns how many rows
+    /// were removed. Used by the TTL sweeper.
+    ///
+    /// We deserialise each item's attrs JSON to inspect the TTL field
+    /// because it lives inside `attrs_json` (no per-attribute index).
+    /// Cheap enough for the sweeper's once-per-minute cadence — it'd
+    /// be the wrong tool for a tight loop.
+    pub fn delete_expired_items(
+        &self,
+        account: &str,
+        region: &str,
+        table: &str,
+        ttl_attribute: &str,
+        now_secs: i64,
+    ) -> Result<u64, AwsError> {
+        let mut victims: Vec<(String, String)> = Vec::new();
+        self.scan_table(account, region, table, None, |pk, sk, attrs| {
+            // DynamoDB attribute values are wire-shaped: { "N": "123" }.
+            let expired = attrs
+                .get(ttl_attribute)
+                .and_then(|v| v.get("N"))
+                .and_then(|n| n.as_str())
+                .and_then(|s| s.parse::<i64>().ok())
+                .map(|n| n <= now_secs)
+                .unwrap_or(false);
+            if expired {
+                victims.push((pk.to_string(), sk.to_string()));
+            }
+            Ok(true)
+        })?;
+
+        let mut removed = 0u64;
+        for (pk, sk) in victims {
+            if self.delete_item(account, region, table, &pk, &sk)? {
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
     /// Row count for a table (cheap — covered by the PRIMARY KEY index).
     pub fn count_items(&self, account: &str, region: &str, table: &str) -> Result<u64, AwsError> {
         let conn = self.conn()?;
@@ -951,5 +992,93 @@ mod tests {
             store.list_table_names("a", "r").unwrap(),
             vec!["users".to_string()]
         );
+    }
+
+    #[test]
+    fn delete_expired_items_drops_only_past_ttl() {
+        let store = SqliteStore::in_memory().unwrap();
+        // Three items: one expired (ttl in past), one fresh (ttl in
+        // future), one with no ttl attribute at all.
+        store
+            .put_item(
+                "a",
+                "r",
+                "t",
+                "p",
+                "expired",
+                &json!({"id": {"S": "expired"}, "expires_at": {"N": "1000"}}),
+                &empty_gsi(),
+            )
+            .unwrap();
+        store
+            .put_item(
+                "a",
+                "r",
+                "t",
+                "p",
+                "fresh",
+                &json!({"id": {"S": "fresh"}, "expires_at": {"N": "9999999999"}}),
+                &empty_gsi(),
+            )
+            .unwrap();
+        store
+            .put_item(
+                "a",
+                "r",
+                "t",
+                "p",
+                "no-ttl",
+                &json!({"id": {"S": "no-ttl"}}),
+                &empty_gsi(),
+            )
+            .unwrap();
+
+        // Sweep at "now = 5000" — only "expired" qualifies.
+        let removed = store
+            .delete_expired_items("a", "r", "t", "expires_at", 5000)
+            .unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(store.count_items("a", "r", "t").unwrap(), 2);
+        assert!(
+            store
+                .get_item("a", "r", "t", "p", "expired")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .get_item("a", "r", "t", "p", "fresh")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .get_item("a", "r", "t", "p", "no-ttl")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn delete_expired_items_no_op_when_attribute_missing() {
+        // A misconfigured table whose declared TTL attribute doesn't
+        // exist on any item shouldn't delete anything.
+        let store = SqliteStore::in_memory().unwrap();
+        store
+            .put_item(
+                "a",
+                "r",
+                "t",
+                "p",
+                "1",
+                &json!({"id": {"S": "1"}}),
+                &empty_gsi(),
+            )
+            .unwrap();
+        let removed = store
+            .delete_expired_items("a", "r", "t", "ghost_attr", 5000)
+            .unwrap();
+        assert_eq!(removed, 0);
+        assert_eq!(store.count_items("a", "r", "t").unwrap(), 1);
     }
 }

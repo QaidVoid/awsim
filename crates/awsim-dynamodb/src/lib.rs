@@ -94,6 +94,83 @@ impl DynamoDbService {
         self.sqlite.vacuum()
     }
 
+    /// Spawn a background tokio task that periodically scans every
+    /// (account, region, table) with TTL enabled and deletes items
+    /// whose TTL attribute has passed. Mirrors the AWS contract that
+    /// expired items are eventually removed (within ~48 hours on
+    /// AWS); we run every `interval_secs` (default 60) which is far
+    /// more aggressive but cheap on a local emulator.
+    ///
+    /// Returns immediately. The task lives until the process exits.
+    pub fn spawn_ttl_sweeper(&self, interval_secs: u64) {
+        let store = self.store.clone();
+        let sqlite = Arc::clone(&self.sqlite);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            // Skip the immediate first tick so we don't sweep before
+            // the user has had a chance to insert anything.
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let now_secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                // Snapshot the (account, region, state) set so we can
+                // iterate without holding any DashMap locks across the
+                // sqlite calls.
+                let regions = store.iter_all();
+                for ((account, region), state) in regions {
+                    // Collect ttl-enabled tables to avoid holding the
+                    // tables DashMap iterator across awaits / sqlite
+                    // calls.
+                    let targets: Vec<(String, String)> = state
+                        .tables
+                        .iter()
+                        .filter_map(|e| {
+                            let t = e.value();
+                            if t.ttl.enabled && !t.ttl.attribute_name.is_empty() {
+                                Some((t.name.clone(), t.ttl.attribute_name.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    for (table_name, attr) in targets {
+                        let sqlite = Arc::clone(&sqlite);
+                        let account = account.clone();
+                        let region = region.clone();
+                        // sqlite calls block — run them on the
+                        // blocking pool so we don't stall the runtime.
+                        let res = tokio::task::spawn_blocking(move || {
+                            sqlite.delete_expired_items(
+                                &account,
+                                &region,
+                                &table_name,
+                                &attr,
+                                now_secs,
+                            )
+                        })
+                        .await;
+                        match res {
+                            Ok(Ok(removed)) if removed > 0 => {
+                                tracing::info!(removed, "DynamoDB TTL sweep removed expired items");
+                            }
+                            Ok(Ok(_)) => {}
+                            Ok(Err(e)) => {
+                                tracing::warn!(error = %e.message, "DynamoDB TTL sweep failed");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "DynamoDB TTL sweep join error");
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     /// If this instance owns an ephemeral tempdir (no `--data-dir`
     /// case), return its path so the shutdown handler can remove it
     /// before calling `process::exit`. Drop wouldn't run otherwise.

@@ -1733,6 +1733,10 @@ fn register_services(
         Some(dir) => awsim_dynamodb::DynamoDbService::with_data_dir(dir),
         None => awsim_dynamodb::DynamoDbService::new(),
     });
+    // Background TTL sweeper — deletes items past their TTL once per
+    // minute. Real DynamoDB allows up to ~48h slack; we're aggressive
+    // since this is a dev tool and the sweep is cheap.
+    dynamodb.spawn_ttl_sweeper(60);
     let dynamodb_clone = Arc::clone(&dynamodb);
     state.register(dynamodb, vec![]);
 
