@@ -45,6 +45,12 @@ export interface TableSummary {
   keySchema?: KeySchemaElement[];
 }
 
+export interface SseDescription {
+  enabled: boolean;
+  sseType: string; // "AES256" | "KMS" | ""
+  kmsMasterKeyArn: string | null;
+}
+
 export interface TableDetail {
   name: string;
   arn: string;
@@ -58,6 +64,7 @@ export interface TableDetail {
   createdAt: string;
   billingMode: string;
   deletionProtectionEnabled: boolean;
+  sse: SseDescription;
 }
 
 export interface TtlState {
@@ -134,6 +141,11 @@ interface RawTableDescription {
   CreationDateTime?: number;
   BillingModeSummary?: { BillingMode?: string };
   DeletionProtectionEnabled?: boolean;
+  SSEDescription?: {
+    Status?: string;
+    SSEType?: string;
+    KMSMasterKeyArn?: string;
+  };
   KeySchema?: { AttributeName: string; KeyType: string }[];
   AttributeDefinitions?: { AttributeName: string; AttributeType: string }[];
   GlobalSecondaryIndexes?: {
@@ -190,6 +202,11 @@ function mapTable(raw: RawTableDescription, fallbackName = ""): TableDetail {
       : "",
     billingMode: raw.BillingModeSummary?.BillingMode ?? "PAY_PER_REQUEST",
     deletionProtectionEnabled: raw.DeletionProtectionEnabled ?? false,
+    sse: {
+      enabled: (raw.SSEDescription?.Status ?? "DISABLED") === "ENABLED",
+      sseType: raw.SSEDescription?.SSEType ?? "",
+      kmsMasterKeyArn: raw.SSEDescription?.KMSMasterKeyArn ?? null,
+    },
   };
 }
 
@@ -345,6 +362,28 @@ export async function untagResource(
   await request("UntagResource", {
     ResourceArn: arn,
     TagKeys: keys,
+  });
+}
+
+/**
+ * Update the table's server-side-encryption spec. AWS only allows
+ * enabling via UpdateTable; awsim accepts both directions. When
+ * `enabled` is false the SSE description disappears from
+ * DescribeTable (default AWS-owned-key encryption).
+ */
+export async function setSse(
+  name: string,
+  enabled: boolean,
+  kmsMasterKeyArn?: string,
+): Promise<void> {
+  const spec: Record<string, unknown> = { Enabled: enabled };
+  if (enabled) {
+    spec.SSEType = "KMS";
+    if (kmsMasterKeyArn) spec.KMSMasterKeyId = kmsMasterKeyArn;
+  }
+  await request("UpdateTable", {
+    TableName: name,
+    SSESpecification: spec,
   });
 }
 

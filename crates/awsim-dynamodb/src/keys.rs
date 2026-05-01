@@ -130,6 +130,7 @@ mod tests {
             ttl: Default::default(),
             tags: Default::default(),
             deletion_protection_enabled: false,
+            sse: Default::default(),
         }
     }
 

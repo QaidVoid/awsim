@@ -231,6 +231,7 @@ impl DynamoDbService {
                 ttl: state::TtlSpecification::default(),
                 tags: std::collections::HashMap::new(),
                 deletion_protection_enabled: false,
+                sse: state::SseSpecification::default(),
             };
             state.tables.insert(table_name.clone(), table);
             tables_created += 1;
@@ -797,6 +798,7 @@ impl ServiceHandler for DynamoDbService {
                             ttl: t.ttl.clone(),
                             tags: t.tags.clone(),
                             deletion_protection_enabled: t.deletion_protection_enabled,
+                            sse: t.sse.clone(),
                         }
                     })
                     .collect::<Vec<_>>()

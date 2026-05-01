@@ -7,7 +7,7 @@ use tracing::info;
 use crate::sqlite_store::SqliteStore;
 use crate::state::{
     AttributeDefinition, DynamoState, GlobalSecondaryIndex, KeySchemaElement, LocalSecondaryIndex,
-    Projection, Table, TtlSpecification,
+    Projection, SseSpecification, Table, TtlSpecification,
 };
 
 use super::{opt_str, require_str};
@@ -210,7 +210,52 @@ pub fn table_description(table: &Table, item_count: u64) -> Value {
         }
     }
 
+    // AWS only emits SSEDescription when customer-managed SSE is on.
+    // Default AWS-owned-key encryption is implicit and silent — match
+    // that so SDK round-tripping is faithful.
+    if table.sse.enabled {
+        let mut sse_desc = json!({
+            "Status": "ENABLED",
+            "SSEType": if table.sse.sse_type.is_empty() { "KMS" } else { table.sse.sse_type.as_str() },
+        });
+        if let Some(arn) = table.sse.kms_master_key_arn.as_ref() {
+            sse_desc["KMSMasterKeyArn"] = json!(arn);
+        }
+        desc["SSEDescription"] = sse_desc;
+    }
+
     desc
+}
+
+/// Parse an `SSESpecification` block from a CreateTable / UpdateTable
+/// request body. Returns the default (disabled / AWS-owned-key) when
+/// the block is absent or `Enabled = false`.
+fn parse_sse_specification(spec: Option<&Value>) -> SseSpecification {
+    let Some(spec) = spec else {
+        return SseSpecification::default();
+    };
+    let enabled = spec
+        .get("Enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !enabled {
+        return SseSpecification::default();
+    }
+    // AWS defaults to "KMS" when Enabled is true and SSEType is omitted.
+    let sse_type = spec
+        .get("SSEType")
+        .and_then(Value::as_str)
+        .unwrap_or("KMS")
+        .to_string();
+    let kms_master_key_arn = spec
+        .get("KMSMasterKeyId")
+        .and_then(Value::as_str)
+        .map(String::from);
+    SseSpecification {
+        enabled: true,
+        sse_type,
+        kms_master_key_arn,
+    }
 }
 
 pub fn create_table(
@@ -304,6 +349,8 @@ pub fn create_table(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
+    let sse = parse_sse_specification(input.get("SSESpecification"));
+
     let table = Table {
         name: table_name.to_string(),
         arn,
@@ -322,6 +369,7 @@ pub fn create_table(
         ttl: TtlSpecification::default(),
         tags,
         deletion_protection_enabled,
+        sse,
     };
 
     // Brand new table — item count is always 0, no need to query SQLite.
@@ -493,6 +541,13 @@ pub fn update_table(
         .and_then(Value::as_bool)
     {
         table.deletion_protection_enabled = flag;
+    }
+
+    // Update SSE if provided. AWS only allows enabling via UpdateTable;
+    // disabling requires re-creating the table. We're a dev tool so
+    // we accept either direction for ergonomic use.
+    if let Some(sse_spec) = input.get("SSESpecification") {
+        table.sse = parse_sse_specification(Some(sse_spec));
     }
 
     // Update StreamSpecification if provided
@@ -1379,6 +1434,7 @@ mod tests {
                 ttl: Default::default(),
                 tags: Default::default(),
                 deletion_protection_enabled: false,
+                sse: Default::default(),
             },
         );
         state
@@ -1506,6 +1562,7 @@ mod tests {
                 ttl: Default::default(),
                 tags: Default::default(),
                 deletion_protection_enabled: false,
+                sse: Default::default(),
             },
         );
         create_global_table(

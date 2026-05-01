@@ -377,6 +377,7 @@ pub fn transact_write_items(
                     ttl: table.ttl.clone(),
                     tags: table.tags.clone(),
                     deletion_protection_enabled: table.deletion_protection_enabled,
+                    sse: table.sse.clone(),
                 },
             );
         }
@@ -602,6 +603,7 @@ mod tests {
             ttl: Default::default(),
             tags: Default::default(),
             deletion_protection_enabled: false,
+            sse: Default::default(),
         };
         state.tables.insert("t".into(), table);
         state

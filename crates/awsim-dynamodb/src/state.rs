@@ -87,6 +87,25 @@ pub struct TtlSpecification {
     pub attribute_name: String,
 }
 
+/// Server-side encryption metadata. AWS-owned-key encryption is the
+/// default and AWS doesn't surface an `SSEDescription` in DescribeTable
+/// for it (so `enabled = false` here means "default-managed", which
+/// is the absence of customer-managed encryption rather than "no
+/// encryption at all"). When `enabled = true` the table reports
+/// `SSEDescription` to the client; we don't actually encrypt anything
+/// in awsim — it's metadata only so SDK code that round-trips it
+/// works.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SseSpecification {
+    pub enabled: bool,
+    /// "AES256" (AWS-owned key) or "KMS" (customer-managed). Empty
+    /// when `enabled = false`.
+    #[serde(default)]
+    pub sse_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kms_master_key_arn: Option<String>,
+}
+
 /// A DynamoDB Table — schema + stream config only.
 ///
 /// Items live in SQLite (see `SqliteStore`); this struct holds the
@@ -130,6 +149,11 @@ pub struct Table {
     /// `DeletionProtectionEnabled` table attribute.
     #[serde(default)]
     pub deletion_protection_enabled: bool,
+    /// Server-side encryption settings. Metadata only — awsim doesn't
+    /// actually encrypt items, but echoing the spec back keeps SDK
+    /// code that reads `SSEDescription` happy.
+    #[serde(default)]
+    pub sse: SseSpecification,
 }
 
 /// Serializable snapshot of `DynamoState`.

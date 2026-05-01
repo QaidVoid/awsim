@@ -7,6 +7,7 @@
 		listTags,
 		tagResource,
 		untagResource,
+		setSse,
 		type ResourceTag,
 		type TableDetail,
 		type TtlState,
@@ -30,6 +31,8 @@
 
 	let togglingDeletionProtection = $state(false);
 	let savingBillingMode = $state(false);
+	let savingSse = $state(false);
+	let kmsKeyDraft = $state('');
 
 	// TTL state — loaded async because it has its own DescribeTimeToLive
 	// op (the table description doesn't include it).
@@ -45,12 +48,14 @@
 	let savingTag = $state(false);
 
 	$effect(() => {
-		// Reload TTL + tags whenever the selected table changes.
+		// Reload TTL + tags + KMS key draft whenever the selected
+		// table changes.
 		const arn = detail.arn;
 		const name = detail.name;
 		void name;
 		ttlLoaded = false;
 		tags = [];
+		kmsKeyDraft = detail.sse.kmsMasterKeyArn ?? '';
 		Promise.all([
 			describeTtl(name).catch(() => ({ enabled: false, attributeName: '' })),
 			arn ? listTags(arn).catch(() => []) : Promise.resolve([]),
@@ -175,6 +180,40 @@
 	}
 
 	let ttlAttrModified = $derived(ttlAttrDraft.trim() !== ttl.attributeName.trim());
+
+	async function toggleSse(next: boolean) {
+		savingSse = true;
+		try {
+			await setSse(detail.name, next, kmsKeyDraft.trim() || undefined);
+			toast.success(next ? 'SSE enabled' : 'SSE set to AWS-owned key');
+			onUpdated?.();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Update failed');
+		} finally {
+			savingSse = false;
+		}
+	}
+
+	async function saveKmsKey() {
+		if (!detail.sse.enabled) {
+			toast.error('Enable SSE first');
+			return;
+		}
+		savingSse = true;
+		try {
+			await setSse(detail.name, true, kmsKeyDraft.trim() || undefined);
+			toast.success('KMS key updated');
+			onUpdated?.();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Update failed');
+		} finally {
+			savingSse = false;
+		}
+	}
+
+	let kmsKeyModified = $derived(
+		kmsKeyDraft.trim() !== (detail.sse.kmsMasterKeyArn ?? '').trim()
+	);
 </script>
 
 <div class="flex h-full min-h-0 flex-col gap-6 overflow-y-auto p-4">
@@ -346,6 +385,51 @@
 						<span class="ml-1">Add</span>
 					</Button>
 				</div>
+			</div>
+
+			<!-- SSE / encryption -->
+			<div class="rounded-md border border-border p-3">
+				<div class="flex items-start justify-between gap-4">
+					<div class="min-w-0">
+						<Label for="ddb-schema-sse" class="text-sm">Encryption (SSE)</Label>
+						<p class="mt-0.5 text-xs text-muted-foreground">
+							Off uses AWS-owned keys (the default — invisible in DescribeTable). On reports
+							customer-managed KMS encryption. awsim doesn't actually encrypt items; the
+							setting round-trips through the API for SDK code that reads it.
+						</p>
+					</div>
+					<Switch
+						id="ddb-schema-sse"
+						checked={detail.sse.enabled}
+						onCheckedChange={(v) => toggleSse(v)}
+						disabled={savingSse}
+					/>
+				</div>
+				{#if detail.sse.enabled}
+					<div class="mt-3 flex items-end gap-2">
+						<div class="flex-1">
+							<Label class="text-xs text-muted-foreground">KMS key ARN (optional)</Label>
+							<Input
+								bind:value={kmsKeyDraft}
+								placeholder="arn:aws:kms:us-east-1:000000000000:key/…"
+								disabled={savingSse}
+								class="h-8 font-mono text-xs"
+							/>
+						</div>
+						{#if kmsKeyModified}
+							<Button size="sm" onclick={saveKmsKey} disabled={savingSse}>
+								<Save class="size-3.5" />
+								<span class="ml-1">Save</span>
+							</Button>
+						{/if}
+					</div>
+					<div class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+						<span class="uppercase tracking-wide">Type</span>
+						<Badge variant="outline" class="font-mono">
+							{detail.sse.sseType || 'KMS'}
+						</Badge>
+					</div>
+				{/if}
 			</div>
 		</div>
 	</section>
