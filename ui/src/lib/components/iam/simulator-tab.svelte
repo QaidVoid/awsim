@@ -56,14 +56,45 @@
 	let customLoading = $state(false);
 	let customResult = $state<SimulationResult | null>(null);
 
-	// Action autocomplete
+	// Action autocomplete. The Card wrapper has overflow-hidden, which
+	// would clip an absolutely-positioned dropdown. We render the
+	// menu with `position: fixed` and recompute coords from the
+	// input's bounding rect so it floats above the Card boundary.
 	let showActionSuggestions = $state(false);
+	let actionInputEl = $state<HTMLInputElement | null>(null);
+	let suggestionRect = $state<{ top: number; left: number; width: number }>({
+		top: 0,
+		left: 0,
+		width: 0,
+	});
+
+	function updateSuggestionRect() {
+		if (!actionInputEl) return;
+		const r = actionInputEl.getBoundingClientRect();
+		suggestionRect = { top: r.bottom + 4, left: r.left, width: r.width };
+	}
+
+	$effect(() => {
+		if (!showActionSuggestions) return;
+		updateSuggestionRect();
+		const onUpdate = () => updateSuggestionRect();
+		window.addEventListener('scroll', onUpdate, true);
+		window.addEventListener('resize', onUpdate);
+		return () => {
+			window.removeEventListener('scroll', onUpdate, true);
+			window.removeEventListener('resize', onUpdate);
+		};
+	});
+	// When the user is typing a filter, cap to a small list of best
+	// matches. With no filter we show the entire suggestion list and
+	// rely on the dropdown's own scroll container so users can browse
+	// across services.
 	const filteredActions = $derived(
 		actionInput.trim()
 			? ACTION_SUGGESTIONS.filter((a) =>
 					a.toLowerCase().includes(actionInput.trim().toLowerCase())
-				).slice(0, 8)
-			: ACTION_SUGGESTIONS.slice(0, 8)
+				).slice(0, 12)
+			: ACTION_SUGGESTIONS
 	);
 
 	async function loadPrincipals() {
@@ -123,7 +154,8 @@
 			return;
 		}
 		principalLoading = true;
-		principalResult = null;
+		// Keep the previous result visible until the new one arrives so
+		// the layout doesn't flash empty between runs.
 		try {
 			const cleaned = contextEntries
 				.filter((e) => e.key.trim())
@@ -180,84 +212,84 @@
 	onMount(loadPrincipals);
 </script>
 
-<div class="space-y-6 p-6">
-	{#if principalResult}
-		<div class="space-y-2">
-			{#each principalResult.results as r (r.evalActionName)}
-				{@const allowed = r.evalDecision === 'allowed'}
-				<div
-					class="flex items-center gap-4 rounded-lg border-2 p-4 {allowed
-						? 'border-emerald-500/40 bg-emerald-500/5'
-						: 'border-destructive/40 bg-destructive/5'}"
-				>
-					{#if allowed}
-						<ShieldCheck class="size-10 text-emerald-500" />
-					{:else}
-						<ShieldX class="size-10 text-destructive" />
-					{/if}
-					<div class="min-w-0 flex-1">
-						<div class="text-xs uppercase tracking-wider text-muted-foreground">
-							{r.evalActionName}
-						</div>
-						<div class="text-2xl font-bold {allowed ? 'text-emerald-500' : 'text-destructive'}">
-							{decisionLabel(r.evalDecision)}
-						</div>
-						{#if r.evalResourceName}
-							<div class="truncate font-mono text-xs text-muted-foreground">
-								on {r.evalResourceName}
-							</div>
-						{/if}
-					</div>
-					<div class="flex flex-col items-end gap-1 text-xs">
-						{#if r.matchedStatements.length > 0}
-							<Badge variant="outline">
-								{r.matchedStatements.length} matched statement{r.matchedStatements.length === 1
-									? ''
-									: 's'}
-							</Badge>
-						{/if}
-						{#if r.missingContextValues.length > 0}
-							<Badge variant="destructive">
-								{r.missingContextValues.length} missing context
-							</Badge>
-						{/if}
-					</div>
-				</div>
-				{#if r.matchedStatements.length || r.missingContextValues.length}
-					<div class="grid grid-cols-2 gap-2 text-xs">
-						{#if r.matchedStatements.length}
-							<div class="rounded border border-border/60 p-3">
-								<div class="mb-1.5 font-semibold uppercase tracking-wide text-muted-foreground">
-									Matched statements
-								</div>
-								<ul class="space-y-1">
-									{#each r.matchedStatements as s, i (s.sourcePolicyId + i)}
-										<li class="font-mono">
-											<span class="text-muted-foreground">{s.sourcePolicyType}:</span>
-											{s.sourcePolicyId}
-										</li>
-									{/each}
-								</ul>
-							</div>
-						{/if}
-						{#if r.missingContextValues.length}
-							<div class="rounded border border-destructive/30 bg-destructive/5 p-3">
-								<div class="mb-1.5 font-semibold uppercase tracking-wide text-muted-foreground">
-									Missing context keys
-								</div>
-								<ul class="space-y-1">
-									{#each r.missingContextValues as k, i (k + i)}
-										<li class="font-mono">{k}</li>
-									{/each}
-								</ul>
-							</div>
-						{/if}
-					</div>
+{#snippet resultBlock(result: SimulationResult)}
+	<div class="space-y-2">
+		{#each result.results as r, idx (r.evalActionName + idx)}
+			{@const allowed = r.evalDecision === 'allowed'}
+			<div
+				class="flex items-center gap-4 rounded-lg border-2 p-4 {allowed
+					? 'border-emerald-500/40 bg-emerald-500/5'
+					: 'border-destructive/40 bg-destructive/5'}"
+			>
+				{#if allowed}
+					<ShieldCheck class="size-10 text-emerald-500" />
+				{:else}
+					<ShieldX class="size-10 text-destructive" />
 				{/if}
-			{/each}
-		</div>
-	{/if}
+				<div class="min-w-0 flex-1">
+					<div class="text-xs uppercase tracking-wider text-muted-foreground">
+						{r.evalActionName}
+					</div>
+					<div class="text-2xl font-bold {allowed ? 'text-emerald-500' : 'text-destructive'}">
+						{decisionLabel(r.evalDecision)}
+					</div>
+					{#if r.evalResourceName}
+						<div class="truncate font-mono text-xs text-muted-foreground">
+							on {r.evalResourceName}
+						</div>
+					{/if}
+				</div>
+				<div class="flex flex-col items-end gap-1 text-xs">
+					{#if r.matchedStatements.length > 0}
+						<Badge variant="outline">
+							{r.matchedStatements.length} matched statement{r.matchedStatements.length === 1
+								? ''
+								: 's'}
+						</Badge>
+					{/if}
+					{#if r.missingContextValues.length > 0}
+						<Badge variant="destructive">
+							{r.missingContextValues.length} missing context
+						</Badge>
+					{/if}
+				</div>
+			</div>
+			{#if r.matchedStatements.length || r.missingContextValues.length}
+				<div class="grid grid-cols-2 gap-2 text-xs">
+					{#if r.matchedStatements.length}
+						<div class="rounded border border-border/60 p-3">
+							<div class="mb-1.5 font-semibold uppercase tracking-wide text-muted-foreground">
+								Matched statements
+							</div>
+							<ul class="space-y-1">
+								{#each r.matchedStatements as s, i (s.sourcePolicyId + i)}
+									<li class="font-mono">
+										<span class="text-muted-foreground">{s.sourcePolicyType}:</span>
+										{s.sourcePolicyId}
+									</li>
+								{/each}
+							</ul>
+						</div>
+					{/if}
+					{#if r.missingContextValues.length}
+						<div class="rounded border border-destructive/30 bg-destructive/5 p-3">
+							<div class="mb-1.5 font-semibold uppercase tracking-wide text-muted-foreground">
+								Missing context keys
+							</div>
+							<ul class="space-y-1">
+								{#each r.missingContextValues as k, i (k + i)}
+									<li class="font-mono">{k}</li>
+								{/each}
+							</ul>
+						</div>
+					{/if}
+				</div>
+			{/if}
+		{/each}
+	</div>
+{/snippet}
 
+<div class="space-y-6 p-6">
 	<Card>
 		<CardHeader>
 			<CardTitle class="flex items-center gap-2">
@@ -294,42 +326,26 @@
 
 			<div class="flex flex-col gap-1.5">
 				<Label for="sim-action" class="text-xs">Actions</Label>
-				<div class="relative">
-					<Input
-						id="sim-action"
-						bind:value={actionInput}
-						placeholder="s3:GetObject (Tab to add)"
-						class="font-mono text-xs"
-						onfocus={() => (showActionSuggestions = true)}
-						onblur={() => setTimeout(() => (showActionSuggestions = false), 150)}
-						onkeydown={(e) => {
-							if (e.key === 'Enter' || e.key === 'Tab') {
-								if (actionInput.trim()) {
-									e.preventDefault();
-									addAction();
-								}
+				<Input
+					id="sim-action"
+					bind:ref={actionInputEl}
+					bind:value={actionInput}
+					placeholder="s3:GetObject (Tab to add)"
+					class="font-mono text-xs"
+					onfocus={() => {
+						showActionSuggestions = true;
+						updateSuggestionRect();
+					}}
+					onblur={() => setTimeout(() => (showActionSuggestions = false), 150)}
+					onkeydown={(e) => {
+						if (e.key === 'Enter' || e.key === 'Tab') {
+							if (actionInput.trim()) {
+								e.preventDefault();
+								addAction();
 							}
-						}}
-					/>
-					{#if showActionSuggestions && filteredActions.length > 0}
-						<div
-							class="absolute left-0 right-0 top-full z-10 mt-1 max-h-56 overflow-y-auto rounded-md border border-border bg-popover shadow-md"
-						>
-							{#each filteredActions as a (a)}
-								<button
-									type="button"
-									class="block w-full px-3 py-1.5 text-left font-mono text-xs hover:bg-muted"
-									onmousedown={(e) => {
-										e.preventDefault();
-										pickAction(a);
-									}}
-								>
-									{a}
-								</button>
-							{/each}
-						</div>
-					{/if}
-				</div>
+						}
+					}}
+				/>
 				{#if actions.length > 0}
 					<div class="flex flex-wrap gap-1.5 pt-1">
 						{#each actions as a (a)}
@@ -411,6 +427,12 @@
 					Run simulation
 				</Button>
 			</div>
+
+			{#if principalResult}
+				<div class="border-t pt-4">
+					{@render resultBlock(principalResult)}
+				</div>
+			{/if}
 		</CardContent>
 	</Card>
 
@@ -483,3 +505,28 @@
 		</CardContent>
 	</Card>
 </div>
+
+<!-- Floating action-suggestions dropdown. Rendered at the document
+     root via fixed positioning so the Card's overflow-hidden can't
+     clip it. Coordinates come from the input's bounding rect. -->
+{#if showActionSuggestions && filteredActions.length > 0}
+	<div
+		class="fixed z-50 max-h-72 overflow-y-auto rounded-md border border-border bg-popover shadow-md"
+		style:top="{suggestionRect.top}px"
+		style:left="{suggestionRect.left}px"
+		style:width="{suggestionRect.width}px"
+	>
+		{#each filteredActions as a (a)}
+			<button
+				type="button"
+				class="block w-full px-3 py-1.5 text-left font-mono text-xs hover:bg-muted"
+				onmousedown={(e) => {
+					e.preventDefault();
+					pickAction(a);
+				}}
+			>
+				{a}
+			</button>
+		{/each}
+	</div>
+{/if}
