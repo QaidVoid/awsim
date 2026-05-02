@@ -376,11 +376,7 @@ pub fn delete_document(state: &OpenSearchState, index_name: &str, doc_id: &str) 
 }
 
 /// Multi-get: retrieve multiple documents by ID.
-pub fn mget(
-    state: &OpenSearchState,
-    index_name: &str,
-    body: &Value,
-) -> (u16, Value) {
+pub fn mget(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, Value) {
     if !state.index_exists(index_name) {
         return (404, index_not_found(index_name));
     }
@@ -405,7 +401,11 @@ pub fn mget(
         })
         .unwrap_or_default();
 
-    let all_ids: Vec<&str> = ids.iter().map(|s| s.as_str()).chain(docs.iter().map(|s| s.as_str())).collect();
+    let all_ids: Vec<&str> = ids
+        .iter()
+        .map(|s| s.as_str())
+        .chain(docs.iter().map(|s| s.as_str()))
+        .collect();
 
     let mut results: Vec<Value> = Vec::new();
     for id in &all_ids {
@@ -444,11 +444,7 @@ pub fn mget(
 }
 
 /// Delete documents matching a query.
-pub fn delete_by_query(
-    state: &OpenSearchState,
-    index_name: &str,
-    body: &Value,
-) -> (u16, Value) {
+pub fn delete_by_query(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, Value) {
     if !state.index_exists(index_name) {
         return (404, index_not_found(index_name));
     }

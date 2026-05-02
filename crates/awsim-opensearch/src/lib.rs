@@ -90,9 +90,14 @@ async fn cluster_info() -> Json<Value> {
         "cluster_uuid": "awsim-local",
         "version": {
             "distribution": "opensearch",
-            "number": "2.11.0",
+            "number": "3.6.0",
             "build_type": "tar",
-            "lucene_version": "9.7.0",
+            "build_hash": "awsim",
+            "build_date": "2025-01-01T00:00:00Z",
+            "build_snapshot": false,
+            "lucene_version": "10.2.0",
+            "minimum_wire_compatibility_version": "3.0.0",
+            "minimum_index_compatibility_version": "3.0.0",
         },
         "tagline": "The OpenSearch Project: https://opensearch.org/",
     }))
