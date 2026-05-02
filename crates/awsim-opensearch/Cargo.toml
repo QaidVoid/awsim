@@ -7,13 +7,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-awsim-core = { workspace = true }
 axum = { workspace = true }
-async-trait = { workspace = true }
 dashmap = { workspace = true }
 redb = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
-tracing = { workspace = true }
 uuid = { workspace = true }

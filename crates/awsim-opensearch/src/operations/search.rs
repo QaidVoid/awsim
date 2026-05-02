@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 
+use super::index::index_not_found;
 use crate::state::OpenSearchState;
 
 /// Search documents in an index (or multiple indices).
@@ -10,6 +11,12 @@ use crate::state::OpenSearchState;
 /// - `match_all` queries
 /// - `bool` queries with `must`, `should`, `filter`
 /// - `term` queries (exact match)
+/// - `terms` queries (set membership)
+/// - `range` queries (gt, gte, lt, lte on strings/numbers)
+/// - `wildcard` queries (field-level pattern matching)
+/// - `prefix` queries
+/// - `exists` queries
+/// - `ids` queries
 /// - `query_string` queries
 /// - `knn` queries (brute-force cosine similarity over a numeric
 ///   vector field — no ANN index, but correct enough for emulator
@@ -24,6 +31,11 @@ pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u1
 
     let matching_indices = resolve_indices(state, index_pattern);
 
+    if matching_indices.is_empty() || !matching_indices.iter().any(|n| state.index_exists(n)) {
+        let name = index_pattern.split(',').next().unwrap_or(index_pattern);
+        return (404, index_not_found(name));
+    }
+
     // k-NN is special: it returns top-k by similarity rather than a
     // per-doc match score, so collect-then-sort happens here instead
     // of going through `match_score`. Falls through to standard search
@@ -34,8 +46,27 @@ pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u1
 
     let mut hits: Vec<Value> = Vec::new();
 
+    // Pre-extract ids filter for _id matching
+    let ids_filter: Option<Vec<String>> = query
+        .get("ids")
+        .and_then(|i| i.get("values"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
+
     for idx_name in &matching_indices {
+        if !state.index_exists(idx_name) {
+            continue;
+        }
         let _ = state.for_each_doc(idx_name, |doc_id, doc| {
+            if let Some(ref allowed) = ids_filter
+                && !allowed.contains(&doc_id.to_string())
+            {
+                return true;
+            }
             let score = match_score(&query, doc);
             if score > 0.0 {
                 hits.push(json!({
@@ -49,12 +80,15 @@ pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u1
         });
     }
 
-    // Sort by score descending
-    hits.sort_by(|a, b| {
-        let sa = a["_score"].as_f64().unwrap_or(0.0);
-        let sb = b["_score"].as_f64().unwrap_or(0.0);
-        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if let Some(sort_spec) = body.get("sort") {
+        sort_hits(&mut hits, sort_spec);
+    } else {
+        hits.sort_by(|a, b| {
+            let sa = a["_score"].as_f64().unwrap_or(0.0);
+            let sb = b["_score"].as_f64().unwrap_or(0.0);
+            sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
 
     let total = hits.len();
     let paged: Vec<Value> = hits.into_iter().skip(from).take(size).collect();
@@ -82,6 +116,11 @@ pub fn count(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, V
         .unwrap_or(json!({"match_all": {}}));
 
     let resolved = state.resolve_alias(index_name);
+
+    if !resolved.iter().any(|n| state.index_exists(n)) {
+        return (404, index_not_found(index_name));
+    }
+
     let mut count: usize = 0;
 
     for name in &resolved {
@@ -107,14 +146,15 @@ pub fn count(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, V
 
 /// Resolve an index pattern (wildcard, alias, or comma-separated list)
 /// down to a concrete list of index names.
+///
+/// Wildcards: `prefix*`, `*suffix`, `pre*fix`, `*` (all).
 fn resolve_indices(state: &OpenSearchState, pattern: &str) -> Vec<String> {
     if pattern.contains('*') {
-        let prefix = pattern.trim_end_matches('*');
         return state
             .list_indices()
             .into_iter()
             .filter_map(|(name, _)| {
-                if name.starts_with(prefix) {
+                if wildcard_match(pattern, &name) {
                     Some(name)
                 } else {
                     None
@@ -128,6 +168,31 @@ fn resolve_indices(state: &OpenSearchState, pattern: &str) -> Vec<String> {
         .collect()
 }
 
+/// Simple wildcard match supporting `*` (any chars) and `?` (single char).
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    wildcard_match_inner(&p, &t, 0, 0)
+}
+
+fn wildcard_match_inner(p: &[char], t: &[char], pi: usize, ti: usize) -> bool {
+    if pi == p.len() {
+        return ti == t.len();
+    }
+    if p[pi] == '*' {
+        for i in ti..=t.len() {
+            if wildcard_match_inner(p, t, pi + 1, i) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if ti < t.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+        return wildcard_match_inner(p, t, pi + 1, ti + 1);
+    }
+    false
+}
+
 /// Score a document against a query. Returns 0.0 for no match.
 pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
     if let Some(obj) = query.as_object() {
@@ -136,7 +201,9 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
         }
 
         // match: { "field": "value" } or { "field": { "query": "value" } }
+        // Evaluate all fields and sum scores.
         if let Some(match_obj) = obj.get("match").and_then(|m| m.as_object()) {
+            let mut total_score = 0.0;
             for (field, match_val) in match_obj {
                 let query_text = match_val
                     .as_str()
@@ -144,10 +211,10 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
                     .unwrap_or("");
                 if let Some(field_val) = get_nested_field(doc, field) {
                     let field_str = value_to_string(field_val);
-                    return text_match_score(query_text, &field_str);
+                    total_score += text_match_score(query_text, &field_str);
                 }
             }
-            return 0.0;
+            return total_score;
         }
 
         // multi_match: { "query": "text", "fields": ["f1", "f2"] }
@@ -181,15 +248,56 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
         }
 
         // term: { "field": "exact_value" }
+        // Supports string, number, and boolean values.
         if let Some(term_obj) = obj.get("term").and_then(|t| t.as_object()) {
             for (field, expected) in term_obj {
-                let expected_str = expected
+                if let Some(field_val) = get_nested_field(doc, field)
+                    && term_match(expected, field_val)
+                {
+                    return 1.0;
+                }
+            }
+            return 0.0;
+        }
+
+        // terms: { "field": ["val1", "val2"] }
+        if let Some(terms_obj) = obj.get("terms").and_then(|t| t.as_object()) {
+            for (field, values) in terms_obj {
+                if let Some(arr) = values.as_array()
+                    && let Some(field_val) = get_nested_field(doc, field)
+                {
+                    for expected in arr {
+                        if term_match(expected, field_val) {
+                            return 1.0;
+                        }
+                    }
+                }
+            }
+            return 0.0;
+        }
+
+        // range: { "field": { "gt": ..., "gte": ..., "lt": ..., "lte": ... } }
+        if let Some(range_obj) = obj.get("range").and_then(|r| r.as_object()) {
+            for (field, conditions) in range_obj {
+                if let Some(field_val) = get_nested_field(doc, field)
+                    && range_match(conditions, field_val)
+                {
+                    return 1.0;
+                }
+            }
+            return 0.0;
+        }
+
+        // wildcard: { "field": { "value": "pattern*" } }
+        if let Some(wc_obj) = obj.get("wildcard").and_then(|w| w.as_object()) {
+            for (field, spec) in wc_obj {
+                let pattern = spec
                     .as_str()
-                    .or_else(|| expected.get("value").and_then(|v| v.as_str()))
+                    .or_else(|| spec.get("value").and_then(|v| v.as_str()))
                     .unwrap_or("");
                 if let Some(field_val) = get_nested_field(doc, field) {
                     let field_str = value_to_string(field_val);
-                    if field_str == expected_str {
+                    if wildcard_match(pattern, &field_str) {
                         return 1.0;
                     }
                 }
@@ -197,10 +305,51 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
             return 0.0;
         }
 
+        // prefix: { "field": { "value": "pre" } }
+        if let Some(pre_obj) = obj.get("prefix").and_then(|p| p.as_object()) {
+            for (field, spec) in pre_obj {
+                let prefix_val = spec
+                    .as_str()
+                    .or_else(|| spec.get("value").and_then(|v| v.as_str()))
+                    .unwrap_or("");
+                if let Some(field_val) = get_nested_field(doc, field) {
+                    let field_str = value_to_string(field_val);
+                    if field_str
+                        .to_lowercase()
+                        .starts_with(&prefix_val.to_lowercase())
+                    {
+                        return 1.0;
+                    }
+                }
+            }
+            return 0.0;
+        }
+
+        // exists: { "field": "fieldName" }
+        if let Some(exists_field) = obj
+            .get("exists")
+            .and_then(|e| e.get("field"))
+            .and_then(|f| f.as_str())
+        {
+            return if get_nested_field(doc, exists_field).is_some() {
+                1.0
+            } else {
+                0.0
+            };
+        }
+
+        // ids: { "values": ["id1", "id2"] }
+        // Filtering happens at the search loop level; all docs score 1.0.
+        if obj.contains_key("ids") {
+            return 1.0;
+        }
+
         // bool: { "must": [...], "should": [...], "filter": [...] }
         if let Some(bool_obj) = obj.get("bool").and_then(|b| b.as_object()) {
             let mut total_score = 0.0;
             let mut must_pass = true;
+            let has_must_or_filter =
+                bool_obj.contains_key("must") || bool_obj.contains_key("filter");
 
             if let Some(must) = bool_obj.get("must").and_then(|m| m.as_array()) {
                 for clause in must {
@@ -226,19 +375,28 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
                 return 0.0;
             }
 
+            let mut should_score = 0.0;
+            let mut should_matched = false;
             if let Some(should) = bool_obj.get("should").and_then(|s| s.as_array()) {
                 for clause in should {
-                    total_score += match_score(clause, doc);
+                    let s = match_score(clause, doc);
+                    if s > 0.0 {
+                        should_matched = true;
+                    }
+                    should_score += s;
                 }
             }
 
-            return if total_score > 0.0 {
-                total_score
-            } else if must_pass {
-                1.0
-            } else {
-                0.0
-            };
+            // If there are must/filter clauses, should is optional and
+            // just adds to score. If there are only should clauses, at
+            // least one must match.
+            if !has_must_or_filter {
+                return if should_matched { should_score } else { 0.0 };
+            }
+
+            total_score += should_score;
+
+            return if total_score > 0.0 { total_score } else { 1.0 };
         }
 
         // query_string: { "query": "text" }
@@ -259,8 +417,88 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
         }
     }
 
-    // Default: no match
     0.0
+}
+
+/// Check if an expected term value matches a field value.
+/// Supports string, number, and boolean comparisons.
+fn term_match(expected: &Value, field_val: &Value) -> bool {
+    if let Some(s) = expected.as_str() {
+        return value_to_string(field_val) == s;
+    }
+    if expected.is_string() {
+        return value_to_string(field_val) == expected.as_str().unwrap_or("");
+    }
+    if let Some(n) = expected.as_f64() {
+        if let Some(fn_val) = field_val.as_f64() {
+            return (fn_val - n).abs() < f64::EPSILON;
+        }
+        let field_str = value_to_string(field_val);
+        if let Ok(field_num) = field_str.parse::<f64>() {
+            return (field_num - n).abs() < f64::EPSILON;
+        }
+    }
+    if let Some(b) = expected.as_bool() {
+        if let Some(fb) = field_val.as_bool() {
+            return fb == b;
+        }
+        let field_str = value_to_string(field_val);
+        return field_str == b.to_string();
+    }
+    // Fallback: compare string representations
+    value_to_string(field_val) == value_to_string(expected)
+}
+
+/// Check range conditions against a field value.
+fn range_match(conditions: &Value, field_val: &Value) -> bool {
+    let cond = match conditions.as_object() {
+        Some(o) => o,
+        None => return false,
+    };
+
+    let field_f64 = field_val.as_f64();
+    let field_str = value_to_string(field_val);
+
+    for (op, threshold) in cond {
+        let thresh_f64 = threshold.as_f64();
+        let thresh_str = value_to_string(threshold);
+
+        let passed = match op.as_str() {
+            "gt" => {
+                if let (Some(f), Some(t)) = (field_f64, thresh_f64) {
+                    f > t
+                } else {
+                    field_str > thresh_str
+                }
+            }
+            "gte" => {
+                if let (Some(f), Some(t)) = (field_f64, thresh_f64) {
+                    f >= t
+                } else {
+                    field_str >= thresh_str
+                }
+            }
+            "lt" => {
+                if let (Some(f), Some(t)) = (field_f64, thresh_f64) {
+                    f < t
+                } else {
+                    field_str < thresh_str
+                }
+            }
+            "lte" => {
+                if let (Some(f), Some(t)) = (field_f64, thresh_f64) {
+                    f <= t
+                } else {
+                    field_str <= thresh_str
+                }
+            }
+            _ => true,
+        };
+        if !passed {
+            return false;
+        }
+    }
+    true
 }
 
 /// Simple text matching score.
@@ -283,6 +521,86 @@ fn text_match_score(query: &str, field: &str) -> f64 {
     }
 
     (matched as f64) / (terms.len() as f64)
+}
+
+/// Sort hits by the `sort` specification from the query body.
+///
+/// Supports array format: `["field1", {"field2": "asc"}]`
+/// and the special `_score` / `_doc` sort keys.
+fn sort_hits(hits: &mut [Value], sort_spec: &Value) {
+    let sort_keys: Vec<(String, bool)> = if let Some(arr) = sort_spec.as_array() {
+        arr.iter()
+            .map(|entry| {
+                if let Some(s) = entry.as_str() {
+                    (s.to_string(), false) // default asc for string entries
+                } else if let Some(obj) = entry.as_object() {
+                    if let Some((field, order)) = obj.iter().next() {
+                        let asc = order.as_str().map(|o| o == "asc").unwrap_or(false);
+                        (field.clone(), asc)
+                    } else {
+                        ("_score".to_string(), false)
+                    }
+                } else {
+                    ("_score".to_string(), false)
+                }
+            })
+            .collect()
+    } else if let Some(s) = sort_spec.as_str() {
+        vec![(s.to_string(), false)]
+    } else {
+        return;
+    };
+
+    hits.sort_by(|a, b| {
+        for (key, asc) in &sort_keys {
+            let va = get_sort_value(a, key);
+            let vb = get_sort_value(b, key);
+            let cmp = compare_sort_values(&va, &vb);
+            let ord = if *asc { cmp.reverse() } else { cmp };
+            if ord != std::cmp::Ordering::Equal {
+                return ord;
+            }
+        }
+        std::cmp::Ordering::Equal
+    });
+
+    // Set _score to null when sorting by non-score fields
+    if !sort_keys.is_empty() && sort_keys[0].0 != "_score" {
+        for hit in hits.iter_mut() {
+            if let Some(obj) = hit.as_object_mut() {
+                obj.insert("_score".to_string(), Value::Null);
+            }
+        }
+    }
+}
+
+fn get_sort_value(hit: &Value, key: &str) -> Value {
+    match key {
+        "_score" => hit["_score"].clone(),
+        "_doc" => json!(0),
+        _ => hit
+            .get("_source")
+            .and_then(|s| get_nested_field(s, key))
+            .cloned()
+            .unwrap_or(Value::Null),
+    }
+}
+
+fn compare_sort_values(a: &Value, b: &Value) -> std::cmp::Ordering {
+    match (a, b) {
+        (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
+        (Value::Null, _) => std::cmp::Ordering::Greater,
+        (_, Value::Null) => std::cmp::Ordering::Less,
+        _ => {
+            let sa = value_to_string(a);
+            let sb = value_to_string(b);
+            if let (Some(na), Some(nb)) = (a.as_f64(), b.as_f64()) {
+                nb.partial_cmp(&na).unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                sb.cmp(&sa)
+            }
+        }
+    }
 }
 
 /// Get a nested field value from a JSON document using dot notation.
@@ -388,7 +706,11 @@ fn knn_search(
 fn extract_vector(v: &Value) -> Option<Vec<f64>> {
     let arr = v.as_array()?;
     let out: Vec<f64> = arr.iter().filter_map(|n| n.as_f64()).collect();
-    if out.len() == arr.len() { Some(out) } else { None }
+    if out.len() == arr.len() {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
@@ -440,6 +762,7 @@ mod tests {
                     mappings: json!({}),
                     settings: json!({}),
                     created_at: "2026-01-01".to_string(),
+                    uuid: "test-uuid".to_string(),
                 },
             )
             .unwrap();
@@ -540,6 +863,7 @@ mod tests {
                     mappings: json!({}),
                     settings: json!({}),
                     created_at: "2026-01-01".to_string(),
+                    uuid: "test-uuid-vecs".to_string(),
                 },
             )
             .unwrap();

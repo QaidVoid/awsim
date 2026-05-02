@@ -126,6 +126,7 @@ pub fn reindex(state: &OpenSearchState, body: &Value, wait_for_completion: bool)
                 mappings,
                 settings,
                 created_at: crate::util::now_iso8601(),
+                uuid: uuid::Uuid::new_v4().to_string(),
             },
         );
     }

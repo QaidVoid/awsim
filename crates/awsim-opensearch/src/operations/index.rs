@@ -27,6 +27,7 @@ pub fn create_index(state: &OpenSearchState, index_name: &str, body: &Value) -> 
             mappings,
             settings,
             created_at: crate::util::now_iso8601(),
+            uuid: uuid::Uuid::new_v4().to_string(),
         },
     ) {
         return (500, storage_error(&e));
@@ -59,6 +60,50 @@ pub fn get_mapping(state: &OpenSearchState, index_name: &str) -> (u16, Value) {
     }
 }
 
+/// Update index mapping (PUT).
+pub fn put_mapping(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, Value) {
+    let Some(mut meta) = state.get_index_meta(index_name) else {
+        return (404, index_not_found(index_name));
+    };
+
+    // Deep-merge new mappings into existing
+    if let (Some(existing), Some(new)) = (meta.mappings.as_object_mut(), body.as_object()) {
+        if let Some(props) = new.get("properties").and_then(|p| p.as_object()) {
+            let existing_props = existing
+                .entry("properties".to_string())
+                .or_insert_with(|| json!({}));
+            if let Some(ep) = existing_props.as_object_mut() {
+                for (k, v) in props {
+                    ep.insert(k.clone(), v.clone());
+                }
+            }
+        } else {
+            for (k, v) in new {
+                existing.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    if let Err(e) = state.create_index_meta(index_name, meta) {
+        return (500, storage_error(&e));
+    }
+
+    (200, json!({ "acknowledged": true }))
+}
+
+/// Refresh index — no-op in emulator (data is immediately visible).
+pub fn refresh(state: &OpenSearchState, index_name: &str) -> (u16, Value) {
+    if !state.index_exists(index_name) {
+        return (404, index_not_found(index_name));
+    }
+    (
+        200,
+        json!({
+            "_shards": { "total": 1, "successful": 1, "failed": 0 },
+        }),
+    )
+}
+
 /// Get index settings.
 pub fn get_index(state: &OpenSearchState, index_name: &str) -> (u16, Value) {
     match state.get_index_meta(index_name) {
@@ -73,7 +118,7 @@ pub fn get_index(state: &OpenSearchState, index_name: &str) -> (u16, Value) {
                             "creation_date": meta.created_at,
                             "number_of_shards": "1",
                             "number_of_replicas": "1",
-                            "uuid": uuid::Uuid::new_v4().to_string(),
+                            "uuid": meta.uuid,
                         }
                     }
                 }
@@ -114,7 +159,7 @@ pub fn cat_indices(state: &OpenSearchState) -> (u16, Value) {
     (200, json!(indices))
 }
 
-fn index_not_found(name: &str) -> Value {
+pub(crate) fn index_not_found(name: &str) -> Value {
     json!({
         "error": {
             "root_cause": [{"type": "index_not_found_exception", "reason": format!("no such index [{}]", name)}],

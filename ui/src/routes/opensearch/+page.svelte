@@ -8,6 +8,7 @@
 		search,
 		indexDocument,
 		deleteDocument,
+		getMapping,
 		type IndexSummary,
 		type SearchHit,
 	} from '$lib/api/opensearch';
@@ -42,10 +43,11 @@
 	let newIndexName = $state('');
 
 	let selected = $state<IndexSummary | null>(null);
-	let activeTab = $state<'browse' | 'query'>('browse');
+	let activeTab = $state<'browse' | 'query' | 'mapping'>('browse');
 	let docs = $state<SearchHit[]>([]);
 	let docsLoading = $state(false);
 	let total = $state(0);
+	let mapping = $state<Record<string, unknown> | null>(null);
 
 	let queryText = $state(
 		JSON.stringify({ query: { match_all: {} }, size: 20 }, null, 2)
@@ -77,7 +79,15 @@
 	async function selectIndex(i: IndexSummary) {
 		selected = i;
 		activeTab = 'browse';
-		await reloadDocs(i.index);
+		await Promise.all([reloadDocs(i.index), loadMapping(i.index)]);
+	}
+
+	async function loadMapping(name: string) {
+		try {
+			mapping = (await getMapping(name)) as Record<string, unknown>;
+		} catch {
+			mapping = null;
+		}
 	}
 
 	async function reloadDocs(name: string) {
@@ -209,7 +219,7 @@
 
 <ServicePage
 	title="OpenSearch"
-	description="Elasticsearch-compatible REST API. Indices and documents are in-memory only."
+	description="Elasticsearch-compatible REST API with disk-backed storage via redb."
 	actions={pageActions}
 >
 	<div class="grid h-full min-h-0 grid-cols-[280px_minmax(0,1fr)] divide-x divide-border">
@@ -285,6 +295,7 @@
 					<TabsList class="mx-4 mt-2 self-start">
 						<TabsTrigger value="browse">Browse</TabsTrigger>
 						<TabsTrigger value="query">Query DSL</TabsTrigger>
+						<TabsTrigger value="mapping">Mapping</TabsTrigger>
 					</TabsList>
 
 					<div class="min-h-0 min-w-0 flex-1 overflow-y-auto p-4">
@@ -333,9 +344,11 @@
 									<p class="mt-0.5 mb-1 text-xs text-muted-foreground">
 										Standard OpenSearch query DSL. AWSim supports
 										<code>match_all</code>, <code>match</code>,
-										<code>term</code>, <code>range</code>,
+										<code>term</code>, <code>terms</code>, <code>range</code>,
 										<code>bool</code>, <code>wildcard</code>, <code>prefix</code>,
-										<code>multi_match</code>, <code>ids</code> (no aggregations).
+										<code>exists</code>, <code>ids</code>,
+										<code>multi_match</code>, <code>query_string</code>,
+										<code>knn</code> (no aggregations).
 									</p>
 									<Textarea
 										id="os-query"
@@ -379,6 +392,14 @@
 									</div>
 								{/if}
 							</div>
+						</TabsContent>
+
+						<TabsContent value="mapping" class="m-0">
+							{#if mapping}
+								<pre class="overflow-x-auto rounded bg-muted/30 p-3 font-mono text-xs">{JSON.stringify(mapping, null, 2)}</pre>
+							{:else}
+								<p class="text-xs text-muted-foreground">No mapping loaded.</p>
+							{/if}
 						</TabsContent>
 					</div>
 				</Tabs>

@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
-use super::index::storage_error;
-use crate::state::{IndexMeta, OpenSearchState};
+use super::index::{index_not_found, storage_error};
+use crate::state::{DocVersion, IndexMeta, OpenSearchState};
 
 /// Auto-create an empty index if it doesn't already exist. Used by
 /// `index_document` and `update_document` to mirror Elasticsearch's
@@ -17,6 +17,7 @@ fn ensure_index(state: &OpenSearchState, index_name: &str) -> Result<(), Value> 
                 mappings: json!({}),
                 settings: json!({}),
                 created_at: crate::util::now_iso8601(),
+                uuid: uuid::Uuid::new_v4().to_string(),
             },
         )
         .map_err(|e| storage_error(&e))
@@ -37,10 +38,12 @@ pub fn index_document(
         .map(String::from)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let created = match state.put_doc(index_name, &id, body) {
+    let (created, seq) = match state.put_doc(index_name, &id, body) {
         Ok(c) => c,
         Err(e) => return (500, storage_error(&e)),
     };
+
+    let version = if created { 1 } else { seq };
     let status = if created { 201 } else { 200 };
 
     (
@@ -48,10 +51,10 @@ pub fn index_document(
         json!({
             "_index": index_name,
             "_id": id,
-            "_version": 1,
+            "_version": version,
             "result": if created { "created" } else { "updated" },
             "_shards": { "total": 2, "successful": 1, "failed": 0 },
-            "_seq_no": 0,
+            "_seq_no": seq,
             "_primary_term": 1,
         }),
     )
@@ -60,29 +63,33 @@ pub fn index_document(
 /// Get a document by ID.
 pub fn get_document(state: &OpenSearchState, index_name: &str, doc_id: &str) -> (u16, Value) {
     if !state.index_exists(index_name) {
-        return (
-            404,
-            json!({
-                "_index": index_name,
-                "_id": doc_id,
-                "found": false,
-            }),
-        );
+        return (404, index_not_found(index_name));
     }
 
     match state.get_doc(index_name, doc_id) {
-        Ok(Some(doc)) => (
-            200,
-            json!({
-                "_index": index_name,
-                "_id": doc_id,
-                "_version": 1,
-                "_seq_no": 0,
-                "_primary_term": 1,
-                "found": true,
-                "_source": doc,
-            }),
-        ),
+        Ok(Some(doc)) => {
+            let ver = state
+                .get_doc_version(index_name, doc_id)
+                .ok()
+                .flatten()
+                .unwrap_or(DocVersion {
+                    version: 1,
+                    seq_no: 0,
+                    primary_term: 1,
+                });
+            (
+                200,
+                json!({
+                    "_index": index_name,
+                    "_id": doc_id,
+                    "_version": ver.version,
+                    "_seq_no": ver.seq_no,
+                    "_primary_term": ver.primary_term,
+                    "found": true,
+                    "_source": doc,
+                }),
+            )
+        }
         Ok(None) => (
             404,
             json!({
@@ -115,42 +122,37 @@ pub fn update_document(
     };
 
     if let Some(mut existing) = existing {
-        // Merge partial fields into existing document.
-        if let (Some(existing_obj), Some(partial_obj)) =
-            (existing.as_object_mut(), partial.as_object())
-        {
-            for (k, v) in partial_obj {
-                existing_obj.insert(k.clone(), v.clone());
-            }
-        }
-        if let Err(e) = state.put_doc(index_name, doc_id, &existing) {
-            return (500, storage_error(&e));
-        }
+        deep_merge(&mut existing, &partial);
+        let (_, seq) = match state.put_doc(index_name, doc_id, &existing) {
+            Ok(s) => s,
+            Err(e) => return (500, storage_error(&e)),
+        };
         (
             200,
             json!({
                 "_index": index_name,
                 "_id": doc_id,
-                "_version": 1,
+                "_version": seq,
                 "result": "updated",
                 "_shards": { "total": 2, "successful": 1, "failed": 0 },
-                "_seq_no": 0,
+                "_seq_no": seq,
                 "_primary_term": 1,
             }),
         )
     } else if doc_as_upsert {
-        if let Err(e) = state.put_doc(index_name, doc_id, &partial) {
-            return (500, storage_error(&e));
-        }
+        let (_, seq) = match state.put_doc(index_name, doc_id, &partial) {
+            Ok(s) => s,
+            Err(e) => return (500, storage_error(&e)),
+        };
         (
             201,
             json!({
                 "_index": index_name,
                 "_id": doc_id,
-                "_version": 1,
+                "_version": seq,
                 "result": "created",
                 "_shards": { "total": 2, "successful": 1, "failed": 0 },
-                "_seq_no": 0,
+                "_seq_no": seq,
                 "_primary_term": 1,
             }),
         )
@@ -163,6 +165,22 @@ pub fn update_document(
                 "found": false,
             }),
         )
+    }
+}
+
+/// Recursively merge `partial` into `target`. Nested objects are
+/// merged rather than replaced.
+fn deep_merge(target: &mut Value, partial: &Value) {
+    if let (Some(target_obj), Some(partial_obj)) = (target.as_object_mut(), partial.as_object()) {
+        for (k, v) in partial_obj {
+            let entry = target_obj.entry(k.clone());
+            if v.is_object() {
+                let existing = entry.or_insert_with(|| json!({}));
+                deep_merge(existing, v);
+            } else {
+                entry.and_modify(|e| *e = v.clone()).or_insert(v.clone());
+            }
+        }
     }
 }
 
@@ -223,6 +241,7 @@ pub fn update_by_query(state: &OpenSearchState, index_name: &str, body: &Value) 
 /// Supported patterns (one per semicolon-separated statement):
 /// - `ctx._source.remove('fieldName')` / `ctx._source.remove("fieldName")`
 /// - `ctx._source.fieldName = params.paramName`
+/// - `ctx._source.nested.field = params.paramName` (dot-notation paths)
 /// - `ctx._source.fieldName = 'literal'` / `ctx._source.fieldName = "literal"`
 fn apply_script(doc: &mut Value, source: &str, params: &Value) {
     for stmt in source.split(';') {
@@ -235,9 +254,7 @@ fn apply_script(doc: &mut Value, source: &str, params: &Value) {
         if let Some(rest) = stmt.strip_prefix("ctx._source.remove(") {
             let rest = rest.trim_end_matches(')');
             let field = rest.trim().trim_matches('\'').trim_matches('"');
-            if let Some(obj) = doc.as_object_mut() {
-                obj.remove(field);
-            }
+            remove_nested_field(doc, field);
             continue;
         }
 
@@ -245,16 +262,14 @@ fn apply_script(doc: &mut Value, source: &str, params: &Value) {
         if let Some(rest) = stmt.strip_prefix("ctx._source.")
             && let Some(eq_pos) = rest.find('=')
         {
-            let field = rest[..eq_pos].trim().to_string();
+            let field_path = rest[..eq_pos].trim().to_string();
             let rhs = rest[eq_pos + 1..].trim();
 
             // params.paramName
             if let Some(param_path) = rhs.strip_prefix("params.") {
                 let param_name = param_path.trim();
-                if let Some(val) = params.get(param_name)
-                    && let Some(obj) = doc.as_object_mut()
-                {
-                    obj.insert(field, val.clone());
+                if let Some(val) = params.get(param_name) {
+                    set_nested_field(doc, &field_path, val.clone());
                 }
                 continue;
             }
@@ -264,24 +279,62 @@ fn apply_script(doc: &mut Value, source: &str, params: &Value) {
                 || (rhs.starts_with('"') && rhs.ends_with('"'))
             {
                 let literal = &rhs[1..rhs.len() - 1];
-                if let Some(obj) = doc.as_object_mut() {
-                    obj.insert(field, json!(literal));
-                }
+                set_nested_field(doc, &field_path, json!(literal));
                 continue;
             }
 
             // Numeric literal
             if let Ok(n) = rhs.parse::<i64>() {
-                if let Some(obj) = doc.as_object_mut() {
-                    obj.insert(field, json!(n));
-                }
+                set_nested_field(doc, &field_path, json!(n));
                 continue;
             }
-            if let Ok(f) = rhs.parse::<f64>()
-                && let Some(obj) = doc.as_object_mut()
-            {
-                obj.insert(field, json!(f));
+            if let Ok(f) = rhs.parse::<f64>() {
+                set_nested_field(doc, &field_path, json!(f));
             }
+        }
+    }
+}
+
+/// Set a nested field using dot-notation (e.g. `"nested.field"`).
+fn set_nested_field(doc: &mut Value, path: &str, value: Value) {
+    let parts: Vec<&str> = path.split('.').collect();
+    if parts.is_empty() {
+        return;
+    }
+    let mut current = doc;
+    for (i, part) in parts.iter().enumerate() {
+        if i == parts.len() - 1 {
+            if let Some(obj) = current.as_object_mut() {
+                obj.insert(part.to_string(), value.clone());
+            }
+        } else {
+            if (current.get(*part).is_none() || !current[*part].is_object())
+                && let Some(obj) = current.as_object_mut()
+            {
+                obj.insert(part.to_string(), json!({}));
+            }
+            current = current.get_mut(*part).unwrap();
+        }
+    }
+}
+
+/// Remove a nested field using dot-notation.
+fn remove_nested_field(doc: &mut Value, path: &str) {
+    let parts: Vec<&str> = path.split('.').collect();
+    if parts.is_empty() {
+        return;
+    }
+    let mut current = doc;
+    for (i, part) in parts.iter().enumerate() {
+        if i == parts.len() - 1 {
+            if let Some(obj) = current.as_object_mut() {
+                obj.remove(*part);
+            }
+        } else {
+            if current.get(*part).is_none() {
+                return;
+            }
+            current = current.get_mut(*part).unwrap();
         }
     }
 }
@@ -289,29 +342,152 @@ fn apply_script(doc: &mut Value, source: &str, params: &Value) {
 /// Delete a document by ID.
 pub fn delete_document(state: &OpenSearchState, index_name: &str, doc_id: &str) -> (u16, Value) {
     if !state.index_exists(index_name) {
-        return (
-            404,
-            json!({
-                "_index": index_name,
-                "_id": doc_id,
-                "result": "not_found",
-            }),
-        );
+        return (404, index_not_found(index_name));
     }
+
+    let ver = state
+        .get_doc_version(index_name, doc_id)
+        .ok()
+        .flatten()
+        .unwrap_or(DocVersion {
+            version: 1,
+            seq_no: 0,
+            primary_term: 1,
+        });
 
     let found = match state.delete_doc(index_name, doc_id) {
         Ok(b) => b,
         Err(e) => return (500, storage_error(&e)),
     };
 
+    let seq = state.global_seq_no();
     (
         if found { 200 } else { 404 },
         json!({
             "_index": index_name,
             "_id": doc_id,
-            "_version": 1,
+            "_version": ver.version + if found { 1 } else { 0 },
             "result": if found { "deleted" } else { "not_found" },
             "_shards": { "total": 2, "successful": 1, "failed": 0 },
+            "_seq_no": if found { seq } else { ver.seq_no },
+            "_primary_term": 1,
+        }),
+    )
+}
+
+/// Multi-get: retrieve multiple documents by ID.
+pub fn mget(
+    state: &OpenSearchState,
+    index_name: &str,
+    body: &Value,
+) -> (u16, Value) {
+    if !state.index_exists(index_name) {
+        return (404, index_not_found(index_name));
+    }
+
+    let ids: Vec<String> = body
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let docs: Vec<String> = body
+        .get("docs")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|d| d.get("_id").and_then(|id| id.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let all_ids: Vec<&str> = ids.iter().map(|s| s.as_str()).chain(docs.iter().map(|s| s.as_str())).collect();
+
+    let mut results: Vec<Value> = Vec::new();
+    for id in &all_ids {
+        match state.get_doc(index_name, id) {
+            Ok(Some(doc)) => {
+                let ver = state
+                    .get_doc_version(index_name, id)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(DocVersion {
+                        version: 1,
+                        seq_no: 0,
+                        primary_term: 1,
+                    });
+                results.push(json!({
+                    "_index": index_name,
+                    "_id": id,
+                    "_version": ver.version,
+                    "_seq_no": ver.seq_no,
+                    "_primary_term": ver.primary_term,
+                    "found": true,
+                    "_source": doc,
+                }));
+            }
+            _ => {
+                results.push(json!({
+                    "_index": index_name,
+                    "_id": id,
+                    "found": false,
+                }));
+            }
+        }
+    }
+
+    (200, json!({ "docs": results }))
+}
+
+/// Delete documents matching a query.
+pub fn delete_by_query(
+    state: &OpenSearchState,
+    index_name: &str,
+    body: &Value,
+) -> (u16, Value) {
+    if !state.index_exists(index_name) {
+        return (404, index_not_found(index_name));
+    }
+
+    let query = body
+        .get("query")
+        .cloned()
+        .unwrap_or(json!({"match_all": {}}));
+
+    let mut matching: Vec<String> = Vec::new();
+    let _ = state.for_each_doc(index_name, |id, doc| {
+        if super::search::match_score(&query, doc) > 0.0 {
+            matching.push(id.to_string());
+        }
+        true
+    });
+
+    let deleted = matching.len();
+    for id in &matching {
+        let _ = state.delete_doc(index_name, id);
+    }
+
+    let failures: Vec<Value> = Vec::new();
+
+    (
+        200,
+        json!({
+            "took": 1,
+            "timed_out": false,
+            "total": deleted,
+            "deleted": deleted,
+            "batches": 1,
+            "version_conflicts": 0,
+            "noops": 0,
+            "retries": { "bulk": 0, "search": 0 },
+            "throttled_millis": 0,
+            "requests_per_second": -1.0,
+            "throttled_until_millis": 0,
+            "failures": failures,
         }),
     )
 }

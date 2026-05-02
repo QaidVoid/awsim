@@ -17,6 +17,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
 use redb::{Database, ReadableTable, TableDefinition};
@@ -31,6 +32,15 @@ pub struct IndexMeta {
     pub mappings: Value,
     pub settings: Value,
     pub created_at: String,
+    pub uuid: String,
+}
+
+/// Tracks `_version`, `_seq_no`, `_primary_term` for a document.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct DocVersion {
+    pub version: u64,
+    pub seq_no: u64,
+    pub primary_term: u64,
 }
 
 /// `(index_name, doc_id)` → document JSON bytes.
@@ -41,6 +51,9 @@ const INDEX_META: TableDefinition<&str, &[u8]> = TableDefinition::new("index_met
 /// `alias_name` → JSON bytes of `Vec<String>` (member indices).
 const ALIASES: TableDefinition<&str, &[u8]> = TableDefinition::new("aliases");
 
+/// `(index_name, doc_id)` → `DocVersion` JSON bytes.
+const DOC_VERSIONS: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("doc_versions");
+
 /// Disk-backed OpenSearch state.
 pub struct OpenSearchState {
     db: Arc<Database>,
@@ -49,6 +62,8 @@ pub struct OpenSearchState {
     pub indices: DashMap<String, IndexMeta>,
     /// Mirrors `ALIASES`.
     pub aliases: DashMap<String, Vec<String>>,
+    /// Monotonic counter for `_seq_no`.
+    global_seq_no: AtomicU64,
     /// When no `--data-dir` is supplied, awsim runs against an
     /// ephemeral redb file in a tempdir. The handle is held here so
     /// the directory lives as long as the state does.
@@ -82,6 +97,7 @@ impl OpenSearchState {
             tx.open_table(DOCUMENTS)?;
             tx.open_table(INDEX_META)?;
             tx.open_table(ALIASES)?;
+            tx.open_table(DOC_VERSIONS)?;
             tx.commit()?;
         }
 
@@ -109,6 +125,7 @@ impl OpenSearchState {
             db: Arc::new(db),
             indices,
             aliases,
+            global_seq_no: AtomicU64::new(0),
             _tempdir: tempdir,
         })
     }
@@ -116,7 +133,11 @@ impl OpenSearchState {
     // ---- Index meta ----
 
     pub fn create_index_meta(&self, name: &str, meta: IndexMeta) -> Result<(), redb::Error> {
-        let bytes = serde_json::to_vec(&meta).expect("IndexMeta serializes");
+        let bytes = serde_json::to_vec(&meta).map_err(|_| {
+            redb::Error::from(redb::StorageError::Io(std::io::Error::other(
+                "IndexMeta serialization failed",
+            )))
+        })?;
         let tx = self.db.begin_write()?;
         {
             let mut tbl = tx.open_table(INDEX_META)?;
@@ -133,8 +154,8 @@ impl OpenSearchState {
         {
             let mut meta_tbl = tx.open_table(INDEX_META)?;
             removed = meta_tbl.remove(name)?.is_some();
-            // Wipe documents for this index in the same transaction.
             let mut docs = tx.open_table(DOCUMENTS)?;
+            let mut ver_tbl = tx.open_table(DOC_VERSIONS)?;
             let mut keys: Vec<String> = Vec::new();
             for entry in docs.range::<(&str, &str)>((name, "")..)? {
                 let (k, _) = entry?;
@@ -144,19 +165,37 @@ impl OpenSearchState {
                 }
                 keys.push(doc_id.to_string());
             }
-            for doc_id in keys {
+            for doc_id in &keys {
                 docs.remove((name, doc_id.as_str()))?;
+                ver_tbl.remove((name, doc_id.as_str()))?;
             }
         }
         tx.commit()?;
         if removed {
             self.indices.remove(name);
+            // BUG-16: Remove this index from any aliases that reference it.
+            let alias_names: Vec<String> = self.aliases.iter().map(|e| e.key().clone()).collect();
+            for alias_name in alias_names {
+                if let Some(mut members) = self.aliases.get_mut(&alias_name) {
+                    let before = members.len();
+                    members.retain(|i| i != name);
+                    if members.len() != before {
+                        let updated = members.clone();
+                        drop(members);
+                        let _ = self.put_alias(&alias_name, updated);
+                    }
+                }
+            }
         }
         Ok(removed)
     }
 
     pub fn index_exists(&self, name: &str) -> bool {
         self.indices.contains_key(name)
+    }
+
+    pub fn global_seq_no(&self) -> u64 {
+        self.global_seq_no.load(Ordering::Relaxed)
     }
 
     pub fn get_index_meta(&self, name: &str) -> Option<IndexMeta> {
@@ -172,20 +211,39 @@ impl OpenSearchState {
 
     // ---- Documents ----
 
-    /// Insert or update a document. Returns `true` if the document
-    /// did not previously exist.
-    pub fn put_doc(&self, index: &str, doc_id: &str, doc: &Value) -> Result<bool, redb::Error> {
-        let bytes = serde_json::to_vec(doc).expect("doc serializes");
+    /// Insert or update a document. Returns `(created, new_version)`.
+    pub fn put_doc(
+        &self,
+        index: &str,
+        doc_id: &str,
+        doc: &Value,
+    ) -> Result<(bool, u64), redb::Error> {
+        let bytes = serde_json::to_vec(doc).map_err(|_| {
+            redb::Error::from(redb::StorageError::Io(std::io::Error::other(
+                "doc serialization failed",
+            )))
+        })?;
+        let seq = self.global_seq_no.fetch_add(1, Ordering::Relaxed) + 1;
+        let ver_bytes = serde_json::to_vec(&DocVersion {
+            version: seq,
+            seq_no: seq,
+            primary_term: 1,
+        })
+        .map_err(|_| {
+            redb::Error::from(redb::StorageError::Io(std::io::Error::other(
+                "version serialization failed",
+            )))
+        })?;
         let tx = self.db.begin_write()?;
         let created;
         {
             let mut tbl = tx.open_table(DOCUMENTS)?;
-            created = tbl
-                .insert((index, doc_id), bytes.as_slice())?
-                .is_none();
+            let mut ver_tbl = tx.open_table(DOC_VERSIONS)?;
+            created = tbl.insert((index, doc_id), bytes.as_slice())?.is_none();
+            ver_tbl.insert((index, doc_id), ver_bytes.as_slice())?;
         }
         tx.commit()?;
-        Ok(created)
+        Ok((created, seq))
     }
 
     pub fn get_doc(&self, index: &str, doc_id: &str) -> Result<Option<Value>, redb::Error> {
@@ -198,12 +256,32 @@ impl OpenSearchState {
         Ok(Some(val))
     }
 
+    pub fn get_doc_version(
+        &self,
+        index: &str,
+        doc_id: &str,
+    ) -> Result<Option<DocVersion>, redb::Error> {
+        let tx = self.db.begin_read()?;
+        let tbl = tx.open_table(DOC_VERSIONS)?;
+        let Some(v) = tbl.get((index, doc_id))? else {
+            return Ok(None);
+        };
+        let ver: DocVersion = serde_json::from_slice(v.value()).unwrap_or(DocVersion {
+            version: 1,
+            seq_no: 0,
+            primary_term: 1,
+        });
+        Ok(Some(ver))
+    }
+
     pub fn delete_doc(&self, index: &str, doc_id: &str) -> Result<bool, redb::Error> {
         let tx = self.db.begin_write()?;
         let removed;
         {
             let mut tbl = tx.open_table(DOCUMENTS)?;
+            let mut ver_tbl = tx.open_table(DOC_VERSIONS)?;
             removed = tbl.remove((index, doc_id))?.is_some();
+            ver_tbl.remove((index, doc_id))?;
         }
         tx.commit()?;
         Ok(removed)
@@ -252,7 +330,11 @@ impl OpenSearchState {
     // ---- Aliases ----
 
     pub fn put_alias(&self, name: &str, members: Vec<String>) -> Result<(), redb::Error> {
-        let bytes = serde_json::to_vec(&members).expect("members serialize");
+        let bytes = serde_json::to_vec(&members).map_err(|_| {
+            redb::Error::from(redb::StorageError::Io(std::io::Error::other(
+                "alias serialization failed",
+            )))
+        })?;
         let tx = self.db.begin_write()?;
         {
             let mut tbl = tx.open_table(ALIASES)?;

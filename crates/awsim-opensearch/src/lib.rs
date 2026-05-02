@@ -4,6 +4,8 @@
 //! REST API rather than using AWS API protocols. This crate provides an Axum
 //! router that handles index management, document CRUD, and search queries.
 
+#![deny(warnings)]
+
 mod operations;
 pub mod state;
 mod util;
@@ -37,6 +39,8 @@ pub fn router(state: Arc<OpenSearchState>) -> Router {
         .route("/_reindex", post(reindex_handler))
         // Multi-search (global)
         .route("/_msearch", post(msearch_global_handler))
+        // Multi-get (global)
+        .route("/_mget", post(mget_global_handler))
         // Cat APIs
         .route("/_cat/indices", get(cat_indices))
         // Bulk API
@@ -47,6 +51,8 @@ pub fn router(state: Arc<OpenSearchState>) -> Router {
         .route("/{index}", head(head_index))
         .route("/{index}", delete(delete_index))
         .route("/{index}/_mapping", get(get_mapping))
+        .route("/{index}/_mapping", put(put_mapping))
+        .route("/{index}/_refresh", post(refresh_handler))
         .route("/{index}/_count", post(count))
         .route("/{index}/_count", get(count))
         // Search
@@ -54,6 +60,8 @@ pub fn router(state: Arc<OpenSearchState>) -> Router {
         .route("/{index}/_search", get(search))
         // Multi-search (per-index)
         .route("/{index}/_msearch", post(msearch_index_handler))
+        // Multi-get (per-index)
+        .route("/{index}/_mget", post(mget_index_handler))
         // Document operations
         .route("/{index}/_doc/{id}", put(put_doc))
         .route("/{index}/_doc/{id}", post(put_doc))
@@ -64,6 +72,8 @@ pub fn router(state: Arc<OpenSearchState>) -> Router {
         .route("/{index}/_update/{id}", post(update_doc_handler))
         // Update by query
         .route("/{index}/_update_by_query", post(update_by_query_handler))
+        // Delete by query
+        .route("/{index}/_delete_by_query", post(delete_by_query_handler))
         // Source-only get
         .route("/{index}/_source/{id}", get(get_source_handler))
         // Bulk per index
@@ -141,6 +151,30 @@ async fn get_mapping(
     Path(index): Path<String>,
 ) -> impl IntoResponse {
     let (status, result) = operations::index::get_mapping(&state, &index);
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
+}
+
+async fn put_mapping(
+    State(state): State<Arc<OpenSearchState>>,
+    Path(index): Path<String>,
+    body: Option<Json<Value>>,
+) -> impl IntoResponse {
+    let body = body.map(|b| b.0).unwrap_or(json!({}));
+    let (status, result) = operations::index::put_mapping(&state, &index, &body);
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
+}
+
+async fn refresh_handler(
+    State(state): State<Arc<OpenSearchState>>,
+    Path(index): Path<String>,
+) -> impl IntoResponse {
+    let (status, result) = operations::index::refresh(&state, &index);
     (
         StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
         Json(result),
@@ -227,7 +261,7 @@ async fn bulk_handler(
     State(state): State<Arc<OpenSearchState>>,
     body: String,
 ) -> impl IntoResponse {
-    let (status, result) = operations::bulk::bulk(&state, &body);
+    let (status, result) = operations::bulk::bulk(&state, None, &body);
     (
         StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
         Json(result),
@@ -236,10 +270,10 @@ async fn bulk_handler(
 
 async fn bulk_index_handler(
     State(state): State<Arc<OpenSearchState>>,
-    Path(_index): Path<String>,
+    Path(index): Path<String>,
     body: String,
 ) -> impl IntoResponse {
-    let (status, result) = operations::bulk::bulk(&state, &body);
+    let (status, result) = operations::bulk::bulk(&state, Some(&index), &body);
     (
         StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
         Json(result),
@@ -339,6 +373,45 @@ async fn update_by_query_handler(
         .map(|b| b.0)
         .unwrap_or(json!({"query": {"match_all": {}}}));
     let (status, result) = operations::document::update_by_query(&state, &index, &body);
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
+}
+
+async fn delete_by_query_handler(
+    State(state): State<Arc<OpenSearchState>>,
+    Path(index): Path<String>,
+    body: Option<Json<Value>>,
+) -> impl IntoResponse {
+    let body = body
+        .map(|b| b.0)
+        .unwrap_or(json!({"query": {"match_all": {}}}));
+    let (status, result) = operations::document::delete_by_query(&state, &index, &body);
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
+}
+
+async fn mget_global_handler(
+    State(state): State<Arc<OpenSearchState>>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    let index = body.get("index").and_then(|v| v.as_str()).unwrap_or("_all");
+    let (status, result) = operations::document::mget(&state, index, &body);
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        Json(result),
+    )
+}
+
+async fn mget_index_handler(
+    State(state): State<Arc<OpenSearchState>>,
+    Path(index): Path<String>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    let (status, result) = operations::document::mget(&state, &index, &body);
     (
         StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
         Json(result),
