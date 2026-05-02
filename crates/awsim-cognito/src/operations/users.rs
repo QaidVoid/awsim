@@ -213,6 +213,27 @@ pub fn confirm_sign_up(
 
     let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
 
+    let code_key = format!("{pool_id}:{username}");
+    if let Some(expected) = state.confirmation_codes.get(&code_key) {
+        let provided = input["ConfirmationCode"].as_str().unwrap_or("");
+        if provided != *expected {
+            return Err(AwsError::bad_request(
+                "CodeMismatchException",
+                "Invalid verification code provided",
+            ));
+        }
+    } else if !input["ConfirmationCode"].is_null() {
+        let provided = input["ConfirmationCode"].as_str().unwrap_or("");
+        if provided.is_empty() {
+            return Err(AwsError::bad_request(
+                "InvalidParameter",
+                "ConfirmationCode is required",
+            ));
+        }
+    }
+
+    let _ = state.confirmation_codes.remove(&code_key);
+
     let user = pool.users.get_mut(username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
@@ -1105,7 +1126,12 @@ pub fn resend_confirmation_code(
         ));
     }
 
-    info!(username = %username, "Cognito: resend confirmation code");
+    let code = format!("{:06}", rand::random::<u32>() % 1_000_000);
+    state
+        .confirmation_codes
+        .insert(format!("{pool_id}:{username}"), code.clone());
+
+    info!(username = %username, code = %code, "Cognito: resend confirmation code");
     Ok(json!({
         "CodeDeliveryDetails": {
             "AttributeName": "email",
@@ -1143,8 +1169,10 @@ pub fn get_user_attribute_verification_code(
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
+            let code = format!("{:06}", rand::random::<u32>() % 1_000_000);
             user.pending_verifications
-                .insert(attribute_name.to_string(), "123456".to_string());
+                .insert(attribute_name.to_string(), code.clone());
+            info!(username = %username, attribute_name = %attribute_name, code = %code, "Cognito: attribute verification code sent");
             return Ok(json!({
                 "CodeDeliveryDetails": {
                     "AttributeName": attribute_name,
@@ -1176,7 +1204,9 @@ pub fn verify_user_attribute(
     let attribute_name = input["AttributeName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AttributeName is required"))?;
-    let _code = input["Code"].as_str();
+    let _code = input["Code"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Code is required"))?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
         return Err(AwsError::bad_request(
@@ -1190,6 +1220,14 @@ pub fn verify_user_attribute(
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
+            if let Some(expected) = user.pending_verifications.get(attribute_name) {
+                if _code != expected {
+                    return Err(AwsError::bad_request(
+                        "CodeMismatchException",
+                        "Invalid verification code provided",
+                    ));
+                }
+            }
             let verified_key = format!("{attribute_name}_verified");
             user.attributes.insert(verified_key, "true".to_string());
             user.pending_verifications.remove(attribute_name);

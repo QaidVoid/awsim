@@ -345,4 +345,6 @@ pub struct CognitoState {
     pub resource_tags: DashMap<String, HashMap<String, String>>,
     /// In-flight MFA sessions: session_id → (pool_id, username).
     pub mfa_sessions: DashMap<String, MfaSession>,
+    /// Pending confirmation codes: "pool_id:username" → code.
+    pub confirmation_codes: DashMap<String, String>,
 }
