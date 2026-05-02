@@ -125,7 +125,9 @@ pub fn sign_up(
         Some(e) => {
             let pool_id = e.id.clone();
             drop(e);
-            state.user_pools.get_mut(&pool_id).unwrap()
+            state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+            })?
         }
         None => {
             return Err(AwsError::not_found(
@@ -211,7 +213,12 @@ pub fn confirm_sign_up(
         )
     })?;
 
-    let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+    let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
 
     let code_key = format!("{pool_id}:{username}");
     if let Some(expected) = state.confirmation_codes.get(&code_key) {
@@ -618,8 +625,18 @@ pub fn forgot_password(
             format!("No pool found for client: {client_id}"),
         ));
     }
-    let pool_id = pool_entry.unwrap().id.clone();
-    let pool = state.user_pools.get(&pool_id).unwrap();
+    let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("No pool found for client: {client_id}"),
+        )
+    })?;
+    let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
 
     if !pool.users.contains_key(username) {
         return Err(AwsError::not_found(
@@ -684,7 +701,12 @@ pub fn confirm_forgot_password(
         )
     })?;
 
-    let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+    let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
     super::auth_policy::validate_password(&pool.policies, password)?;
 
     let user = pool.users.get_mut(username).ok_or_else(|| {
@@ -735,7 +757,12 @@ pub fn change_password(
     for mut pool_entry in state.user_pools.iter_mut() {
         if pool_entry.users.contains_key(&username) {
             super::auth_policy::validate_password(&pool_entry.policies, proposed)?;
-            let user = pool_entry.users.get_mut(&username).unwrap();
+            let user = pool_entry.users.get_mut(&username).ok_or_else(|| {
+                AwsError::not_found(
+                    "UserNotFoundException",
+                    format!("User not found: {username}"),
+                )
+            })?;
             if user.password != previous {
                 return Err(AwsError::bad_request(
                     "NotAuthorizedException",
@@ -1118,7 +1145,12 @@ pub fn resend_confirmation_code(
         )
     })?;
 
-    let pool = state.user_pools.get(&pool_id).unwrap();
+    let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
     if !pool.users.contains_key(username) {
         return Err(AwsError::not_found(
             "UserNotFoundException",

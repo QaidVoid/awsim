@@ -185,7 +185,9 @@ pub fn initiate_auth(
             // an immutable borrow first to fire the trigger, then drop so we
             // can take a mutable borrow for the lockout bookkeeping below.
             {
-                let pool = state.user_pools.get(&pool_id).unwrap();
+                let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
+                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+            })?;
                 if let Some(arn) = pool.lambda_config.get("PreAuthentication") {
                     let trigger_event = json!({
                         "userPoolId": pool_id,
@@ -200,7 +202,9 @@ pub fn initiate_auth(
             // mutable scope so the remainder of the flow keeps its existing
             // immutable borrows.
             {
-                let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+                let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+                    AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                })?;
                 let block_action = super::auth_policy::compromised_credentials_action_for(
                     &pool,
                     Some(client_id),
@@ -246,8 +250,15 @@ pub fn initiate_auth(
                 );
             }
 
-            let pool = state.user_pools.get(&pool_id).unwrap();
-            let user = pool.users.get(username).unwrap();
+            let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
+                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+            })?;
+            let user = pool.users.get(username).ok_or_else(|| {
+                AwsError::not_found(
+                    "UserNotFoundException",
+                    format!("User not found: {username}"),
+                )
+            })?;
 
             if user.status == "UNCONFIRMED" {
                 return Err(AwsError::bad_request(
@@ -361,7 +372,9 @@ pub fn initiate_auth(
                 .unwrap_or("unknown");
 
             // Find user by sub
-            let pool = state.user_pools.get(&pool_id).unwrap();
+            let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
+                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+            })?;
             let user = pool
                 .users
                 .values()
@@ -442,7 +455,9 @@ pub fn admin_initiate_auth(
             // Pre-Authentication trigger (fire-and-forget) — separate
             // immutable scope so we can take a mutable borrow below.
             {
-                let pool = state.user_pools.get(pool_id).unwrap();
+                let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+                    AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                })?;
                 if let Some(arn) = pool.lambda_config.get("PreAuthentication") {
                     let trigger_event = json!({
                         "userPoolId": pool_id,
@@ -457,7 +472,9 @@ pub fn admin_initiate_auth(
             // mutable scope; the rest of the flow re-acquires an immutable
             // borrow without overlapping with the &mut user.
             {
-                let mut pool = state.user_pools.get_mut(pool_id).unwrap();
+                let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+                    AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                })?;
                 let block_action = super::auth_policy::compromised_credentials_action_for(
                     &pool,
                     Some(client_id),
@@ -503,8 +520,15 @@ pub fn admin_initiate_auth(
                 );
             }
 
-            let pool = state.user_pools.get(pool_id).unwrap();
-            let user = pool.users.get(username).unwrap();
+            let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+            })?;
+            let user = pool.users.get(username).ok_or_else(|| {
+                AwsError::not_found(
+                    "UserNotFoundException",
+                    format!("User not found: {username}"),
+                )
+            })?;
 
             if user.status == "UNCONFIRMED" {
                 return Err(AwsError::bad_request(
@@ -654,7 +678,9 @@ pub fn respond_to_auth_challenge(
                 )
             })?;
 
-            let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+            let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+            })?;
             let policy = pool.policies.clone();
             let user = pool.users.get_mut(username).ok_or_else(|| {
                 AwsError::not_found(

@@ -208,16 +208,18 @@ fn urlencoding(s: &str) -> String {
                 bytes
                     .bytes()
                     .flat_map(|b| {
+                        // SAFETY: b >> 4 and b & 0xf are always in 0..=15, which are valid base-16 digits.
+                        // to_uppercase() on single ASCII hex chars always yields at least one char.
                         let hi = char::from_digit((b >> 4) as u32, 16)
-                            .unwrap()
+                            .expect("0..=15 is a valid base-16 digit")
                             .to_uppercase()
                             .next()
-                            .unwrap();
+                            .expect("to_uppercase always yields at least one char for ASCII hex");
                         let lo = char::from_digit((b & 0xf) as u32, 16)
-                            .unwrap()
+                            .expect("0..=15 is a valid base-16 digit")
                             .to_uppercase()
                             .next()
-                            .unwrap();
+                            .expect("to_uppercase always yields at least one char for ASCII hex");
                         vec!['%', hi, lo]
                     })
                     .collect()
@@ -298,11 +300,13 @@ button:hover {{ background: #f97316; }}
 </div></body></html>"#
     );
 
+    // SAFETY: Response::builder() only fails on invalid header values, and we're using
+    // well-known static strings for status and content-type.
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "text/html; charset=utf-8")
         .body(Body::from(html))
-        .unwrap()
+        .expect("well-known header values cannot fail")
 }
 
 // ---------------------------------------------------------------------------
@@ -754,10 +758,7 @@ async fn token(
                 return error_response(
                     StatusCode::BAD_REQUEST,
                     "unauthorized_client",
-                    &format!(
-                        "Grant type '{}' is not allowed for this client",
-                        flow_name
-                    ),
+                    &format!("Grant type '{}' is not allowed for this client", flow_name),
                 );
             }
         }

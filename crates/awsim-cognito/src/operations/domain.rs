@@ -150,7 +150,12 @@ pub fn update_user_pool_domain(
         state.domain_pool_map.remove(&old);
     }
 
-    let mut pool_mut = state.user_pools.get_mut(pool_id).unwrap();
+    let mut pool_mut = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("User pool not found: {pool_id}"),
+        )
+    })?;
     pool_mut.domain = Some(domain.to_string());
     drop(pool_mut);
 

@@ -64,8 +64,9 @@ fn client_to_value(client: &UserPoolClient, include_secret: bool) -> Value {
         "LastModifiedDate": client.created_date
     });
     if include_secret {
+        // SAFETY: obj was created by json!() macro above, which always produces an object.
         obj.as_object_mut()
-            .unwrap()
+            .expect("json!() macro always produces an object")
             .insert("ClientSecret".into(), json!(client.client_secret));
     }
     obj

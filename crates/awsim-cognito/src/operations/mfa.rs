@@ -129,7 +129,7 @@ pub fn associate_software_token(
     } else if let Some(_session) = input["Session"].as_str() {
         // Session-based flow: session stores pool_id+username in MFA session map.
         // For dev emulator we look it up from the session store on CognitoState.
-        let session = input["Session"].as_str().unwrap();
+        let session = input["Session"].as_str().unwrap_or("");
         state
             .mfa_sessions
             .get(session)

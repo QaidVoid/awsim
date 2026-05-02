@@ -366,7 +366,12 @@ pub fn admin_link_provider_for_user(
             )
         })?;
 
-    let user = pool.users.get_mut(&username).unwrap();
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
 
     // Remove any existing link for this provider
     user.linked_providers

@@ -88,7 +88,8 @@ pub fn id_token(
         payload["nonce"] = Value::String(n.to_string());
     }
 
-    let obj = payload.as_object_mut().unwrap();
+    // SAFETY: payload was created by json!() macro above, which always produces a JSON object.
+    let obj = payload.as_object_mut().expect("json!() always produces an object");
 
     // Inject group/role claims if the user belongs to any groups.
     if !groups.is_empty() {
@@ -234,9 +235,10 @@ pub fn access_token(
             .iter()
             .map(|g| Value::String(g.group_name.clone()))
             .collect();
+        // SAFETY: payload was created by json!() macro above, which always produces a JSON object.
         payload
             .as_object_mut()
-            .unwrap()
+            .expect("json!() always produces an object")
             .insert("cognito:groups".to_string(), Value::Array(group_names));
     }
 
