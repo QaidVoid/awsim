@@ -56,6 +56,7 @@ pub fn id_token(
     nonce: Option<&str>,
     groups: &[GroupRolePair],
     issuer_override: Option<&str>,
+    expires_in: u64,
 ) -> String {
     let now = now_epoch();
     let header = json!({
@@ -77,7 +78,7 @@ pub fn id_token(
         "cognito:username": username,
         "auth_time": now,
         "iat": now,
-        "exp": now + 3600,
+        "exp": now + expires_in,
         "scope": scope_str
     });
 
@@ -195,6 +196,7 @@ pub fn access_token(
     scopes: &[String],
     groups: &[GroupRolePair],
     issuer_override: Option<&str>,
+    expires_in: u64,
 ) -> String {
     let now = now_epoch();
     let header = json!({
@@ -222,7 +224,7 @@ pub fn access_token(
         "username": username,
         "auth_time": now,
         "iat": now,
-        "exp": now + 3600,
+        "exp": now + expires_in,
         "jti": uuid::Uuid::new_v4().to_string()
     });
 
@@ -243,7 +245,7 @@ pub fn access_token(
 
 /// Generate a refresh token (opaque for local dev — just a UUID).
 pub fn refresh_token(sub: &str) -> String {
-    format!("refresh-{sub}-{}", uuid::Uuid::new_v4())
+    format!("refresh-{sub}.{}", uuid::Uuid::new_v4())
 }
 
 /// Extract the sub claim from an access token without verifying the signature.

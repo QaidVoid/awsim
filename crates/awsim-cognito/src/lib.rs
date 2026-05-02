@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 mod identity;
 mod jwt;
 pub mod oauth;

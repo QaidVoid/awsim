@@ -229,6 +229,14 @@ fn urlencoding(s: &str) -> String {
 /// Render the login page HTML.
 // SAFETY: each parameter is an independent OAuth/OIDC field that must be embedded into the form.
 #[allow(clippy::too_many_arguments)]
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 fn login_page_html(
     pool_id: &str,
     response_type: &str,
@@ -242,8 +250,18 @@ fn login_page_html(
     error_msg: Option<&str>,
 ) -> Response {
     let error_html = error_msg
-        .map(|e| format!(r#"<div class="error">{e}</div>"#))
+        .map(|e| format!(r#"<div class="error">{}</div>"#, escape_html(e)))
         .unwrap_or_default();
+
+    let pool_id_e = escape_html(pool_id);
+    let response_type_e = escape_html(response_type);
+    let client_id_e = escape_html(client_id);
+    let redirect_uri_e = escape_html(redirect_uri);
+    let scope_e = escape_html(scope);
+    let state_param_e = escape_html(state_param);
+    let nonce_e = escape_html(nonce);
+    let code_challenge_e = escape_html(code_challenge);
+    let code_challenge_method_e = escape_html(code_challenge_method);
 
     let html = format!(
         r#"<!DOCTYPE html>
@@ -261,17 +279,17 @@ button:hover {{ background: #f97316; }}
 <body>
 <div class="card">
 <h2>Sign In</h2>
-<div class="pool">Pool: {pool_id}</div>
+<div class="pool">Pool: {pool_id_e}</div>
 {error_html}
-<form method="POST" action="/cognito/{pool_id}/oauth2/authorize">
-<input type="hidden" name="response_type" value="{response_type}">
-<input type="hidden" name="client_id" value="{client_id}">
-<input type="hidden" name="redirect_uri" value="{redirect_uri}">
-<input type="hidden" name="scope" value="{scope}">
-<input type="hidden" name="state" value="{state_param}">
-<input type="hidden" name="nonce" value="{nonce}">
-<input type="hidden" name="code_challenge" value="{code_challenge}">
-<input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
+<form method="POST" action="/cognito/{pool_id_e}/oauth2/authorize">
+<input type="hidden" name="response_type" value="{response_type_e}">
+<input type="hidden" name="client_id" value="{client_id_e}">
+<input type="hidden" name="redirect_uri" value="{redirect_uri_e}">
+<input type="hidden" name="scope" value="{scope_e}">
+<input type="hidden" name="state" value="{state_param_e}">
+<input type="hidden" name="nonce" value="{nonce_e}">
+<input type="hidden" name="code_challenge" value="{code_challenge_e}">
+<input type="hidden" name="code_challenge_method" value="{code_challenge_method_e}">
 <input type="text" name="username" placeholder="Username" required autofocus>
 <input type="password" name="password" placeholder="Password" required>
 <button type="submit">Sign In</button>
@@ -535,6 +553,36 @@ async fn authorize_post(
         );
     }
 
+    if user.status == "UNCONFIRMED" {
+        return login_page_html(
+            &pool_id,
+            &response_type,
+            &client_id,
+            &redirect_uri,
+            &scope_str,
+            &state_param,
+            nonce.as_deref().unwrap_or(""),
+            code_challenge.as_deref().unwrap_or(""),
+            code_challenge_method.as_deref().unwrap_or(""),
+            Some("User is not confirmed"),
+        );
+    }
+
+    if user.status == "FORCE_CHANGE_PASSWORD" {
+        return login_page_html(
+            &pool_id,
+            &response_type,
+            &client_id,
+            &redirect_uri,
+            &scope_str,
+            &state_param,
+            nonce.as_deref().unwrap_or(""),
+            code_challenge.as_deref().unwrap_or(""),
+            code_challenge_method.as_deref().unwrap_or(""),
+            Some("Password reset required — use AdminSetUserPassword or InitiateAuth with NEW_PASSWORD_REQUIRED"),
+        );
+    }
+
     // Validate scopes against client's allowed_oauth_scopes (if configured).
     let requested_scopes = parse_scopes(&scope_str);
     let effective_scopes = if let Some(client) = pool_ref.clients.get(&client_id) {
@@ -554,6 +602,11 @@ async fn authorize_post(
     // Collect group role pairs before dropping pool_ref.
     let group_pairs = user_group_role_pairs(&pool_ref, &user.groups);
     let issuer_url = oauth_state.issuer(&pool_id);
+    let token_validity = pool_ref
+        .clients
+        .get(&client_id)
+        .map(|c| (c.access_token_validity, c.id_token_validity))
+        .unwrap_or((3600, 3600));
 
     drop(pool_ref);
 
@@ -601,6 +654,7 @@ async fn authorize_post(
                 &effective_scopes,
                 &group_pairs,
                 Some(&issuer_url),
+                token_validity.0,
             );
             let id_tok = jwt::id_token(
                 &user.sub,
@@ -613,6 +667,7 @@ async fn authorize_post(
                 nonce.as_deref(),
                 &group_pairs,
                 Some(&issuer_url),
+                token_validity.1,
             );
 
             info!(
@@ -623,7 +678,8 @@ async fn authorize_post(
             );
 
             let mut fragment = format!(
-                "access_token={access_tok}&id_token={id_tok}&token_type=Bearer&expires_in=3600"
+                "access_token={access_tok}&id_token={id_tok}&token_type=Bearer&expires_in={}",
+                token_validity.0
             );
             if !state_param.is_empty() {
                 fragment.push_str(&format!("&state={}", urlencoding(&state_param)));
@@ -819,6 +875,17 @@ async fn token(
             let nonce = entry.nonce.clone();
             let issuer_url = oauth_state.issuer(&pool_id);
 
+            let validity = oauth_state
+                .cognito
+                .user_pools
+                .get(&pool_id)
+                .and_then(|p| {
+                    p.clients
+                        .get(&effective_client_id)
+                        .map(|c| (c.access_token_validity, c.id_token_validity))
+                })
+                .unwrap_or((3600, 3600));
+
             let access_tok = jwt::access_token(
                 &sub,
                 &oauth_state.default_region,
@@ -828,6 +895,7 @@ async fn token(
                 &scopes,
                 &group_pairs,
                 Some(&issuer_url),
+                validity.0,
             );
             let id_tok = jwt::id_token(
                 &sub,
@@ -840,6 +908,7 @@ async fn token(
                 nonce.as_deref(),
                 &group_pairs,
                 Some(&issuer_url),
+                validity.1,
             );
             let refresh_tok = jwt::refresh_token(&sub);
 
@@ -854,7 +923,7 @@ async fn token(
                 "id_token": id_tok,
                 "refresh_token": refresh_tok,
                 "token_type": "Bearer",
-                "expires_in": 3600
+                "expires_in": validity.0
             }))
             .into_response()
         }
@@ -932,6 +1001,12 @@ async fn token(
                 requested_scopes
             };
 
+            let client_access_validity = pool
+                .clients
+                .get(&effective_client_id)
+                .map(|c| c.access_token_validity)
+                .unwrap_or(3600);
+
             // client_credentials is machine-to-machine — no user groups.
             let issuer_url = oauth_state.issuer(&pool_id);
             let access_tok = jwt::access_token(
@@ -943,6 +1018,7 @@ async fn token(
                 &effective_scopes,
                 &[],
                 Some(&issuer_url),
+                client_access_validity,
             );
 
             info!(
@@ -954,7 +1030,7 @@ async fn token(
             Json(json!({
                 "access_token": access_tok,
                 "token_type": "Bearer",
-                "expires_in": 3600
+                "expires_in": client_access_validity
             }))
             .into_response()
         }
@@ -986,7 +1062,7 @@ async fn token(
             // Parse our opaque format: "refresh-{sub}-{uuid}"
             let sub = refresh_tok
                 .strip_prefix("refresh-")
-                .and_then(|s| s.split('-').next())
+                .and_then(|s| s.split('.').next())
                 .unwrap_or("unknown")
                 .to_string();
 
@@ -1029,6 +1105,12 @@ async fn token(
             let scopes = parse_scopes(form.scope.as_deref().unwrap_or("openid"));
             let issuer_url = oauth_state.issuer(&pool_id);
 
+            let validity = pool
+                .clients
+                .get(&effective_client_id)
+                .map(|c| (c.access_token_validity, c.id_token_validity))
+                .unwrap_or((3600, 3600));
+
             let access_tok = jwt::access_token(
                 &user_sub,
                 &oauth_state.default_region,
@@ -1038,6 +1120,7 @@ async fn token(
                 &scopes,
                 &group_pairs,
                 Some(&issuer_url),
+                validity.0,
             );
             let id_tok = jwt::id_token(
                 &user_sub,
@@ -1050,6 +1133,7 @@ async fn token(
                 None,
                 &group_pairs,
                 Some(&issuer_url),
+                validity.1,
             );
             let new_refresh = jwt::refresh_token(&user_sub);
 
@@ -1064,7 +1148,7 @@ async fn token(
                 "id_token": id_tok,
                 "refresh_token": new_refresh,
                 "token_type": "Bearer",
-                "expires_in": 3600
+                "expires_in": validity.0
             }))
             .into_response()
         }
