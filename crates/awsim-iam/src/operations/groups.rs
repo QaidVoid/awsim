@@ -113,8 +113,15 @@ pub fn delete_group(state: &IamState, input: &Value) -> Result<Value, AwsError> 
     Ok(json!({}))
 }
 
-pub fn list_groups(state: &IamState, _input: &Value) -> Result<Value, AwsError> {
-    let groups: Vec<Value> = state.groups.iter().map(|g| group_to_value(&g)).collect();
+pub fn list_groups(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let path_prefix = opt_str(input, "PathPrefix").unwrap_or("/");
+
+    let groups: Vec<Value> = state
+        .groups
+        .iter()
+        .filter(|g| g.path.starts_with(path_prefix))
+        .map(|g| group_to_value(&g))
+        .collect();
 
     Ok(json!({
         "Groups": { "member": groups },
