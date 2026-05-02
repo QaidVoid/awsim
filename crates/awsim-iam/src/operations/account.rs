@@ -6,7 +6,32 @@ use crate::{
     state::{AccountPasswordPolicy, IamState},
 };
 
-use super::{opt_str, require_str};
+use super::require_str;
+
+fn extract_filter_list(input: &Value) -> Vec<String> {
+    if let Some(f) = input.get("Filter") {
+        if let Some(members) = f.get("member").and_then(|m| m.as_array()) {
+            return members
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+        }
+        if let Some(s) = f.as_str() {
+            return vec![s.to_string()];
+        }
+    }
+    if let Some(s) = input
+        .get("Filter")
+        .and_then(|v| {
+            v.as_str()
+                .or_else(|| v.as_array().and_then(|a| a.first()?.as_str()))
+        })
+        .map(|s| s.to_string())
+    {
+        return vec![s];
+    }
+    Vec::new()
+}
 
 fn opt_bool(input: &Value, key: &str) -> Option<bool> {
     input.get(key).and_then(|v| v.as_bool())
@@ -177,13 +202,13 @@ pub fn get_account_authorization_details(
     state: &IamState,
     input: &Value,
 ) -> Result<Value, AwsError> {
-    let filter = opt_str(input, "Filter").unwrap_or("All");
-    let include_all = filter == "All";
-    let include_users = include_all || filter == "User";
-    let include_roles = include_all || filter == "Role";
-    let include_groups = include_all || filter == "Group";
-    let include_local = include_all || filter == "LocalManagedPolicy";
-    let include_aws = include_all || filter == "AWSManagedPolicy";
+    let filters = extract_filter_list(input);
+    let include_all = filters.is_empty();
+    let include_users = include_all || filters.contains(&"User".to_string());
+    let include_roles = include_all || filters.contains(&"Role".to_string());
+    let include_groups = include_all || filters.contains(&"Group".to_string());
+    let include_local = include_all || filters.contains(&"LocalManagedPolicy".to_string());
+    let include_aws = include_all || filters.contains(&"AWSManagedPolicy".to_string());
 
     let user_detail_list: Vec<Value> = if include_users {
         state
