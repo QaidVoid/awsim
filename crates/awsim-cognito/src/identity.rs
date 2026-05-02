@@ -183,6 +183,8 @@ impl ServiceHandler for CognitoIdentityService {
             serde_json::from_slice(data).map_err(|e| e.to_string())?;
         for (account, region, s) in snap {
             let state = self.state.get(&account, &region);
+            state.pools.clear();
+            state.identities.clear();
             for (id, pool) in s.pools {
                 state.pools.insert(id, pool);
             }
