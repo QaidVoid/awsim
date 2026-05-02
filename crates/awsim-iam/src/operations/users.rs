@@ -85,6 +85,11 @@ pub fn delete_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
                 "Cannot delete user {user_name}: user has attached policies"
             )));
         }
+        if !user.inline_policies.is_empty() {
+            return Err(delete_conflict(format!(
+                "Cannot delete user {user_name}: user has inline policies"
+            )));
+        }
         if !user.groups.is_empty() {
             return Err(delete_conflict(format!(
                 "Cannot delete user {user_name}: user is a member of groups"
