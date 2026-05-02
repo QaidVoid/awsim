@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 mod expressions;
 mod keys;
 mod operations;

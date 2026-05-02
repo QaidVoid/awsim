@@ -1559,6 +1559,7 @@ async fn build_service(
         data_ingest_per_gb,
         storage_per_gb_month,
         compute_per_gb_second,
+        instance_hour_per_instance: None,
     })
 }
 
