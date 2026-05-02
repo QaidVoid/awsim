@@ -186,8 +186,8 @@ pub fn initiate_auth(
             // can take a mutable borrow for the lockout bookkeeping below.
             {
                 let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-                AwsError::not_found("ResourceNotFoundException", "User pool not found")
-            })?;
+                    AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                })?;
                 if let Some(arn) = pool.lambda_config.get("PreAuthentication") {
                     let trigger_event = json!({
                         "userPoolId": pool_id,

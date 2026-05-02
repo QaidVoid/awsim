@@ -89,7 +89,9 @@ pub fn id_token(
     }
 
     // SAFETY: payload was created by json!() macro above, which always produces a JSON object.
-    let obj = payload.as_object_mut().expect("json!() always produces an object");
+    let obj = payload
+        .as_object_mut()
+        .expect("json!() always produces an object");
 
     // Inject group/role claims if the user belongs to any groups.
     if !groups.is_empty() {
