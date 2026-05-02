@@ -101,40 +101,31 @@ pub fn delete_backup(
 
     let record = state.backups.remove(backup_arn).map(|(_, r)| r);
 
-    let (name, table_name, table_arn, created) = if let Some(r) = record {
-        (
-            r.backup_name,
-            r.table_name,
-            r.table_arn,
-            r.backup_creation_date_time,
+    let r = record.ok_or_else(|| {
+        AwsError::service_not_found(
+            "com.amazon.coral.service#BackupNotFoundException",
+            format!("Backup not found: {backup_arn}"),
         )
-    } else {
-        (
-            "deleted-backup".to_string(),
-            String::new(),
-            String::new(),
-            0.0,
-        )
-    };
+    })?;
 
     Ok(json!({
         "BackupDescription": {
             "BackupDetails": {
                 "BackupArn": backup_arn,
-                "BackupName": name,
+                "BackupName": r.backup_name,
                 "BackupStatus": "DELETED",
                 "BackupType": "USER",
-                "BackupCreationDateTime": created,
+                "BackupCreationDateTime": r.backup_creation_date_time,
                 "BackupSizeBytes": 0
             },
             "SourceTableDetails": {
-                "TableName": table_name,
-                "TableArn": table_arn,
+                "TableName": r.table_name,
+                "TableArn": r.table_arn,
                 "TableId": "00000000-0000-0000-0000-000000000000",
                 "TableSizeBytes": 0,
                 "ItemCount": 0,
                 "KeySchema": [],
-                "TableCreationDateTime": created,
+                "TableCreationDateTime": r.backup_creation_date_time,
                 "BillingMode": "PAY_PER_REQUEST"
             }
         }
