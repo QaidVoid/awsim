@@ -100,6 +100,11 @@ pub fn delete_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {
                 "Cannot delete role {role_name}: role has attached policies"
             )));
         }
+        if !role.inline_policies.is_empty() {
+            return Err(delete_conflict(format!(
+                "Cannot delete role {role_name}: role has inline policies"
+            )));
+        }
     }
 
     // Ensure no instance profile references this role
