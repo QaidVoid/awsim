@@ -1264,3 +1264,93 @@ export async function describeIdentityPool(
     developerProviderName: data.DeveloperProviderName,
   };
 }
+
+export interface IdentityPoolIdentity {
+  identityId: string;
+  logins: Record<string, string>;
+  creationDate: string;
+  lastModifiedDate: string;
+}
+
+export async function listIdentities(
+  poolId: string,
+  maxResults = 60,
+): Promise<IdentityPoolIdentity[]> {
+  const data = (await identityRequest("ListIdentities", {
+    IdentityPoolId: poolId,
+    MaxResults: maxResults,
+  })) as {
+    Identities?: {
+      IdentityId?: string;
+      Logins?: Record<string, string>;
+      CreationDate?: string;
+      LastModifiedDate?: string;
+    }[];
+  };
+  return (data.Identities ?? []).map((i) => ({
+    identityId: i.IdentityId ?? "",
+    logins: i.Logins ?? {},
+    creationDate: i.CreationDate ?? "",
+    lastModifiedDate: i.LastModifiedDate ?? "",
+  }));
+}
+
+export interface IdentityPoolRoles {
+  authenticatedRoleArn?: string;
+  unauthenticatedRoleArn?: string;
+  roleMappingRules?: {
+    type: string;
+    ambiguousRoleResolution: string;
+    rules: { claim: string; matchType: string; value: string; roleArn: string }[];
+  }[];
+}
+
+export async function getIdentityPoolRoles(
+  poolId: string,
+): Promise<IdentityPoolRoles> {
+  const data = (await identityRequest("GetIdentityPoolRoles", {
+    IdentityPoolId: poolId,
+  })) as {
+    Roles?: {
+      AuthenticatedRoleArn?: string;
+      UnauthenticatedRoleArn?: string;
+    };
+    RoleMappings?: Record<
+      string,
+      {
+        Type?: string;
+        AmbiguousRoleResolution?: string;
+        RulesConfiguration?: {
+          Rules?: {
+            Claim?: string;
+            MatchType?: string;
+            Value?: string;
+            RoleARN?: string;
+          }[];
+        };
+      }
+    >;
+  };
+  const roleMappings = data.RoleMappings ?? {};
+  const roleMappingRules = Object.entries(roleMappings).map(
+    ([, v]) => ({
+      type: v.Type ?? "",
+      ambiguousRoleResolution: v.AmbiguousRoleResolution ?? "",
+      rules: (v.RulesConfiguration?.Rules ?? []).map((r) => ({
+        claim: r.Claim ?? "",
+        matchType: r.MatchType ?? "",
+        value: r.Value ?? "",
+        roleArn: r.RoleARN ?? "",
+      })),
+    }),
+  );
+  return {
+    authenticatedRoleArn: data.Roles?.AuthenticatedRoleArn,
+    unauthenticatedRoleArn: data.Roles?.UnauthenticatedRoleArn,
+    roleMappingRules: roleMappingRules.length ? roleMappingRules : undefined,
+  };
+}
+
+export async function deleteIdentityPool(poolId: string): Promise<void> {
+  await identityRequest("DeleteIdentityPool", { IdentityPoolId: poolId });
+}
