@@ -38,6 +38,13 @@ pub struct IamState {
     pub access_key_last_used: DashMap<String, AccessKeyLastUsed>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeletionTask {
+    pub task_id: String,
+    pub role_name: String,
+    pub status: String,
+}
+
 /// Serializable snapshot of `IamState`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IamStateSnapshot {
@@ -58,6 +65,20 @@ pub struct IamStateSnapshot {
     pub server_certificates: Vec<ServerCertificate>,
     #[serde(default)]
     pub virtual_mfa_devices: Vec<VirtualMfaDevice>,
+    #[serde(default)]
+    pub login_profiles: Vec<LoginProfile>,
+    #[serde(default)]
+    pub signing_certificates: Vec<SigningCertificate>,
+    #[serde(default)]
+    pub service_specific_credentials: Vec<ServiceSpecificCredential>,
+    #[serde(default)]
+    pub user_permissions_boundaries: Vec<(String, String)>,
+    #[serde(default)]
+    pub role_permissions_boundaries: Vec<(String, String)>,
+    #[serde(default)]
+    pub access_key_last_used: Vec<(String, AccessKeyLastUsed)>,
+    #[serde(default)]
+    pub deletion_tasks: Vec<DeletionTask>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

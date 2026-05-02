@@ -11,7 +11,7 @@ use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, Service
 use serde_json::Value;
 use tracing::debug;
 
-use state::{IamState, IamStateSnapshot};
+use state::{DeletionTask, IamState, IamStateSnapshot};
 
 /// IAM is a global service — we use account-only namespacing.
 /// The region key is always "global" for IAM state lookups.
@@ -629,6 +629,13 @@ impl ServiceHandler for IamService {
             saml_providers: vec![],
             server_certificates: vec![],
             virtual_mfa_devices: vec![],
+            login_profiles: vec![],
+            signing_certificates: vec![],
+            service_specific_credentials: vec![],
+            user_permissions_boundaries: vec![],
+            role_permissions_boundaries: vec![],
+            access_key_last_used: vec![],
+            deletion_tasks: vec![],
         };
 
         for (_, state) in self.store.iter_all() {
@@ -667,6 +674,43 @@ impl ServiceHandler for IamService {
             snapshot
                 .virtual_mfa_devices
                 .extend(state.virtual_mfa_devices.iter().map(|e| e.value().clone()));
+            snapshot
+                .login_profiles
+                .extend(state.login_profiles.iter().map(|e| e.value().clone()));
+            snapshot
+                .signing_certificates
+                .extend(state.signing_certificates.iter().map(|e| e.value().clone()));
+            snapshot.service_specific_credentials.extend(
+                state
+                    .service_specific_credentials
+                    .iter()
+                    .map(|e| e.value().clone()),
+            );
+            snapshot.user_permissions_boundaries.extend(
+                state
+                    .user_permissions_boundaries
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone())),
+            );
+            snapshot.role_permissions_boundaries.extend(
+                state
+                    .role_permissions_boundaries
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone())),
+            );
+            snapshot.access_key_last_used.extend(
+                state
+                    .access_key_last_used
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone())),
+            );
+            snapshot
+                .deletion_tasks
+                .extend(state.deletion_tasks.iter().map(|e| DeletionTask {
+                    task_id: e.key().clone(),
+                    role_name: e.value().clone(),
+                    status: "SUCCEEDED".to_string(),
+                }));
         }
 
         serde_json::to_vec(&snapshot).ok()
@@ -743,6 +787,37 @@ impl ServiceHandler for IamService {
             state
                 .virtual_mfa_devices
                 .insert(device.serial_number.clone(), device);
+        }
+        for profile in snapshot.login_profiles {
+            state
+                .login_profiles
+                .insert(profile.user_name.clone(), profile);
+        }
+        for cert in snapshot.signing_certificates {
+            state
+                .signing_certificates
+                .insert(cert.certificate_id.clone(), cert);
+        }
+        for cred in snapshot.service_specific_credentials {
+            state
+                .service_specific_credentials
+                .insert(cred.service_specific_credential_id.clone(), cred);
+        }
+        for (user_name, boundary_arn) in snapshot.user_permissions_boundaries {
+            state
+                .user_permissions_boundaries
+                .insert(user_name, boundary_arn);
+        }
+        for (role_name, boundary_arn) in snapshot.role_permissions_boundaries {
+            state
+                .role_permissions_boundaries
+                .insert(role_name, boundary_arn);
+        }
+        for (key_id, last_used) in snapshot.access_key_last_used {
+            state.access_key_last_used.insert(key_id, last_used);
+        }
+        for task in snapshot.deletion_tasks {
+            state.deletion_tasks.insert(task.task_id, task.role_name);
         }
 
         Ok(())
