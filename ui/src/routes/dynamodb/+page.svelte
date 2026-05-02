@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import {
@@ -56,7 +57,12 @@
 	let editorOpen = $state(false);
 	let editingItem = $state<Item | null>(null);
 
-	let activeTab = $state<'items' | 'partiql' | 'indexes' | 'schema' | 'backups'>('items');
+	let active: string = $state(
+		useTab('dynamodb', ['items', 'partiql', 'indexes', 'schema', 'backups'] as const, 'items', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	onMount(loadTables);
 
@@ -102,7 +108,7 @@
 		selected = t;
 		detail = null;
 		detailLoading = true;
-		activeTab = 'items';
+		active = 'items';
 		try {
 			detail = await describeTable(t.name);
 			syncProtection(detail.name, detail.deletionProtectionEnabled);
@@ -250,7 +256,7 @@
 					</div>
 				</div>
 
-				<Tabs bind:value={activeTab} class="flex min-h-0 min-w-0 flex-1 flex-col gap-0">
+				<Tabs bind:value={active} class="flex min-h-0 min-w-0 flex-1 flex-col gap-0">
 					<TabsList class="mx-4 mt-2 self-start">
 						<TabsTrigger value="items">Items</TabsTrigger>
 						<TabsTrigger value="partiql">PartiQL</TabsTrigger>

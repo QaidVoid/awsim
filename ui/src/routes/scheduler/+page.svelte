@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
@@ -11,7 +12,12 @@
 	import { listScheduleGroups, type ScheduleGroup, type ScheduleSummary } from '$lib/api/scheduler';
 	import { toast } from 'svelte-sonner';
 
-	let activeTab = $state<'schedules' | 'groups'>('schedules');
+	let active: string = $state(
+		useTab('scheduler', ['schedules', 'groups'] as const, 'schedules', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 	let selectedGroup = $state('ALL');
 	let groups = $state<ScheduleGroup[]>([]);
 	let refreshKey = $state(0);
@@ -54,7 +60,7 @@
 		</Button>
 	{/snippet}
 
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="schedules">Schedules</TabsTrigger>
 			<TabsTrigger value="groups">Groups</TabsTrigger>

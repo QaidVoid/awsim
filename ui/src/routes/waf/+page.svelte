@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
 	import { Label } from '$lib/components/ui/label';
@@ -8,7 +9,12 @@
 	import type { WafScope } from '$lib/api/waf';
 
 	let scope = $state<WafScope>('REGIONAL');
-	let active = $state('webacls');
+	let active: string = $state(
+		useTab('waf', ['webacls', 'rulegroups', 'ipsets'] as const, 'webacls', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 </script>
 
 <ServicePage

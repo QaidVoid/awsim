@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import { ServicePage, EmptyState, ListSkeleton } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
@@ -43,8 +44,11 @@
 	let error = $state<string | null>(null);
 
 	let selectedId = $state<string | null>(null);
-	let activeTab = $state<'resources' | 'stages' | 'deployments' | 'authorizers' | 'tester'>(
-		'resources'
+	let active: string = $state(
+		useTab('apigateway', ['resources', 'stages', 'deployments', 'authorizers', 'tester'] as const, 'resources', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
 	);
 
 	let createOpen = $state(false);
@@ -185,10 +189,10 @@
 						</div>
 					</header>
 
-					<Tabs
-						bind:value={activeTab}
-						class="flex h-full min-h-0 flex-1 flex-col overflow-hidden"
-					>
+				<Tabs
+					bind:value={active}
+					class="flex h-full min-h-0 flex-1 flex-col overflow-hidden"
+				>
 						<TabsList variant="line" class="border-b border-border px-4">
 							<TabsTrigger value="resources">Resources</TabsTrigger>
 							<TabsTrigger value="stages">Stages</TabsTrigger>

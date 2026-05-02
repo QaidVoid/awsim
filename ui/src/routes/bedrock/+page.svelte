@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import { ServicePage } from '$lib/components/service';
 	import {
@@ -24,16 +25,12 @@
 		type Guardrail,
 	} from '$lib/api/bedrock';
 
-	type TabKey =
-		| 'models'
-		| 'guardrails'
-		| 'provisioned'
-		| 'custom'
-		| 'knowledge'
-		| 'playground'
-		| 'proxy';
-
-	let activeTab = $state<TabKey>('models');
+	let active: string = $state(
+		useTab('bedrock', ['models', 'guardrails', 'provisioned', 'custom', 'knowledge', 'playground', 'proxy'] as const, 'models', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	let modelSheetOpen = $state(false);
 	let selectedModel = $state<FoundationModel | null>(null);
@@ -77,7 +74,7 @@
 		<button
 			type="button"
 			class="cursor-pointer"
-			onclick={() => (activeTab = 'proxy')}
+			onclick={() => (active = 'proxy')}
 			title="View proxy config"
 		>
 			<Badge variant="default" class="text-xs">
@@ -88,7 +85,7 @@
 		<button
 			type="button"
 			class="cursor-pointer"
-			onclick={() => (activeTab = 'proxy')}
+			onclick={() => (active = 'proxy')}
 			title="No backend configured — using canned responses"
 		>
 			<Badge variant="outline" class="text-xs">proxy: canned</Badge>
@@ -101,7 +98,7 @@
 	description="Foundation models, guardrails, custom models, knowledge bases, and an invoke playground."
 	actions={proxyChip}
 >
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="models">Foundation models</TabsTrigger>
 			<TabsTrigger value="guardrails">Guardrails</TabsTrigger>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import { Input } from '$lib/components/ui/input';
@@ -6,7 +7,12 @@
 	import GroupsTab from '$lib/components/identitystore/groups-tab.svelte';
 
 	let identityStoreId = $state('d-1234567890');
-	let activeTab = $state<'users' | 'groups'>('users');
+	let active: string = $state(
+		useTab('identitystore', ['users', 'groups'] as const, 'users', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 	let refreshKey = $state(0);
 
 	function refresh() {
@@ -29,7 +35,7 @@
 		</div>
 	{/snippet}
 
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="users">Users</TabsTrigger>
 			<TabsTrigger value="groups">Groups</TabsTrigger>

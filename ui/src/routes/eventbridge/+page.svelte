@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
@@ -8,7 +9,12 @@
 	import ArchivesTab from '$lib/components/eventbridge/archives-tab.svelte';
 	import SendEventDialog from '$lib/components/eventbridge/send-event-dialog.svelte';
 
-	let activeTab = $state<'buses' | 'rules' | 'archives'>('buses');
+	let active: string = $state(
+		useTab('eventbridge', ['buses', 'rules', 'archives'] as const, 'buses', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 	let selectedBus = $state('default');
 
 	let sendOpen = $state(false);
@@ -35,7 +41,7 @@
 		</Button>
 	{/snippet}
 
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="buses">Event buses</TabsTrigger>
 			<TabsTrigger value="rules">Rules</TabsTrigger>

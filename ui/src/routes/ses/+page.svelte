@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import { Button } from '$lib/components/ui/button';
@@ -11,8 +12,12 @@
 	import OutboxTab from '$lib/components/ses/outbox-tab.svelte';
 	import SendEmailDialog from '$lib/components/ses/send-email-dialog.svelte';
 
-	type TabId = 'outbox' | 'identities' | 'config-sets' | 'templates' | 'contacts' | 'suppression';
-	let activeTab = $state<TabId>('outbox');
+	let active: string = $state(
+		useTab('ses', ['outbox', 'identities', 'config-sets', 'templates', 'contacts', 'suppression'] as const, 'outbox', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 	let composeOpen = $state(false);
 </script>
 
@@ -22,7 +27,7 @@
 			<SendIcon /> Compose
 		</Button>
 	{/snippet}
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="outbox">Outbox</TabsTrigger>
 			<TabsTrigger value="identities">Identities</TabsTrigger>

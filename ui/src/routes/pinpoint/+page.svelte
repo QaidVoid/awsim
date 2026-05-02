@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage, EmptyState } from '$lib/components/service';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import MegaphoneIcon from '@lucide/svelte/icons/megaphone';
@@ -9,7 +10,12 @@
 	import type { App } from '$lib/api/pinpoint';
 
 	let selected = $state<App | null>(null);
-	let activeTab = $state<'endpoints' | 'segments' | 'campaigns'>('endpoints');
+	let active: string = $state(
+		useTab('pinpoint', ['endpoints', 'segments', 'campaigns'] as const, 'endpoints', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 	let refreshKey = $state(0);
 
 	function refresh() {
@@ -40,7 +46,7 @@
 					/>
 				</div>
 			{:else}
-				<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+				<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 					<TabsList variant="line" class="border-b border-border px-4">
 						<TabsTrigger value="endpoints">Endpoints</TabsTrigger>
 						<TabsTrigger value="segments">Segments</TabsTrigger>

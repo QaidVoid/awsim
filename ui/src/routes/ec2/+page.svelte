@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import {
 		describeInstances,
@@ -28,8 +29,11 @@
 	} from '$lib/components/ec2';
 	import { toast } from 'svelte-sonner';
 
-	let activeTab = $state<'instances' | 'security' | 'keys' | 'vpcs' | 'subnets' | 'volumes'>(
-		'instances'
+	let active: string = $state(
+		useTab('ec2', ['instances', 'security', 'keys', 'vpcs', 'subnets', 'volumes'] as const, 'instances', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
 	);
 
 	let instances = $state<Instance[]>([]);
@@ -134,7 +138,7 @@
 	title="EC2"
 	description="Elastic Compute Cloud — instances, networking, security, keys, and storage."
 >
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-col">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-col">
 		<TabsList class="mx-4 mt-2 self-start">
 			<TabsTrigger value="instances">Instances</TabsTrigger>
 			<TabsTrigger value="security">Security groups</TabsTrigger>

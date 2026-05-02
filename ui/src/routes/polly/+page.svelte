@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import {
 		Tabs,
@@ -11,15 +12,19 @@
 	import SynthesizePanel from '$lib/components/polly/synthesize-panel.svelte';
 	import TasksTab from '$lib/components/polly/tasks-tab.svelte';
 
-	type TabKey = 'synth' | 'voices' | 'lexicons' | 'tasks';
-	let activeTab = $state<TabKey>('synth');
+	let active: string = $state(
+		useTab('polly', ['synth', 'voices', 'lexicons', 'tasks'] as const, 'synth', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 </script>
 
 <ServicePage
 	title="Polly"
 	description="Text-to-speech with managed voices, pronunciation lexicons, and async tasks."
 >
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="synth">Synthesize</TabsTrigger>
 			<TabsTrigger value="voices">Voices</TabsTrigger>

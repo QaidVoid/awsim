@@ -2,6 +2,7 @@
 	/**
 	 * CloudTrail page — Trails + Event History tabs.
 	 */
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import {
 		Tabs,
@@ -12,7 +13,12 @@
 	import TrailsTab from '$lib/components/cloudtrail/trails-tab.svelte';
 	import EventHistoryTab from '$lib/components/cloudtrail/event-history-tab.svelte';
 
-	let tab = $state<'trails' | 'events'>('trails');
+	let active: string = $state(
+		useTab('cloudtrail', ['trails', 'events'] as const, 'trails', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 </script>
 
 <svelte:head>
@@ -21,8 +27,7 @@
 
 <ServicePage title="CloudTrail" description="Audit trails for AWS API activity.">
 	<Tabs
-		value={tab}
-		onValueChange={(v) => (tab = v as 'trails' | 'events')}
+		bind:value={active}
 		class="flex h-full min-h-0 flex-col"
 	>
 		<div class="border-b border-border px-4 pt-3">

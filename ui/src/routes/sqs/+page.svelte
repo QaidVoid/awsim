@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import { ServicePage, EmptyState, ListSkeleton } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
@@ -46,7 +47,12 @@
 	let error = $state<string | null>(null);
 
 	let selectedUrl = $state<string | null>(null);
-	let activeTab = $state<'messages' | 'send' | 'attributes' | 'dlq'>('messages');
+	let active: string = $state(
+		useTab('sqs', ['messages', 'send', 'attributes', 'dlq'] as const, 'messages', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 	let detailMessage = $state<Message | null>(null);
 	let detailOpen = $state(false);
 
@@ -86,7 +92,7 @@
 
 	function handleSelect(url: string) {
 		selectedUrl = url;
-		activeTab = 'messages';
+		active = 'messages';
 	}
 
 	async function handleDelete() {
@@ -214,7 +220,7 @@
 						</div>
 					</header>
 
-					<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+					<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 						<TabsList variant="line" class="border-b border-border px-4">
 							<TabsTrigger value="messages">Messages</TabsTrigger>
 							<TabsTrigger value="send">Send</TabsTrigger>

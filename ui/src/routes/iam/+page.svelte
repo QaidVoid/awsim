@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
 	import UsersTab from '$lib/components/iam/users-tab.svelte';
@@ -8,7 +9,12 @@
 	import SimulatorTab from '$lib/components/iam/simulator-tab.svelte';
 	import InstanceProfilesTab from '$lib/components/iam/instance-profiles-tab.svelte';
 
-	let active = $state('users');
+	let active: string = $state(
+		useTab('iam', ['users', 'roles', 'groups', 'policies', 'instance-profiles', 'simulator'] as const, 'users', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 </script>
 
 <ServicePage

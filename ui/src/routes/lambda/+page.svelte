@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import {
 		listFunctions,
@@ -46,9 +47,12 @@
 	let selectedName = $state<string | null>(null);
 	let detail = $state<LambdaFunctionDetail | null>(null);
 	let detailLoading = $state(false);
-	let activeTab = $state<
-		'code' | 'config' | 'invoke' | 'versions' | 'logs' | 'concurrency' | 'sources'
-	>('invoke');
+	let active: string = $state(
+		useTab('lambda', ['invoke', 'config', 'code', 'versions', 'concurrency', 'sources', 'logs'] as const, 'invoke', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 	let createOpen = $state(false);
 
 	onMount(loadList);
@@ -154,7 +158,7 @@
 					onDelete={handleDelete}
 					onRefresh={() => selectedName && loadDetail(selectedName)}
 				/>
-				<Tabs bind:value={activeTab} class="flex min-h-0 flex-1 flex-col">
+				<Tabs bind:value={active} class="flex min-h-0 flex-1 flex-col">
 					<TabsList class="mx-4 mt-2 self-start">
 						<TabsTrigger value="invoke">Invoke</TabsTrigger>
 						<TabsTrigger value="config">Configuration</TabsTrigger>

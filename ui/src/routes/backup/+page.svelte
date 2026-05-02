@@ -1,11 +1,17 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import VaultsTab from '$lib/components/backup/vaults-tab.svelte';
 	import PlansTab from '$lib/components/backup/plans-tab.svelte';
 	import JobsTab from '$lib/components/backup/jobs-tab.svelte';
 
-	let activeTab = $state<'vaults' | 'plans' | 'jobs'>('vaults');
+	let active: string = $state(
+		useTab('backup', ['vaults', 'plans', 'jobs'] as const, 'vaults', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 	let refreshKey = $state(0);
 
 	function refresh() {
@@ -17,7 +23,7 @@
 	title="Backup"
 	description="Backup vaults, plans, and jobs across EFS, RDS, DynamoDB, S3, and EBS."
 >
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="vaults">Vaults</TabsTrigger>
 			<TabsTrigger value="plans">Plans</TabsTrigger>

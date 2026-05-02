@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import { ServicePage, EmptyState, ListSkeleton } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
@@ -42,7 +43,12 @@
 	let selectedArn = $state<string | null>(null);
 	let selectedAttrs = $state<TopicAttributes | null>(null);
 	let attrsLoading = $state(false);
-	let activeTab = $state<'subs' | 'publish' | 'attrs'>('subs');
+	let active: string = $state(
+		useTab('sns', ['subs', 'publish', 'attrs'] as const, 'subs', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	let createOpen = $state(false);
 	let confirmDelete = $state<{ arn: string; name: string } | null>(null);
@@ -80,7 +86,7 @@
 	function handleSelect(arn: string) {
 		selectedArn = arn;
 		selectedAttrs = null;
-		activeTab = 'subs';
+		active = 'subs';
 		loadAttrs(arn);
 	}
 
@@ -171,7 +177,7 @@
 						</Button>
 					</header>
 
-					<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+					<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 						<TabsList variant="line" class="border-b border-border px-4">
 							<TabsTrigger value="subs">Subscriptions</TabsTrigger>
 							<TabsTrigger value="publish">Publish</TabsTrigger>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import {
@@ -20,7 +21,12 @@
 	let instances = $state<DBInstance[]>([]);
 	let loading = $state(true);
 
-	let activeTab = $state<'instances' | 'snapshots'>('instances');
+	let active: string = $state(
+		useTab('rds', ['instances', 'snapshots'] as const, 'instances', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	let selected = $state<DBInstance | null>(null);
 	let detailOpen = $state(false);
@@ -86,7 +92,7 @@
 		</Button>
 	{/snippet}
 
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-col gap-0">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-col gap-0">
 		<TabsList class="mx-4 mt-2 self-start">
 			<TabsTrigger value="instances">Instances</TabsTrigger>
 			<TabsTrigger value="snapshots">Snapshots</TabsTrigger>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage, EmptyState } from '$lib/components/service';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import ToggleIcon from '@lucide/svelte/icons/toggle-left';
@@ -9,7 +10,12 @@
 	import type { Application } from '$lib/api/appconfig';
 
 	let selected = $state<Application | null>(null);
-	let activeTab = $state<'environments' | 'profiles' | 'deployments'>('environments');
+	let active: string = $state(
+		useTab('appconfig', ['environments', 'profiles', 'deployments'] as const, 'environments', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 	let refreshKey = $state(0);
 
 	function refresh() {
@@ -40,7 +46,7 @@
 					/>
 				</div>
 			{:else}
-				<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+				<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 					<TabsList variant="line" class="border-b border-border px-4">
 						<TabsTrigger value="environments">Environments</TabsTrigger>
 						<TabsTrigger value="profiles">Profiles</TabsTrigger>

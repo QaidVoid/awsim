@@ -2,6 +2,7 @@
 	/**
 	 * DataSync page — locations, tasks, and executions.
 	 */
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import {
@@ -14,7 +15,12 @@
 	} from '$lib/components/datasync';
 	import type { Location, Task } from '$lib/api/datasync';
 
-	let activeTab = $state<'locations' | 'tasks' | 'executions'>('locations');
+	let active: string = $state(
+		useTab('datasync', ['locations', 'tasks', 'executions'] as const, 'locations', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	let selectedLocation = $state<Location | null>(null);
 	let locationOpen = $state(false);
@@ -45,7 +51,7 @@
 </svelte:head>
 
 <ServicePage title="DataSync" description="Move data between AWS storage services and on-prem.">
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-col">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-col">
 		<TabsList class="mx-4 mt-2 self-start">
 			<TabsTrigger value="locations">Locations</TabsTrigger>
 			<TabsTrigger value="tasks">Tasks</TabsTrigger>

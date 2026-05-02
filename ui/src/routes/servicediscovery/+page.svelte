@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import NamespacesTab from '$lib/components/servicediscovery/namespaces-tab.svelte';
@@ -6,7 +7,12 @@
 	import InstancesSheet from '$lib/components/servicediscovery/instances-sheet.svelte';
 	import type { SDService } from '$lib/api/servicediscovery';
 
-	let activeTab = $state<'namespaces' | 'services'>('namespaces');
+	let active: string = $state(
+		useTab('servicediscovery', ['namespaces', 'services'] as const, 'namespaces', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 	let detailOpen = $state(false);
 	let detailService = $state<SDService | null>(null);
 	let refreshKey = $state(0);
@@ -25,7 +31,7 @@
 	title="Cloud Map"
 	description="Service discovery — namespaces, services, and instances. Used by ECS service discovery."
 >
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="namespaces">Namespaces</TabsTrigger>
 			<TabsTrigger value="services">Services</TabsTrigger>

@@ -5,6 +5,7 @@
 	 * Left: list of stacks. Right: tabbed detail (resources, events,
 	 * parameters, outputs, template).
 	 */
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import {
 		listStacks,
@@ -47,8 +48,11 @@
 	let resources = $state<StackResource[]>([]);
 	let events = $state<StackEvent[]>([]);
 	let detailLoading = $state(false);
-	let activeTab = $state<'resources' | 'events' | 'parameters' | 'outputs' | 'template'>(
-		'resources'
+	let active: string = $state(
+		useTab('cloudformation', ['resources', 'events', 'parameters', 'outputs', 'template'] as const, 'resources', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
 	);
 
 	let createOpen = $state(false);
@@ -201,7 +205,7 @@
 					</div>
 				</header>
 
-				<Tabs bind:value={activeTab} class="flex min-h-0 flex-1 flex-col">
+				<Tabs bind:value={active} class="flex min-h-0 flex-1 flex-col">
 					<TabsList class="mx-4 mt-2 self-start">
 						<TabsTrigger value="resources">Resources</TabsTrigger>
 						<TabsTrigger value="events">Events</TabsTrigger>

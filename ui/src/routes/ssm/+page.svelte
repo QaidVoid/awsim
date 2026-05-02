@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import ParametersTab from '$lib/components/ssm/parameters-tab.svelte';
@@ -7,15 +8,19 @@
 	import MaintenanceWindowsTab from '$lib/components/ssm/maintenance-windows-tab.svelte';
 	import OpsItemsTab from '$lib/components/ssm/ops-items-tab.svelte';
 
-	type TabId = 'parameters' | 'documents' | 'activations' | 'windows' | 'ops';
-	let activeTab = $state<TabId>('parameters');
+	let active: string = $state(
+		useTab('ssm', ['parameters', 'documents', 'activations', 'windows', 'ops'] as const, 'parameters', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 </script>
 
 <ServicePage
 	title="Systems Manager"
 	description="Parameters, automation documents, and hybrid activations."
 >
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="parameters">Parameters</TabsTrigger>
 			<TabsTrigger value="documents">Documents</TabsTrigger>

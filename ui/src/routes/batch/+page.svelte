@@ -3,6 +3,7 @@
 	 * AWS Batch page — tabs for compute environments, job queues, job
 	 * definitions, and jobs. Submit + detail sheet for jobs.
 	 */
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import {
@@ -15,7 +16,12 @@
 	} from '$lib/components/batch';
 	import type { JobSummary } from '$lib/api/batch';
 
-	let activeTab = $state<'envs' | 'queues' | 'defs' | 'jobs'>('envs');
+	let active: string = $state(
+		useTab('batch', ['envs', 'queues', 'defs', 'jobs'] as const, 'envs', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	let detailJob = $state<JobSummary | null>(null);
 	let detailOpen = $state(false);
@@ -37,7 +43,7 @@
 </svelte:head>
 
 <ServicePage title="Batch" description="Run batch compute workloads with managed queues and jobs.">
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-col">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-col">
 		<TabsList class="mx-4 mt-2 self-start">
 			<TabsTrigger value="envs">Compute environments</TabsTrigger>
 			<TabsTrigger value="queues">Job queues</TabsTrigger>

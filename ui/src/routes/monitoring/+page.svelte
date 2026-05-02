@@ -2,6 +2,7 @@
 	/**
 	 * CloudWatch Metrics page — tabbed view of metrics, alarms and dashboards.
 	 */
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import {
 		Tabs,
@@ -13,7 +14,12 @@
 	import AlarmsTab from '$lib/components/cloudwatch-metrics/alarms-tab.svelte';
 	import DashboardsTab from '$lib/components/cloudwatch-metrics/dashboards-tab.svelte';
 
-	let tab = $state<'metrics' | 'alarms' | 'dashboards'>('metrics');
+	let active: string = $state(
+		useTab('monitoring', ['metrics', 'alarms', 'dashboards'] as const, 'metrics', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 </script>
 
 <svelte:head>
@@ -22,8 +28,7 @@
 
 <ServicePage title="CloudWatch Metrics" description="Metrics, alarms and dashboards.">
 	<Tabs
-		value={tab}
-		onValueChange={(v) => (tab = v as 'metrics' | 'alarms' | 'dashboards')}
+		bind:value={active}
 		class="flex h-full min-h-0 flex-col"
 	>
 		<div class="border-b border-border px-4 pt-3">

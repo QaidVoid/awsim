@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import {
 		Tabs,
@@ -11,15 +12,19 @@
 	import WorkgroupsTab from '$lib/components/athena/workgroups-tab.svelte';
 	import NamedQueriesTab from '$lib/components/athena/named-queries-tab.svelte';
 
-	type TabKey = 'editor' | 'history' | 'workgroups' | 'named';
-	let activeTab = $state<TabKey>('editor');
+	let active: string = $state(
+		useTab('athena', ['editor', 'history', 'workgroups', 'named'] as const, 'editor', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 </script>
 
 <ServicePage
 	title="Athena"
 	description="Run interactive SQL against data in S3 using workgroups and saved named queries."
 >
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="editor">Query editor</TabsTrigger>
 			<TabsTrigger value="history">History</TabsTrigger>

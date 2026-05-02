@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
@@ -21,16 +22,12 @@
 	import DistributionDetailSheet from '$lib/components/cloudfront/distribution-detail-sheet.svelte';
 	import CreateDistributionDialog from '$lib/components/cloudfront/create-distribution-dialog.svelte';
 
-	type Tab =
-		| 'distributions'
-		| 'oai'
-		| 'cache'
-		| 'origin'
-		| 'keyGroups'
-		| 'publicKeys'
-		| 'functions';
-
-	let activeTab = $state<Tab>('distributions');
+	let active: string = $state(
+		useTab('cloudfront', ['distributions', 'cache', 'origin', 'oai', 'keyGroups', 'publicKeys', 'functions'] as const, 'distributions', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	let distributions = $state<Distribution[]>([]);
 	let distLoading = $state(false);
@@ -69,7 +66,7 @@
 		</Button>
 	{/snippet}
 
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="distributions">Distributions</TabsTrigger>
 			<TabsTrigger value="cache">Cache policies</TabsTrigger>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
 	import UserPoolList from '$lib/components/cognito/user-pool-list.svelte';
@@ -7,7 +8,12 @@
 	import JwtDecoder from '$lib/components/cognito/jwt-decoder.svelte';
 	import type { UserPool } from '$lib/api/cognito';
 
-	let active = $state('userpools');
+	let active: string = $state(
+		useTab('cognito', ['userpools', 'identitypools', 'jwt'] as const, 'userpools', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	function openPool(p: UserPool) {
 		void goto(`/cognito/${p.id}`);

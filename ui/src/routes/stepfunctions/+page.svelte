@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import {
 		listStateMachines,
@@ -29,7 +30,12 @@
 	let selectedArn = $state<string | null>(null);
 	let detail = $state<StateMachineDetail | null>(null);
 	let detailLoading = $state(false);
-	let activeTab = $state<'definition' | 'executions'>('definition');
+	let active: string = $state(
+		useTab('stepfunctions', ['definition', 'executions'] as const, 'definition', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	let createOpen = $state(false);
 	let detailExecution = $state<Execution | null>(null);
@@ -141,7 +147,7 @@
 					onDelete={handleDelete}
 					onRefresh={() => selectedArn && loadDetail(selectedArn)}
 				/>
-				<Tabs bind:value={activeTab} class="flex min-h-0 flex-1 flex-col">
+				<Tabs bind:value={active} class="flex min-h-0 flex-1 flex-col">
 					<TabsList class="mx-4 mt-2 self-start">
 						<TabsTrigger value="definition">Definition</TabsTrigger>
 						<TabsTrigger value="executions">Executions</TabsTrigger>

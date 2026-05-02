@@ -2,6 +2,7 @@
 	/**
 	 * Organizations page — accounts, OUs, SCPs, and roots.
 	 */
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import {
@@ -14,7 +15,12 @@
 	} from '$lib/components/organizations';
 	import type { Account, Policy } from '$lib/api/organizations';
 
-	let activeTab = $state<'accounts' | 'ous' | 'policies' | 'roots'>('accounts');
+	let active: string = $state(
+		useTab('organizations', ['accounts', 'ous', 'policies', 'roots'] as const, 'accounts', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	let selectedAccount = $state<Account | null>(null);
 	let accountOpen = $state(false);
@@ -41,7 +47,7 @@
 	title="Organizations"
 	description="Centrally manage accounts, OUs, and service control policies."
 >
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-col">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-col">
 		<TabsList class="mx-4 mt-2 self-start">
 			<TabsTrigger value="accounts">Accounts</TabsTrigger>
 			<TabsTrigger value="ous">OUs</TabsTrigger>

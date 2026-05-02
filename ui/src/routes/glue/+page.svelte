@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import {
 		Tabs,
@@ -24,8 +25,12 @@
 		GlueConnection,
 	} from '$lib/api/glue';
 
-	type TabKey = 'databases' | 'tables' | 'crawlers' | 'jobs' | 'connections';
-	let activeTab = $state<TabKey>('databases');
+	let active: string = $state(
+		useTab('glue', ['databases', 'tables', 'crawlers', 'jobs', 'connections'] as const, 'databases', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	let dbSheetOpen = $state(false);
 	let dbName = $state<string | null>(null);
@@ -74,7 +79,7 @@
 	title="Glue"
 	description="Managed ETL service and Data Catalog: databases, tables, crawlers, jobs, and connections."
 >
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="databases">Databases</TabsTrigger>
 			<TabsTrigger value="tables">Tables</TabsTrigger>

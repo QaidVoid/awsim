@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import { listClustersWithDetail, type Cluster } from '$lib/api/eks';
 	import { ServicePage } from '$lib/components/service';
@@ -14,7 +15,12 @@
 	let clusters = $state<Cluster[]>([]);
 	let loading = $state(true);
 	let selected = $state<Cluster | null>(null);
-	let activeTab = $state<'clusters' | 'nodegroups' | 'fargate'>('clusters');
+	let active: string = $state(
+		useTab('eks', ['clusters', 'nodegroups', 'fargate'] as const, 'clusters', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	onMount(loadClusters);
 
@@ -35,7 +41,7 @@
 
 	function pickCluster(c: Cluster) {
 		selected = c;
-		if (activeTab === 'clusters') activeTab = 'nodegroups';
+		if (active === 'clusters') active = 'nodegroups';
 	}
 </script>
 
@@ -49,7 +55,7 @@
 		{/if}
 	{/snippet}
 
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-col">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-col">
 		<TabsList class="mx-4 mt-2 self-start">
 			<TabsTrigger value="clusters">Clusters</TabsTrigger>
 			<TabsTrigger value="nodegroups">Nodegroups</TabsTrigger>

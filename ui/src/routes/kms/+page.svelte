@@ -1,11 +1,17 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
 	import KeysTab from '$lib/components/kms/keys-tab.svelte';
 	import AliasesTab from '$lib/components/kms/aliases-tab.svelte';
 	import EncryptDecryptPlayground from '$lib/components/kms/encrypt-decrypt-playground.svelte';
 
-	let active = $state('keys');
+	let active: string = $state(
+		useTab('kms', ['keys', 'aliases', 'playground'] as const, 'keys', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 </script>
 
 <ServicePage

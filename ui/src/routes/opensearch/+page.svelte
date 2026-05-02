@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import {
 		listIndices,
@@ -43,7 +44,6 @@
 	let newIndexName = $state('');
 
 	let selected = $state<IndexSummary | null>(null);
-	let activeTab = $state<'browse' | 'query' | 'mapping'>('browse');
 	let docs = $state<SearchHit[]>([]);
 	let docsLoading = $state(false);
 	let total = $state(0);
@@ -59,6 +59,13 @@
 	let putOpen = $state(false);
 	let putId = $state('');
 	let putBody = $state('{\n  "field": "value"\n}');
+
+	let active: string = $state(
+		useTab('opensearch', ['browse', 'query', 'mapping'] as const, 'browse', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	onMount(loadAll);
 
@@ -78,7 +85,7 @@
 
 	async function selectIndex(i: IndexSummary) {
 		selected = i;
-		activeTab = 'browse';
+		active = 'browse';
 		await Promise.all([reloadDocs(i.index), loadMapping(i.index)]);
 	}
 
@@ -291,7 +298,7 @@
 					</div>
 				</div>
 
-				<Tabs bind:value={activeTab} class="flex min-h-0 min-w-0 flex-1 flex-col gap-0">
+				<Tabs bind:value={active} class="flex min-h-0 min-w-0 flex-1 flex-col gap-0">
 					<TabsList class="mx-4 mt-2 self-start">
 						<TabsTrigger value="browse">Browse</TabsTrigger>
 						<TabsTrigger value="query">Query DSL</TabsTrigger>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import TracesTab from '$lib/components/xray/traces-tab.svelte';
@@ -6,7 +7,12 @@
 	import TraceDetailSheet from '$lib/components/xray/trace-detail-sheet.svelte';
 	import type { TraceSummary } from '$lib/api/xray';
 
-	let activeTab = $state<'traces' | 'graph'>('traces');
+	let active: string = $state(
+		useTab('xray', ['traces', 'graph'] as const, 'traces', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 	let detailOpen = $state(false);
 	let detailSummary = $state<TraceSummary | null>(null);
 
@@ -20,7 +26,7 @@
 	title="X-Ray"
 	description="Distributed traces and service graph for instrumented workloads."
 >
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="traces">Traces</TabsTrigger>
 			<TabsTrigger value="graph">Service graph</TabsTrigger>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
@@ -35,7 +36,12 @@
 	import CreateLbDialog from '$lib/components/elb/create-lb-dialog.svelte';
 	import CreateTargetGroupDialog from '$lib/components/elb/create-target-group-dialog.svelte';
 
-	let activeTab = $state<'lbs' | 'tgs' | 'listeners' | 'rules'>('lbs');
+	let active: string = $state(
+		useTab('elb', ['lbs', 'tgs', 'listeners', 'rules'] as const, 'lbs', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	let loadBalancers = $state<LoadBalancer[]>([]);
 	let lbsLoading = $state(false);
@@ -130,7 +136,7 @@
 		</Button>
 	{/snippet}
 
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="lbs">Load balancers</TabsTrigger>
 			<TabsTrigger value="tgs">Target groups</TabsTrigger>

@@ -1,11 +1,17 @@
 <script lang="ts">
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import ClustersTab from '$lib/components/memorydb/clusters-tab.svelte';
 	import UsersTab from '$lib/components/memorydb/users-tab.svelte';
 	import AclsTab from '$lib/components/memorydb/acls-tab.svelte';
 
-	let activeTab = $state<'clusters' | 'users' | 'acls'>('clusters');
+	let active: string = $state(
+		useTab('memorydb', ['clusters', 'users', 'acls'] as const, 'clusters', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 	let refreshKey = $state(0);
 
 	function refresh() {
@@ -17,7 +23,7 @@
 	title="MemoryDB"
 	description="Redis-compatible MemoryDB clusters, users, and ACLs."
 >
-	<Tabs bind:value={activeTab} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+	<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
 		<TabsList variant="line" class="border-b border-border px-4">
 			<TabsTrigger value="clusters">Clusters</TabsTrigger>
 			<TabsTrigger value="users">Users</TabsTrigger>
