@@ -736,6 +736,33 @@ async fn token(
     let grant_type = form.grant_type.as_deref().unwrap_or("authorization_code");
     let cognito = &oauth_state.cognito;
 
+    {
+        let pool = cognito.user_pools.get(&pool_id);
+        if let Some(pool) = pool
+            && let Some(client) = pool.clients.get(client_id.as_str())
+        {
+            let flow_name = match grant_type {
+                "authorization_code" => "code",
+                "implicit" => "implicit",
+                "client_credentials" => "client_credentials",
+                "refresh_token" => "refresh_token",
+                _ => grant_type,
+            };
+            if !client.allowed_oauth_flows.is_empty()
+                && !client.allowed_oauth_flows.contains(&flow_name.to_string())
+            {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "unauthorized_client",
+                    &format!(
+                        "Grant type '{}' is not allowed for this client",
+                        flow_name
+                    ),
+                );
+            }
+        }
+    }
+
     match grant_type {
         "authorization_code" => {
             let code = match &form.code {
