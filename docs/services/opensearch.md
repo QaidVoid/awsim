@@ -9,7 +9,7 @@ Amazon OpenSearch Service compatible Elasticsearch REST API for full-text search
 | Protocol | Elasticsearch REST (not an AWS API protocol) |
 | Signing Name | N/A |
 | Base URL | `http://localhost:4566/opensearch/` |
-| Persistence | No |
+| Persistence | Yes (redb, disk-backed) |
 
 OpenSearch in AWSim is **not** an AWS-protocol service. It exposes an Elasticsearch-compatible REST API mounted at `/opensearch/` on the AWSim server. **No `Authorization` header or AWS SigV4 signing is required.**
 
@@ -45,7 +45,7 @@ curl -X POST http://localhost:4566/opensearch/products/_search \
 ## Operations
 
 ### Cluster
-- `GET /opensearch/` — cluster info: returns `name`, `cluster_name`, `cluster_uuid`, `version.number` (7.x compatible)
+- `GET /opensearch/` — cluster info: returns `name`, `cluster_name`, `cluster_uuid`, `version.number` (3.6.0, Lucene 10.2)
 - `GET /opensearch/_cluster/health` — cluster health status
   - Returns: `status` (`green`), `number_of_nodes`, `number_of_data_nodes`, `active_shards`
 - `GET /opensearch/_cat/indices` — list all indices in cat format (text, not JSON)
@@ -60,6 +60,8 @@ curl -X POST http://localhost:4566/opensearch/products/_search \
 - `HEAD /opensearch/{index}` — check if an index exists (200 = exists, 404 = not found)
 - `DELETE /opensearch/{index}` — delete an index and all its documents
 - `GET /opensearch/{index}/_mapping` — get the current mapping for an index
+- `PUT /opensearch/{index}/_mapping` — update mapping (deep-merges new properties)
+- `POST /opensearch/{index}/_refresh` — refresh index (no-op, data is immediately visible)
 - `GET/POST /opensearch/{index}/_count` — count documents matching a query
 
 ### Document Operations
@@ -75,13 +77,16 @@ curl -X POST http://localhost:4566/opensearch/products/_search \
 - `POST /opensearch/{index}/_update/{id}` — partially update a document
   - Body: `{"doc":{"field":"new_value"}}` — merges with existing document
 
-- `POST /opensearch/{index}/_update_by_query` — update multiple documents matching a query
+- `POST /opensearch/{index}/_update_by_query` — update multiple documents matching a query (supports Painless scripts)
+- `POST /opensearch/{index}/_delete_by_query` — delete documents matching a query
+- `GET/POST /opensearch/{index}/_mget` — retrieve multiple documents by ID
+- `GET/POST /opensearch/_mget` — retrieve multiple documents by ID (global)
 
 ### Search
 - `POST /opensearch/{index}/_search` — search with a full query DSL body
   - Body: `{"query":{...},"size":10,"from":0,"sort":[...],"_source":[...], "_id":true}`
   - Returns: `{"hits":{"total":{"value":N},"hits":[{"_id":"...","_score":1.0,"_source":{...}}]}}`
-  - Supported query types: `match`, `match_all`, `term`, `terms`, `range`, `bool` (`must`, `should`, `must_not`, `filter`), `ids`, `wildcard`, `prefix`
+  - Supported query types: `match`, `match_all`, `term`, `terms`, `range`, `bool` (`must`, `should`, `must_not`, `filter`), `ids`, `wildcard`, `prefix`, `exists`, `multi_match`, `query_string`, `knn`
 
 - `GET /opensearch/{index}/_search` — search with URL query params (e.g., `?q=name:stack`)
 - `POST /opensearch/_msearch` — multi-search (alternating header line + query body in ndjson)
@@ -211,8 +216,12 @@ const response = await client.search({
 
 - OpenSearch is mounted at `/opensearch/` prefix — **all requests must include this prefix**.
 - No AWS SigV4 signing is required — standard HTTP requests work directly.
-- Search supports `match`, `match_all`, `term`, `terms`, `range`, `bool` (`must`, `should`, `must_not`, `filter`), `ids`, `wildcard`, `prefix` query types.
+- Search supports `match`, `match_all`, `match`, `multi_match`, `term`, `terms`, `range`, `bool` (`must`, `should`, `must_not`, `filter`), `ids`, `wildcard`, `prefix`, `exists`, `query_string`, `knn` query types.
+- `sort` parameter is supported in search queries.
 - Aggregations are **not** supported in the current implementation.
-- The `_reindex` operation copies documents between in-memory indices; no S3 or external data is accessed.
-- `_update_by_query` updates in place but without scripting support.
-- State is in-memory only and lost on restart.
+- The `_reindex` operation copies documents between indices.
+- `_update_by_query` supports simple Painless scripts (`ctx._source.field = params.value`, `ctx._source.remove('field')`, including nested dot-notation paths).
+- State is persistent via redb (disk-backed) and survives AWSim restarts.
+- Document `_version` and `_seq_no` are tracked per document.
+- Aliases are cleaned up automatically when an index is deleted.
+- Returns proper `index_not_found_exception` errors for operations on non-existent indices.

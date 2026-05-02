@@ -34,6 +34,8 @@ All standard Elasticsearch API paths are supported under this prefix.
 | `HEAD /opensearch/{index}` | Check index exists |
 | `DELETE /opensearch/{index}` | Delete index |
 | `GET /opensearch/{index}/_mapping` | Get mapping |
+| `PUT /opensearch/{index}/_mapping` | Update mapping |
+| `POST /opensearch/{index}/_refresh` | Refresh index (no-op) |
 
 ### Document Operations
 
@@ -47,6 +49,9 @@ All standard Elasticsearch API paths are supported under this prefix.
 | `GET /opensearch/{index}/_source/{id}` | Get document source |
 | `POST /opensearch/{index}/_update/{id}` | Update document |
 | `POST /opensearch/{index}/_update_by_query` | Update by query |
+| `POST /opensearch/{index}/_delete_by_query` | Delete by query |
+| `GET/POST /opensearch/{index}/_mget` | Multi-get documents |
+| `GET/POST /opensearch/_mget` | Multi-get documents (global) |
 | `POST /opensearch/{index}/_bulk` | Bulk operations on index |
 
 ### Search
@@ -62,11 +67,20 @@ All standard Elasticsearch API paths are supported under this prefix.
 ## Supported Query Types
 
 - `match_all` — matches every document
-- `match` — full-text search on a single field
-- `multi_match` — full-text search across multiple fields
-- `bool` — compound queries with `must`, `should`, `filter`
-- `term` — exact-value match
+- `match` — full-text search on fields
+- `multi_match` — full-text search across multiple fields (supports field boosting with `^`)
+- `bool` — compound queries with `must`, `should`, `must_not`, `filter`
+- `term` — exact-value match (supports strings, numbers, booleans)
+- `terms` — match any of a set of values
+- `range` — numeric/string range filters (`gt`, `gte`, `lt`, `lte`)
+- `wildcard` — pattern matching with `*` and `?`
+- `prefix` — prefix match on field values
+- `exists` — check if a field exists
+- `ids` — match by document `_id`
 - `query_string` — simple query string syntax
+- `knn` — brute-force k-NN vector search (cosine similarity)
+
+Sorting is supported via the `sort` body parameter.
 
 ## Examples
 
@@ -150,3 +164,5 @@ curl -X POST "http://localhost:4566/opensearch/logs-*/_search" \
 - Mappings are stored but not enforced during indexing. Any JSON document can be indexed in any index.
 - Aggregations are not yet supported.
 - The `from` / `size` pagination parameters are supported. The default size is 10.
+- State is persistent via redb (disk-backed) and survives AWSim restarts.
+- Reports itself as OpenSearch 3.6.0 (Lucene 10.2.0).
