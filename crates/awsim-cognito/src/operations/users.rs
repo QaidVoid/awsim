@@ -1220,13 +1220,13 @@ pub fn verify_user_attribute(
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
-            if let Some(expected) = user.pending_verifications.get(attribute_name) {
-                if _code != expected {
-                    return Err(AwsError::bad_request(
-                        "CodeMismatchException",
-                        "Invalid verification code provided",
-                    ));
-                }
+            if let Some(expected) = user.pending_verifications.get(attribute_name)
+                && _code != expected
+            {
+                return Err(AwsError::bad_request(
+                    "CodeMismatchException",
+                    "Invalid verification code provided",
+                ));
             }
             let verified_key = format!("{attribute_name}_verified");
             user.attributes.insert(verified_key, "true".to_string());

@@ -56,6 +56,7 @@ pub fn build_auth_result_pub(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_auth_result_with_validity(
     user_sub: &str,
     username: &str,
@@ -108,6 +109,7 @@ fn build_auth_result_with_validity(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_auth_result_validity(
     user_sub: &str,
     username: &str,

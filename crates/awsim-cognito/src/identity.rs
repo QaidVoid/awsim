@@ -519,10 +519,10 @@ fn get_id(
             }
             let mut match_count = 0;
             for (provider, token) in &login_map {
-                if let Some(existing_token) = ident.login_tokens.get(provider) {
-                    if existing_token == token {
-                        match_count += 1;
-                    }
+                if let Some(existing_token) = ident.login_tokens.get(provider)
+                    && existing_token == token
+                {
+                    match_count += 1;
                 }
             }
             if match_count == login_map.len() && !login_map.is_empty() {
@@ -1368,7 +1368,7 @@ fn list_tags_for_resource(state: &IdentityPoolState, input: &Value) -> Result<Va
     let pool_id = pool_id_from_arn(resource_arn)
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format"))?;
 
-    let pool = get_pool(state, &pool_id)?;
+    let pool = get_pool(state, pool_id)?;
 
     let tags_json: Value = pool.tags.iter().fold(json!({}), |mut acc, (k, v)| {
         acc[k] = Value::String(v.clone());

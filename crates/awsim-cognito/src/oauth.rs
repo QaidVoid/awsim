@@ -237,6 +237,7 @@ fn escape_html(s: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn login_page_html(
     pool_id: &str,
     response_type: &str,
@@ -579,7 +580,9 @@ async fn authorize_post(
             nonce.as_deref().unwrap_or(""),
             code_challenge.as_deref().unwrap_or(""),
             code_challenge_method.as_deref().unwrap_or(""),
-            Some("Password reset required — use AdminSetUserPassword or InitiateAuth with NEW_PASSWORD_REQUIRED"),
+            Some(
+                "Password reset required — use AdminSetUserPassword or InitiateAuth with NEW_PASSWORD_REQUIRED",
+            ),
         );
     }
 
