@@ -11,8 +11,11 @@
 		getUserPolicy,
 		putUserPolicy,
 		deleteUserPolicy,
+		listGroupsForUser,
+		removeUserFromGroup,
 		type IamAttachedPolicy,
 		type IamUser,
+		type IamGroup,
 	} from '$lib/api/iam';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Badge } from '$lib/components/ui/badge';
@@ -26,6 +29,7 @@
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import X from '@lucide/svelte/icons/x';
 	import { toast } from 'svelte-sonner';
 
 	let users = $state<IamUser[]>([]);
@@ -38,6 +42,7 @@
 
 	let attached = $state<IamAttachedPolicy[]>([]);
 	let inlineNames = $state<string[]>([]);
+	let userGroups = $state<IamGroup[]>([]);
 
 	const filtered = $derived(
 		filter.trim()
@@ -59,9 +64,11 @@
 		detailLoading = true;
 		attached = [];
 		inlineNames = [];
+		userGroups = [];
 		try {
 			selected = await getUser(u.userName);
 			await reloadPolicies(u.userName);
+			userGroups = await listGroupsForUser(u.userName).catch(() => []);
 		} finally {
 			detailLoading = false;
 		}
@@ -161,6 +168,49 @@
 		{/if}
 		<div class="pt-6">
 			<AccessKeysPanel userName={selected.userName} />
+		</div>
+		<div class="pt-6">
+			<div class="mb-2 flex items-center justify-between">
+				<h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+					Groups
+				</h3>
+				<Badge variant="outline">{userGroups.length}</Badge>
+			</div>
+			{#if detailLoading}
+				<p class="text-xs text-muted-foreground">Loading groups...</p>
+			{:else if userGroups.length === 0}
+				<p class="text-xs text-muted-foreground">Not a member of any group.</p>
+			{:else}
+				<ul class="space-y-1.5">
+					{#each userGroups as g (g.arn)}
+						<li
+							class="flex items-center gap-2 rounded border border-border/60 px-3 py-2 text-sm"
+						>
+							<div class="min-w-0 flex-1">
+								<div class="font-medium">{g.groupName}</div>
+								<div class="truncate font-mono text-xs text-muted-foreground">{g.arn}</div>
+							</div>
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								aria-label="Remove from group"
+								onclick={async () => {
+									if (!selected || !confirm(`Remove from ${g.groupName}?`)) return;
+									try {
+										await removeUserFromGroup(g.groupName, selected.userName);
+										toast.success(`Removed from ${g.groupName}`);
+										userGroups = await listGroupsForUser(selected.userName).catch(() => []);
+									} catch (e) {
+										toast.error(e instanceof Error ? e.message : 'Failed');
+									}
+								}}
+							>
+								<X class="size-3.5" />
+							</Button>
+						</li>
+					{/each}
+				</ul>
+			{/if}
 		</div>
 		<div class="pt-6">
 			<EntityPoliciesEditor
