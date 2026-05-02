@@ -501,8 +501,36 @@ fn get_id(
         .map(|m| m.keys().cloned().collect())
         .unwrap_or_default();
 
-    // For authenticated identities, check if one already exists for this provider set.
-    // For simplicity, always create a new identity (real Cognito deduplicates by token).
+    // For authenticated identities, deduplicate by matching provider + token.
+    if is_authenticated {
+        let login_map: HashMap<String, String> = logins
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Look for an existing identity in this pool with the same login providers and tokens.
+        for entry in state.identities.iter() {
+            let ident = entry.value();
+            if ident.pool_id != pool_id {
+                continue;
+            }
+            let mut match_count = 0;
+            for (provider, token) in &login_map {
+                if let Some(existing_token) = ident.login_tokens.get(provider) {
+                    if existing_token == token {
+                        match_count += 1;
+                    }
+                }
+            }
+            if match_count == login_map.len() && !login_map.is_empty() {
+                return Ok(json!({ "IdentityId": ident.identity_id }));
+            }
+        }
+    }
+
     let identity_id = format!("{}:{}", ctx.region, uuid::Uuid::new_v4());
 
     let now = now_iso8601();
@@ -741,8 +769,11 @@ fn get_open_id_token(
         ));
     }
 
-    // The pool_id can be inferred from the identity_id region prefix
-    let pool_id = format!("{}:pool", ctx.region);
+    let pool_id = state
+        .identities
+        .get(identity_id)
+        .map(|e| e.value().pool_id.clone())
+        .unwrap_or_else(|| format!("{}:pool", ctx.region));
     let token = fake_open_id_token(identity_id, &pool_id);
 
     Ok(json!({
@@ -958,12 +989,10 @@ fn list_identities(state: &IdentityPoolState, input: &Value) -> Result<Value, Aw
 
     let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
 
-    // Filter identities that belong to this pool (identity_id starts with pool region prefix)
-    // In our simulator all identities share the same region store so we return all of them
-    // with a simple pagination stub.
     let identities: Vec<Value> = state
         .identities
         .iter()
+        .filter(|e| e.value().pool_id == pool_id)
         .take(max_results)
         .map(|e| {
             json!({
@@ -1283,12 +1312,10 @@ fn tag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsEr
         .unwrap_or_default();
 
     // Resolve the pool from ARN
-    let pool_id_raw = pool_id_from_arn(resource_arn)
+    let pool_id = pool_id_from_arn(resource_arn)
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format"))?;
-    // Pool ids use ':' but we stored them with '_' in the ARN; convert back
-    let pool_id = pool_id_raw.replace('_', ":");
 
-    let mut pool = state.pools.get_mut(&pool_id).ok_or_else(|| {
+    let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
             "ResourceNotFoundException",
             format!("Identity pool not found: {pool_id}"),
@@ -1315,11 +1342,10 @@ fn untag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, Aws
         .filter_map(|v| v.as_str())
         .collect();
 
-    let pool_id_raw = pool_id_from_arn(resource_arn)
+    let pool_id = pool_id_from_arn(resource_arn)
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format"))?;
-    let pool_id = pool_id_raw.replace('_', ":");
 
-    let mut pool = state.pools.get_mut(&pool_id).ok_or_else(|| {
+    let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
             "ResourceNotFoundException",
             format!("Identity pool not found: {pool_id}"),
@@ -1339,9 +1365,8 @@ fn list_tags_for_resource(state: &IdentityPoolState, input: &Value) -> Result<Va
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
 
-    let pool_id_raw = pool_id_from_arn(resource_arn)
+    let pool_id = pool_id_from_arn(resource_arn)
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format"))?;
-    let pool_id = pool_id_raw.replace('_', ":");
 
     let pool = get_pool(state, &pool_id)?;
 
