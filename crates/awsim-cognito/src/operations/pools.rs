@@ -46,12 +46,11 @@ fn password_policy_to_value(p: &PasswordPolicy) -> Value {
     })
 }
 
-fn client_to_value(client: &UserPoolClient) -> Value {
-    json!({
+fn client_to_value(client: &UserPoolClient, include_secret: bool) -> Value {
+    let mut obj = json!({
         "UserPoolId": client.user_pool_id,
         "ClientName": client.client_name,
         "ClientId": client.client_id,
-        "ClientSecret": client.client_secret,
         "ExplicitAuthFlows": client.explicit_auth_flows,
         "CallbackURLs": client.callback_urls,
         "LogoutURLs": client.logout_urls,
@@ -63,7 +62,13 @@ fn client_to_value(client: &UserPoolClient) -> Value {
         "RefreshTokenValidity": client.refresh_token_validity,
         "CreationDate": client.created_date,
         "LastModifiedDate": client.created_date
-    })
+    });
+    if include_secret {
+        obj.as_object_mut()
+            .unwrap()
+            .insert("ClientSecret".into(), json!(client.client_secret));
+    }
+    obj
 }
 
 // ---------------------------------------------------------------------------
@@ -432,7 +437,7 @@ pub fn describe_user_pool_client(
         )
     })?;
 
-    Ok(json!({ "UserPoolClient": client_to_value(client) }))
+    Ok(json!({ "UserPoolClient": client_to_value(client, false) }))
 }
 
 // ---------------------------------------------------------------------------
@@ -593,7 +598,7 @@ pub fn update_user_pool_client(
         client.refresh_token_validity = v;
     }
 
-    let client_value = client_to_value(client);
+    let client_value = client_to_value(client, false);
     info!(pool_id = %pool_id, client_id = %client_id, "Cognito: updated user pool client");
 
     Ok(json!({ "UserPoolClient": client_value }))
