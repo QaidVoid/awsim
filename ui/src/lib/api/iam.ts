@@ -586,6 +586,96 @@ export async function deleteGroupPolicy(
   });
 }
 
+// ---- Instance Profiles ----
+
+export interface IamInstanceProfile {
+  instanceProfileName: string;
+  instanceProfileId: string;
+  arn: string;
+  createDate: string;
+  roles: IamRole[];
+}
+
+export async function listInstanceProfiles(): Promise<IamInstanceProfile[]> {
+  const xml = await iamRequest("ListInstanceProfiles");
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  if (doc.querySelector("parsererror")) return [];
+
+  const text = (parent: Element | null, tag: string): string =>
+    parent?.getElementsByTagName(tag)[0]?.textContent?.trim() ?? "";
+
+  const profiles: IamInstanceProfile[] = [];
+  const list = doc.getElementsByTagName("InstanceProfiles")[0];
+  if (!list) return [];
+
+  for (const member of Array.from(list.children)) {
+    if (member.tagName !== "member") continue;
+    const roles: IamRole[] = [];
+    const rolesEl = member.getElementsByTagName("Roles")[0];
+    if (rolesEl) {
+      for (const rm of Array.from(rolesEl.children)) {
+        if (rm.tagName !== "member") continue;
+        const doc2 = xmlValue(rm.innerHTML, "AssumeRolePolicyDocument");
+        roles.push({
+          roleName: text(rm, "RoleName"),
+          roleId: text(rm, "RoleId"),
+          arn: text(rm, "Arn"),
+          createDate: text(rm, "CreateDate"),
+          assumeRolePolicyDocument: doc2 ? decodeURIComponent(doc2) : "",
+        });
+      }
+    }
+    profiles.push({
+      instanceProfileName: text(member, "InstanceProfileName"),
+      instanceProfileId: text(member, "InstanceProfileId"),
+      arn: text(member, "Arn"),
+      createDate: text(member, "CreateDate"),
+      roles,
+    });
+  }
+  return profiles;
+}
+
+export async function createInstanceProfile(
+  name: string,
+  path?: string,
+): Promise<IamInstanceProfile> {
+  const params: Record<string, string> = { InstanceProfileName: name };
+  if (path) params["Path"] = path;
+  const xml = await iamRequest("CreateInstanceProfile", params);
+  return {
+    instanceProfileName: xmlValue(xml, "InstanceProfileName"),
+    instanceProfileId: xmlValue(xml, "InstanceProfileId"),
+    arn: xmlValue(xml, "Arn"),
+    createDate: xmlValue(xml, "CreateDate"),
+    roles: [],
+  };
+}
+
+export async function deleteInstanceProfile(name: string): Promise<void> {
+  await iamRequest("DeleteInstanceProfile", { InstanceProfileName: name });
+}
+
+export async function addRoleToInstanceProfile(
+  instanceProfileName: string,
+  roleName: string,
+): Promise<void> {
+  await iamRequest("AddRoleToInstanceProfile", {
+    InstanceProfileName: instanceProfileName,
+    RoleName: roleName,
+  });
+}
+
+export async function removeRoleFromInstanceProfile(
+  instanceProfileName: string,
+  roleName: string,
+): Promise<void> {
+  await iamRequest("RemoveRoleFromInstanceProfile", {
+    InstanceProfileName: instanceProfileName,
+    RoleName: roleName,
+  });
+}
+
 // ---- Policies ----
 
 export async function listPolicies(

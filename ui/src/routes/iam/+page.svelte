@@ -6,6 +6,7 @@
 	import GroupsTab from '$lib/components/iam/groups-tab.svelte';
 	import PoliciesTab from '$lib/components/iam/policies-tab.svelte';
 	import SimulatorTab from '$lib/components/iam/simulator-tab.svelte';
+	import InstanceProfilesTab from '$lib/components/iam/instance-profiles-tab.svelte';
 
 	let active = $state('users');
 </script>
@@ -20,8 +21,9 @@
 				<TabsTrigger value="users">Users</TabsTrigger>
 				<TabsTrigger value="roles">Roles</TabsTrigger>
 				<TabsTrigger value="groups">Groups</TabsTrigger>
-				<TabsTrigger value="policies">Policies</TabsTrigger>
-				<TabsTrigger value="simulator">Simulator</TabsTrigger>
+			<TabsTrigger value="policies">Policies</TabsTrigger>
+			<TabsTrigger value="instance-profiles">Instance Profiles</TabsTrigger>
+			<TabsTrigger value="simulator">Simulator</TabsTrigger>
 			</TabsList>
 		</div>
 
@@ -42,6 +44,12 @@
 			class="min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden"
 		>
 			<PoliciesTab />
+		</TabsContent>
+		<TabsContent
+			value="instance-profiles"
+			class="min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden"
+		>
+			<InstanceProfilesTab />
 		</TabsContent>
 		<TabsContent
 			value="simulator"
