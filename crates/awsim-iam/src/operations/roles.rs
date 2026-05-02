@@ -83,7 +83,14 @@ pub fn get_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {
         .roles
         .get(role_name)
         .ok_or_else(|| no_such_entity("Role", role_name))?;
-    Ok(json!({ "Role": role_to_value(&role) }))
+    let mut v = json!({ "Role": role_to_value(&role) });
+    if let Some(boundary) = state.role_permissions_boundaries.get(&role.role_name) {
+        v["Role"]["PermissionsBoundary"] = json!({
+            "PermissionsBoundaryType": "Policy",
+            "PermissionsBoundaryArn": boundary.value().clone(),
+        });
+    }
+    Ok(v)
 }
 
 pub fn delete_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {

@@ -64,14 +64,28 @@ pub fn get_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
             .users
             .get(name)
             .ok_or_else(|| no_such_entity("User", name))?;
-        return Ok(json!({ "User": user_to_value(&user) }));
+        let mut v = json!({ "User": user_to_value(&user) });
+        if let Some(boundary) = state.user_permissions_boundaries.get(&user.user_name) {
+            v["User"]["PermissionsBoundary"] = json!({
+                "PermissionsBoundaryType": "Policy",
+                "PermissionsBoundaryArn": boundary.value().clone(),
+            });
+        }
+        return Ok(v);
     }
     let user = state
         .users
         .iter()
         .next()
         .ok_or_else(|| no_such_entity("User", "default"))?;
-    Ok(json!({ "User": user_to_value(&user) }))
+    let mut v = json!({ "User": user_to_value(&user) });
+    if let Some(boundary) = state.user_permissions_boundaries.get(&user.user_name) {
+        v["User"]["PermissionsBoundary"] = json!({
+            "PermissionsBoundaryType": "Policy",
+            "PermissionsBoundaryArn": boundary.value().clone(),
+        });
+    }
+    Ok(v)
 }
 
 pub fn delete_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
