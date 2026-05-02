@@ -683,11 +683,28 @@ pub fn list_policy_tags(state: &IamState, input: &Value) -> Result<Value, AwsErr
 
 // ── Inline policies ──────────────────────────────────────────────────────────
 
+const USER_POLICY_SIZE_LIMIT: usize = 2048;
+const ROLE_POLICY_SIZE_LIMIT: usize = 10240;
+const GROUP_POLICY_SIZE_LIMIT: usize = 5120;
+
+fn check_policy_size(doc: &str, limit: usize, entity_type: &str) -> Result<(), AwsError> {
+    if doc.len() > limit {
+        return Err(AwsError::bad_request(
+            "LimitExceeded",
+            format!(
+                "Inline policy document for {entity_type} exceeds maximum size of {limit} characters"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 pub fn put_user_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
     let policy_name = require_str(input, "PolicyName")?;
     let policy_document = require_str(input, "PolicyDocument")?;
 
+    check_policy_size(policy_document, USER_POLICY_SIZE_LIMIT, "user")?;
     validate_policy_document(policy_document)?;
 
     let mut user = state
@@ -705,6 +722,7 @@ pub fn put_role_policy(state: &IamState, input: &Value) -> Result<Value, AwsErro
     let policy_name = require_str(input, "PolicyName")?;
     let policy_document = require_str(input, "PolicyDocument")?;
 
+    check_policy_size(policy_document, ROLE_POLICY_SIZE_LIMIT, "role")?;
     validate_policy_document(policy_document)?;
 
     let mut role = state
@@ -722,6 +740,7 @@ pub fn put_group_policy(state: &IamState, input: &Value) -> Result<Value, AwsErr
     let policy_name = require_str(input, "PolicyName")?;
     let policy_document = require_str(input, "PolicyDocument")?;
 
+    check_policy_size(policy_document, GROUP_POLICY_SIZE_LIMIT, "group")?;
     validate_policy_document(policy_document)?;
 
     let mut group = state
