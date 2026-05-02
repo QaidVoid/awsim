@@ -58,11 +58,19 @@ pub fn create_user(
 }
 
 pub fn get_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
-    let user_name = require_str(input, "UserName")?;
+    let user_name = opt_str(input, "UserName");
+    if let Some(name) = user_name {
+        let user = state
+            .users
+            .get(name)
+            .ok_or_else(|| no_such_entity("User", name))?;
+        return Ok(json!({ "User": user_to_value(&user) }));
+    }
     let user = state
         .users
-        .get(user_name)
-        .ok_or_else(|| no_such_entity("User", user_name))?;
+        .iter()
+        .next()
+        .ok_or_else(|| no_such_entity("User", "default"))?;
     Ok(json!({ "User": user_to_value(&user) }))
 }
 
