@@ -394,7 +394,20 @@ impl ServiceHandler for CognitoService {
                     .iter()
                     .map(|e| (e.key().clone(), e.value().clone()))
                     .collect();
-                (account, region, CognitoSnapshot { pools, domains })
+                let resource_tags: HashMap<String, HashMap<String, String>> = state
+                    .resource_tags
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect();
+                (
+                    account,
+                    region,
+                    CognitoSnapshot {
+                        pools,
+                        domains,
+                        resource_tags,
+                    },
+                )
             })
             .collect();
         serde_json::to_vec(&snap).ok()
@@ -405,11 +418,19 @@ impl ServiceHandler for CognitoService {
             serde_json::from_slice(data).map_err(|e| e.to_string())?;
         for (account, region, cs) in snap {
             let state = self.store.get(&account, &region);
+            state.user_pools.clear();
+            state.domain_pool_map.clear();
+            state.resource_tags.clear();
+            state.mfa_sessions.clear();
+            state.confirmation_codes.clear();
             for (id, pool) in cs.pools {
                 state.user_pools.insert(id, pool);
             }
             for (domain, pool_id) in cs.domains {
                 state.domain_pool_map.insert(domain, pool_id);
+            }
+            for (arn, tags) in cs.resource_tags {
+                state.resource_tags.insert(arn, tags);
             }
         }
         Ok(())
@@ -420,4 +441,5 @@ impl ServiceHandler for CognitoService {
 struct CognitoSnapshot {
     pools: HashMap<String, UserPool>,
     domains: HashMap<String, String>,
+    resource_tags: HashMap<String, HashMap<String, String>>,
 }
