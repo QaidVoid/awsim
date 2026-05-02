@@ -604,16 +604,9 @@ pub fn update_table(
                 .unwrap_or_default()
                 .as_secs();
             table.stream_arn = Some(format!(
-                "arn:aws:dynamodb:{}:table/{}/stream/{}",
-                // region/account from table ARN: arn:aws:dynamodb:{region}:{account}:table/{name}
-                {
-                    let parts: Vec<&str> = table.arn.splitn(6, ':').collect();
-                    if parts.len() == 6 {
-                        format!("{}:{}", parts[3], parts[4])
-                    } else {
-                        "us-east-1:000000000000".to_string()
-                    }
-                },
+                "arn:aws:dynamodb:{}:{}:table/{}/stream/{}",
+                ctx.region,
+                ctx.account_id,
                 table.name,
                 timestamp
             ));
