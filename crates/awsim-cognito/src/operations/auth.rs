@@ -254,6 +254,14 @@ pub fn initiate_auth(
                 ));
             }
 
+            // RESET_REQUIRED: admin reset password, user must use ForgotPassword
+            if user.status == "RESET_REQUIRED" {
+                return Err(AwsError::bad_request(
+                    "PasswordResetRequiredException",
+                    "Password reset required for the user",
+                ));
+            }
+
             // FORCE_CHANGE_PASSWORD challenge
             if user.status == "FORCE_CHANGE_PASSWORD" {
                 let session_id = Uuid::new_v4().to_string();
@@ -500,6 +508,13 @@ pub fn admin_initiate_auth(
                 return Err(AwsError::bad_request(
                     "UserNotConfirmedException",
                     "User is not confirmed",
+                ));
+            }
+
+            if user.status == "RESET_REQUIRED" {
+                return Err(AwsError::bad_request(
+                    "PasswordResetRequiredException",
+                    "Password reset required for the user",
                 ));
             }
 
