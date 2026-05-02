@@ -1,55 +1,20 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import {
-		listPolicies,
-		getPolicy,
-		listPolicyVersions,
-		getPolicyVersion,
-		createPolicyVersion,
-		setDefaultPolicyVersion,
-		deletePolicy,
-		type IamPolicy,
-		type IamPolicyVersion
-	} from '$lib/api/iam';
+	import { goto } from '$app/navigation';
+	import { listPolicies, type IamPolicy } from '$lib/api/iam';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import EntityDetailSheet from './entity-detail-sheet.svelte';
 	import CreateEntityDialog from './create-entity-dialog.svelte';
-	import PolicyEditor from './policy-editor.svelte';
 	import FileBadge from '@lucide/svelte/icons/file-badge';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
-	import Trash2 from '@lucide/svelte/icons/trash-2';
-	import { toast } from 'svelte-sonner';
 
 	let policies = $state<IamPolicy[]>([]);
 	let loading = $state(false);
 	let filter = $state('');
-	let selected = $state<IamPolicy | null>(null);
-	let versions = $state<IamPolicyVersion[]>([]);
-	let activeVersionId = $state<string | null>(null);
-	let policyDoc = $state('');
-	let detailLoading = $state(false);
-	let saving = $state(false);
 	let createOpen = $state(false);
-	let deleting = $state(false);
-
-	async function handleDelete(p: IamPolicy) {
-		if (!confirm(`Delete policy "${p.policyName}"? This cannot be undone.`)) return;
-		deleting = true;
-		try {
-			await deletePolicy(p.arn);
-			toast.success(`Deleted ${p.policyName}`);
-			selected = null;
-			await load();
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Delete failed');
-		} finally {
-			deleting = false;
-		}
-	}
 
 	const filtered = $derived(
 		filter.trim()
@@ -66,64 +31,8 @@
 		}
 	}
 
-	async function openDetail(p: IamPolicy) {
-		selected = p;
-		versions = [];
-		policyDoc = '';
-		activeVersionId = null;
-		detailLoading = true;
-		try {
-			const [detail, vers] = await Promise.all([getPolicy(p.arn), listPolicyVersions(p.arn)]);
-			selected = detail;
-			versions = vers;
-			const def = vers.find((v) => v.isDefaultVersion) ?? vers[0];
-			if (def) await loadVersion(def.versionId);
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to load policy');
-		} finally {
-			detailLoading = false;
-		}
-	}
-
-	async function loadVersion(versionId: string) {
-		if (!selected) return;
-		activeVersionId = versionId;
-		try {
-			const v = await getPolicyVersion(selected.arn, versionId);
-			try {
-				policyDoc = JSON.stringify(JSON.parse(v.document), null, 2);
-			} catch {
-				policyDoc = v.document;
-			}
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to load version');
-		}
-	}
-
-	async function saveAsNewVersion() {
-		if (!selected) return;
-		saving = true;
-		try {
-			await createPolicyVersion(selected.arn, policyDoc, true);
-			toast.success('Saved new policy version');
-			const vers = await listPolicyVersions(selected.arn);
-			versions = vers;
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to save version');
-		} finally {
-			saving = false;
-		}
-	}
-
-	async function setDefault(versionId: string) {
-		if (!selected) return;
-		try {
-			await setDefaultPolicyVersion(selected.arn, versionId);
-			toast.success(`Set ${versionId} as default`);
-			versions = await listPolicyVersions(selected.arn);
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to set default');
-		}
+	function openDetail(p: IamPolicy) {
+		goto(`/iam/policies/${encodeURIComponent(p.arn)}`);
 	}
 
 	onMount(load);
@@ -175,79 +84,6 @@
 		</DataTable>
 	</div>
 </div>
-
-<EntityDetailSheet
-	open={!!selected}
-	onOpenChange={(v) => {
-		if (!v) selected = null;
-	}}
-	title={selected?.policyName ?? ''}
-	subtitle={selected?.arn}
->
-	{#if selected}
-		<dl class="grid grid-cols-3 gap-x-4 gap-y-2 py-4 text-sm">
-			{#if selected.description}
-				<dt class="text-muted-foreground">Description</dt>
-				<dd class="col-span-2">{selected.description}</dd>
-			{/if}
-			<dt class="text-muted-foreground">Default version</dt>
-			<dd class="col-span-2 font-mono text-xs">{selected.defaultVersionId ?? '—'}</dd>
-			<dt class="text-muted-foreground">Attachments</dt>
-			<dd class="col-span-2">{selected.attachmentCount}</dd>
-		</dl>
-		<div class="mt-2">
-			<h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-				Versions
-			</h3>
-			{#if detailLoading}
-				<p class="text-xs text-muted-foreground">Loading...</p>
-			{:else}
-				<div class="mb-3 flex flex-wrap gap-1.5">
-					{#each versions as v (v.versionId)}
-						<button
-							type="button"
-							class="rounded border px-2 py-1 font-mono text-xs transition-colors {activeVersionId ===
-							v.versionId
-								? 'border-primary bg-primary/10 text-primary'
-								: 'border-border hover:bg-muted'}"
-							onclick={() => loadVersion(v.versionId)}
-						>
-							{v.versionId}{v.isDefaultVersion ? ' (default)' : ''}
-						</button>
-					{/each}
-				</div>
-				{#if activeVersionId && !versions.find((v) => v.versionId === activeVersionId)?.isDefaultVersion}
-					<Button
-						variant="outline"
-						size="xs"
-						onclick={() => activeVersionId && setDefault(activeVersionId)}
-					>
-						Set {activeVersionId} as default
-					</Button>
-				{/if}
-			{/if}
-		</div>
-		<div class="mt-4">
-			<PolicyEditor bind:value={policyDoc} id="policy-doc" label="Policy document" rows={18} />
-			<div class="mt-2 flex justify-end">
-				<Button size="sm" onclick={saveAsNewVersion} disabled={saving || !policyDoc}>
-					{saving ? 'Saving...' : 'Save as new version'}
-				</Button>
-			</div>
-		</div>
-		<div class="flex justify-end pt-4">
-			<Button
-				variant="destructive"
-				size="sm"
-				disabled={deleting}
-				onclick={() => selected && handleDelete(selected)}
-			>
-				<Trash2 class="size-4" />
-				<span class="ml-1">Delete policy</span>
-			</Button>
-		</div>
-	{/if}
-</EntityDetailSheet>
 
 <CreateEntityDialog
 	bind:open={createOpen}
