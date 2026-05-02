@@ -545,6 +545,47 @@ export async function listGroupsForUser(userName: string): Promise<IamGroup[]> {
   }));
 }
 
+export async function listGroupPolicies(
+  groupName: string,
+): Promise<string[]> {
+  const xml = await iamRequest("ListGroupPolicies", { GroupName: groupName });
+  return parseInlinePolicyNames(xml);
+}
+
+export async function getGroupPolicy(
+  groupName: string,
+  policyName: string,
+): Promise<string> {
+  const xml = await iamRequest("GetGroupPolicy", {
+    GroupName: groupName,
+    PolicyName: policyName,
+  });
+  const doc = xmlValue(xml, "PolicyDocument");
+  return doc ? decodeURIComponent(doc) : "";
+}
+
+export async function putGroupPolicy(
+  groupName: string,
+  policyName: string,
+  document: string,
+): Promise<void> {
+  await iamRequest("PutGroupPolicy", {
+    GroupName: groupName,
+    PolicyName: policyName,
+    PolicyDocument: document,
+  });
+}
+
+export async function deleteGroupPolicy(
+  groupName: string,
+  policyName: string,
+): Promise<void> {
+  await iamRequest("DeleteGroupPolicy", {
+    GroupName: groupName,
+    PolicyName: policyName,
+  });
+}
+
 // ---- Policies ----
 
 export async function listPolicies(

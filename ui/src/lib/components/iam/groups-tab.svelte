@@ -7,6 +7,10 @@
 		listAttachedGroupPolicies,
 		attachGroupPolicy,
 		detachGroupPolicy,
+		listGroupPolicies,
+		getGroupPolicy,
+		putGroupPolicy,
+		deleteGroupPolicy,
 		listUsers,
 		addUserToGroup,
 		removeUserFromGroup,
@@ -38,10 +42,7 @@
 	let deleting = $state(false);
 
 	let attached = $state<IamAttachedPolicy[]>([]);
-	// Group inline policies don't have a list operation in the API
-	// client today; surface attached managed policies + member
-	// management here, and expose inline policies via the separate
-	// API for completeness only when listed by other tools.
+	let inlineNames = $state<string[]>([]);
 	let allUsers = $state<IamUser[]>([]);
 	let memberPickerName = $state('');
 	let addingMember = $state(false);
@@ -68,6 +69,7 @@
 		selected = g;
 		members = [];
 		attached = [];
+		inlineNames = [];
 		detailLoading = true;
 		try {
 			const detail = await getGroup(g.groupName);
@@ -87,11 +89,13 @@
 	}
 
 	async function reloadGroup(groupName: string) {
-		const [a, detail] = await Promise.all([
+		const [a, i, detail] = await Promise.all([
 			listAttachedGroupPolicies(groupName).catch(() => []),
+			listGroupPolicies(groupName).catch(() => []),
 			getGroup(groupName).catch(() => null),
 		]);
 		attached = a;
+		inlineNames = i;
 		if (detail) members = detail.users;
 	}
 
@@ -250,13 +254,12 @@
 		<div class="pt-6">
 			<EntityPoliciesEditor
 				{attached}
-				inlineNames={[]}
-				showInline={false}
+				{inlineNames}
 				onAttach={(arn) => attachGroupPolicy(selected!.groupName, arn)}
 				onDetach={(arn) => detachGroupPolicy(selected!.groupName, arn)}
-				onLoadInline={async () => ''}
-				onPutInline={async () => {}}
-				onDeleteInline={async () => {}}
+				onLoadInline={(name) => getGroupPolicy(selected!.groupName, name)}
+				onPutInline={(name, doc) => putGroupPolicy(selected!.groupName, name, doc)}
+				onDeleteInline={(name) => deleteGroupPolicy(selected!.groupName, name)}
 				onMutated={() => selected && reloadGroup(selected.groupName)}
 			/>
 		</div>
