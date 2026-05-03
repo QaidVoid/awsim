@@ -59,27 +59,26 @@ pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError
     let mut common_prefixes: BTreeSet<String> = BTreeSet::new();
     let mut key_count = 0usize;
     let mut next_continuation_token: Option<String> = None;
+    let mut last_emitted_key: Option<&str> = None;
 
     for key in &matching_keys {
         if key_count >= max_keys {
-            next_continuation_token = Some(key.clone());
+            next_continuation_token = last_emitted_key.map(|k| k.to_string());
             break;
         }
 
-        // If delimiter is set, check if the key (after stripping prefix) contains the delimiter.
         if !delimiter.is_empty() {
             let suffix = &key[prefix.len()..];
             if let Some(delim_pos) = suffix.find(delimiter) {
-                // This key collapses into a common prefix.
                 let common_prefix = format!("{}{}{}", prefix, &suffix[..delim_pos], delimiter);
-                common_prefixes.insert(common_prefix);
-                // Don't count against key_count — common prefixes are counted separately.
+                if common_prefixes.insert(common_prefix) {
+                    key_count += 1;
+                    last_emitted_key = Some(key.as_str());
+                }
                 continue;
             }
         }
 
-        // Full object entry — skip keys whose latest version is a delete
-        // marker (they look gone to the un-versioned listing API).
         if let Some(versions) = bucket.objects.get(key.as_str())
             && let Some(obj) = versions.current()
         {
@@ -91,7 +90,15 @@ pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError
                 "StorageClass": "STANDARD",
             }));
             key_count += 1;
+            last_emitted_key = Some(key.as_str());
         }
+    }
+
+    // If we exhausted all matching keys without hitting max_keys, there is no next page.
+    // If we broke out early, last_emitted_key is set. If max_keys is 0 we have no emitted keys
+    // and should use the continuation token as a sentinel to skip nothing extra.
+    if next_continuation_token.is_none() && key_count >= max_keys && !matching_keys.is_empty() {
+        next_continuation_token = last_emitted_key.map(|k| k.to_string());
     }
 
     let common_prefix_list: Vec<Value> = common_prefixes
@@ -162,17 +169,20 @@ pub fn list_objects(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let mut contents: Vec<Value> = Vec::new();
     let mut common_prefixes: BTreeSet<String> = BTreeSet::new();
     let mut next_marker: Option<String> = None;
+    let mut last_emitted_key: Option<&str> = None;
 
     for key in &matching_keys {
         if contents.len() + common_prefixes.len() >= max_keys {
-            next_marker = Some(key.clone());
+            next_marker = last_emitted_key.map(|k| k.to_string());
             break;
         }
         if !delimiter.is_empty() {
             let suffix = &key[prefix.len()..];
             if let Some(delim_pos) = suffix.find(delimiter) {
                 let cp = format!("{}{}{}", prefix, &suffix[..delim_pos], delimiter);
-                common_prefixes.insert(cp);
+                if common_prefixes.insert(cp) {
+                    last_emitted_key = Some(key.as_str());
+                }
                 continue;
             }
         }
@@ -186,6 +196,7 @@ pub fn list_objects(state: &S3State, input: &Value) -> Result<Value, AwsError> {
                 "LastModified": rfc7231_to_iso8601(&obj.last_modified),
                 "StorageClass": "STANDARD",
             }));
+            last_emitted_key = Some(key.as_str());
         }
     }
 
