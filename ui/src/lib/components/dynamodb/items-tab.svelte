@@ -41,6 +41,8 @@
 	let items = $state<Item[]>([]);
 	let loading = $state(false);
 	let scanned = $state(0);
+	let lastEvaluatedKey = $state<Item | undefined>(undefined);
+	let hasMore = $derived(lastEvaluatedKey !== undefined);
 
 	let pkName = $derived(detail.keySchema.find((k) => k.keyType === 'HASH')?.attributeName ?? '');
 	let skName = $derived(detail.keySchema.find((k) => k.keyType === 'RANGE')?.attributeName);
@@ -73,10 +75,31 @@
 
 	async function runScan() {
 		loading = true;
+		lastEvaluatedKey = undefined;
 		try {
 			const res = await scan({ tableName: detail.name, limit });
 			items = res.items;
 			scanned = res.scannedCount;
+			lastEvaluatedKey = res.lastEvaluatedKey;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Scan failed');
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function loadMore() {
+		if (!lastEvaluatedKey) return;
+		loading = true;
+		try {
+			const res = await scan({
+				tableName: detail.name,
+				limit,
+				exclusiveStartKey: lastEvaluatedKey
+			});
+			items = [...items, ...res.items];
+			scanned += res.scannedCount;
+			lastEvaluatedKey = res.lastEvaluatedKey;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Scan failed');
 		} finally {
@@ -90,6 +113,7 @@
 			return;
 		}
 		loading = true;
+		lastEvaluatedKey = undefined;
 		try {
 			const partitionValue = inferAttribute(pkValue, pkType);
 			const sortValue = skName && skValue ? inferAttribute(skValue, skType) : undefined;
@@ -104,6 +128,7 @@
 			});
 			items = res.items;
 			scanned = res.scannedCount;
+			lastEvaluatedKey = res.lastEvaluatedKey;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Query failed');
 		} finally {
@@ -272,6 +297,7 @@
 				<Button size="sm" onclick={runScan} disabled={loading}>Run scan</Button>
 				<span class="ml-auto text-[11px] text-muted-foreground">
 					{items.length} returned · {scanned} scanned
+					{#if hasMore}· more available{/if}
 				</span>
 			</div>
 		{/if}
@@ -342,6 +368,21 @@
 						{/each}
 					</tbody>
 				</table>
+				{#if hasMore}
+					<div class="flex justify-center border-t border-border/40 py-2">
+						<Button
+							variant="ghost"
+							size="sm"
+							onclick={loadMore}
+							disabled={loading}
+						>
+							{#if loading}
+								<Loader2 class="size-3.5 animate-spin" />
+							{/if}
+							Load more
+						</Button>
+					</div>
+				{/if}
 			</div>
 		{/if}
 	</div>
