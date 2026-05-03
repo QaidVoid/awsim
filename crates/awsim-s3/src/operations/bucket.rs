@@ -58,7 +58,7 @@ pub fn create_bucket(
     let bucket = Bucket::new(bucket_name, &ctx.region, now_iso8601());
     state.buckets.insert(bucket_name.to_string(), bucket);
 
-    Ok(json!({}))
+    Ok(json!({ "Location": format!("/{bucket_name}") }))
 }
 
 /// DELETE /{Bucket} — delete an empty bucket.
@@ -84,6 +84,11 @@ pub fn delete_bucket(state: &S3State, input: &Value) -> Result<Value, AwsError> 
         && let Err(e) = store.delete_bucket("objects", bucket_name)
     {
         tracing::warn!(bucket = %bucket_name, error = %e, "delete bucket bodies");
+    }
+    if let Some(store) = state.body_store()
+        && let Err(e) = store.delete_bucket("multipart", bucket_name)
+    {
+        tracing::warn!(bucket = %bucket_name, error = %e, "delete bucket multipart data");
     }
 
     Ok(json!({}))
@@ -143,6 +148,34 @@ fn validate_bucket_name(name: &str) -> Result<(), AwsError> {
         return Err(AwsError::bad_request(
             "InvalidBucketName",
             "Bucket name cannot start or end with a hyphen or period",
+        ));
+    }
+
+    // Consecutive dots.
+    if name.contains("..") {
+        return Err(AwsError::bad_request(
+            "InvalidBucketName",
+            "Bucket name cannot contain consecutive periods",
+        ));
+    }
+
+    // IP-address format.
+    if name.split('.').all(|part| part.parse::<u8>().is_ok()) {
+        return Err(AwsError::bad_request(
+            "InvalidBucketName",
+            "Bucket name must not be formatted as an IP address",
+        ));
+    }
+
+    // Reserved prefixes/suffixes.
+    if name.starts_with("xn--")
+        || name.ends_with("-s3alias")
+        || name.ends_with("--ol-s3")
+        || name.ends_with("--x-s3")
+    {
+        return Err(AwsError::bad_request(
+            "InvalidBucketName",
+            format!("Bucket name '{name}' uses a reserved prefix or suffix"),
         ));
     }
 

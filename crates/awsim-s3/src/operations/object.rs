@@ -482,7 +482,17 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
     let src_key = &path[slash_pos + 1..];
 
     // Read source object (possibly a specific historical version).
-    let (data, content_type, metadata, content_encoding, cache_control, content_disposition, content_language, expires, src_version_id) = {
+    let (
+        data,
+        content_type,
+        metadata,
+        content_encoding,
+        cache_control,
+        content_disposition,
+        content_language,
+        expires,
+        src_version_id,
+    ) = {
         let bucket = state
             .buckets
             .get(src_bucket)
