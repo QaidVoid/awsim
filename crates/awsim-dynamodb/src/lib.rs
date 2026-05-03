@@ -655,6 +655,22 @@ impl ServiceHandler for DynamoDbService {
                 operations::resource_policy::delete_resource_policy(&state, &input, ctx)
             }
 
+            // Auto Scaling (Terraform compatibility)
+            "DescribeTableReplicaAutoScaling" => {
+                operations::table::describe_table_replica_auto_scaling(&state, &input, ctx)
+            }
+            "UpdateTableReplicaAutoScaling" => {
+                operations::table::update_table_replica_auto_scaling(&state, &input, ctx)
+            }
+
+            // Global Table Settings (Terraform compatibility)
+            "DescribeGlobalTableSettings" => {
+                operations::table::describe_global_table_settings(&state, &input, ctx)
+            }
+            "UpdateGlobalTableSettings" => {
+                operations::table::update_global_table_settings(&state, &input, ctx)
+            }
+
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
@@ -717,7 +733,11 @@ impl ServiceHandler for DynamoDbService {
             | "DescribeKinesisStreamingDestination"
             | "PutResourcePolicy"
             | "GetResourcePolicy"
-            | "DeleteResourcePolicy" => Some(format!("dynamodb:{operation}")),
+            | "DeleteResourcePolicy"
+            | "DescribeTableReplicaAutoScaling"
+            | "UpdateTableReplicaAutoScaling"
+            | "DescribeGlobalTableSettings"
+            | "UpdateGlobalTableSettings" => Some(format!("dynamodb:{operation}")),
             _ => None,
         }
     }

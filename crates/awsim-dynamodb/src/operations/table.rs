@@ -605,10 +605,7 @@ pub fn update_table(
                 .as_secs();
             table.stream_arn = Some(format!(
                 "arn:aws:dynamodb:{}:{}:table/{}/stream/{}",
-                ctx.region,
-                ctx.account_id,
-                table.name,
-                timestamp
+                ctx.region, ctx.account_id, table.name, timestamp
             ));
             table.stream_view_type = Some(view_type);
             table.stream_enabled = true;
@@ -1428,6 +1425,108 @@ pub fn list_contributor_insights(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     Ok(json!({ "ContributorInsightsSummaries": [] }))
+}
+
+pub fn describe_table_replica_auto_scaling(
+    state: &DynamoState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let table_name = require_str(input, "TableName")?;
+    let _table = state.tables.get(table_name).ok_or_else(|| {
+        AwsError::service_not_found(
+            "ResourceNotFoundException",
+            format!("Cannot do operations on a non-existent table: {table_name}"),
+        )
+    })?;
+
+    Ok(json!({
+        "TableAutoScalingDescription": {
+            "TableName": table_name,
+            "TableStatus": "ACTIVE",
+            "Replicas": [{
+                "RegionName": ctx.region,
+                "GlobalSecondaryIndexes": [],
+                "ReplicaProvisionedReadCapacityAutoScalingSettings": {
+                    "MinimumUnits": 5,
+                    "MaximumUnits": 100,
+                    "ProvisionedReadCapacityUnits": 5,
+                    "TargetTrackingScalingPolicyConfiguration": {
+                        "TargetValue": 70.0
+                    },
+                    "AutoScalingDisabled": false
+                },
+                "ReplicaProvisionedWriteCapacityAutoScalingSettings": {
+                    "MinimumUnits": 5,
+                    "MaximumUnits": 100,
+                    "ProvisionedWriteCapacityUnits": 5,
+                    "TargetTrackingScalingPolicyConfiguration": {
+                        "TargetValue": 70.0
+                    },
+                    "AutoScalingDisabled": false
+                },
+                "ReplicaStatus": "ACTIVE"
+            }]
+        }
+    }))
+}
+
+pub fn update_table_replica_auto_scaling(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let table_name = require_str(input, "TableName")?;
+    let _table = state.tables.get(table_name).ok_or_else(|| {
+        AwsError::service_not_found(
+            "ResourceNotFoundException",
+            format!("Cannot do operations on a non-existent table: {table_name}"),
+        )
+    })?;
+
+    Ok(json!({}))
+}
+
+pub fn describe_global_table_settings(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let table_name = require_str(input, "GlobalTableName")?;
+    let _table = state.tables.get(table_name).ok_or_else(|| {
+        AwsError::service_not_found(
+            "ResourceNotFoundException",
+            format!("Cannot do operations on a non-existent table: {table_name}"),
+        )
+    })?;
+
+    Ok(json!({
+        "GlobalTableSettingsDescription": {
+            "GlobalTableName": table_name,
+            "ReplicaSettings": [{
+                "RegionName": _ctx.region,
+                "ReplicaStatus": "ACTIVE",
+                "ReplicaProvisionedReadCapacityUnits": 5,
+                "ReplicaProvisionedWriteCapacityUnits": 5,
+            }]
+        }
+    }))
+}
+
+pub fn update_global_table_settings(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let table_name = require_str(input, "GlobalTableName")?;
+    let _table = state.tables.get(table_name).ok_or_else(|| {
+        AwsError::service_not_found(
+            "ResourceNotFoundException",
+            format!("Cannot do operations on a non-existent table: {table_name}"),
+        )
+    })?;
+
+    Ok(json!({}))
 }
 
 #[cfg(test)]
