@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use awsim_core::AwsError;
+use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::state::{NotificationConfiguration, NotificationDestination, S3State, VersioningStatus};
@@ -519,7 +519,7 @@ pub fn delete_object_tagging(state: &S3State, input: &Value) -> Result<Value, Aw
 // ─── ACL ──────────────────────────────────────────────────────────────────────
 
 /// GET /{Bucket}?acl — Return default owner-full-control ACL for a bucket.
-pub fn get_bucket_acl(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+pub fn get_bucket_acl(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
     let bucket = state
@@ -528,11 +528,11 @@ pub fn get_bucket_acl(state: &S3State, input: &Value) -> Result<Value, AwsError>
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
     if let Some(acl_str) = &bucket.acl {
-        let parsed: Value = serde_json::from_str(acl_str).unwrap_or(default_bucket_acl());
+        let parsed: Value = serde_json::from_str(acl_str).unwrap_or(default_bucket_acl(&ctx.account_id));
         return Ok(parsed);
     }
 
-    Ok(default_bucket_acl())
+    Ok(default_bucket_acl(&ctx.account_id))
 }
 
 /// PUT /{Bucket}?acl — Store ACL for a bucket (accept and store).
@@ -549,7 +549,7 @@ pub fn put_bucket_acl(state: &S3State, input: &Value) -> Result<Value, AwsError>
 }
 
 /// GET /{Bucket}/{Key+}?acl — Return default ACL for an object.
-pub fn get_object_acl(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+pub fn get_object_acl(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
     let bucket_name = input["Bucket"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingBucket", "Bucket is required"))?;
@@ -569,21 +569,21 @@ pub fn get_object_acl(state: &S3State, input: &Value) -> Result<Value, AwsError>
         ));
     }
 
-    Ok(default_bucket_acl())
+    Ok(default_bucket_acl(&ctx.account_id))
 }
 
-fn default_bucket_acl() -> Value {
+fn default_bucket_acl(owner_id: &str) -> Value {
     json!({
         "AccessControlPolicy": {
             "Owner": {
-                "ID": "owner-id",
-                "DisplayName": "owner"
+                "ID": owner_id,
+                "DisplayName": owner_id
             },
             "AccessControlList": {
                 "Grant": [{
                     "Grantee": {
-                        "ID": "owner-id",
-                        "DisplayName": "owner",
+                        "ID": owner_id,
+                        "DisplayName": owner_id,
                         "xsi:type": "CanonicalUser"
                     },
                     "Permission": "FULL_CONTROL"

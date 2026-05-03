@@ -878,9 +878,9 @@ impl ServiceHandler for S3Service {
             "GetBucketNotificationConfiguration" => {
                 operations::config::get_bucket_notification_configuration(&state, &input)
             }
-            "GetBucketAcl" => operations::config::get_bucket_acl(&state, &input),
+            "GetBucketAcl" => operations::config::get_bucket_acl(&state, &input, ctx),
             "PutBucketAcl" => operations::config::put_bucket_acl(&state, &input),
-            "GetObjectAcl" => operations::config::get_object_acl(&state, &input),
+            "GetObjectAcl" => operations::config::get_object_acl(&state, &input, ctx),
             "GetBucketLifecycleConfiguration" => {
                 operations::config::get_bucket_lifecycle_configuration(&state, &input)
             }
