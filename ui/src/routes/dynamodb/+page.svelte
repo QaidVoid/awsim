@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
+	import { afterNavigate, replaceState } from '$app/navigation';
+	import { browser } from '$app/environment';
 	import { toast } from 'svelte-sonner';
 	import {
 		listTables,
@@ -64,7 +67,30 @@
 		})
 	);
 
-	onMount(loadTables);
+	let routerReady = $state(false);
+	afterNavigate(() => {
+		routerReady = true;
+	});
+
+	$effect(() => {
+		if (!browser || !routerReady) return;
+		const url = new URL(window.location.href);
+		const name = selected?.name;
+		if (url.searchParams.get('table') === name) return;
+		if (name) url.searchParams.set('table', name);
+		else url.searchParams.delete('table');
+		replaceState(url.toString(), {});
+	});
+
+	onMount(() => {
+		void loadTables().then(() => {
+			const tableName = page.url.searchParams.get('table');
+			if (tableName) {
+				const t = tables.find((x) => x.name === tableName);
+				if (t) void selectTable(t);
+			}
+		});
+	});
 
 	async function loadTables() {
 		tablesLoading = true;
