@@ -13,6 +13,7 @@
 		formatTimestamp,
 		headObject,
 		getObjectText,
+		getObjectBlob,
 		objectUrl,
 		type ObjectMetadata,
 		type S3Object
@@ -38,12 +39,15 @@
 	let preview = $state<string | null>(null);
 	let previewLoading = $state(false);
 	let previewError = $state<string | null>(null);
+	let imageBlobUrl = $state<string | null>(null);
 
 	$effect(() => {
 		if (open && bucket && object) {
 			metadata = null;
 			preview = null;
 			previewError = null;
+			if (imageBlobUrl) URL.revokeObjectURL(imageBlobUrl);
+			imageBlobUrl = null;
 			void loadMetadata(bucket, object.key);
 		}
 	});
@@ -75,6 +79,34 @@
 	function downloadUrl(): string {
 		if (!bucket || !object) return '#';
 		return objectUrl(bucket, object.key);
+	}
+
+	async function loadImagePreview() {
+		if (!bucket || !object) return;
+		try {
+			const blob = await getObjectBlob(bucket, object.key);
+			if (imageBlobUrl) URL.revokeObjectURL(imageBlobUrl);
+			imageBlobUrl = URL.createObjectURL(blob);
+		} catch {
+			imageBlobUrl = null;
+		}
+	}
+
+	async function downloadFile() {
+		if (!bucket || !object) return;
+		try {
+			const blob = await getObjectBlob(bucket, object.key);
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = object.key.split('/').pop() ?? object.key;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(url);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Download failed');
+		}
 	}
 
 	function isText(): boolean {
@@ -156,11 +188,22 @@
 					Preview
 				</h3>
 				{#if isImage()}
-					<img
-						src={downloadUrl()}
-						alt={object?.key ?? 'object preview'}
-						class="max-h-72 w-auto rounded-md border border-border object-contain"
-					/>
+					{#if imageBlobUrl}
+						<img
+							src={imageBlobUrl}
+							alt={object?.key ?? 'object preview'}
+							class="max-h-72 w-auto rounded-md border border-border object-contain"
+						/>
+					{:else}
+						<Button variant="outline" size="sm" onclick={loadImagePreview} disabled={previewLoading}>
+							{#if previewLoading}
+								<Loader2 class="size-3.5 animate-spin" />
+							{:else}
+								<Eye class="size-3.5" />
+							{/if}
+							Load image preview
+						</Button>
+					{/if}
 				{:else if preview !== null}
 					<pre
 						class="max-h-72 overflow-auto rounded-md border border-border bg-muted/40 p-2 font-mono text-[11px]">{preview}</pre>
@@ -189,7 +232,7 @@
 				<Trash2 class="size-3.5" />
 				Delete
 			</Button>
-			<Button variant="outline" size="sm" href={downloadUrl()} target="_blank">
+			<Button variant="outline" size="sm" onclick={downloadFile} disabled={!bucket || !object}>
 				<Download class="size-3.5" />
 				Download
 			</Button>
