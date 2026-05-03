@@ -157,6 +157,18 @@ pub fn serialize_error(error: &AwsError, request_id: &str) -> (StatusCode, Heade
     let mut headers = HeaderMap::new();
     headers.insert("content-type", "text/xml".parse().unwrap());
     headers.insert("x-amzn-requestid", request_id.parse().unwrap());
+
+    // Promote extras (e.g., DeleteMarker, VersionId) to response headers.
+    // S3 relies on x-amz-delete-marker and x-amz-version-id headers.
+    if let Some(extras) = &error.extras {
+        if let Some(dm) = extras.get("DeleteMarker").and_then(Value::as_bool) {
+            headers.insert("x-amz-delete-marker", dm.to_string().parse().unwrap());
+        }
+        if let Some(vid) = extras.get("VersionId").and_then(Value::as_str) {
+            headers.insert("x-amz-version-id", vid.parse().unwrap());
+        }
+    }
+
     (error.status, headers, Bytes::from(xml))
 }
 
