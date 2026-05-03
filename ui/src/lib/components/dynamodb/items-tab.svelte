@@ -113,7 +113,10 @@
 
 	async function fetchQueryPage(startKey: Item | undefined) {
 		if (!queryPkName || !pkValue.trim()) {
-			toast.error('Partition key value required');
+			items = [];
+			scanned = 0;
+			lastEvaluatedKey = undefined;
+			currentStartKey = startKey;
 			return;
 		}
 		loading = true;
@@ -144,6 +147,16 @@
 	async function fetchPage(startKey: Item | undefined) {
 		if (mode === 'scan') await fetchScanPage(startKey);
 		else await fetchQueryPage(startKey);
+	}
+
+	async function runQuery() {
+		if (!queryPkName || !pkValue.trim()) {
+			toast.error('Partition key value required');
+			return;
+		}
+		pageStack = [];
+		currentStartKey = undefined;
+		await fetchQueryPage(undefined);
 	}
 
 	async function reset() {
@@ -344,7 +357,7 @@
 							max={1000}
 							class="h-8 w-20 text-xs"
 						/>
-						<Button size="sm" onclick={() => void reset()} disabled={loading}
+						<Button size="sm" onclick={runQuery} disabled={loading}
 							>Run query</Button
 						>
 					</div>
