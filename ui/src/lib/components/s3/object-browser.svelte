@@ -9,6 +9,7 @@
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import Inbox from '@lucide/svelte/icons/inbox';
 
 	interface Props {
@@ -17,10 +18,14 @@
 		objects: S3Object[];
 		commonPrefixes: S3CommonPrefix[];
 		loading: boolean;
+		hasPrev: boolean;
+		hasMore: boolean;
 		onNavigate: (prefix: string) => void;
 		onSelectObject: (obj: S3Object) => void;
 		onDeleteObject: (obj: S3Object) => void;
 		onRefresh: () => void;
+		onPrevPage: () => void;
+		onNextPage: () => void;
 	}
 
 	let {
@@ -29,10 +34,14 @@
 		objects,
 		commonPrefixes,
 		loading,
+		hasPrev,
+		hasMore,
 		onNavigate,
 		onSelectObject,
 		onDeleteObject,
-		onRefresh
+		onRefresh,
+		onPrevPage,
+		onNextPage
 	}: Props = $props();
 
 	let breadcrumbs = $derived.by(() => {
@@ -76,6 +85,24 @@
 			{:else}
 				<RefreshCw class="size-3.5" />
 			{/if}
+		</Button>
+		<Button
+			variant="ghost"
+			size="icon-sm"
+			onclick={onPrevPage}
+			disabled={!hasPrev || loading}
+			title="Previous page"
+		>
+			<ChevronLeft class="size-4" />
+		</Button>
+		<Button
+			variant="ghost"
+			size="icon-sm"
+			onclick={onNextPage}
+			disabled={!hasMore || loading}
+			title="Next page"
+		>
+			<ChevronRight class="size-4" />
 		</Button>
 	</div>
 

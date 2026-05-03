@@ -34,6 +34,11 @@
 	let commonPrefixes = $state<S3CommonPrefix[]>([]);
 	let objectsLoading = $state(false);
 
+	let pageStack = $state<(string | undefined)[]>([]);
+	let currentToken = $state<string | undefined>(undefined);
+	let nextToken = $state<string | undefined>(undefined);
+	let hasMore = $derived(nextToken !== undefined);
+
 	let bucketFilter = $state('');
 	let createOpen = $state(false);
 	let policyOpen = $state(false);
@@ -64,15 +69,19 @@
 	async function openBucket(b: Bucket) {
 		selectedBucket = b;
 		prefix = '';
-		await loadObjects(b.name, '');
+		pageStack = [];
+		currentToken = undefined;
+		await fetchObjects(b.name, '', undefined);
 	}
 
-	async function loadObjects(bucket: string, pfx: string) {
+	async function fetchObjects(bucket: string, pfx: string, token: string | undefined) {
 		objectsLoading = true;
 		try {
-			const res = await listObjects(bucket, pfx, '/');
+			const res = await listObjects(bucket, pfx, '/', token);
 			objects = res.objects;
 			commonPrefixes = res.commonPrefixes;
+			nextToken = res.nextContinuationToken;
+			currentToken = token;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to list objects');
 			objects = [];
@@ -82,13 +91,29 @@
 		}
 	}
 
+	async function nextPage() {
+		if (!nextToken || !selectedBucket) return;
+		pageStack = [...pageStack, currentToken];
+		await fetchObjects(selectedBucket.name, prefix, nextToken);
+	}
+
+	async function prevPage() {
+		if (pageStack.length === 0 || !selectedBucket) return;
+		const newStack = [...pageStack];
+		const prevKey = newStack.pop();
+		pageStack = newStack;
+		await fetchObjects(selectedBucket.name, prefix, prevKey);
+	}
+
 	function navigatePrefix(newPrefix: string) {
 		prefix = newPrefix;
-		if (selectedBucket) void loadObjects(selectedBucket.name, newPrefix);
+		pageStack = [];
+		currentToken = undefined;
+		if (selectedBucket) void fetchObjects(selectedBucket.name, newPrefix, undefined);
 	}
 
 	function refreshObjects() {
-		if (selectedBucket) void loadObjects(selectedBucket.name, prefix);
+		if (selectedBucket) void fetchObjects(selectedBucket.name, prefix, currentToken);
 	}
 
 	function selectObject(obj: S3Object) {
@@ -110,7 +135,7 @@
 			confirmObjectOpen = false;
 			detailOpen = false;
 			confirmObject = null;
-			void loadObjects(selectedBucket.name, prefix);
+			void fetchObjects(selectedBucket.name, prefix, currentToken);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete object');
 		} finally {
@@ -155,7 +180,7 @@
 		}
 		if (success > 0) {
 			toast.success(`Uploaded ${success} file${success === 1 ? '' : 's'}`);
-			void loadObjects(bucket, prefix);
+			void fetchObjects(bucket, prefix, currentToken);
 		}
 		uploading = false;
 	}
@@ -224,10 +249,14 @@
 						{objects}
 						{commonPrefixes}
 						loading={objectsLoading}
+						hasPrev={pageStack.length > 0}
+						hasMore={hasMore}
 						onNavigate={navigatePrefix}
 						onSelectObject={selectObject}
 						onDeleteObject={askDeleteObject}
 						onRefresh={refreshObjects}
+						onPrevPage={prevPage}
+						onNextPage={nextPage}
 					/>
 				</div>
 

@@ -115,10 +115,12 @@ export async function listObjects(
   bucket: string,
   prefix = "",
   delimiter = "/",
+  continuationToken?: string,
 ): Promise<ListObjectsResult> {
   const params = new URLSearchParams({ "list-type": "2" });
   if (prefix) params.set("prefix", prefix);
   if (delimiter !== undefined) params.set("delimiter", delimiter);
+  if (continuationToken) params.set("continuation-token", continuationToken);
 
   const res = await loggedFetch(
     "s3",
