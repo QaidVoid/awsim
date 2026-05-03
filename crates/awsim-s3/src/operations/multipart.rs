@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use std::collections::HashMap;
+
 use awsim_core::AwsError;
 use base64::Engine;
 use serde_json::{Value, json};
@@ -30,6 +32,21 @@ pub fn create_multipart_upload(state: &S3State, input: &Value) -> Result<Value, 
         .unwrap_or("application/octet-stream")
         .to_string();
 
+    let mut metadata = HashMap::new();
+    if let Some(obj) = input.as_object() {
+        for (k, v) in obj {
+            if k.starts_with("Meta")
+                && let Some(val) = v.as_str()
+            {
+                let meta_key = format!(
+                    "x-amz-meta-{}",
+                    super::object::to_kebab(k.strip_prefix("Meta").unwrap_or(k))
+                );
+                metadata.insert(meta_key, val.to_string());
+            }
+        }
+    }
+
     let upload_id = Uuid::new_v4().to_string();
     let upload = MultipartUpload {
         upload_id: upload_id.clone(),
@@ -38,6 +55,7 @@ pub fn create_multipart_upload(state: &S3State, input: &Value) -> Result<Value, 
         created_at: now_rfc7231(),
         bucket: bucket_name.to_string(),
         content_type,
+        metadata,
     };
 
     bucket.multipart_uploads.insert(upload_id.clone(), upload);
@@ -60,6 +78,12 @@ pub fn upload_part(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let part_number: u32 = part_number_str.parse().map_err(|_| {
         AwsError::bad_request("InvalidPartNumber", "partNumber must be a positive integer")
     })?;
+    if !(1..=10000).contains(&part_number) {
+        return Err(AwsError::bad_request(
+            "InvalidArgument",
+            "partNumber must be between 1 and 10000",
+        ));
+    }
 
     let data: Vec<u8> = if let Some(raw) = input.get("__raw_body").and_then(Value::as_str) {
         base64::engine::general_purpose::STANDARD
@@ -124,6 +148,12 @@ pub fn upload_part_copy(state: &S3State, input: &Value) -> Result<Value, AwsErro
     let part_number: u32 = part_number_str.parse().map_err(|_| {
         AwsError::bad_request("InvalidPartNumber", "partNumber must be a positive integer")
     })?;
+    if !(1..=10000).contains(&part_number) {
+        return Err(AwsError::bad_request(
+            "InvalidArgument",
+            "partNumber must be between 1 and 10000",
+        ));
+    }
 
     // copy_source is "src-bucket/src-key" (may have leading slash).
     let copy_source = copy_source.trim_start_matches('/');
@@ -250,10 +280,35 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         .remove(upload_id)
         .ok_or_else(|| no_such_upload(upload_id))?;
 
+    let requested_parts = parse_complete_parts(input);
+    if requested_parts.is_empty() {
+        return Err(AwsError::bad_request(
+            "MalformedXML",
+            "The XML you provided was not well-formed or did not validate against our published schema. At least one Part must be specified.",
+        ));
+    }
+
     let mut combined_data: Vec<u8> = Vec::new();
     let mut part_md5s: Vec<Vec<u8>> = Vec::new();
     let mut part_count: usize = 0;
-    for part in upload.parts.values() {
+    for (part_number, expected_etag) in &requested_parts {
+        let part = upload.parts.get(part_number).ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidPart",
+                format!("The specified upload does not contain a part with number {part_number}"),
+            )
+        })?;
+            if let Some(expected) = expected_etag
+                && part.etag != *expected
+            {
+                return Err(AwsError::bad_request(
+                    "InvalidPart",
+                    format!(
+                        "ETag mismatch for part {part_number}: expected {expected}, got {}",
+                        part.etag
+                    ),
+                ));
+            }
         let bytes = part
             .body
             .read_all()
@@ -294,17 +349,14 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         content_length,
         etag: etag.clone(),
         last_modified,
-        metadata: Default::default(),
+        metadata: upload.metadata.clone(),
         version_id: version_id.clone(),
         tags: Default::default(),
         is_delete_marker: false,
     };
 
     let mut versions = bucket.objects.entry(key.to_string()).or_default();
-    if !matches!(status, crate::state::VersioningStatus::Enabled) {
-        versions.versions.retain(|o| o.version_id.is_some());
-    }
-    versions.push(obj);
+    super::object::record_version(&mut versions, obj, &status);
     drop(versions);
 
     if let Some(store) = state.body_store()
@@ -425,6 +477,37 @@ fn no_such_upload(upload_id: &str) -> AwsError {
         "NoSuchUpload",
         format!("The specified upload '{upload_id}' does not exist"),
     )
+}
+
+/// Parse the `<Part><PartNumber>N</PartNumber><ETag>...</ETag></Part>` list
+/// from the CompleteMultipartUpload request body.
+fn parse_complete_parts(input: &Value) -> Vec<(u32, Option<String>)> {
+    let parts_val = input
+        .get("CompleteMultipartUpload")
+        .and_then(|v| v.get("Part"))
+        .or_else(|| input.get("Part"));
+
+    let Some(parts_val) = parts_val else {
+        return Vec::new();
+    };
+
+    let items: Vec<&Value> = match parts_val {
+        Value::Array(arr) => arr.iter().collect(),
+        other => vec![other],
+    };
+
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let num = item.get("PartNumber").and_then(Value::as_str)?;
+            let part_number: u32 = num.parse().ok()?;
+            if !(1..=10000).contains(&part_number) {
+                return None;
+            }
+            let etag = item.get("ETag").and_then(Value::as_str).map(String::from);
+            Some((part_number, etag))
+        })
+        .collect()
 }
 
 #[cfg(test)]

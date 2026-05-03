@@ -23,7 +23,7 @@ fn next_version_id(versioning: &VersioningStatus) -> Option<String> {
 
 /// Append `obj` as a new version, but for Disabled / Suspended buckets the
 /// existing un-versioned ("null") slot is replaced rather than retained.
-fn record_version(versions: &mut ObjectVersions, obj: S3Object, status: &VersioningStatus) {
+pub fn record_version(versions: &mut ObjectVersions, obj: S3Object, status: &VersioningStatus) {
     if !matches!(status, VersioningStatus::Enabled) {
         // Disabled buckets only ever keep one entry; Suspended buckets keep
         // prior ID-bearing versions but overwrite the single "null" slot.
@@ -616,7 +616,7 @@ pub fn no_such_key(key: &str) -> AwsError {
 }
 
 /// Convert PascalCase to kebab-case for metadata key reconstruction.
-fn to_kebab(s: &str) -> String {
+pub fn to_kebab(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 4);
     for (i, c) in s.chars().enumerate() {
         if c.is_uppercase() && i > 0 {

@@ -221,6 +221,8 @@ pub struct MultipartUpload {
     pub created_at: String,
     pub bucket: String,
     pub content_type: String,
+    #[serde(default)]
+    pub metadata: std::collections::HashMap<String, String>,
 }
 
 /// Data for a single uploaded part.
