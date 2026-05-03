@@ -118,7 +118,6 @@
 		prefix = initialPrefix;
 		pageStack = [];
 		currentToken = undefined;
-		active = 'objects';
 		await fetchObjects(b.name, initialPrefix, undefined);
 	}
 
