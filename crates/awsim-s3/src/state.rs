@@ -220,6 +220,7 @@ pub struct MultipartUpload {
     pub parts: BTreeMap<u32, PartData>,
     pub created_at: String,
     pub bucket: String,
+    pub content_type: String,
 }
 
 /// Data for a single uploaded part.

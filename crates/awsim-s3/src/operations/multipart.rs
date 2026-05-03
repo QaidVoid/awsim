@@ -8,7 +8,8 @@ use uuid::Uuid;
 use awsim_core::Body;
 
 use crate::state::{MultipartUpload, PartData, S3Object, S3State};
-use crate::util::{compute_etag, now_rfc7231};
+use crate::util::{compute_etag, compute_multipart_etag, now_rfc7231};
+use md5::Digest;
 
 use super::bucket::no_such_bucket;
 use super::require_str;
@@ -18,10 +19,16 @@ pub fn create_multipart_upload(state: &S3State, input: &Value) -> Result<Value, 
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
 
-    let _bucket = state
+    let bucket = state
         .buckets
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    let content_type = input
+        .get("Content-Type")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream")
+        .to_string();
 
     let upload_id = Uuid::new_v4().to_string();
     let upload = MultipartUpload {
@@ -30,12 +37,8 @@ pub fn create_multipart_upload(state: &S3State, input: &Value) -> Result<Value, 
         parts: BTreeMap::new(),
         created_at: now_rfc7231(),
         bucket: bucket_name.to_string(),
+        content_type,
     };
-
-    let bucket = state
-        .buckets
-        .get(bucket_name)
-        .ok_or_else(|| no_such_bucket(bucket_name))?;
 
     bucket.multipart_uploads.insert(upload_id.clone(), upload);
 
@@ -248,15 +251,21 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         .ok_or_else(|| no_such_upload(upload_id))?;
 
     let mut combined_data: Vec<u8> = Vec::new();
+    let mut part_md5s: Vec<Vec<u8>> = Vec::new();
+    let mut part_count: usize = 0;
     for part in upload.parts.values() {
         let bytes = part
             .body
             .read_all()
             .map_err(|e| AwsError::internal(format!("read part body: {e}")))?;
+        let mut hasher = md5::Md5::new();
+        hasher.update(&bytes);
+        part_md5s.push(hasher.finalize().to_vec());
         combined_data.extend_from_slice(&bytes);
+        part_count += 1;
     }
 
-    let etag = compute_etag(&combined_data);
+    let etag = compute_multipart_etag(&part_md5s, part_count);
     let content_length = combined_data.len() as u64;
     let last_modified = now_rfc7231();
 
@@ -281,7 +290,7 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
     let obj = S3Object {
         key: key.to_string(),
         body,
-        content_type: "application/octet-stream".to_string(),
+        content_type: upload.content_type.clone(),
         content_length,
         etag: etag.clone(),
         last_modified,

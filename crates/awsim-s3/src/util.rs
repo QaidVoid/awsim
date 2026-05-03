@@ -8,6 +8,17 @@ pub fn compute_etag(data: &[u8]) -> String {
     format!("\"{:x}\"", result)
 }
 
+/// Compute the multipart ETag as AWS S3 does: MD5 of concatenated
+/// per-part MD5s, followed by `-{part_count}`, all wrapped in quotes.
+pub fn compute_multipart_etag(part_md5s: &[Vec<u8>], part_count: usize) -> String {
+    let mut hasher = Md5::new();
+    for md5_bytes in part_md5s {
+        hasher.update(md5_bytes);
+    }
+    let result = hasher.finalize();
+    format!("\"{:x}-{}\"", result, part_count)
+}
+
 /// Return the current time as an ISO 8601 UTC string.
 /// Example: `2026-04-21T14:48:01.000Z`
 ///
