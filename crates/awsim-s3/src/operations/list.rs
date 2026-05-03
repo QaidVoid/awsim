@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use awsim_core::AwsError;
+use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::state::S3State;
@@ -9,8 +9,15 @@ use crate::util::rfc7231_to_iso8601;
 use super::bucket::no_such_bucket;
 use super::require_str;
 
+fn owner_entry(account_id: &str) -> Value {
+    json!({
+        "ID": account_id,
+        "DisplayName": account_id,
+    })
+}
+
 /// GET /{Bucket}?list-type=2 — list objects with prefix/delimiter/pagination.
-pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+pub fn list_objects_v2(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let prefix = input.get("prefix").and_then(Value::as_str).unwrap_or("");
     let delimiter = input.get("delimiter").and_then(Value::as_str).unwrap_or("");
@@ -30,6 +37,10 @@ pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError
         .get("continuation-token")
         .and_then(Value::as_str)
         .unwrap_or("");
+    let start_after = input
+        .get("start-after")
+        .and_then(Value::as_str)
+        .unwrap_or("");
 
     let bucket = state
         .buckets
@@ -45,13 +56,18 @@ pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError
         .collect();
     matching_keys.sort();
 
-    // Apply continuation token (start after this token alphabetically).
-    let matching_keys: Vec<String> = if continuation_token.is_empty() {
+    // Apply start-after and continuation token (start after the later of the two).
+    let effective_token = if continuation_token > start_after {
+        continuation_token
+    } else {
+        start_after
+    };
+    let matching_keys: Vec<String> = if effective_token.is_empty() {
         matching_keys
     } else {
         matching_keys
             .into_iter()
-            .filter(|k| k.as_str() > continuation_token)
+            .filter(|k| k.as_str() > effective_token)
             .collect()
     };
 
@@ -88,6 +104,7 @@ pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError
                 "Size": obj.content_length,
                 "LastModified": rfc7231_to_iso8601(&obj.last_modified),
                 "StorageClass": "STANDARD",
+                "Owner": owner_entry(&ctx.account_id),
             }));
             key_count += 1;
             last_emitted_key = Some(key.as_str());
@@ -135,7 +152,7 @@ pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError
 }
 
 /// GET /{Bucket} — list objects (v1).
-pub fn list_objects(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+pub fn list_objects(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let prefix = input.get("prefix").and_then(Value::as_str).unwrap_or("");
     let delimiter = input.get("delimiter").and_then(Value::as_str).unwrap_or("");
@@ -195,6 +212,7 @@ pub fn list_objects(state: &S3State, input: &Value) -> Result<Value, AwsError> {
                 "Size": obj.content_length,
                 "LastModified": rfc7231_to_iso8601(&obj.last_modified),
                 "StorageClass": "STANDARD",
+                "Owner": owner_entry(&ctx.account_id),
             }));
             last_emitted_key = Some(key.as_str());
         }

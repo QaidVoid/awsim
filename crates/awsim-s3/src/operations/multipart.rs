@@ -298,17 +298,17 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
                 format!("The specified upload does not contain a part with number {part_number}"),
             )
         })?;
-            if let Some(expected) = expected_etag
-                && part.etag != *expected
-            {
-                return Err(AwsError::bad_request(
-                    "InvalidPart",
-                    format!(
-                        "ETag mismatch for part {part_number}: expected {expected}, got {}",
-                        part.etag
-                    ),
-                ));
-            }
+        if let Some(expected) = expected_etag
+            && part.etag != *expected
+        {
+            return Err(AwsError::bad_request(
+                "InvalidPart",
+                format!(
+                    "ETag mismatch for part {part_number}: expected {expected}, got {}",
+                    part.etag
+                ),
+            ));
+        }
         let bytes = part
             .body
             .read_all()
@@ -467,7 +467,7 @@ pub fn list_parts(state: &S3State, input: &Value) -> Result<Value, AwsError> {
         "Bucket": bucket_name,
         "Key": key,
         "UploadId": upload_id,
-        "Parts": parts,
+        "Part": parts,
         "IsTruncated": false,
     }))
 }

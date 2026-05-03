@@ -1176,8 +1176,8 @@ impl ServiceHandler for S3Service {
             "HeadObject" => operations::object::head_object(&state, &input),
 
             // Listing / batch
-            "ListObjectsV2" => operations::list::list_objects_v2(&state, &input),
-            "ListObjects" => operations::list::list_objects(&state, &input),
+            "ListObjectsV2" => operations::list::list_objects_v2(&state, &input, ctx),
+            "ListObjects" => operations::list::list_objects(&state, &input, ctx),
             "ListObjectVersions" => operations::list::list_object_versions(&state, &input),
             "DeleteObjects" => operations::list::delete_objects(&state, &input),
 
