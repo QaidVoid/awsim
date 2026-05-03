@@ -22,6 +22,8 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import Inbox from '@lucide/svelte/icons/inbox';
+	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 
 	interface Props {
 		detail: TableDetail;
@@ -31,6 +33,7 @@
 	let { detail, onEdit }: Props = $props();
 
 	let mode = $state<'scan' | 'query'>('scan');
+	let selectedIndexName = $state<string>('');
 	let pkValue = $state('');
 	let pkType = $state<ScalarType>('S');
 	let skValue = $state('');
@@ -41,11 +44,27 @@
 	let items = $state<Item[]>([]);
 	let loading = $state(false);
 	let scanned = $state(0);
+
+	let pageStack = $state<(Item | undefined)[]>([]);
+	let currentStartKey = $state<Item | undefined>(undefined);
 	let lastEvaluatedKey = $state<Item | undefined>(undefined);
 	let hasMore = $derived(lastEvaluatedKey !== undefined);
+	let pageIndex = $derived(pageStack.length);
 
 	let pkName = $derived(detail.keySchema.find((k) => k.keyType === 'HASH')?.attributeName ?? '');
 	let skName = $derived(detail.keySchema.find((k) => k.keyType === 'RANGE')?.attributeName);
+
+	let selectedGsi = $derived(
+		selectedIndexName
+			? detail.globalSecondaryIndexes.find((g) => g.indexName === selectedIndexName)
+			: null
+	);
+	let queryPkName = $derived(
+		selectedGsi?.keySchema.find((k) => k.keyType === 'HASH')?.attributeName ?? pkName
+	);
+	let querySkName = $derived(
+		selectedGsi?.keySchema.find((k) => k.keyType === 'RANGE')?.attributeName
+	);
 
 	let columns = $derived.by(() => {
 		const seen = new Set<string>();
@@ -69,37 +88,22 @@
 
 	$effect(() => {
 		if (detail.name) {
-			void runScan();
+			void reset();
 		}
 	});
 
-	async function runScan() {
-		loading = true;
-		lastEvaluatedKey = undefined;
-		try {
-			const res = await scan({ tableName: detail.name, limit });
-			items = res.items;
-			scanned = res.scannedCount;
-			lastEvaluatedKey = res.lastEvaluatedKey;
-		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Scan failed');
-		} finally {
-			loading = false;
-		}
-	}
-
-	async function loadMore() {
-		if (!lastEvaluatedKey) return;
+	async function fetchScanPage(startKey: Item | undefined) {
 		loading = true;
 		try {
 			const res = await scan({
 				tableName: detail.name,
 				limit,
-				exclusiveStartKey: lastEvaluatedKey
+				exclusiveStartKey: startKey
 			});
-			items = [...items, ...res.items];
-			scanned += res.scannedCount;
+			items = res.items;
+			scanned = res.scannedCount;
 			lastEvaluatedKey = res.lastEvaluatedKey;
+			currentStartKey = startKey;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Scan failed');
 		} finally {
@@ -107,28 +111,29 @@
 		}
 	}
 
-	async function runQuery() {
-		if (!pkName || !pkValue.trim()) {
+	async function fetchQueryPage(startKey: Item | undefined) {
+		if (!queryPkName || !pkValue.trim()) {
 			toast.error('Partition key value required');
 			return;
 		}
 		loading = true;
-		lastEvaluatedKey = undefined;
 		try {
 			const partitionValue = inferAttribute(pkValue, pkType);
-			const sortValue = skName && skValue ? inferAttribute(skValue, skType) : undefined;
+			const sortValue = querySkName && skValue ? inferAttribute(skValue, skType) : undefined;
 			const res = await query({
 				tableName: detail.name,
-				partitionKey: pkName,
+				partitionKey: queryPkName,
 				partitionValue,
-				sortKey: sortValue ? skName : undefined,
+				sortKey: sortValue ? querySkName : undefined,
 				sortValue,
 				sortOperator: sortValue ? skOp : undefined,
+				indexName: selectedIndexName || undefined,
 				limit
 			});
 			items = res.items;
 			scanned = res.scannedCount;
 			lastEvaluatedKey = res.lastEvaluatedKey;
+			currentStartKey = startKey;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Query failed');
 		} finally {
@@ -136,9 +141,29 @@
 		}
 	}
 
-	async function refresh() {
-		if (mode === 'scan') await runScan();
-		else await runQuery();
+	async function fetchPage(startKey: Item | undefined) {
+		if (mode === 'scan') await fetchScanPage(startKey);
+		else await fetchQueryPage(startKey);
+	}
+
+	async function reset() {
+		pageStack = [];
+		currentStartKey = undefined;
+		await fetchPage(undefined);
+	}
+
+	async function nextPage() {
+		if (!lastEvaluatedKey) return;
+		pageStack = [...pageStack, currentStartKey];
+		await fetchPage(lastEvaluatedKey);
+	}
+
+	async function prevPage() {
+		if (pageStack.length === 0) return;
+		const newStack = [...pageStack];
+		const prevKey = newStack.pop();
+		pageStack = newStack;
+		await fetchPage(prevKey);
 	}
 
 	async function handleDelete(item: Item) {
@@ -176,7 +201,10 @@
 					class="rounded px-3 py-1 text-xs font-medium transition-colors {mode === 'scan'
 						? 'bg-muted text-foreground'
 						: 'text-muted-foreground hover:text-foreground'}"
-					onclick={() => (mode = 'scan')}
+					onclick={() => {
+						mode = 'scan';
+						void reset();
+					}}
 				>
 					Scan
 				</button>
@@ -191,8 +219,30 @@
 				</button>
 			</div>
 
+			<Badge variant="secondary" class="ml-1">
+				Page {pageIndex + 1}{hasMore ? '+' : ''}
+			</Badge>
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				onclick={prevPage}
+				disabled={pageStack.length === 0 || loading}
+				title="Previous page"
+			>
+				<ChevronLeft class="size-4" />
+			</Button>
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				onclick={nextPage}
+				disabled={!hasMore || loading}
+				title="Next page"
+			>
+				<ChevronRight class="size-4" />
+			</Button>
+
 			<div class="ml-auto flex items-center gap-1.5">
-				<Button variant="ghost" size="icon-sm" onclick={refresh} aria-label="Refresh">
+				<Button variant="ghost" size="icon-sm" onclick={() => void reset()} aria-label="Refresh">
 					{#if loading}
 						<Loader2 class="size-3.5 animate-spin" />
 					{:else}
@@ -207,10 +257,25 @@
 		</div>
 
 		{#if mode === 'query'}
+			{#if detail.globalSecondaryIndexes.length > 0}
+				<div class="mb-2 flex items-center gap-2">
+					<Label class="text-[11px] text-muted-foreground">Index</Label>
+					<select
+						bind:value={selectedIndexName}
+						aria-label="Index to query"
+						class="h-7 rounded-md border border-border bg-background px-1.5 text-xs"
+					>
+						<option value="">Table (default)</option>
+						{#each detail.globalSecondaryIndexes as gsi}
+							<option value={gsi.indexName}>{gsi.indexName}</option>
+						{/each}
+					</select>
+				</div>
+			{/if}
 			<div class="grid grid-cols-[1fr_1fr_auto] gap-2">
 				<div class="flex flex-col gap-1">
 					<Label for="dq-pk-value" class="text-[11px]">
-						{pkName || 'partition key'}
+						{queryPkName || 'partition key'}
 					</Label>
 					<div class="flex gap-1">
 						<Input
@@ -231,9 +296,9 @@
 					</div>
 				</div>
 
-				{#if skName}
+				{#if querySkName}
 					<div class="flex flex-col gap-1">
-						<Label for="dq-sk-value" class="text-[11px]">{skName}</Label>
+						<Label for="dq-sk-value" class="text-[11px]">{querySkName}</Label>
 						<div class="flex gap-1">
 							<select
 								bind:value={skOp}
@@ -279,7 +344,9 @@
 							max={1000}
 							class="h-8 w-20 text-xs"
 						/>
-						<Button size="sm" onclick={runQuery} disabled={loading}>Run query</Button>
+						<Button size="sm" onclick={() => void reset()} disabled={loading}
+							>Run query</Button
+						>
 					</div>
 				</div>
 			</div>
@@ -294,10 +361,9 @@
 					max={1000}
 					class="h-8 w-24 text-xs"
 				/>
-				<Button size="sm" onclick={runScan} disabled={loading}>Run scan</Button>
+				<Button size="sm" onclick={() => void reset()} disabled={loading}>Run scan</Button>
 				<span class="ml-auto text-[11px] text-muted-foreground">
 					{items.length} returned · {scanned} scanned
-					{#if hasMore}· more available{/if}
 				</span>
 			</div>
 		{/if}
@@ -368,21 +434,6 @@
 						{/each}
 					</tbody>
 				</table>
-				{#if hasMore}
-					<div class="flex justify-center border-t border-border/40 py-2">
-						<Button
-							variant="ghost"
-							size="sm"
-							onclick={loadMore}
-							disabled={loading}
-						>
-							{#if loading}
-								<Loader2 class="size-3.5 animate-spin" />
-							{/if}
-							Load more
-						</Button>
-					</div>
-				{/if}
 			</div>
 		{/if}
 	</div>
