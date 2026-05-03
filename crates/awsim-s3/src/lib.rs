@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 pub mod authz;
 mod operations;
 pub mod state;
