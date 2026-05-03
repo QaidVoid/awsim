@@ -64,10 +64,13 @@ curl -s http://localhost:4566 \
 | Operation | Description |
 |-----------|-------------|
 | `DescribeContinuousBackups` | Get the point-in-time recovery (PITR) status for a table. Returns `ContinuousBackupsDescription` |
-| `CreateBackup` | Create an on-demand backup (stub — returns a backup ARN but does not persist) |
-| `DeleteBackup` | Delete a backup (stub — always succeeds) |
-| `DescribeBackup` | Describe a backup (stub — always returns not-found) |
-| `ListBackups` | List on-demand backups (stub — returns empty list) |
+| `UpdateContinuousBackups` | Enable or disable PITR for a table |
+| `CreateBackup` | Create an on-demand backup. Snapshots all items from SQLite into an in-memory record |
+| `DeleteBackup` | Delete a backup. Returns `BackupNotFoundException` if the backup ARN doesn't exist |
+| `DescribeBackup` | Describe a backup by ARN |
+| `ListBackups` | List on-demand backups, optionally filtered by `TableName` |
+| `RestoreTableFromBackup` | Restore a table from a backup. Creates a new table with the backed-up schema and items |
+| `RestoreTableToPointInTime` | Restore a table to a point in time. Creates a new table with the source schema (items not copied — point-in-time replay not implemented) |
 
 ### Global Tables
 
@@ -82,18 +85,32 @@ curl -s http://localhost:4566 \
 
 | Operation | Description |
 |-----------|-------------|
-| `DescribeExport` | Describe an export (stub — returns not-found) |
-| `ExportTableToPointInTime` | Export to S3 (stub — returns not-supported error) |
-| `ListExports` | List exports (stub — returns empty list) |
-| `DescribeImport` | Describe an import (stub — returns not-found) |
-| `ImportTable` | Import from S3 (stub — returns not-supported error) |
-| `ListImports` | List imports (stub — returns empty list) |
+| `DescribeExport` | Describe an export by ARN. Returns a stub record |
+| `ExportTableToPointInTime` | Export to S3 (stub — creates an export record but does not move data to S3) |
+| `ListExports` | List exports, optionally filtered by `TableArn` |
+| `DescribeImport` | Describe an import by ARN. Returns a stub record |
+| `ImportTable` | Import from S3 (stub — creates an import record but does not read from S3) |
+| `ListImports` | List imports, optionally filtered by `TableArn` |
 
 ### Account Limits
 
 | Operation | Description |
 |-----------|-------------|
 | `DescribeLimits` | Return default account-level throughput limits (called by Terraform on every plan) |
+
+### Auto Scaling (Terraform compatibility)
+
+| Operation | Description |
+|-----------|-------------|
+| `DescribeTableReplicaAutoScaling` | Returns a stub auto-scaling description for the table. Required by Terraform `aws_dynamodb_table` plans |
+| `UpdateTableReplicaAutoScaling` | Acknowledges auto-scaling updates without applying them |
+
+### Global Table Settings (Terraform compatibility)
+
+| Operation | Description |
+|-----------|-------------|
+| `DescribeGlobalTableSettings` | Returns stub replica settings for a global table |
+| `UpdateGlobalTableSettings` | Acknowledges global table settings updates without applying them |
 
 ### Contributor Insights
 
@@ -110,6 +127,22 @@ curl -s http://localhost:4566 \
 | `TagResource` | Add tags to a table (by ARN). Input: `ResourceArn`, `Tags` list |
 | `UntagResource` | Remove tags from a table. Input: `ResourceArn`, `TagKeys` list |
 | `ListTagsOfResource` | List all tags for a table. Input: `ResourceArn`. Returns paginated `Tags` list |
+
+### Kinesis Streaming Destination
+
+| Operation | Description |
+|-----------|-------------|
+| `EnableKinesisStreamingDestination` | Register a Kinesis stream as a replication destination (metadata only) |
+| `DisableKinesisStreamingDestination` | Remove a Kinesis streaming destination |
+| `DescribeKinesisStreamingDestination` | List Kinesis streaming destinations for a table |
+
+### Resource Policy
+
+| Operation | Description |
+|-----------|-------------|
+| `PutResourcePolicy` | Attach a resource-based policy to a table |
+| `GetResourcePolicy` | Retrieve the resource-based policy for a table |
+| `DeleteResourcePolicy` | Remove the resource-based policy from a table |
 
 ### Item Operations
 
@@ -283,7 +316,7 @@ The byte estimator that drives the response caps walks the typed `AttributeValue
 - `TransactWriteItems` is genuinely atomic: phase 1 (validate every condition) and phase 2 (apply every mutation) run inside a single SQLite write transaction. A failing condition anywhere in the batch rolls back every mutation that had already been applied. The cancellation surfaces as `TransactionCanceledException` (HTTP 400) with a structured `CancellationReasons` array — one entry per `TransactItem` in request order, marked `{"Code": "None"}` for unfailed ops and `{"Code": "ConditionalCheckFailed", "Message": ...}` for the failing one. `TransactGetItems` reads see a single consistent snapshot.
 - `ResourceNotFoundException`, `TableNotFoundException`, `BackupNotFoundException`, etc. all return HTTP 400 (matching real DynamoDB), not 404. SDK retry/error-classification logic depends on this.
 - Global tables are metadata-only: `CreateGlobalTable` / `UpdateGlobalTable` register the replication group so Terraform / CDK can `Describe` them, but cross-region data replication is not modelled. Reads and writes to the underlying tables stay per-region.
-- TTL (Time to Live) configuration (`UpdateTimeToLive`) is accepted and stored but items are not automatically expired.
+- TTL (Time to Live) configuration (`UpdateTimeToLive`) is accepted and stored. A background sweeper periodically deletes expired items from SQLite.
 - `DescribeContinuousBackups` returns a stub response indicating PITR is disabled — no actual backups are made.
 - `DescribeEndpoints` returns a single endpoint entry for SDK endpoint discovery compatibility.
 - Table tags (`TagResource`, `UntagResource`, `ListTagsOfResource`) are stored and returned correctly.
