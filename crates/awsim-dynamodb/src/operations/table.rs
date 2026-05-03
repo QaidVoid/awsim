@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use awsim_core::{AwsError, RequestContext};
@@ -390,7 +391,7 @@ pub fn create_table(
         stream_enabled,
         stream_arn,
         stream_view_type,
-        stream_records: Vec::new(),
+        stream_records: VecDeque::new(),
         stream_sequence: 0,
         ttl: TtlSpecification::default(),
         tags,
@@ -1558,7 +1559,7 @@ mod tests {
                 stream_enabled: false,
                 stream_arn: None,
                 stream_view_type: None,
-                stream_records: Vec::new(),
+                stream_records: VecDeque::new(),
                 stream_sequence: 0,
                 ttl: Default::default(),
                 tags: Default::default(),
@@ -1688,7 +1689,7 @@ mod tests {
                 stream_enabled: false,
                 stream_arn: None,
                 stream_view_type: None,
-                stream_records: Vec::new(),
+                stream_records: VecDeque::new(),
                 stream_sequence: 0,
                 ttl: Default::default(),
                 tags: Default::default(),

@@ -8,6 +8,7 @@ mod state;
 
 pub use sqlite_store::{MAX_GSI_SLOTS, SqliteStore};
 
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -228,7 +229,7 @@ impl DynamoDbService {
                 stream_enabled: false,
                 stream_arn: None,
                 stream_view_type: None,
-                stream_records: Vec::new(),
+                stream_records: VecDeque::new(),
                 stream_sequence: 0,
                 ttl: state::TtlSpecification::default(),
                 tags: std::collections::HashMap::new(),

@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -372,7 +374,7 @@ pub fn transact_write_items(
                     stream_enabled: table.stream_enabled,
                     stream_arn: table.stream_arn.clone(),
                     stream_view_type: table.stream_view_type.clone(),
-                    stream_records: Vec::new(),
+                    stream_records: VecDeque::new(),
                     stream_sequence: 0,
                     ttl: table.ttl.clone(),
                     tags: table.tags.clone(),
@@ -600,7 +602,7 @@ mod tests {
             stream_enabled: false,
             stream_arn: None,
             stream_view_type: None,
-            stream_records: Vec::new(),
+            stream_records: VecDeque::new(),
             stream_sequence: 0,
             ttl: Default::default(),
             tags: Default::default(),

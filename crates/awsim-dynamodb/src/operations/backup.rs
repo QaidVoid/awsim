@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use awsim_core::{AwsError, RequestContext};
@@ -250,7 +251,7 @@ pub fn restore_table_from_backup(
         t.stream_enabled = false;
         t.stream_arn = None;
         t.stream_view_type = None;
-        t.stream_records = Vec::new();
+        t.stream_records = VecDeque::new();
         t.stream_sequence = 0;
         t
     } else if let Some(src) = state.tables.get(&backup.table_name) {
@@ -267,7 +268,7 @@ pub fn restore_table_from_backup(
             stream_enabled: false,
             stream_arn: None,
             stream_view_type: None,
-            stream_records: Vec::new(),
+            stream_records: VecDeque::new(),
             stream_sequence: 0,
             ttl: src.ttl.clone(),
             tags: src.tags.clone(),
@@ -290,7 +291,7 @@ pub fn restore_table_from_backup(
             stream_enabled: false,
             stream_arn: None,
             stream_view_type: None,
-            stream_records: Vec::new(),
+            stream_records: VecDeque::new(),
             stream_sequence: 0,
             ttl: Default::default(),
             tags: std::collections::HashMap::new(),
@@ -388,7 +389,7 @@ pub fn restore_table_to_point_in_time(
         stream_enabled: false,
         stream_arn: None,
         stream_view_type: None,
-        stream_records: Vec::new(),
+        stream_records: VecDeque::new(),
         stream_sequence: 0,
         ttl: source.ttl.clone(),
         tags: source.tags.clone(),

@@ -117,9 +117,9 @@ fn emit_stream_record(
 
     // Keep last 1 000 records.
     if table.stream_records.len() >= 1000 {
-        table.stream_records.remove(0);
+        table.stream_records.pop_front();
     }
-    table.stream_records.push(record.clone());
+    table.stream_records.push_back(record.clone());
 
     // Publish to the event bus for Lambda trigger fan-out.
     if let Some(ref bus) = ctx.event_bus {
@@ -575,6 +575,7 @@ mod tests {
     use super::*;
     use crate::state::{KeySchemaElement, Table};
     use serde_json::json;
+    use std::collections::VecDeque;
 
     fn ctx() -> RequestContext {
         RequestContext::new("dynamodb", "us-east-1")
@@ -604,7 +605,7 @@ mod tests {
             stream_enabled: false,
             stream_arn: None,
             stream_view_type: None,
-            stream_records: Vec::new(),
+            stream_records: VecDeque::new(),
             stream_sequence: 0,
             ttl: Default::default(),
             tags: Default::default(),

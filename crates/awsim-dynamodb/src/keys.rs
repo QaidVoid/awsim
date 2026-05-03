@@ -95,6 +95,7 @@ mod tests {
     use super::*;
     use crate::state::{KeySchemaElement, Projection};
     use serde_json::json;
+    use std::collections::VecDeque;
 
     fn ks(name: &str, kt: &str) -> KeySchemaElement {
         KeySchemaElement {
@@ -125,7 +126,7 @@ mod tests {
             stream_enabled: false,
             stream_arn: None,
             stream_view_type: None,
-            stream_records: Vec::new(),
+            stream_records: VecDeque::new(),
             stream_sequence: 0,
             ttl: Default::default(),
             tags: Default::default(),

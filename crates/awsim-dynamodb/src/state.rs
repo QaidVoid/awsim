@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -134,7 +134,7 @@ pub struct Table {
     pub stream_view_type: Option<String>,
     /// Bounded ring buffer of recent stream records (last 1 000).
     #[serde(default)]
-    pub stream_records: Vec<StreamRecord>,
+    pub stream_records: VecDeque<StreamRecord>,
     /// Monotonically increasing counter used to generate sequence numbers.
     #[serde(default)]
     pub stream_sequence: u64,
