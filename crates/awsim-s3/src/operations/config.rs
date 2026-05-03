@@ -519,7 +519,11 @@ pub fn delete_object_tagging(state: &S3State, input: &Value) -> Result<Value, Aw
 // ─── ACL ──────────────────────────────────────────────────────────────────────
 
 /// GET /{Bucket}?acl — Return default owner-full-control ACL for a bucket.
-pub fn get_bucket_acl(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn get_bucket_acl(
+    state: &S3State,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
     let bucket = state
@@ -528,7 +532,8 @@ pub fn get_bucket_acl(state: &S3State, input: &Value, ctx: &RequestContext) -> R
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
     if let Some(acl_str) = &bucket.acl {
-        let parsed: Value = serde_json::from_str(acl_str).unwrap_or(default_bucket_acl(&ctx.account_id));
+        let parsed: Value =
+            serde_json::from_str(acl_str).unwrap_or(default_bucket_acl(&ctx.account_id));
         return Ok(parsed);
     }
 
@@ -549,7 +554,11 @@ pub fn put_bucket_acl(state: &S3State, input: &Value) -> Result<Value, AwsError>
 }
 
 /// GET /{Bucket}/{Key+}?acl — Return default ACL for an object.
-pub fn get_object_acl(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn get_object_acl(
+    state: &S3State,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let bucket_name = input["Bucket"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingBucket", "Bucket is required"))?;
@@ -562,7 +571,9 @@ pub fn get_object_acl(state: &S3State, input: &Value, ctx: &RequestContext) -> R
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    if !bucket.objects.contains_key(key) {
+    let versions = bucket.objects.get(key);
+    let obj_exists = versions.is_some_and(|v| v.current().is_some());
+    if !obj_exists {
         return Err(AwsError::not_found(
             "NoSuchKey",
             format!("Key '{key}' not found"),
@@ -683,15 +694,10 @@ pub fn get_bucket_encryption(state: &S3State, input: &Value) -> Result<Value, Aw
                 .unwrap_or(json!([]));
             Ok(json!({ "__xml_root": "ServerSideEncryptionConfiguration", "Rule": rules }))
         }
-        None => Ok(json!({
-            "__xml_root": "ServerSideEncryptionConfiguration",
-            "Rule": [{
-                "ApplyServerSideEncryptionByDefault": {
-                    "SSEAlgorithm": "AES256"
-                },
-                "BucketKeyEnabled": false
-            }]
-        })),
+        None => Err(AwsError::not_found(
+            "ServerSideEncryptionConfigurationNotFoundError",
+            format!("The server side encryption configuration was not found for bucket '{bucket_name}'"),
+        )),
     }
 }
 
@@ -1391,13 +1397,10 @@ pub fn get_public_access_block(state: &S3State, input: &Value) -> Result<Value, 
             }
             Ok(Value::Object(result))
         }
-        None => Ok(json!({
-            "__xml_root": "PublicAccessBlockConfiguration",
-            "BlockPublicAcls": false,
-            "IgnorePublicAcls": false,
-            "BlockPublicPolicy": false,
-            "RestrictPublicBuckets": false
-        })),
+        None => Err(AwsError::not_found(
+            "NoSuchPublicAccessBlockConfiguration",
+            format!("The public access block configuration was not found for bucket '{bucket_name}'"),
+        )),
     }
 }
 
@@ -1472,10 +1475,10 @@ pub fn get_object_lock_configuration(state: &S3State, input: &Value) -> Result<V
             }
             Ok(Value::Object(result))
         }
-        None => Ok(json!({
-            "__xml_root": "ObjectLockConfiguration",
-            "ObjectLockEnabled": "Disabled",
-        })),
+        None => Err(AwsError::not_found(
+            "ObjectLockConfigurationNotFoundError",
+            format!("Object Lock configuration does not exist for bucket '{bucket_name}'"),
+        )),
     }
 }
 
@@ -1494,7 +1497,9 @@ pub fn get_object_legal_hold(state: &S3State, input: &Value) -> Result<Value, Aw
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    if !bucket.objects.contains_key(key) {
+    let versions = bucket.objects.get(key);
+    let obj_exists = versions.is_some_and(|v| v.current().is_some());
+    if !obj_exists {
         return Err(AwsError::not_found(
             "NoSuchKey",
             format!("Key '{key}' not found"),
@@ -1536,7 +1541,8 @@ pub fn put_object_legal_hold(state: &S3State, input: &Value) -> Result<Value, Aw
         .get_mut(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    if !bucket.objects.contains_key(key) {
+    let versions = bucket.objects.get(key);
+    if !versions.is_some_and(|v| v.current().is_some()) {
         return Err(AwsError::not_found(
             "NoSuchKey",
             format!("Key '{key}' not found"),
@@ -1561,7 +1567,8 @@ pub fn get_object_retention(state: &S3State, input: &Value) -> Result<Value, Aws
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    if !bucket.objects.contains_key(key) {
+    let versions = bucket.objects.get(key);
+    if !versions.is_some_and(|v| v.current().is_some()) {
         return Err(AwsError::not_found(
             "NoSuchKey",
             format!("Key '{key}' not found"),
@@ -1617,7 +1624,8 @@ pub fn put_object_retention(state: &S3State, input: &Value) -> Result<Value, Aws
         .get_mut(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    if !bucket.objects.contains_key(key) {
+    let versions = bucket.objects.get(key);
+    if !versions.is_some_and(|v| v.current().is_some()) {
         return Err(AwsError::not_found(
             "NoSuchKey",
             format!("Key '{key}' not found"),
@@ -1642,7 +1650,8 @@ pub fn put_object_acl(state: &S3State, input: &Value) -> Result<Value, AwsError>
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    if !bucket.objects.contains_key(key) {
+    let versions = bucket.objects.get(key);
+    if !versions.is_some_and(|v| v.current().is_some()) {
         return Err(AwsError::not_found(
             "NoSuchKey",
             format!("Key '{key}' not found"),
@@ -1690,7 +1699,8 @@ pub fn restore_object(state: &S3State, input: &Value) -> Result<Value, AwsError>
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    if !bucket.objects.contains_key(key) {
+    let versions = bucket.objects.get(key);
+    if !versions.is_some_and(|v| v.current().is_some()) {
         return Err(AwsError::not_found(
             "NoSuchKey",
             format!("Key '{key}' not found"),

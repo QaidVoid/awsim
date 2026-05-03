@@ -301,7 +301,7 @@ pub fn head_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
         result["VersionId"] = Value::String(vid.clone());
     }
     for (k, v) in &obj.metadata {
-        result[format!("x-amz-meta-{k}")] = Value::String(v.clone());
+        result[k.clone()] = Value::String(v.clone());
     }
     Ok(result)
 }
