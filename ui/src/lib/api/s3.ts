@@ -344,6 +344,103 @@ export function objectUrl(bucket: string, key: string): string {
   return `${ENDPOINT}/${encodeURIComponent(bucket)}/${encodeKey(key)}`;
 }
 
+export interface CorsRule {
+  AllowedHeaders?: string[];
+  AllowedMethods: string[];
+  AllowedOrigins: string[];
+  ExposeHeaders?: string[];
+  MaxAgeSeconds?: number;
+}
+
+export async function getBucketCors(
+  bucket: string,
+): Promise<CorsRule[]> {
+  const res = await loggedFetch(
+    "s3",
+    "GetBucketCors",
+    "GET",
+    `${ENDPOINT}/${encodeURIComponent(bucket)}?cors`,
+    { headers: s3Headers() },
+  );
+  if (res.status === 404) return [];
+  if (!res.ok)
+    throw new Error(
+      `GetBucketCors failed: HTTP ${res.status}: ${await res.text()}`,
+    );
+  const text = await res.text();
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(text, "text/xml");
+    const rules: CorsRule[] = [];
+    doc.querySelectorAll("CORSRule").forEach((el) => {
+      const rule: CorsRule = {
+        AllowedMethods: [],
+        AllowedOrigins: [],
+      };
+      el.querySelectorAll("AllowedMethod").forEach((m) => rule.AllowedMethods.push(m.textContent ?? ""));
+      el.querySelectorAll("AllowedOrigin").forEach((o) => rule.AllowedOrigins.push(o.textContent ?? ""));
+      el.querySelectorAll("AllowedHeader").forEach((h) => {
+        if (!rule.AllowedHeaders) rule.AllowedHeaders = [];
+        rule.AllowedHeaders.push(h.textContent ?? "");
+      });
+      el.querySelectorAll("ExposeHeader").forEach((h) => {
+        if (!rule.ExposeHeaders) rule.ExposeHeaders = [];
+        rule.ExposeHeaders.push(h.textContent ?? "");
+      });
+      const maxAge = el.querySelector("MaxAgeSeconds")?.textContent;
+      if (maxAge) rule.MaxAgeSeconds = parseInt(maxAge, 10);
+      rules.push(rule);
+    });
+    return rules;
+  } catch {
+    return [];
+  }
+}
+
+export async function putBucketCors(
+  bucket: string,
+  rules: CorsRule[],
+): Promise<void> {
+  let xml = '<CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">';
+  for (const rule of rules) {
+    xml += "<CORSRule>";
+    for (const m of rule.AllowedMethods) xml += `<AllowedMethod>${m}</AllowedMethod>`;
+    for (const o of rule.AllowedOrigins) xml += `<AllowedOrigin>${o}</AllowedOrigin>`;
+    for (const h of rule.AllowedHeaders ?? []) xml += `<AllowedHeader>${h}</AllowedHeader>`;
+    for (const h of rule.ExposeHeaders ?? []) xml += `<ExposeHeader>${h}</ExposeHeader>`;
+    if (rule.MaxAgeSeconds != null) xml += `<MaxAgeSeconds>${rule.MaxAgeSeconds}</MaxAgeSeconds>`;
+    xml += "</CORSRule>";
+  }
+  xml += "</CORSConfiguration>";
+  const headers = s3Headers();
+  headers["Content-Type"] = "application/xml";
+  const res = await loggedFetch(
+    "s3",
+    "PutBucketCors",
+    "PUT",
+    `${ENDPOINT}/${encodeURIComponent(bucket)}?cors`,
+    { method: "PUT", headers, body: xml },
+  );
+  if (!res.ok)
+    throw new Error(
+      `PutBucketCors failed: HTTP ${res.status}: ${await res.text()}`,
+    );
+}
+
+export async function deleteBucketCors(bucket: string): Promise<void> {
+  const res = await loggedFetch(
+    "s3",
+    "DeleteBucketCors",
+    "DELETE",
+    `${ENDPOINT}/${encodeURIComponent(bucket)}?cors`,
+    { method: "DELETE", headers: s3Headers() },
+  );
+  if (!res.ok && res.status !== 404)
+    throw new Error(
+      `DeleteBucketCors failed: HTTP ${res.status}: ${await res.text()}`,
+    );
+}
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
