@@ -463,3 +463,151 @@ export function formatTimestamp(iso: string): string {
     return iso;
   }
 }
+
+// ── Bucket configuration APIs ──
+
+export interface VersioningConfig {
+  status: "Enabled" | "Suspended" | "";
+}
+
+export async function getBucketVersioning(
+  bucket: string,
+): Promise<VersioningConfig> {
+  const res = await loggedFetch(
+    "s3",
+    "GetBucketVersioning",
+    "GET",
+    `${ENDPOINT}/${encodeURIComponent(bucket)}?versioning`,
+    { headers: s3Headers() },
+  );
+  if (!res.ok) return { status: "" };
+  const text = await res.text();
+  const enabled = /<Status>Enabled<\/Status>/.test(text);
+  const suspended = /<Status>Suspended<\/Status>/.test(text);
+  return { status: enabled ? "Enabled" : suspended ? "Suspended" : "" };
+}
+
+export async function putBucketVersioning(
+  bucket: string,
+  status: "Enabled" | "Suspended",
+): Promise<void> {
+  const xml = `<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>${status}</Status></VersioningConfiguration>`;
+  const headers = s3Headers();
+  headers["Content-Type"] = "application/xml";
+  const res = await loggedFetch(
+    "s3",
+    "PutBucketVersioning",
+    "PUT",
+    `${ENDPOINT}/${encodeURIComponent(bucket)}?versioning`,
+    { method: "PUT", headers, body: xml },
+  );
+  if (!res.ok)
+    throw new Error(
+      `PutBucketVersioning failed: HTTP ${res.status}: ${await res.text()}`,
+    );
+}
+
+export interface EncryptionConfig {
+  enabled: boolean;
+  algorithm: string;
+}
+
+export async function getBucketEncryption(
+  bucket: string,
+): Promise<EncryptionConfig> {
+  const res = await loggedFetch(
+    "s3",
+    "GetBucketEncryption",
+    "GET",
+    `${ENDPOINT}/${encodeURIComponent(bucket)}?encryption`,
+    { headers: s3Headers() },
+  );
+  if (res.status === 404 || res.status === 204) return { enabled: false, algorithm: "" };
+  if (!res.ok) return { enabled: false, algorithm: "" };
+  const text = await res.text();
+  const algo = /<Algorithm>([^<]+)<\/Algorithm>/.exec(text)?.[1] ?? "";
+  return { enabled: true, algorithm: algo };
+}
+
+export async function putBucketEncryption(
+  bucket: string,
+  algorithm = "AES256",
+): Promise<void> {
+  const xml = `<ServerSideEncryptionConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Rule><ApplyServerSideEncryptionByDefault><Algorithm>${algorithm}</Algorithm></ApplyServerSideEncryptionByDefault></Rule></ServerSideEncryptionConfiguration>`;
+  const headers = s3Headers();
+  headers["Content-Type"] = "application/xml";
+  const res = await loggedFetch(
+    "s3",
+    "PutBucketEncryption",
+    "PUT",
+    `${ENDPOINT}/${encodeURIComponent(bucket)}?encryption`,
+    { method: "PUT", headers, body: xml },
+  );
+  if (!res.ok)
+    throw new Error(
+      `PutBucketEncryption failed: HTTP ${res.status}: ${await res.text()}`,
+    );
+}
+
+export async function deleteBucketEncryption(bucket: string): Promise<void> {
+  const res = await loggedFetch(
+    "s3",
+    "DeleteBucketEncryption",
+    "DELETE",
+    `${ENDPOINT}/${encodeURIComponent(bucket)}?encryption`,
+    { method: "DELETE", headers: s3Headers() },
+  );
+  if (!res.ok && res.status !== 404)
+    throw new Error(
+      `DeleteBucketEncryption failed: HTTP ${res.status}: ${await res.text()}`,
+    );
+}
+
+export interface BucketTag {
+  key: string;
+  value: string;
+}
+
+export async function getBucketTagging(bucket: string): Promise<BucketTag[]> {
+  const res = await loggedFetch(
+    "s3",
+    "GetBucketTagging",
+    "GET",
+    `${ENDPOINT}/${encodeURIComponent(bucket)}?tagging`,
+    { headers: s3Headers() },
+  );
+  if (res.status === 404) return [];
+  if (!res.ok) return [];
+  const text = await res.text();
+  const tags: BucketTag[] = [];
+  const regex = /<Tag>\s*<Key>([^<]+)<\/Key>\s*<Value>([^<]*)<\/Value>\s*<\/Tag>/g;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(text)) !== null) {
+    tags.push({ key: m[1], value: m[2] });
+  }
+  return tags;
+}
+
+export async function putBucketTagging(
+  bucket: string,
+  tags: BucketTag[],
+): Promise<void> {
+  let xml = '<Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet>';
+  for (const t of tags) {
+    xml += `<Tag><Key>${t.key}</Key><Value>${t.value}</Value></Tag>`;
+  }
+  xml += "</TagSet></Tagging>";
+  const headers = s3Headers();
+  headers["Content-Type"] = "application/xml";
+  const res = await loggedFetch(
+    "s3",
+    "PutBucketTagging",
+    "PUT",
+    `${ENDPOINT}/${encodeURIComponent(bucket)}?tagging`,
+    { method: "PUT", headers, body: xml },
+  );
+  if (!res.ok)
+    throw new Error(
+      `PutBucketTagging failed: HTTP ${res.status}: ${await res.text()}`,
+    );
+}
