@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
+	import { afterNavigate, replaceState } from '$app/navigation';
+	import { browser } from '$app/environment';
 	import { toast } from 'svelte-sonner';
 	import {
 		listBuckets,
@@ -62,7 +65,42 @@
 		})
 	);
 
-	onMount(loadBuckets);
+	let routerReady = $state(false);
+	afterNavigate(() => {
+		routerReady = true;
+	});
+
+	$effect(() => {
+		if (!browser || !routerReady) return;
+		const url = new URL(window.location.href);
+		const name = selectedBucket?.name;
+		const changed =
+			url.searchParams.get('bucket') !== (name ?? null) ||
+			url.searchParams.get('prefix') !== (prefix || null);
+		if (!changed) return;
+		if (name) {
+			url.searchParams.set('bucket', name);
+			if (prefix) url.searchParams.set('prefix', prefix);
+			else url.searchParams.delete('prefix');
+		} else {
+			url.searchParams.delete('bucket');
+			url.searchParams.delete('prefix');
+		}
+		replaceState(url.toString(), {});
+	});
+
+	onMount(() => {
+		void loadBuckets().then(() => {
+			const bucketName = page.url.searchParams.get('bucket');
+			if (bucketName) {
+				const b = buckets.find((x) => x.name === bucketName);
+				if (b) {
+					const pfx = page.url.searchParams.get('prefix') ?? '';
+					void openBucket(b, pfx);
+				}
+			}
+		});
+	});
 
 	async function loadBuckets() {
 		bucketsLoading = true;
@@ -75,13 +113,13 @@
 		}
 	}
 
-	async function openBucket(b: Bucket) {
+	async function openBucket(b: Bucket, initialPrefix = '') {
 		selectedBucket = b;
-		prefix = '';
+		prefix = initialPrefix;
 		pageStack = [];
 		currentToken = undefined;
 		active = 'objects';
-		await fetchObjects(b.name, '', undefined);
+		await fetchObjects(b.name, initialPrefix, undefined);
 	}
 
 	async function fetchObjects(bucket: string, pfx: string, token: string | undefined) {
