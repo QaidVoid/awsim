@@ -11,18 +11,21 @@
 		type S3Object,
 		type S3CommonPrefix
 	} from '$lib/api/s3';
+	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
 	import BucketList from '$lib/components/s3/bucket-list.svelte';
 	import ObjectBrowser from '$lib/components/s3/object-browser.svelte';
+	import BucketPropertiesTab from '$lib/components/s3/bucket-properties-tab.svelte';
+	import BucketCorsTab from '$lib/components/s3/bucket-cors-tab.svelte';
+	import BucketPolicyTab from '$lib/components/s3/bucket-policy-tab.svelte';
 	import UploadZone from '$lib/components/s3/upload-zone.svelte';
 	import ObjectDetailSheet from '$lib/components/s3/object-detail-sheet.svelte';
-	import BucketPolicyDialog from '$lib/components/s3/bucket-policy-dialog.svelte';
 	import CreateBucketDialog from '$lib/components/s3/create-bucket-dialog.svelte';
 	import ConfirmDialog from '$lib/components/s3/confirm-dialog.svelte';
 	import Plus from '@lucide/svelte/icons/plus';
-	import Shield from '@lucide/svelte/icons/shield';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
 	let buckets = $state<Bucket[]>([]);
@@ -41,7 +44,6 @@
 
 	let bucketFilter = $state('');
 	let createOpen = $state(false);
-	let policyOpen = $state(false);
 	let detailOpen = $state(false);
 	let detailObject = $state<S3Object | null>(null);
 
@@ -52,6 +54,13 @@
 	let confirmObject = $state<S3Object | null>(null);
 
 	let uploading = $state(false);
+
+	let active: string = $state(
+		useTab('s3', ['objects', 'properties', 'policy', 'cors'] as const, 'objects', {
+			get: (): string => active,
+			set: (v) => (active = v)
+		})
+	);
 
 	onMount(loadBuckets);
 
@@ -71,6 +80,7 @@
 		prefix = '';
 		pageStack = [];
 		currentToken = undefined;
+		active = 'objects';
 		await fetchObjects(b.name, '', undefined);
 	}
 
@@ -226,41 +236,58 @@
 						<span class="text-xs font-medium text-muted-foreground">Bucket</span>
 						<span class="font-mono text-sm">{selectedBucket.name}</span>
 					</div>
-					<div class="flex items-center gap-1.5">
-						<Button variant="ghost" size="sm" onclick={() => (policyOpen = true)}>
-							<Shield class="size-3.5" />
-							Policy
-						</Button>
-						<Button
-							variant="ghost"
-							size="sm"
-							onclick={() => (confirmBucketOpen = true)}
-						>
-							<Trash2 class="size-3.5 text-destructive" />
-							Delete
-						</Button>
+					<Button
+						variant="ghost"
+						size="sm"
+						onclick={() => (confirmBucketOpen = true)}
+					>
+						<Trash2 class="size-3.5 text-destructive" />
+						Delete
+					</Button>
+				</div>
+
+				<Tabs bind:value={active} class="flex min-h-0 min-w-0 flex-1 flex-col gap-0">
+					<TabsList class="mx-4 mt-2 self-start">
+						<TabsTrigger value="objects">Objects</TabsTrigger>
+						<TabsTrigger value="properties">Properties</TabsTrigger>
+						<TabsTrigger value="policy">Policy</TabsTrigger>
+						<TabsTrigger value="cors">CORS</TabsTrigger>
+					</TabsList>
+
+					<div class="min-h-0 min-w-0 flex-1">
+						<TabsContent value="objects" class="m-0 h-full min-w-0">
+							<div class="flex h-full flex-col">
+								<div class="min-h-0 flex-1">
+									<ObjectBrowser
+										bucket={selectedBucket.name}
+										{prefix}
+										{objects}
+										{commonPrefixes}
+										loading={objectsLoading}
+										hasPrev={pageStack.length > 0}
+										hasMore={hasMore}
+										onNavigate={navigatePrefix}
+										onSelectObject={selectObject}
+										onDeleteObject={askDeleteObject}
+										onRefresh={refreshObjects}
+										onPrevPage={prevPage}
+										onNextPage={nextPage}
+									/>
+								</div>
+								<UploadZone {uploading} onFiles={uploadFiles} disabled={uploading} />
+							</div>
+						</TabsContent>
+						<TabsContent value="properties" class="m-0 h-full min-w-0">
+							<BucketPropertiesTab bucket={selectedBucket.name} />
+						</TabsContent>
+						<TabsContent value="policy" class="m-0 h-full min-w-0">
+							<BucketPolicyTab bucket={selectedBucket.name} />
+						</TabsContent>
+						<TabsContent value="cors" class="m-0 h-full min-w-0">
+							<BucketCorsTab bucket={selectedBucket.name} />
+						</TabsContent>
 					</div>
-				</div>
-
-				<div class="min-h-0 flex-1">
-					<ObjectBrowser
-						bucket={selectedBucket.name}
-						{prefix}
-						{objects}
-						{commonPrefixes}
-						loading={objectsLoading}
-						hasPrev={pageStack.length > 0}
-						hasMore={hasMore}
-						onNavigate={navigatePrefix}
-						onSelectObject={selectObject}
-						onDeleteObject={askDeleteObject}
-						onRefresh={refreshObjects}
-						onPrevPage={prevPage}
-						onNextPage={nextPage}
-					/>
-				</div>
-
-				<UploadZone {uploading} onFiles={uploadFiles} disabled={uploading} />
+				</Tabs>
 			{:else}
 				<div
 					class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground"
@@ -276,12 +303,6 @@
 	bind:open={createOpen}
 	onClose={() => (createOpen = false)}
 	onCreated={onBucketCreated}
-/>
-
-<BucketPolicyDialog
-	bind:open={policyOpen}
-	bucket={selectedBucket?.name ?? null}
-	onClose={() => (policyOpen = false)}
 />
 
 <ObjectDetailSheet
