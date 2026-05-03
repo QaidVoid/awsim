@@ -358,17 +358,24 @@ pub fn delete_objects(state: &S3State, input: &Value) -> Result<Value, AwsError>
     drop(bucket);
 
     let mut deleted: Vec<Value> = Vec::new();
-    let errors: Vec<Value> = Vec::new();
+    let mut errors: Vec<Value> = Vec::new();
 
     for (key, vid) in entries {
         let mut req = json!({ "Bucket": bucket_name, "Key": key.clone() });
         if let Some(v) = &vid {
             req["VersionId"] = Value::String(v.clone());
         }
-        let _ = status; // Quieten unused warning when we later branch on it.
+        let _ = status;
         let resp = match super::object::delete_object(state, &req) {
             Ok(r) => r,
-            Err(_) => continue,
+            Err(e) => {
+                errors.push(json!({
+                    "Key": key,
+                    "Code": e.code,
+                    "Message": e.message,
+                }));
+                continue;
+            }
         };
         let mut entry = json!({ "Key": key });
         if let Some(rvid) = resp.get("VersionId").and_then(Value::as_str) {
