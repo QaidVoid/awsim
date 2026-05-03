@@ -17,7 +17,11 @@ fn owner_entry(account_id: &str) -> Value {
 }
 
 /// GET /{Bucket}?list-type=2 — list objects with prefix/delimiter/pagination.
-pub fn list_objects_v2(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn list_objects_v2(
+    state: &S3State,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let prefix = input.get("prefix").and_then(Value::as_str).unwrap_or("");
     let delimiter = input.get("delimiter").and_then(Value::as_str).unwrap_or("");
@@ -152,7 +156,11 @@ pub fn list_objects_v2(state: &S3State, input: &Value, ctx: &RequestContext) -> 
 }
 
 /// GET /{Bucket} — list objects (v1).
-pub fn list_objects(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn list_objects(
+    state: &S3State,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let prefix = input.get("prefix").and_then(Value::as_str).unwrap_or("");
     let delimiter = input.get("delimiter").and_then(Value::as_str).unwrap_or("");

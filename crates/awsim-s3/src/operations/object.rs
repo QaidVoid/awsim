@@ -137,6 +137,11 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     let content_type = opt_str(input, "ContentType")
         .unwrap_or("application/octet-stream")
         .to_string();
+    let content_encoding = opt_str(input, "ContentEncoding").map(String::from);
+    let cache_control = opt_str(input, "CacheControl").map(String::from);
+    let content_disposition = opt_str(input, "ContentDisposition").map(String::from);
+    let content_language = opt_str(input, "ContentLanguage").map(String::from);
+    let expires = opt_str(input, "Expires").map(String::from);
 
     let mut metadata = HashMap::new();
     if let Some(obj) = input.as_object() {
@@ -188,6 +193,11 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
             metadata,
             version_id: version_id.clone(),
             tags: Default::default(),
+            content_encoding,
+            cache_control,
+            content_disposition,
+            content_language,
+            expires,
             is_delete_marker: false,
         };
 
@@ -257,14 +267,32 @@ pub fn get_object(
         "ETag": obj.etag,
         "LastModified": obj.last_modified,
         "Body": encoded,
+        "AcceptRanges": "bytes",
     });
 
     if let Some(range) = content_range {
         result["ContentRange"] = json!(range);
+        result["__status_code"] = json!(206);
     }
 
     if let Some(vid) = &obj.version_id {
         result["VersionId"] = Value::String(vid.clone());
+    }
+
+    if let Some(ce) = &obj.content_encoding {
+        result["ContentEncoding"] = Value::String(ce.clone());
+    }
+    if let Some(cc) = &obj.cache_control {
+        result["CacheControl"] = Value::String(cc.clone());
+    }
+    if let Some(cd) = &obj.content_disposition {
+        result["ContentDisposition"] = Value::String(cd.clone());
+    }
+    if let Some(cl) = &obj.content_language {
+        result["ContentLanguage"] = Value::String(cl.clone());
+    }
+    if let Some(ex) = &obj.expires {
+        result["Expires"] = Value::String(ex.clone());
     }
 
     // Add user metadata.
@@ -300,10 +328,46 @@ pub fn head_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     if let Some(vid) = &obj.version_id {
         result["VersionId"] = Value::String(vid.clone());
     }
+    if let Some(ce) = &obj.content_encoding {
+        result["ContentEncoding"] = Value::String(ce.clone());
+    }
+    if let Some(cc) = &obj.cache_control {
+        result["CacheControl"] = Value::String(cc.clone());
+    }
+    if let Some(cd) = &obj.content_disposition {
+        result["ContentDisposition"] = Value::String(cd.clone());
+    }
+    if let Some(cl) = &obj.content_language {
+        result["ContentLanguage"] = Value::String(cl.clone());
+    }
+    if let Some(ex) = &obj.expires {
+        result["Expires"] = Value::String(ex.clone());
+    }
+    result["AcceptRanges"] = json!("bytes");
     for (k, v) in &obj.metadata {
         result[k.clone()] = Value::String(v.clone());
     }
     Ok(result)
+}
+
+fn delete_marker_object(key: &str, version_id: Option<String>) -> S3Object {
+    S3Object {
+        key: key.to_string(),
+        body: Body::InMemory(Vec::new()),
+        content_type: "application/x-directory".to_string(),
+        content_length: 0,
+        etag: String::new(),
+        last_modified: now_rfc7231(),
+        metadata: Default::default(),
+        version_id,
+        tags: Default::default(),
+        content_encoding: None,
+        cache_control: None,
+        content_disposition: None,
+        content_language: None,
+        expires: None,
+        is_delete_marker: true,
+    }
 }
 
 /// DELETE /{Bucket}/{Key+} — delete an object.
@@ -374,18 +438,7 @@ pub fn delete_object(state: &S3State, input: &Value) -> Result<Value, AwsError> 
             }
             VersioningStatus::Enabled => {
                 let dm_id = Uuid::new_v4().simple().to_string();
-                let marker = S3Object {
-                    key: key.to_string(),
-                    body: Body::InMemory(Vec::new()),
-                    content_type: "application/x-directory".to_string(),
-                    content_length: 0,
-                    etag: String::new(),
-                    last_modified: now_rfc7231(),
-                    metadata: Default::default(),
-                    version_id: Some(dm_id.clone()),
-                    tags: Default::default(),
-                    is_delete_marker: true,
-                };
+                let marker = delete_marker_object(key, Some(dm_id.clone()));
                 bucket
                     .objects
                     .entry(key.to_string())
@@ -395,24 +448,11 @@ pub fn delete_object(state: &S3State, input: &Value) -> Result<Value, AwsError> 
                 response["VersionId"] = Value::String(dm_id);
             }
             VersioningStatus::Suspended => {
-                // Clean up the existing null-slot blob (if any) before
-                // overwriting that slot with a delete marker.
                 if let Some(store) = state.body_store() {
                     let blob_key = versioned_blob_key(key, None);
                     let _ = store.delete_blob("objects", bucket_name, &blob_key);
                 }
-                let marker = S3Object {
-                    key: key.to_string(),
-                    body: Body::InMemory(Vec::new()),
-                    content_type: "application/x-directory".to_string(),
-                    content_length: 0,
-                    etag: String::new(),
-                    last_modified: now_rfc7231(),
-                    metadata: Default::default(),
-                    version_id: None,
-                    tags: Default::default(),
-                    is_delete_marker: true,
-                };
+                let marker = delete_marker_object(key, None);
                 let mut versions = bucket.objects.entry(key.to_string()).or_default();
                 versions.versions.retain(|o| o.version_id.is_some());
                 versions.push(marker);
@@ -442,7 +482,7 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
     let src_key = &path[slash_pos + 1..];
 
     // Read source object (possibly a specific historical version).
-    let (data, content_type, metadata) = {
+    let (data, content_type, metadata, content_encoding, cache_control, content_disposition, content_language, expires, src_version_id) = {
         let bucket = state
             .buckets
             .get(src_bucket)
@@ -463,6 +503,12 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
                 .map_err(|e| AwsError::internal(format!("read source body: {e}")))?,
             obj.content_type.clone(),
             obj.metadata.clone(),
+            obj.content_encoding.clone(),
+            obj.cache_control.clone(),
+            obj.content_disposition.clone(),
+            obj.content_language.clone(),
+            obj.expires.clone(),
+            obj.version_id.clone(),
         )
     };
 
@@ -502,6 +548,11 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
         metadata,
         version_id: version_id.clone(),
         tags: Default::default(),
+        content_encoding,
+        cache_control,
+        content_disposition,
+        content_language,
+        expires,
         is_delete_marker: false,
     };
 
@@ -533,6 +584,11 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
             "LastModified": last_modified_iso,
         }
     });
+    if let Some(src_vid) = src_version_id
+        && let Some(map) = result.as_object_mut()
+    {
+        map.insert("CopySourceVersionId".to_string(), Value::String(src_vid));
+    }
     if let Some(vid) = version_id
         && let Some(map) = result.as_object_mut()
     {

@@ -118,6 +118,11 @@ impl S3Service {
                     metadata: std::collections::HashMap::new(),
                     version_id: None,
                     tags: std::collections::HashMap::new(),
+                    content_encoding: None,
+                    cache_control: None,
+                    content_disposition: None,
+                    content_language: None,
+                    expires: None,
                     is_delete_marker: false,
                 };
                 bucket.objects.insert(

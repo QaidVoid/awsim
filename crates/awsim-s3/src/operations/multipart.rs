@@ -352,6 +352,11 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         metadata: upload.metadata.clone(),
         version_id: version_id.clone(),
         tags: Default::default(),
+        content_encoding: None,
+        cache_control: None,
+        content_disposition: None,
+        content_language: None,
+        expires: None,
         is_delete_marker: false,
     };
 
@@ -529,6 +534,11 @@ mod tests {
             metadata: Default::default(),
             version_id: None,
             tags: Default::default(),
+            content_encoding: None,
+            cache_control: None,
+            content_disposition: None,
+            content_language: None,
+            expires: None,
             is_delete_marker: false,
         });
         bucket.objects.insert(src_key.to_string(), versions);

@@ -119,8 +119,16 @@ pub fn put_bucket_policy(state: &S3State, input: &Value) -> Result<Value, AwsErr
         String::from_utf8(bytes)
             .map_err(|_| AwsError::bad_request("MalformedPolicy", "Policy is not valid UTF-8"))?
     } else {
-        // Body was valid JSON; serialize it back.
-        input.to_string()
+        let mut clean = serde_json::Map::new();
+        if let Some(obj) = input.as_object() {
+            for (k, v) in obj {
+                if k.starts_with("__") || k == "Bucket" || k == "Key" {
+                    continue;
+                }
+                clean.insert(k.clone(), v.clone());
+            }
+        }
+        Value::Object(clean).to_string()
     };
 
     let mut bucket = state
@@ -696,7 +704,9 @@ pub fn get_bucket_encryption(state: &S3State, input: &Value) -> Result<Value, Aw
         }
         None => Err(AwsError::not_found(
             "ServerSideEncryptionConfigurationNotFoundError",
-            format!("The server side encryption configuration was not found for bucket '{bucket_name}'"),
+            format!(
+                "The server side encryption configuration was not found for bucket '{bucket_name}'"
+            ),
         )),
     }
 }
@@ -1399,7 +1409,9 @@ pub fn get_public_access_block(state: &S3State, input: &Value) -> Result<Value, 
         }
         None => Err(AwsError::not_found(
             "NoSuchPublicAccessBlockConfiguration",
-            format!("The public access block configuration was not found for bucket '{bucket_name}'"),
+            format!(
+                "The public access block configuration was not found for bucket '{bucket_name}'"
+            ),
         )),
     }
 }

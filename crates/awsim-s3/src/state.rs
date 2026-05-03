@@ -114,6 +114,16 @@ pub struct S3Object {
     /// Object tags (key → value).
     #[serde(default)]
     pub tags: HashMap<String, String>,
+    #[serde(default)]
+    pub content_encoding: Option<String>,
+    #[serde(default)]
+    pub cache_control: Option<String>,
+    #[serde(default)]
+    pub content_disposition: Option<String>,
+    #[serde(default)]
+    pub content_language: Option<String>,
+    #[serde(default)]
+    pub expires: Option<String>,
     /// True when this entry is a delete marker — a tombstone written when
     /// DeleteObject lands on a versioning-enabled bucket without a VersionId.
     /// Delete markers carry a version_id but no body, and reads against them
@@ -393,6 +403,11 @@ impl Snapshottable for S3State {
                             metadata: meta.metadata,
                             version_id: meta.version_id,
                             tags: Default::default(),
+                            content_encoding: None,
+                            cache_control: None,
+                            content_disposition: None,
+                            content_language: None,
+                            expires: None,
                             is_delete_marker: meta.is_delete_marker,
                         };
                         dm.entry(meta.key).or_default().push(obj);
