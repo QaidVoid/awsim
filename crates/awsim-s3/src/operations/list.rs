@@ -100,14 +100,13 @@ pub fn list_objects_v2(state: &S3State, input: &Value) -> Result<Value, AwsError
         .collect();
 
     let is_truncated = next_continuation_token.is_some();
-    let actual_key_count = contents.len() + common_prefix_list.len();
 
     let mut result = json!({
         "__xml_root": "ListBucketResult",
         "Name": bucket_name,
         "Prefix": prefix,
         "MaxKeys": max_keys,
-        "KeyCount": actual_key_count,
+        "KeyCount": key_count,
         "IsTruncated": is_truncated,
         "Contents": contents,
     });
