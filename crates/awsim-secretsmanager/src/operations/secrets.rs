@@ -846,14 +846,90 @@ pub fn validate_resource_policy(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    // Ensure a policy was provided
-    if input["ResourcePolicy"].as_str().is_none() {
-        return Err(error::missing_parameter("ResourcePolicy"));
-    }
-    // Stub: always return success with no validation errors
+    let policy = input["ResourcePolicy"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("ResourcePolicy"))?;
+    let issues = check_policy_structure(policy);
+    let validation_errors: Vec<Value> = issues
+        .iter()
+        .map(|m| json!({ "CheckName": "ValidateResourcePolicy", "ErrorMessage": m }))
+        .collect();
     Ok(json!({
-        "ValidationErrors": [],
+        "PolicyValidationPassed": validation_errors.is_empty(),
+        "ValidationErrors": validation_errors,
     }))
+}
+
+/// Cheap structural validation of an IAM-shaped resource policy. Flags
+/// missing fields and wrong shapes; doesn't attempt full IAM semantic
+/// validation. Returns a list of human-readable issues (empty == valid).
+fn check_policy_structure(policy: &str) -> Vec<String> {
+    let mut issues = Vec::new();
+    let parsed: Value = match serde_json::from_str(policy) {
+        Ok(v) => v,
+        Err(e) => {
+            issues.push(format!("Policy is not valid JSON: {e}"));
+            return issues;
+        }
+    };
+    let statements = match parsed.get("Statement") {
+        Some(Value::Array(a)) => a.clone(),
+        Some(Value::Object(_)) => vec![parsed["Statement"].clone()],
+        Some(_) => {
+            issues.push("Statement must be an object or array of objects".to_string());
+            return issues;
+        }
+        None => {
+            issues.push("Policy is missing a Statement".to_string());
+            return issues;
+        }
+    };
+    for (i, stmt) in statements.iter().enumerate() {
+        let prefix = format!("Statement[{i}]");
+        match stmt.get("Effect").and_then(|v| v.as_str()) {
+            Some("Allow") | Some("Deny") => {}
+            Some(other) => issues.push(format!(
+                "{prefix}.Effect must be Allow or Deny, got {other}"
+            )),
+            None => issues.push(format!("{prefix} is missing Effect")),
+        }
+        if stmt.get("Action").is_none() && stmt.get("NotAction").is_none() {
+            issues.push(format!("{prefix} must specify Action or NotAction"));
+        }
+        if stmt.get("Principal").is_none() && stmt.get("NotPrincipal").is_none() {
+            issues.push(format!("{prefix} must specify Principal or NotPrincipal"));
+        }
+        if stmt.get("Resource").is_none() && stmt.get("NotResource").is_none() {
+            issues.push(format!("{prefix} must specify Resource or NotResource"));
+        }
+    }
+    issues
+}
+
+/// Returns true when any Allow statement names a wildcard Principal — i.e.
+/// `Principal: "*"` or `Principal.AWS: "*"`. AWS uses this signal for
+/// BlockPublicPolicy on PutResourcePolicy.
+fn policy_grants_public_access(policy: &str) -> bool {
+    let Ok(parsed) = serde_json::from_str::<Value>(policy) else {
+        return false;
+    };
+    let statements: Vec<Value> = match parsed.get("Statement") {
+        Some(Value::Array(a)) => a.clone(),
+        Some(Value::Object(_)) => vec![parsed["Statement"].clone()],
+        _ => return false,
+    };
+    fn principal_is_wildcard(p: &Value) -> bool {
+        match p {
+            Value::String(s) => s == "*",
+            Value::Array(a) => a.iter().any(principal_is_wildcard),
+            Value::Object(o) => o.values().any(principal_is_wildcard),
+            _ => false,
+        }
+    }
+    statements.iter().any(|s| {
+        s.get("Effect").and_then(|v| v.as_str()) == Some("Allow")
+            && s.get("Principal").is_some_and(principal_is_wildcard)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1175,6 +1251,22 @@ pub fn put_resource_policy(
     let policy = input["ResourcePolicy"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("ResourcePolicy"))?;
+    let block_public = input["BlockPublicPolicy"].as_bool().unwrap_or(false);
+
+    // Reject malformed JSON regardless of BlockPublicPolicy — AWS doesn't
+    // store policies it can't parse.
+    if serde_json::from_str::<Value>(policy).is_err() {
+        return Err(AwsError::bad_request(
+            "MalformedPolicyDocumentException",
+            "ResourcePolicy is not valid JSON",
+        ));
+    }
+    if block_public && policy_grants_public_access(policy) {
+        return Err(AwsError::bad_request(
+            "PublicPolicyException",
+            "ResourcePolicy grants public access; pass BlockPublicPolicy=false to override",
+        ));
+    }
 
     let name = resolve_name(state, secret_id)?;
     let secret = state
@@ -1402,6 +1494,93 @@ mod tests {
 
         let after = describe_secret(&state, &json!({ "SecretId": "s" }), &ctx()).unwrap();
         assert!(after.get("LastRotatedDate").is_some());
+    }
+
+    #[test]
+    fn validate_resource_policy_flags_missing_principal() {
+        let state = SecretsState::default();
+        let policy = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"secretsmanager:GetSecretValue","Resource":"*"}]}"#;
+        let resp =
+            validate_resource_policy(&state, &json!({ "ResourcePolicy": policy }), &ctx()).unwrap();
+        assert_eq!(resp["PolicyValidationPassed"], json!(false));
+        let errors = resp["ValidationErrors"].as_array().unwrap();
+        assert!(!errors.is_empty());
+        let combined: String = errors
+            .iter()
+            .filter_map(|e| e["ErrorMessage"].as_str())
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(combined.to_lowercase().contains("principal"));
+    }
+
+    #[test]
+    fn validate_resource_policy_passes_complete_policy() {
+        let state = SecretsState::default();
+        let policy = r#"{
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "AWS": "arn:aws:iam::000000000000:root" },
+                "Action": "secretsmanager:GetSecretValue",
+                "Resource": "*"
+            }]
+        }"#;
+        let resp =
+            validate_resource_policy(&state, &json!({ "ResourcePolicy": policy }), &ctx()).unwrap();
+        assert_eq!(resp["PolicyValidationPassed"], json!(true));
+    }
+
+    #[test]
+    fn put_resource_policy_rejects_public_policy_when_block_set() {
+        let state = SecretsState::default();
+        create_secret(&state, &json!({ "Name": "s", "SecretString": "v" }), &ctx()).unwrap();
+        let public_policy = r#"{
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": "*",
+                "Action": "secretsmanager:GetSecretValue",
+                "Resource": "*"
+            }]
+        }"#;
+        let err = put_resource_policy(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "ResourcePolicy": public_policy,
+                "BlockPublicPolicy": true,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "PublicPolicyException");
+
+        // Same policy without BlockPublicPolicy succeeds.
+        put_resource_policy(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "ResourcePolicy": public_policy,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn put_resource_policy_rejects_malformed_json() {
+        let state = SecretsState::default();
+        create_secret(&state, &json!({ "Name": "s", "SecretString": "v" }), &ctx()).unwrap();
+        let err = put_resource_policy(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "ResourcePolicy": "{ not json",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "MalformedPolicyDocumentException");
     }
 
     #[test]
