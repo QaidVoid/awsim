@@ -176,6 +176,48 @@ async fn create_role_rejects_max_session_duration_above_43200() {
 }
 
 #[tokio::test]
+async fn get_user_without_username_returns_caller_when_access_key_matches_user() {
+    let svc = IamService::new();
+    call(&svc, "CreateUser", json!({ "UserName": "alice" }))
+        .await
+        .unwrap();
+    call(&svc, "CreateUser", json!({ "UserName": "bob" }))
+        .await
+        .unwrap();
+
+    // Sign as alice — no UserName supplied. Must resolve to alice, not
+    // whichever user iterates first out of the dashmap.
+    let mut self_ctx = ctx();
+    self_ctx.access_key = Some("alice".to_string());
+    let resp = svc.handle("GetUser", json!({}), &self_ctx).await.unwrap();
+    assert_eq!(resp["User"]["UserName"], json!("alice"));
+}
+
+#[tokio::test]
+async fn create_and_list_access_keys_default_to_caller() {
+    let svc = IamService::new();
+    call(&svc, "CreateUser", json!({ "UserName": "alice" }))
+        .await
+        .unwrap();
+
+    let mut self_ctx = ctx();
+    self_ctx.access_key = Some("alice".to_string());
+    let resp = svc
+        .handle("CreateAccessKey", json!({}), &self_ctx)
+        .await
+        .unwrap();
+    assert_eq!(resp["AccessKey"]["UserName"], json!("alice"));
+
+    let listed = svc
+        .handle("ListAccessKeys", json!({}), &self_ctx)
+        .await
+        .unwrap();
+    let keys = listed["AccessKeyMetadata"]["member"].as_array().unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0]["UserName"], json!("alice"));
+}
+
+#[tokio::test]
 async fn attach_user_policy_accepts_aws_managed_arn() {
     let svc = IamService::new();
     call(&svc, "CreateUser", json!({ "UserName": "alice" }))

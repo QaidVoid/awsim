@@ -91,7 +91,7 @@ impl ServiceHandler for IamService {
         match operation {
             // Users
             "CreateUser" => operations::users::create_user(&state, &input, ctx),
-            "GetUser" => operations::users::get_user(&state, &input),
+            "GetUser" => operations::users::get_user(&state, &input, ctx),
             "DeleteUser" => operations::users::delete_user(&state, &input),
             "ListUsers" => operations::users::list_users(&state, &input),
             "UpdateUser" => operations::users::update_user(&state, &input),
@@ -99,7 +99,7 @@ impl ServiceHandler for IamService {
             // Access Keys
             "CreateAccessKey" => operations::users::create_access_key(&state, &input, ctx),
             "DeleteAccessKey" => operations::users::delete_access_key(&state, &input),
-            "ListAccessKeys" => operations::users::list_access_keys(&state, &input),
+            "ListAccessKeys" => operations::users::list_access_keys(&state, &input, ctx),
 
             // Groups
             "CreateGroup" => operations::groups::create_group(&state, &input, ctx),

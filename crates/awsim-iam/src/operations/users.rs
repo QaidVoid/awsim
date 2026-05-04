@@ -60,27 +60,39 @@ pub fn create_user(
     Ok(json!({ "User": result }))
 }
 
-pub fn get_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
-    let user_name = opt_str(input, "UserName");
-    if let Some(name) = user_name {
-        let user = state
-            .users
-            .get(name)
-            .ok_or_else(|| no_such_entity("User", name))?;
-        let mut v = json!({ "User": user_to_value(&user) });
-        if let Some(boundary) = state.user_permissions_boundaries.get(&user.user_name) {
-            v["User"]["PermissionsBoundary"] = json!({
-                "PermissionsBoundaryType": "Policy",
-                "PermissionsBoundaryArn": boundary.value().clone(),
-            });
-        }
-        return Ok(v);
+/// Resolve the user name an operation should target when the caller
+/// omits `UserName`. AWS allows certain operations (GetUser,
+/// CreateAccessKey, ListAccessKeys, …) to default to the caller's own
+/// IAM user when omitted. We map the SigV4-signed access key to its
+/// matching user when present, falling back to any existing user.
+fn resolve_target_user_name(
+    state: &IamState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<String, AwsError> {
+    if let Some(name) = opt_str(input, "UserName") {
+        return Ok(name.to_string());
     }
-    let user = state
+    // SigV4 caller's access key, if any, used as a self-identity hint.
+    if let Some(ak) = ctx.access_key.as_deref()
+        && state.users.contains_key(ak)
+    {
+        return Ok(ak.to_string());
+    }
+    state
         .users
         .iter()
         .next()
-        .ok_or_else(|| no_such_entity("User", "default"))?;
+        .map(|e| e.user_name.clone())
+        .ok_or_else(|| no_such_entity("User", "default"))
+}
+
+pub fn get_user(state: &IamState, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
+    let name = resolve_target_user_name(state, input, ctx)?;
+    let user = state
+        .users
+        .get(&name)
+        .ok_or_else(|| no_such_entity("User", &name))?;
     let mut v = json!({ "User": user_to_value(&user) });
     if let Some(boundary) = state.user_permissions_boundaries.get(&user.user_name) {
         v["User"]["PermissionsBoundary"] = json!({
@@ -185,14 +197,14 @@ pub fn update_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
 pub fn create_access_key(
     state: &IamState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let user_name = require_str(input, "UserName")?;
+    let user_name = resolve_target_user_name(state, input, ctx)?;
 
     let mut user = state
         .users
-        .get_mut(user_name)
-        .ok_or_else(|| no_such_entity("User", user_name))?;
+        .get_mut(&user_name)
+        .ok_or_else(|| no_such_entity("User", &user_name))?;
 
     if user.access_keys.len() >= MAX_ACCESS_KEYS_PER_USER {
         return Err(limit_exceeded(format!(
@@ -238,13 +250,17 @@ pub fn delete_access_key(state: &IamState, input: &Value) -> Result<Value, AwsEr
     Ok(json!({}))
 }
 
-pub fn list_access_keys(state: &IamState, input: &Value) -> Result<Value, AwsError> {
-    let user_name = require_str(input, "UserName")?;
+pub fn list_access_keys(
+    state: &IamState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let user_name = resolve_target_user_name(state, input, ctx)?;
 
     let user = state
         .users
-        .get(user_name)
-        .ok_or_else(|| no_such_entity("User", user_name))?;
+        .get(&user_name)
+        .ok_or_else(|| no_such_entity("User", &user_name))?;
 
     let keys: Vec<Value> = user
         .access_keys
