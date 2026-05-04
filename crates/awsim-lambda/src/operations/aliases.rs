@@ -1,19 +1,71 @@
 use awsim_core::{AwsError, RequestContext};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 
 use crate::{
-    error::{resource_conflict, resource_not_found},
+    error::{invalid_parameter, resource_conflict, resource_not_found},
     state::{Alias, LambdaState},
     util::{opt_str, require_str},
 };
 
 fn alias_to_value(alias: &Alias) -> Value {
-    json!({
+    let mut out = json!({
         "Name": alias.name,
         "AliasArn": alias.arn,
         "FunctionVersion": alias.function_version,
         "Description": alias.description,
-    })
+    });
+    if !alias.routing_config.is_empty() {
+        let weights: Map<String, Value> = alias
+            .routing_config
+            .iter()
+            .map(|(v, w)| (v.clone(), json!(w)))
+            .collect();
+        out["RoutingConfig"] = json!({ "AdditionalVersionWeights": Value::Object(weights) });
+    }
+    out
+}
+
+/// Parse and validate `RoutingConfig.AdditionalVersionWeights` from the
+/// request input. AWS requires: at most one additional version, weight in
+/// the open interval (0.0, 1.0), and the version must not match the alias's
+/// primary `FunctionVersion`.
+fn parse_routing_config(
+    input: &Value,
+    primary_version: &str,
+) -> Result<HashMap<String, f64>, AwsError> {
+    let Some(raw) = input
+        .get("RoutingConfig")
+        .and_then(|v| v.get("AdditionalVersionWeights"))
+    else {
+        return Ok(HashMap::new());
+    };
+    let obj = raw.as_object().ok_or_else(|| {
+        invalid_parameter("RoutingConfig.AdditionalVersionWeights must be an object")
+    })?;
+    if obj.len() > 1 {
+        return Err(invalid_parameter(
+            "RoutingConfig.AdditionalVersionWeights supports at most one entry",
+        ));
+    }
+    let mut out = HashMap::with_capacity(obj.len());
+    for (version, weight) in obj {
+        if version == primary_version {
+            return Err(invalid_parameter(
+                "RoutingConfig version must differ from FunctionVersion",
+            ));
+        }
+        let w = weight.as_f64().ok_or_else(|| {
+            invalid_parameter("RoutingConfig weight must be a number between 0 and 1")
+        })?;
+        if !(w > 0.0 && w < 1.0) {
+            return Err(invalid_parameter(
+                "RoutingConfig weight must be greater than 0 and less than 1",
+            ));
+        }
+        out.insert(version.clone(), w);
+    }
+    Ok(out)
 }
 
 pub fn create_alias(
@@ -37,12 +89,15 @@ pub fn create_alias(
         )));
     }
 
+    let routing_config = parse_routing_config(input, function_version)?;
+
     let alias_arn = format!("{}:{}", f.arn, alias_name);
     let alias = Alias {
         name: alias_name.to_string(),
         arn: alias_arn,
         function_version: function_version.to_string(),
         description,
+        routing_config,
     };
 
     let result = alias_to_value(&alias);
@@ -115,6 +170,11 @@ pub fn update_alias(
     }
     if let Some(description) = opt_str(input, "Description") {
         alias.description = description.to_string();
+    }
+    // Update validates against the (possibly just-changed) primary version
+    // so traffic-shifting between v1 and v2 stays self-consistent.
+    if input.get("RoutingConfig").is_some() {
+        alias.routing_config = parse_routing_config(input, &alias.function_version)?;
     }
 
     Ok(alias_to_value(alias))
@@ -277,6 +337,110 @@ mod tests {
         // serde_json silently drops earlier duplicates so this is more of
         // a regression guard against re-adding the duplicated key.
         assert_eq!(cfg["FunctionArn"], json!(f.arn));
+    }
+
+    #[test]
+    fn create_alias_persists_routing_config() {
+        let state = state_with_function("f");
+        let resp = create_alias(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "Name": "live",
+                "FunctionVersion": "1",
+                "RoutingConfig": {
+                    "AdditionalVersionWeights": { "2": 0.25 },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(
+            resp["RoutingConfig"]["AdditionalVersionWeights"]["2"],
+            json!(0.25)
+        );
+
+        let got = get_alias(
+            &state,
+            &json!({ "FunctionName": "f", "Name": "live" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(
+            got["RoutingConfig"]["AdditionalVersionWeights"]["2"],
+            json!(0.25)
+        );
+    }
+
+    #[test]
+    fn create_alias_rejects_routing_to_primary_version() {
+        let state = state_with_function("f");
+        let err = create_alias(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "Name": "live",
+                "FunctionVersion": "1",
+                "RoutingConfig": {
+                    "AdditionalVersionWeights": { "1": 0.5 },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn create_alias_rejects_weight_outside_open_unit_interval() {
+        let state = state_with_function("f");
+        for weight in [0.0, 1.0, 1.5, -0.1] {
+            let err = create_alias(
+                &state,
+                &json!({
+                    "FunctionName": "f",
+                    "Name": format!("a{}", (weight * 100.0) as i64),
+                    "FunctionVersion": "1",
+                    "RoutingConfig": {
+                        "AdditionalVersionWeights": { "2": weight },
+                    },
+                }),
+                &ctx(),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "InvalidParameterValueException");
+        }
+    }
+
+    #[test]
+    fn update_alias_replaces_routing_config() {
+        let state = state_with_function("f");
+        create_alias(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "Name": "live",
+                "FunctionVersion": "1",
+                "RoutingConfig": {
+                    "AdditionalVersionWeights": { "2": 0.25 },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        // Empty AdditionalVersionWeights clears any prior split traffic.
+        let updated = update_alias(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "Name": "live",
+                "RoutingConfig": { "AdditionalVersionWeights": {} },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(updated.get("RoutingConfig").is_none());
     }
 
     #[test]

@@ -73,6 +73,7 @@ impl Snapshottable for LambdaState {
                                     arn: a.arn.clone(),
                                     function_version: a.function_version.clone(),
                                     description: a.description.clone(),
+                                    routing_config: a.routing_config.clone(),
                                 },
                             )
                         })
@@ -119,6 +120,7 @@ impl Snapshottable for LambdaState {
                             arn: a.arn,
                             function_version: a.function_version,
                             description: a.description,
+                            routing_config: a.routing_config,
                         },
                     )
                 })
@@ -244,6 +246,11 @@ pub struct Alias {
     pub arn: String,
     pub function_version: String,
     pub description: String,
+    /// Traffic-shifting weights: `version → fraction in [0, 1]`. When set,
+    /// invocations through the alias split between `function_version` and
+    /// the listed versions per their weights. Must total ≤ 1; the
+    /// implicit remainder is routed to `function_version`.
+    pub routing_config: HashMap<String, f64>,
 }
 
 /// Stored for debugging and the admin console — fields read externally.
@@ -344,6 +351,8 @@ pub struct AliasSnapshot {
     pub arn: String,
     pub function_version: String,
     pub description: String,
+    #[serde(default)]
+    pub routing_config: HashMap<String, f64>,
 }
 
 #[derive(Debug, Clone)]
