@@ -12,6 +12,18 @@ fn opt_value<'a>(input: &'a Value, key: &str) -> Option<&'a Value> {
     input.get(key).filter(|v| !v.is_null())
 }
 
+fn opt_tags(input: &Value) -> HashMap<String, String> {
+    input
+        .get("Tags")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn opt_string_array(input: &Value, key: &str) -> Vec<String> {
     input
         .get(key)
@@ -137,6 +149,7 @@ pub fn create_event_source_mapping(
         function_response_types: opt_string_array(input, "FunctionResponseTypes"),
         last_processing_result: "No records processed".to_string(),
         shard_iterators: HashMap::new(),
+        tags: opt_tags(input),
     };
 
     let result = mapping_to_value(&mapping);

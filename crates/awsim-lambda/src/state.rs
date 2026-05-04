@@ -346,6 +346,8 @@ pub struct EventSourceMapping {
     /// Per-shard iterator state for Kinesis/DDB-stream pollers so we don't
     /// re-deliver records on every tick. Keyed by shard id.
     pub shard_iterators: HashMap<String, String>,
+    /// Tags attached via `TagResource` against the ESM ARN.
+    pub tags: HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -443,8 +445,6 @@ pub struct AliasSnapshot {
 
 #[derive(Debug, Clone)]
 pub struct LayerVersion {
-    /// Layer name kept for reference / admin console.
-    #[allow(dead_code)]
     pub layer_name: String,
     pub layer_arn: String,
     pub version_arn: String,
@@ -457,4 +457,6 @@ pub struct LayerVersion {
     #[allow(dead_code)]
     pub code_data: Option<Vec<u8>>,
     pub created_date: String,
+    /// Tags attached via `TagResource` against the layer-version ARN.
+    pub tags: HashMap<String, String>,
 }

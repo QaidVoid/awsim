@@ -74,6 +74,7 @@ pub fn publish_layer_version(
         code_size,
         code_data,
         created_date: now_iso8601(),
+        tags: std::collections::HashMap::new(),
     };
 
     let result = layer_version_to_value(&lv);
