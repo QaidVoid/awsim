@@ -290,13 +290,20 @@ mod tests {
             block_on(svc.handle("CreateTopic", json!({ "Name": "unsub-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
+        // Use sqs protocol so Subscribe returns the real SubscriptionArn
+        // without needing the confirmation-token round-trip.
         let sub = block_on(svc.handle(
             "Subscribe",
-            json!({ "TopicArn": arn, "Protocol": "https", "Endpoint": "https://example.com" }),
+            json!({
+                "TopicArn": arn,
+                "Protocol": "sqs",
+                "Endpoint": "arn:aws:sqs:us-east-1:000000000000:q",
+            }),
             &ctx,
         ))
         .unwrap();
         let sub_arn = sub["SubscriptionArn"].as_str().unwrap();
+        assert!(sub_arn.starts_with("arn:aws:sns:"));
 
         block_on(svc.handle("Unsubscribe", json!({ "SubscriptionArn": sub_arn }), &ctx)).unwrap();
 
@@ -330,7 +337,57 @@ mod tests {
     }
 
     #[test]
-    fn test_confirm_subscription() {
+    fn test_subscribe_returns_pending_for_http_protocol() {
+        let svc = SnsService::new();
+        let ctx = ctx();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "pending-topic" }), &ctx)).unwrap();
+        let arn = created["TopicArn"].as_str().unwrap();
+
+        let sub = block_on(svc.handle(
+            "Subscribe",
+            json!({ "TopicArn": arn, "Protocol": "https", "Endpoint": "https://example.com" }),
+            &ctx,
+        ))
+        .unwrap();
+        // AWS returns the literal "pending confirmation" placeholder for
+        // protocols that need token round-trip, not the real ARN.
+        assert_eq!(
+            sub["SubscriptionArn"].as_str(),
+            Some("pending confirmation")
+        );
+    }
+
+    #[test]
+    fn test_confirm_subscription_rejects_invalid_token() {
+        let svc = SnsService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle(
+            "CreateTopic",
+            json!({ "Name": "confirm-bad-token-topic" }),
+            &ctx,
+        ))
+        .unwrap();
+        let arn = created["TopicArn"].as_str().unwrap();
+
+        block_on(svc.handle(
+            "Subscribe",
+            json!({ "TopicArn": arn, "Protocol": "email", "Endpoint": "test@example.com" }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let err = block_on(svc.handle(
+            "ConfirmSubscription",
+            json!({ "TopicArn": arn, "Token": "definitely-not-the-token" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+    }
+
+    #[test]
+    fn test_confirm_subscription_succeeds_with_valid_token() {
         let svc = SnsService::new();
         let ctx = ctx();
         let created =
@@ -344,13 +401,35 @@ mod tests {
         ))
         .unwrap();
 
+        // Pull the actual generated token out of internal state — AWS would
+        // have delivered this via the SubscriptionConfirmation control
+        // message to the endpoint, which we don't simulate.
+        let token = {
+            let state = svc.store().get("000000000000", "us-east-1");
+            let entry = state
+                .subscriptions
+                .iter()
+                .find(|s| s.topic_arn == arn)
+                .expect("pending sub present");
+            entry
+                .attributes
+                .get("_AwsimConfirmationToken")
+                .cloned()
+                .expect("token stored on pending sub")
+        };
+
         let confirmed = block_on(svc.handle(
             "ConfirmSubscription",
-            json!({ "TopicArn": arn, "Token": "fake-token" }),
+            json!({ "TopicArn": arn, "Token": token }),
             &ctx,
         ))
         .unwrap();
-        assert!(confirmed["SubscriptionArn"].as_str().is_some());
+        assert!(
+            confirmed["SubscriptionArn"]
+                .as_str()
+                .unwrap()
+                .starts_with("arn:aws:sns:")
+        );
     }
 
     // -----------------------------------------------------------------------

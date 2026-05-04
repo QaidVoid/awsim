@@ -16,6 +16,14 @@ impl SnsService {
             store: AccountRegionStore::new(),
         }
     }
+
+    /// Test-only accessor used to peek at internal subscription state
+    /// (e.g. to retrieve the confirmation token for a pending HTTP/email
+    /// subscription, since AWS doesn't expose it on a public API).
+    #[cfg(test)]
+    pub(crate) fn store(&self) -> &AccountRegionStore<SnsState> {
+        &self.store
+    }
 }
 
 impl Default for SnsService {
