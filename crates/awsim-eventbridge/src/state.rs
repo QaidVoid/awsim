@@ -9,6 +9,27 @@ pub struct Target {
     pub arn: String,
     pub input: Option<String>,
     pub input_path: Option<String>,
+    /// Optional InputTransformer (`{InputPathsMap, InputTemplate}`).
+    /// Mutually exclusive with `input` and `input_path`. Stored on
+    /// PutTargets but not yet applied at fan-out — see NEW_PLAN §10.4.
+    #[allow(dead_code)]
+    pub input_transformer: Option<InputTransformer>,
+}
+
+/// EventBridge `InputTransformer` shape — stored verbatim and applied
+/// at fan-out time. AWS requires `InputTemplate`; `InputPathsMap` is
+/// optional but every key it declares must appear at least once in
+/// the template as `<key>`.
+///
+/// The fields are populated and validated on PutTargets but not yet
+/// consulted during fan-out (the EventBridge target invocation path
+/// is itself stubby — see NEW_PLAN §10.4). The `allow(dead_code)`
+/// keeps `#![deny(warnings)]` happy until that work lands.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct InputTransformer {
+    pub input_paths_map: HashMap<String, String>,
+    pub input_template: String,
 }
 
 /// An EventBridge rule on a bus.

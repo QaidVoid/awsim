@@ -73,6 +73,36 @@ pub fn put_targets(
         let input_val = target_input["Input"].as_str().map(|s| s.to_string());
         let input_path = target_input["InputPath"].as_str().map(|s| s.to_string());
 
+        // InputTransformer: parse and validate. AWS requires exactly
+        // one of Input / InputPath / InputTransformer per target.
+        let input_transformer = match parse_input_transformer(&target_input["InputTransformer"]) {
+            Ok(t) => t,
+            Err(msg) => {
+                failed_count += 1;
+                failed_entries.push(json!({
+                    "TargetId": id,
+                    "ErrorCode": "InvalidParameterValue",
+                    "ErrorMessage": msg,
+                }));
+                continue;
+            }
+        };
+
+        let input_modes = [
+            input_val.is_some(),
+            input_path.is_some(),
+            input_transformer.is_some(),
+        ];
+        if input_modes.iter().filter(|x| **x).count() > 1 {
+            failed_count += 1;
+            failed_entries.push(json!({
+                "TargetId": id,
+                "ErrorCode": "InvalidParameterValue",
+                "ErrorMessage": "Specify at most one of Input, InputPath, or InputTransformer per target",
+            }));
+            continue;
+        }
+
         // Upsert: replace if same ID already exists
         if let Some(pos) = rule.targets.iter().position(|t| t.id == id) {
             rule.targets[pos] = Target {
@@ -80,6 +110,7 @@ pub fn put_targets(
                 arn,
                 input: input_val,
                 input_path,
+                input_transformer,
             };
         } else {
             rule.targets.push(Target {
@@ -87,6 +118,7 @@ pub fn put_targets(
                 arn,
                 input: input_val,
                 input_path,
+                input_transformer,
             });
         }
     }
@@ -102,6 +134,50 @@ pub fn put_targets(
     Ok(json!({
         "FailedEntryCount": failed_count,
         "FailedEntries": failed_entries,
+    }))
+}
+
+/// Parse an `InputTransformer` Value into the internal struct,
+/// returning Ok(None) when the input is null/absent. Validates that:
+///   - InputTemplate is present and non-empty
+///   - every key in InputPathsMap appears as `<key>` in the template
+fn parse_input_transformer(
+    value: &Value,
+) -> Result<Option<crate::state::InputTransformer>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "InputTransformer must be an object".to_string())?;
+    let template = obj
+        .get("InputTemplate")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "InputTransformer.InputTemplate is required".to_string())?
+        .to_string();
+    if template.is_empty() {
+        return Err("InputTransformer.InputTemplate must be non-empty".to_string());
+    }
+    let paths: std::collections::HashMap<String, String> = obj
+        .get("InputPathsMap")
+        .and_then(Value::as_object)
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    for key in paths.keys() {
+        let placeholder = format!("<{key}>");
+        if !template.contains(&placeholder) {
+            return Err(format!(
+                "InputPathsMap key '{key}' is not referenced in InputTemplate"
+            ));
+        }
+    }
+    Ok(Some(crate::state::InputTransformer {
+        input_paths_map: paths,
+        input_template: template,
     }))
 }
 

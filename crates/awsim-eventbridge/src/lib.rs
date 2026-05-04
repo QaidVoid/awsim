@@ -310,6 +310,117 @@ mod tests {
     }
 
     #[test]
+    fn test_put_targets_rejects_input_combined_with_input_path() {
+        let svc = EventBridgeService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutRule",
+            json!({ "Name": "r", "EventPattern": r#"{"source":["x"]}"#, "State": "ENABLED" }),
+            &ctx,
+        ))
+        .unwrap();
+        let result = block_on(svc.handle(
+            "PutTargets",
+            json!({
+                "Rule": "r",
+                "Targets": [{
+                    "Id": "t1",
+                    "Arn": "arn:aws:sqs:us-east-1:000000000000:q",
+                    "Input": r#"{"k":1}"#,
+                    "InputPath": "$.detail",
+                }],
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(result["FailedEntryCount"].as_u64().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_put_targets_rejects_input_transformer_missing_template() {
+        let svc = EventBridgeService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutRule",
+            json!({ "Name": "r", "EventPattern": r#"{"source":["x"]}"#, "State": "ENABLED" }),
+            &ctx,
+        ))
+        .unwrap();
+        let result = block_on(svc.handle(
+            "PutTargets",
+            json!({
+                "Rule": "r",
+                "Targets": [{
+                    "Id": "t1",
+                    "Arn": "arn:aws:sqs:us-east-1:000000000000:q",
+                    "InputTransformer": { "InputPathsMap": { "k": "$.detail.k" } },
+                }],
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(result["FailedEntryCount"].as_u64().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_put_targets_rejects_input_paths_map_key_not_in_template() {
+        let svc = EventBridgeService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutRule",
+            json!({ "Name": "r", "EventPattern": r#"{"source":["x"]}"#, "State": "ENABLED" }),
+            &ctx,
+        ))
+        .unwrap();
+        let result = block_on(svc.handle(
+            "PutTargets",
+            json!({
+                "Rule": "r",
+                "Targets": [{
+                    "Id": "t1",
+                    "Arn": "arn:aws:sqs:us-east-1:000000000000:q",
+                    "InputTransformer": {
+                        "InputPathsMap": { "name": "$.detail.name" },
+                        "InputTemplate": "Hello"   // doesn't reference <name>
+                    },
+                }],
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(result["FailedEntryCount"].as_u64().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_put_targets_accepts_well_formed_input_transformer() {
+        let svc = EventBridgeService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutRule",
+            json!({ "Name": "r", "EventPattern": r#"{"source":["x"]}"#, "State": "ENABLED" }),
+            &ctx,
+        ))
+        .unwrap();
+        let result = block_on(svc.handle(
+            "PutTargets",
+            json!({
+                "Rule": "r",
+                "Targets": [{
+                    "Id": "t1",
+                    "Arn": "arn:aws:sqs:us-east-1:000000000000:q",
+                    "InputTransformer": {
+                        "InputPathsMap": { "name": "$.detail.name" },
+                        "InputTemplate": "Hello <name>"
+                    },
+                }],
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(result["FailedEntryCount"].as_u64().unwrap(), 0);
+    }
+
+    #[test]
     fn test_delete_rule_with_attached_targets_requires_force() {
         let svc = EventBridgeService::new();
         let ctx = ctx();
