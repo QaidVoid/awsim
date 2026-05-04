@@ -142,4 +142,24 @@ pub trait ServiceHandler: Send + Sync {
     ) -> Option<String> {
         None
     }
+
+    /// Periodic tick. The gateway spawns a single 1-second loop that
+    /// calls `tick` on every registered service after the server is up.
+    /// Use this hook for time-driven behavior that doesn't fit into the
+    /// request path: SQS visibility-timeout reclamation, DynamoDB TTL
+    /// expiry, Lambda event-source-mapping polling, S3 lifecycle
+    /// transitions, EventBridge schedule firing, SecretsManager
+    /// rotation, etc.
+    ///
+    /// **Contract:**
+    /// - `tick` must be idempotent — it may be called repeatedly, and
+    ///   missing a tick must not lose state. Use absolute deadlines
+    ///   (`Instant`/`SystemTime`) rather than per-call deltas.
+    /// - `tick` must return quickly (target <10 ms). Slow work
+    ///   (HTTP fan-out, subprocess invocation, large iterations)
+    ///   should be enqueued onto an internal worker the service spawns
+    ///   from elsewhere — `tick` enqueues, doesn't block.
+    /// - The default implementation is a no-op so existing services
+    ///   don't need to opt in.
+    async fn tick(&self) {}
 }

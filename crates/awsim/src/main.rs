@@ -868,6 +868,14 @@ async fn async_main() -> Result<()> {
     // Spawn background event router — handles cross-service fan-out.
     spawn_event_router(&state);
 
+    // Spawn the per-service tick loop. Each ServiceHandler::tick is
+    // called once a second; services use it for lifecycle work that
+    // doesn't fit in the request path (DDB TTL, SQS visibility-timeout
+    // reclamation, S3 lifecycle, EventBridge scheduling, …). The
+    // default trait impl is a no-op so non-tick-aware services pay
+    // nothing.
+    awsim_core::gateway::spawn_tick_loop(state.clone(), std::time::Duration::from_secs(1));
+
     // Spawn SQS->Lambda poller: periodically polls SQS queues for event source mappings.
     let poll_services = Arc::clone(&state.services);
     let sqs_lambda_store = lambda_store.clone();

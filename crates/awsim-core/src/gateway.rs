@@ -137,6 +137,36 @@ struct ProcessMeta {
 }
 
 /// Main request handler — all AWS API requests funnel through here.
+/// Spawn the periodic tick loop. Runs in the background until the
+/// process exits, calling `tick` on every registered service every
+/// `interval`. Per the [`ServiceHandler::tick`] contract, individual
+/// services must keep each tick under ~10 ms — slow work is enqueued
+/// elsewhere so this loop stays responsive.
+///
+/// Returns the [`tokio::task::JoinHandle`] so callers can cancel the
+/// loop on shutdown if they want to.
+pub fn spawn_tick_loop(
+    state: AppState,
+    interval: std::time::Duration,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        // Skip the immediate first tick so a slow startup doesn't ripple
+        // into a tick storm if the loop falls behind.
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        ticker.tick().await; // consume the immediate tick
+        loop {
+            ticker.tick().await;
+            // Snapshot the service list so a service registering / removing
+            // mid-loop doesn't disturb iteration.
+            let services: Vec<Arc<dyn ServiceHandler>> = state.services.values().cloned().collect();
+            for svc in services {
+                svc.tick().await;
+            }
+        }
+    })
+}
+
 pub async fn handle_request(
     State(state): State<AppState>,
     method: Method,
@@ -802,5 +832,61 @@ mod browser_probe_tests {
         assert!(!is_browser_probe(&Method::GET, "/"));
         assert!(!is_browser_probe(&Method::GET, "/some-bucket/key"));
         assert!(!is_browser_probe(&Method::GET, "/_awsim/stats"));
+    }
+}
+
+#[cfg(test)]
+mod tick_tests {
+    use super::*;
+    use crate::RequestContext;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    /// Test handler that counts tick invocations.
+    struct CountingService {
+        ticks: Arc<AtomicU64>,
+    }
+
+    #[async_trait::async_trait]
+    impl ServiceHandler for CountingService {
+        fn service_name(&self) -> &str {
+            "test"
+        }
+        fn protocol(&self) -> Protocol {
+            Protocol::AwsJson1_1
+        }
+        async fn handle(
+            &self,
+            _: &str,
+            _: serde_json::Value,
+            _: &RequestContext,
+        ) -> Result<serde_json::Value, AwsError> {
+            Ok(serde_json::Value::Null)
+        }
+        async fn tick(&self) {
+            self.ticks.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn tick_loop_invokes_each_registered_service() {
+        let counter = Arc::new(AtomicU64::new(0));
+        let svc = Arc::new(CountingService {
+            ticks: counter.clone(),
+        }) as Arc<dyn ServiceHandler>;
+
+        let mut services: HashMap<String, Arc<dyn ServiceHandler>> = HashMap::new();
+        services.insert("test".to_string(), svc);
+
+        let mut state = AppState::new("us-east-1".to_string(), "000000000000".to_string());
+        state.services = Arc::new(services);
+
+        let handle = spawn_tick_loop(state, Duration::from_millis(50));
+        // Wait long enough for ~3 ticks.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        handle.abort();
+
+        let count = counter.load(Ordering::SeqCst);
+        assert!(count >= 2, "expected at least 2 ticks, got {count}");
     }
 }
