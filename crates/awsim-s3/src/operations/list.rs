@@ -307,6 +307,15 @@ pub fn list_object_versions(state: &S3State, input: &Value) -> Result<Value, Aws
         })
         .unwrap_or(1000)
         .min(1000);
+    let key_marker = input
+        .get("key-marker")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let version_id_marker = input
+        .get("version-id-marker")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let encoding_type = input.get("encoding-type").and_then(Value::as_str);
 
     let bucket = state
         .buckets
@@ -324,8 +333,19 @@ pub fn list_object_versions(state: &S3State, input: &Value) -> Result<Value, Aws
     let mut versions_out: Vec<Value> = Vec::new();
     let mut delete_markers: Vec<Value> = Vec::new();
     let mut common_prefixes: BTreeSet<String> = BTreeSet::new();
+    let mut next_key_marker: Option<String> = None;
+    let mut next_version_id_marker: Option<String> = None;
+
     'keys: for key in matching.iter() {
-        if versions_out.len() + delete_markers.len() >= max_keys {
+        // Skip keys that come strictly before the key marker. When the
+        // key matches the marker, only versions strictly after the
+        // version-id marker are included (the (key, version) pair is the
+        // resume cursor).
+        if !key_marker.is_empty() && key.as_str() < key_marker {
+            continue;
+        }
+        if (versions_out.len() + delete_markers.len()) >= max_keys {
+            next_key_marker = Some(key.clone());
             break;
         }
         if !delimiter.is_empty() {
@@ -341,13 +361,28 @@ pub fn list_object_versions(state: &S3State, input: &Value) -> Result<Value, Aws
         // The most recent entry per key is `IsLatest=true`; everything older
         // is a historical version (or DM) and `IsLatest=false`.
         let last_idx = versions.versions.len().saturating_sub(1);
+        let on_marker_key = key.as_str() == key_marker;
+        let mut past_version_marker = !on_marker_key || version_id_marker.is_empty();
+
         for (i, obj) in versions.iter().enumerate().rev() {
-            if versions_out.len() + delete_markers.len() >= max_keys {
+            // When resuming on the marker key, skip until we pass the
+            // marker version ID (exclusive).
+            let vid = obj.version_id.clone().unwrap_or_else(|| "null".to_string());
+            if !past_version_marker {
+                if vid == version_id_marker {
+                    past_version_marker = true;
+                }
+                continue;
+            }
+
+            if (versions_out.len() + delete_markers.len()) >= max_keys {
+                next_key_marker = Some(key.clone());
+                next_version_id_marker = Some(vid);
                 break 'keys;
             }
             let entry = json!({
-                "Key": obj.key,
-                "VersionId": obj.version_id.clone().unwrap_or_else(|| "null".to_string()),
+                "Key": encode_if_url(&obj.key, encoding_type),
+                "VersionId": vid,
                 "IsLatest": i == last_idx,
                 "LastModified": rfc7231_to_iso8601(&obj.last_modified),
             });
@@ -365,18 +400,34 @@ pub fn list_object_versions(state: &S3State, input: &Value) -> Result<Value, Aws
 
     let cp_list: Vec<Value> = common_prefixes
         .iter()
-        .map(|p| json!({"Prefix": p}))
+        .map(|p| json!({"Prefix": encode_if_url(p, encoding_type)}))
         .collect();
 
+    let is_truncated = next_key_marker.is_some();
     let mut result = json!({
         "__xml_root": "ListVersionsResult",
         "Name": bucket_name,
-        "Prefix": prefix,
+        "Prefix": encode_if_url(prefix, encoding_type),
         "MaxKeys": max_keys,
-        "IsTruncated": false,
+        "IsTruncated": is_truncated,
         "Version": versions_out,
         "DeleteMarker": delete_markers,
     });
+    if !key_marker.is_empty() {
+        result["KeyMarker"] = json!(key_marker);
+    }
+    if !version_id_marker.is_empty() {
+        result["VersionIdMarker"] = json!(version_id_marker);
+    }
+    if let Some(nkm) = next_key_marker {
+        result["NextKeyMarker"] = json!(encode_if_url(&nkm, encoding_type));
+    }
+    if let Some(nvim) = next_version_id_marker {
+        result["NextVersionIdMarker"] = json!(nvim);
+    }
+    if let Some(et) = encoding_type {
+        result["EncodingType"] = json!(et);
+    }
     if !delimiter.is_empty() {
         result["Delimiter"] = json!(delimiter);
         result["CommonPrefixes"] = json!(cp_list);
@@ -588,6 +639,47 @@ mod tests {
         assert!(keys[1].contains("%20"), "space encoded: {}", keys[1]);
         assert!(keys[1].contains("%26"), "ampersand encoded: {}", keys[1]);
         assert!(keys[1].contains("%2F"), "slash encoded: {}", keys[1]);
+    }
+
+    #[test]
+    fn list_object_versions_truncates_and_emits_next_key_marker() {
+        let state = state_with_keys(&["alpha", "bravo", "charlie", "delta"]);
+        let resp =
+            list_object_versions(&state, &json!({ "Bucket": "b", "max-keys": 2u64 })).unwrap();
+        assert_eq!(resp["IsTruncated"], json!(true));
+        // NextKeyMarker points at the first key NOT yet returned.
+        assert_eq!(resp["NextKeyMarker"].as_str(), Some("charlie"));
+    }
+
+    #[test]
+    fn list_object_versions_without_truncation_omits_next_markers() {
+        let state = state_with_keys(&["alpha", "bravo"]);
+        let resp =
+            list_object_versions(&state, &json!({ "Bucket": "b", "max-keys": 100u64 })).unwrap();
+        assert_eq!(resp["IsTruncated"], json!(false));
+        assert!(resp.get("NextKeyMarker").is_none());
+    }
+
+    #[test]
+    fn list_object_versions_resumes_from_key_marker() {
+        let state = state_with_keys(&["alpha", "bravo", "charlie", "delta"]);
+        let resp = list_object_versions(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "max-keys": 100u64,
+                "key-marker": "charlie",
+            }),
+        )
+        .unwrap();
+        let returned: Vec<&str> = resp["Version"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Key"].as_str().unwrap())
+            .collect();
+        assert_eq!(returned, vec!["charlie", "delta"]);
+        assert_eq!(resp["KeyMarker"].as_str(), Some("charlie"));
     }
 
     #[test]
