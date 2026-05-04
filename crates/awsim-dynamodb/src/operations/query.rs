@@ -101,8 +101,55 @@ pub fn query(
 
     let projection_paths: Vec<String> = projection_expr.map(parse_projection).unwrap_or_default();
 
-    let hash_key_name = table.hash_key().unwrap_or("").to_string();
-    let range_key_name = table.range_key().map(|s| s.to_string());
+    // Resolve which key schema applies. With IndexName, GSI/LSI metadata
+    // names different attributes than the base table; we look up the
+    // index and pull its hash/range key names. Unknown index → 400 (AWS
+    // raises ValidationException).
+    let index_name = opt_str(input, "IndexName");
+    let (hash_key_name, range_key_name, gsi_slot) = match index_name {
+        None => (
+            table.hash_key().unwrap_or("").to_string(),
+            table.range_key().map(|s| s.to_string()),
+            None,
+        ),
+        Some(idx) => {
+            // Try GSI first; fall back to LSI.
+            if let Some((slot, gsi)) = table
+                .gsi
+                .iter()
+                .enumerate()
+                .find(|(_, g)| g.index_name == idx)
+            {
+                let hk = gsi
+                    .key_schema
+                    .iter()
+                    .find(|k| k.key_type == "HASH")
+                    .map(|k| k.attribute_name.clone())
+                    .ok_or_else(|| {
+                        AwsError::validation(format!("GSI {idx} has no HASH key in its KeySchema"))
+                    })?;
+                let rk = gsi
+                    .key_schema
+                    .iter()
+                    .find(|k| k.key_type == "RANGE")
+                    .map(|k| k.attribute_name.clone());
+                (hk, rk, Some(slot))
+            } else if let Some(lsi) = table.lsi.iter().find(|l| l.index_name == idx) {
+                // LSI shares the base hash key, only the range key differs.
+                let hk = table.hash_key().unwrap_or("").to_string();
+                let rk = lsi
+                    .key_schema
+                    .iter()
+                    .find(|k| k.key_type == "RANGE")
+                    .map(|k| k.attribute_name.clone());
+                (hk, rk, None) // LSI uses base table's pk column → no slot
+            } else {
+                return Err(AwsError::validation(format!(
+                    "The table does not have the specified index: {idx}"
+                )));
+            }
+        }
+    };
 
     // Pull the partition key value out of the KeyConditionExpression so we
     // can push the partition lookup down to SQLite. DynamoDB requires the
@@ -175,19 +222,38 @@ pub fn query(
     };
 
     if let Some(ref pk) = pk_value {
-        sqlite.query_partition(
-            &ctx.account_id,
-            &ctx.region,
-            table_name,
-            pk,
-            scan_index_forward,
-            start_after_sk.as_deref(),
-            |_sk, attrs| {
-                let item = storage_value_to_item(attrs)
-                    .ok_or_else(|| AwsError::internal("DynamoDB stored attrs is not an object"))?;
-                handle(item)
-            },
-        )?;
+        if let Some(slot) = gsi_slot {
+            sqlite.query_gsi_partition(
+                &ctx.account_id,
+                &ctx.region,
+                table_name,
+                slot,
+                pk,
+                scan_index_forward,
+                start_after_sk.as_deref(),
+                |_base_pk, _base_sk, _gsi_sk, attrs| {
+                    let item = storage_value_to_item(attrs).ok_or_else(|| {
+                        AwsError::internal("DynamoDB stored attrs is not an object")
+                    })?;
+                    handle(item)
+                },
+            )?;
+        } else {
+            sqlite.query_partition(
+                &ctx.account_id,
+                &ctx.region,
+                table_name,
+                pk,
+                scan_index_forward,
+                start_after_sk.as_deref(),
+                |_sk, attrs| {
+                    let item = storage_value_to_item(attrs).ok_or_else(|| {
+                        AwsError::internal("DynamoDB stored attrs is not an object")
+                    })?;
+                    handle(item)
+                },
+            )?;
+        }
     } else {
         // No usable hash-key constraint extracted — fall back to a full
         // table scan (matches the legacy in-memory behaviour).
@@ -516,6 +582,10 @@ mod tests {
     }
 
     fn make_state() -> DynamoState {
+        make_state_with_gsi(vec![])
+    }
+
+    fn make_state_with_gsi(gsi: Vec<crate::state::GlobalSecondaryIndex>) -> DynamoState {
         let state = DynamoState::default();
         let table = Table {
             name: "t".into(),
@@ -534,7 +604,7 @@ mod tests {
             billing_mode: "PAY_PER_REQUEST".into(),
             status: "ACTIVE".into(),
             created_at: 0.0,
-            gsi: vec![],
+            gsi,
             lsi: vec![],
             stream_enabled: false,
             stream_arn: None,
@@ -622,6 +692,92 @@ mod tests {
                 "TableName": "t",
                 "Segment": 4u64,
                 "TotalSegments": 4u64,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn query_against_gsi_returns_only_matching_partition() {
+        use crate::state::{GlobalSecondaryIndex, Projection};
+        let gsi = vec![GlobalSecondaryIndex {
+            index_name: "byTenant".into(),
+            key_schema: vec![
+                KeySchemaElement {
+                    attribute_name: "tenant".into(),
+                    key_type: "HASH".into(),
+                },
+                KeySchemaElement {
+                    attribute_name: "ts".into(),
+                    key_type: "RANGE".into(),
+                },
+            ],
+            projection: Projection {
+                projection_type: "ALL".into(),
+                non_key_attributes: vec![],
+            },
+            status: "ACTIVE".into(),
+        }];
+        let state = make_state_with_gsi(gsi);
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+
+        // Two tenants, several items each.
+        for (tenant, sk_ts) in [("a", "1"), ("a", "2"), ("a", "3"), ("b", "1"), ("b", "2")] {
+            put_item(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "Item": {
+                        "pk": {"S": format!("p-{tenant}-{sk_ts}")},
+                        "sk": {"S": "row"},
+                        "tenant": {"S": tenant},
+                        "ts": {"S": sk_ts},
+                    },
+                }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        let resp = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "IndexName": "byTenant",
+                "KeyConditionExpression": "tenant = :t",
+                "ExpressionAttributeValues": { ":t": {"S": "a"} },
+            }),
+            &c,
+        )
+        .unwrap();
+
+        assert_eq!(resp["Count"], json!(3));
+        let tenants: Vec<&str> = resp["Items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["tenant"]["S"].as_str().unwrap())
+            .collect();
+        assert!(tenants.iter().all(|t| *t == "a"));
+    }
+
+    #[test]
+    fn query_against_unknown_index_raises_validation() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "IndexName": "nope",
+                "KeyConditionExpression": "pk = :p",
+                "ExpressionAttributeValues": { ":p": {"S": "x"} },
             }),
             &ctx(),
         )

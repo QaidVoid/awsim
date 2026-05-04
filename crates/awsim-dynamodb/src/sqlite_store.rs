@@ -315,6 +315,76 @@ impl SqliteStore {
     /// with that exact sk are skipped. (For tables without a sort key it
     /// is meaningless and should be `None`.)
     #[allow(clippy::too_many_arguments)]
+    /// Query a GSI partition. `slot` is the zero-based GSI index
+    /// (`gsi{slot+1}_*` in the storage schema). Returns rows where the
+    /// indexed `pk` column equals `pk`, ordered by the indexed `sk`.
+    /// `start_after_sk` resumes from a prior page's last item.
+    #[allow(clippy::too_many_arguments)]
+    pub fn query_gsi_partition<F>(
+        &self,
+        account: &str,
+        region: &str,
+        table: &str,
+        slot: usize,
+        pk: &str,
+        forward: bool,
+        start_after_sk: Option<&str>,
+        mut visit: F,
+    ) -> Result<(), AwsError>
+    where
+        F: FnMut(&str, &str, &str, Value) -> Result<bool, AwsError>,
+    {
+        if slot >= MAX_GSI_SLOTS {
+            return Err(AwsError::validation(format!(
+                "GSI slot {slot} exceeds the {MAX_GSI_SLOTS}-slot maximum"
+            )));
+        }
+        // The column suffix is one-based to match the migration schema.
+        let i = slot + 1;
+        let pk_col = format!("gsi{i}_pk");
+        let sk_col = format!("gsi{i}_sk");
+        let conn = self.conn()?;
+        let order = if forward { "ASC" } else { "DESC" };
+
+        let sql = match start_after_sk {
+            Some(_) => {
+                let cmp = if forward { ">" } else { "<" };
+                format!(
+                    "SELECT pk, sk, {sk_col}, attrs_json FROM items
+                     WHERE account = ?1 AND region = ?2 AND table_name = ?3
+                       AND {pk_col} = ?4 AND {sk_col} {cmp} ?5
+                     ORDER BY {sk_col} {order}"
+                )
+            }
+            None => format!(
+                "SELECT pk, sk, {sk_col}, attrs_json FROM items
+                 WHERE account = ?1 AND region = ?2 AND table_name = ?3
+                   AND {pk_col} = ?4
+                 ORDER BY {sk_col} {order}"
+            ),
+        };
+
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_err)?;
+        let mut rows = match start_after_sk {
+            Some(start) => stmt.query(params![account, region, table, pk, start]),
+            None => stmt.query(params![account, region, table, pk]),
+        }
+        .map_err(sqlite_err)?;
+
+        while let Some(row) = rows.next().map_err(sqlite_err)? {
+            let base_pk: String = row.get(0).map_err(sqlite_err)?;
+            let base_sk: String = row.get(1).map_err(sqlite_err)?;
+            let gsi_sk: Option<String> = row.get(2).map_err(sqlite_err)?;
+            let attrs_json: String = row.get(3).map_err(sqlite_err)?;
+            let attrs: Value = serde_json::from_str(&attrs_json).map_err(json_err)?;
+            if !visit(&base_pk, &base_sk, gsi_sk.as_deref().unwrap_or(""), attrs)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn query_partition<F>(
         &self,
         account: &str,
