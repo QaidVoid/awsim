@@ -176,6 +176,31 @@ async fn create_role_rejects_max_session_duration_above_43200() {
 }
 
 #[tokio::test]
+async fn delete_group_blocks_when_inline_policy_present() {
+    let svc = IamService::new();
+    call(&svc, "CreateGroup", json!({ "GroupName": "g" }))
+        .await
+        .unwrap();
+    call(
+        &svc,
+        "PutGroupPolicy",
+        json!({
+            "GroupName": "g",
+            "PolicyName": "inline-1",
+            "PolicyDocument": valid_policy_doc(),
+        }),
+    )
+    .await
+    .unwrap();
+
+    let err = call(&svc, "DeleteGroup", json!({ "GroupName": "g" }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "DeleteConflict");
+    assert!(err.message.contains("inline"));
+}
+
+#[tokio::test]
 async fn create_role_accepts_max_session_duration_at_boundary() {
     let svc = IamService::new();
     call(

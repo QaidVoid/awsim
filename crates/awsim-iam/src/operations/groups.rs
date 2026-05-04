@@ -110,6 +110,11 @@ pub fn delete_group(state: &IamState, input: &Value) -> Result<Value, AwsError> 
                 "Cannot delete group {group_name}: group has attached policies"
             )));
         }
+        if !group.inline_policies.is_empty() {
+            return Err(delete_conflict(format!(
+                "Cannot delete group {group_name}: group has inline policies"
+            )));
+        }
     }
 
     state.groups.remove(group_name);
