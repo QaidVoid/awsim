@@ -479,6 +479,50 @@ mod tests {
     }
 
     #[test]
+    fn test_encrypt_decrypt_with_encryption_context() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+        let plaintext_b64 = BASE64.encode(b"context-bound");
+        let ec = json!({ "purpose": "test", "tenant": "alpha" });
+
+        let encrypted = block_on(svc.handle(
+            "Encrypt",
+            json!({
+                "KeyId": key_id,
+                "Plaintext": plaintext_b64,
+                "EncryptionContext": ec,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let ciphertext = encrypted["CiphertextBlob"].as_str().unwrap();
+
+        // Same context → succeeds.
+        let ok = block_on(svc.handle(
+            "Decrypt",
+            json!({ "CiphertextBlob": ciphertext, "EncryptionContext": ec }),
+            &ctx,
+        ))
+        .unwrap();
+        let pt = BASE64.decode(ok["Plaintext"].as_str().unwrap()).unwrap();
+        assert_eq!(pt, b"context-bound");
+
+        // Different context → InvalidCiphertextException via auth tag failure.
+        let err = block_on(svc.handle(
+            "Decrypt",
+            json!({
+                "CiphertextBlob": ciphertext,
+                "EncryptionContext": { "purpose": "wrong" },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidCiphertextException");
+    }
+
+    #[test]
     fn test_encrypt_disabled_key() {
         let svc = KmsService::new();
         let ctx = ctx();

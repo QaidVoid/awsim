@@ -196,7 +196,7 @@ pub fn generate_data_key_pair(
     let private_key_plaintext_b64 = BASE64.encode(&private_key_bytes);
     let public_key_b64 = BASE64.encode(&public_key_bytes);
 
-    // Encrypt the private key using the wrapping key (same XOR scheme)
+    // Encrypt the private key using the wrapping key (AES-256-GCM).
     use crate::operations::crypto::encrypt_raw;
     let encrypted_private_key_bytes = encrypt_raw(&key.key_id, &key.secret, &private_key_bytes);
     let private_key_ciphertext_blob_b64 = BASE64.encode(&encrypted_private_key_bytes);

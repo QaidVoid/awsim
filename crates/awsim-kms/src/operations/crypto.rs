@@ -1,53 +1,135 @@
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Nonce};
 use awsim_core::{AwsError, RequestContext};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use rand::RngCore;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::error;
 use crate::operations::keys::resolve_key;
 use crate::state::KmsState;
 
-/// Encode `{key_id_bytes (36 bytes)}{xor_encrypted_data}` to base64.
-///
-/// key_id is a UUID string (36 ASCII chars). Plaintext is XOR'd with the
-/// key's secret bytes (cycling). The ciphertext blob layout:
-///   [0..36]  = key_id as ASCII bytes
-///   [36..]   = plaintext XOR secret (cycling)
-fn xor_encrypt(key_id: &str, secret: &[u8], plaintext: &[u8]) -> Vec<u8> {
-    assert_eq!(key_id.len(), 36, "key_id must be a UUID string (36 chars)");
-    let mut blob = Vec::with_capacity(36 + plaintext.len());
-    blob.extend_from_slice(key_id.as_bytes());
-    for (i, b) in plaintext.iter().enumerate() {
-        blob.push(b ^ secret[i % secret.len()]);
-    }
-    blob
+/// Real AES-256-GCM ciphertext layout:
+///   [0..36]   = key_id (UUID ASCII)
+///   [36..48]  = nonce (12 random bytes)
+///   [48..]    = AES-GCM ciphertext (plaintext + 16-byte auth tag)
+const KEY_ID_LEN: usize = 36;
+const NONCE_LEN: usize = 12;
+
+/// Derive a 32-byte AES-256 key from the KMS key's secret bytes via
+/// SHA-256. The stored secret is variable-length, but AES-256 demands
+/// 32 bytes; hashing is a stable, key-id-independent KDF.
+fn derive_aes_key(secret: &[u8]) -> [u8; 32] {
+    let digest = Sha256::digest(secret);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
 }
 
-/// Exported helper: XOR-encrypt plaintext with a key's secret, prefixed with key_id.
-/// Used by other modules (e.g. signing) that need to produce a ciphertext blob.
-pub fn encrypt_raw(key_id: &str, secret: &[u8], plaintext: &[u8]) -> Vec<u8> {
-    xor_encrypt(key_id, secret, plaintext)
-}
-
-fn xor_decrypt(secret: &[u8], ciphertext_payload: &[u8]) -> Vec<u8> {
-    ciphertext_payload
+/// Serialize EncryptionContext into the canonical AAD bytes used by AWS
+/// KMS: keys sorted ascending, joined as `k1=v1&k2=v2&...`. Returns an
+/// empty Vec when the input is `None` or empty so the AEAD path stays
+/// uniform.
+fn encryption_context_aad(ctx: Option<&Value>) -> Vec<u8> {
+    let Some(obj) = ctx.and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<(&str, &str)> = obj
         .iter()
-        .enumerate()
-        .map(|(i, b)| b ^ secret[i % secret.len()])
-        .collect()
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.as_str(), s)))
+        .collect();
+    entries.sort_by_key(|(k, _)| *k);
+    let mut out = Vec::new();
+    for (i, (k, v)) in entries.iter().enumerate() {
+        if i > 0 {
+            out.push(b'&');
+        }
+        out.extend_from_slice(k.as_bytes());
+        out.push(b'=');
+        out.extend_from_slice(v.as_bytes());
+    }
+    out
+}
+
+/// AES-256-GCM encrypt with the key's derived AES key. Generates a fresh
+/// 96-bit nonce per call. AAD is bound (and required at decrypt) so a
+/// caller that supplied EncryptionContext on encrypt cannot decrypt
+/// without supplying the same context.
+fn aes_encrypt(
+    key_id: &str,
+    secret: &[u8],
+    plaintext: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>, AwsError> {
+    assert_eq!(
+        key_id.len(),
+        KEY_ID_LEN,
+        "key_id must be a UUID string (36 chars)"
+    );
+    let aes_key = derive_aes_key(secret);
+    let cipher = Aes256Gcm::new((&aes_key).into());
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ct = cipher
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .map_err(|_| AwsError::internal("AES-GCM encryption failed"))?;
+    let mut blob = Vec::with_capacity(KEY_ID_LEN + NONCE_LEN + ct.len());
+    blob.extend_from_slice(key_id.as_bytes());
+    blob.extend_from_slice(&nonce_bytes);
+    blob.extend_from_slice(&ct);
+    Ok(blob)
+}
+
+fn aes_decrypt(secret: &[u8], nonce_and_ct: &[u8], aad: &[u8]) -> Result<Vec<u8>, AwsError> {
+    if nonce_and_ct.len() < NONCE_LEN + 16 {
+        return Err(error::invalid_parameter("CiphertextBlob is too short"));
+    }
+    let aes_key = derive_aes_key(secret);
+    let cipher = Aes256Gcm::new((&aes_key).into());
+    let nonce = Nonce::from_slice(&nonce_and_ct[..NONCE_LEN]);
+    cipher
+        .decrypt(
+            nonce,
+            Payload {
+                msg: &nonce_and_ct[NONCE_LEN..],
+                aad,
+            },
+        )
+        .map_err(|_| {
+            AwsError::bad_request(
+                "InvalidCiphertextException",
+                "Ciphertext failed authenticated decryption",
+            )
+        })
+}
+
+/// Exported helper: AES-GCM-encrypt plaintext with a key's secret,
+/// prefixed with key_id. Used by other modules (e.g. signing) that need
+/// to produce a ciphertext blob.
+pub fn encrypt_raw(key_id: &str, secret: &[u8], plaintext: &[u8]) -> Vec<u8> {
+    aes_encrypt(key_id, secret, plaintext, &[]).unwrap_or_else(|_| Vec::new())
 }
 
 fn decode_ciphertext_blob(blob_b64: &str) -> Result<(String, Vec<u8>), AwsError> {
     let blob = BASE64
         .decode(blob_b64)
         .map_err(|_| error::invalid_parameter("CiphertextBlob is not valid base64"))?;
-    if blob.len() < 36 {
+    if blob.len() < KEY_ID_LEN + NONCE_LEN {
         return Err(error::invalid_parameter("CiphertextBlob is too short"));
     }
-    let key_id_bytes = &blob[..36];
+    let key_id_bytes = &blob[..KEY_ID_LEN];
     let key_id = String::from_utf8(key_id_bytes.to_vec())
         .map_err(|_| error::invalid_parameter("CiphertextBlob contains invalid key ID"))?;
-    let payload = blob[36..].to_vec();
+    let payload = blob[KEY_ID_LEN..].to_vec();
     Ok((key_id, payload))
 }
 
@@ -77,7 +159,8 @@ pub fn encrypt(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result
         return Err(error::key_pending_deletion(&key.key_id));
     }
 
-    let blob = xor_encrypt(&key.key_id, &key.secret, &plaintext);
+    let aad = encryption_context_aad(input.get("EncryptionContext"));
+    let blob = aes_encrypt(&key.key_id, &key.secret, &plaintext, &aad)?;
     let ciphertext_b64 = BASE64.encode(&blob);
 
     Ok(json!({
@@ -110,7 +193,8 @@ pub fn decrypt(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result
         return Err(error::key_pending_deletion(&key.key_id));
     }
 
-    let plaintext = xor_decrypt(&key.secret, &payload);
+    let aad = encryption_context_aad(input.get("EncryptionContext"));
+    let plaintext = aes_decrypt(&key.secret, &payload, &aad)?;
     let plaintext_b64 = BASE64.encode(&plaintext);
 
     Ok(json!({
@@ -160,7 +244,8 @@ pub fn generate_data_key(
     data_key_bytes.truncate(data_key_len);
 
     let plaintext_b64 = BASE64.encode(&data_key_bytes);
-    let blob = xor_encrypt(&key.key_id, &key.secret, &data_key_bytes);
+    let aad = encryption_context_aad(input.get("EncryptionContext"));
+    let blob = aes_encrypt(&key.key_id, &key.secret, &data_key_bytes, &aad)?;
     let ciphertext_b64 = BASE64.encode(&blob);
 
     Ok(json!({
@@ -240,7 +325,8 @@ pub fn re_encrypt(
         return Err(error::key_pending_deletion(&src_key.key_id));
     }
 
-    let plaintext = xor_decrypt(&src_key.secret, &payload);
+    let src_aad = encryption_context_aad(input.get("SourceEncryptionContext"));
+    let plaintext = aes_decrypt(&src_key.secret, &payload, &src_aad)?;
 
     // Resolve dest key
     let dest_key_id = crate::operations::keys::resolve_key_id(state, dest_key_id_input)?;
@@ -258,7 +344,8 @@ pub fn re_encrypt(
     }
 
     // Re-encrypt with destination key
-    let new_blob = xor_encrypt(&dest_key.key_id, &dest_key.secret, &plaintext);
+    let dest_aad = encryption_context_aad(input.get("DestinationEncryptionContext"));
+    let new_blob = aes_encrypt(&dest_key.key_id, &dest_key.secret, &plaintext, &dest_aad)?;
     let new_ciphertext_b64 = BASE64.encode(&new_blob);
 
     Ok(json!({

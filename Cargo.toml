@@ -206,6 +206,7 @@ base64 = "0.22"
 sha2 = "0.10"
 zip = "2"
 rand = "0.8"
+aes-gcm = "0.10"
 
 # Policy / matching
 regex = "1"
