@@ -370,14 +370,19 @@ pub fn get_bucket_notification_configuration(
         .destinations
         .iter()
         .filter(|d| d.dest_type == "lambda")
-        .map(|d| json!({ "CloudFunction": d.arn, "Event": d.events }))
+        .map(|d| json!({ "LambdaFunctionArn": d.arn, "Event": d.events }))
         .collect();
 
+    // The Lambda destination element is `LambdaFunctionConfiguration`
+    // with the function ARN under `LambdaFunctionArn`. The legacy
+    // `CloudFunctionConfiguration` / `CloudFunction` names from S3's
+    // pre-Lambda notification API survive only as input aliases on
+    // PutBucketNotificationConfiguration.
     Ok(json!({
         "NotificationConfiguration": {
             "QueueConfiguration": queue_configs,
             "TopicConfiguration": topic_configs,
-            "CloudFunctionConfiguration": lambda_configs,
+            "LambdaFunctionConfiguration": lambda_configs,
         }
     }))
 }
