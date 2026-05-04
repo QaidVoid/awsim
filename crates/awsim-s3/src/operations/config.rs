@@ -176,6 +176,7 @@ pub fn delete_bucket_policy(state: &S3State, input: &Value) -> Result<Value, Aws
 /// PUT /{Bucket}?cors
 pub fn put_bucket_cors(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
+    validate_cors_configuration(input)?;
     let cors_config = input.to_string();
 
     let mut bucket = state
@@ -185,6 +186,81 @@ pub fn put_bucket_cors(state: &S3State, input: &Value) -> Result<Value, AwsError
 
     bucket.cors = Some(cors_config);
     Ok(json!({}))
+}
+
+/// Validate the CORS configuration shape:
+///   - root must contain at least one CORSRule
+///   - max 100 rules
+///   - each rule must have AllowedMethods (one of GET/PUT/POST/DELETE/HEAD)
+///     and at least one AllowedOrigins entry
+fn validate_cors_configuration(input: &Value) -> Result<(), AwsError> {
+    const VALID_METHODS: &[&str] = &["GET", "PUT", "POST", "DELETE", "HEAD"];
+    const MAX_RULES: usize = 100;
+
+    let rules_node = input
+        .get("CORSConfiguration")
+        .and_then(|c| c.get("CORSRule"))
+        .or_else(|| input.get("CORSRule"));
+    let rules_vec: Vec<&Value> = match rules_node {
+        Some(Value::Array(arr)) => arr.iter().collect(),
+        Some(single @ Value::Object(_)) => vec![single],
+        _ => Vec::new(),
+    };
+    if rules_vec.is_empty() {
+        return Err(AwsError::bad_request(
+            "MalformedXML",
+            "CORS configuration must contain at least one CORSRule",
+        ));
+    }
+    if rules_vec.len() > MAX_RULES {
+        return Err(AwsError::bad_request(
+            "MalformedXML",
+            format!(
+                "CORS configuration has {} rules; max is {MAX_RULES}",
+                rules_vec.len()
+            ),
+        ));
+    }
+    for rule in &rules_vec {
+        let methods_node = rule
+            .get("AllowedMethod")
+            .or_else(|| rule.get("AllowedMethods"));
+        let methods: Vec<&str> = match methods_node {
+            Some(Value::Array(arr)) => arr.iter().filter_map(Value::as_str).collect(),
+            Some(Value::String(s)) => vec![s.as_str()],
+            _ => Vec::new(),
+        };
+        if methods.is_empty() {
+            return Err(AwsError::bad_request(
+                "MalformedXML",
+                "Each CORSRule must declare at least one AllowedMethod",
+            ));
+        }
+        for m in &methods {
+            if !VALID_METHODS.contains(&m.to_uppercase().as_str()) {
+                return Err(AwsError::bad_request(
+                    "MalformedXML",
+                    format!(
+                        "Unsupported AllowedMethod {m}; valid values are GET, PUT, POST, DELETE, HEAD"
+                    ),
+                ));
+            }
+        }
+        let origins_node = rule
+            .get("AllowedOrigin")
+            .or_else(|| rule.get("AllowedOrigins"));
+        let origins_present = matches!(
+            origins_node,
+            Some(Value::Array(arr)) if !arr.is_empty()
+        ) || matches!(origins_node, Some(Value::String(_)));
+        if !origins_present {
+            return Err(AwsError::bad_request(
+                "MalformedXML",
+                "Each CORSRule must declare at least one AllowedOrigin",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// GET /{Bucket}?cors
@@ -691,6 +767,7 @@ pub fn put_bucket_lifecycle_configuration(
     input: &Value,
 ) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
+    validate_lifecycle_configuration(input)?;
 
     let mut bucket = state
         .buckets
@@ -699,6 +776,52 @@ pub fn put_bucket_lifecycle_configuration(
 
     bucket.lifecycle = Some(input.to_string());
     Ok(json!({}))
+}
+
+/// Validate a lifecycle configuration's structural shape: at least one
+/// rule, each rule must declare a Status (Enabled or Disabled) and at
+/// least one of Expiration / Transition / NoncurrentVersionExpiration /
+/// NoncurrentVersionTransition / AbortIncompleteMultipartUpload.
+fn validate_lifecycle_configuration(input: &Value) -> Result<(), AwsError> {
+    let rules_node = input
+        .get("LifecycleConfiguration")
+        .and_then(|c| c.get("Rule"))
+        .or_else(|| input.get("Rule"));
+    let rules: Vec<&Value> = match rules_node {
+        Some(Value::Array(arr)) => arr.iter().collect(),
+        Some(single @ Value::Object(_)) => vec![single],
+        _ => Vec::new(),
+    };
+    if rules.is_empty() {
+        return Err(AwsError::bad_request(
+            "MalformedXML",
+            "LifecycleConfiguration must contain at least one Rule",
+        ));
+    }
+    const ACTION_FIELDS: &[&str] = &[
+        "Expiration",
+        "Transition",
+        "NoncurrentVersionExpiration",
+        "NoncurrentVersionTransition",
+        "AbortIncompleteMultipartUpload",
+    ];
+    for rule in &rules {
+        let status = rule.get("Status").and_then(Value::as_str).unwrap_or("");
+        if status != "Enabled" && status != "Disabled" {
+            return Err(AwsError::bad_request(
+                "MalformedXML",
+                "Each lifecycle Rule must have Status of 'Enabled' or 'Disabled'",
+            ));
+        }
+        if !ACTION_FIELDS.iter().any(|f| rule.get(*f).is_some()) {
+            return Err(AwsError::bad_request(
+                "MalformedXML",
+                "Each lifecycle Rule must declare at least one action \
+                 (Expiration, Transition, NoncurrentVersion*, or AbortIncompleteMultipartUpload)",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// DELETE /{Bucket}?lifecycle — Remove lifecycle configuration.
@@ -899,7 +1022,62 @@ pub fn get_bucket_website(state: &S3State, input: &Value) -> Result<Value, AwsEr
 }
 
 pub fn put_bucket_website(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    validate_website_configuration(input)?;
     put_bucket_config_key(state, input, "website", Some("WebsiteConfiguration"))
+}
+
+/// Validate a website configuration:
+///   - exactly one of RedirectAllRequestsTo or IndexDocument must be present
+///   - IndexDocument.Suffix is non-empty and contains no '/'
+///   - if RoutingRules is present, it must not be empty
+fn validate_website_configuration(input: &Value) -> Result<(), AwsError> {
+    let cfg = input.get("WebsiteConfiguration").unwrap_or(input);
+    let has_redirect_all = cfg.get("RedirectAllRequestsTo").is_some();
+    let index_doc = cfg.get("IndexDocument");
+    let has_index = index_doc.is_some();
+
+    if has_redirect_all && has_index {
+        return Err(AwsError::bad_request(
+            "MalformedXML",
+            "WebsiteConfiguration cannot combine RedirectAllRequestsTo with IndexDocument",
+        ));
+    }
+    if !has_redirect_all && !has_index {
+        return Err(AwsError::bad_request(
+            "MalformedXML",
+            "WebsiteConfiguration must contain either IndexDocument or RedirectAllRequestsTo",
+        ));
+    }
+
+    if let Some(idx) = index_doc {
+        let suffix = idx.get("Suffix").and_then(Value::as_str).unwrap_or("");
+        if suffix.is_empty() {
+            return Err(AwsError::bad_request(
+                "InvalidArgument",
+                "IndexDocument.Suffix must be non-empty",
+            ));
+        }
+        if suffix.contains('/') {
+            return Err(AwsError::bad_request(
+                "InvalidArgument",
+                "IndexDocument.Suffix must not contain '/'",
+            ));
+        }
+    }
+
+    if let Some(rules) = cfg.get("RoutingRules")
+        && rules
+            .get("RoutingRule")
+            .and_then(Value::as_array)
+            .map(|a| a.is_empty())
+            .unwrap_or(false)
+    {
+        return Err(AwsError::bad_request(
+            "MalformedXML",
+            "RoutingRules cannot be empty when present",
+        ));
+    }
+    Ok(())
 }
 
 pub fn delete_bucket_website(state: &S3State, input: &Value) -> Result<Value, AwsError> {
@@ -1857,4 +2035,169 @@ pub fn put_bucket_logging(state: &S3State, input: &Value) -> Result<Value, AwsEr
 
     bucket.logging = Some(json!({ "BucketLoggingStatus": to_store }).to_string());
     Ok(json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::Bucket;
+
+    fn ctx_state() -> S3State {
+        let state = S3State::default();
+        state
+            .buckets
+            .insert("b".to_string(), Bucket::new("b", "us-east-1", "now"));
+        state
+    }
+
+    // -- CORS validation -----------------------------------------------------
+
+    #[test]
+    fn put_cors_rejects_empty_rules() {
+        let state = ctx_state();
+        let err = put_bucket_cors(&state, &json!({ "Bucket": "b", "CORSConfiguration": {} }))
+            .unwrap_err();
+        assert_eq!(err.code, "MalformedXML");
+    }
+
+    #[test]
+    fn put_cors_rejects_unsupported_method() {
+        let state = ctx_state();
+        let err = put_bucket_cors(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "CORSConfiguration": {
+                    "CORSRule": [{
+                        "AllowedMethod": "PATCH",
+                        "AllowedOrigin": "*",
+                    }]
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "MalformedXML");
+        assert!(err.message.contains("PATCH"));
+    }
+
+    #[test]
+    fn put_cors_accepts_valid_rule() {
+        let state = ctx_state();
+        put_bucket_cors(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "CORSConfiguration": {
+                    "CORSRule": [{
+                        "AllowedMethod": ["GET", "HEAD"],
+                        "AllowedOrigin": ["https://example.com"],
+                    }]
+                }
+            }),
+        )
+        .unwrap();
+    }
+
+    // -- Lifecycle validation ------------------------------------------------
+
+    #[test]
+    fn put_lifecycle_rejects_rule_without_status() {
+        let state = ctx_state();
+        let err = put_bucket_lifecycle_configuration(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "LifecycleConfiguration": {
+                    "Rule": [{ "Expiration": { "Days": 30 } }]
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "MalformedXML");
+    }
+
+    #[test]
+    fn put_lifecycle_rejects_rule_with_no_action() {
+        let state = ctx_state();
+        let err = put_bucket_lifecycle_configuration(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "LifecycleConfiguration": {
+                    "Rule": [{ "Status": "Enabled" }]
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "MalformedXML");
+    }
+
+    #[test]
+    fn put_lifecycle_accepts_valid_rule() {
+        let state = ctx_state();
+        put_bucket_lifecycle_configuration(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "LifecycleConfiguration": {
+                    "Rule": [{
+                        "ID": "expire-old",
+                        "Status": "Enabled",
+                        "Expiration": { "Days": 90 },
+                    }]
+                }
+            }),
+        )
+        .unwrap();
+    }
+
+    // -- Website validation --------------------------------------------------
+
+    #[test]
+    fn put_website_rejects_combined_redirect_and_index() {
+        let state = ctx_state();
+        let err = put_bucket_website(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "WebsiteConfiguration": {
+                    "RedirectAllRequestsTo": { "HostName": "example.com" },
+                    "IndexDocument": { "Suffix": "index.html" }
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "MalformedXML");
+    }
+
+    #[test]
+    fn put_website_rejects_index_suffix_with_slash() {
+        let state = ctx_state();
+        let err = put_bucket_website(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "WebsiteConfiguration": {
+                    "IndexDocument": { "Suffix": "html/index.html" }
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgument");
+    }
+
+    #[test]
+    fn put_website_accepts_index_only() {
+        let state = ctx_state();
+        put_bucket_website(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "WebsiteConfiguration": {
+                    "IndexDocument": { "Suffix": "index.html" }
+                }
+            }),
+        )
+        .unwrap();
+    }
 }
