@@ -149,19 +149,32 @@ pub fn delete_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {
 }
 
 pub fn list_roles(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    use awsim_core::pagination::{cap_max_results, paginate};
+
     let path_prefix = opt_str(input, "PathPrefix").unwrap_or("/");
 
-    let roles: Vec<Value> = state
+    let mut all_roles: Vec<crate::state::Role> = state
         .roles
         .iter()
         .filter(|r| r.path.starts_with(path_prefix))
-        .map(|r| role_to_value(&r))
+        .map(|r| r.value().clone())
         .collect();
+    all_roles.sort_by(|a, b| a.role_name.cmp(&b.role_name));
 
-    Ok(json!({
+    let max = cap_max_results(input.get("MaxItems").and_then(Value::as_i64), 100, 1000);
+    let marker = input.get("Marker").and_then(Value::as_str);
+
+    let page = paginate(all_roles, max, marker, |r| r.role_name.clone())?;
+    let roles: Vec<Value> = page.items.iter().map(role_to_value).collect();
+
+    let mut result = json!({
         "Roles": { "member": roles },
-        "IsTruncated": false,
-    }))
+        "IsTruncated": page.next_token.is_some(),
+    });
+    if let Some(token) = page.next_token {
+        result["Marker"] = json!(token);
+    }
+    Ok(result)
 }
 
 pub fn update_assume_role_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {

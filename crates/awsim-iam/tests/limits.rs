@@ -176,6 +176,53 @@ async fn create_role_rejects_max_session_duration_above_43200() {
 }
 
 #[tokio::test]
+async fn list_users_paginates_with_marker() {
+    let svc = IamService::new();
+    for i in 0..5 {
+        call(
+            &svc,
+            "CreateUser",
+            json!({ "UserName": format!("u-{i:02}") }),
+        )
+        .await
+        .unwrap();
+    }
+
+    let page1 = call(&svc, "ListUsers", json!({ "MaxItems": 2u64 }))
+        .await
+        .unwrap();
+    assert_eq!(page1["IsTruncated"], json!(true));
+    let marker = page1["Marker"].as_str().expect("marker on truncated page");
+    let names1: Vec<String> = page1["Users"]["member"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["UserName"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names1, vec!["u-00".to_string(), "u-01".to_string()]);
+
+    let page2 = call(
+        &svc,
+        "ListUsers",
+        json!({ "MaxItems": 100u64, "Marker": marker }),
+    )
+    .await
+    .unwrap();
+    let names2: Vec<String> = page2["Users"]["member"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["UserName"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        names2,
+        vec!["u-02".to_string(), "u-03".to_string(), "u-04".to_string()]
+    );
+    assert_eq!(page2["IsTruncated"], json!(false));
+    assert!(page2.get("Marker").is_none());
+}
+
+#[tokio::test]
 async fn get_user_without_username_returns_caller_when_access_key_matches_user() {
     let svc = IamService::new();
     call(&svc, "CreateUser", json!({ "UserName": "alice" }))

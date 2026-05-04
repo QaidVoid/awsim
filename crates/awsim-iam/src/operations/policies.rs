@@ -175,21 +175,37 @@ pub fn delete_policy(state: &IamState, input: &Value) -> Result<Value, AwsError>
 }
 
 pub fn list_policies(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    use awsim_core::pagination::{cap_max_results, paginate};
+
     let path_prefix = opt_str(input, "PathPrefix").unwrap_or("/");
     // Scope: "All", "Local", "AWS" — we only have local policies.
     let _scope = opt_str(input, "Scope").unwrap_or("Local");
 
-    let policies: Vec<Value> = state
+    let mut all_policies: Vec<Policy> = state
         .policies
         .iter()
         .filter(|p| p.path.starts_with(path_prefix))
-        .map(|p| policy_to_value(&p))
+        .map(|p| p.value().clone())
         .collect();
+    // Sort by ARN — the marker key needs to be globally unique so a
+    // duplicate policy_name (rare but possible across paths) doesn't
+    // confuse pagination.
+    all_policies.sort_by(|a, b| a.arn.cmp(&b.arn));
 
-    Ok(json!({
+    let max = cap_max_results(input.get("MaxItems").and_then(Value::as_i64), 100, 1000);
+    let marker = input.get("Marker").and_then(Value::as_str);
+
+    let page = paginate(all_policies, max, marker, |p| p.arn.clone())?;
+    let policies: Vec<Value> = page.items.iter().map(policy_to_value).collect();
+
+    let mut result = json!({
         "Policies": { "member": policies },
-        "IsTruncated": false,
-    }))
+        "IsTruncated": page.next_token.is_some(),
+    });
+    if let Some(token) = page.next_token {
+        result["Marker"] = json!(token);
+    }
+    Ok(result)
 }
 
 // ── Attach / detach managed policies ────────────────────────────────────────

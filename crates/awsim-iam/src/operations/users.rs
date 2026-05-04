@@ -139,19 +139,33 @@ pub fn delete_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
 }
 
 pub fn list_users(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    use awsim_core::pagination::{cap_max_results, paginate};
+
     let path_prefix = opt_str(input, "PathPrefix").unwrap_or("/");
 
-    let users: Vec<Value> = state
+    // Sort by name so the marker key is stable across calls.
+    let mut all_users: Vec<crate::state::User> = state
         .users
         .iter()
         .filter(|u| u.path.starts_with(path_prefix))
-        .map(|u| user_to_value(&u))
+        .map(|u| u.value().clone())
         .collect();
+    all_users.sort_by(|a, b| a.user_name.cmp(&b.user_name));
 
-    Ok(json!({
+    let max = cap_max_results(input.get("MaxItems").and_then(Value::as_i64), 100, 1000);
+    let marker = input.get("Marker").and_then(Value::as_str);
+
+    let page = paginate(all_users, max, marker, |u| u.user_name.clone())?;
+    let users: Vec<Value> = page.items.iter().map(user_to_value).collect();
+
+    let mut result = json!({
         "Users": { "member": users },
-        "IsTruncated": false,
-    }))
+        "IsTruncated": page.next_token.is_some(),
+    });
+    if let Some(token) = page.next_token {
+        result["Marker"] = json!(token);
+    }
+    Ok(result)
 }
 
 pub fn update_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {

@@ -122,19 +122,32 @@ pub fn delete_group(state: &IamState, input: &Value) -> Result<Value, AwsError> 
 }
 
 pub fn list_groups(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    use awsim_core::pagination::{cap_max_results, paginate};
+
     let path_prefix = opt_str(input, "PathPrefix").unwrap_or("/");
 
-    let groups: Vec<Value> = state
+    let mut all_groups: Vec<crate::state::Group> = state
         .groups
         .iter()
         .filter(|g| g.path.starts_with(path_prefix))
-        .map(|g| group_to_value(&g))
+        .map(|g| g.value().clone())
         .collect();
+    all_groups.sort_by(|a, b| a.group_name.cmp(&b.group_name));
 
-    Ok(json!({
+    let max = cap_max_results(input.get("MaxItems").and_then(Value::as_i64), 100, 1000);
+    let marker = input.get("Marker").and_then(Value::as_str);
+
+    let page = paginate(all_groups, max, marker, |g| g.group_name.clone())?;
+    let groups: Vec<Value> = page.items.iter().map(group_to_value).collect();
+
+    let mut result = json!({
         "Groups": { "member": groups },
-        "IsTruncated": false,
-    }))
+        "IsTruncated": page.next_token.is_some(),
+    });
+    if let Some(token) = page.next_token {
+        result["Marker"] = json!(token);
+    }
+    Ok(result)
 }
 
 pub fn add_user_to_group(state: &IamState, input: &Value) -> Result<Value, AwsError> {
