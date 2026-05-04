@@ -243,12 +243,21 @@ pub fn put_item(
             )
         })?;
 
-        // Validate the hash key attribute is present in the inbound item.
+        // Validate that BOTH key attributes are present. Only checking the
+        // hash key let through items that omit the sort key; AWS requires
+        // every key in KeySchema to be supplied or returns ValidationException.
         if let Some(hk) = table.hash_key()
             && !item.contains_key(hk)
         {
             return Err(AwsError::validation(format!(
                 "One or more parameter values were invalid: Missing the key {hk} in the item"
+            )));
+        }
+        if let Some(rk) = table.range_key()
+            && !item.contains_key(rk)
+        {
+            return Err(AwsError::validation(format!(
+                "One or more parameter values were invalid: Missing the key {rk} in the item"
             )));
         }
 
@@ -645,6 +654,44 @@ mod tests {
                 .unwrap(),
             1000
         );
+    }
+
+    #[test]
+    fn put_item_rejects_missing_sort_key() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let ctx = ctx();
+        let err = put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": { "pk": {"S": "tenant"} },  // sk omitted
+            }),
+            &ctx,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("sk"));
+    }
+
+    #[test]
+    fn put_item_rejects_missing_hash_key() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let ctx = ctx();
+        let err = put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": { "sk": {"S": "row"} },  // pk omitted
+            }),
+            &ctx,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("pk"));
     }
 
     #[test]
