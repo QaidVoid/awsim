@@ -120,22 +120,31 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
             .collect();
 
         // Collect subscriptions for this topic that target SQS or Lambda.
-        let subs: Vec<(String, String, String, Option<String>)> = state
+        // Capture the RawMessageDelivery flag so the fan-out worker knows
+        // whether to wrap the payload in the SNS notification envelope or
+        // pass it through verbatim.
+        let subs: Vec<(String, String, String, Option<String>, bool)> = state
             .subscriptions
             .iter()
             .filter(|s| s.topic_arn == topic_arn && (s.protocol == "sqs" || s.protocol == "lambda"))
             .map(|s| {
                 let filter_policy = s.attributes.get("FilterPolicy").cloned();
+                let raw_delivery = s
+                    .attributes
+                    .get("RawMessageDelivery")
+                    .map(|v| v == "true")
+                    .unwrap_or(false);
                 (
                     s.protocol.clone(),
                     s.endpoint.clone(),
                     s.arn.clone(),
                     filter_policy,
+                    raw_delivery,
                 )
             })
             .collect();
 
-        for (protocol, endpoint, subscription_arn, filter_policy) in subs {
+        for (protocol, endpoint, subscription_arn, filter_policy, raw_delivery) in subs {
             // Apply filter policy if set
             if let Some(filter_str) = &filter_policy
                 && let Ok(filter_val) = serde_json::from_str::<Value>(filter_str)
@@ -164,6 +173,7 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
                     "endpoint": endpoint,
                     "subscription_arn": subscription_arn,
                     "message_attributes": attr_envelope,
+                    "raw_message_delivery": raw_delivery,
                 }),
             };
             bus.publish(event);

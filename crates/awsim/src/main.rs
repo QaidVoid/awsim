@@ -1455,6 +1455,9 @@ fn spawn_event_router(state: &AppState) {
                         .unwrap_or("")
                         .to_string();
                     let message_attributes = event.detail.get("message_attributes").cloned();
+                    let raw_message_delivery = event.detail["raw_message_delivery"]
+                        .as_bool()
+                        .unwrap_or(false);
 
                     match event.event_type.as_str() {
                         "sns:Publish" if protocol == "sqs" => {
@@ -1476,48 +1479,84 @@ fn spawn_event_router(state: &AppState) {
                                     event_bus: None,
                                 };
 
-                                // Wrap the SNS message in the SNS notification envelope that
-                                // real AWS delivers to SQS subscribers. The fixture
-                                // signature/cert URL/timestamp are stable per-message but not
-                                // cryptographically real — clients that verify the signature
-                                // (rare in test environments) will fail; clients that just
-                                // read the metadata (the common case) round-trip cleanly.
-                                let timestamp = iso8601_now();
-                                let unsubscribe_url = format!(
-                                    "http://sns.{region}.localhost/?Action=Unsubscribe&SubscriptionArn={sub}",
-                                    region = event.region,
-                                    sub = subscription_arn,
-                                );
-                                let signing_cert_url = format!(
-                                    "http://sns.{region}.localhost/SimpleNotificationService-awsim.pem",
-                                    region = event.region,
-                                );
+                                // RawMessageDelivery=true subscriptions skip the SNS
+                                // notification envelope entirely; the SQS body is the
+                                // raw publish payload, and SNS publish-time message
+                                // attributes flow through as native SQS message
+                                // attributes (Type/Value form).
+                                let mut input = if raw_message_delivery {
+                                    let mut sqs_attrs = serde_json::Map::new();
+                                    if let Some(attrs) = &message_attributes
+                                        && let Some(map) = attrs.as_object()
+                                    {
+                                        for (k, v) in map {
+                                            // SNS attribute envelope is { "Type", "Value" };
+                                            // SQS uses { "DataType", "StringValue" }.
+                                            let data_type = v["Type"].as_str().unwrap_or("String");
+                                            let string_value = v["Value"].as_str().unwrap_or("");
+                                            sqs_attrs.insert(
+                                                k.clone(),
+                                                serde_json::json!({
+                                                    "DataType": data_type,
+                                                    "StringValue": string_value,
+                                                }),
+                                            );
+                                        }
+                                    }
+                                    let mut input = serde_json::json!({
+                                        "QueueUrl": queue_url,
+                                        "MessageBody": message,
+                                    });
+                                    if !sqs_attrs.is_empty() {
+                                        input["MessageAttributes"] =
+                                            serde_json::Value::Object(sqs_attrs);
+                                    }
+                                    input
+                                } else {
+                                    // Wrap the SNS message in the SNS notification envelope that
+                                    // real AWS delivers to SQS subscribers. The fixture
+                                    // signature/cert URL/timestamp are stable per-message but not
+                                    // cryptographically real — clients that verify the signature
+                                    // (rare in test environments) will fail; clients that just
+                                    // read the metadata (the common case) round-trip cleanly.
+                                    let timestamp = iso8601_now();
+                                    let unsubscribe_url = format!(
+                                        "http://sns.{region}.localhost/?Action=Unsubscribe&SubscriptionArn={sub}",
+                                        region = event.region,
+                                        sub = subscription_arn,
+                                    );
+                                    let signing_cert_url = format!(
+                                        "http://sns.{region}.localhost/SimpleNotificationService-awsim.pem",
+                                        region = event.region,
+                                    );
 
-                                let mut envelope = serde_json::json!({
-                                    "Type": "Notification",
-                                    "MessageId": message_id,
-                                    "TopicArn": topic_arn,
-                                    "Message": message,
-                                    "Timestamp": timestamp,
-                                    "SignatureVersion": "1",
-                                    "Signature": "awsim-fixture-signature",
-                                    "SigningCertURL": signing_cert_url,
-                                    "UnsubscribeURL": unsubscribe_url,
-                                });
-                                if let Some(s) = &subject {
-                                    envelope["Subject"] = serde_json::Value::String(s.clone());
-                                }
-                                if let Some(attrs) = &message_attributes
-                                    && attrs.as_object().is_some_and(|m| !m.is_empty())
-                                {
-                                    envelope["MessageAttributes"] = attrs.clone();
-                                }
-                                let body = envelope.to_string();
-
-                                let input = serde_json::json!({
-                                    "QueueUrl": queue_url,
-                                    "MessageBody": body,
-                                });
+                                    let mut envelope = serde_json::json!({
+                                        "Type": "Notification",
+                                        "MessageId": message_id,
+                                        "TopicArn": topic_arn,
+                                        "Message": message,
+                                        "Timestamp": timestamp,
+                                        "SignatureVersion": "1",
+                                        "Signature": "awsim-fixture-signature",
+                                        "SigningCertURL": signing_cert_url,
+                                        "UnsubscribeURL": unsubscribe_url,
+                                    });
+                                    if let Some(s) = &subject {
+                                        envelope["Subject"] = serde_json::Value::String(s.clone());
+                                    }
+                                    if let Some(attrs) = &message_attributes
+                                        && attrs.as_object().is_some_and(|m| !m.is_empty())
+                                    {
+                                        envelope["MessageAttributes"] = attrs.clone();
+                                    }
+                                    serde_json::json!({
+                                        "QueueUrl": queue_url,
+                                        "MessageBody": envelope.to_string(),
+                                    })
+                                };
+                                // Silence the read-only `let mut` lint when the
+                                // raw-delivery branch produces no further mutations.
+                                let _ = &mut input;
 
                                 match sqs_handler.handle("SendMessage", input, &ctx).await {
                                     Ok(_) => {
