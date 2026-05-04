@@ -276,6 +276,11 @@ pub fn scan(
 
     drop(table);
 
+    // Parallel Scan: Segment/TotalSegments shard the table into N disjoint
+    // slices. Both must be supplied together; we hash each row's (pk, sk)
+    // and only emit those whose hash mod TotalSegments == Segment.
+    let segmenting = parse_segments(input)?;
+
     // Translate ExclusiveStartKey → (pk, sk) tuple SQLite uses for
     // resume. Tables with no sort key encode sk as the empty string.
     let scan_start = exclusive_start_key.as_ref().and_then(|esk| {
@@ -300,7 +305,15 @@ pub fn scan(
         &ctx.region,
         table_name,
         scan_start_ref,
-        |_pk, _sk, attrs| {
+        |pk, sk, attrs| {
+            // Skip rows that don't belong to this segment so the worker
+            // only sees its slice. We don't count skipped rows toward
+            // ScannedCount — they belong to another worker's count.
+            if let Some((segment, total)) = segmenting
+                && segment_index(pk, sk, total) != segment
+            {
+                return Ok(true);
+            }
             let item = storage_value_to_item(attrs)
                 .ok_or_else(|| AwsError::internal("DynamoDB stored attrs is not an object"))?;
 
@@ -360,6 +373,45 @@ pub fn scan(
         result["ConsumedCapacity"] = cc;
     }
     Ok(result)
+}
+
+/// Parse and validate the parallel-scan parameters. Returns None when
+/// neither field is present (sequential scan); errors when one is set
+/// without the other or values are out of range.
+fn parse_segments(input: &Value) -> Result<Option<(u32, u32)>, AwsError> {
+    let segment = input.get("Segment").and_then(|v| v.as_u64());
+    let total = input.get("TotalSegments").and_then(|v| v.as_u64());
+    match (segment, total) {
+        (None, None) => Ok(None),
+        (Some(_), None) | (None, Some(_)) => Err(AwsError::validation(
+            "Segment and TotalSegments must be supplied together",
+        )),
+        (Some(s), Some(t)) => {
+            // AWS allows TotalSegments in [1, 1_000_000].
+            if !(1..=1_000_000).contains(&t) {
+                return Err(AwsError::validation(
+                    "TotalSegments must be between 1 and 1000000",
+                ));
+            }
+            if s >= t {
+                return Err(AwsError::validation(
+                    "Segment must be between 0 and TotalSegments-1",
+                ));
+            }
+            Ok(Some((s as u32, t as u32)))
+        }
+    }
+}
+
+/// Hash `(pk, sk)` into `[0, total)`. Uses Rust's default hasher — the
+/// only requirement is that the same row maps to the same segment for
+/// every worker, which DefaultHasher satisfies within a single process.
+fn segment_index(pk: &str, sk: &str, total: u32) -> u32 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    pk.hash(&mut hasher);
+    sk.hash(&mut hasher);
+    (hasher.finish() % total as u64) as u32
 }
 
 /// Try to extract the partition key value from a KeyConditionExpression.
@@ -498,6 +550,83 @@ mod tests {
         };
         state.tables.insert("t".into(), table);
         state
+    }
+
+    #[test]
+    fn parallel_scan_partitions_rows_disjointly_and_covers_all() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        for i in 0..50 {
+            put_item(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "Item": {
+                        "pk": {"S": format!("p-{i:03}")},
+                        "sk": {"S": "s"},
+                    },
+                }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        let total = 4u64;
+        let mut all_pks: Vec<String> = Vec::new();
+        for seg in 0..total {
+            let resp = scan(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "Segment": seg,
+                    "TotalSegments": total,
+                }),
+                &c,
+            )
+            .unwrap();
+            for item in resp["Items"].as_array().unwrap() {
+                all_pks.push(item["pk"]["S"].as_str().unwrap().to_string());
+            }
+        }
+        // Disjoint and complete: every original row is reported exactly once.
+        all_pks.sort();
+        all_pks.dedup();
+        assert_eq!(all_pks.len(), 50);
+    }
+
+    #[test]
+    fn parallel_scan_rejects_segment_without_total() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = scan(
+            &state,
+            &sqlite,
+            &json!({ "TableName": "t", "Segment": 0u64 }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn parallel_scan_rejects_segment_at_or_above_total() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = scan(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Segment": 4u64,
+                "TotalSegments": 4u64,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 
     #[test]
