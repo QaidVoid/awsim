@@ -76,6 +76,18 @@ impl AwsError {
         }
     }
 
+    /// HTTP 416 Range Not Satisfiable — used by S3 when a `Range` header
+    /// requests bytes outside the object's size.
+    pub fn range_not_satisfiable(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::RANGE_NOT_SATISFIABLE,
+            code: code.into(),
+            message: message.into(),
+            error_type: ErrorType::Sender,
+            extras: None,
+        }
+    }
+
     /// HTTP 412 Precondition Failed — used by S3 when an `If-Match` /
     /// `If-Unmodified-Since` conditional request fails.
     pub fn precondition_failed(code: impl Into<String>, message: impl Into<String>) -> Self {

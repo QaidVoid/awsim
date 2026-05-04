@@ -750,10 +750,12 @@ fn apply_range<'a>(
     };
 
     if start > end || start >= total {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::range_not_satisfiable(
             "InvalidRange",
             "The requested range is not satisfiable",
-        ));
+        )
+        .with_extra("ActualObjectSize", Value::from(total))
+        .with_extra("RangeRequested", Value::String(range_str.to_string())));
     }
 
     let slice = &data[start..=end];
@@ -1048,6 +1050,26 @@ mod tests {
         )
         .unwrap();
         assert!(resp.get("Body").is_some());
+    }
+
+    #[test]
+    fn unsatisfiable_range_returns_416_with_actual_object_size() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        put_and_get_etag(&state, "b", "k", "hello"); // body length 5
+
+        // Request bytes well past end of object.
+        let err = get_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "k", "Range": "bytes=100-200" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.status.as_u16(), 416);
+        assert_eq!(err.code, "InvalidRange");
+        let extras = err.extras.as_ref().expect("extras");
+        assert_eq!(extras["ActualObjectSize"], json!(5));
+        assert_eq!(extras["RangeRequested"], json!("bytes=100-200"));
     }
 
     #[test]

@@ -140,6 +140,32 @@ pub fn serialize_error(error: &AwsError, request_id: &str) -> (StatusCode, Heade
         crate::error::ErrorType::Receiver => "Receiver",
     };
 
+    // Body-only extras: emit any extras that aren't header-promoted as
+    // additional `<Field>value</Field>` elements inside `<Error>`. S3 uses
+    // this for fields like `ActualObjectSize` and `RangeRequested` on 416,
+    // and `Resource` / `BucketName` on various errors.
+    let extras_xml = error
+        .extras
+        .as_deref()
+        .map(|extras| {
+            let mut buf = String::new();
+            for (key, val) in extras.iter() {
+                // Skip extras that are exclusively header-promoted.
+                if matches!(key.as_str(), "DeleteMarker" | "VersionId") {
+                    continue;
+                }
+                let s = match val {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    _ => continue,
+                };
+                buf.push_str(&format!("<{key}>{s}</{key}>\n"));
+            }
+            buf
+        })
+        .unwrap_or_default();
+
     let xml = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <ErrorResponse xmlns=\"http://iam.amazonaws.com/doc/2010-05-08/\">\n\
@@ -147,7 +173,7 @@ pub fn serialize_error(error: &AwsError, request_id: &str) -> (StatusCode, Heade
          <Type>{error_type}</Type>\n\
          <Code>{code}</Code>\n\
          <Message>{message}</Message>\n\
-         </Error>\n\
+         {extras_xml}</Error>\n\
          <RequestId>{request_id}</RequestId>\n\
          </ErrorResponse>",
         code = error.code,
