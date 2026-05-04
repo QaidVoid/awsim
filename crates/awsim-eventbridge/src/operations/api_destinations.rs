@@ -1,17 +1,8 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::state::{ApiDestination, EventBridgeState};
-
-fn now_iso8601() -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .to_string()
-}
+use crate::util::now_iso8601;
 
 fn api_dest_to_value(d: &ApiDestination) -> Value {
     json!({

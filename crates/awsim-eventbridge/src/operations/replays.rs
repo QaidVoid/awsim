@@ -1,17 +1,8 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::state::{EventBridgeState, Replay};
-
-fn now_iso8601() -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .to_string()
-}
+use crate::util::now_iso8601;
 
 fn replay_to_value(r: &Replay) -> Value {
     json!({
