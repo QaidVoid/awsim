@@ -182,7 +182,7 @@ pub fn invoke(
         }));
     }
 
-    let (response_payload, exec_error) = if let (Some(rt), Some(hndlr), Some(data)) =
+    let (response_payload, exec_error, exec_logs) = if let (Some(rt), Some(hndlr), Some(data)) =
         (runtime.as_deref(), handler.as_deref(), code_data.as_deref())
     {
         match ensure_code_dir(name, data, &code_sha256) {
@@ -199,7 +199,7 @@ pub fn invoke(
                 let parsed_payload: Value = serde_json::from_str(&result.payload)
                     .unwrap_or(Value::String(result.payload.clone()));
 
-                (parsed_payload, result.error)
+                (parsed_payload, result.error, result.logs)
             }
             Err(e) => {
                 warn!(error = %e, function_name = name, "Failed to extract function code");
@@ -207,7 +207,11 @@ pub fn invoke(
                     "errorMessage": format!("Failed to prepare function code: {}", e),
                     "errorType": "ServiceException"
                 });
-                (err_payload, Some("ServiceException".to_string()))
+                (
+                    err_payload,
+                    Some("ServiceException".to_string()),
+                    String::new(),
+                )
             }
         }
     } else {
@@ -219,7 +223,11 @@ pub fn invoke(
             has_code = code_data.is_some(),
             "Falling back to mock response (no executable code)"
         );
-        (json!({ "statusCode": 200, "body": "{}" }), None)
+        (
+            json!({ "statusCode": 200, "body": "{}" }),
+            None,
+            String::new(),
+        )
     };
 
     let status_code: u16 = 200;
@@ -261,6 +269,29 @@ pub fn invoke(
         // response header, not from the response body, so surface it both ways.
         response["FunctionError"] = Value::String(err_type.clone());
         headers.insert("X-Amz-Function-Error".to_string(), Value::String(err_type));
+    }
+
+    // LogType=Tail surfaces the last 4 KiB of the function's combined
+    // stdout+stderr as base64 in both the LogResult body field and the
+    // X-Amz-Log-Result header. Anything past 4 KiB is truncated from
+    // the front so the most-recent logs survive.
+    if opt_str(input, "LogType").is_some_and(|v| v.eq_ignore_ascii_case("Tail")) {
+        use base64::Engine as _;
+        const TAIL_BYTES: usize = 4096;
+        let tail = if exec_logs.len() > TAIL_BYTES {
+            // Slice on a UTF-8 char boundary at or after the cut point.
+            let cut = exec_logs.len() - TAIL_BYTES;
+            let mut start = cut;
+            while start < exec_logs.len() && !exec_logs.is_char_boundary(start) {
+                start += 1;
+            }
+            &exec_logs[start..]
+        } else {
+            exec_logs.as_str()
+        };
+        let encoded = base64::engine::general_purpose::STANDARD.encode(tail.as_bytes());
+        response["LogResult"] = Value::String(encoded.clone());
+        headers.insert("X-Amz-Log-Result".to_string(), Value::String(encoded));
     }
     response["__headers"] = Value::Object(headers);
 
@@ -376,5 +407,45 @@ mod tests {
         .unwrap();
         assert_eq!(resp["StatusCode"], json!(200));
         assert!(resp.get("Payload").is_some());
+    }
+
+    #[test]
+    fn log_type_tail_emits_log_result_field_and_header() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        let resp = invoke(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "InvocationType": "RequestResponse",
+                "LogType": "Tail",
+                "Payload": {},
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // Mock-fallback logs are empty, so LogResult is base64("") = "" —
+        // we only care that the field/header are present and identical.
+        let body_log = resp.get("LogResult").and_then(Value::as_str).unwrap();
+        let header_log = resp["__headers"]["X-Amz-Log-Result"].as_str().unwrap();
+        assert_eq!(body_log, header_log);
+    }
+
+    #[test]
+    fn log_type_tail_omitted_when_not_requested() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        let resp = invoke(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "InvocationType": "RequestResponse",
+                "Payload": {},
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(resp.get("LogResult").is_none());
+        assert!(resp["__headers"].get("X-Amz-Log-Result").is_none());
     }
 }

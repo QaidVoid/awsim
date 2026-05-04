@@ -9,8 +9,9 @@ pub struct ExecutionResult {
     pub status_code: u16,
     pub payload: String,
     pub error: Option<String>,
-    /// Combined stderr + stdout for log forwarding (reserved for future use).
-    #[allow(dead_code)]
+    /// Combined stderr + stdout. Surfaced on Invoke responses when the
+    /// caller passes `LogType=Tail` (last 4 KiB, base64-encoded, in the
+    /// `X-Amz-Log-Result` header / `LogResult` body field).
     pub logs: String,
 }
 
