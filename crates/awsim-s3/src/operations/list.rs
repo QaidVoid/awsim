@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use awsim_core::pagination::{decode_token, encode_token};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -37,7 +38,7 @@ pub fn list_objects_v2(
         })
         .unwrap_or(1000)
         .min(1000);
-    let continuation_token = input
+    let continuation_token_in = input
         .get("continuation-token")
         .and_then(Value::as_str)
         .unwrap_or("");
@@ -60,30 +61,43 @@ pub fn list_objects_v2(
         .collect();
     matching_keys.sort();
 
-    // Apply start-after and continuation token (start after the later of the two).
-    let effective_token = if continuation_token > start_after {
-        continuation_token
+    // Decode the continuation token (opaque base64) back to its marker key.
+    // ContinuationToken takes precedence over StartAfter when both are
+    // supplied; if neither, no skip.
+    let resume_marker: Option<String> = if !continuation_token_in.is_empty() {
+        Some(decode_token(continuation_token_in)?)
+    } else if !start_after.is_empty() {
+        Some(start_after.to_string())
     } else {
-        start_after
+        None
     };
-    let matching_keys: Vec<String> = if effective_token.is_empty() {
-        matching_keys
-    } else {
-        matching_keys
+    // ContinuationToken's marker is the first NOT-yet-returned key, so we
+    // include it (>=). StartAfter's marker is the last seen key, so we
+    // exclude it (>); but since StartAfter is only used when there's no
+    // continuation token, gate by which input was decoded.
+    let matching_keys: Vec<String> = match resume_marker {
+        None => matching_keys,
+        Some(marker) if !continuation_token_in.is_empty() => matching_keys
             .into_iter()
-            .filter(|k| k.as_str() > effective_token)
-            .collect()
+            .filter(|k| k.as_str() >= marker.as_str())
+            .collect(),
+        Some(marker) => matching_keys
+            .into_iter()
+            .filter(|k| k.as_str() > marker.as_str())
+            .collect(),
     };
 
     let mut contents: Vec<Value> = Vec::new();
     let mut common_prefixes: BTreeSet<String> = BTreeSet::new();
     let mut key_count = 0usize;
-    let mut next_continuation_token: Option<String> = None;
-    let mut last_emitted_key: Option<&str> = None;
+    // The marker for the next page: the first key we did NOT emit on this
+    // page, so resuming with this token returns the next slice with no
+    // overlap or gap. Stored raw; encoded as base64 only when emitted.
+    let mut next_unemitted_key: Option<&str> = None;
 
     for key in &matching_keys {
         if key_count >= max_keys {
-            next_continuation_token = last_emitted_key.map(|k| k.to_string());
+            next_unemitted_key = Some(key.as_str());
             break;
         }
 
@@ -93,7 +107,6 @@ pub fn list_objects_v2(
                 let common_prefix = format!("{}{}{}", prefix, &suffix[..delim_pos], delimiter);
                 if common_prefixes.insert(common_prefix) {
                     key_count += 1;
-                    last_emitted_key = Some(key.as_str());
                 }
                 continue;
             }
@@ -111,15 +124,7 @@ pub fn list_objects_v2(
                 "Owner": owner_entry(&ctx.account_id),
             }));
             key_count += 1;
-            last_emitted_key = Some(key.as_str());
         }
-    }
-
-    // If we exhausted all matching keys without hitting max_keys, there is no next page.
-    // If we broke out early, last_emitted_key is set. If max_keys is 0 we have no emitted keys
-    // and should use the continuation token as a sentinel to skip nothing extra.
-    if next_continuation_token.is_none() && key_count >= max_keys && !matching_keys.is_empty() {
-        next_continuation_token = last_emitted_key.map(|k| k.to_string());
     }
 
     let common_prefix_list: Vec<Value> = common_prefixes
@@ -127,7 +132,7 @@ pub fn list_objects_v2(
         .map(|p| json!({ "Prefix": p }))
         .collect();
 
-    let is_truncated = next_continuation_token.is_some();
+    let is_truncated = next_unemitted_key.is_some();
 
     let mut result = json!({
         "__xml_root": "ListBucketResult",
@@ -144,12 +149,12 @@ pub fn list_objects_v2(
         result["CommonPrefixes"] = json!(common_prefix_list);
     }
 
-    if let Some(token) = next_continuation_token {
-        result["NextContinuationToken"] = json!(token);
+    if let Some(marker) = next_unemitted_key {
+        result["NextContinuationToken"] = json!(encode_token(marker));
     }
 
-    if !continuation_token.is_empty() {
-        result["ContinuationToken"] = json!(continuation_token);
+    if !continuation_token_in.is_empty() {
+        result["ContinuationToken"] = json!(continuation_token_in);
     }
 
     Ok(result)
@@ -432,4 +437,116 @@ pub fn delete_objects(state: &S3State, input: &Value) -> Result<Value, AwsError>
         "Deleted": deleted,
         "Error": errors,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::object::record_version;
+    use crate::state::VersioningStatus;
+    use crate::state::{Bucket, S3Object, S3State};
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("s3", "us-east-1")
+    }
+
+    fn state_with_keys(keys: &[&str]) -> S3State {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = S3State::default();
+        state.buckets.insert(bucket.name.clone(), bucket);
+        {
+            let bucket_ref = state.buckets.get_mut("b").unwrap();
+            for k in keys {
+                let obj = S3Object {
+                    key: (*k).to_string(),
+                    etag: "\"x\"".to_string(),
+                    last_modified: "Mon, 01 Jan 2024 00:00:00 GMT".to_string(),
+                    content_length: 0,
+                    content_type: "application/octet-stream".to_string(),
+                    metadata: Default::default(),
+                    version_id: None,
+                    tags: Default::default(),
+                    is_delete_marker: false,
+                    content_encoding: None,
+                    cache_control: None,
+                    content_disposition: None,
+                    content_language: None,
+                    expires: None,
+                    body: awsim_core::Body::from_bytes(Vec::new()),
+                };
+                let mut versions = bucket_ref.objects.entry((*k).to_string()).or_default();
+                record_version(&mut versions, obj, &VersioningStatus::Disabled);
+            }
+        }
+        state
+    }
+
+    #[test]
+    fn next_continuation_token_is_base64_of_first_unemitted_key() {
+        let state = state_with_keys(&["alpha", "bravo", "charlie", "delta"]);
+        let resp =
+            list_objects_v2(&state, &json!({ "Bucket": "b", "max-keys": 2u64 }), &ctx()).unwrap();
+
+        assert_eq!(resp["IsTruncated"], json!(true));
+        assert_eq!(resp["KeyCount"], json!(2));
+        let token = resp["NextContinuationToken"].as_str().unwrap();
+        // Token must be opaque (base64) — not a raw key.
+        assert_ne!(token, "charlie", "token must not be raw key");
+        assert_eq!(decode_token(token).unwrap(), "charlie");
+    }
+
+    #[test]
+    fn resuming_with_token_returns_next_slice_with_no_overlap() {
+        let state = state_with_keys(&["alpha", "bravo", "charlie", "delta"]);
+        let page1 =
+            list_objects_v2(&state, &json!({ "Bucket": "b", "max-keys": 2u64 }), &ctx()).unwrap();
+        let token = page1["NextContinuationToken"].as_str().unwrap().to_string();
+
+        let page2 = list_objects_v2(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "max-keys": 10u64,
+                "continuation-token": token,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let returned: Vec<&str> = page2["Contents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Key"].as_str().unwrap())
+            .collect();
+        assert_eq!(returned, vec!["charlie", "delta"]);
+        assert_eq!(page2["IsTruncated"], json!(false));
+        assert!(page2.get("NextContinuationToken").is_none());
+    }
+
+    #[test]
+    fn no_token_when_exactly_max_keys_match() {
+        // Regression: previously emitted a spurious continuation token when
+        // total matching keys equaled max_keys exactly.
+        let state = state_with_keys(&["alpha", "bravo", "charlie"]);
+        let resp =
+            list_objects_v2(&state, &json!({ "Bucket": "b", "max-keys": 3u64 }), &ctx()).unwrap();
+        assert_eq!(resp["IsTruncated"], json!(false));
+        assert!(resp.get("NextContinuationToken").is_none());
+    }
+
+    #[test]
+    fn invalid_continuation_token_returns_error() {
+        let state = state_with_keys(&["alpha"]);
+        let err = list_objects_v2(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "continuation-token": "!!!not-valid-base64!!!",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
 }
