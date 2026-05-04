@@ -219,6 +219,32 @@ mod tests {
     }
 
     #[test]
+    fn test_create_secret_rejects_reserved_aws_prefix() {
+        let svc = SecretsManagerService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateSecret",
+            json!({ "Name": "aws/managed", "SecretString": "hi" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidRequestException");
+    }
+
+    #[test]
+    fn test_create_secret_rejects_invalid_chars() {
+        let svc = SecretsManagerService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateSecret",
+            json!({ "Name": "bad name with spaces", "SecretString": "hi" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
     fn test_create_secret_no_value() {
         let svc = SecretsManagerService::new();
         let ctx = ctx();

@@ -92,6 +92,7 @@ pub fn create_secret(
     let name = input["Name"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("Name"))?;
+    validate_secret_name(name)?;
 
     if state.secrets.contains_key(name) {
         return Err(error::resource_exists(name));
@@ -1108,4 +1109,34 @@ pub fn delete_resource_policy(
         "ARN": arn,
         "Name": secret_name,
     }))
+}
+
+/// Validate a secret name against AWS rules:
+///   - 1..=512 characters
+///   - charset: alphanumerics plus `/_+=.@-` (the `/` is for path-like
+///     names used by some SDKs / reserved-prefix detection below)
+///   - the `aws/` prefix is reserved for AWS-managed secrets and rejected
+///     for customer creates with InvalidRequestException
+fn validate_secret_name(name: &str) -> Result<(), AwsError> {
+    if name.is_empty() || name.len() > 512 {
+        return Err(error::invalid_parameter(format!(
+            "Secret name length {} is outside 1..=512",
+            name.len()
+        )));
+    }
+    let valid_chars = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '+' | '=' | '.' | '@' | '-'));
+    if !valid_chars {
+        return Err(error::invalid_parameter(
+            "Secret names may only contain alphanumeric characters and the chars /_+=.@-",
+        ));
+    }
+    if name.starts_with("aws/") {
+        return Err(AwsError::bad_request(
+            "InvalidRequestException",
+            "Secret names may not start with the reserved prefix 'aws/'",
+        ));
+    }
+    Ok(())
 }
