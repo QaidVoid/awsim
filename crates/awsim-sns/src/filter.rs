@@ -19,6 +19,59 @@ pub fn matches_filter(filter_policy: &Value, message_attributes: &HashMap<String
     true
 }
 
+/// Evaluate a filter policy against the parsed message body. Used when
+/// the subscription has `FilterPolicyScope=MessageBody`. Policy keys
+/// nest to mirror the body's JSON structure: a policy of
+/// `{"detail":{"status":["FAILED"]}}` matches a body whose `detail.status`
+/// field equals `"FAILED"`.
+pub fn matches_filter_body(filter_policy: &Value, body: &Value) -> bool {
+    let policy = match filter_policy.as_object() {
+        Some(p) => p,
+        None => return true,
+    };
+
+    for (key, conditions) in policy {
+        let body_value = body.get(key);
+        // Nested object policy → recurse into the same field of the body.
+        if conditions.is_object() && !is_operator_object(conditions) {
+            let Some(nested_body) = body_value else {
+                return false;
+            };
+            if !matches_filter_body(conditions, nested_body) {
+                return false;
+            }
+            continue;
+        }
+        // Leaf array of conditions → reuse the same single-value matcher.
+        if !matches_conditions(conditions, body_value) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Detect a leaf operator object like `{"prefix": "x"}` so the body
+/// matcher knows not to recurse into it (the operator object lives at
+/// the same nesting depth as a value would, but is structurally a
+/// directive rather than a field).
+fn is_operator_object(v: &Value) -> bool {
+    match v.as_object() {
+        Some(obj) => obj.keys().any(|k| {
+            matches!(
+                k.as_str(),
+                "prefix"
+                    | "suffix"
+                    | "exists"
+                    | "numeric"
+                    | "anything-but"
+                    | "equals-ignore-case"
+                    | "cidr"
+            )
+        }),
+        None => false,
+    }
+}
+
 fn matches_conditions(conditions: &Value, attr: Option<&Value>) -> bool {
     let conditions = match conditions.as_array() {
         Some(c) => c,
@@ -38,12 +91,35 @@ fn attr_str(attr: Option<&Value>) -> Option<&str> {
     attr.and_then(|a| a["Value"].as_str().or_else(|| a.as_str()))
 }
 
+/// Extract a stringified scalar from either form a filter value can take:
+///
+/// - `{"Value": "..."}` (SNS attribute envelope; only String reaches here)
+/// - a raw JSON scalar (string/number/boolean) — used when matching
+///   against a parsed message body via `FilterPolicyScope=MessageBody`.
+///
+/// Returns `None` for objects, arrays, and null.
+fn scalar_as_string(attr: Option<&Value>) -> Option<String> {
+    let v = attr?;
+    if let Some(s) = v["Value"].as_str() {
+        return Some(s.to_string());
+    }
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
 fn matches_single_condition(condition: &Value, attr: Option<&Value>) -> bool {
     match condition {
-        // String exact match
+        // String exact match — AWS treats string and numeric values as
+        // distinct types, so a string condition only matches a string
+        // attribute / body value (no implicit coercion).
         Value::String(s) => attr_str(attr).map(|v| v == s).unwrap_or(false),
-        // Numeric match
-        Value::Number(n) => attr_str(attr)
+        // Numeric match — accept either a wrapped attribute string or a
+        // raw JSON number from a parsed message body.
+        Value::Number(n) => scalar_as_string(attr)
             .and_then(|v| v.parse::<f64>().ok())
             .map(|v| Some(v) == n.as_f64())
             .unwrap_or(false),
@@ -164,10 +240,7 @@ fn ip_in_cidr(addr: &str, cidr: &str) -> bool {
 }
 
 fn matches_numeric(conditions: &[Value], attr: Option<&Value>) -> bool {
-    let val = match attr
-        .and_then(|a| a["Value"].as_str().or_else(|| a.as_str()))
-        .and_then(|v| v.parse::<f64>().ok())
-    {
+    let val = match scalar_as_string(attr).and_then(|v| v.parse::<f64>().ok()) {
         Some(v) => v,
         None => return false,
     };
@@ -446,6 +519,45 @@ mod tests {
     fn test_cidr_invalid_prefix_returns_false() {
         let policy = json!({ "src": [{ "cidr": "10.0.0.0/64" }] });
         assert!(!matches_filter(&policy, &attrs(&[("src", "10.0.0.5")])));
+    }
+
+    #[test]
+    fn test_body_matches_top_level_value() {
+        let policy = json!({ "kind": ["order"] });
+        let body = json!({ "kind": "order" });
+        assert!(matches_filter_body(&policy, &body));
+        let body2 = json!({ "kind": "shipment" });
+        assert!(!matches_filter_body(&policy, &body2));
+    }
+
+    #[test]
+    fn test_body_matches_nested_value() {
+        let policy = json!({ "detail": { "status": ["FAILED"] } });
+        let body = json!({ "detail": { "status": "FAILED" } });
+        assert!(matches_filter_body(&policy, &body));
+        let body2 = json!({ "detail": { "status": "OK" } });
+        assert!(!matches_filter_body(&policy, &body2));
+        // Missing nested path → no match.
+        let body3 = json!({ "other": { "status": "FAILED" } });
+        assert!(!matches_filter_body(&policy, &body3));
+    }
+
+    #[test]
+    fn test_body_matches_operator_object() {
+        let policy = json!({ "url": [{ "prefix": "https://" }] });
+        let body = json!({ "url": "https://example.com" });
+        assert!(matches_filter_body(&policy, &body));
+        let body2 = json!({ "url": "http://example.com" });
+        assert!(!matches_filter_body(&policy, &body2));
+    }
+
+    #[test]
+    fn test_body_matches_numeric_at_nested_path() {
+        let policy = json!({ "detail": { "count": [{ "numeric": [">=", 100] }] } });
+        let body = json!({ "detail": { "count": 250 } });
+        assert!(matches_filter_body(&policy, &body));
+        let body2 = json!({ "detail": { "count": 50 } });
+        assert!(!matches_filter_body(&policy, &body2));
     }
 
     #[test]

@@ -145,12 +145,17 @@ fn fan_out_to_subscribers(
         })
         .collect();
 
-    let subs: Vec<(String, String, String, Option<String>, bool)> = state
+    let subs: Vec<(String, String, String, Option<String>, String, bool)> = state
         .subscriptions
         .iter()
         .filter(|s| s.topic_arn == topic_arn && (s.protocol == "sqs" || s.protocol == "lambda"))
         .map(|s| {
             let filter_policy = s.attributes.get("FilterPolicy").cloned();
+            let scope = s
+                .attributes
+                .get("FilterPolicyScope")
+                .cloned()
+                .unwrap_or_else(|| "MessageAttributes".to_string());
             let raw_delivery = s
                 .attributes
                 .get("RawMessageDelivery")
@@ -161,17 +166,37 @@ fn fan_out_to_subscribers(
                 s.endpoint.clone(),
                 s.arn.clone(),
                 filter_policy,
+                scope,
                 raw_delivery,
             )
         })
         .collect();
 
-    for (protocol, endpoint, subscription_arn, filter_policy, raw_delivery) in subs {
+    // Lazily parse the message body — only when at least one subscription
+    // uses FilterPolicyScope=MessageBody, since most don't.
+    let body_value: Option<Value> = if subs
+        .iter()
+        .any(|(_, _, _, _, scope, _)| scope == "MessageBody")
+    {
+        serde_json::from_str(raw_message).ok()
+    } else {
+        None
+    };
+
+    for (protocol, endpoint, subscription_arn, filter_policy, scope, raw_delivery) in subs {
         if let Some(filter_str) = &filter_policy
             && let Ok(filter_val) = serde_json::from_str::<Value>(filter_str)
-            && !filter::matches_filter(&filter_val, &filter_attrs)
         {
-            continue;
+            let passes = match scope.as_str() {
+                "MessageBody" => match &body_value {
+                    Some(body) => filter::matches_filter_body(&filter_val, body),
+                    None => false, // Body not parseable as JSON → can't match.
+                },
+                _ => filter::matches_filter(&filter_val, &filter_attrs),
+            };
+            if !passes {
+                continue;
+            }
         }
 
         let delivered = select_message_for_protocol(message_json, &protocol).unwrap_or(raw_message);
