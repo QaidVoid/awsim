@@ -86,10 +86,29 @@ pub fn add_permission(
         );
     }
 
+    // Principal shape mirrors AWS conventions:
+    //   * "*"                              → "Principal": "*"          (any caller)
+    //   * 12-digit account                 → "Principal": { "AWS": "arn:aws:iam::{acct}:root" }
+    //   * arn:aws:iam::*                   → "Principal": { "AWS": "<arn>" }
+    //   * everything else (e.g.            → "Principal": { "Service": "<value>" }
+    //     "lambda.amazonaws.com")
+    // Wrapping every value as {Service:...} as we did before produced
+    // policy documents that real IAM evaluation logic rejects for cross-
+    // account caller principals.
+    let principal_value: Value = if principal == "*" {
+        Value::String("*".to_string())
+    } else if principal.starts_with("arn:aws:iam::") {
+        json!({ "AWS": principal })
+    } else if principal.len() == 12 && principal.chars().all(|c| c.is_ascii_digit()) {
+        json!({ "AWS": format!("arn:aws:iam::{principal}:root") })
+    } else {
+        json!({ "Service": principal })
+    };
+
     let statement = json!({
         "Sid": statement_id,
         "Effect": "Allow",
-        "Principal": { "Service": principal },
+        "Principal": principal_value,
         "Action": action,
         "Resource": function_arn,
         "Condition": condition,
@@ -150,4 +169,116 @@ pub fn get_account_settings(
             "FunctionCount": 0,
         },
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::functions::create_function;
+    use crate::state::LambdaState;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("lambda", "us-east-1")
+    }
+
+    fn empty_zip_b64() -> String {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD as BASE64;
+        let bytes: [u8; 22] = [
+            0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        BASE64.encode(bytes)
+    }
+
+    fn create_test_fn(state: &LambdaState) {
+        create_function(
+            state,
+            &json!({
+                "FunctionName": "f",
+                "Role": "arn:aws:iam::000000000000:role/test",
+                "Code": { "ZipFile": empty_zip_b64() },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    fn statement_principal(svc_state: &LambdaState, sid: &str) -> Value {
+        let f = svc_state.functions.get("f").unwrap();
+        let stmt = f.policy_statements.get(sid).unwrap().clone();
+        stmt["Principal"].clone()
+    }
+
+    #[test]
+    fn add_permission_wraps_service_principal_under_service_key() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        add_permission(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "StatementId": "s1",
+                "Principal": "events.amazonaws.com",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let p = statement_principal(&state, "s1");
+        assert_eq!(p["Service"], json!("events.amazonaws.com"));
+        assert!(p.get("AWS").is_none());
+    }
+
+    #[test]
+    fn add_permission_wraps_account_principal_as_aws_root_arn() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        add_permission(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "StatementId": "s1",
+                "Principal": "111122223333",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let p = statement_principal(&state, "s1");
+        assert_eq!(p["AWS"], json!("arn:aws:iam::111122223333:root"));
+    }
+
+    #[test]
+    fn add_permission_wraps_iam_arn_principal_as_aws() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        add_permission(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "StatementId": "s1",
+                "Principal": "arn:aws:iam::111122223333:user/alice",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let p = statement_principal(&state, "s1");
+        assert_eq!(p["AWS"], json!("arn:aws:iam::111122223333:user/alice"));
+    }
+
+    #[test]
+    fn add_permission_wildcard_principal_passes_through_as_string() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        add_permission(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "StatementId": "s1",
+                "Principal": "*",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let p = statement_principal(&state, "s1");
+        assert_eq!(p, json!("*"));
+    }
 }
