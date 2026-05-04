@@ -50,6 +50,140 @@ pub fn matches_filter_body(filter_policy: &Value, body: &Value) -> bool {
     true
 }
 
+/// Validate a filter-policy JSON document. Returns the AWS-shaped error
+/// message on the first structural problem so callers can surface it
+/// directly via InvalidParameter.
+pub fn validate_filter_policy(policy: &Value) -> Result<(), String> {
+    let obj = policy
+        .as_object()
+        .ok_or_else(|| "Filter policy must be a JSON object".to_string())?;
+    if obj.is_empty() {
+        return Err("Filter policy must contain at least one key".to_string());
+    }
+    for (key, value) in obj {
+        if key.is_empty() {
+            return Err("Filter policy keys must be non-empty".to_string());
+        }
+        validate_filter_clause(key, value)?;
+    }
+    Ok(())
+}
+
+fn validate_filter_clause(key: &str, value: &Value) -> Result<(), String> {
+    // Nested policy (used for FilterPolicyScope=MessageBody) — recurse.
+    if value.is_object() && !is_operator_object(value) {
+        return validate_filter_policy(value);
+    }
+    let arr = value.as_array().ok_or_else(|| {
+        format!("Value of key {key} must be an array of conditions or a nested object")
+    })?;
+    if arr.is_empty() {
+        return Err(format!("Conditions array for {key} must not be empty"));
+    }
+    for cond in arr {
+        validate_condition(key, cond)?;
+    }
+    Ok(())
+}
+
+fn validate_condition(key: &str, cond: &Value) -> Result<(), String> {
+    match cond {
+        Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null => Ok(()),
+        Value::Object(obj) => {
+            // Exactly one operator key per condition object.
+            let operator_keys: Vec<&str> = obj
+                .keys()
+                .filter(|k| {
+                    matches!(
+                        k.as_str(),
+                        "prefix"
+                            | "suffix"
+                            | "exists"
+                            | "numeric"
+                            | "anything-but"
+                            | "equals-ignore-case"
+                            | "cidr"
+                    )
+                })
+                .map(String::as_str)
+                .collect();
+            if operator_keys.len() != 1 {
+                return Err(format!(
+                    "Condition object on key {key} must have exactly one operator"
+                ));
+            }
+            let op = operator_keys[0];
+            let inner = &obj[op];
+            match op {
+                "prefix" | "suffix" | "equals-ignore-case" | "cidr" => {
+                    if !inner.is_string() {
+                        return Err(format!("{op} on key {key} must be a string"));
+                    }
+                }
+                "exists" => {
+                    if !inner.is_boolean() {
+                        return Err(format!("exists on key {key} must be a boolean"));
+                    }
+                }
+                "numeric" => {
+                    let nums = inner
+                        .as_array()
+                        .ok_or_else(|| format!("numeric on key {key} must be an array"))?;
+                    if nums.is_empty() || nums.len() % 2 != 0 {
+                        return Err(format!(
+                            "numeric on key {key} must be op/value pairs (even length)"
+                        ));
+                    }
+                    let mut i = 0;
+                    while i < nums.len() {
+                        let op_str = nums[i]
+                            .as_str()
+                            .ok_or_else(|| format!("numeric op on key {key} must be a string"))?;
+                        if !matches!(op_str, "=" | "<" | "<=" | ">" | ">=") {
+                            return Err(format!(
+                                "numeric op {op_str} on key {key} is not supported"
+                            ));
+                        }
+                        if !nums[i + 1].is_number() {
+                            return Err(format!("numeric value on key {key} must be a number"));
+                        }
+                        i += 2;
+                    }
+                }
+                "anything-but" => match inner {
+                    Value::String(_) => {}
+                    Value::Array(arr) => {
+                        if arr.is_empty() || !arr.iter().all(|v| v.is_string()) {
+                            return Err(format!(
+                                "anything-but array on key {key} must be non-empty strings"
+                            ));
+                        }
+                    }
+                    Value::Object(obj) => {
+                        // anything-but with one of the supported sub-operators.
+                        let nested_ops = ["prefix", "suffix", "equals-ignore-case"];
+                        if !nested_ops.iter().any(|n| obj.contains_key(*n)) {
+                            return Err(format!(
+                                "anything-but object on key {key} must use prefix/suffix/equals-ignore-case"
+                            ));
+                        }
+                    }
+                    _ => {
+                        return Err(format!(
+                            "anything-but on key {key} must be string, array, or object"
+                        ));
+                    }
+                },
+                _ => unreachable!(),
+            }
+            Ok(())
+        }
+        Value::Array(_) => Err(format!(
+            "Condition on key {key} must be a scalar or operator object, not an array"
+        )),
+    }
+}
+
 /// Detect a leaf operator object like `{"prefix": "x"}` so the body
 /// matcher knows not to recurse into it (the operator object lives at
 /// the same nesting depth as a value would, but is structurally a

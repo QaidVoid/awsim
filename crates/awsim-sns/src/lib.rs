@@ -337,6 +337,85 @@ mod tests {
     }
 
     #[test]
+    fn test_subscribe_rejects_invalid_filter_policy_json() {
+        let svc = SnsService::new();
+        let ctx = ctx();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "fp-bad-topic" }), &ctx)).unwrap();
+        let arn = created["TopicArn"].as_str().unwrap();
+
+        let err = block_on(svc.handle(
+            "Subscribe",
+            json!({
+                "TopicArn": arn,
+                "Protocol": "sqs",
+                "Endpoint": "arn:aws:sqs:us-east-1:000000000000:q",
+                "Attributes": { "FilterPolicy": "not-json" },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+        assert!(err.message.contains("FilterPolicy"));
+    }
+
+    #[test]
+    fn test_subscribe_rejects_filter_policy_with_bad_operator() {
+        let svc = SnsService::new();
+        let ctx = ctx();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "fp-bad2-topic" }), &ctx)).unwrap();
+        let arn = created["TopicArn"].as_str().unwrap();
+
+        // numeric without value pairs is malformed.
+        let bad = json!({ "count": [{ "numeric": [">"] }] }).to_string();
+        let err = block_on(svc.handle(
+            "Subscribe",
+            json!({
+                "TopicArn": arn,
+                "Protocol": "sqs",
+                "Endpoint": "arn:aws:sqs:us-east-1:000000000000:q",
+                "Attributes": { "FilterPolicy": bad },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+    }
+
+    #[test]
+    fn test_set_subscription_attributes_rejects_invalid_filter_policy() {
+        let svc = SnsService::new();
+        let ctx = ctx();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "fp-set-topic" }), &ctx)).unwrap();
+        let arn = created["TopicArn"].as_str().unwrap();
+        let sub = block_on(svc.handle(
+            "Subscribe",
+            json!({
+                "TopicArn": arn,
+                "Protocol": "sqs",
+                "Endpoint": "arn:aws:sqs:us-east-1:000000000000:q",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let sub_arn = sub["SubscriptionArn"].as_str().unwrap();
+
+        let err = block_on(svc.handle(
+            "SetSubscriptionAttributes",
+            json!({
+                "SubscriptionArn": sub_arn,
+                "AttributeName": "FilterPolicy",
+                "AttributeValue": "{\"k\": \"not-an-array\"}",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+    }
+
+    #[test]
     fn test_subscribe_returns_pending_for_http_protocol() {
         let svc = SnsService::new();
         let ctx = ctx();

@@ -5,7 +5,19 @@ use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
+use crate::filter;
 use crate::state::{SnsState, Subscription};
+
+/// Parse and validate a FilterPolicy JSON string. AWS rejects
+/// structurally invalid policies on Subscribe / SetSubscriptionAttributes
+/// with InvalidParameter; storing them silently means filtering would
+/// fail open.
+fn validate_filter_policy_str(policy_str: &str) -> Result<(), AwsError> {
+    let parsed: Value = serde_json::from_str(policy_str)
+        .map_err(|_| AwsError::bad_request("InvalidParameter", "FilterPolicy is not valid JSON"))?;
+    filter::validate_filter_policy(&parsed)
+        .map_err(|msg| AwsError::bad_request("InvalidParameter", format!("FilterPolicy: {msg}")))
+}
 
 // ---------------------------------------------------------------------------
 // Subscribe
@@ -74,8 +86,15 @@ pub fn subscribe(state: &SnsState, input: &Value, ctx: &RequestContext) -> Resul
         Some(token)
     };
 
-    // Collect user-supplied attributes (overlay onto defaults).
+    // Collect user-supplied attributes (overlay onto defaults). Validate
+    // FilterPolicy up-front so a malformed policy is rejected at
+    // Subscribe rather than silently letting every message through.
     if let Some(attrs) = input["Attributes"].as_object() {
+        if let Some(fp) = attrs.get("FilterPolicy").and_then(Value::as_str)
+            && !fp.is_empty()
+        {
+            validate_filter_policy_str(fp)?;
+        }
         for (k, v) in attrs {
             if let Some(s) = v.as_str() {
                 sub_attributes.insert(k.clone(), s.to_string());
@@ -241,6 +260,10 @@ pub fn set_subscription_attributes(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AttributeName is required"))?;
 
     let attr_value = input["AttributeValue"].as_str().unwrap_or("");
+
+    if attr_name == "FilterPolicy" && !attr_value.is_empty() {
+        validate_filter_policy_str(attr_value)?;
+    }
 
     let mut sub = state.subscriptions.get_mut(sub_arn).ok_or_else(|| {
         AwsError::not_found("NotFound", format!("Subscription not found: {sub_arn}"))
