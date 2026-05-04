@@ -601,6 +601,96 @@ pub async fn handle_eventbridge_target(
                 }
             }
         }
+    } else if target_arn.contains(":kinesis:") {
+        // Kinesis stream — arn:aws:kinesis:{region}:{account}:stream/{name}
+        if let Some(kinesis) = services.get("kinesis") {
+            let stream_name = target_arn
+                .rsplit_once("stream/")
+                .map(|(_, n)| n)
+                .unwrap_or("");
+            let payload_str = serde_json::to_string(payload).unwrap_or_default();
+            // Real EventBridge supports a KinesisParameters.PartitionKeyPath
+            // pointer into the event; we don't track per-target params here,
+            // so default to the rule name as the partition key. Stable
+            // enough that all events from the same rule land in the same
+            // shard, which is the common intent.
+            let partition_key = event.detail["ruleName"]
+                .as_str()
+                .unwrap_or("eventbridge")
+                .to_string();
+            use base64::Engine as _;
+            let data_b64 = base64::engine::general_purpose::STANDARD.encode(payload_str);
+            let input = serde_json::json!({
+                "StreamName": stream_name,
+                "Data": data_b64,
+                "PartitionKey": partition_key,
+            });
+            let ctx = RequestContext::new("kinesis", &event.region);
+            match kinesis.handle("PutRecord", input, &ctx).await {
+                Ok(_) => {
+                    info!(stream = %stream_name, rule = ?event.detail["ruleName"], "EventBridge->Kinesis record delivered")
+                }
+                Err(e) => {
+                    warn!(stream = %stream_name, error = %e.message, "EventBridge->Kinesis delivery failed")
+                }
+            }
+        }
+    } else if target_arn.contains(":states:") {
+        // Step Functions — arn:aws:states:{region}:{account}:stateMachine:{name}
+        if let Some(sfn) = services.get("stepfunctions") {
+            let input_str = serde_json::to_string(payload).unwrap_or_default();
+            let input = serde_json::json!({
+                "stateMachineArn": target_arn,
+                "input": input_str,
+            });
+            let ctx = RequestContext::new("stepfunctions", &event.region);
+            match sfn.handle("StartExecution", input, &ctx).await {
+                Ok(_) => {
+                    info!(arn = %target_arn, rule = ?event.detail["ruleName"], "EventBridge->StepFunctions execution started")
+                }
+                Err(e) => {
+                    warn!(arn = %target_arn, error = %e.message, "EventBridge->StepFunctions delivery failed")
+                }
+            }
+        }
+    } else if target_arn.contains(":logs:") {
+        // CloudWatch Logs — arn:aws:logs:{region}:{account}:log-group:{name}[:*]
+        if let Some(logs) = services.get("logs") {
+            // Strip optional :* suffix and the log-group: prefix.
+            let log_group_name = target_arn
+                .rsplit_once("log-group:")
+                .map(|(_, rest)| rest.trim_end_matches(":*"))
+                .unwrap_or("");
+            let payload_str = serde_json::to_string(payload).unwrap_or_default();
+            // Use a single stream per rule so EB-sourced events stay
+            // grouped and don't fan out into hundreds of streams. The
+            // SDK auto-creates the stream when missing.
+            let log_stream_name = format!(
+                "events/{}",
+                event.detail["ruleName"].as_str().unwrap_or("default")
+            );
+            let timestamp_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let input = serde_json::json!({
+                "logGroupName": log_group_name,
+                "logStreamName": log_stream_name,
+                "logEvents": [{
+                    "timestamp": timestamp_ms,
+                    "message": payload_str,
+                }],
+            });
+            let ctx = RequestContext::new("logs", &event.region);
+            match logs.handle("PutLogEvents", input, &ctx).await {
+                Ok(_) => {
+                    info!(log_group = %log_group_name, rule = ?event.detail["ruleName"], "EventBridge->Logs event delivered")
+                }
+                Err(e) => {
+                    warn!(log_group = %log_group_name, error = %e.message, "EventBridge->Logs delivery failed")
+                }
+            }
+        }
     } else {
         warn!(target_arn = %target_arn, "EventBridge target type not supported");
     }
