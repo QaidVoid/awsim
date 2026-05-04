@@ -10,6 +10,33 @@ use crate::util::rfc7231_to_iso8601;
 use super::bucket::no_such_bucket;
 use super::require_str;
 
+/// Percent-encode a key for `EncodingType=url` responses. AWS encodes
+/// every byte that isn't unreserved-per-RFC-3986 (alphanumeric and
+/// `-_.~`). The forward slash is encoded too — keys treated as paths
+/// don't change semantics for SDK clients that decode the value back
+/// before use.
+fn pct_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        let c = byte as char;
+        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
+            out.push(c);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+/// Conditional encoder driven by the request's EncodingType.
+fn encode_if_url(s: &str, encoding: Option<&str>) -> String {
+    if encoding == Some("url") {
+        pct_encode(s)
+    } else {
+        s.to_string()
+    }
+}
+
 fn owner_entry(account_id: &str) -> Value {
     json!({
         "ID": account_id,
@@ -46,6 +73,7 @@ pub fn list_objects_v2(
         .get("start-after")
         .and_then(Value::as_str)
         .unwrap_or("");
+    let encoding_type = input.get("encoding-type").and_then(Value::as_str);
 
     let bucket = state
         .buckets
@@ -116,7 +144,7 @@ pub fn list_objects_v2(
             && let Some(obj) = versions.current()
         {
             contents.push(json!({
-                "Key": obj.key,
+                "Key": encode_if_url(&obj.key, encoding_type),
                 "ETag": obj.etag,
                 "Size": obj.content_length,
                 "LastModified": rfc7231_to_iso8601(&obj.last_modified),
@@ -129,7 +157,7 @@ pub fn list_objects_v2(
 
     let common_prefix_list: Vec<Value> = common_prefixes
         .iter()
-        .map(|p| json!({ "Prefix": p }))
+        .map(|p| json!({ "Prefix": encode_if_url(p, encoding_type) }))
         .collect();
 
     let is_truncated = next_unemitted_key.is_some();
@@ -137,7 +165,7 @@ pub fn list_objects_v2(
     let mut result = json!({
         "__xml_root": "ListBucketResult",
         "Name": bucket_name,
-        "Prefix": prefix,
+        "Prefix": encode_if_url(prefix, encoding_type),
         "MaxKeys": max_keys,
         "KeyCount": key_count,
         "IsTruncated": is_truncated,
@@ -145,7 +173,7 @@ pub fn list_objects_v2(
     });
 
     if !delimiter.is_empty() {
-        result["Delimiter"] = json!(delimiter);
+        result["Delimiter"] = json!(encode_if_url(delimiter, encoding_type));
         result["CommonPrefixes"] = json!(common_prefix_list);
     }
 
@@ -155,6 +183,10 @@ pub fn list_objects_v2(
 
     if !continuation_token_in.is_empty() {
         result["ContinuationToken"] = json!(continuation_token_in);
+    }
+
+    if let Some(et) = encoding_type {
+        result["EncodingType"] = json!(et);
     }
 
     Ok(result)
@@ -533,6 +565,37 @@ mod tests {
             list_objects_v2(&state, &json!({ "Bucket": "b", "max-keys": 3u64 }), &ctx()).unwrap();
         assert_eq!(resp["IsTruncated"], json!(false));
         assert!(resp.get("NextContinuationToken").is_none());
+    }
+
+    #[test]
+    fn list_v2_url_encodes_keys_when_encoding_type_url() {
+        let state = state_with_keys(&["folder/file with spaces & symbols.txt", "alpha"]);
+        let resp = list_objects_v2(
+            &state,
+            &json!({ "Bucket": "b", "encoding-type": "url" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["EncodingType"], json!("url"));
+        let keys: Vec<String> = resp["Contents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["Key"].as_str().unwrap().to_string())
+            .collect();
+        // alpha sorts first; "folder/..." second.
+        assert_eq!(keys[0], "alpha");
+        assert!(keys[1].contains("%20"), "space encoded: {}", keys[1]);
+        assert!(keys[1].contains("%26"), "ampersand encoded: {}", keys[1]);
+        assert!(keys[1].contains("%2F"), "slash encoded: {}", keys[1]);
+    }
+
+    #[test]
+    fn list_v2_no_encoding_returns_keys_verbatim() {
+        let state = state_with_keys(&["a/b c"]);
+        let resp = list_objects_v2(&state, &json!({ "Bucket": "b" }), &ctx()).unwrap();
+        assert!(resp.get("EncodingType").is_none());
+        assert_eq!(resp["Contents"][0]["Key"].as_str(), Some("a/b c"));
     }
 
     #[test]
