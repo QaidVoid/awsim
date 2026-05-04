@@ -100,10 +100,16 @@ impl StsService {
         validate_role_arn(role_arn)?;
         validate_role_session_name(session_name)?;
 
-        // WebIdentityToken is required by AWS but we accept any value.
-        let _token = input["WebIdentityToken"]
+        // WebIdentityToken is required by AWS. We don't verify the JWT
+        // signature against any IDP, but we extract the `sub` claim to
+        // surface as `SubjectFromWebIdentityToken` so callers that key
+        // off the subject (per-user identity) get a stable distinct
+        // value per token rather than a hardcoded fixture string.
+        let token = input["WebIdentityToken"]
             .as_str()
             .ok_or_else(|| AwsError::validation("WebIdentityToken is required"))?;
+        let subject =
+            extract_jwt_subject(token).unwrap_or_else(|| "web-identity-subject".to_string());
 
         let duration = input["DurationSeconds"]
             .as_str()
@@ -120,7 +126,7 @@ impl StsService {
         Ok(json!({
             "Credentials": credentials,
             "AssumedRoleUser": assumed_role_user,
-            "SubjectFromWebIdentityToken": "web-identity-subject",
+            "SubjectFromWebIdentityToken": subject,
             "Audience": "sts.amazonaws.com",
             "Provider": "sts.amazonaws.com",
         }))
@@ -234,28 +240,49 @@ impl StsService {
         let role_arn = input["RoleArn"]
             .as_str()
             .ok_or_else(|| AwsError::validation("RoleArn is required"))?;
+        validate_role_arn(role_arn)?;
 
         let _principal_arn = input["PrincipalArn"]
             .as_str()
             .ok_or_else(|| AwsError::validation("PrincipalArn is required"))?;
 
-        // SAMLAssertion is required but we accept any value as a stub.
-        let _saml_assertion = input["SAMLAssertion"]
+        // SAMLAssertion is required and AWS extracts the NameID from it
+        // (Subject + NameQualifier). We don't parse XML / verify the
+        // signature, but we pull a NameID from the base64-decoded assertion
+        // when one is present so distinct SAML calls produce distinct
+        // session subjects.
+        let assertion = input["SAMLAssertion"]
             .as_str()
             .ok_or_else(|| AwsError::validation("SAMLAssertion is required"))?;
+        let saml_subject =
+            extract_saml_nameid(assertion).unwrap_or_else(|| "saml-subject".to_string());
 
-        let session_name = role_arn.split('/').next_back().unwrap_or("SAMLSession");
+        // Per AWS: RoleSessionName for SAML is derived from the SAML
+        // NameID, not from the role ARN. The legacy fallback to the role
+        // name keeps existing fixtures working when the assertion has
+        // no extractable NameID.
+        let session_name = if saml_subject != "saml-subject" {
+            sanitize_session_name(&saml_subject)
+        } else {
+            role_arn
+                .split('/')
+                .next_back()
+                .unwrap_or("SAMLSession")
+                .to_string()
+        };
+        validate_role_session_name(&session_name)?;
 
         let duration = input["DurationSeconds"]
             .as_str()
             .and_then(|s| s.parse::<u64>().ok())
             .or_else(|| input["DurationSeconds"].as_u64())
             .unwrap_or(3600);
+        validate_assume_role_duration(duration)?;
 
         debug!(role_arn = %role_arn, "AssumeRoleWithSAML");
 
         let (credentials, assumed_role_user) =
-            generate_assumed_role_output(role_arn, session_name, &ctx.account_id, duration);
+            generate_assumed_role_output(role_arn, &session_name, &ctx.account_id, duration);
 
         Ok(json!({
             "Credentials": credentials,
@@ -264,7 +291,7 @@ impl StsService {
             "Audience": "sts.amazonaws.com",
             "NameQualifier": "awsim-saml",
             "SubjectType": "transient",
-            "Subject": "saml-subject",
+            "Subject": saml_subject,
         }))
     }
 }
@@ -497,6 +524,70 @@ fn validate_session_tags(input: &Value) -> Result<(), AwsError> {
         }
     }
     Ok(())
+}
+
+/// Extract the `sub` claim from a JWT-shaped Web Identity token. We
+/// don't verify the signature against any IDP (no JWKS lookup) — the
+/// purpose here is to give callers a stable per-token subject identity
+/// instead of a hardcoded fixture string. Returns `None` for malformed
+/// tokens so the caller can fall back to a default.
+fn extract_jwt_subject(token: &str) -> Option<String> {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let mut parts = token.split('.');
+    let _header = parts.next()?;
+    let payload = parts.next()?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    claims.get("sub").and_then(Value::as_str).map(String::from)
+}
+
+/// Extract a SAML NameID from a base64-encoded SAML assertion. We
+/// don't verify the signature; we just look for `<NameID>...</NameID>`
+/// (any namespace prefix) inside the decoded XML. Returns `None` when
+/// no NameID is found so the caller can fall back.
+fn extract_saml_nameid(assertion_b64: &str) -> Option<String> {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    let bytes = STANDARD.decode(assertion_b64).ok()?;
+    let xml = std::str::from_utf8(&bytes).ok()?;
+    // Crude scan: find `>...NameID>` close-tag and walk back to its
+    // opening tag. Avoids a full XML parser dependency for what is a
+    // best-effort extraction.
+    let close_idx = xml
+        .find("</saml:NameID>")
+        .or_else(|| xml.find("</saml2:NameID>"))
+        .or_else(|| xml.find("</NameID>"))?;
+    let prefix = &xml[..close_idx];
+    let open_idx = prefix
+        .rfind("<saml:NameID")
+        .or_else(|| prefix.rfind("<saml2:NameID"))
+        .or_else(|| prefix.rfind("<NameID"))?;
+    // Skip past the `>` that closes the open tag.
+    let after_open = &prefix[open_idx..];
+    let gt_idx = after_open.find('>')?;
+    let inner = &after_open[gt_idx + 1..];
+    let trimmed = inner.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Coerce an arbitrary string into a valid RoleSessionName by replacing
+/// disallowed characters with `-` and clamping the length to 64. AWS
+/// session-name regex is `[\w+=,.@-]{2,64}`.
+fn sanitize_session_name(raw: &str) -> String {
+    let mut out: String = raw
+        .chars()
+        .map(|c| if is_iam_name_char(c) { c } else { '-' })
+        .collect();
+    if out.len() < 2 {
+        out.push_str("--");
+    }
+    out.truncate(64);
+    out
 }
 
 /// Generic duration-seconds bounds check used by GetSessionToken /
@@ -821,6 +912,62 @@ mod tests {
             &ctx,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_assume_role_with_web_identity_extracts_jwt_sub_claim() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        // Hand-crafted JWT: header.payload.signature; payload has `sub`.
+        let header = B64URL.encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let payload = B64URL.encode(br#"{"sub":"user@idp.example","aud":"awsim"}"#);
+        let token = format!("{header}.{payload}.signature");
+
+        let resp = svc
+            .assume_role_with_web_identity(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                    "RoleSessionName": "session",
+                    "WebIdentityToken": token,
+                }),
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(
+            resp["SubjectFromWebIdentityToken"].as_str(),
+            Some("user@idp.example")
+        );
+    }
+
+    #[test]
+    fn test_assume_role_with_saml_extracts_nameid() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD as B64;
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let assertion_xml = r#"<saml:Assertion><saml:Subject><saml:NameID>alice@example.com</saml:NameID></saml:Subject></saml:Assertion>"#;
+        let assertion = B64.encode(assertion_xml);
+
+        let resp = svc
+            .assume_role_with_saml(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                    "PrincipalArn": "arn:aws:iam::000000000000:saml-provider/idp",
+                    "SAMLAssertion": assertion,
+                }),
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(resp["Subject"].as_str(), Some("alice@example.com"));
+        // Session name was derived from the NameID (sanitized — `@` and
+        // `.` are valid IAM-name chars so they pass through).
+        let session_arn = resp["AssumedRoleUser"]["Arn"].as_str().unwrap();
+        assert!(
+            session_arn.contains("alice@example.com"),
+            "arn={session_arn}"
+        );
     }
 
     #[test]
