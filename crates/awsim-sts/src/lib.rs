@@ -47,11 +47,15 @@ impl StsService {
             .as_str()
             .ok_or_else(|| AwsError::validation("RoleSessionName is required"))?;
 
+        validate_role_arn(role_arn)?;
+        validate_role_session_name(session_name)?;
+
         let duration = input["DurationSeconds"]
             .as_str()
             .and_then(|s| s.parse::<u64>().ok())
             .or_else(|| input["DurationSeconds"].as_u64())
             .unwrap_or(3600);
+        validate_assume_role_duration(duration)?;
 
         debug!(role_arn = %role_arn, session_name = %session_name, "AssumeRole");
 
@@ -295,6 +299,95 @@ impl ServiceHandler for StsService {
 }
 
 // ---------------------------------------------------------------------------
+// Input validation
+// ---------------------------------------------------------------------------
+
+/// Characters allowed in IAM resource names (e.g., role/user/session names)
+/// per the published Smithy patterns: `[\w+=,.@-]`. `\w` here means
+/// `[A-Za-z0-9_]`.
+fn is_iam_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '=' | ',' | '.' | '@' | '-')
+}
+
+/// Validate the AWS Role ARN shape:
+/// `arn:aws(-{partition})?:iam::ACCOUNT_ID:role/PATH`
+/// — 12-digit account id, role/path segments composed of `[\w+=,.@-]`
+/// segments separated by `/`.
+fn validate_role_arn(arn: &str) -> Result<(), AwsError> {
+    fn invalid(arn: &str) -> AwsError {
+        AwsError::validation(format!(
+            "1 validation error detected: Value '{arn}' at 'roleArn' \
+             failed to satisfy constraint: Member must satisfy regular \
+             expression pattern: arn:aws(-[a-z]+)*:iam::\\d{{12}}:role/[\\w+=,.@-]+"
+        ))
+    }
+
+    let rest = arn.strip_prefix("arn:aws").ok_or_else(|| invalid(arn))?;
+    // Optional partition suffix like `-cn` or `-us-gov`.
+    let rest = if let Some(stripped) = rest.strip_prefix(':') {
+        stripped
+    } else if let Some(after_dash) = rest.strip_prefix('-') {
+        // Walk through the partition suffix until the next ':'.
+        let colon = after_dash.find(':').ok_or_else(|| invalid(arn))?;
+        let (partition, after) = after_dash.split_at(colon);
+        if partition.is_empty()
+            || !partition
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '-')
+        {
+            return Err(invalid(arn));
+        }
+        // `after` starts with the ':' we found.
+        &after[1..]
+    } else {
+        return Err(invalid(arn));
+    };
+
+    let rest = rest.strip_prefix("iam::").ok_or_else(|| invalid(arn))?;
+    let (account, rest) = rest.split_once(':').ok_or_else(|| invalid(arn))?;
+    if account.len() != 12 || !account.chars().all(|c| c.is_ascii_digit()) {
+        return Err(invalid(arn));
+    }
+    let path = rest.strip_prefix("role/").ok_or_else(|| invalid(arn))?;
+    if path.is_empty() {
+        return Err(invalid(arn));
+    }
+    // Each '/'-separated segment must use only the IAM-name charset.
+    for segment in path.split('/') {
+        if segment.is_empty() || !segment.chars().all(is_iam_name_char) {
+            return Err(invalid(arn));
+        }
+    }
+    Ok(())
+}
+
+/// Validate `RoleSessionName` per Smithy: 2..=64 chars from `[\w+=,.@-]`.
+fn validate_role_session_name(name: &str) -> Result<(), AwsError> {
+    if !(2..=64).contains(&name.len()) || !name.chars().all(is_iam_name_char) {
+        return Err(AwsError::validation(format!(
+            "1 validation error detected: Value '{name}' at 'roleSessionName' \
+             failed to satisfy constraint: Member must satisfy regular \
+             expression pattern: [\\w+=,.@-]{{2,64}}"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate the DurationSeconds parameter for AssumeRole. AWS allows
+/// 900..=43200 seconds (the upper bound is role-specific in real AWS but
+/// we apply the global max).
+fn validate_assume_role_duration(seconds: u64) -> Result<(), AwsError> {
+    if !(900..=43_200).contains(&seconds) {
+        return Err(AwsError::validation(format!(
+            "1 validation error detected: Value '{seconds}' at 'durationSeconds' \
+             failed to satisfy constraint: Member must have value less than or equal to 43200 \
+             and greater than or equal to 900"
+        )));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Credential generation helpers
 // ---------------------------------------------------------------------------
 
@@ -506,6 +599,102 @@ mod tests {
                 .unwrap()
                 .contains("test-session")
         );
+    }
+
+    #[test]
+    fn test_assume_role_rejects_malformed_arn() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "not-an-arn",
+                    "RoleSessionName": "session",
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("roleArn"));
+    }
+
+    #[test]
+    fn test_assume_role_rejects_session_name_too_short() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                    "RoleSessionName": "x",
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("roleSessionName"));
+    }
+
+    #[test]
+    fn test_assume_role_rejects_session_name_with_invalid_chars() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                    "RoleSessionName": "bad name with spaces",
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn test_assume_role_accepts_partition_arn() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        svc.assume_role(
+            &json!({
+                "RoleArn": "arn:aws-us-gov:iam::000000000000:role/MyRole",
+                "RoleSessionName": "session",
+            }),
+            &ctx,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_assume_role_accepts_role_with_path() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        svc.assume_role(
+            &json!({
+                "RoleArn": "arn:aws:iam::000000000000:role/team/dev/MyRole",
+                "RoleSessionName": "session",
+            }),
+            &ctx,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_assume_role_rejects_duration_below_900() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                    "RoleSessionName": "session",
+                    "DurationSeconds": 60u64,
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("durationSeconds"));
     }
 
     #[test]
