@@ -124,6 +124,14 @@ pub struct S3Object {
     pub content_language: Option<String>,
     #[serde(default)]
     pub expires: Option<String>,
+    /// SDK-supplied integrity check (`x-amz-checksum-*`). The algorithm
+    /// is one of CRC32, CRC32C, SHA1, SHA256 — store the value as the
+    /// SDK sent it (base64) so we can round-trip it on GetObject when the
+    /// caller asks for ChecksumMode=ENABLED.
+    #[serde(default)]
+    pub checksum_algorithm: Option<String>,
+    #[serde(default)]
+    pub checksum_value: Option<String>,
     /// True when this entry is a delete marker — a tombstone written when
     /// DeleteObject lands on a versioning-enabled bucket without a VersionId.
     /// Delete markers carry a version_id but no body, and reads against them
@@ -408,6 +416,8 @@ impl Snapshottable for S3State {
                             content_disposition: None,
                             content_language: None,
                             expires: None,
+                            checksum_algorithm: None,
+                            checksum_value: None,
                             is_delete_marker: meta.is_delete_marker,
                         };
                         dm.entry(meta.key).or_default().push(obj);

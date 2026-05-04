@@ -123,6 +123,8 @@ impl S3Service {
                     content_disposition: None,
                     content_language: None,
                     expires: None,
+                    checksum_algorithm: None,
+                    checksum_value: None,
                     is_delete_marker: false,
                 };
                 bucket.objects.insert(

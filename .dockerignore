@@ -1,7 +1,25 @@
+# Heavy / unrelated trees that the Rust build doesn't need.
 target/
 ui/node_modules/
 ui/.svelte-kit/
 ui/build/
+
+# Local repo state and editor noise.
 .git/
+.github/
 .claude/
+.idea/
+.vscode/
+
+# Documentation source — copied into the binary at link time would be wasted
+# build-context bandwidth.
+docs/
 *.md
+
+# Local persistence dirs (when developers test --data-dir locally).
+data/
+.tmp/
+
+# Existing release artifacts.
+awsim-*.tar.xz
+awsim-*.zip

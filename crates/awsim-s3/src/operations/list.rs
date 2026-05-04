@@ -555,6 +555,8 @@ mod tests {
                     content_disposition: None,
                     content_language: None,
                     expires: None,
+                    checksum_algorithm: None,
+                    checksum_value: None,
                     body: awsim_core::Body::from_bytes(Vec::new()),
                 };
                 let mut versions = bucket_ref.objects.entry((*k).to_string()).or_default();

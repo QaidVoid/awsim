@@ -357,6 +357,8 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         content_disposition: None,
         content_language: None,
         expires: None,
+        checksum_algorithm: None,
+        checksum_value: None,
         is_delete_marker: false,
     };
 
@@ -539,6 +541,8 @@ mod tests {
             content_disposition: None,
             content_language: None,
             expires: None,
+            checksum_algorithm: None,
+            checksum_value: None,
             is_delete_marker: false,
         });
         bucket.objects.insert(src_key.to_string(), versions);

@@ -132,6 +132,52 @@ fn version_id_input(input: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+/// Parse the `x-amz-checksum-*` integrity headers off a PutObject (or
+/// CopyObject / UploadPart) input. Returns `(algorithm, value)` when the
+/// caller supplied a precomputed checksum, or `(None, None)` otherwise.
+///
+/// AWS validates that the base64-decoded value has the right length for
+/// the named algorithm:
+///   CRC32 / CRC32C → 4 bytes (base64 `XXXXXXXX`, with `=` padding)
+///   SHA1            → 20 bytes
+///   SHA256          → 32 bytes
+fn parse_request_checksum(input: &Value) -> Result<(Option<String>, Option<String>), AwsError> {
+    // Each pair: (input field, algorithm name, expected decoded bytes)
+    const FIELDS: &[(&str, &str, usize)] = &[
+        ("ChecksumCrc32", "CRC32", 4),
+        ("ChecksumCrc32c", "CRC32C", 4),
+        ("ChecksumSha1", "SHA1", 20),
+        ("ChecksumSha256", "SHA256", 32),
+    ];
+    for (field, algo, expected_bytes) in FIELDS {
+        let Some(value) = opt_str(input, field) else {
+            continue;
+        };
+        if value.is_empty() {
+            continue;
+        }
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(value)
+            .map_err(|_| {
+                AwsError::bad_request(
+                    "InvalidRequest",
+                    format!("{algo} checksum value is not valid base64"),
+                )
+            })?;
+        if decoded.len() != *expected_bytes {
+            return Err(AwsError::bad_request(
+                "InvalidRequest",
+                format!(
+                    "{algo} checksum must decode to {expected_bytes} bytes, got {}",
+                    decoded.len()
+                ),
+            ));
+        }
+        return Ok((Some(algo.to_string()), Some(value.to_string())));
+    }
+    Ok((None, None))
+}
+
 /// Pull the user-metadata sub-map out of the input. The protocol layer
 /// converts incoming `x-amz-meta-*` headers into PascalCase keys
 /// (`Meta<Suffix>`); this reverses that to the wire form so we store
@@ -248,6 +294,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     let expires = opt_str(input, "Expires").map(String::from);
 
     let metadata = extract_user_metadata(input);
+    let (checksum_algorithm, checksum_value) = parse_request_checksum(input)?;
 
     let content_length = data.len() as u64;
     let etag = compute_etag(&data);
@@ -288,6 +335,8 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
             content_disposition,
             content_language,
             expires,
+            checksum_algorithm: checksum_algorithm.clone(),
+            checksum_value: checksum_value.clone(),
             is_delete_marker: false,
         };
 
@@ -389,6 +438,25 @@ pub fn get_object(
         result["Expires"] = Value::String(ex.clone());
     }
 
+    // Surface the stored x-amz-checksum-* value when the caller asks
+    // for it via ChecksumMode=ENABLED. AWS includes both the algorithm
+    // name and the value-bearing field on a checksum-mode response.
+    let want_checksum = opt_str(input, "ChecksumMode")
+        .map(|m| m.eq_ignore_ascii_case("ENABLED"))
+        .unwrap_or(false);
+    if want_checksum
+        && let (Some(algo), Some(value)) = (&obj.checksum_algorithm, &obj.checksum_value)
+    {
+        let field = match algo.as_str() {
+            "CRC32" => "ChecksumCRC32",
+            "CRC32C" => "ChecksumCRC32C",
+            "SHA1" => "ChecksumSHA1",
+            "SHA256" => "ChecksumSHA256",
+            _ => "ChecksumSHA256",
+        };
+        result[field] = Value::String(value.clone());
+    }
+
     // Add user metadata.
     for (k, v) in &obj.metadata {
         if let Some(obj_map) = result.as_object_mut() {
@@ -465,6 +533,8 @@ fn delete_marker_object(key: &str, version_id: Option<String>) -> S3Object {
         content_language: None,
         expires: None,
         is_delete_marker: true,
+        checksum_algorithm: None,
+        checksum_value: None,
     }
 }
 
@@ -700,6 +770,8 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
         content_language,
         expires,
         is_delete_marker: false,
+        checksum_algorithm: None,
+        checksum_value: None,
     };
 
     // Same null-slot housekeeping as PutObject: clean up any prior null
@@ -1128,6 +1200,65 @@ mod tests {
         )
         .unwrap();
         assert!(resp.get("Body").is_some());
+    }
+
+    #[test]
+    fn put_object_stores_and_returns_checksum_with_mode_enabled() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+        // SHA-256 of "hello": precomputed.
+        let sha256: [u8; 32] = [
+            0x2c, 0xf2, 0x4d, 0xba, 0x5f, 0xb0, 0xa3, 0x0e, 0x26, 0xe8, 0x3b, 0x2a, 0xc5, 0xb9,
+            0xe2, 0x9e, 0x1b, 0x16, 0x1e, 0x5c, 0x1f, 0xa7, 0x42, 0x5e, 0x73, 0x04, 0x33, 0x62,
+            0x93, 0x8b, 0x98, 0x24,
+        ];
+        let b64 = BASE64.encode(sha256);
+
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "Body": "hello",
+                "ChecksumSha256": b64.clone(),
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        // Without ChecksumMode the response shouldn't carry the value.
+        let plain = get_object(&state, &json!({ "Bucket": "b", "Key": "k" }), &ctx()).unwrap();
+        assert!(plain.get("ChecksumSHA256").is_none());
+
+        // With ChecksumMode=ENABLED the response carries it.
+        let checked = get_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "k", "ChecksumMode": "ENABLED" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(checked["ChecksumSHA256"].as_str(), Some(b64.as_str()));
+    }
+
+    #[test]
+    fn put_object_rejects_checksum_with_wrong_decoded_length() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        // 16 bytes base64-encoded — not 32, so SHA256 length check fails.
+        let too_short = "AAAAAAAAAAAAAAAAAAAAAAAA";
+        let err = put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "Body": "hello",
+                "ChecksumSha256": too_short,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidRequest");
     }
 
     #[test]
