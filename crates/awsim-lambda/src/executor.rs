@@ -61,10 +61,14 @@ fn execute_node(
         ("index", "handler")
     };
 
+    // Exit codes are how we distinguish Handled (callback(err) — function
+    // signalled failure cleanly) from Unhandled (uncaught throw / promise
+    // rejection — function crashed) for the X-Amz-Function-Error header.
     let bootstrap = format!(
         r#"
 const mod = require('./{module}');
 const event = JSON.parse(process.argv[1]);
+const errOut = (e) => console.error(JSON.stringify({{ errorMessage: e && e.message || String(e), errorType: e && e.name || 'Error' }}));
 const context = {{
     functionName: process.env.AWS_LAMBDA_FUNCTION_NAME || 'test',
     functionVersion: '$LATEST',
@@ -79,18 +83,12 @@ const context = {{
     fail: (err) => console.error(err),
 }};
 const callback = (err, result) => {{
-    if (err) {{
-        console.error(JSON.stringify({{ errorMessage: err.message || String(err), errorType: err.name || 'Error' }}));
-        process.exit(1);
-    }}
+    if (err) {{ errOut(err); process.exit(64); }}
     console.log(JSON.stringify(result));
 }};
 Promise.resolve(mod.{func}(event, context, callback))
     .then(r => {{ if (r !== undefined) console.log(JSON.stringify(r)); }})
-    .catch(e => {{
-        console.error(JSON.stringify({{ errorMessage: e.message || String(e), errorType: e.name || 'Error' }}));
-        process.exit(1);
-    }});
+    .catch(e => {{ errOut(e); process.exit(1); }});
 "#
     );
 
@@ -159,9 +157,12 @@ fn execute_python(
         ("lambda_function", "lambda_handler")
     };
 
+    // Python has no callback API, so a raised exception is always
+    // "Unhandled" — surface it as AWS-style error JSON on stderr and
+    // exit 1 so the Rust side maps it accordingly.
     let bootstrap = format!(
         r#"
-import sys, json, importlib, os
+import sys, json, importlib, os, traceback
 sys.path.insert(0, os.environ.get('PYTHONPATH', '.'))
 event = json.loads(sys.argv[1])
 context = type('Context', (), {{
@@ -173,10 +174,18 @@ context = type('Context', (), {{
     'log_stream_name': 'local',
     'get_remaining_time_in_millis': lambda self: {timeout_secs}000,
 }})()
-mod = importlib.import_module('{module}')
-result = mod.{func}(event, context)
-if result is not None:
-    print(json.dumps(result))
+try:
+    mod = importlib.import_module('{module}')
+    result = mod.{func}(event, context)
+    if result is not None:
+        print(json.dumps(result))
+except BaseException as e:
+    print(json.dumps({{
+        'errorMessage': str(e),
+        'errorType': type(e).__name__,
+        'stackTrace': traceback.format_tb(e.__traceback__),
+    }}), file=sys.stderr)
+    sys.exit(1)
 "#
     );
 
@@ -225,16 +234,24 @@ fn run_command(mut cmd: Command, _timeout_secs: u32) -> ExecutionResult {
                     logs,
                 }
             } else {
-                // On failure, last line of stderr is the error payload
+                // On failure, last line of stderr is the error payload.
+                // Exit code 64 is the bootstrap's signal that the user
+                // called callback(err) — i.e. Handled. Anything else
+                // (uncaught throw, OOM, native crash) is Unhandled.
                 let error_payload = stderr
                     .lines()
                     .rfind(|l| !l.trim().is_empty())
                     .unwrap_or(r#"{"errorMessage":"Function failed","errorType":"Unhandled"}"#)
                     .to_string();
+                let kind = if output.status.code() == Some(64) {
+                    "Handled"
+                } else {
+                    "Unhandled"
+                };
                 ExecutionResult {
                     status_code: 200,
                     payload: error_payload,
-                    error: Some("Unhandled".to_string()),
+                    error: Some(kind.to_string()),
                     logs,
                 }
             }
