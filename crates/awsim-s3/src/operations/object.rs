@@ -716,6 +716,13 @@ fn apply_range<'a>(
         ));
     }
 
+    // A range request against a zero-byte object is treated as a non-range
+    // GET (HTTP 200, full empty body) rather than 416. This matches AWS
+    // behavior — the entire object IS what was requested.
+    if data.is_empty() {
+        return Ok((data, None));
+    }
+
     let range_spec = &range_str[bytes_prefix.len()..];
     let parts: Vec<&str> = range_spec.splitn(2, '-').collect();
 
@@ -1050,6 +1057,33 @@ mod tests {
         )
         .unwrap();
         assert!(resp.get("Body").is_some());
+    }
+
+    #[test]
+    fn range_on_zero_byte_object_returns_200_with_empty_body() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        // Zero-byte object.
+        put_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "empty", "Body": "" }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let resp = get_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "empty", "Range": "bytes=0-100" }),
+            &ctx(),
+        )
+        .unwrap();
+        // No 206 → returned as a normal 200 (no __status_code).
+        assert!(resp.get("__status_code").is_none());
+        // Empty body.
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(resp["Body"].as_str().unwrap())
+            .unwrap();
+        assert!(body.is_empty());
     }
 
     #[test]
