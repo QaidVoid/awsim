@@ -28,7 +28,10 @@ fn fetch_existing(
     .transpose()
 }
 
-use super::{get_expr_attr_names, get_expr_attr_values, opt_str, require_str};
+use super::{
+    build_consumed_capacity, get_expr_attr_names, get_expr_attr_values, opt_str,
+    read_capacity_units, require_str, write_capacity_units,
+};
 
 /// Build a `ConditionalCheckFailedException` matching the real DynamoDB shape:
 /// HTTP 400, the standard message, and (when the caller asked for `ALL_OLD`
@@ -322,6 +325,10 @@ pub fn put_item(
     {
         result["Attributes"] = item_to_json(&old);
     }
+    let write_units = write_capacity_units(item_bytes, false);
+    if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units) {
+        result["ConsumedCapacity"] = cc;
+    }
     Ok(result)
 }
 
@@ -351,16 +358,27 @@ pub fn get_item(
     // Drop the dashmap guard before SQLite IO to avoid pinning the shard.
     drop(table);
 
+    let consistent_read = input
+        .get("ConsistentRead")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     let raw = sqlite.get_item(&ctx.account_id, &ctx.region, table_name, &pk, &sk)?;
-    match raw {
-        None => Ok(json!({})),
+    let (mut response, bytes) = match raw {
+        None => (json!({}), 0usize),
         Some(stored) => {
             let item = crate::keys::storage_value_to_item(stored)
                 .ok_or_else(|| AwsError::internal("DynamoDB stored attrs is not an object"))?;
+            let bytes = estimate_item_bytes(&item);
             let projected = apply_projection(&item, projection_expr, &expr_attr_names);
-            Ok(json!({ "Item": item_to_json(&projected) }))
+            (json!({ "Item": item_to_json(&projected) }), bytes)
         }
+    };
+    let read_units = read_capacity_units(bytes, consistent_read, false);
+    if let Some(cc) = build_consumed_capacity(input, table_name, read_units, 0.0) {
+        response["ConsumedCapacity"] = cc;
     }
+    Ok(response)
 }
 
 pub fn delete_item(
@@ -433,10 +451,15 @@ pub fn delete_item(
     }
 
     let mut result = json!({});
+    let old_bytes = old_item.as_ref().map(estimate_item_bytes).unwrap_or(0);
     if return_values == "ALL_OLD"
         && let Some(old) = old_item
     {
         result["Attributes"] = item_to_json(&old);
+    }
+    let write_units = write_capacity_units(old_bytes, false);
+    if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units) {
+        result["ConsumedCapacity"] = cc;
     }
     Ok(result)
 }
@@ -604,6 +627,10 @@ pub fn update_item(
         _ => {}
     }
 
+    let write_units = write_capacity_units(new_item_bytes, false);
+    if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units) {
+        result["ConsumedCapacity"] = cc;
+    }
     Ok(result)
 }
 
@@ -682,6 +709,62 @@ mod tests {
                 .unwrap(),
             1000
         );
+    }
+
+    #[test]
+    fn put_item_returns_consumed_capacity_only_when_requested() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        let item = json!({
+            "TableName": "t",
+            "Item": { "pk": {"S": "p"}, "sk": {"S": "s"}, "n": {"N": "1"} },
+        });
+        let resp = put_item(&state, &sqlite, &item, &c).unwrap();
+        assert!(resp.get("ConsumedCapacity").is_none());
+
+        let mut item_with = item.clone();
+        item_with["ReturnConsumedCapacity"] = json!("TOTAL");
+        let resp = put_item(&state, &sqlite, &item_with, &c).unwrap();
+        let cc = resp.get("ConsumedCapacity").unwrap();
+        assert_eq!(cc["TableName"], json!("t"));
+        // Tiny item costs at least 1 WCU.
+        assert!(cc["WriteCapacityUnits"].as_f64().unwrap() >= 1.0);
+        assert!(cc["CapacityUnits"].as_f64().unwrap() >= 1.0);
+    }
+
+    #[test]
+    fn get_item_returns_consumed_capacity_with_read_units() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": { "pk": {"S": "p"}, "sk": {"S": "s"} },
+            }),
+            &c,
+        )
+        .unwrap();
+
+        let resp = get_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Key": { "pk": {"S": "p"}, "sk": {"S": "s"} },
+                "ReturnConsumedCapacity": "TOTAL",
+                "ConsistentRead": true,
+            }),
+            &c,
+        )
+        .unwrap();
+        let cc = resp.get("ConsumedCapacity").unwrap();
+        // Strongly consistent, tiny item → exactly 1 RCU.
+        assert_eq!(cc["ReadCapacityUnits"].as_f64().unwrap(), 1.0);
+        assert_eq!(cc["CapacityUnits"].as_f64().unwrap(), 1.0);
     }
 
     #[test]

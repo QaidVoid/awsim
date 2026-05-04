@@ -8,7 +8,10 @@ use crate::{
     state::{DynamoItem, DynamoState, extract_scalar_str},
 };
 
-use super::{get_expr_attr_names, get_expr_attr_values, opt_str, require_str};
+use super::{
+    build_consumed_capacity, get_expr_attr_names, get_expr_attr_values, opt_str,
+    read_capacity_units, require_str,
+};
 use crate::operations::item::{estimate_item_bytes, item_to_json};
 
 /// AWS DynamoDB caps `Query` / `Scan` responses at 1 MiB regardless of
@@ -226,6 +229,14 @@ pub fn query(
         result["LastEvaluatedKey"] = item_to_json(&lek);
     }
 
+    let consistent_read = input
+        .get("ConsistentRead")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let read_units = read_capacity_units(response_bytes, consistent_read, false);
+    if let Some(cc) = build_consumed_capacity(input, table_name, read_units, 0.0) {
+        result["ConsumedCapacity"] = cc;
+    }
     Ok(result)
 }
 
@@ -341,6 +352,14 @@ pub fn scan(
         result["LastEvaluatedKey"] = item_to_json(&lek);
     }
 
+    let consistent_read = input
+        .get("ConsistentRead")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let read_units = read_capacity_units(response_bytes, consistent_read, false);
+    if let Some(cc) = build_consumed_capacity(input, table_name, read_units, 0.0) {
+        result["ConsumedCapacity"] = cc;
+    }
     Ok(result)
 }
 
