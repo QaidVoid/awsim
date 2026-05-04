@@ -86,9 +86,16 @@ pub fn import_key_material(
         return Err(error::key_pending_deletion(&resolved_id));
     }
 
-    // Mark that key material has been imported and flip origin
+    // ImportKeyMaterial only applies to keys created with Origin=EXTERNAL.
+    // Keys originally created as AWS_KMS / AWS_CLOUDHSM cannot accept
+    // imported material — AWS rejects with KMSInvalidStateException.
+    if key.origin != "EXTERNAL" {
+        return Err(error::kms_invalid_state(format!(
+            "Key {resolved_id} was not created with Origin=EXTERNAL"
+        )));
+    }
+
     key.key_material_imported = true;
-    key.origin = "EXTERNAL".to_string();
     if key.key_state == "PendingImport" {
         key.key_state = "Enabled".to_string();
     }

@@ -845,10 +845,43 @@ mod tests {
     }
 
     #[test]
-    fn test_import_key_material() {
+    fn test_create_key_external_origin_starts_pending_import() {
         let svc = KmsService::new();
         let ctx = ctx();
+        let created =
+            block_on(svc.handle("CreateKey", json!({ "Origin": "EXTERNAL" }), &ctx)).unwrap();
+        let metadata = &created["KeyMetadata"];
+        assert_eq!(metadata["KeyState"], json!("PendingImport"));
+        assert_eq!(metadata["Origin"], json!("EXTERNAL"));
+        assert_eq!(metadata["Enabled"], json!(false));
+    }
+
+    #[test]
+    fn test_import_key_material_rejects_aws_kms_origin_key() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        // Default Origin=AWS_KMS — must reject ImportKeyMaterial.
         let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+        let err = block_on(svc.handle(
+            "ImportKeyMaterial",
+            json!({
+                "KeyId": key_id,
+                "EncryptedKeyMaterial": BASE64.encode(b"fake-material"),
+                "ImportToken": BASE64.encode(b"fake-token"),
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "KMSInvalidStateException");
+    }
+
+    #[test]
+    fn test_import_key_material_flips_external_key_to_enabled() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let created =
+            block_on(svc.handle("CreateKey", json!({ "Origin": "EXTERNAL" }), &ctx)).unwrap();
         let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
 
         block_on(svc.handle(
@@ -862,12 +895,9 @@ mod tests {
         ))
         .unwrap();
 
-        // Verify origin is now EXTERNAL
         let described =
             block_on(svc.handle("DescribeKey", json!({ "KeyId": key_id }), &ctx)).unwrap();
-        assert_eq!(
-            described["KeyMetadata"]["Origin"].as_str().unwrap(),
-            "EXTERNAL"
-        );
+        assert_eq!(described["KeyMetadata"]["KeyState"], json!("Enabled"));
+        assert_eq!(described["KeyMetadata"]["Origin"], json!("EXTERNAL"));
     }
 }

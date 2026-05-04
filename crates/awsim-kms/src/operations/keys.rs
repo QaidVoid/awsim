@@ -26,6 +26,7 @@ pub fn create_key(
         .unwrap_or("ENCRYPT_DECRYPT")
         .to_string();
     let description = input["Description"].as_str().unwrap_or("").to_string();
+    let origin = input["Origin"].as_str().unwrap_or("AWS_KMS").to_string();
 
     // Validate key_spec / key_usage compatibility
     if key_spec == "SYMMETRIC_DEFAULT" && key_usage != "ENCRYPT_DECRYPT" {
@@ -33,6 +34,16 @@ pub fn create_key(
             "SYMMETRIC_DEFAULT keys must have ENCRYPT_DECRYPT key usage",
         ));
     }
+
+    // EXTERNAL-origin keys start in PendingImport with no usable key
+    // material; the customer must run GetParametersForImport followed by
+    // ImportKeyMaterial before the key transitions to Enabled. AWS_KMS
+    // (default) and AWS_CLOUDHSM origins are immediately Enabled.
+    let initial_state = match origin.as_str() {
+        "EXTERNAL" => "PendingImport",
+        _ => "Enabled",
+    };
+    let initial_enabled = initial_state == "Enabled";
 
     let key_id = Uuid::new_v4().to_string();
     let arn = format!(
@@ -46,7 +57,7 @@ pub fn create_key(
         key_id: key_id.clone(),
         arn: arn.clone(),
         description: description.clone(),
-        key_state: "Enabled".to_string(),
+        key_state: initial_state.to_string(),
         key_spec: key_spec.clone(),
         key_usage: key_usage.clone(),
         creation_date,
@@ -56,7 +67,7 @@ pub fn create_key(
         policies: HashMap::new(),
         tags: HashMap::new(),
         key_material_imported: false,
-        origin: "AWS_KMS".to_string(),
+        origin: origin.clone(),
     };
 
     state.keys.insert(key_id.clone(), key);
@@ -66,13 +77,13 @@ pub fn create_key(
             "KeyId": key_id,
             "Arn": arn,
             "Description": description,
-            "KeyState": "Enabled",
+            "KeyState": initial_state,
             "KeySpec": key_spec,
             "KeyUsage": key_usage,
             "CreationDate": creation_date,
-            "Enabled": true,
+            "Enabled": initial_enabled,
             "KeyManager": "CUSTOMER",
-            "Origin": "AWS_KMS",
+            "Origin": origin,
             "MultiRegion": false,
         }
     }))
