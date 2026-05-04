@@ -1,6 +1,6 @@
 //! Basic Amazon States Language (ASL) interpreter.
 //!
-//! Supports: Pass, Succeed, Fail, Wait, Task, Choice, Parallel (stub), Map (stub).
+//! Supports: Pass, Succeed, Fail, Wait, Task, Choice, Parallel, Map.
 //! InputPath / OutputPath / ResultPath transformations are supported.
 
 use awsim_core::AwsError;
@@ -291,32 +291,21 @@ impl InterpreterContext {
         state: &Value,
         input: Value,
     ) -> Result<(Value, StateTransition), StateFailed> {
-        // Stub: execute only the first branch
-        let branches = state["Branches"].as_array();
-
-        if let Some(branch_list) = branches
-            && let Some(first_branch) = branch_list.first()
-        {
-            let branch_def = first_branch.to_string();
+        let branches = state["Branches"].as_array().cloned().unwrap_or_default();
+        let mut outputs: Vec<Value> = Vec::with_capacity(branches.len());
+        for branch in &branches {
+            let branch_def = branch.to_string();
             let branch_result = execute(&branch_def, &input.to_string(), &self.start_time);
-
             if branch_result.status == "FAILED" {
                 return Err(StateFailed {
                     error: branch_result.error.unwrap_or_default(),
                     cause: branch_result.cause.unwrap_or_default(),
                 });
             }
-
             let output_str = branch_result.output.unwrap_or_else(|| "null".to_string());
-            let output: Value = serde_json::from_str(&output_str).unwrap_or(Value::Null);
-            let parallel_output = json!([output]);
-            let result_output =
-                apply_result_path(&input, &parallel_output, state["ResultPath"].as_str());
-            return Ok((result_output, transition(state)));
+            outputs.push(serde_json::from_str(&output_str).unwrap_or(Value::Null));
         }
-
-        // No branches — succeed with empty array
-        let parallel_output = json!([]);
+        let parallel_output = Value::Array(outputs);
         let result_output =
             apply_result_path(&input, &parallel_output, state["ResultPath"].as_str());
         Ok((result_output, transition(state)))
@@ -327,36 +316,35 @@ impl InterpreterContext {
         state: &Value,
         input: Value,
     ) -> Result<(Value, StateTransition), StateFailed> {
-        // Stub: process only the first item of the items array
         let items_path = state["ItemsPath"].as_str().unwrap_or("$");
         let items = resolve_reference_path(&input, items_path);
-
-        let iterator_def = state["Iterator"].clone();
-
-        let first_item = match items.as_array().and_then(|a| a.first()) {
-            Some(item) => item.clone(),
-            None => {
-                // Empty input array → empty result
-                let map_output = json!([]);
-                let result_output =
-                    apply_result_path(&input, &map_output, state["ResultPath"].as_str());
-                return Ok((result_output, transition(state)));
-            }
+        // ItemProcessor (newer ASL) supersedes Iterator (legacy) but the
+        // payload shape is identical; honor either.
+        let iterator_def = if state.get("ItemProcessor").is_some() {
+            state["ItemProcessor"].clone()
+        } else {
+            state["Iterator"].clone()
         };
 
+        let item_array: Vec<Value> = items
+            .as_array()
+            .cloned()
+            .unwrap_or_else(|| vec![items.clone()]);
+
         let iter_def_str = iterator_def.to_string();
-        let item_result = execute(&iter_def_str, &first_item.to_string(), &self.start_time);
-
-        if item_result.status == "FAILED" {
-            return Err(StateFailed {
-                error: item_result.error.unwrap_or_default(),
-                cause: item_result.cause.unwrap_or_default(),
-            });
+        let mut outputs: Vec<Value> = Vec::with_capacity(item_array.len());
+        for item in &item_array {
+            let item_result = execute(&iter_def_str, &item.to_string(), &self.start_time);
+            if item_result.status == "FAILED" {
+                return Err(StateFailed {
+                    error: item_result.error.unwrap_or_default(),
+                    cause: item_result.cause.unwrap_or_default(),
+                });
+            }
+            let item_output_str = item_result.output.unwrap_or_else(|| "null".to_string());
+            outputs.push(serde_json::from_str(&item_output_str).unwrap_or(Value::Null));
         }
-
-        let item_output_str = item_result.output.unwrap_or_else(|| "null".to_string());
-        let item_output: Value = serde_json::from_str(&item_output_str).unwrap_or(Value::Null);
-        let map_output = json!([item_output]);
+        let map_output = Value::Array(outputs);
         let result_output = apply_result_path(&input, &map_output, state["ResultPath"].as_str());
         Ok((result_output, transition(state)))
     }
@@ -588,4 +576,133 @@ pub fn run_execution(
     start_time: &str,
 ) -> Result<ExecResult, AwsError> {
     Ok(execute(definition, input, start_time))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(def: &str, input: &str) -> ExecResult {
+        execute(def, input, "2024-01-01T00:00:00Z")
+    }
+
+    #[test]
+    fn parallel_runs_every_branch_and_collects_outputs() {
+        // Two branches, each a Pass that emits a distinct constant.
+        let def = r#"{
+            "StartAt": "Fan",
+            "States": {
+                "Fan": {
+                    "Type": "Parallel",
+                    "End": true,
+                    "Branches": [
+                        {
+                            "StartAt": "A",
+                            "States": { "A": { "Type": "Pass", "Result": "alpha", "End": true } }
+                        },
+                        {
+                            "StartAt": "B",
+                            "States": { "B": { "Type": "Pass", "Result": "beta", "End": true } }
+                        }
+                    ]
+                }
+            }
+        }"#;
+        let result = run(def, r#"{}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out, json!(["alpha", "beta"]));
+    }
+
+    #[test]
+    fn parallel_branch_failure_fails_state() {
+        let def = r#"{
+            "StartAt": "Fan",
+            "States": {
+                "Fan": {
+                    "Type": "Parallel",
+                    "End": true,
+                    "Branches": [
+                        {
+                            "StartAt": "Boom",
+                            "States": {
+                                "Boom": { "Type": "Fail", "Error": "Oops", "Cause": "boom" }
+                            }
+                        }
+                    ]
+                }
+            }
+        }"#;
+        let result = run(def, r#"{}"#);
+        assert_eq!(result.status, "FAILED");
+        assert_eq!(result.error.as_deref(), Some("Oops"));
+    }
+
+    #[test]
+    fn map_runs_every_item() {
+        // Iterator just passes the item through.
+        let def = r#"{
+            "StartAt": "ForEach",
+            "States": {
+                "ForEach": {
+                    "Type": "Map",
+                    "End": true,
+                    "ItemsPath": "$",
+                    "Iterator": {
+                        "StartAt": "Echo",
+                        "States": { "Echo": { "Type": "Pass", "End": true } }
+                    }
+                }
+            }
+        }"#;
+        let result = run(def, r#"[1, 2, 3]"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out, json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn map_with_empty_input_produces_empty_array() {
+        let def = r#"{
+            "StartAt": "ForEach",
+            "States": {
+                "ForEach": {
+                    "Type": "Map",
+                    "End": true,
+                    "ItemsPath": "$",
+                    "Iterator": {
+                        "StartAt": "Echo",
+                        "States": { "Echo": { "Type": "Pass", "End": true } }
+                    }
+                }
+            }
+        }"#;
+        let result = run(def, r#"[]"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out, json!([]));
+    }
+
+    #[test]
+    fn map_accepts_item_processor_alongside_iterator() {
+        // ItemProcessor (newer ASL spelling) should be honored.
+        let def = r#"{
+            "StartAt": "ForEach",
+            "States": {
+                "ForEach": {
+                    "Type": "Map",
+                    "End": true,
+                    "ItemsPath": "$",
+                    "ItemProcessor": {
+                        "StartAt": "Echo",
+                        "States": { "Echo": { "Type": "Pass", "End": true } }
+                    }
+                }
+            }
+        }"#;
+        let result = run(def, r#"["a", "b"]"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out, json!(["a", "b"]));
+    }
 }
