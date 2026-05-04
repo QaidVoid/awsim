@@ -67,6 +67,23 @@ fn build_auth_result_with_validity(
     groups: &[GroupRolePair],
     validity: &TokenValidity,
 ) -> Value {
+    build_auth_result_inner(
+        user_sub, username, region, pool_id, client_id, attributes, groups, validity, true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_auth_result_inner(
+    user_sub: &str,
+    username: &str,
+    region: &str,
+    pool_id: &str,
+    client_id: &str,
+    attributes: &std::collections::HashMap<String, String>,
+    groups: &[GroupRolePair],
+    validity: &TokenValidity,
+    include_refresh: bool,
+) -> Value {
     let default_scopes: Vec<String> = vec![
         "openid".to_string(),
         "email".to_string(),
@@ -96,17 +113,24 @@ fn build_auth_result_with_validity(
         None,
         validity.access,
     );
-    let refresh_tok = jwt::refresh_token(user_sub);
 
-    json!({
-        "AuthenticationResult": {
-            "AccessToken": access_tok,
-            "IdToken": id_tok,
-            "RefreshToken": refresh_tok,
-            "ExpiresIn": validity.access,
-            "TokenType": "Bearer"
-        }
-    })
+    let mut auth_result = json!({
+        "AccessToken": access_tok,
+        "IdToken": id_tok,
+        "ExpiresIn": validity.access,
+        "TokenType": "Bearer"
+    });
+    // AWS Cognito only includes RefreshToken on the *initial* auth
+    // exchange (USER_PASSWORD_AUTH, USER_SRP_AUTH, etc.) — not on
+    // subsequent REFRESH_TOKEN_AUTH calls, where the SPA keeps reusing
+    // the refresh token it already has.
+    if include_refresh && let Some(obj) = auth_result.as_object_mut() {
+        obj.insert(
+            "RefreshToken".to_string(),
+            Value::String(jwt::refresh_token(user_sub)),
+        );
+    }
+    json!({ "AuthenticationResult": auth_result })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -389,7 +413,9 @@ pub fn initiate_auth(
                 .get(client_id)
                 .map(TokenValidity::from_client)
                 .unwrap_or_else(TokenValidity::defaults);
-            Ok(build_auth_result_validity(
+            // include_refresh=false: AWS doesn't reissue a RefreshToken
+            // on REFRESH_TOKEN_AUTH; the SPA keeps the original one.
+            Ok(build_auth_result_inner(
                 &user.sub,
                 &user.username,
                 &ctx.region,
@@ -398,6 +424,7 @@ pub fn initiate_auth(
                 &user.attributes,
                 &pairs,
                 &validity,
+                false,
             ))
         }
         flow => Err(AwsError::bad_request(

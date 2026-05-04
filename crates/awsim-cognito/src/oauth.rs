@@ -251,6 +251,7 @@ fn login_page_html(
     code_challenge: &str,
     code_challenge_method: &str,
     error_msg: Option<&str>,
+    prefill_username: Option<&str>,
 ) -> Response {
     let error_html = error_msg
         .map(|e| format!(r#"<div class="error">{}</div>"#, escape_html(e)))
@@ -265,6 +266,11 @@ fn login_page_html(
     let nonce_e = escape_html(nonce);
     let code_challenge_e = escape_html(code_challenge);
     let code_challenge_method_e = escape_html(code_challenge_method);
+    // Re-render the username so the user doesn't have to retype it after
+    // a wrong-password attempt. Password fields are intentionally not
+    // pre-filled — browsers strip `value=` on password inputs anyway and
+    // it's poor practice to round-trip a password through the form.
+    let username_e = prefill_username.map(escape_html).unwrap_or_default();
 
     let html = format!(
         r#"<!DOCTYPE html>
@@ -293,7 +299,7 @@ button:hover {{ background: #f97316; }}
 <input type="hidden" name="nonce" value="{nonce_e}">
 <input type="hidden" name="code_challenge" value="{code_challenge_e}">
 <input type="hidden" name="code_challenge_method" value="{code_challenge_method_e}">
-<input type="text" name="username" placeholder="Username" required autofocus>
+<input type="text" name="username" placeholder="Username" required autofocus value="{username_e}">
 <input type="password" name="password" placeholder="Password" required>
 <button type="submit">Sign In</button>
 </form>
@@ -423,6 +429,7 @@ async fn authorize_get(
         params.code_challenge.as_deref().unwrap_or(""),
         params.code_challenge_method.as_deref().unwrap_or(""),
         None,
+        None,
     )
 }
 
@@ -477,6 +484,7 @@ async fn authorize_post(
                 code_challenge.as_deref().unwrap_or(""),
                 code_challenge_method.as_deref().unwrap_or(""),
                 Some("Username is required"),
+                None,
             );
         }
     };
@@ -524,6 +532,7 @@ async fn authorize_post(
                 code_challenge.as_deref().unwrap_or(""),
                 code_challenge_method.as_deref().unwrap_or(""),
                 Some("Invalid username or password"),
+                Some(&username),
             );
         }
     };
@@ -540,6 +549,7 @@ async fn authorize_post(
             code_challenge.as_deref().unwrap_or(""),
             code_challenge_method.as_deref().unwrap_or(""),
             Some("Invalid username or password"),
+            Some(&username),
         );
     }
 
@@ -555,6 +565,7 @@ async fn authorize_post(
             code_challenge.as_deref().unwrap_or(""),
             code_challenge_method.as_deref().unwrap_or(""),
             Some("User account is disabled"),
+            Some(&username),
         );
     }
 
@@ -570,6 +581,7 @@ async fn authorize_post(
             code_challenge.as_deref().unwrap_or(""),
             code_challenge_method.as_deref().unwrap_or(""),
             Some("User is not confirmed"),
+            Some(&username),
         );
     }
 
@@ -587,6 +599,7 @@ async fn authorize_post(
             Some(
                 "Password reset required — use AdminSetUserPassword or InitiateAuth with NEW_PASSWORD_REQUIRED",
             ),
+            Some(&username),
         );
     }
 
@@ -1166,8 +1179,11 @@ async fn token(
                 Some(&issuer_url),
                 validity.1,
             );
-            let new_refresh = jwt::refresh_token(&user_sub);
-
+            // AWS Cognito intentionally does NOT issue a new refresh_token
+            // on a refresh-grant exchange — the SPA keeps using the
+            // original one. Mirroring that here avoids confusing SDKs that
+            // store the response and either retain a stale value or drop
+            // the original.
             info!(
                 pool_id = %pool_id,
                 username = %username,
@@ -1177,7 +1193,6 @@ async fn token(
             Json(json!({
                 "access_token": access_tok,
                 "id_token": id_tok,
-                "refresh_token": new_refresh,
                 "token_type": "Bearer",
                 "expires_in": validity.0
             }))
