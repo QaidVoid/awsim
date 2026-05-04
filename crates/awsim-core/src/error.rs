@@ -76,6 +76,18 @@ impl AwsError {
         }
     }
 
+    /// HTTP 412 Precondition Failed — used by S3 when an `If-Match` /
+    /// `If-Unmodified-Since` conditional request fails.
+    pub fn precondition_failed(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::PRECONDITION_FAILED,
+            code: code.into(),
+            message: message.into(),
+            error_type: ErrorType::Sender,
+            extras: None,
+        }
+    }
+
     pub fn conflict(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,

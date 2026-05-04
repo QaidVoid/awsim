@@ -6,10 +6,91 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::state::{ObjectVersions, S3Object, S3State, VersioningStatus};
-use crate::util::{compute_etag, now_iso8601, now_rfc7231};
+use crate::util::{compute_etag, now_iso8601, now_rfc7231, parse_rfc7231};
 
 use super::bucket::no_such_bucket;
 use super::{opt_str, require_str};
+
+/// Outcome of evaluating RFC 7232 conditional headers on a GET/HEAD.
+enum ConditionOutcome {
+    /// All conditions passed; serve the object normally.
+    Proceed,
+    /// `If-None-Match` matched (or `If-Modified-Since` failed): respond 304
+    /// with metadata headers and no body.
+    NotModified,
+}
+
+/// Compare an `If-Match` / `If-None-Match` header value against an ETag.
+///
+/// The header may be `*` (matches any existing object), a single quoted
+/// ETag, or a comma-separated list of quoted ETags. ETag matching is byte-
+/// for-byte against the stored representation including surrounding quotes.
+fn etag_list_matches(header: &str, etag: &str) -> bool {
+    if header.trim() == "*" {
+        return true;
+    }
+    header.split(',').any(|piece| piece.trim() == etag)
+}
+
+/// Evaluate RFC 7232 conditional headers (`If-Match`, `If-None-Match`,
+/// `If-Modified-Since`, `If-Unmodified-Since`) for a GET or HEAD request.
+///
+/// Per RFC 7232 §6 and the S3 documentation, `If-Match` takes precedence
+/// over `If-Unmodified-Since` (the latter is ignored when the former is
+/// present), and `If-None-Match` takes precedence over `If-Modified-Since`.
+fn check_get_conditions(obj: &S3Object, input: &Value) -> Result<ConditionOutcome, AwsError> {
+    let if_match = opt_str(input, "IfMatch");
+    let if_none_match = opt_str(input, "IfNoneMatch");
+    let if_modified_since = opt_str(input, "IfModifiedSince");
+    let if_unmodified_since = opt_str(input, "IfUnmodifiedSince");
+
+    if let Some(header) = if_match {
+        if !etag_list_matches(header, &obj.etag) {
+            return Err(precondition_failed("If-Match header did not match ETag"));
+        }
+    } else if let Some(header) = if_unmodified_since
+        && let (Some(req), Some(stored)) =
+            (parse_rfc7231(header), parse_rfc7231(&obj.last_modified))
+        && stored > req
+    {
+        return Err(precondition_failed(
+            "If-Unmodified-Since header is older than object's last modification time",
+        ));
+    }
+
+    if let Some(header) = if_none_match {
+        if etag_list_matches(header, &obj.etag) {
+            return Ok(ConditionOutcome::NotModified);
+        }
+    } else if let Some(header) = if_modified_since
+        && let (Some(req), Some(stored)) =
+            (parse_rfc7231(header), parse_rfc7231(&obj.last_modified))
+        && stored <= req
+    {
+        return Ok(ConditionOutcome::NotModified);
+    }
+
+    Ok(ConditionOutcome::Proceed)
+}
+
+fn precondition_failed(message: &str) -> AwsError {
+    AwsError::precondition_failed("PreconditionFailed", message)
+}
+
+/// Build a 304 Not Modified response carrying the ETag and Last-Modified
+/// headers that AWS includes on conditional cache responses.
+fn not_modified_response(obj: &S3Object) -> Value {
+    let mut result = json!({
+        "__raw_body": "",
+        "__status_code": 304,
+        "ETag": obj.etag,
+        "LastModified": obj.last_modified,
+    });
+    if let Some(vid) = &obj.version_id {
+        result["VersionId"] = Value::String(vid.clone());
+    }
+    result
+}
 
 /// When the bucket has versioning Enabled, generate a fresh opaque version ID;
 /// otherwise leave the object un-versioned. (Suspended buckets emit `null` for
@@ -250,6 +331,10 @@ pub fn get_object(
     let versions = bucket.objects.get(key).ok_or_else(|| no_such_key(key))?;
     let obj = resolve_or_delete_marker(&versions, requested_version, key)?;
 
+    if let ConditionOutcome::NotModified = check_get_conditions(obj, input)? {
+        return Ok(not_modified_response(obj));
+    }
+
     let body_bytes = obj.body.read_all().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             no_such_key(key)
@@ -318,6 +403,10 @@ pub fn head_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
 
     let versions = bucket.objects.get(key).ok_or_else(|| no_such_key(key))?;
     let obj = resolve_or_delete_marker(&versions, requested_version, key)?;
+
+    if let ConditionOutcome::NotModified = check_get_conditions(obj, input)? {
+        return Ok(not_modified_response(obj));
+    }
 
     let mut result = json!({
         "ContentType": obj.content_type,
@@ -845,5 +934,138 @@ mod tests {
         assert_eq!(err.code, "NoSuchKey");
         let head = head_object(&state, &json!({ "Bucket": "v", "Key": "k" })).unwrap();
         assert_eq!(head["VersionId"].as_str(), Some(v2.as_str()));
+    }
+
+    fn put_and_get_etag(state: &S3State, bucket: &str, key: &str, body: &str) -> String {
+        let resp = put_object(
+            state,
+            &json!({ "Bucket": bucket, "Key": key, "Body": body }),
+            &ctx(),
+        )
+        .unwrap();
+        resp["ETag"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn get_object_returns_412_when_if_match_does_not_match() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        put_and_get_etag(&state, "b", "k", "hello");
+
+        let err = get_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "k", "IfMatch": "\"deadbeef\"" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "PreconditionFailed");
+        assert_eq!(err.status.as_u16(), 412);
+    }
+
+    #[test]
+    fn get_object_returns_object_when_if_match_matches() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        let etag = put_and_get_etag(&state, "b", "k", "hello");
+
+        let resp = get_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "k", "IfMatch": etag }),
+            &ctx(),
+        )
+        .unwrap();
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(resp["Body"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(body, b"hello");
+    }
+
+    #[test]
+    fn if_match_accepts_star_for_any_existing_object() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        put_and_get_etag(&state, "b", "k", "hello");
+        let resp = get_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "k", "IfMatch": "*" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(resp.get("Body").is_some());
+    }
+
+    #[test]
+    fn get_object_returns_304_when_if_none_match_matches() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        let etag = put_and_get_etag(&state, "b", "k", "hello");
+
+        let resp = get_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "k", "IfNoneMatch": etag.clone() }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["__status_code"], json!(304));
+        assert_eq!(resp["ETag"].as_str(), Some(etag.as_str()));
+        // 304 must not include a body field.
+        assert_eq!(resp["__raw_body"].as_str(), Some(""));
+    }
+
+    #[test]
+    fn head_object_honors_if_none_match() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        let etag = put_and_get_etag(&state, "b", "k", "hello");
+
+        let resp = head_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "k", "IfNoneMatch": etag }),
+        )
+        .unwrap();
+        assert_eq!(resp["__status_code"], json!(304));
+    }
+
+    #[test]
+    fn if_match_takes_precedence_over_if_unmodified_since() {
+        // Per RFC 7232 §6: when If-Match succeeds, If-Unmodified-Since must
+        // be ignored — even if the object was modified after the supplied
+        // timestamp.
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        let etag = put_and_get_etag(&state, "b", "k", "hello");
+
+        let resp = get_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "IfMatch": etag,
+                // Far in the past — would normally fail If-Unmodified-Since.
+                "IfUnmodifiedSince": "Thu, 01 Jan 1970 00:00:00 GMT",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(resp.get("Body").is_some());
+    }
+
+    #[test]
+    fn if_unmodified_since_in_past_returns_412_when_no_if_match() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        put_and_get_etag(&state, "b", "k", "hello");
+
+        let err = get_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "IfUnmodifiedSince": "Thu, 01 Jan 1970 00:00:00 GMT",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "PreconditionFailed");
     }
 }

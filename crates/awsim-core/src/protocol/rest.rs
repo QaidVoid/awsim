@@ -94,11 +94,23 @@ pub fn parse_xml_request(
         for (key, value) in parse_query_string(query_string) {
             map.entry(key).or_insert(Value::String(value));
         }
-        // Extract relevant headers (x-amz-*)
+        // Extract relevant headers: all `x-amz-*` headers plus the standard
+        // HTTP headers that S3 (and other restXml services) bind as request
+        // input via `smithy.api#httpHeader` — Range and the four RFC 7232
+        // conditional headers. The Smithy field name is the PascalCase of
+        // the header (e.g. `If-Match` → `IfMatch`, `Range` → `Range`).
         for (name, value) in headers.iter() {
             let name_str = name.as_str();
-            if name_str.starts_with("x-amz-")
-                && name_str != "x-amz-target"
+            let is_amz = name_str.starts_with("x-amz-") && name_str != "x-amz-target";
+            let is_http_input = matches!(
+                name_str,
+                "range"
+                    | "if-match"
+                    | "if-none-match"
+                    | "if-modified-since"
+                    | "if-unmodified-since"
+            );
+            if (is_amz || is_http_input)
                 && let Ok(v) = value.to_str()
             {
                 let key = header_to_param_name(name_str);
@@ -361,6 +373,14 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
     let mut headers = HeaderMap::new();
     headers.insert("x-amz-request-id", request_id.parse().unwrap());
 
+    // Optional `__status_code` override — used by S3 for 206 Partial Content
+    // (range responses) and 304 Not Modified (conditional GETs).
+    let status = output
+        .get("__status_code")
+        .and_then(Value::as_u64)
+        .and_then(|n| StatusCode::from_u16(n as u16).ok())
+        .unwrap_or(StatusCode::OK);
+
     // --- Raw binary response (e.g. S3 GetObject) ---
     if let Some(raw_b64) = output.get("__raw_body").and_then(Value::as_str) {
         use base64::Engine;
@@ -371,7 +391,7 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
         // Promote scalar fields to response headers.
         if let Some(map) = output.as_object() {
             for (key, val) in map {
-                if key == "__raw_body" || key == "Body" {
+                if key == "__raw_body" || key == "Body" || key == "__status_code" {
                     continue;
                 }
                 let header_name = pascal_to_header(key);
@@ -390,7 +410,13 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
             }
         }
 
-        return (StatusCode::OK, headers, Bytes::from(data));
+        // 304 Not Modified responses must not include a body.
+        let body = if status == StatusCode::NOT_MODIFIED {
+            Bytes::new()
+        } else {
+            Bytes::from(data)
+        };
+        return (status, headers, body);
     }
 
     // --- Promote well-known fields to HTTP headers (S3 convention) ---
@@ -465,10 +491,15 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
         )
     };
 
-    if !body.is_empty() {
+    if !body.is_empty() && status != StatusCode::NOT_MODIFIED {
         headers.insert("content-type", "application/xml".parse().unwrap());
     }
-    (StatusCode::OK, headers, Bytes::from(body))
+    let body_bytes = if status == StatusCode::NOT_MODIFIED {
+        Bytes::new()
+    } else {
+        Bytes::from(body)
+    };
+    (status, headers, body_bytes)
 }
 
 /// Convert a PascalCase field name to a lowercase HTTP header name.

@@ -66,6 +66,56 @@ pub fn format_iso8601(secs: u64) -> String {
     format!("{y:04}-{:02}-{d:02}T{h:02}:{min:02}:{s:02}.000Z", mo + 1)
 }
 
+/// Parse an RFC 7231 / RFC 1123 date string into Unix seconds.
+///
+/// Returns `None` if the input is malformed. Used to compare conditional
+/// `If-Modified-Since` / `If-Unmodified-Since` headers against an object's
+/// stored last-modified timestamp.
+pub fn parse_rfc7231(s: &str) -> Option<i64> {
+    // Parse: "<day-name>, <dd> <Mon> <yyyy> <HH>:<mm>:<ss> GMT"
+    let parts: Vec<&str> = s.splitn(2, ", ").collect();
+    let rest = if parts.len() == 2 { parts[1] } else { s };
+
+    const MONTH_NAMES: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 4 {
+        return None;
+    }
+    let day: i64 = tokens[0].parse().ok()?;
+    let month = MONTH_NAMES.iter().position(|&m| m == tokens[1])? as i64;
+    let year: i64 = tokens[2].parse().ok()?;
+    let time_parts: Vec<&str> = tokens[3].split(':').collect();
+    if time_parts.len() < 3 {
+        return None;
+    }
+    let h: i64 = time_parts[0].parse().ok()?;
+    let min: i64 = time_parts[1].parse().ok()?;
+    let s: i64 = time_parts[2].parse().ok()?;
+
+    // Convert (year, month, day, h, min, s) to seconds since 1970-01-01.
+    if year < 1970 {
+        return None;
+    }
+    let mut days: i64 = 0;
+    for y in 1970..year {
+        days += if is_leap_year(y as u64) { 366 } else { 365 };
+    }
+    let monthly = if is_leap_year(year as u64) {
+        [31i64, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+    for &days_in_month in monthly.iter().take(month as usize) {
+        days += days_in_month;
+    }
+    days += day - 1;
+
+    Some(days * 86400 + h * 3600 + min * 60 + s)
+}
+
 /// Convert an RFC 7231 date string to ISO 8601 via Unix epoch (best-effort).
 ///
 /// S3 stores `LastModified` as RFC 7231 (e.g. `Tue, 21 Apr 2026 14:52:46 GMT`)
@@ -194,5 +244,23 @@ mod tests {
         // Unix epoch 0 = Thu, 01 Jan 1970 00:00:00 GMT
         let s = format_rfc7231(0);
         assert_eq!(s, "Thu, 01 Jan 1970 00:00:00 GMT");
+    }
+
+    #[test]
+    fn test_parse_rfc7231_round_trips_format() {
+        for &secs in &[0u64, 1_000_000, 1_700_000_000, 1_900_000_000] {
+            let formatted = format_rfc7231(secs);
+            assert_eq!(parse_rfc7231(&formatted), Some(secs as i64), "for {secs}");
+        }
+    }
+
+    #[test]
+    fn test_parse_rfc7231_known_value() {
+        // 1900-01-01 is rejected (before epoch).
+        assert_eq!(parse_rfc7231("Mon, 01 Jan 1900 00:00:00 GMT"), None);
+        // Garbage input is rejected.
+        assert_eq!(parse_rfc7231("not a date"), None);
+        // RFC 7231 without leading day-name is also accepted.
+        assert!(parse_rfc7231("01 Jan 1970 00:00:01 GMT").is_some());
     }
 }
