@@ -18,6 +18,28 @@ pub fn new_version_id() -> String {
     Uuid::new_v4().to_string()
 }
 
+/// Validate a `ClientRequestToken` per AWS rules: 32–64 characters, ASCII
+/// letters/digits/`-`/`_`. Returns the token as `String` on success.
+pub fn validate_client_request_token(token: &str) -> Result<String, awsim_core::AwsError> {
+    let len = token.chars().count();
+    if !(32..=64).contains(&len) {
+        return Err(awsim_core::AwsError::bad_request(
+            "InvalidParameterException",
+            "ClientRequestToken must be between 32 and 64 characters",
+        ));
+    }
+    if !token
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(awsim_core::AwsError::bad_request(
+            "InvalidParameterException",
+            "ClientRequestToken may only contain letters, digits, '-', and '_'",
+        ));
+    }
+    Ok(token.to_string())
+}
+
 /// Generate 6 random alphanumeric characters for ARN suffix.
 pub fn random_suffix(len: usize) -> String {
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";

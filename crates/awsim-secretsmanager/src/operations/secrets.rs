@@ -6,7 +6,9 @@ use tracing::info;
 
 use crate::error;
 use crate::state::{Secret, SecretVersion, SecretsState};
-use crate::util::{new_version_id, now_epoch_f64, random_password, random_suffix};
+use crate::util::{
+    new_version_id, now_epoch_f64, random_password, random_suffix, validate_client_request_token,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -121,7 +123,13 @@ pub fn create_secret(
 
     let arn = build_arn(&ctx.region, &ctx.account_id, name);
     let now = now_epoch_f64();
-    let version_id = new_version_id();
+    // ClientRequestToken doubles as the VersionId (idempotency key) when
+    // supplied; the SDK auto-generates one client-side otherwise. We
+    // accept the caller's choice and only fall back when absent.
+    let version_id = match input["ClientRequestToken"].as_str() {
+        Some(t) => validate_client_request_token(t)?,
+        None => new_version_id(),
+    };
 
     let version = SecretVersion {
         version_id: version_id.clone(),
@@ -255,7 +263,36 @@ pub fn put_secret_value(
     }
 
     let now = now_epoch_f64();
-    let new_version_id_str = new_version_id();
+    let client_token = match input["ClientRequestToken"].as_str() {
+        Some(t) => Some(validate_client_request_token(t)?),
+        None => None,
+    };
+
+    // Idempotency: if the same ClientRequestToken already exists on this
+    // secret, AWS returns the existing version when the payload matches
+    // and ResourceExistsException when it doesn't.
+    if let Some(ref token) = client_token
+        && let Some(existing) = secret.versions.get(token)
+    {
+        let payload_matches =
+            existing.secret_string == secret_string && existing.secret_binary == secret_binary;
+        if !payload_matches {
+            return Err(error::resource_exists(token));
+        }
+        let arn = secret.arn.clone();
+        let sname = secret.name.clone();
+        let stages = existing.stages.clone();
+        let vid = existing.version_id.clone();
+        drop(secret);
+        return Ok(json!({
+            "ARN": arn,
+            "Name": sname,
+            "VersionId": vid,
+            "VersionStages": stages,
+        }));
+    }
+
+    let new_version_id_str = client_token.unwrap_or_else(new_version_id);
 
     // Determine stages for new version
     let requested_stages: Vec<String> = if let Some(stages) = input["VersionStages"].as_array() {
@@ -283,7 +320,7 @@ pub fn put_secret_value(
         version_id: new_version_id_str.clone(),
         secret_string,
         secret_binary,
-        stages: requested_stages,
+        stages: requested_stages.clone(),
         created_date: now,
     };
 
@@ -300,6 +337,7 @@ pub fn put_secret_value(
         "ARN": arn,
         "Name": sname,
         "VersionId": new_version_id_str,
+        "VersionStages": requested_stages,
     }))
 }
 
@@ -1139,4 +1177,120 @@ fn validate_secret_name(name: &str) -> Result<(), AwsError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("secretsmanager", "us-east-1")
+    }
+
+    fn token(prefix: &str) -> String {
+        // 32-char minimum: pad with letters.
+        format!("{prefix:x<32}")
+    }
+
+    #[test]
+    fn create_secret_uses_client_request_token_as_version_id() {
+        let state = SecretsState::default();
+        let tok = token("a");
+        let resp = create_secret(
+            &state,
+            &json!({
+                "Name": "s",
+                "SecretString": "hello",
+                "ClientRequestToken": tok,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["VersionId"].as_str().unwrap(), tok);
+    }
+
+    #[test]
+    fn create_secret_rejects_short_client_request_token() {
+        let state = SecretsState::default();
+        let err = create_secret(
+            &state,
+            &json!({
+                "Name": "s",
+                "SecretString": "hello",
+                "ClientRequestToken": "tooshort",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn put_secret_value_returns_existing_version_for_idempotent_replay() {
+        let state = SecretsState::default();
+        create_secret(
+            &state,
+            &json!({ "Name": "s", "SecretString": "v1" }),
+            &ctx(),
+        )
+        .unwrap();
+        let tok = token("b");
+
+        let first = put_secret_value(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "SecretString": "v2",
+                "ClientRequestToken": tok,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let replay = put_secret_value(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "SecretString": "v2",
+                "ClientRequestToken": tok,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(first["VersionId"], replay["VersionId"]);
+        assert_eq!(replay["VersionId"].as_str().unwrap(), tok);
+    }
+
+    #[test]
+    fn put_secret_value_rejects_token_reuse_with_different_payload() {
+        let state = SecretsState::default();
+        create_secret(
+            &state,
+            &json!({ "Name": "s", "SecretString": "v1" }),
+            &ctx(),
+        )
+        .unwrap();
+        let tok = token("c");
+        put_secret_value(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "SecretString": "v2",
+                "ClientRequestToken": tok,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let err = put_secret_value(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "SecretString": "different-payload",
+                "ClientRequestToken": tok,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ResourceExistsException");
+    }
 }
