@@ -32,6 +32,42 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
         ));
     }
 
+    // When MessageStructure="json", the Message must parse as a JSON object
+    // with at least a "default" key — AWS rejects otherwise. We keep the
+    // raw payload here and pick the per-protocol body during fan-out via
+    // select_message_for_protocol().
+    let message_structure = input["MessageStructure"].as_str();
+    let message_json: Option<serde_json::Map<String, Value>> = match message_structure {
+        Some("json") => {
+            let parsed: Value = serde_json::from_str(message).map_err(|_| {
+                AwsError::bad_request(
+                    "InvalidParameter",
+                    "Message must be valid JSON when MessageStructure is 'json'",
+                )
+            })?;
+            let obj = parsed.as_object().cloned().ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameter",
+                    "MessageStructure='json' requires Message to be a JSON object",
+                )
+            })?;
+            if !obj.contains_key("default") {
+                return Err(AwsError::bad_request(
+                    "InvalidParameter",
+                    "Attribute 'default' is required when MessageStructure is 'json'",
+                ));
+            }
+            Some(obj)
+        }
+        Some(other) => {
+            return Err(AwsError::bad_request(
+                "InvalidParameter",
+                format!("Unknown MessageStructure: {other}"),
+            ));
+        }
+        None => None,
+    };
+
     let subject = input["Subject"].as_str().map(str::to_string);
     let message_attributes = parse_message_attributes(input);
 
@@ -108,6 +144,12 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
                 continue; // Skip this subscription
             }
 
+            // When MessageStructure=json, pick the protocol-specific body
+            // (falling back to "default"); otherwise the raw message is
+            // delivered as-is.
+            let delivered =
+                select_message_for_protocol(message_json.as_ref(), &protocol).unwrap_or(message);
+
             let event = InternalEvent {
                 source: "sns".to_string(),
                 event_type: "sns:Publish".to_string(),
@@ -116,7 +158,7 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
                 detail: json!({
                     "topic_arn": topic_arn,
                     "message_id": message_id,
-                    "message": message,
+                    "message": delivered,
                     "subject": subject,
                     "protocol": protocol,
                     "endpoint": endpoint,
@@ -226,6 +268,21 @@ pub fn publish_batch(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// When `MessageStructure="json"` was supplied on Publish, select the
+/// protocol-specific message body from the parsed JSON. Returns `None`
+/// when no MessageStructure was provided (caller should deliver the raw
+/// message). Falls back to the "default" key when the protocol-specific
+/// key is absent.
+fn select_message_for_protocol<'a>(
+    message_json: Option<&'a serde_json::Map<String, Value>>,
+    protocol: &str,
+) -> Option<&'a str> {
+    let obj = message_json?;
+    obj.get(protocol)
+        .or_else(|| obj.get("default"))
+        .and_then(Value::as_str)
+}
 
 fn parse_message_attributes(input: &Value) -> HashMap<String, MessageAttribute> {
     let mut result = HashMap::new();

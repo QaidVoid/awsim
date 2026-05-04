@@ -403,6 +403,71 @@ mod tests {
     }
 
     #[test]
+    fn test_publish_message_structure_json_requires_default_key() {
+        let svc = SnsService::new();
+        let ctx = ctx();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "json-topic" }), &ctx)).unwrap();
+        let arn = created["TopicArn"].as_str().unwrap();
+
+        // Missing "default" key — must reject.
+        let err = block_on(svc.handle(
+            "Publish",
+            json!({
+                "TopicArn": arn,
+                "Message": json!({ "sqs": "for sqs" }).to_string(),
+                "MessageStructure": "json",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+        assert!(err.message.to_lowercase().contains("default"));
+    }
+
+    #[test]
+    fn test_publish_message_structure_json_rejects_invalid_json() {
+        let svc = SnsService::new();
+        let ctx = ctx();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "json-topic2" }), &ctx)).unwrap();
+        let arn = created["TopicArn"].as_str().unwrap();
+
+        let err = block_on(svc.handle(
+            "Publish",
+            json!({
+                "TopicArn": arn,
+                "Message": "not json",
+                "MessageStructure": "json",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+    }
+
+    #[test]
+    fn test_publish_message_structure_json_with_default_succeeds() {
+        let svc = SnsService::new();
+        let ctx = ctx();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "json-topic3" }), &ctx)).unwrap();
+        let arn = created["TopicArn"].as_str().unwrap();
+
+        let result = block_on(svc.handle(
+            "Publish",
+            json!({
+                "TopicArn": arn,
+                "Message": json!({ "default": "fallback", "sqs": "for sqs" }).to_string(),
+                "MessageStructure": "json",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert!(result["MessageId"].as_str().is_some());
+    }
+
+    #[test]
     fn test_publish_batch_success() {
         let svc = SnsService::new();
         let ctx = ctx();
