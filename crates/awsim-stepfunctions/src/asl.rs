@@ -138,7 +138,14 @@ impl InterpreterContext {
             json!({ "name": state_name, "type": state_type, "input": input }),
         );
 
-        let effective_input = apply_input_path(&input, state["InputPath"].as_str());
+        let after_input_path = apply_input_path(&input, state["InputPath"].as_str());
+        // Parameters runs after InputPath but before the state body. Each
+        // value whose key ends in `.$` is resolved as a JSONPath into the
+        // post-InputPath input; everything else is a static literal.
+        let effective_input = match state.get("Parameters") {
+            Some(p) => apply_parameters(p, &after_input_path),
+            None => after_input_path.clone(),
+        };
 
         // Retry: re-run the state body up to MaxAttempts when the failure
         // matches an ErrorEquals entry. We don't sleep IntervalSeconds —
@@ -183,8 +190,26 @@ impl InterpreterContext {
         };
 
         match result {
-            Ok((output, next)) => {
-                let final_output = apply_output_path(&output, state["OutputPath"].as_str());
+            Ok((raw_output, next)) => {
+                // ResultSelector → ResultPath → OutputPath is the AWS pipeline.
+                // Choice/Wait/Succeed don't carry a "result" so we skip
+                // ResultSelector/ResultPath for them and just apply OutputPath
+                // to whatever they returned (typically the input).
+                let has_result = matches!(state_type, "Pass" | "Task" | "Parallel" | "Map");
+                let after_post = if has_result {
+                    let after_selector = match state.get("ResultSelector") {
+                        Some(rs) => apply_parameters(rs, &raw_output),
+                        None => raw_output.clone(),
+                    };
+                    apply_result_path(
+                        &after_input_path,
+                        &after_selector,
+                        state["ResultPath"].as_str(),
+                    )
+                } else {
+                    raw_output
+                };
+                let final_output = apply_output_path(&after_post, state["OutputPath"].as_str());
 
                 self.push_event(
                     "StateExited",
@@ -227,14 +252,9 @@ impl InterpreterContext {
         state: &Value,
         input: Value,
     ) -> Result<(Value, StateTransition), StateFailed> {
-        let result = if let Some(result_val) = state.get("Result") {
-            result_val.clone()
-        } else {
-            input.clone()
-        };
-
-        let output = apply_result_path(&input, &result, state["ResultPath"].as_str());
-        Ok((output, transition(state)))
+        // Raw result; ResultSelector + ResultPath handled by run_state.
+        let result = state.get("Result").cloned().unwrap_or(input);
+        Ok((result, transition(state)))
     }
 
     fn exec_succeed(
@@ -280,7 +300,8 @@ impl InterpreterContext {
             }),
         );
 
-        // Mock output: echo input back (no actual Lambda invocation)
+        // Mock output: echo input back (no actual Lambda invocation).
+        // ResultSelector + ResultPath are applied by run_state.
         let mock_output = input.clone();
 
         self.push_event(
@@ -292,8 +313,7 @@ impl InterpreterContext {
             }),
         );
 
-        let output = apply_result_path(&input, &mock_output, state["ResultPath"].as_str());
-        Ok((output, transition(state)))
+        Ok((mock_output, transition(state)))
     }
 
     fn exec_choice(
@@ -354,10 +374,8 @@ impl InterpreterContext {
             let output_str = branch_result.output.unwrap_or_else(|| "null".to_string());
             outputs.push(serde_json::from_str(&output_str).unwrap_or(Value::Null));
         }
-        let parallel_output = Value::Array(outputs);
-        let result_output =
-            apply_result_path(&input, &parallel_output, state["ResultPath"].as_str());
-        Ok((result_output, transition(state)))
+        // Raw result; run_state handles ResultSelector + ResultPath.
+        Ok((Value::Array(outputs), transition(state)))
     }
 
     fn exec_map(
@@ -393,9 +411,45 @@ impl InterpreterContext {
             let item_output_str = item_result.output.unwrap_or_else(|| "null".to_string());
             outputs.push(serde_json::from_str(&item_output_str).unwrap_or(Value::Null));
         }
-        let map_output = Value::Array(outputs);
-        let result_output = apply_result_path(&input, &map_output, state["ResultPath"].as_str());
-        Ok((result_output, transition(state)))
+        // Raw result; run_state handles ResultSelector + ResultPath.
+        Ok((Value::Array(outputs), transition(state)))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parameters / ResultSelector
+// ---------------------------------------------------------------------------
+
+/// Recursively transform a `Parameters` (or `ResultSelector`) template
+/// against a source object. Keys ending in `.$` carry a JSONPath
+/// reference into `source` and are renamed to drop the suffix in the
+/// output. Object / array values recurse; everything else is a literal.
+///
+/// Doesn't implement intrinsic functions (`States.Format`, etc.) yet —
+/// strings beginning with `States.` pass through unchanged so the SDK
+/// at least sees the source template.
+fn apply_parameters(template: &Value, source: &Value) -> Value {
+    match template {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::with_capacity(map.len());
+            for (k, v) in map {
+                if let Some(stripped_key) = k.strip_suffix(".$") {
+                    let resolved = match v.as_str() {
+                        Some(path) if path.starts_with('$') => resolve_reference_path(source, path),
+                        _ => v.clone(),
+                    };
+                    out.insert(stripped_key.to_string(), resolved);
+                } else {
+                    out.insert(k.clone(), apply_parameters(v, source));
+                }
+            }
+            Value::Object(out)
+        }
+        Value::Array(arr) => {
+            Value::Array(arr.iter().map(|v| apply_parameters(v, source)).collect())
+        }
+        // Scalars pass through.
+        _ => template.clone(),
     }
 }
 
@@ -886,6 +940,76 @@ mod tests {
         let result = run(def, r#"{}"#);
         assert_eq!(result.status, "SUCCEEDED");
         assert_eq!(result.output.as_deref(), Some("\"recovered\""));
+    }
+
+    #[test]
+    fn parameters_resolve_jsonpath_references() {
+        let def = r#"{
+            "StartAt": "Build",
+            "States": {
+                "Build": {
+                    "Type": "Pass",
+                    "End": true,
+                    "Parameters": {
+                        "name.$": "$.user.name",
+                        "static": "literal",
+                        "nested": { "deep.$": "$.user.id" }
+                    }
+                }
+            }
+        }"#;
+        let result = run(def, r#"{"user": {"name": "Ada", "id": 42}}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out["name"], json!("Ada"));
+        assert_eq!(out["static"], json!("literal"));
+        assert_eq!(out["nested"]["deep"], json!(42));
+    }
+
+    #[test]
+    fn result_selector_filters_state_output() {
+        // Parameters builds a {a, b} object; ResultSelector keeps only
+        // `picked`, derived from `a`.
+        let def = r#"{
+            "StartAt": "Build",
+            "States": {
+                "Build": {
+                    "Type": "Pass",
+                    "End": true,
+                    "Parameters": { "a": 1, "b": 2 },
+                    "ResultSelector": { "picked.$": "$.a" }
+                }
+            }
+        }"#;
+        let result = run(def, r#"{}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out, json!({ "picked": 1 }));
+    }
+
+    #[test]
+    fn result_path_merges_into_post_input_path_input() {
+        // ResultPath should merge the (possibly Parameters/ResultSelector
+        // transformed) result back into the *raw* input — not the
+        // Parameters output.
+        let def = r#"{
+            "StartAt": "T",
+            "States": {
+                "T": {
+                    "Type": "Pass",
+                    "End": true,
+                    "Parameters": { "x.$": "$.outer" },
+                    "ResultPath": "$.computed"
+                }
+            }
+        }"#;
+        let result = run(def, r#"{"outer": "hi", "untouched": "ok"}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        // Original input keys preserved, computed sits beside them.
+        assert_eq!(out["outer"], json!("hi"));
+        assert_eq!(out["untouched"], json!("ok"));
+        assert_eq!(out["computed"]["x"], json!("hi"));
     }
 
     #[test]
