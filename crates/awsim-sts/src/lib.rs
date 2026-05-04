@@ -10,11 +10,31 @@ impl StsService {
     }
 
     fn get_caller_identity(&self, ctx: &RequestContext) -> Result<Value, AwsError> {
-        debug!(account_id = %ctx.account_id, "GetCallerIdentity");
+        debug!(
+            account_id = %ctx.account_id,
+            access_key = ?ctx.access_key,
+            "GetCallerIdentity"
+        );
+        // Derive UserId and Arn from the SigV4-signed access key when one
+        // was supplied: a sigil access key keeps the historical "root"
+        // shape, otherwise we surface the access key itself as UserId so
+        // tools that compare callers across requests get a stable, distinct
+        // identifier per credential. Without an access key (anonymous /
+        // unauthenticated test calls), we fall back to root.
+        let (user_id, arn) = match ctx.access_key.as_deref() {
+            Some(key) if !key.is_empty() => (
+                key.to_string(),
+                format!("arn:aws:iam::{}:user/{}", ctx.account_id, key),
+            ),
+            _ => (
+                ctx.account_id.clone(),
+                format!("arn:aws:iam::{}:root", ctx.account_id),
+            ),
+        };
         Ok(json!({
             "Account": ctx.account_id,
-            "Arn": format!("arn:aws:iam::{}:root", ctx.account_id),
-            "UserId": "AIDEXAMPLESTSUSERID",
+            "Arn": arn,
+            "UserId": user_id,
         }))
     }
 
@@ -414,13 +434,30 @@ mod tests {
     }
 
     #[test]
-    fn test_get_caller_identity() {
+    fn test_get_caller_identity_anonymous_returns_root() {
         let svc = StsService::new();
         let ctx = make_ctx();
         let result = svc.get_caller_identity(&ctx).unwrap();
         assert_eq!(result["Account"], "000000000000");
-        assert!(result["Arn"].as_str().unwrap().contains("arn:aws:iam::"));
-        assert!(result["UserId"].as_str().is_some());
+        // Anonymous/unauthenticated → root shape; UserId equals account id.
+        assert_eq!(result["UserId"], json!("000000000000"));
+        assert_eq!(
+            result["Arn"].as_str().unwrap(),
+            "arn:aws:iam::000000000000:root"
+        );
+    }
+
+    #[test]
+    fn test_get_caller_identity_uses_access_key_when_present() {
+        let svc = StsService::new();
+        let mut ctx = make_ctx();
+        ctx.access_key = Some("AKIATESTAKID000000".to_string());
+        let result = svc.get_caller_identity(&ctx).unwrap();
+        assert_eq!(result["UserId"], json!("AKIATESTAKID000000"));
+        assert_eq!(
+            result["Arn"].as_str().unwrap(),
+            "arn:aws:iam::000000000000:user/AKIATESTAKID000000"
+        );
     }
 
     #[test]
