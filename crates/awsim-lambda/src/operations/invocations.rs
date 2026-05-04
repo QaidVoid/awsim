@@ -121,23 +121,64 @@ pub fn invoke(
 
     let request_id = new_uuid();
 
+    // Build env vars common to both sync and async paths.
+    let mut invocation_env = env_vars.clone();
+    invocation_env
+        .entry("AWS_LAMBDA_FUNCTION_NAME".to_string())
+        .or_insert_with(|| name.to_string());
+    invocation_env
+        .entry("AWS_LAMBDA_FUNCTION_MEMORY_SIZE".to_string())
+        .or_insert_with(|| memory_size.to_string());
+    invocation_env
+        .entry("AWS_REQUEST_ID".to_string())
+        .or_insert_with(|| request_id.clone());
+
+    let event_json = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
+
+    // Async (Event) invocations return HTTP 202 with an empty body and run
+    // the function on a background thread. The caller doesn't see the
+    // result, errors, or any invocation record — that's the documented
+    // AWS behavior. Pre-flight code preparation happens before the
+    // detach so a missing-code error is still synchronously visible.
+    if invocation_type == "Event" {
+        if let (Some(rt), Some(hndlr), Some(data)) =
+            (runtime.as_deref(), handler.as_deref(), code_data.as_deref())
+        {
+            match ensure_code_dir(name, data, &code_sha256) {
+                Ok(code_dir) => {
+                    let rt = rt.to_string();
+                    let hndlr = hndlr.to_string();
+                    let env = invocation_env.clone();
+                    std::thread::spawn(move || {
+                        let _ = executor::execute_function(
+                            &rt,
+                            &hndlr,
+                            &code_dir,
+                            &event_json,
+                            &env,
+                            timeout,
+                        );
+                    });
+                }
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        function_name = name,
+                        "Async invoke: failed to prepare code; dropping"
+                    );
+                }
+            }
+        }
+        return Ok(json!({
+            "StatusCode": 202u64,
+            "__status_code": 202u64,
+            "__headers": { "X-Awsim-Memory-MB": memory_size.to_string() },
+        }));
+    }
+
     let (response_payload, exec_error) = if let (Some(rt), Some(hndlr), Some(data)) =
         (runtime.as_deref(), handler.as_deref(), code_data.as_deref())
     {
-        // Build env vars for the invocation
-        let mut invocation_env = env_vars.clone();
-        invocation_env
-            .entry("AWS_LAMBDA_FUNCTION_NAME".to_string())
-            .or_insert_with(|| name.to_string());
-        invocation_env
-            .entry("AWS_LAMBDA_FUNCTION_MEMORY_SIZE".to_string())
-            .or_insert_with(|| memory_size.to_string());
-        invocation_env
-            .entry("AWS_REQUEST_ID".to_string())
-            .or_insert_with(|| request_id.clone());
-
-        let event_json = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
-
         match ensure_code_dir(name, data, &code_sha256) {
             Ok(code_dir) => {
                 let result = executor::execute_function(
@@ -177,7 +218,7 @@ pub fn invoke(
 
     let status_code: u16 = 200;
 
-    // Record invocation
+    // Record invocation (sync RequestResponse only; async drops history)
     let record = InvocationRecord {
         invocation_id: request_id,
         invocation_type: invocation_type.to_string(),
@@ -194,16 +235,10 @@ pub fn invoke(
         }
     }
 
-    let response_status = if invocation_type == "Event" {
-        202u64
-    } else {
-        200u64
-    };
-
     let mut response = json!({
-        "StatusCode": response_status,
+        "StatusCode": 200u64,
         "Payload": response_payload,
-        "__status_code": response_status,
+        "__status_code": 200u64,
     });
 
     // Emit the function's configured memory as an internal metadata
@@ -224,4 +259,98 @@ pub fn invoke(
     response["__headers"] = Value::Object(headers);
 
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::functions::create_function;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("lambda", "us-east-1")
+    }
+
+    fn empty_zip_b64() -> String {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD as BASE64;
+        let bytes: [u8; 22] = [
+            0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        BASE64.encode(bytes)
+    }
+
+    fn create_test_fn(state: &LambdaState) {
+        // No runtime/handler so the executor fallback short-circuits — we
+        // only care about the dispatch / status-code path here.
+        create_function(
+            state,
+            &json!({
+                "FunctionName": "f",
+                "Role": "arn:aws:iam::000000000000:role/test",
+                "Code": { "ZipFile": empty_zip_b64() },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn event_invocation_returns_202_with_no_payload() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        let resp = invoke(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "InvocationType": "Event",
+                "Payload": {"hello": "world"},
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["StatusCode"], json!(202));
+        assert_eq!(resp["__status_code"], json!(202));
+        // Per AWS, async invocations have an empty body — no Payload field.
+        assert!(resp.get("Payload").is_none());
+        assert!(resp.get("FunctionError").is_none());
+    }
+
+    #[test]
+    fn event_invocation_does_not_record_invocation_history() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        invoke(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "InvocationType": "Event",
+                "Payload": {},
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // Async invocations don't return data to the caller; they also
+        // shouldn't pollute the synchronous-invocation history we keep
+        // for diagnostics.
+        let f = state.functions.get("f").unwrap();
+        assert!(f.invocations.is_empty());
+    }
+
+    #[test]
+    fn request_response_invocation_returns_200_with_payload() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        let resp = invoke(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "InvocationType": "RequestResponse",
+                "Payload": {},
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["StatusCode"], json!(200));
+        assert!(resp.get("Payload").is_some());
+    }
 }
