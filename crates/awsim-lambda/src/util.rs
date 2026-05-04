@@ -104,6 +104,75 @@ pub fn decode_zip(b64: &str) -> Result<(Vec<u8>, String, u64), awsim_core::AwsEr
     Ok((bytes, hash, size))
 }
 
+/// Lambda managed runtimes accepted by CreateFunction / UpdateFunctionConfiguration
+/// as of 2026. Excludes deprecated runtimes that AWS has fully retired —
+/// callers passing those receive InvalidParameterValueException.
+pub const VALID_RUNTIMES: &[&str] = &[
+    // Node.js
+    "nodejs18.x",
+    "nodejs20.x",
+    "nodejs22.x",
+    // Python
+    "python3.10",
+    "python3.11",
+    "python3.12",
+    "python3.13",
+    // Java
+    "java11",
+    "java17",
+    "java21",
+    // .NET
+    "dotnet6",
+    "dotnet8",
+    // Ruby
+    "ruby3.2",
+    "ruby3.3",
+    // Custom runtimes
+    "provided.al2",
+    "provided.al2023",
+];
+
+/// Validate a Runtime parameter against the AWS managed-runtime allow-list.
+pub fn validate_runtime(runtime: &str) -> Result<(), awsim_core::AwsError> {
+    if VALID_RUNTIMES.contains(&runtime) {
+        return Ok(());
+    }
+    Err(awsim_core::AwsError::bad_request(
+        "InvalidParameterValueException",
+        format!(
+            "Value {runtime} at 'runtime' failed to satisfy constraint: \
+             Member must satisfy enum value set: [{}]",
+            VALID_RUNTIMES.join(", ")
+        ),
+    ))
+}
+
+/// Validate a Handler parameter. AWS's Smithy constrains it to non-empty
+/// strings of up to 128 characters with no whitespace. Format-checking
+/// against the runtime's specific shape (e.g. `module.function` for
+/// Python) is a runtime-time concern and not enforced here.
+pub fn validate_handler(handler: &str) -> Result<(), awsim_core::AwsError> {
+    if handler.is_empty() {
+        return Err(awsim_core::AwsError::bad_request(
+            "InvalidParameterValueException",
+            "Handler must not be empty",
+        ));
+    }
+    if handler.len() > 128 {
+        return Err(awsim_core::AwsError::bad_request(
+            "InvalidParameterValueException",
+            "Handler must be at most 128 characters",
+        ));
+    }
+    if handler.chars().any(char::is_whitespace) {
+        return Err(awsim_core::AwsError::bad_request(
+            "InvalidParameterValueException",
+            "Handler must not contain whitespace",
+        ));
+    }
+    Ok(())
+}
+
 /// Compute SHA-256 of bytes and return as base64.
 pub fn sha256_base64(data: &[u8]) -> String {
     let mut hasher = Sha256::new();

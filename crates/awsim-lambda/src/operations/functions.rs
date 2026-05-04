@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use crate::{
     error::{invalid_parameter, resource_conflict, resource_not_found},
     state::{LambdaFunction, LambdaState},
-    util::{decode_zip, now_iso8601, opt_str, require_str, sha256_base64},
+    util::{
+        decode_zip, now_iso8601, opt_str, require_str, sha256_base64, validate_handler,
+        validate_runtime,
+    },
 };
 
 /// Serialize a LambdaFunction into its FunctionConfiguration JSON shape.
@@ -115,6 +118,12 @@ pub fn create_function(
     let role = require_str(input, "Role")?;
     let runtime = opt_str(input, "Runtime").map(str::to_string);
     let handler = opt_str(input, "Handler").map(str::to_string);
+    if let Some(r) = runtime.as_deref() {
+        validate_runtime(r)?;
+    }
+    if let Some(h) = handler.as_deref() {
+        validate_handler(h)?;
+    }
     let description = opt_str(input, "Description").unwrap_or("").to_string();
     let timeout = input.get("Timeout").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
     let memory_size = input
@@ -295,9 +304,11 @@ pub fn update_function_configuration(
         f.role = role.to_string();
     }
     if let Some(handler) = opt_str(input, "Handler") {
+        validate_handler(handler)?;
         f.handler = Some(handler.to_string());
     }
     if let Some(runtime) = opt_str(input, "Runtime") {
+        validate_runtime(runtime)?;
         f.runtime = Some(runtime.to_string());
     }
     if let Some(desc) = opt_str(input, "Description") {
@@ -320,4 +331,88 @@ pub fn update_function_configuration(
     f.last_modified = now_iso8601();
 
     Ok(function_configuration(&f))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("lambda", "us-east-1")
+    }
+
+    fn empty_zip_b64() -> String {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD as BASE64;
+        let bytes: [u8; 22] = [
+            0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        BASE64.encode(bytes)
+    }
+
+    fn create_input(runtime: &str, handler: &str) -> Value {
+        json!({
+            "FunctionName": "f",
+            "Role": "arn:aws:iam::000000000000:role/test",
+            "Runtime": runtime,
+            "Handler": handler,
+            "Code": { "ZipFile": empty_zip_b64() },
+        })
+    }
+
+    #[test]
+    fn create_function_rejects_unknown_runtime() {
+        let state = LambdaState::default();
+        let err = create_function(&state, &create_input("ferris1.x", "index.handler"), &ctx())
+            .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+        assert!(err.message.contains("ferris1.x"));
+    }
+
+    #[test]
+    fn create_function_rejects_handler_with_whitespace() {
+        let state = LambdaState::default();
+        let err = create_function(
+            &state,
+            &create_input("nodejs20.x", "index .handler"),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+        assert!(err.message.contains("whitespace"));
+    }
+
+    #[test]
+    fn create_function_rejects_empty_handler() {
+        let state = LambdaState::default();
+        let err = create_function(&state, &create_input("nodejs20.x", ""), &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn create_function_accepts_valid_runtime_and_handler() {
+        let state = LambdaState::default();
+        let resp =
+            create_function(&state, &create_input("python3.12", "app.handler"), &ctx()).unwrap();
+        assert_eq!(resp["Runtime"], json!("python3.12"));
+        assert_eq!(resp["Handler"], json!("app.handler"));
+    }
+
+    #[test]
+    fn create_function_omits_runtime_validation_when_runtime_absent() {
+        // Container-image (PackageType=Image) functions don't carry a
+        // Runtime — must accept the absent case.
+        let state = LambdaState::default();
+        let resp = create_function(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "Role": "arn:aws:iam::000000000000:role/test",
+                "Code": { "ZipFile": empty_zip_b64() },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["FunctionName"], json!("f"));
+    }
 }
