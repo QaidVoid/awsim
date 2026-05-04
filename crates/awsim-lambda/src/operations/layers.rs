@@ -119,6 +119,42 @@ pub fn list_layer_versions(
     Ok(json!({ "LayerVersions": versions }))
 }
 
+pub fn get_layer_version(
+    state: &LambdaState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let layer_name = require_str(input, "LayerName")?;
+    let version_number = input
+        .get("VersionNumber")
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+        })
+        .ok_or_else(|| invalid_parameter("VersionNumber is required"))?;
+
+    let entry = state
+        .layers
+        .get(layer_name)
+        .ok_or_else(|| resource_not_found("layer", layer_name))?;
+
+    let lv = entry
+        .iter()
+        .find(|v| v.version == version_number)
+        .ok_or_else(|| resource_not_found("layer version", &version_number.to_string()))?;
+
+    let mut result = layer_version_to_value(lv);
+    // The Content sub-object carries a download Location alongside the
+    // hash fields. AWS Location is a presigned S3 URL valid for ~10 min;
+    // here we surface a stable awsim-internal URL pattern instead.
+    result["Content"] = json!({
+        "Location": format!("/layers/{}/{}/code.zip", lv.layer_name, lv.version),
+        "CodeSha256": lv.code_sha256,
+        "CodeSize": lv.code_size,
+    });
+    Ok(result)
+}
+
 pub fn delete_layer_version(
     state: &LambdaState,
     input: &Value,
@@ -149,4 +185,78 @@ pub fn delete_layer_version(
     }
 
     Ok(json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("lambda", "us-east-1")
+    }
+
+    fn empty_zip_b64() -> String {
+        // Minimal valid ZIP file (empty central directory).
+        let bytes: [u8; 22] = [
+            0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        BASE64.encode(bytes)
+    }
+
+    #[test]
+    fn get_layer_version_returns_metadata_and_content() {
+        let state = LambdaState::default();
+        publish_layer_version(
+            &state,
+            &json!({
+                "LayerName": "shared",
+                "Description": "test",
+                "CompatibleRuntimes": ["nodejs20.x"],
+                "Content": { "ZipFile": empty_zip_b64() },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let got = get_layer_version(
+            &state,
+            &json!({ "LayerName": "shared", "VersionNumber": 1u64 }),
+            &ctx(),
+        )
+        .unwrap();
+
+        assert_eq!(got["Version"], json!(1));
+        assert_eq!(
+            got["LayerArn"].as_str().unwrap(),
+            "arn:aws:lambda:us-east-1:000000000000:layer:shared"
+        );
+        let content = got.get("Content").expect("Content present");
+        assert!(content.get("Location").is_some());
+        assert_eq!(content["CodeSha256"], got["CodeSha256"]);
+        assert_eq!(content["CodeSize"], got["CodeSize"]);
+    }
+
+    #[test]
+    fn get_layer_version_unknown_version_returns_resource_not_found() {
+        let state = LambdaState::default();
+        publish_layer_version(
+            &state,
+            &json!({
+                "LayerName": "shared",
+                "Content": { "ZipFile": empty_zip_b64() },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let err = get_layer_version(
+            &state,
+            &json!({ "LayerName": "shared", "VersionNumber": 99u64 }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundException");
+    }
 }

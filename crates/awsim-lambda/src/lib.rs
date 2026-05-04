@@ -455,6 +455,7 @@ impl ServiceHandler for LambdaService {
             // Aliases
             "CreateAlias" => operations::aliases::create_alias(&state, &input, ctx),
             "GetAlias" => operations::aliases::get_alias(&state, &input, ctx),
+            "UpdateAlias" => operations::aliases::update_alias(&state, &input, ctx),
             "DeleteAlias" => operations::aliases::delete_alias(&state, &input, ctx),
             "ListAliases" => operations::aliases::list_aliases(&state, &input, ctx),
 
@@ -479,6 +480,7 @@ impl ServiceHandler for LambdaService {
             "PublishLayerVersion" => operations::layers::publish_layer_version(&state, &input, ctx),
             "ListLayers" => operations::layers::list_layers(&state, &input, ctx),
             "ListLayerVersions" => operations::layers::list_layer_versions(&state, &input, ctx),
+            "GetLayerVersion" => operations::layers::get_layer_version(&state, &input, ctx),
             "DeleteLayerVersion" => operations::layers::delete_layer_version(&state, &input, ctx),
 
             // Function URL Configs
