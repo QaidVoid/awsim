@@ -446,6 +446,16 @@ fn parse_tags(input: &Value) -> HashMap<String, String> {
 // ─── Object Tagging ─────────────────────────────────────────────────────────
 
 /// PUT /{Bucket}/{Key+}?tagging
+/// Read the caller's VersionId in either Smithy member-name (`VersionId`)
+/// or wire-query (`versionId`) form, like the equivalent helper in
+/// `operations/object`.
+fn version_id_input(input: &Value) -> Option<&str> {
+    input
+        .get("VersionId")
+        .or_else(|| input.get("versionId"))
+        .and_then(Value::as_str)
+}
+
 pub fn put_object_tagging(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = input["Bucket"]
         .as_str()
@@ -453,6 +463,7 @@ pub fn put_object_tagging(state: &S3State, input: &Value) -> Result<Value, AwsEr
     let key = input["Key"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingKey", "Key is required"))?;
+    let version_id = version_id_input(input);
 
     let bucket = state.buckets.get(bucket_name).ok_or_else(|| {
         AwsError::not_found("NoSuchBucket", format!("Bucket '{bucket_name}' not found"))
@@ -462,14 +473,20 @@ pub fn put_object_tagging(state: &S3State, input: &Value) -> Result<Value, AwsEr
         .objects
         .get_mut(key)
         .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
-    let obj = versions
-        .current_mut()
-        .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
+    let obj = match version_id {
+        Some(vid) => versions.find_mut(vid),
+        None => versions.current_mut(),
+    }
+    .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
 
     let tags = parse_tags(input);
     obj.tags = tags;
 
-    Ok(json!({}))
+    let mut result = json!({});
+    if let Some(vid) = obj.version_id.clone() {
+        result["VersionId"] = Value::String(vid);
+    }
+    Ok(result)
 }
 
 /// GET /{Bucket}/{Key+}?tagging
@@ -480,6 +497,7 @@ pub fn get_object_tagging(state: &S3State, input: &Value) -> Result<Value, AwsEr
     let key = input["Key"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingKey", "Key is required"))?;
+    let version_id = version_id_input(input);
 
     let bucket = state.buckets.get(bucket_name).ok_or_else(|| {
         AwsError::not_found("NoSuchBucket", format!("Bucket '{bucket_name}' not found"))
@@ -489,9 +507,11 @@ pub fn get_object_tagging(state: &S3State, input: &Value) -> Result<Value, AwsEr
         .objects
         .get(key)
         .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
-    let obj = versions
-        .current()
-        .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
+    let obj = match version_id {
+        Some(vid) => versions.find(vid),
+        None => versions.current(),
+    }
+    .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
 
     let tag_set: Vec<Value> = obj
         .tags
@@ -499,10 +519,14 @@ pub fn get_object_tagging(state: &S3State, input: &Value) -> Result<Value, AwsEr
         .map(|(k, v)| json!({"Key": k, "Value": v}))
         .collect();
 
-    Ok(json!({
+    let mut result = json!({
         "__xml_root": "Tagging",
         "TagSet": { "Tag": tag_set }
-    }))
+    });
+    if let Some(vid) = obj.version_id.clone() {
+        result["VersionId"] = Value::String(vid);
+    }
+    Ok(result)
 }
 
 /// DELETE /{Bucket}/{Key+}?tagging
@@ -513,6 +537,7 @@ pub fn delete_object_tagging(state: &S3State, input: &Value) -> Result<Value, Aw
     let key = input["Key"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingKey", "Key is required"))?;
+    let version_id = version_id_input(input);
 
     let bucket = state.buckets.get(bucket_name).ok_or_else(|| {
         AwsError::not_found("NoSuchBucket", format!("Bucket '{bucket_name}' not found"))
@@ -522,11 +547,22 @@ pub fn delete_object_tagging(state: &S3State, input: &Value) -> Result<Value, Aw
         .objects
         .get_mut(key)
         .ok_or_else(|| AwsError::not_found("NoSuchKey", format!("Key '{key}' not found")))?;
-    if let Some(obj) = versions.current_mut() {
+    let target = match version_id {
+        Some(vid) => versions.find_mut(vid),
+        None => versions.current_mut(),
+    };
+    let cleared_vid = if let Some(obj) = target {
         obj.tags.clear();
-    }
+        obj.version_id.clone()
+    } else {
+        None
+    };
 
-    Ok(json!({}))
+    let mut result = json!({});
+    if let Some(vid) = cleared_vid {
+        result["VersionId"] = Value::String(vid);
+    }
+    Ok(result)
 }
 
 // ─── ACL ──────────────────────────────────────────────────────────────────────
