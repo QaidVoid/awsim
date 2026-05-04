@@ -266,10 +266,6 @@ fn login_page_html(
     let nonce_e = escape_html(nonce);
     let code_challenge_e = escape_html(code_challenge);
     let code_challenge_method_e = escape_html(code_challenge_method);
-    // Re-render the username so the user doesn't have to retype it after
-    // a wrong-password attempt. Password fields are intentionally not
-    // pre-filled — browsers strip `value=` on password inputs anyway and
-    // it's poor practice to round-trip a password through the form.
     let username_e = prefill_username.map(escape_html).unwrap_or_default();
 
     let html = format!(
