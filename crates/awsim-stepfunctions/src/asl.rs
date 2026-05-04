@@ -140,19 +140,46 @@ impl InterpreterContext {
 
         let effective_input = apply_input_path(&input, state["InputPath"].as_str());
 
-        let result = match state_type {
-            "Pass" => self.exec_pass(&state, effective_input),
-            "Succeed" => self.exec_succeed(&state, effective_input),
-            "Fail" => self.exec_fail(&state),
-            "Wait" => self.exec_wait(&state, effective_input),
-            "Task" => self.exec_task(state_name, &state, effective_input),
-            "Choice" => self.exec_choice(&state, effective_input),
-            "Parallel" => self.exec_parallel(&state, effective_input),
-            "Map" => self.exec_map(&state, effective_input),
-            other => Err(StateFailed {
-                error: "UnsupportedStateType".to_string(),
-                cause: format!("State type '{other}' is not supported"),
-            }),
+        // Retry: re-run the state body up to MaxAttempts when the failure
+        // matches an ErrorEquals entry. We don't sleep IntervalSeconds —
+        // tasks already run synchronously here.
+        let max_attempts = max_retry_attempts(&state);
+        let mut attempt: u32 = 0;
+        let result = loop {
+            let attempt_result = match state_type {
+                "Pass" => self.exec_pass(&state, effective_input.clone()),
+                "Succeed" => self.exec_succeed(&state, effective_input.clone()),
+                "Fail" => self.exec_fail(&state),
+                "Wait" => self.exec_wait(&state, effective_input.clone()),
+                "Task" => self.exec_task(state_name, &state, effective_input.clone()),
+                "Choice" => self.exec_choice(&state, effective_input.clone()),
+                "Parallel" => self.exec_parallel(&state, effective_input.clone()),
+                "Map" => self.exec_map(&state, effective_input.clone()),
+                other => Err(StateFailed {
+                    error: "UnsupportedStateType".to_string(),
+                    cause: format!("State type '{other}' is not supported"),
+                }),
+            };
+
+            match attempt_result {
+                Ok(ok) => break Ok(ok),
+                Err(err) => {
+                    if attempt < max_attempts && retry_matches(&state, &err.error) {
+                        attempt += 1;
+                        self.push_event(
+                            "StateRetrying",
+                            json!({
+                                "name": state_name,
+                                "attempt": attempt,
+                                "error": err.error,
+                                "cause": err.cause,
+                            }),
+                        );
+                        continue;
+                    }
+                    break Err(err);
+                }
+            }
         };
 
         match result {
@@ -169,7 +196,29 @@ impl InterpreterContext {
                     StateTransition::Next(next_state) => self.run_state(&next_state, final_output),
                 }
             }
-            Err(e) => Err(e),
+            Err(err) => {
+                // Catch: route to a fallback state with the error info
+                // attached at ResultPath (default `$`). State counts as
+                // succeeded for the purpose of execution status.
+                if let Some((next_state, result_path)) = catch_target(&state, &err.error) {
+                    let error_payload = json!({
+                        "Error": err.error,
+                        "Cause": err.cause,
+                    });
+                    let merged =
+                        apply_result_path(&effective_input, &error_payload, Some(&result_path));
+                    self.push_event(
+                        "StateCaught",
+                        json!({
+                            "name": state_name,
+                            "next": next_state,
+                            "error": err.error,
+                        }),
+                    );
+                    return self.run_state(&next_state, merged);
+                }
+                Err(err)
+            }
         }
     }
 
@@ -348,6 +397,70 @@ impl InterpreterContext {
         let result_output = apply_result_path(&input, &map_output, state["ResultPath"].as_str());
         Ok((result_output, transition(state)))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Retry / Catch helpers
+// ---------------------------------------------------------------------------
+
+/// Walk the state's `Retry` array and return the highest MaxAttempts seen
+/// (effectively `max(MaxAttempts)` across applicable entries). When no
+/// Retry block exists, the cap is 0 — the state runs once.
+fn max_retry_attempts(state: &Value) -> u32 {
+    let Some(arr) = state.get("Retry").and_then(|v| v.as_array()) else {
+        return 0;
+    };
+    arr.iter()
+        .map(|entry| {
+            entry
+                .get("MaxAttempts")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(3) as u32
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Returns true when `error` matches any `ErrorEquals` in any Retry entry.
+/// The synthetic name `States.ALL` matches every error.
+fn retry_matches(state: &Value, error: &str) -> bool {
+    let Some(arr) = state.get("Retry").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    arr.iter()
+        .filter_map(|entry| entry.get("ErrorEquals").and_then(|v| v.as_array()))
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .any(|e| e == "States.ALL" || e == error)
+}
+
+/// Find the first Catch entry whose ErrorEquals includes `error` and
+/// return `(Next state name, ResultPath)`. ResultPath defaults to `$` (
+/// the error replaces the input entirely) when the catch entry omits it.
+fn catch_target(state: &Value, error: &str) -> Option<(String, String)> {
+    let arr = state.get("Catch").and_then(|v| v.as_array())?;
+    for entry in arr {
+        let matches = entry
+            .get("ErrorEquals")
+            .and_then(|v| v.as_array())
+            .map(|errs| {
+                errs.iter()
+                    .filter_map(|e| e.as_str())
+                    .any(|e| e == "States.ALL" || e == error)
+            })
+            .unwrap_or(false);
+        if !matches {
+            continue;
+        }
+        let next = entry.get("Next").and_then(|v| v.as_str())?.to_string();
+        let result_path = entry
+            .get("ResultPath")
+            .and_then(|v| v.as_str())
+            .unwrap_or("$")
+            .to_string();
+        return Some((next, result_path));
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -681,6 +794,98 @@ mod tests {
         assert_eq!(result.status, "SUCCEEDED");
         let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
         assert_eq!(out, json!([]));
+    }
+
+    #[test]
+    fn catch_routes_failure_to_fallback_state() {
+        // Fail state's error matches the Catch entry → execution
+        // succeeds, ending in the fallback state with the error info
+        // attached at $.error.
+        let def = r#"{
+            "StartAt": "Try",
+            "States": {
+                "Try": {
+                    "Type": "Fail",
+                    "Error": "FlakyError",
+                    "Cause": "transient",
+                    "Catch": [{
+                        "ErrorEquals": ["FlakyError"],
+                        "Next": "Fallback",
+                        "ResultPath": "$.error"
+                    }]
+                },
+                "Fallback": { "Type": "Pass", "End": true }
+            }
+        }"#;
+        let result = run(def, r#"{"hello":"world"}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out["hello"], json!("world"));
+        assert_eq!(out["error"]["Error"], json!("FlakyError"));
+        assert_eq!(out["error"]["Cause"], json!("transient"));
+    }
+
+    #[test]
+    fn catch_states_all_matches_any_error() {
+        let def = r#"{
+            "StartAt": "Try",
+            "States": {
+                "Try": {
+                    "Type": "Fail",
+                    "Error": "AnythingGoesHere",
+                    "Catch": [{
+                        "ErrorEquals": ["States.ALL"],
+                        "Next": "Fallback"
+                    }]
+                },
+                "Fallback": { "Type": "Pass", "Result": "caught", "End": true }
+            }
+        }"#;
+        let result = run(def, r#"{}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        assert_eq!(result.output.as_deref(), Some("\"caught\""));
+    }
+
+    #[test]
+    fn unmatched_error_propagates_failure() {
+        let def = r#"{
+            "StartAt": "Try",
+            "States": {
+                "Try": {
+                    "Type": "Fail",
+                    "Error": "Unhandled",
+                    "Catch": [{
+                        "ErrorEquals": ["DifferentError"],
+                        "Next": "Fallback"
+                    }]
+                },
+                "Fallback": { "Type": "Pass", "End": true }
+            }
+        }"#;
+        let result = run(def, r#"{}"#);
+        assert_eq!(result.status, "FAILED");
+        assert_eq!(result.error.as_deref(), Some("Unhandled"));
+    }
+
+    #[test]
+    fn retry_then_catch_handles_exhausted_attempts() {
+        // Retry is set but the Fail state always fails the same way;
+        // after MaxAttempts, Catch picks up the failure.
+        let def = r#"{
+            "StartAt": "Try",
+            "States": {
+                "Try": {
+                    "Type": "Fail",
+                    "Error": "Boom",
+                    "Retry": [{ "ErrorEquals": ["Boom"], "MaxAttempts": 2 }],
+                    "Catch": [{ "ErrorEquals": ["Boom"], "Next": "End" }]
+                },
+                "End": { "Type": "Pass", "Result": "recovered", "End": true }
+            }
+        }"#;
+        let result = run(def, r#"{}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        assert_eq!(result.output.as_deref(), Some("\"recovered\""));
     }
 
     #[test]
