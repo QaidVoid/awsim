@@ -132,6 +132,28 @@ fn version_id_input(input: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+/// Pull the user-metadata sub-map out of the input. The protocol layer
+/// converts incoming `x-amz-meta-*` headers into PascalCase keys
+/// (`Meta<Suffix>`); this reverses that to the wire form so we store
+/// them under the original `x-amz-meta-{name}` key.
+fn extract_user_metadata(input: &Value) -> HashMap<String, String> {
+    let mut metadata = HashMap::new();
+    if let Some(obj) = input.as_object() {
+        for (k, v) in obj {
+            if k.starts_with("Meta")
+                && let Some(val) = v.as_str()
+            {
+                let meta_key = format!(
+                    "x-amz-meta-{}",
+                    to_kebab(k.strip_prefix("Meta").unwrap_or(k))
+                );
+                metadata.insert(meta_key, val.to_string());
+            }
+        }
+    }
+    metadata
+}
+
 /// Strip an optional `?versionId=X` suffix from a CopySource value, returning
 /// `(bucket_and_key, version_id)`.
 fn split_copy_source_version(raw: &str) -> (&str, Option<&str>) {
@@ -224,21 +246,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     let content_language = opt_str(input, "ContentLanguage").map(String::from);
     let expires = opt_str(input, "Expires").map(String::from);
 
-    let mut metadata = HashMap::new();
-    if let Some(obj) = input.as_object() {
-        for (k, v) in obj {
-            // Look for keys that start with "Meta" (from x-amz-meta-* headers).
-            if k.starts_with("Meta")
-                && let Some(val) = v.as_str()
-            {
-                let meta_key = format!(
-                    "x-amz-meta-{}",
-                    to_kebab(k.strip_prefix("Meta").unwrap_or(k))
-                );
-                metadata.insert(meta_key, val.to_string());
-            }
-        }
-    }
+    let metadata = extract_user_metadata(input);
 
     let content_length = data.len() as u64;
     let etag = compute_etag(&data);
@@ -573,13 +581,13 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
     // Read source object (possibly a specific historical version).
     let (
         data,
-        content_type,
-        metadata,
-        content_encoding,
-        cache_control,
-        content_disposition,
-        content_language,
-        expires,
+        src_content_type,
+        src_metadata,
+        src_content_encoding,
+        src_cache_control,
+        src_content_disposition,
+        src_content_language,
+        src_expires,
         src_version_id,
     ) = {
         let bucket = state
@@ -608,6 +616,44 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
             obj.content_language.clone(),
             obj.expires.clone(),
             obj.version_id.clone(),
+        )
+    };
+
+    // MetadataDirective controls whether the destination's user metadata
+    // and Content-* fields come from the source (COPY, default) or from
+    // the request itself (REPLACE). Per AWS:
+    //   COPY     — ignore request metadata; carry source metadata over
+    //   REPLACE  — drop source metadata; use only what the request supplies
+    let metadata_directive = opt_str(input, "MetadataDirective").unwrap_or("COPY");
+    let (
+        content_type,
+        metadata,
+        content_encoding,
+        cache_control,
+        content_disposition,
+        content_language,
+        expires,
+    ) = if metadata_directive == "REPLACE" {
+        (
+            opt_str(input, "ContentType")
+                .map(str::to_string)
+                .unwrap_or_else(|| "application/octet-stream".to_string()),
+            extract_user_metadata(input),
+            opt_str(input, "ContentEncoding").map(str::to_string),
+            opt_str(input, "CacheControl").map(str::to_string),
+            opt_str(input, "ContentDisposition").map(str::to_string),
+            opt_str(input, "ContentLanguage").map(str::to_string),
+            opt_str(input, "Expires").map(str::to_string),
+        )
+    } else {
+        (
+            src_content_type,
+            src_metadata,
+            src_content_encoding,
+            src_cache_control,
+            src_content_disposition,
+            src_content_language,
+            src_expires,
         )
     };
 
@@ -1057,6 +1103,80 @@ mod tests {
         )
         .unwrap();
         assert!(resp.get("Body").is_some());
+    }
+
+    #[test]
+    fn copy_object_default_directive_carries_source_metadata() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        // Source object with custom Content-Type and a user metadata field.
+        put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "src",
+                "Body": "data",
+                "ContentType": "text/plain",
+                "MetaProject": "alpha",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        // CopyObject without MetadataDirective defaults to COPY.
+        put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "dst",
+                "CopySource": "b/src",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let head = head_object(&state, &json!({ "Bucket": "b", "Key": "dst" })).unwrap();
+        assert_eq!(head["ContentType"].as_str(), Some("text/plain"));
+        // User metadata round-trips on Head.
+        assert_eq!(head["x-amz-meta-project"].as_str(), Some("alpha"));
+    }
+
+    #[test]
+    fn copy_object_replace_directive_overwrites_metadata_from_request() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "src",
+                "Body": "data",
+                "ContentType": "text/plain",
+                "MetaProject": "alpha",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        // REPLACE: source metadata is dropped; only request metadata applies.
+        put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "dst",
+                "CopySource": "b/src",
+                "MetadataDirective": "REPLACE",
+                "ContentType": "application/json",
+                "MetaTeam": "infra",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let head = head_object(&state, &json!({ "Bucket": "b", "Key": "dst" })).unwrap();
+        assert_eq!(head["ContentType"].as_str(), Some("application/json"));
+        // New request metadata appears.
+        assert_eq!(head["x-amz-meta-team"].as_str(), Some("infra"));
+        // Source metadata does NOT appear.
+        assert!(head.get("x-amz-meta-project").is_none());
     }
 
     #[test]
