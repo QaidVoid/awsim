@@ -565,13 +565,41 @@ pub fn update_item(
             result["Attributes"] = item_to_json(&new_item);
         }
         "UPDATED_OLD" => {
-            // In full fidelity we'd track which attrs changed; for now return old
+            // The diff of the old item against the new: attributes that
+            // were modified or removed by the update, in their pre-update
+            // form. Key attributes never participate.
+            let key_names: std::collections::HashSet<&String> = key.keys().collect();
             if let Some(old) = old_item {
-                result["Attributes"] = item_to_json(&old);
+                let mut diff = DynamoItem::new();
+                for (k, v) in old.iter() {
+                    if key_names.contains(k) {
+                        continue;
+                    }
+                    if new_item.get(k) != Some(v) {
+                        diff.insert(k.clone(), v.clone());
+                    }
+                }
+                if !diff.is_empty() {
+                    result["Attributes"] = item_to_json(&diff);
+                }
             }
         }
         "UPDATED_NEW" => {
-            result["Attributes"] = item_to_json(&new_item);
+            // The diff of the new item against the old: attributes added
+            // or changed by the update, in their post-update form.
+            let key_names: std::collections::HashSet<&String> = key.keys().collect();
+            let mut diff = DynamoItem::new();
+            for (k, v) in new_item.iter() {
+                if key_names.contains(k) {
+                    continue;
+                }
+                if old_item.as_ref().and_then(|o| o.get(k)) != Some(v) {
+                    diff.insert(k.clone(), v.clone());
+                }
+            }
+            if !diff.is_empty() {
+                result["Attributes"] = item_to_json(&diff);
+            }
         }
         _ => {}
     }
@@ -802,6 +830,89 @@ mod tests {
         });
         let err = put_item(&state, &sqlite, &no_flag, &ctx).unwrap_err();
         assert!(err.extras.is_none(), "Item should be opt-in");
+    }
+
+    #[test]
+    fn update_item_returns_only_modified_attrs_for_updated_new() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let ctx = ctx();
+        // Seed with three attributes.
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": {
+                    "pk": {"S": "p"}, "sk": {"S": "s"},
+                    "a": {"N": "1"}, "b": {"S": "old"}, "c": {"S": "stays"},
+                },
+            }),
+            &ctx,
+        )
+        .unwrap();
+
+        let resp = update_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Key": { "pk": {"S": "p"}, "sk": {"S": "s"} },
+                "UpdateExpression": "SET a = :a, b = :b",
+                "ExpressionAttributeValues": { ":a": {"N": "2"}, ":b": {"S": "new"} },
+                "ReturnValues": "UPDATED_NEW",
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let attrs = &resp["Attributes"];
+        // Only a and b changed; c is unchanged so must NOT appear.
+        assert_eq!(attrs["a"]["N"], json!("2"));
+        assert_eq!(attrs["b"]["S"], json!("new"));
+        assert!(
+            attrs.get("c").is_none(),
+            "unchanged attribute must be filtered"
+        );
+        // Key attributes never participate in UPDATED_*.
+        assert!(attrs.get("pk").is_none());
+        assert!(attrs.get("sk").is_none());
+    }
+
+    #[test]
+    fn update_item_returns_pre_update_values_for_updated_old() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let ctx = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": {
+                    "pk": {"S": "p"}, "sk": {"S": "s"},
+                    "a": {"N": "1"}, "c": {"S": "stays"},
+                },
+            }),
+            &ctx,
+        )
+        .unwrap();
+
+        let resp = update_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Key": { "pk": {"S": "p"}, "sk": {"S": "s"} },
+                "UpdateExpression": "SET a = :a",
+                "ExpressionAttributeValues": { ":a": {"N": "99"} },
+                "ReturnValues": "UPDATED_OLD",
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let attrs = &resp["Attributes"];
+        assert_eq!(attrs["a"]["N"], json!("1"));
+        assert!(attrs.get("c").is_none());
     }
 
     #[test]
