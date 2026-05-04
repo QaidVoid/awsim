@@ -65,6 +65,15 @@ fn secret_metadata(secret: &Secret) -> Value {
     if let Some(days) = secret.rotation_automatically_after_days {
         meta["RotationRules"] = json!({ "AutomaticallyAfterDays": days });
     }
+    if let Some(ref kms) = secret.kms_key_id {
+        meta["KmsKeyId"] = json!(kms);
+    }
+    if let Some(ts) = secret.last_rotated_date {
+        meta["LastRotatedDate"] = json!(ts);
+    }
+    if let Some(ts) = secret.last_accessed_date {
+        meta["LastAccessedDate"] = json!(ts);
+    }
 
     if !secret.tags.is_empty() {
         let tags: Vec<Value> = secret
@@ -155,6 +164,9 @@ pub fn create_secret(
         rotation_enabled: false,
         rotation_lambda_arn: None,
         rotation_automatically_after_days: None,
+        kms_key_id: input["KmsKeyId"].as_str().map(str::to_string),
+        last_rotated_date: None,
+        last_accessed_date: None,
     };
 
     info!(name = %name, arn = %arn, "Created secret");
@@ -189,6 +201,16 @@ pub fn get_secret_value(
     if secret.deleted_date.is_some() {
         return Err(error::invalid_request("Secret is marked for deletion"));
     }
+
+    // Drop the read guard and re-acquire mutably to stamp LastAccessedDate.
+    drop(secret);
+    if let Some(mut s) = state.secrets.get_mut(&name) {
+        s.last_accessed_date = Some(now_epoch_f64());
+    }
+    let secret = state
+        .secrets
+        .get(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
 
     let version_stage = input["VersionStage"].as_str().unwrap_or("AWSCURRENT");
     let version_id = if let Some(vid) = input["VersionId"].as_str() {
@@ -369,16 +391,101 @@ pub fn describe_secret(
 
 pub fn list_secrets(
     state: &SecretsState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let list: Vec<Value> = state
+    let filters = parse_list_filters(input)?;
+    let include_planned_deletion = input["IncludePlannedDeletion"].as_bool().unwrap_or(false);
+
+    let mut secrets: Vec<Secret> = state
         .secrets
         .iter()
-        .map(|entry| secret_metadata(entry.value()))
+        .filter(|entry| {
+            let s = entry.value();
+            if !include_planned_deletion && s.deleted_date.is_some() {
+                return false;
+            }
+            filters.iter().all(|f| f.matches(s))
+        })
+        .map(|entry| entry.value().clone())
         .collect();
 
+    // SortOrder operates on the secret's CreatedDate per AWS docs.
+    let sort_order = input["SortOrder"].as_str().unwrap_or("asc");
+    secrets.sort_by(|a, b| match sort_order {
+        "desc" => b
+            .created_date
+            .partial_cmp(&a.created_date)
+            .unwrap_or(std::cmp::Ordering::Equal),
+        _ => a
+            .created_date
+            .partial_cmp(&b.created_date)
+            .unwrap_or(std::cmp::Ordering::Equal),
+    });
+
+    let list: Vec<Value> = secrets.iter().map(secret_metadata).collect();
     Ok(json!({ "SecretList": list }))
+}
+
+/// A single Filter entry from the ListSecrets request.
+struct ListFilter {
+    key: String,
+    values: Vec<String>,
+}
+
+impl ListFilter {
+    fn matches(&self, s: &Secret) -> bool {
+        // AWS treats multiple values within a single filter as OR; they
+        // also do prefix matching on string fields and accept a leading
+        // `!` to negate.
+        self.values.iter().any(|raw| {
+            let (negate, needle) = match raw.strip_prefix('!') {
+                Some(stripped) => (true, stripped),
+                None => (false, raw.as_str()),
+            };
+            let hit = match self.key.as_str() {
+                "name" => s.name.contains(needle),
+                "description" => s.description.contains(needle),
+                "tag-key" => s.tags.keys().any(|k| k.contains(needle)),
+                "tag-value" => s.tags.values().any(|v| v.contains(needle)),
+                "primary-region" => false,
+                "owning-service" => false,
+                "all" => {
+                    s.name.contains(needle)
+                        || s.description.contains(needle)
+                        || s.tags.keys().any(|k| k.contains(needle))
+                        || s.tags.values().any(|v| v.contains(needle))
+                }
+                _ => false,
+            };
+            if negate { !hit } else { hit }
+        })
+    }
+}
+
+fn parse_list_filters(input: &Value) -> Result<Vec<ListFilter>, AwsError> {
+    let Some(arr) = input["Filters"].as_array() else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for f in arr {
+        let key = f["Key"].as_str().ok_or_else(|| {
+            error::invalid_parameter("Filter.Key is required and must be a string")
+        })?;
+        let values: Vec<String> = f["Values"]
+            .as_array()
+            .map(|vs| {
+                vs.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.push(ListFilter {
+            key: key.to_string(),
+            values,
+        });
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +513,9 @@ pub fn update_secret(
 
     if let Some(desc) = input["Description"].as_str() {
         secret.description = desc.to_string();
+    }
+    if let Some(kms) = input["KmsKeyId"].as_str() {
+        secret.kms_key_id = Some(kms.to_string());
     }
 
     let has_new_value =
@@ -678,6 +788,7 @@ pub fn rotate_secret(
     secret.versions.insert(pending_vid.clone(), new_version);
     secret.current_version_id = pending_vid.clone();
     secret.last_changed_date = now;
+    secret.last_rotated_date = Some(now);
 
     let arn = secret.arn.clone();
     let sname = secret.name.clone();
@@ -1258,6 +1369,84 @@ mod tests {
         .unwrap();
         assert_eq!(first["VersionId"], replay["VersionId"]);
         assert_eq!(replay["VersionId"].as_str().unwrap(), tok);
+    }
+
+    #[test]
+    fn create_secret_persists_kms_key_id_in_describe() {
+        let state = SecretsState::default();
+        create_secret(
+            &state,
+            &json!({
+                "Name": "s",
+                "SecretString": "v",
+                "KmsKeyId": "arn:aws:kms:us-east-1:000000000000:key/abc",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = describe_secret(&state, &json!({ "SecretId": "s" }), &ctx()).unwrap();
+        assert_eq!(
+            resp["KmsKeyId"],
+            json!("arn:aws:kms:us-east-1:000000000000:key/abc")
+        );
+    }
+
+    #[test]
+    fn rotate_secret_stamps_last_rotated_date() {
+        let state = SecretsState::default();
+        create_secret(&state, &json!({ "Name": "s", "SecretString": "v" }), &ctx()).unwrap();
+        let before = describe_secret(&state, &json!({ "SecretId": "s" }), &ctx()).unwrap();
+        assert!(before.get("LastRotatedDate").is_none());
+
+        rotate_secret(&state, &json!({ "SecretId": "s" }), &ctx()).unwrap();
+
+        let after = describe_secret(&state, &json!({ "SecretId": "s" }), &ctx()).unwrap();
+        assert!(after.get("LastRotatedDate").is_some());
+    }
+
+    #[test]
+    fn list_secrets_filters_by_name_and_negates() {
+        let state = SecretsState::default();
+        create_secret(
+            &state,
+            &json!({ "Name": "alpha", "SecretString": "v" }),
+            &ctx(),
+        )
+        .unwrap();
+        create_secret(
+            &state,
+            &json!({ "Name": "beta", "SecretString": "v" }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let resp = list_secrets(
+            &state,
+            &json!({ "Filters": [{ "Key": "name", "Values": ["alpha"] }] }),
+            &ctx(),
+        )
+        .unwrap();
+        let names: Vec<&str> = resp["SecretList"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["alpha"]);
+
+        let resp = list_secrets(
+            &state,
+            &json!({ "Filters": [{ "Key": "name", "Values": ["!alpha"] }] }),
+            &ctx(),
+        )
+        .unwrap();
+        let names: Vec<&str> = resp["SecretList"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["beta"]);
     }
 
     #[test]

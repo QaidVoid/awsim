@@ -114,6 +114,9 @@ pub async fn seed(
                 rotation_enabled: false,
                 rotation_lambda_arn: None,
                 rotation_automatically_after_days: None,
+                kms_key_id: None,
+                last_rotated_date: None,
+                last_accessed_date: None,
             };
             secrets_state.secrets.insert(name, secret);
             created += 1;

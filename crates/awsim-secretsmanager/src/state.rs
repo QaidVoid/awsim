@@ -36,6 +36,16 @@ pub struct Secret {
     pub rotation_lambda_arn: Option<String>,
     /// Days between automatic rotations.
     pub rotation_automatically_after_days: Option<u64>,
+    /// KMS key ARN/alias used to encrypt secret values at rest. None
+    /// means the AWS-managed `aws/secretsmanager` key (unsurfaced in
+    /// Describe responses, matching AWS).
+    pub kms_key_id: Option<String>,
+    /// Unix epoch seconds — last time RotateSecret successfully ran.
+    /// `None` until the first rotation completes.
+    pub last_rotated_date: Option<f64>,
+    /// Unix epoch seconds — last time the secret value was retrieved
+    /// (any GetSecretValue call). Surfaces in Describe / ListSecrets.
+    pub last_accessed_date: Option<f64>,
 }
 
 /// Per-account/region Secrets Manager state.
