@@ -242,10 +242,12 @@ pub fn list_event_source_mappings(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    use awsim_core::pagination::{cap_max_results, paginate};
+
     let filter_source_arn = opt_str(input, "EventSourceArn");
     let filter_function = opt_str(input, "FunctionName");
 
-    let mappings: Vec<Value> = state
+    let mut all: Vec<EventSourceMapping> = state
         .event_source_mappings
         .iter()
         .filter(|m| {
@@ -261,8 +263,18 @@ pub fn list_event_source_mappings(
             }
             true
         })
-        .map(|m| mapping_to_value(&m))
+        .map(|m| m.value().clone())
         .collect();
+    all.sort_by(|a, b| a.uuid.cmp(&b.uuid));
 
-    Ok(json!({ "EventSourceMappings": mappings }))
+    let max = cap_max_results(input.get("MaxItems").and_then(Value::as_i64), 100, 10_000);
+    let marker = input.get("Marker").and_then(Value::as_str);
+    let page = paginate(all, max, marker, |m| m.uuid.clone())?;
+
+    let mappings: Vec<Value> = page.items.iter().map(mapping_to_value).collect();
+    let mut result = json!({ "EventSourceMappings": mappings });
+    if let Some(token) = page.next_token {
+        result["NextMarker"] = json!(token);
+    }
+    Ok(result)
 }

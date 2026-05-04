@@ -84,24 +84,44 @@ pub fn publish_layer_version(
 
 pub fn list_layers(
     state: &LambdaState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let layers: Vec<Value> = state
+    use awsim_core::pagination::{cap_max_results, paginate};
+
+    let mut all: Vec<(String, LayerVersion)> = state
         .layers
         .iter()
         .filter_map(|entry| {
-            entry.value().last().map(|latest| {
-                json!({
-                    "LayerName": entry.key(),
-                    "LayerArn": latest.layer_arn,
-                    "LatestMatchingVersion": layer_version_to_value(latest),
-                })
+            entry
+                .value()
+                .last()
+                .cloned()
+                .map(|latest| (entry.key().clone(), latest))
+        })
+        .collect();
+    all.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let max = cap_max_results(input.get("MaxItems").and_then(Value::as_i64), 50, 50);
+    let marker = input.get("Marker").and_then(Value::as_str);
+    let page = paginate(all, max, marker, |(name, _)| name.clone())?;
+
+    let layers: Vec<Value> = page
+        .items
+        .iter()
+        .map(|(name, latest)| {
+            json!({
+                "LayerName": name,
+                "LayerArn": latest.layer_arn,
+                "LatestMatchingVersion": layer_version_to_value(latest),
             })
         })
         .collect();
-
-    Ok(json!({ "Layers": layers }))
+    let mut result = json!({ "Layers": layers });
+    if let Some(token) = page.next_token {
+        result["NextMarker"] = json!(token);
+    }
+    Ok(result)
 }
 
 pub fn list_layer_versions(
@@ -109,14 +129,29 @@ pub fn list_layer_versions(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    use awsim_core::pagination::{cap_max_results, paginate};
+
     let layer_name = require_str(input, "LayerName")?;
 
-    let versions = match state.layers.get(layer_name) {
-        Some(v) => v.iter().map(layer_version_to_value).collect::<Vec<_>>(),
-        None => vec![],
+    let all: Vec<LayerVersion> = match state.layers.get(layer_name) {
+        Some(v) => v.iter().cloned().collect(),
+        None => Vec::new(),
     };
 
-    Ok(json!({ "LayerVersions": versions }))
+    let max = cap_max_results(input.get("MaxItems").and_then(Value::as_i64), 50, 50);
+    let marker = input.get("Marker").and_then(Value::as_str);
+    // Sort by version ascending so the marker (formatted version) gives
+    // a stable ordering across calls.
+    let mut sorted = all;
+    sorted.sort_by_key(|v| v.version);
+    let page = paginate(sorted, max, marker, |v| format!("{:020}", v.version))?;
+
+    let versions: Vec<Value> = page.items.iter().map(layer_version_to_value).collect();
+    let mut result = json!({ "LayerVersions": versions });
+    if let Some(token) = page.next_token {
+        result["NextMarker"] = json!(token);
+    }
+    Ok(result)
 }
 
 pub fn get_layer_version(

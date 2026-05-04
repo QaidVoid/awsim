@@ -96,14 +96,17 @@ pub fn list_versions_by_function(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    use awsim_core::pagination::{cap_max_results, paginate};
+
     let name = require_str(input, "FunctionName")?;
     let f = state
         .functions
         .get(name)
         .ok_or_else(|| resource_not_found("function", name))?;
 
-    // Include $LATEST plus all published versions
-    let mut versions: Vec<Value> = vec![json!({
+    // Build the full list ($LATEST first, then numeric versions in order)
+    // and let the shared paginator carve out the requested slice.
+    let mut entries: Vec<Value> = vec![json!({
         "FunctionName": f.name,
         "FunctionArn": f.arn,
         "Runtime": f.runtime,
@@ -118,9 +121,8 @@ pub fn list_versions_by_function(
         "LastModified": f.last_modified,
         "State": f.state,
     })];
-
     for ver in &f.versions {
-        versions.push(json!({
+        entries.push(json!({
             "FunctionName": f.name,
             "FunctionArn": format!("{}:{}", f.arn, ver.version),
             "Runtime": f.runtime,
@@ -137,7 +139,17 @@ pub fn list_versions_by_function(
         }));
     }
 
-    Ok(json!({ "Versions": versions }))
+    let max = cap_max_results(input.get("MaxItems").and_then(Value::as_i64), 50, 50);
+    let marker = input.get("Marker").and_then(Value::as_str);
+    let page = paginate(entries, max, marker, |v| {
+        v["Version"].as_str().unwrap_or("").to_string()
+    })?;
+
+    let mut result = json!({ "Versions": page.items });
+    if let Some(token) = page.next_token {
+        result["NextMarker"] = json!(token);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

@@ -245,16 +245,24 @@ pub fn delete_function(state: &LambdaState, input: &Value) -> Result<Value, AwsE
 
 pub fn list_functions(
     state: &LambdaState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let functions: Vec<Value> = state
-        .functions
-        .iter()
-        .map(|f| function_configuration(&f))
-        .collect();
+    use awsim_core::pagination::{cap_max_results, paginate};
 
-    Ok(json!({ "Functions": functions }))
+    let mut all: Vec<LambdaFunction> = state.functions.iter().map(|f| f.value().clone()).collect();
+    all.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let max = cap_max_results(input.get("MaxItems").and_then(Value::as_i64), 50, 50);
+    let marker = input.get("Marker").and_then(Value::as_str);
+    let page = paginate(all, max, marker, |f| f.name.clone())?;
+
+    let functions: Vec<Value> = page.items.iter().map(function_configuration).collect();
+    let mut result = json!({ "Functions": functions });
+    if let Some(token) = page.next_token {
+        result["NextMarker"] = json!(token);
+    }
+    Ok(result)
 }
 
 pub fn update_function_code(

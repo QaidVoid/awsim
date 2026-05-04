@@ -125,6 +125,8 @@ pub fn list_aliases(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    use awsim_core::pagination::{cap_max_results, paginate};
+
     let function_name = require_str(input, "FunctionName")?;
 
     let f = state
@@ -132,9 +134,19 @@ pub fn list_aliases(
         .get(function_name)
         .ok_or_else(|| resource_not_found("function", function_name))?;
 
-    let aliases: Vec<Value> = f.aliases.values().map(alias_to_value).collect();
+    let mut all: Vec<Alias> = f.aliases.values().cloned().collect();
+    all.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Ok(json!({ "Aliases": aliases }))
+    let max = cap_max_results(input.get("MaxItems").and_then(Value::as_i64), 50, 50);
+    let marker = input.get("Marker").and_then(Value::as_str);
+    let page = paginate(all, max, marker, |a| a.name.clone())?;
+
+    let aliases: Vec<Value> = page.items.iter().map(alias_to_value).collect();
+    let mut result = json!({ "Aliases": aliases });
+    if let Some(token) = page.next_token {
+        result["NextMarker"] = json!(token);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
