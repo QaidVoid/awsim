@@ -378,90 +378,236 @@ fn remove_nested_in_value(current: &mut Value, parts: &[&str]) {
     }
 }
 
-/// Apply ADD operation (numeric increment or set union).
-fn apply_add(item: &mut DynamoItem, path: &str, value: &Value) -> Result<(), AwsError> {
-    let existing = item.get(path).cloned();
-    match existing {
-        None => {
-            // If no existing value, just set it
-            item.insert(path.to_string(), value.clone());
+/// Walk a dot-separated map path and run `f` on the leaf value's parent
+/// container so the caller can insert / replace / remove the leaf. The
+/// intermediate maps are auto-created on missing-segment writes.
+fn with_leaf_mut<F>(item: &mut DynamoItem, path: &str, f: F)
+where
+    F: FnOnce(&mut serde_json::Map<String, Value>, &str),
+{
+    let parts: Vec<&str> = path.split('.').collect();
+    if parts.len() == 1 {
+        // Top-level: synthesize a one-shot Map<String, Value> view.
+        // BTreeMap is not serde_json::Map, so we operate directly on `item`.
+        let key = parts[0];
+        let mut shim = serde_json::Map::new();
+        if let Some(v) = item.get(key) {
+            shim.insert(key.to_string(), v.clone());
         }
-        Some(existing) => {
-            if let (Some(en), Some(vn)) = (
-                existing.get("N").and_then(|v| v.as_str()),
-                value.get("N").and_then(|v| v.as_str()),
-            ) {
-                let result: f64 =
-                    en.parse::<f64>().unwrap_or(0.0) + vn.parse::<f64>().unwrap_or(0.0);
-                let s = if result.fract() == 0.0 {
-                    format!("{}", result as i64)
-                } else {
-                    result.to_string()
-                };
-                item.insert(path.to_string(), json!({ "N": s }));
-            } else if existing.get("SS").is_some() {
-                // Union of sets
-                let mut ss: Vec<Value> = existing
-                    .get("SS")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                if let Some(new_ss) = value.get("SS").and_then(|v| v.as_array()) {
-                    for v in new_ss {
-                        if !ss.contains(v) {
-                            ss.push(v.clone());
-                        }
-                    }
-                }
-                item.insert(path.to_string(), json!({ "SS": ss }));
-            } else if existing.get("NS").is_some() {
-                let mut ns: Vec<Value> = existing
-                    .get("NS")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                if let Some(new_ns) = value.get("NS").and_then(|v| v.as_array()) {
-                    for v in new_ns {
-                        if !ns.contains(v) {
-                            ns.push(v.clone());
-                        }
-                    }
-                }
-                item.insert(path.to_string(), json!({ "NS": ns }));
+        f(&mut shim, key);
+        match shim.remove(key) {
+            Some(v) => {
+                item.insert(key.to_string(), v);
+            }
+            None => {
+                item.remove(key);
             }
         }
+        return;
     }
+
+    let entry = item
+        .entry(parts[0].to_string())
+        .or_insert_with(|| json!({ "M": {} }));
+    descend(entry, &parts[1..], f);
+
+    fn descend<F: FnOnce(&mut serde_json::Map<String, Value>, &str)>(
+        current: &mut Value,
+        parts: &[&str],
+        f: F,
+    ) {
+        let Some(map) = current
+            .as_object_mut()
+            .and_then(|o| o.get_mut("M"))
+            .and_then(|m| m.as_object_mut())
+        else {
+            return;
+        };
+        if parts.len() == 1 {
+            f(map, parts[0]);
+        } else {
+            let next = map
+                .entry(parts[0].to_string())
+                .or_insert_with(|| json!({ "M": {} }));
+            descend(next, &parts[1..], f);
+        }
+    }
+}
+
+/// Format the result of a DynamoDB numeric ADD. Integer-valued floats are
+/// emitted without a decimal so SDK clients see canonical "1" rather than
+/// "1.0", matching AWS.
+fn format_dynamo_number(n: f64) -> String {
+    if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+        format!("{}", n as i64)
+    } else {
+        n.to_string()
+    }
+}
+
+/// Set-type tag: SS (string), NS (number), BS (binary).
+const SET_TAGS: [&str; 3] = ["SS", "NS", "BS"];
+
+/// Return the AttributeValue tag for a typed-set value (SS/NS/BS) or None.
+fn set_tag(v: &Value) -> Option<&'static str> {
+    SET_TAGS.iter().copied().find(|&t| v.get(t).is_some())
+}
+
+/// Apply ADD operation: numeric increment for N, set union for SS/NS/BS.
+fn apply_add(item: &mut DynamoItem, path: &str, value: &Value) -> Result<(), AwsError> {
+    with_leaf_mut(item, path, |map, key| {
+        let existing = map.get(key).cloned();
+        match existing {
+            None => {
+                map.insert(key.to_string(), value.clone());
+            }
+            Some(existing) => {
+                if let (Some(en), Some(vn)) = (
+                    existing.get("N").and_then(|v| v.as_str()),
+                    value.get("N").and_then(|v| v.as_str()),
+                ) {
+                    let result =
+                        en.parse::<f64>().unwrap_or(0.0) + vn.parse::<f64>().unwrap_or(0.0);
+                    map.insert(
+                        key.to_string(),
+                        json!({ "N": format_dynamo_number(result) }),
+                    );
+                } else if let Some(tag) = set_tag(&existing)
+                    && value.get(tag).is_some()
+                {
+                    let mut combined: Vec<Value> = existing
+                        .get(tag)
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    if let Some(new) = value.get(tag).and_then(|v| v.as_array()) {
+                        for v in new {
+                            if !combined.contains(v) {
+                                combined.push(v.clone());
+                            }
+                        }
+                    }
+                    map.insert(key.to_string(), json!({ tag: combined }));
+                }
+            }
+        }
+    });
     Ok(())
 }
 
-/// Apply DELETE operation (set subtraction).
+/// Apply DELETE operation (set subtraction). Drops the attribute if the
+/// resulting set is empty, matching AWS semantics where empty sets are
+/// not allowed to be persisted.
 fn apply_delete(item: &mut DynamoItem, path: &str, value: &Value) -> Result<(), AwsError> {
-    if let Some(existing) = item.get(path).cloned() {
-        if let Some(ss) = existing.get("SS").and_then(|v| v.as_array()) {
-            let to_remove: Vec<&Value> = value
-                .get("SS")
-                .and_then(|v| v.as_array())
-                .map(|v| v.iter().collect())
-                .unwrap_or_default();
-            let new_ss: Vec<Value> = ss
-                .iter()
-                .filter(|v| !to_remove.contains(v))
-                .cloned()
-                .collect();
-            item.insert(path.to_string(), json!({ "SS": new_ss }));
-        } else if let Some(ns) = existing.get("NS").and_then(|v| v.as_array()) {
-            let to_remove: Vec<&Value> = value
-                .get("NS")
-                .and_then(|v| v.as_array())
-                .map(|v| v.iter().collect())
-                .unwrap_or_default();
-            let new_ns: Vec<Value> = ns
-                .iter()
-                .filter(|v| !to_remove.contains(v))
-                .cloned()
-                .collect();
-            item.insert(path.to_string(), json!({ "NS": new_ns }));
+    with_leaf_mut(item, path, |map, key| {
+        let Some(existing) = map.get(key).cloned() else {
+            return;
+        };
+        let Some(tag) = set_tag(&existing) else {
+            return;
+        };
+        let arr = existing
+            .get(tag)
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let to_remove: Vec<&Value> = value
+            .get(tag)
+            .and_then(|v| v.as_array())
+            .map(|v| v.iter().collect())
+            .unwrap_or_default();
+        let remaining: Vec<Value> = arr
+            .into_iter()
+            .filter(|v| !to_remove.contains(&v))
+            .collect();
+        if remaining.is_empty() {
+            map.remove(key);
+        } else {
+            map.insert(key.to_string(), json!({ tag: remaining }));
         }
-    }
+    });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Map;
+
+    fn names() -> HashMap<String, String> {
+        HashMap::new()
+    }
+
+    fn empty_values() -> Map<String, Value> {
+        Map::new()
+    }
+
+    #[test]
+    fn add_unions_binary_set() {
+        let mut item = DynamoItem::new();
+        item.insert("blobs".into(), json!({ "BS": ["AA==", "AQ=="] }));
+        let mut values = Map::new();
+        values.insert(":new".into(), json!({ "BS": ["AQ==", "Ag=="] }));
+        apply_update_expression(&mut item, "ADD blobs :new", &names(), &values).unwrap();
+        let bs = item["blobs"]["BS"].as_array().unwrap();
+        let strs: Vec<&str> = bs.iter().filter_map(|v| v.as_str()).collect();
+        assert!(strs.contains(&"AA=="));
+        assert!(strs.contains(&"AQ=="));
+        assert!(strs.contains(&"Ag=="));
+        assert_eq!(strs.len(), 3);
+    }
+
+    #[test]
+    fn delete_removes_attribute_when_set_empties() {
+        let mut item = DynamoItem::new();
+        item.insert("tags".into(), json!({ "SS": ["a", "b"] }));
+        let mut values = Map::new();
+        values.insert(":all".into(), json!({ "SS": ["a", "b"] }));
+        apply_update_expression(&mut item, "DELETE tags :all", &names(), &values).unwrap();
+        assert!(!item.contains_key("tags"));
+    }
+
+    #[test]
+    fn add_increments_nested_numeric_attribute() {
+        let mut item = DynamoItem::new();
+        item.insert("stats".into(), json!({ "M": { "count": {"N": "5"} } }));
+        let mut values = Map::new();
+        values.insert(":n".into(), json!({ "N": "3" }));
+        apply_update_expression(&mut item, "ADD stats.count :n", &names(), &values).unwrap();
+        assert_eq!(item["stats"]["M"]["count"]["N"], json!("8"));
+    }
+
+    #[test]
+    fn add_creates_nested_attribute_when_missing() {
+        let mut item = DynamoItem::new();
+        let mut values = Map::new();
+        values.insert(":n".into(), json!({ "N": "1" }));
+        apply_update_expression(&mut item, "ADD stats.count :n", &names(), &values).unwrap();
+        assert_eq!(item["stats"]["M"]["count"]["N"], json!("1"));
+    }
+
+    #[test]
+    fn delete_subtracts_from_nested_string_set() {
+        let mut item = DynamoItem::new();
+        item.insert(
+            "user".into(),
+            json!({ "M": { "tags": { "SS": ["a", "b", "c"] } } }),
+        );
+        let mut values = Map::new();
+        values.insert(":rm".into(), json!({ "SS": ["b"] }));
+        apply_update_expression(&mut item, "DELETE user.tags :rm", &names(), &values).unwrap();
+        let tags = item["user"]["M"]["tags"]["SS"].as_array().unwrap();
+        let strs: Vec<&str> = tags.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(strs, ["a", "c"]);
+    }
+
+    #[test]
+    fn add_integer_result_omits_decimal() {
+        let mut item = DynamoItem::new();
+        item.insert("n".into(), json!({ "N": "1.5" }));
+        let mut values = empty_values();
+        values.insert(":d".into(), json!({ "N": "0.5" }));
+        apply_update_expression(&mut item, "ADD n :d", &names(), &values).unwrap();
+        assert_eq!(item["n"]["N"], json!("2"));
+    }
 }
