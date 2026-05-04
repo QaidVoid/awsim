@@ -220,6 +220,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
 
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
+    validate_object_key(key)?;
 
     // Decode body: may be raw bytes (base64 in __raw_body) or a plain string.
     let data: Vec<u8> = if let Some(raw) = input.get("__raw_body").and_then(Value::as_str) {
@@ -825,6 +826,30 @@ pub fn no_such_key(key: &str) -> AwsError {
     )
 }
 
+/// Validate an S3 object key against the documented constraints:
+///
+/// - Length 1..=1024 bytes (UTF-8). Empty keys are rejected as
+///   InvalidRequest by AWS; over-1024 keys are rejected as
+///   KeyTooLongError.
+fn validate_object_key(key: &str) -> Result<(), AwsError> {
+    if key.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidRequest",
+            "Object key must not be empty",
+        ));
+    }
+    if key.len() > 1024 {
+        return Err(AwsError::bad_request(
+            "KeyTooLongError",
+            format!(
+                "Object key length {} exceeds the 1024-byte limit",
+                key.len()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Convert PascalCase to kebab-case for metadata key reconstruction.
 pub fn to_kebab(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 4);
@@ -1103,6 +1128,33 @@ mod tests {
         )
         .unwrap();
         assert!(resp.get("Body").is_some());
+    }
+
+    #[test]
+    fn put_object_rejects_keys_over_1024_bytes() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        let huge_key = "a".repeat(1025);
+        let err = put_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": huge_key, "Body": "x" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "KeyTooLongError");
+    }
+
+    #[test]
+    fn put_object_accepts_key_at_1024_byte_limit() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        let max_key = "a".repeat(1024);
+        put_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": max_key, "Body": "x" }),
+            &ctx(),
+        )
+        .unwrap();
     }
 
     #[test]
