@@ -76,6 +76,7 @@ impl StsService {
             .and_then(|s| s.parse::<u64>().ok())
             .or_else(|| input["DurationSeconds"].as_u64())
             .unwrap_or(43200);
+        validate_duration_bounds(duration, 900, 129_600, "DurationSeconds")?;
 
         debug!(account_id = %ctx.account_id, duration, "GetSessionToken");
 
@@ -96,6 +97,9 @@ impl StsService {
             .as_str()
             .ok_or_else(|| AwsError::validation("RoleSessionName is required"))?;
 
+        validate_role_arn(role_arn)?;
+        validate_role_session_name(session_name)?;
+
         // WebIdentityToken is required by AWS but we accept any value.
         let _token = input["WebIdentityToken"]
             .as_str()
@@ -106,6 +110,7 @@ impl StsService {
             .and_then(|s| s.parse::<u64>().ok())
             .or_else(|| input["DurationSeconds"].as_u64())
             .unwrap_or(3600);
+        validate_assume_role_duration(duration)?;
 
         debug!(role_arn = %role_arn, session_name = %session_name, "AssumeRoleWithWebIdentity");
 
@@ -153,6 +158,7 @@ impl StsService {
             .and_then(|s| s.parse::<u64>().ok())
             .or_else(|| input["DurationSeconds"].as_u64())
             .unwrap_or(43200);
+        validate_duration_bounds(duration, 900, 129_600, "DurationSeconds")?;
 
         debug!(name = %name, duration, "GetFederationToken");
 
@@ -493,6 +499,24 @@ fn validate_session_tags(input: &Value) -> Result<(), AwsError> {
     Ok(())
 }
 
+/// Generic duration-seconds bounds check used by GetSessionToken /
+/// GetFederationToken (which allow 900..=129 600).
+fn validate_duration_bounds(
+    seconds: u64,
+    min: u64,
+    max: u64,
+    field_name: &str,
+) -> Result<(), AwsError> {
+    if !(min..=max).contains(&seconds) {
+        return Err(AwsError::validation(format!(
+            "1 validation error detected: Value '{seconds}' at '{field_name}' failed to satisfy \
+             constraint: Member must have value less than or equal to {max} and greater than or \
+             equal to {min}"
+        )));
+    }
+    Ok(())
+}
+
 /// Validate the DurationSeconds parameter for AssumeRole. AWS allows
 /// 900..=43200 seconds (the upper bound is role-specific in real AWS but
 /// we apply the global max).
@@ -797,6 +821,39 @@ mod tests {
             &ctx,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_get_session_token_rejects_duration_above_129600() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let err = svc
+            .get_session_token(&json!({ "DurationSeconds": 200_000u64 }), &ctx)
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn test_get_session_token_rejects_duration_below_900() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let err = svc
+            .get_session_token(&json!({ "DurationSeconds": 60u64 }), &ctx)
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn test_get_federation_token_enforces_duration_bounds() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let err = svc
+            .get_federation_token(
+                &json!({ "Name": "fed", "DurationSeconds": 200_000u64 }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 
     #[test]
