@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -14,6 +16,56 @@ use crate::{
 /// user, role, or group. The default account quota is 10 (raisable to 20
 /// via support); we enforce the documented default.
 const MAX_ATTACHED_POLICIES_PER_ENTITY: usize = 10;
+
+/// Match an AWS-managed policy ARN: `arn:aws:iam::aws:policy/<Name>` or
+/// `arn:aws:iam::aws:policy/service-role/<Name>` (path-prefixed). The
+/// literal account "aws" is the marker.
+fn aws_managed_policy_name(arn: &str) -> Option<&str> {
+    arn.strip_prefix("arn:aws:iam::aws:policy/")
+        .and_then(|rest| rest.rsplit('/').next())
+}
+
+/// Lazily materialize an AWS-managed policy stub when first referenced.
+///
+/// Real AWS pre-populates the entire AWS-managed catalog
+/// (AdministratorAccess, AmazonS3FullAccess, …); awsim doesn't ship the
+/// catalog, but Attach* shouldn't fail just because we haven't seen the
+/// ARN before — the caller is referencing a known AWS resource. We
+/// synthesize a placeholder policy carrying the supplied ARN so
+/// downstream Get/List/Detach all succeed.
+///
+/// Returns `true` if the ARN refers to an AWS-managed policy (regardless
+/// of whether it was just materialized) so callers know the policy
+/// existence check should pass.
+fn ensure_aws_managed_policy(state: &IamState, arn: &str) -> bool {
+    let Some(name) = aws_managed_policy_name(arn) else {
+        return false;
+    };
+    if state.policies.contains_key(arn) {
+        return true;
+    }
+    let now = now_iso8601();
+    let policy = Policy {
+        policy_name: name.to_string(),
+        policy_id: new_policy_id(),
+        arn: arn.to_string(),
+        path: "/".to_string(),
+        description: Some(format!("AWS managed policy {name}")),
+        policy_document: "{\"Version\":\"2012-10-17\",\"Statement\":[]}".to_string(),
+        create_date: now.clone(),
+        update_date: now,
+        attachment_count: 0,
+        versions: Vec::new(),
+        default_version_id: "v1".to_string(),
+        tags: HashMap::new(),
+    };
+    state.policies.insert(arn.to_string(), policy);
+    true
+}
+
+fn policy_exists_or_managed(state: &IamState, arn: &str) -> bool {
+    state.policies.contains_key(arn) || ensure_aws_managed_policy(state, arn)
+}
 
 use super::{opt_str, require_str};
 
@@ -146,7 +198,7 @@ pub fn attach_user_policy(state: &IamState, input: &Value) -> Result<Value, AwsE
     let user_name = require_str(input, "UserName")?;
     let policy_arn = require_str(input, "PolicyArn")?;
 
-    if !state.policies.contains_key(policy_arn) {
+    if !policy_exists_or_managed(state, policy_arn) {
         return Err(no_such_entity("Policy", policy_arn));
     }
 
@@ -202,7 +254,7 @@ pub fn attach_role_policy(state: &IamState, input: &Value) -> Result<Value, AwsE
     let role_name = require_str(input, "RoleName")?;
     let policy_arn = require_str(input, "PolicyArn")?;
 
-    if !state.policies.contains_key(policy_arn) {
+    if !policy_exists_or_managed(state, policy_arn) {
         return Err(no_such_entity("Policy", policy_arn));
     }
 
@@ -258,7 +310,7 @@ pub fn attach_group_policy(state: &IamState, input: &Value) -> Result<Value, Aws
     let group_name = require_str(input, "GroupName")?;
     let policy_arn = require_str(input, "PolicyArn")?;
 
-    if !state.policies.contains_key(policy_arn) {
+    if !policy_exists_or_managed(state, policy_arn) {
         return Err(no_such_entity("Policy", policy_arn));
     }
 
@@ -569,7 +621,7 @@ pub fn list_entities_for_policy(state: &IamState, input: &Value) -> Result<Value
     let policy_arn = require_str(input, "PolicyArn")?;
     let entity_filter = opt_str(input, "EntityFilter");
 
-    if !state.policies.contains_key(policy_arn) {
+    if !policy_exists_or_managed(state, policy_arn) {
         return Err(no_such_entity("Policy", policy_arn));
     }
 

@@ -176,6 +176,74 @@ async fn create_role_rejects_max_session_duration_above_43200() {
 }
 
 #[tokio::test]
+async fn attach_user_policy_accepts_aws_managed_arn() {
+    let svc = IamService::new();
+    call(&svc, "CreateUser", json!({ "UserName": "alice" }))
+        .await
+        .unwrap();
+
+    // No policy of this name exists in awsim's local store. AWS-managed
+    // ARNs (account literal "aws") should still be accepted.
+    call(
+        &svc,
+        "AttachUserPolicy",
+        json!({
+            "UserName": "alice",
+            "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess",
+        }),
+    )
+    .await
+    .unwrap();
+
+    // GetUserPolicies / ListAttachedUserPolicies should now show it.
+    let attached = call(
+        &svc,
+        "ListAttachedUserPolicies",
+        json!({ "UserName": "alice" }),
+    )
+    .await
+    .unwrap();
+    let arns: Vec<&str> = attached["AttachedPolicies"]["member"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p["PolicyArn"].as_str())
+        .collect();
+    assert!(
+        arns.contains(&"arn:aws:iam::aws:policy/AdministratorAccess"),
+        "managed ARN missing from attached: {arns:?}"
+    );
+}
+
+#[tokio::test]
+async fn attach_role_policy_accepts_service_role_managed_path() {
+    // arn:aws:iam::aws:policy/service-role/<name> (path-prefixed managed
+    // ARN) is also valid — used by Lambda execution roles, ECS tasks,
+    // and many CDK/CFN templates.
+    let svc = IamService::new();
+    call(
+        &svc,
+        "CreateRole",
+        json!({
+            "RoleName": "lambda-exec",
+            "AssumeRolePolicyDocument": valid_policy_doc(),
+        }),
+    )
+    .await
+    .unwrap();
+    call(
+        &svc,
+        "AttachRolePolicy",
+        json!({
+            "RoleName": "lambda-exec",
+            "PolicyArn": "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+        }),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn delete_group_blocks_when_inline_policy_present() {
     let svc = IamService::new();
     call(&svc, "CreateGroup", json!({ "GroupName": "g" }))
