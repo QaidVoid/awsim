@@ -36,7 +36,14 @@ pub fn function_configuration(f: &LambdaFunction) -> Value {
         "Version": f.version,
         "LastModified": f.last_modified,
         "State": f.state,
-        "FunctionArn": f.arn,
+        // SDK waiters (wait_until_function_updated_v2,
+        // wait_until_function_active_v2) poll these two fields and only
+        // stop once both reach a terminal value. Our handlers run
+        // synchronously, so every visible state is terminal Successful;
+        // exposing the field is what unblocks the waiter loop.
+        "LastUpdateStatus": "Successful",
+        "LastUpdateStatusReason": Value::Null,
+        "LastUpdateStatusReasonCode": Value::Null,
     })
 }
 
