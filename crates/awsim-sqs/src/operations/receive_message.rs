@@ -7,7 +7,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::state::{Message, SqsState};
-use crate::util::queue_name_from_url;
+use crate::util::{md5_of_message_attributes, queue_name_from_url};
 
 pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
     let queue_url = input["QueueUrl"]
@@ -148,6 +148,14 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                 "Body": body_str,
                 "MD5OfBody": msg.md5_of_body,
             });
+
+            // Always derive MD5OfMessageAttributes from the full attribute
+            // set on the stored message — AWS sends it whenever the message
+            // has any attributes, regardless of whether the caller asked
+            // for them with MessageAttributeNames.
+            if let Some(attr_md5) = md5_of_message_attributes(&msg.message_attributes) {
+                msg_json["MD5OfMessageAttributes"] = Value::String(attr_md5);
+            }
 
             if !attrs.is_empty() {
                 msg_json["Attributes"] = Value::Object(attrs);

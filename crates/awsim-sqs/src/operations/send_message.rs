@@ -8,7 +8,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::state::{Message, MessageAttribute, SqsState};
-use crate::util::{md5_of, queue_name_from_url};
+use crate::util::{md5_of, md5_of_message_attributes, queue_name_from_url};
 
 pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
     let queue_url = input["QueueUrl"]
@@ -110,11 +110,15 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         // Duplicate detected; return the original message ID
         let seq = sequence_number();
         debug!(dedup_id = %did, "FIFO dedup suppressed duplicate");
-        return Ok(json!({
+        let mut resp = json!({
             "MessageId": existing_id,
             "MD5OfMessageBody": md5,
             "SequenceNumber": seq,
-        }));
+        });
+        if let Some(attr_md5) = md5_of_message_attributes(&message_attributes) {
+            resp["MD5OfMessageAttributes"] = Value::String(attr_md5);
+        }
+        return Ok(resp);
     }
 
     // Determine sequence number for FIFO
@@ -182,6 +186,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         group_id,
     };
 
+    let attr_md5 = md5_of_message_attributes(&msg.message_attributes);
     queue.messages.push_back(msg);
     debug!(queue = %queue_name, message_id = %message_id, "Enqueued message");
 
@@ -189,6 +194,10 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         "MessageId": message_id,
         "MD5OfMessageBody": md5,
     });
+
+    if let Some(attr_md5) = attr_md5 {
+        resp["MD5OfMessageAttributes"] = Value::String(attr_md5);
+    }
 
     if let Some(seq) = sequence_number {
         resp["SequenceNumber"] = Value::String(seq);
@@ -352,6 +361,46 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterValue");
         assert!(err.message.contains("MessageGroupId"));
+    }
+
+    #[test]
+    fn send_message_returns_md5_of_message_attributes() {
+        let state = standard_queue();
+        let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
+        let resp = handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/std",
+                "MessageBody": "hi",
+                "MessageAttributes": {
+                    "k": { "DataType": "String", "StringValue": "v" }
+                },
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let md5 = resp["MD5OfMessageAttributes"]
+            .as_str()
+            .expect("MD5OfMessageAttributes returned");
+        assert_eq!(md5.len(), 32);
+        // Body MD5 must remain the body-only hash (different value).
+        assert_ne!(md5, resp["MD5OfMessageBody"].as_str().unwrap());
+    }
+
+    #[test]
+    fn send_message_omits_md5_of_message_attributes_when_no_attributes() {
+        let state = standard_queue();
+        let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
+        let resp = handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/std",
+                "MessageBody": "hi",
+            }),
+            &ctx,
+        )
+        .unwrap();
+        assert!(resp.get("MD5OfMessageAttributes").is_none());
     }
 
     #[test]
