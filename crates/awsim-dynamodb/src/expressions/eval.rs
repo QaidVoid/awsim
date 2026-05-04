@@ -262,7 +262,21 @@ fn dynamo_size(val: &Value) -> usize {
         return n.len();
     }
     if let Some(b) = val.get("B").and_then(|v| v.as_str()) {
-        return b.len();
+        // Binary attributes are stored base64-encoded on the wire, but
+        // size(B) is documented as the decoded byte count. Approximate the
+        // decoded length from the base64 string without allocating: every
+        // 4 base64 chars decode to 3 bytes, minus 1 byte per `=` pad.
+        let pad = b.bytes().rev().take_while(|&c| c == b'=').count();
+        let n = b.len();
+        if n % 4 != 0 {
+            // Malformed base64 — fall back to actually decoding.
+            use base64::Engine as _;
+            return base64::engine::general_purpose::STANDARD
+                .decode(b)
+                .map(|bytes| bytes.len())
+                .unwrap_or(0);
+        }
+        return n / 4 * 3 - pad;
     }
     if let Some(arr) = val.get("L").and_then(|v| v.as_array()) {
         return arr.len();
@@ -306,4 +320,44 @@ fn dynamo_contains(container: &Value, needle: &Value) -> bool {
         return ns_arr.iter().any(|el| el.as_str() == Some(n));
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use serde_json::json;
+
+    #[test]
+    fn size_of_string_returns_utf8_byte_length() {
+        assert_eq!(dynamo_size(&json!({ "S": "hello" })), 5);
+        // 4 emoji each 4 UTF-8 bytes wide.
+        assert_eq!(dynamo_size(&json!({ "S": "🦀🦀" })), 8);
+    }
+
+    #[test]
+    fn size_of_binary_returns_decoded_byte_count() {
+        // 4 raw bytes → "AAECAw==" (8 chars, 2 padding) → decoded length 4.
+        let b = BASE64.encode([0u8, 1, 2, 3]);
+        assert_eq!(b.len(), 8);
+        assert_eq!(dynamo_size(&json!({ "B": b })), 4);
+
+        // 5 raw bytes → "AAECAwQ=" (8 chars, 1 padding) → decoded length 5.
+        let b = BASE64.encode([0u8, 1, 2, 3, 4]);
+        assert_eq!(dynamo_size(&json!({ "B": b })), 5);
+
+        // 6 raw bytes → "AAECAwQF" (8 chars, 0 padding) → decoded length 6.
+        let b = BASE64.encode([0u8, 1, 2, 3, 4, 5]);
+        assert_eq!(dynamo_size(&json!({ "B": b })), 6);
+
+        // Empty binary → "" → 0 bytes.
+        assert_eq!(dynamo_size(&json!({ "B": "" })), 0);
+    }
+
+    #[test]
+    fn size_of_malformed_binary_falls_back_to_decode() {
+        // Length not a multiple of 4 — decode-or-zero path.
+        assert_eq!(dynamo_size(&json!({ "B": "abc" })), 0);
+    }
 }

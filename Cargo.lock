@@ -2060,6 +2060,7 @@ version = "0.3.0"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "base64",
  "dashmap",
  "r2d2",
  "r2d2_sqlite",
