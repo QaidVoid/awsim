@@ -50,6 +50,7 @@ impl StsService {
         validate_role_arn(role_arn)?;
         validate_role_session_name(session_name)?;
         validate_session_tags(input)?;
+        validate_session_policies(input)?;
 
         let duration = input["DurationSeconds"]
             .as_str()
@@ -370,6 +371,60 @@ fn validate_role_session_name(name: &str) -> Result<(), AwsError> {
              failed to satisfy constraint: Member must satisfy regular \
              expression pattern: [\\w+=,.@-]{{2,64}}"
         )));
+    }
+    Ok(())
+}
+
+/// Validate the optional session-policy inputs to AssumeRole. AWS:
+///   - inline `Policy`: must parse as JSON; combined size with PolicyArns
+///     bound to a packed limit (we use 2048 chars as a rough guard)
+///   - `PolicyArns`: max 10 entries, each must be a valid policy ARN
+///
+/// Note: we don't yet apply session policies to credential evaluation —
+/// the IAM enforcement engine is opt-in and AssumeRole credentials are
+/// generated without consulting them. Validation here just prevents
+/// callers from getting silent acceptance of bad input.
+fn validate_session_policies(input: &Value) -> Result<(), AwsError> {
+    if let Some(policy) = input.get("Policy").and_then(Value::as_str) {
+        if policy.len() > 2048 {
+            return Err(AwsError::validation(format!(
+                "Session Policy must be at most 2048 characters; got {}",
+                policy.len()
+            )));
+        }
+        if !policy.is_empty() {
+            serde_json::from_str::<Value>(policy)
+                .map_err(|_| AwsError::validation("Session Policy must be valid JSON"))?;
+        }
+    }
+    if let Some(arns) = input.get("PolicyArns").and_then(Value::as_array) {
+        if arns.len() > 10 {
+            return Err(AwsError::validation(format!(
+                "PolicyArns supports up to 10 entries; got {}",
+                arns.len()
+            )));
+        }
+        for entry in arns {
+            let arn = entry
+                .get("arn")
+                .or_else(|| entry.get("Arn"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    AwsError::validation("Each PolicyArns entry must include an 'arn' field")
+                })?;
+            // Accept either an account-managed ARN (arn:aws:iam::{12 digits}:policy/...)
+            // or an AWS-managed ARN (arn:aws:iam::aws:policy/...).
+            let is_account_arn = arn.starts_with("arn:aws:iam::")
+                && arn.split(':').nth(4).is_some_and(|seg| {
+                    seg == "aws" || (seg.len() == 12 && seg.chars().all(|c| c.is_ascii_digit()))
+                })
+                && arn.contains(":policy/");
+            if !is_account_arn {
+                return Err(AwsError::validation(format!(
+                    "PolicyArns entry '{arn}' is not a valid IAM policy ARN"
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -738,6 +793,79 @@ mod tests {
             &json!({
                 "RoleArn": "arn:aws:iam::000000000000:role/team/dev/MyRole",
                 "RoleSessionName": "session",
+            }),
+            &ctx,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_assume_role_rejects_invalid_policy_json() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                    "RoleSessionName": "session",
+                    "Policy": "{not-json",
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn test_assume_role_rejects_too_many_policy_arns() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let arns: Vec<Value> = (0..11)
+            .map(|i| json!({ "arn": format!("arn:aws:iam::aws:policy/P{i}") }))
+            .collect();
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                    "RoleSessionName": "session",
+                    "PolicyArns": arns,
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn test_assume_role_rejects_malformed_policy_arn() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                    "RoleSessionName": "session",
+                    "PolicyArns": [{ "arn": "not-an-arn" }],
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn test_assume_role_accepts_valid_session_policies() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        svc.assume_role(
+            &json!({
+                "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                "RoleSessionName": "session",
+                "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[]}",
+                "PolicyArns": [
+                    { "arn": "arn:aws:iam::aws:policy/AdministratorAccess" },
+                    { "arn": "arn:aws:iam::000000000000:policy/Custom" },
+                ],
             }),
             &ctx,
         )
