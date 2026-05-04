@@ -1076,35 +1076,66 @@ fn match_resource<'a>(
     param_match
 }
 
+/// True when `pattern_segment` is a `{name+}` greedy capture.
+fn is_greedy_segment(seg: &str) -> bool {
+    seg.starts_with('{') && seg.ends_with("+}")
+}
+
+/// True when `pattern_segment` is a normal `{name}` capture.
+fn is_named_segment(seg: &str) -> bool {
+    seg.starts_with('{') && seg.ends_with('}') && !seg.ends_with("+}")
+}
+
 fn path_matches(pattern: &str, actual: &str) -> bool {
     let pat: Vec<&str> = pattern.split('/').collect();
     let act: Vec<&str> = actual.split('/').collect();
-    if pat.len() != act.len() {
-        return false;
-    }
-    for (p, a) in pat.iter().zip(act.iter()) {
-        if p.starts_with('{') && p.ends_with('}') {
-            continue;
+    let mut pi = 0usize;
+    let mut ai = 0usize;
+    while pi < pat.len() {
+        let p = pat[pi];
+        if is_greedy_segment(p) {
+            // Greedy capture must be the final segment in the pattern
+            // and matches every remaining segment of the actual path.
+            return pi == pat.len() - 1 && ai <= act.len();
         }
-        if p != a {
+        if ai >= act.len() {
             return false;
         }
+        if !is_named_segment(p) && p != act[ai] {
+            return false;
+        }
+        pi += 1;
+        ai += 1;
     }
-    true
+    ai == act.len()
 }
 
 fn extract_path_params(pattern: &str, actual: &str) -> Value {
     let pat: Vec<&str> = pattern.split('/').collect();
     let act: Vec<&str> = actual.split('/').collect();
-    if pat.len() != act.len() {
-        return Value::Null;
-    }
     let mut out = serde_json::Map::new();
-    for (p, a) in pat.iter().zip(act.iter()) {
-        if p.starts_with('{') && p.ends_with('}') {
-            let name = &p[1..p.len() - 1];
-            out.insert(name.to_string(), Value::String((*a).to_string()));
+    let mut ai = 0usize;
+    for (pi, p) in pat.iter().enumerate() {
+        if is_greedy_segment(p) {
+            // Greedy capture: name without the trailing `+`. Joins the
+            // rest of the actual path's segments back together with `/`.
+            let name = &p[1..p.len() - 2];
+            let tail: Vec<&str> = act.iter().skip(pi).copied().collect();
+            out.insert(name.to_string(), Value::String(tail.join("/")));
+            ai = act.len();
+            break;
         }
+        if ai >= act.len() {
+            return Value::Null;
+        }
+        if is_named_segment(p) {
+            let name = &p[1..p.len() - 1];
+            out.insert(name.to_string(), Value::String(act[ai].to_string()));
+        }
+        ai += 1;
+    }
+    if ai != act.len() {
+        return Value::Null;
     }
     if out.is_empty() {
         Value::Null
@@ -1146,6 +1177,40 @@ mod tests {
             uri: "/".to_string(),
             event_bus: None,
         }
+    }
+
+    #[test]
+    fn path_matches_exact_and_named_captures() {
+        assert!(path_matches("/users", "/users"));
+        assert!(path_matches("/users/{id}", "/users/42"));
+        assert!(!path_matches("/users", "/users/42"));
+        assert!(!path_matches("/users/{id}", "/users/42/orders"));
+    }
+
+    #[test]
+    fn path_matches_greedy_proxy_captures_remaining_segments() {
+        assert!(path_matches("/api/{proxy+}", "/api/users"));
+        assert!(path_matches("/api/{proxy+}", "/api/users/42"));
+        assert!(path_matches("/api/{proxy+}", "/api/users/42/orders/abc"));
+        // Pattern prefix doesn't match → no greedy save.
+        assert!(!path_matches("/api/{proxy+}", "/other/users"));
+    }
+
+    #[test]
+    fn extract_path_params_includes_greedy_value() {
+        let params = extract_path_params("/api/{proxy+}", "/api/users/42/orders");
+        assert_eq!(params["proxy"], "users/42/orders");
+
+        let params = extract_path_params("/users/{id}/files/{path+}", "/users/42/files/a/b/c.txt");
+        assert_eq!(params["id"], "42");
+        assert_eq!(params["path"], "a/b/c.txt");
+    }
+
+    #[test]
+    fn extract_path_params_returns_null_for_unmatched_pattern() {
+        // Without greedy + segment count differs → no match.
+        let params = extract_path_params("/users/{id}", "/users/42/extra");
+        assert_eq!(params, Value::Null);
     }
 
     #[tokio::test]
