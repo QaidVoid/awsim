@@ -307,18 +307,11 @@ fn extract_num(val: &Value) -> Option<f64> {
         .and_then(|s| s.parse().ok())
 }
 
-/// Get a possibly-nested attribute value from an item.
+/// Get a possibly-nested attribute value from an item. Delegates to the
+/// shared eval-side path resolver so list indexing (`tags[2].name`) and
+/// map traversal stay consistent across condition / projection / update.
 fn get_nested_val<'a>(item: &'a DynamoItem, path: &str) -> Option<&'a Value> {
-    let parts: Vec<&str> = path.split('.').collect();
-    let mut current: Option<&Value> = item.get(parts[0]);
-    for part in &parts[1..] {
-        current = current.and_then(|v| {
-            v.get("M")
-                .and_then(|m| m.as_object())
-                .and_then(|m| m.get(*part))
-        });
-    }
-    current
+    crate::expressions::eval::get_nested(item, path)
 }
 
 /// Set a nested attribute value in an item (dot-path notation).

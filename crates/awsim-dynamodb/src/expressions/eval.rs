@@ -159,18 +159,59 @@ fn resolve_operand<'a>(
     }
 }
 
-/// Get a possibly-nested attribute from an item, using dot notation.
+/// One step in an attribute path: a named map key or a list index.
+enum PathStep<'a> {
+    Name(&'a str),
+    Index(usize),
+}
+
+/// Tokenize a DynamoDB document path like `tags[2].name[0]` into named
+/// segments and list indices. Returns None if the bracket syntax is
+/// malformed.
+fn tokenize_path(path: &str) -> Option<Vec<PathStep<'_>>> {
+    let mut steps: Vec<PathStep<'_>> = Vec::new();
+    for segment in path.split('.') {
+        // Each dot-segment is either bare (`name`) or has trailing list
+        // indices (`name[0]`, `name[0][1]`). Find the first `[` to split
+        // the name from the index list.
+        let (name, rest) = match segment.find('[') {
+            Some(i) => (&segment[..i], &segment[i..]),
+            None => (segment, ""),
+        };
+        if name.is_empty() {
+            return None;
+        }
+        steps.push(PathStep::Name(name));
+        let mut cursor = rest;
+        while !cursor.is_empty() {
+            let close = cursor.find(']')?;
+            let idx: usize = cursor[1..close].parse().ok()?;
+            steps.push(PathStep::Index(idx));
+            cursor = &cursor[close + 1..];
+        }
+    }
+    Some(steps)
+}
+
+/// Get a possibly-nested attribute from an item using DynamoDB document
+/// path syntax. Supports map traversal (`a.b.c`) and list indexing
+/// (`a[0]`, `tags[2].name`).
 pub fn get_nested<'a>(item: &'a DynamoItem, path: &str) -> Option<&'a Value> {
-    let parts: Vec<&str> = path.split('.').collect();
-    let mut current: Option<&Value> = item.get(parts[0]);
-    for part in &parts[1..] {
-        current = current.and_then(|v| {
-            // DynamoDB Map type: {"M": {"key": {...}}}
-            if let Some(map) = v.get("M").and_then(|m| m.as_object()) {
-                map.get(*part)
-            } else {
-                None
-            }
+    let steps = tokenize_path(path)?;
+    let mut iter = steps.into_iter();
+    // First step must be an attribute name on the item itself.
+    let first = match iter.next()? {
+        PathStep::Name(n) => n,
+        PathStep::Index(_) => return None,
+    };
+    let mut current: Option<&Value> = item.get(first);
+    for step in iter {
+        current = current.and_then(|v| match step {
+            PathStep::Name(n) => v
+                .get("M")
+                .and_then(|m| m.as_object())
+                .and_then(|m| m.get(n)),
+            PathStep::Index(i) => v.get("L").and_then(|l| l.as_array()).and_then(|a| a.get(i)),
         });
     }
     current
@@ -359,5 +400,57 @@ mod tests {
     fn size_of_malformed_binary_falls_back_to_decode() {
         // Length not a multiple of 4 — decode-or-zero path.
         assert_eq!(dynamo_size(&json!({ "B": "abc" })), 0);
+    }
+
+    #[test]
+    fn get_nested_indexes_into_list() {
+        let mut item = DynamoItem::new();
+        item.insert(
+            "tags".into(),
+            json!({ "L": [ {"S": "a"}, {"S": "b"}, {"S": "c"} ] }),
+        );
+        assert_eq!(get_nested(&item, "tags[0]"), Some(&json!({"S": "a"})));
+        assert_eq!(get_nested(&item, "tags[2]"), Some(&json!({"S": "c"})));
+        // Out-of-bounds resolves to None, never panics.
+        assert!(get_nested(&item, "tags[5]").is_none());
+    }
+
+    #[test]
+    fn get_nested_indexes_into_list_of_maps_then_map_key() {
+        let mut item = DynamoItem::new();
+        item.insert(
+            "friends".into(),
+            json!({ "L": [
+                { "M": { "name": {"S": "alice"} } },
+                { "M": { "name": {"S": "bob"} } },
+            ] }),
+        );
+        assert_eq!(
+            get_nested(&item, "friends[1].name"),
+            Some(&json!({"S": "bob"}))
+        );
+    }
+
+    #[test]
+    fn get_nested_handles_chained_indices() {
+        let mut item = DynamoItem::new();
+        item.insert(
+            "matrix".into(),
+            json!({ "L": [
+                { "L": [ {"N": "1"}, {"N": "2"} ] },
+                { "L": [ {"N": "3"}, {"N": "4"} ] },
+            ] }),
+        );
+        assert_eq!(get_nested(&item, "matrix[1][0]"), Some(&json!({"N": "3"})));
+    }
+
+    #[test]
+    fn get_nested_rejects_malformed_bracket_syntax() {
+        let mut item = DynamoItem::new();
+        item.insert("tags".into(), json!({ "L": [ {"S": "a"} ] }));
+        // No closing bracket → unparseable.
+        assert!(get_nested(&item, "tags[0").is_none());
+        // Non-numeric index → unparseable.
+        assert!(get_nested(&item, "tags[a]").is_none());
     }
 }
