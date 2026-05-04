@@ -310,6 +310,42 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_rule_with_attached_targets_requires_force() {
+        let svc = EventBridgeService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutRule",
+            json!({ "Name": "guarded", "EventPattern": r#"{"source":["x"]}"#, "State": "ENABLED" }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "PutTargets",
+            json!({
+                "Rule": "guarded",
+                "Targets": [
+                    { "Id": "t1", "Arn": "arn:aws:sqs:us-east-1:000000000000:q" }
+                ],
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        // Without Force=true: rejected.
+        let err =
+            block_on(svc.handle("DeleteRule", json!({ "Name": "guarded" }), &ctx)).unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+
+        // With Force=true: succeeds.
+        block_on(svc.handle(
+            "DeleteRule",
+            json!({ "Name": "guarded", "Force": true }),
+            &ctx,
+        ))
+        .unwrap();
+    }
+
+    #[test]
     fn test_remove_targets() {
         let svc = EventBridgeService::new();
         let ctx = ctx();

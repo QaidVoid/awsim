@@ -102,10 +102,31 @@ pub fn delete_rule(
         )
     })?;
 
-    if !bus.rules.contains_key(name) {
-        return Err(AwsError::not_found(
-            "ResourceNotFoundException",
-            format!("Rule {name} does not exist on event bus {bus_name}"),
+    let force = input["Force"].as_bool().unwrap_or(false);
+
+    let target_count = bus
+        .rules
+        .get(name)
+        .map(|r| r.targets.len())
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Rule {name} does not exist on event bus {bus_name}"),
+            )
+        })?;
+
+    // AWS rejects DeleteRule when the rule still has targets attached
+    // unless the caller explicitly passes Force=true. The error code is
+    // ManagedRuleException for managed rules and a plain client error
+    // for the user-rule case; we surface it as the ValidationException
+    // shape that user code commonly catches.
+    if target_count > 0 && !force {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "Rule {name} still has {target_count} target(s) attached; \
+                 set Force=true or remove the targets first"
+            ),
         ));
     }
 
