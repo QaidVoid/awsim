@@ -34,25 +34,35 @@ fn matches_conditions(conditions: &Value, attr: Option<&Value>) -> bool {
     false
 }
 
+fn attr_str(attr: Option<&Value>) -> Option<&str> {
+    attr.and_then(|a| a["Value"].as_str().or_else(|| a.as_str()))
+}
+
 fn matches_single_condition(condition: &Value, attr: Option<&Value>) -> bool {
     match condition {
         // String exact match
-        Value::String(s) => attr
-            .and_then(|a| a["Value"].as_str().or_else(|| a.as_str()))
-            .map(|v| v == s)
-            .unwrap_or(false),
+        Value::String(s) => attr_str(attr).map(|v| v == s).unwrap_or(false),
         // Numeric match
-        Value::Number(n) => attr
-            .and_then(|a| a["Value"].as_str().or_else(|| a.as_str()))
+        Value::Number(n) => attr_str(attr)
             .and_then(|v| v.parse::<f64>().ok())
             .map(|v| Some(v) == n.as_f64())
             .unwrap_or(false),
-        // Object conditions (prefix, numeric, exists)
+        // Object conditions: { "prefix": "..." }, { "suffix": "..." },
+        // { "exists": true|false }, { "numeric": [...] },
+        // { "anything-but": ... }, { "equals-ignore-case": "..." },
+        // { "cidr": "..." }
         Value::Object(obj) => {
             if let Some(prefix) = obj.get("prefix").and_then(|v| v.as_str()) {
-                return attr
-                    .and_then(|a| a["Value"].as_str().or_else(|| a.as_str()))
+                return attr_str(attr)
                     .map(|v| v.starts_with(prefix))
+                    .unwrap_or(false);
+            }
+            if let Some(suffix) = obj.get("suffix").and_then(|v| v.as_str()) {
+                return attr_str(attr).map(|v| v.ends_with(suffix)).unwrap_or(false);
+            }
+            if let Some(target) = obj.get("equals-ignore-case").and_then(|v| v.as_str()) {
+                return attr_str(attr)
+                    .map(|v| v.eq_ignore_ascii_case(target))
                     .unwrap_or(false);
             }
             if let Some(exists) = obj.get("exists").and_then(|v| v.as_bool()) {
@@ -61,7 +71,93 @@ fn matches_single_condition(condition: &Value, attr: Option<&Value>) -> bool {
             if let Some(numeric) = obj.get("numeric").and_then(|v| v.as_array()) {
                 return matches_numeric(numeric, attr);
             }
+            if let Some(any) = obj.get("anything-but") {
+                return matches_anything_but(any, attr);
+            }
+            if let Some(cidr) = obj.get("cidr").and_then(|v| v.as_str()) {
+                return attr_str(attr).map(|v| ip_in_cidr(v, cidr)).unwrap_or(false);
+            }
             false
+        }
+        _ => false,
+    }
+}
+
+/// Evaluate an `anything-but` clause:
+/// - `{ "anything-but": "x" }` — matches if attr is present and != "x"
+/// - `{ "anything-but": ["x", "y"] }` — matches if attr is present and not in list
+/// - `{ "anything-but": { "prefix": "x" } }` — matches if attr is present and
+///   does not start with "x"
+fn matches_anything_but(spec: &Value, attr: Option<&Value>) -> bool {
+    let Some(value) = attr_str(attr) else {
+        return false;
+    };
+    match spec {
+        Value::String(s) => value != s,
+        Value::Array(arr) => !arr.iter().any(|item| match item {
+            Value::String(s) => s == value,
+            _ => false,
+        }),
+        Value::Object(obj) => {
+            if let Some(p) = obj.get("prefix").and_then(|v| v.as_str()) {
+                !value.starts_with(p)
+            } else if let Some(p) = obj.get("suffix").and_then(|v| v.as_str()) {
+                !value.ends_with(p)
+            } else if let Some(t) = obj.get("equals-ignore-case").and_then(|v| v.as_str()) {
+                !value.eq_ignore_ascii_case(t)
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when `addr` parses as an IP address (v4 or v6) and lies
+/// within the supplied `cidr` block. Mixing address families (v4 inside
+/// a v6 CIDR or vice versa) returns false.
+fn ip_in_cidr(addr: &str, cidr: &str) -> bool {
+    use std::net::IpAddr;
+    let (block, prefix_str) = match cidr.split_once('/') {
+        Some(parts) => parts,
+        None => return false,
+    };
+    let prefix: u8 = match prefix_str.parse() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let block_addr: IpAddr = match block.parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let value_addr: IpAddr = match addr.parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    match (block_addr, value_addr) {
+        (IpAddr::V4(b), IpAddr::V4(v)) => {
+            if prefix > 32 {
+                return false;
+            }
+            let bits: u32 = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix)
+            };
+            (u32::from(b) & bits) == (u32::from(v) & bits)
+        }
+        (IpAddr::V6(b), IpAddr::V6(v)) => {
+            if prefix > 128 {
+                return false;
+            }
+            let b = u128::from(b);
+            let v = u128::from(v);
+            let bits: u128 = if prefix == 0 {
+                0
+            } else {
+                u128::MAX << (128 - prefix)
+            };
+            (b & bits) == (v & bits)
         }
         _ => false,
     }
@@ -275,6 +371,81 @@ mod tests {
             &policy,
             &attrs(&[("price", "not-a-number")])
         ));
+    }
+
+    #[test]
+    fn test_suffix_match() {
+        let policy = json!({ "file": [{ "suffix": ".jpg" }] });
+        assert!(matches_filter(&policy, &attrs(&[("file", "photo.jpg")])));
+        assert!(matches_filter(&policy, &attrs(&[("file", "x.JPG.jpg")])));
+        assert!(!matches_filter(&policy, &attrs(&[("file", "doc.pdf")])));
+        assert!(!matches_filter(&policy, &HashMap::new()));
+    }
+
+    #[test]
+    fn test_equals_ignore_case() {
+        let policy = json!({ "level": [{ "equals-ignore-case": "WARNING" }] });
+        assert!(matches_filter(&policy, &attrs(&[("level", "Warning")])));
+        assert!(matches_filter(&policy, &attrs(&[("level", "warning")])));
+        assert!(matches_filter(&policy, &attrs(&[("level", "WARNING")])));
+        assert!(!matches_filter(&policy, &attrs(&[("level", "info")])));
+    }
+
+    #[test]
+    fn test_anything_but_string() {
+        let policy = json!({ "kind": [{ "anything-but": "test" }] });
+        assert!(matches_filter(&policy, &attrs(&[("kind", "prod")])));
+        assert!(!matches_filter(&policy, &attrs(&[("kind", "test")])));
+        // Missing attr does not match anything-but per AWS semantics —
+        // anything-but requires the attribute to be present.
+        assert!(!matches_filter(&policy, &HashMap::new()));
+    }
+
+    #[test]
+    fn test_anything_but_array() {
+        let policy = json!({ "kind": [{ "anything-but": ["test", "stage"] }] });
+        assert!(matches_filter(&policy, &attrs(&[("kind", "prod")])));
+        assert!(!matches_filter(&policy, &attrs(&[("kind", "test")])));
+        assert!(!matches_filter(&policy, &attrs(&[("kind", "stage")])));
+    }
+
+    #[test]
+    fn test_anything_but_prefix() {
+        let policy = json!({ "kind": [{ "anything-but": { "prefix": "test-" } }] });
+        assert!(matches_filter(&policy, &attrs(&[("kind", "prod-1")])));
+        assert!(!matches_filter(&policy, &attrs(&[("kind", "test-1")])));
+    }
+
+    #[test]
+    fn test_cidr_ipv4_match() {
+        let policy = json!({ "src": [{ "cidr": "10.0.0.0/24" }] });
+        assert!(matches_filter(&policy, &attrs(&[("src", "10.0.0.5")])));
+        assert!(matches_filter(&policy, &attrs(&[("src", "10.0.0.255")])));
+        assert!(!matches_filter(&policy, &attrs(&[("src", "10.0.1.0")])));
+        assert!(!matches_filter(&policy, &attrs(&[("src", "192.168.0.1")])));
+        assert!(!matches_filter(&policy, &attrs(&[("src", "not-an-ip")])));
+    }
+
+    #[test]
+    fn test_cidr_ipv4_zero_prefix_matches_all() {
+        let policy = json!({ "src": [{ "cidr": "0.0.0.0/0" }] });
+        assert!(matches_filter(&policy, &attrs(&[("src", "10.0.0.5")])));
+        assert!(matches_filter(&policy, &attrs(&[("src", "192.168.99.42")])));
+    }
+
+    #[test]
+    fn test_cidr_ipv6_match() {
+        let policy = json!({ "src": [{ "cidr": "2001:db8::/32" }] });
+        assert!(matches_filter(&policy, &attrs(&[("src", "2001:db8::1")])));
+        assert!(!matches_filter(&policy, &attrs(&[("src", "2001:db9::1")])));
+        // v4 inside v6 CIDR — no match (mixed family).
+        assert!(!matches_filter(&policy, &attrs(&[("src", "10.0.0.1")])));
+    }
+
+    #[test]
+    fn test_cidr_invalid_prefix_returns_false() {
+        let policy = json!({ "src": [{ "cidr": "10.0.0.0/64" }] });
+        assert!(!matches_filter(&policy, &attrs(&[("src", "10.0.0.5")])));
     }
 
     #[test]
