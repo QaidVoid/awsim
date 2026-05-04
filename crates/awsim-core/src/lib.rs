@@ -5,6 +5,7 @@ pub mod body_store;
 pub mod error;
 pub mod events;
 pub mod gateway;
+pub mod pagination;
 pub mod persistence;
 pub mod protocol;
 pub mod request_detail;
@@ -23,6 +24,7 @@ pub use body_store::{BlobInventory, BodyStore};
 pub use error::AwsError;
 pub use events::{EventBus, InternalEvent};
 pub use gateway::{AppState, BodyStoreHandle};
+pub use pagination::{Page, cap_max_results, decode_token, encode_token, paginate};
 pub use persistence::PersistenceManager;
 pub use protocol::{Protocol, RouteDefinition};
 pub use request_detail::{
