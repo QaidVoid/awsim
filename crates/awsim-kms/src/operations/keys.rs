@@ -290,21 +290,15 @@ pub fn update_key_description(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Resolve key_id_input which may be a KeyId, ARN, or alias name to the actual KeyId string.
+/// Resolve a key identifier (KeyId, key ARN, alias name, or alias ARN)
+/// to the canonical KeyId string.
+///
+/// The order matters: alias ARNs are checked before key ARNs because
+/// both share the `arn:aws:kms:` prefix — a generic `arn:aws:kms:…/X`
+/// match would otherwise treat the alias name as a raw key ID and fail
+/// the key-table lookup before the alias path is considered.
 pub fn resolve_key_id(state: &KmsState, input: &str) -> Result<String, AwsError> {
-    // ARN format: arn:aws:kms:...:key/<uuid>
-    if input.starts_with("arn:aws:kms:") {
-        let key_id = input
-            .rsplit('/')
-            .next()
-            .ok_or_else(|| error::invalid_key_id(input))?;
-        if state.keys.contains_key(key_id) {
-            return Ok(key_id.to_string());
-        }
-        return Err(error::not_found("Key"));
-    }
-
-    // Alias ARN: arn:aws:kms:...:alias/<name>
+    // Alias ARN: arn:aws:kms:{region}:{account}:alias/{name}
     if input.starts_with("arn:aws:kms:") && input.contains(":alias/") {
         let alias_part = input
             .split(":alias/")
@@ -315,6 +309,18 @@ pub fn resolve_key_id(state: &KmsState, input: &str) -> Result<String, AwsError>
             return Ok(key_id.clone());
         }
         return Err(error::not_found("Alias"));
+    }
+
+    // Key ARN: arn:aws:kms:{region}:{account}:key/{uuid}
+    if input.starts_with("arn:aws:kms:") {
+        let key_id = input
+            .rsplit('/')
+            .next()
+            .ok_or_else(|| error::invalid_key_id(input))?;
+        if state.keys.contains_key(key_id) {
+            return Ok(key_id.to_string());
+        }
+        return Err(error::not_found("Key"));
     }
 
     // Alias name (starts with "alias/")

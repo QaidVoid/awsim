@@ -410,6 +410,34 @@ mod tests {
     }
 
     #[test]
+    fn test_encrypt_resolves_alias_arn() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+        block_on(svc.handle(
+            "CreateAlias",
+            json!({ "AliasName": "alias/my-key", "TargetKeyId": key_id }),
+            &ctx,
+        ))
+        .unwrap();
+
+        // Alias ARN form — must resolve through resolve_key_id even though
+        // the prefix `arn:aws:kms:` is shared with key ARNs.
+        let alias_arn = "arn:aws:kms:us-east-1:000000000000:alias/my-key";
+        let resp = block_on(svc.handle(
+            "Encrypt",
+            json!({
+                "KeyId": alias_arn,
+                "Plaintext": BASE64.encode(b"secret"),
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert!(resp["CiphertextBlob"].as_str().is_some());
+    }
+
+    #[test]
     fn test_alias_must_start_with_alias() {
         let svc = KmsService::new();
         let ctx = ctx();
