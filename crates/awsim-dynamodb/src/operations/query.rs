@@ -134,11 +134,10 @@ pub fn query(
 
     let mut handle = |item: DynamoItem| -> Result<bool, AwsError> {
         // Key condition over typed attributes (covers sort key range,
-        // BEGINS_WITH, BETWEEN, etc.). Items in the partition that fail
-        // the condition still count toward ScannedCount, matching real
-        // DynamoDB.
+        // BEGINS_WITH, BETWEEN, etc.). Items that fail the key condition
+        // are skipped silently — DynamoDB's index would never have
+        // surfaced them, so they don't count toward ScannedCount either.
         if !evaluate_condition(&key_condition, &item, &expr_attr_names, &expr_attr_values)? {
-            scanned_count += 1;
             return Ok(true);
         }
         scanned_count += 1;
@@ -453,5 +452,89 @@ mod tests {
         // Sanity: if someone bumps the const accidentally, fail loudly.
         // Real AWS DynamoDB Query/Scan response cap is exactly 1 MiB.
         assert_eq!(MAX_RESPONSE_BYTES, 1024 * 1024);
+    }
+
+    use crate::operations::item::put_item;
+    use crate::sqlite_store::SqliteStore;
+    use crate::state::{KeySchemaElement, Table};
+    use std::collections::VecDeque;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("dynamodb", "us-east-1")
+    }
+
+    fn make_state() -> DynamoState {
+        let state = DynamoState::default();
+        let table = Table {
+            name: "t".into(),
+            arn: "arn:aws:dynamodb:us-east-1:000000000000:table/t".into(),
+            key_schema: vec![
+                KeySchemaElement {
+                    attribute_name: "pk".into(),
+                    key_type: "HASH".into(),
+                },
+                KeySchemaElement {
+                    attribute_name: "sk".into(),
+                    key_type: "RANGE".into(),
+                },
+            ],
+            attribute_definitions: vec![],
+            billing_mode: "PAY_PER_REQUEST".into(),
+            status: "ACTIVE".into(),
+            created_at: 0.0,
+            gsi: vec![],
+            lsi: vec![],
+            stream_enabled: false,
+            stream_arn: None,
+            stream_view_type: None,
+            stream_records: VecDeque::new(),
+            stream_sequence: 0,
+            ttl: Default::default(),
+            tags: Default::default(),
+            deletion_protection_enabled: false,
+            sse: Default::default(),
+            read_capacity_units: 0,
+            write_capacity_units: 0,
+        };
+        state.tables.insert("t".into(), table);
+        state
+    }
+
+    #[test]
+    fn query_scanned_count_excludes_items_that_failed_key_condition() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        // Three sort-key buckets; the key condition selects only sk = "y".
+        for sk in ["x", "y", "z"] {
+            put_item(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "Item": { "pk": {"S": "p"}, "sk": {"S": sk} },
+                }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        let resp = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditionExpression": "pk = :pk AND sk = :sk",
+                "ExpressionAttributeValues": {
+                    ":pk": {"S": "p"},
+                    ":sk": {"S": "y"},
+                },
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp["Count"], json!(1));
+        // Only the matching key-condition item counts, not the two we skipped.
+        assert_eq!(resp["ScannedCount"], json!(1));
     }
 }
