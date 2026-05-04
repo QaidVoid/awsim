@@ -25,3 +25,11 @@ pub fn delete_conflict(message: impl Into<String>) -> AwsError {
 pub fn malformed_policy_document(message: impl Into<String>) -> AwsError {
     AwsError::bad_request("MalformedPolicyDocument", message)
 }
+
+pub fn limit_exceeded(message: impl Into<String>) -> AwsError {
+    AwsError::bad_request("LimitExceeded", message)
+}
+
+pub fn validation_error(message: impl Into<String>) -> AwsError {
+    AwsError::bad_request("ValidationError", message)
+}

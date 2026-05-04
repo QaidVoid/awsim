@@ -2,10 +2,18 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::{
-    error::{delete_conflict, entity_already_exists, malformed_policy_document, no_such_entity},
+    error::{
+        delete_conflict, entity_already_exists, limit_exceeded, malformed_policy_document,
+        no_such_entity,
+    },
     ids::{new_policy_id, normalize_path, now_iso8601},
     state::{IamState, Policy, PolicyVersion},
 };
+
+/// AWS quota: maximum managed policies that can be attached to a single
+/// user, role, or group. The default account quota is 10 (raisable to 20
+/// via support); we enforce the documented default.
+const MAX_ATTACHED_POLICIES_PER_ENTITY: usize = 10;
 
 use super::{opt_str, require_str};
 
@@ -149,6 +157,11 @@ pub fn attach_user_policy(state: &IamState, input: &Value) -> Result<Value, AwsE
             .ok_or_else(|| no_such_entity("User", user_name))?;
 
         if !user.attached_policies.contains(&policy_arn.to_string()) {
+            if user.attached_policies.len() >= MAX_ATTACHED_POLICIES_PER_ENTITY {
+                return Err(limit_exceeded(format!(
+                    "Cannot exceed quota for PoliciesPerUser: {MAX_ATTACHED_POLICIES_PER_ENTITY}"
+                )));
+            }
             user.attached_policies.push(policy_arn.to_string());
             if let Some(mut p) = state.policies.get_mut(policy_arn) {
                 p.attachment_count += 1;
@@ -200,6 +213,11 @@ pub fn attach_role_policy(state: &IamState, input: &Value) -> Result<Value, AwsE
             .ok_or_else(|| no_such_entity("Role", role_name))?;
 
         if !role.attached_policies.contains(&policy_arn.to_string()) {
+            if role.attached_policies.len() >= MAX_ATTACHED_POLICIES_PER_ENTITY {
+                return Err(limit_exceeded(format!(
+                    "Cannot exceed quota for PoliciesPerRole: {MAX_ATTACHED_POLICIES_PER_ENTITY}"
+                )));
+            }
             role.attached_policies.push(policy_arn.to_string());
             if let Some(mut p) = state.policies.get_mut(policy_arn) {
                 p.attachment_count += 1;
@@ -251,6 +269,11 @@ pub fn attach_group_policy(state: &IamState, input: &Value) -> Result<Value, Aws
             .ok_or_else(|| no_such_entity("Group", group_name))?;
 
         if !group.attached_policies.contains(&policy_arn.to_string()) {
+            if group.attached_policies.len() >= MAX_ATTACHED_POLICIES_PER_ENTITY {
+                return Err(limit_exceeded(format!(
+                    "Cannot exceed quota for PoliciesPerGroup: {MAX_ATTACHED_POLICIES_PER_ENTITY}"
+                )));
+            }
             group.attached_policies.push(policy_arn.to_string());
             if let Some(mut p) = state.policies.get_mut(policy_arn) {
                 p.attachment_count += 1;

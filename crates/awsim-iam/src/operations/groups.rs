@@ -3,12 +3,15 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use crate::{
-    error::{delete_conflict, entity_already_exists, no_such_entity},
+    error::{delete_conflict, entity_already_exists, limit_exceeded, no_such_entity},
     ids::{new_group_id, normalize_path, now_iso8601},
     state::{Group, IamState},
 };
 
 use super::{opt_str, require_str};
+
+/// AWS quota: maximum groups a single IAM user may belong to.
+const MAX_GROUPS_PER_USER: usize = 10;
 
 fn group_to_value(g: &Group) -> Value {
     json!({
@@ -136,6 +139,20 @@ pub fn add_user_to_group(state: &IamState, input: &Value) -> Result<Value, AwsEr
     // Validate both exist
     if !state.users.contains_key(user_name) {
         return Err(no_such_entity("User", user_name));
+    }
+
+    // Check the per-user group cap before mutating either side. Skip the
+    // count when the user is already in the target group — re-issuing the
+    // call must remain idempotent even at the cap.
+    {
+        let user = state.users.get(user_name).expect("user just verified");
+        if !user.groups.contains(&group_name.to_string())
+            && user.groups.len() >= MAX_GROUPS_PER_USER
+        {
+            return Err(limit_exceeded(format!(
+                "Cannot exceed quota for GroupsPerUser: {MAX_GROUPS_PER_USER}"
+            )));
+        }
     }
 
     {

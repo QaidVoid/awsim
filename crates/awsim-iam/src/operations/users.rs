@@ -3,12 +3,15 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use crate::{
-    error::{delete_conflict, entity_already_exists, no_such_entity},
+    error::{delete_conflict, entity_already_exists, limit_exceeded, no_such_entity},
     ids::{new_access_key_id, new_secret_access_key, new_user_id, normalize_path, now_iso8601},
     state::{AccessKey, IamState, LoginProfile, User},
 };
 
 use super::{opt_str, require_str};
+
+/// AWS hard limit: at most 2 access keys per IAM user.
+const MAX_ACCESS_KEYS_PER_USER: usize = 2;
 
 fn user_to_value(u: &User) -> Value {
     json!({
@@ -190,6 +193,12 @@ pub fn create_access_key(
         .users
         .get_mut(user_name)
         .ok_or_else(|| no_such_entity("User", user_name))?;
+
+    if user.access_keys.len() >= MAX_ACCESS_KEYS_PER_USER {
+        return Err(limit_exceeded(format!(
+            "Cannot exceed quota for AccessKeysPerUser: {MAX_ACCESS_KEYS_PER_USER}"
+        )));
+    }
 
     let key = AccessKey {
         access_key_id: new_access_key_id(),

@@ -3,15 +3,34 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 
 use crate::{
-    error::{delete_conflict, entity_already_exists, malformed_policy_document, no_such_entity},
+    error::{
+        delete_conflict, entity_already_exists, malformed_policy_document, no_such_entity,
+        validation_error,
+    },
     ids::{new_role_id, normalize_path, now_iso8601},
     state::{IamState, Role},
 };
+
+const MIN_MAX_SESSION_DURATION: u32 = 3600;
+const MAX_MAX_SESSION_DURATION: u32 = 43_200;
 
 fn validate_policy_document(doc: &str) -> Result<(), AwsError> {
     awsim_iam_policy::parse(doc)
         .map(|_| ())
         .map_err(|e| malformed_policy_document(format!("Syntax errors in policy. {e}")))
+}
+
+/// AWS rejects MaxSessionDuration values outside [3600, 43200] seconds
+/// with ValidationError ("1 validation error detected"). Mirror that.
+fn validate_max_session_duration(value: u32) -> Result<(), AwsError> {
+    if !(MIN_MAX_SESSION_DURATION..=MAX_MAX_SESSION_DURATION).contains(&value) {
+        return Err(validation_error(format!(
+            "1 validation error detected: Value '{value}' at 'maxSessionDuration' \
+             failed to satisfy constraint: Member must have value less than or equal to \
+             {MAX_MAX_SESSION_DURATION} and greater than or equal to {MIN_MAX_SESSION_DURATION}"
+        )));
+    }
+    Ok(())
 }
 
 use super::{opt_str, require_str};
@@ -56,6 +75,7 @@ pub fn create_role(
         .and_then(|v| v.as_u64())
         .map(|v| v as u32)
         .unwrap_or(3600);
+    validate_max_session_duration(max_session_duration)?;
 
     let role = Role {
         role_name: role_name.to_string(),
@@ -171,7 +191,9 @@ pub fn update_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {
         role.description = Some(desc.to_string());
     }
     if let Some(dur) = input.get("MaxSessionDuration").and_then(|v| v.as_u64()) {
-        role.max_session_duration = dur as u32;
+        let dur = dur as u32;
+        validate_max_session_duration(dur)?;
+        role.max_session_duration = dur;
     }
 
     Ok(json!({ "Role": role_to_value(&role) }))
