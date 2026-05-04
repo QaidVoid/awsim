@@ -48,6 +48,35 @@ pub fn create_bucket(
 
     validate_bucket_name(bucket_name)?;
 
+    // CreateBucketConfiguration.LocationConstraint must match the request
+    // region when supplied. AWS rejects mismatches with
+    // IllegalLocationConstraintException; us-east-1 is the special case
+    // where omitting LocationConstraint or supplying "us-east-1" / "" /
+    // "US" all map to the same region.
+    if let Some(constraint) = parse_location_constraint(input) {
+        if constraint != ctx.region && !(constraint == "US" && ctx.region == "us-east-1") {
+            return Err(AwsError::bad_request(
+                "IllegalLocationConstraintException",
+                format!(
+                    "The {constraint} location constraint is incompatible for the region \
+                     specific endpoint this request was sent to ({region})",
+                    region = ctx.region,
+                ),
+            ));
+        }
+    } else if ctx.region != "us-east-1" {
+        // Outside us-east-1, AWS requires LocationConstraint to be
+        // supplied — there is no implicit default.
+        return Err(AwsError::bad_request(
+            "IllegalLocationConstraintException",
+            format!(
+                "CreateBucket without a LocationConstraint is not allowed in {region}; \
+                 supply CreateBucketConfiguration.LocationConstraint",
+                region = ctx.region,
+            ),
+        ));
+    }
+
     if state.buckets.contains_key(bucket_name) {
         return Err(AwsError::conflict(
             "BucketAlreadyOwnedByYou",
@@ -59,6 +88,22 @@ pub fn create_bucket(
     state.buckets.insert(bucket_name.to_string(), bucket);
 
     Ok(json!({ "Location": format!("/{bucket_name}") }))
+}
+
+/// Pull `CreateBucketConfiguration.LocationConstraint` out of the input,
+/// accepting it under either the modern field or the legacy
+/// `CreateBucketConfiguration` flat shape.
+fn parse_location_constraint(input: &Value) -> Option<String> {
+    let raw = input
+        .get("CreateBucketConfiguration")
+        .and_then(|v| v.get("LocationConstraint"))
+        .or_else(|| input.get("LocationConstraint"))?;
+    let s = raw.as_str()?.trim();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
 }
 
 /// DELETE /{Bucket} — delete an empty bucket.
@@ -188,4 +233,79 @@ pub fn no_such_bucket(name: &str) -> AwsError {
         "NoSuchBucket",
         format!("The specified bucket '{name}' does not exist"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx_in(region: &str) -> RequestContext {
+        RequestContext::new("s3", region)
+    }
+
+    #[test]
+    fn create_bucket_in_us_east_1_without_location_constraint_succeeds() {
+        let state = S3State::default();
+        create_bucket(
+            &state,
+            &json!({ "Bucket": "test-bucket" }),
+            &ctx_in("us-east-1"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn create_bucket_in_other_region_requires_location_constraint() {
+        let state = S3State::default();
+        let err = create_bucket(
+            &state,
+            &json!({ "Bucket": "test-bucket" }),
+            &ctx_in("eu-west-1"),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "IllegalLocationConstraintException");
+    }
+
+    #[test]
+    fn create_bucket_rejects_mismatched_location_constraint() {
+        let state = S3State::default();
+        let err = create_bucket(
+            &state,
+            &json!({
+                "Bucket": "test-bucket",
+                "CreateBucketConfiguration": { "LocationConstraint": "us-west-2" },
+            }),
+            &ctx_in("eu-west-1"),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "IllegalLocationConstraintException");
+    }
+
+    #[test]
+    fn create_bucket_accepts_matching_location_constraint() {
+        let state = S3State::default();
+        create_bucket(
+            &state,
+            &json!({
+                "Bucket": "test-bucket",
+                "CreateBucketConfiguration": { "LocationConstraint": "eu-west-1" },
+            }),
+            &ctx_in("eu-west-1"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn create_bucket_accepts_legacy_us_constraint_in_us_east_1() {
+        let state = S3State::default();
+        create_bucket(
+            &state,
+            &json!({
+                "Bucket": "test-bucket",
+                "CreateBucketConfiguration": { "LocationConstraint": "US" },
+            }),
+            &ctx_in("us-east-1"),
+        )
+        .unwrap();
+    }
 }
