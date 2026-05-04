@@ -421,13 +421,11 @@ impl InterpreterContext {
 // ---------------------------------------------------------------------------
 
 /// Recursively transform a `Parameters` (or `ResultSelector`) template
-/// against a source object. Keys ending in `.$` carry a JSONPath
-/// reference into `source` and are renamed to drop the suffix in the
-/// output. Object / array values recurse; everything else is a literal.
-///
-/// Doesn't implement intrinsic functions (`States.Format`, etc.) yet —
-/// strings beginning with `States.` pass through unchanged so the SDK
-/// at least sees the source template.
+/// against a source object. Keys ending in `.$` carry either a JSONPath
+/// reference into `source` (e.g. `$.user.id`) or an intrinsic function
+/// invocation (`States.Format(...)`, `States.JsonToString(...)`, etc.)
+/// and are renamed to drop the suffix in the output. Object / array
+/// values recurse; everything else is a literal.
 fn apply_parameters(template: &Value, source: &Value) -> Value {
     match template {
         Value::Object(map) => {
@@ -435,6 +433,9 @@ fn apply_parameters(template: &Value, source: &Value) -> Value {
             for (k, v) in map {
                 if let Some(stripped_key) = k.strip_suffix(".$") {
                     let resolved = match v.as_str() {
+                        Some(s) if s.starts_with("States.") => {
+                            evaluate_intrinsic(s, source).unwrap_or_else(|| v.clone())
+                        }
                         Some(path) if path.starts_with('$') => resolve_reference_path(source, path),
                         _ => v.clone(),
                     };
@@ -450,6 +451,163 @@ fn apply_parameters(template: &Value, source: &Value) -> Value {
         }
         // Scalars pass through.
         _ => template.clone(),
+    }
+}
+
+/// Evaluate an ASL intrinsic function call against `source`. Returns
+/// `None` when the call isn't a recognized intrinsic (caller falls back
+/// to treating it as an opaque literal).
+///
+/// Supported intrinsics:
+/// - `States.Format(template, args...)` — `{}` placeholder substitution.
+/// - `States.JsonToString(path)` — serialize a JSON value to a string.
+/// - `States.StringToJson(path-or-literal)` — parse a string to JSON.
+/// - `States.Array(args...)` — wrap arguments into a JSON array.
+/// - `States.UUID()` — fresh v4 UUID per call.
+fn evaluate_intrinsic(expr: &str, source: &Value) -> Option<Value> {
+    let expr = expr.trim();
+    let (name, args_str) = expr
+        .strip_prefix("States.")
+        .and_then(|rest| rest.split_once('('))
+        .and_then(|(name, rest)| rest.strip_suffix(')').map(|inner| (name, inner.trim())))?;
+    let args = parse_intrinsic_args(args_str);
+
+    match name {
+        "Format" => {
+            let raw = args.first()?;
+            let template = resolve_intrinsic_arg_str(raw, source)?;
+            let mut out = String::with_capacity(template.len());
+            let mut chars = template.chars().peekable();
+            let mut arg_idx = 1usize;
+            while let Some(c) = chars.next() {
+                match c {
+                    '{' if chars.peek() == Some(&'}') => {
+                        chars.next();
+                        let arg = args.get(arg_idx)?;
+                        arg_idx += 1;
+                        let value = resolve_intrinsic_arg(arg, source)?;
+                        out.push_str(&intrinsic_arg_to_format_string(&value));
+                    }
+                    '\\' if chars.peek() == Some(&'{') || chars.peek() == Some(&'}') => {
+                        if let Some(escaped) = chars.next() {
+                            out.push(escaped);
+                        }
+                    }
+                    _ => out.push(c),
+                }
+            }
+            Some(Value::String(out))
+        }
+        "JsonToString" => {
+            let arg = args.first()?;
+            let value = resolve_intrinsic_arg(arg, source)?;
+            Some(Value::String(value.to_string()))
+        }
+        "StringToJson" => {
+            let arg = args.first()?;
+            let s = resolve_intrinsic_arg_str(arg, source)?;
+            serde_json::from_str(&s).ok()
+        }
+        "Array" => Some(Value::Array(
+            args.iter()
+                .filter_map(|a| resolve_intrinsic_arg(a, source))
+                .collect(),
+        )),
+        "UUID" => Some(Value::String(uuid::Uuid::new_v4().to_string())),
+        _ => None,
+    }
+}
+
+/// Split intrinsic-function arguments at top-level commas, honoring
+/// quoted strings so `States.Format('a, b', $.x)` stays as two args.
+fn parse_intrinsic_args(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut prev_backslash = false;
+    for c in s.chars() {
+        if prev_backslash {
+            current.push(c);
+            prev_backslash = false;
+            continue;
+        }
+        match c {
+            '\\' => {
+                current.push(c);
+                prev_backslash = true;
+            }
+            '\'' => {
+                in_single = !in_single;
+                current.push(c);
+            }
+            ',' if !in_single => {
+                let trimmed = current.trim().to_string();
+                if !trimmed.is_empty() {
+                    out.push(trimmed);
+                }
+                current.clear();
+            }
+            _ => current.push(c),
+        }
+    }
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        out.push(trimmed);
+    }
+    out
+}
+
+/// Resolve a single intrinsic argument:
+/// - `'literal string'` → `Value::String("literal string")`
+/// - `42`, `3.14`, `true`, `false`, `null` → corresponding scalar
+/// - `$.path...` → JSONPath lookup into `source`
+fn resolve_intrinsic_arg(raw: &str, source: &Value) -> Option<Value> {
+    let trimmed = raw.trim();
+    if let Some(s) = trimmed
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''))
+    {
+        return Some(Value::String(s.replace("\\'", "'").replace("\\\\", "\\")));
+    }
+    if trimmed == "null" {
+        return Some(Value::Null);
+    }
+    if trimmed == "true" {
+        return Some(Value::Bool(true));
+    }
+    if trimmed == "false" {
+        return Some(Value::Bool(false));
+    }
+    if let Ok(n) = trimmed.parse::<i64>() {
+        return Some(Value::Number(n.into()));
+    }
+    if let Ok(f) = trimmed.parse::<f64>()
+        && let Some(num) = serde_json::Number::from_f64(f)
+    {
+        return Some(Value::Number(num));
+    }
+    if trimmed.starts_with('$') {
+        return Some(resolve_reference_path(source, trimmed));
+    }
+    None
+}
+
+fn resolve_intrinsic_arg_str(raw: &str, source: &Value) -> Option<String> {
+    let v = resolve_intrinsic_arg(raw, source)?;
+    Some(match v {
+        Value::String(s) => s,
+        other => other.to_string(),
+    })
+}
+
+/// `States.Format`'s placeholder substitution stringifies values without
+/// JSON-escaping — i.e. a string argument lands in the output as its raw
+/// content, not surrounded by quotes.
+fn intrinsic_arg_to_format_string(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
     }
 }
 
@@ -1010,6 +1168,110 @@ mod tests {
         assert_eq!(out["outer"], json!("hi"));
         assert_eq!(out["untouched"], json!("ok"));
         assert_eq!(out["computed"]["x"], json!("hi"));
+    }
+
+    #[test]
+    fn intrinsic_format_substitutes_placeholders() {
+        let def = r#"{
+            "StartAt": "Build",
+            "States": {
+                "Build": {
+                    "Type": "Pass",
+                    "End": true,
+                    "Parameters": {
+                        "greeting.$": "States.Format('Hello, {}!', $.name)"
+                    }
+                }
+            }
+        }"#;
+        let result = run(def, r#"{"name": "Ada"}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out["greeting"], json!("Hello, Ada!"));
+    }
+
+    #[test]
+    fn intrinsic_array_collects_args() {
+        let def = r#"{
+            "StartAt": "Build",
+            "States": {
+                "Build": {
+                    "Type": "Pass",
+                    "End": true,
+                    "Parameters": {
+                        "items.$": "States.Array($.a, $.b, 'x')"
+                    }
+                }
+            }
+        }"#;
+        let result = run(def, r#"{"a": 1, "b": 2}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out["items"], json!([1, 2, "x"]));
+    }
+
+    #[test]
+    fn intrinsic_json_to_string_serializes_value() {
+        let def = r#"{
+            "StartAt": "Build",
+            "States": {
+                "Build": {
+                    "Type": "Pass",
+                    "End": true,
+                    "Parameters": {
+                        "encoded.$": "States.JsonToString($.payload)"
+                    }
+                }
+            }
+        }"#;
+        let result = run(def, r#"{"payload": {"k": "v"}}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out["encoded"], json!("{\"k\":\"v\"}"));
+    }
+
+    #[test]
+    fn intrinsic_string_to_json_parses_string() {
+        let def = r#"{
+            "StartAt": "Build",
+            "States": {
+                "Build": {
+                    "Type": "Pass",
+                    "End": true,
+                    "Parameters": {
+                        "decoded.$": "States.StringToJson($.raw)"
+                    }
+                }
+            }
+        }"#;
+        let result = run(def, r#"{"raw": "{\"n\": 42}"}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out["decoded"]["n"], json!(42));
+    }
+
+    #[test]
+    fn intrinsic_uuid_is_random_per_call() {
+        let def = r#"{
+            "StartAt": "Build",
+            "States": {
+                "Build": {
+                    "Type": "Pass",
+                    "End": true,
+                    "Parameters": {
+                        "a.$": "States.UUID()",
+                        "b.$": "States.UUID()"
+                    }
+                }
+            }
+        }"#;
+        let result = run(def, r#"{}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        let a = out["a"].as_str().unwrap();
+        let b = out["b"].as_str().unwrap();
+        assert_eq!(a.len(), 36);
+        assert_ne!(a, b);
     }
 
     #[test]
