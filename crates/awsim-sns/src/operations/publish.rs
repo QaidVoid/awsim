@@ -88,9 +88,42 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
         "Published message"
     );
 
-    // Build a Value-based view of message attributes for filter evaluation.
-    let filter_attrs: HashMap<String, Value> = published
-        .message_attributes
+    fan_out_to_subscribers(
+        state,
+        ctx,
+        topic_arn,
+        &message_id,
+        message,
+        message_json.as_ref(),
+        subject.as_deref(),
+        &published.message_attributes,
+    );
+
+    let _ = published;
+
+    Ok(json!({ "MessageId": message_id }))
+}
+
+/// Emit cross-service `sns:Publish` events for every subscription on
+/// `topic_arn` that targets SQS or Lambda, applying the subscription's
+/// FilterPolicy and per-protocol body selection. Used by both Publish
+/// and PublishBatch so batch entries fan out to subscribers identically.
+#[allow(clippy::too_many_arguments)]
+fn fan_out_to_subscribers(
+    state: &SnsState,
+    ctx: &RequestContext,
+    topic_arn: &str,
+    message_id: &str,
+    raw_message: &str,
+    message_json: Option<&serde_json::Map<String, Value>>,
+    subject: Option<&str>,
+    message_attributes: &HashMap<String, MessageAttribute>,
+) {
+    let Some(bus) = ctx.event_bus.as_ref() else {
+        return;
+    };
+
+    let filter_attrs: HashMap<String, Value> = message_attributes
         .iter()
         .map(|(k, attr)| {
             let val = json!({
@@ -101,88 +134,67 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
         })
         .collect();
 
-    // Emit cross-service events for each active subscription.
-    if let Some(bus) = ctx.event_bus.as_ref() {
-        // Wire message attributes through the event bus so the fan-out
-        // worker can include them on the SNS notification envelope. We
-        // serialize as the AWS notification shape (`{Type, Value}` per
-        // attribute) directly, since that's what SQS/Lambda consumers see.
-        let attr_envelope: serde_json::Map<String, Value> = published
-            .message_attributes
-            .iter()
-            .map(|(k, attr)| {
-                let entry = json!({
-                    "Type": attr.data_type,
-                    "Value": attr.string_value.as_deref().unwrap_or(""),
-                });
-                (k.clone(), entry)
-            })
-            .collect();
+    let attr_envelope: serde_json::Map<String, Value> = message_attributes
+        .iter()
+        .map(|(k, attr)| {
+            let entry = json!({
+                "Type": attr.data_type,
+                "Value": attr.string_value.as_deref().unwrap_or(""),
+            });
+            (k.clone(), entry)
+        })
+        .collect();
 
-        // Collect subscriptions for this topic that target SQS or Lambda.
-        // Capture the RawMessageDelivery flag so the fan-out worker knows
-        // whether to wrap the payload in the SNS notification envelope or
-        // pass it through verbatim.
-        let subs: Vec<(String, String, String, Option<String>, bool)> = state
-            .subscriptions
-            .iter()
-            .filter(|s| s.topic_arn == topic_arn && (s.protocol == "sqs" || s.protocol == "lambda"))
-            .map(|s| {
-                let filter_policy = s.attributes.get("FilterPolicy").cloned();
-                let raw_delivery = s
-                    .attributes
-                    .get("RawMessageDelivery")
-                    .map(|v| v == "true")
-                    .unwrap_or(false);
-                (
-                    s.protocol.clone(),
-                    s.endpoint.clone(),
-                    s.arn.clone(),
-                    filter_policy,
-                    raw_delivery,
-                )
-            })
-            .collect();
+    let subs: Vec<(String, String, String, Option<String>, bool)> = state
+        .subscriptions
+        .iter()
+        .filter(|s| s.topic_arn == topic_arn && (s.protocol == "sqs" || s.protocol == "lambda"))
+        .map(|s| {
+            let filter_policy = s.attributes.get("FilterPolicy").cloned();
+            let raw_delivery = s
+                .attributes
+                .get("RawMessageDelivery")
+                .map(|v| v == "true")
+                .unwrap_or(false);
+            (
+                s.protocol.clone(),
+                s.endpoint.clone(),
+                s.arn.clone(),
+                filter_policy,
+                raw_delivery,
+            )
+        })
+        .collect();
 
-        for (protocol, endpoint, subscription_arn, filter_policy, raw_delivery) in subs {
-            // Apply filter policy if set
-            if let Some(filter_str) = &filter_policy
-                && let Ok(filter_val) = serde_json::from_str::<Value>(filter_str)
-                && !filter::matches_filter(&filter_val, &filter_attrs)
-            {
-                continue; // Skip this subscription
-            }
-
-            // When MessageStructure=json, pick the protocol-specific body
-            // (falling back to "default"); otherwise the raw message is
-            // delivered as-is.
-            let delivered =
-                select_message_for_protocol(message_json.as_ref(), &protocol).unwrap_or(message);
-
-            let event = InternalEvent {
-                source: "sns".to_string(),
-                event_type: "sns:Publish".to_string(),
-                region: ctx.region.clone(),
-                account_id: ctx.account_id.clone(),
-                detail: json!({
-                    "topic_arn": topic_arn,
-                    "message_id": message_id,
-                    "message": delivered,
-                    "subject": subject,
-                    "protocol": protocol,
-                    "endpoint": endpoint,
-                    "subscription_arn": subscription_arn,
-                    "message_attributes": attr_envelope,
-                    "raw_message_delivery": raw_delivery,
-                }),
-            };
-            bus.publish(event);
+    for (protocol, endpoint, subscription_arn, filter_policy, raw_delivery) in subs {
+        if let Some(filter_str) = &filter_policy
+            && let Ok(filter_val) = serde_json::from_str::<Value>(filter_str)
+            && !filter::matches_filter(&filter_val, &filter_attrs)
+        {
+            continue;
         }
+
+        let delivered = select_message_for_protocol(message_json, &protocol).unwrap_or(raw_message);
+
+        let event = InternalEvent {
+            source: "sns".to_string(),
+            event_type: "sns:Publish".to_string(),
+            region: ctx.region.clone(),
+            account_id: ctx.account_id.clone(),
+            detail: json!({
+                "topic_arn": topic_arn,
+                "message_id": message_id,
+                "message": delivered,
+                "subject": subject,
+                "protocol": protocol,
+                "endpoint": endpoint,
+                "subscription_arn": subscription_arn,
+                "message_attributes": attr_envelope,
+                "raw_message_delivery": raw_delivery,
+            }),
+        };
+        bus.publish(event);
     }
-
-    let _ = published;
-
-    Ok(json!({ "MessageId": message_id }))
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +204,7 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
 pub fn publish_batch(
     state: &SnsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let topic_arn = input["TopicArn"]
         .as_str()
@@ -256,9 +268,21 @@ pub fn publish_batch(
                     message_id: message_id.clone(),
                     topic_arn: topic_arn.to_string(),
                     message: msg.to_string(),
-                    subject,
-                    message_attributes,
+                    subject: subject.clone(),
+                    message_attributes: message_attributes.clone(),
                 };
+
+                fan_out_to_subscribers(
+                    state,
+                    ctx,
+                    topic_arn,
+                    &message_id,
+                    msg,
+                    None, // PublishBatch doesn't accept MessageStructure
+                    subject.as_deref(),
+                    &message_attributes,
+                );
+
                 let _ = published;
 
                 successful.push(json!({
