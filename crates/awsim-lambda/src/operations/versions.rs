@@ -2,7 +2,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::{
-    error::resource_not_found,
+    error::{invalid_parameter, resource_not_found},
     operations::functions::persist_code,
     state::{FunctionVersion, LambdaState},
     util::{now_iso8601, opt_str, require_str},
@@ -15,12 +15,26 @@ pub fn publish_version(
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "FunctionName")?;
     let description = opt_str(input, "Description").unwrap_or("").to_string();
+    let expected_sha256 = opt_str(input, "CodeSha256");
 
     let current_bytes = {
         let f = state
             .functions
             .get(name)
             .ok_or_else(|| resource_not_found("function", name))?;
+        // Optional guard: when CodeSha256 is supplied, it must equal the
+        // function's current $LATEST code hash. AWS rejects with
+        // PreconditionFailedException when the hash drifted, which the SDK
+        // exposes so race-publishes against $LATEST updates fail loudly.
+        if let Some(expected) = expected_sha256
+            && f.code_sha256 != expected
+        {
+            return Err(invalid_parameter(format!(
+                "CodeSha256 ({expected}) does not match the function's current code SHA-256 \
+                 ({})",
+                f.code_sha256
+            )));
+        }
         f.code
             .as_ref()
             .map(|c| c.read_all())
@@ -163,6 +177,40 @@ mod tests {
         let state = LambdaState::default();
         create_test_fn(&state);
         let resp = publish_version(&state, &json!({ "FunctionName": "f" }), &ctx()).unwrap();
+        assert_eq!(resp["Version"], json!("1"));
+    }
+
+    #[test]
+    fn publish_version_rejects_codesha256_mismatch() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        let err = publish_version(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "CodeSha256": "definitely-not-the-current-hash",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+        assert!(err.message.contains("CodeSha256"));
+    }
+
+    #[test]
+    fn publish_version_accepts_matching_codesha256() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        let current_hash = state.functions.get("f").unwrap().code_sha256.clone();
+        let resp = publish_version(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "CodeSha256": current_hash,
+            }),
+            &ctx(),
+        )
+        .unwrap();
         assert_eq!(resp["Version"], json!("1"));
     }
 
