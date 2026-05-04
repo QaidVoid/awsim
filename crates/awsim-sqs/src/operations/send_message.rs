@@ -253,6 +253,25 @@ pub fn handle_batch(
         ));
     }
 
+    // AWS rejects a SendMessageBatch whose summed message-body bytes
+    // exceed 256 KiB (262 144 bytes). The limit is a sum of body sizes —
+    // attribute payloads are not included in this calculation.
+    const SQS_MAX_BATCH_PAYLOAD_BYTES: usize = 262_144;
+    let total_payload: usize = entries
+        .iter()
+        .filter_map(|e| e["MessageBody"].as_str())
+        .map(str::len)
+        .sum();
+    if total_payload > SQS_MAX_BATCH_PAYLOAD_BYTES {
+        return Err(AwsError::bad_request(
+            "BatchRequestTooLong",
+            format!(
+                "Batch requests cannot be longer than {SQS_MAX_BATCH_PAYLOAD_BYTES} bytes. \
+                 You have sent {total_payload} bytes."
+            ),
+        ));
+    }
+
     let mut successful = vec![];
     let mut failed = vec![];
 
@@ -402,6 +421,50 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterValue");
         assert!(err.message.contains("MessageGroupId"));
+    }
+
+    #[test]
+    fn send_message_batch_rejects_total_payload_over_limit() {
+        let state = standard_queue();
+        let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
+        let big = "a".repeat(100_000);
+        // 3 × 100 000 bytes = 300 000 > 262 144.
+        let entries: Vec<Value> = (0..3)
+            .map(|i| {
+                json!({
+                    "Id": format!("e{i}"),
+                    "MessageBody": big.clone(),
+                })
+            })
+            .collect();
+        let err = handle_batch(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/std",
+                "Entries": entries,
+            }),
+            &ctx,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BatchRequestTooLong");
+    }
+
+    #[test]
+    fn send_message_batch_accepts_payload_at_limit() {
+        let state = standard_queue();
+        let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
+        // Exactly 262 144 bytes — must succeed.
+        let body = "a".repeat(262_144);
+        let resp = handle_batch(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/std",
+                "Entries": [{ "Id": "e0", "MessageBody": body }],
+            }),
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(resp["Successful"].as_array().unwrap().len(), 1);
     }
 
     #[test]
