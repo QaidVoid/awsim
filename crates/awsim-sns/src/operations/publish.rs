@@ -67,18 +67,39 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
 
     // Emit cross-service events for each active subscription.
     if let Some(bus) = ctx.event_bus.as_ref() {
+        // Wire message attributes through the event bus so the fan-out
+        // worker can include them on the SNS notification envelope. We
+        // serialize as the AWS notification shape (`{Type, Value}` per
+        // attribute) directly, since that's what SQS/Lambda consumers see.
+        let attr_envelope: serde_json::Map<String, Value> = published
+            .message_attributes
+            .iter()
+            .map(|(k, attr)| {
+                let entry = json!({
+                    "Type": attr.data_type,
+                    "Value": attr.string_value.as_deref().unwrap_or(""),
+                });
+                (k.clone(), entry)
+            })
+            .collect();
+
         // Collect subscriptions for this topic that target SQS or Lambda.
-        let subs: Vec<(String, String, Option<String>)> = state
+        let subs: Vec<(String, String, String, Option<String>)> = state
             .subscriptions
             .iter()
             .filter(|s| s.topic_arn == topic_arn && (s.protocol == "sqs" || s.protocol == "lambda"))
             .map(|s| {
                 let filter_policy = s.attributes.get("FilterPolicy").cloned();
-                (s.protocol.clone(), s.endpoint.clone(), filter_policy)
+                (
+                    s.protocol.clone(),
+                    s.endpoint.clone(),
+                    s.arn.clone(),
+                    filter_policy,
+                )
             })
             .collect();
 
-        for (protocol, endpoint, filter_policy) in subs {
+        for (protocol, endpoint, subscription_arn, filter_policy) in subs {
             // Apply filter policy if set
             if let Some(filter_str) = &filter_policy
                 && let Ok(filter_val) = serde_json::from_str::<Value>(filter_str)
@@ -99,6 +120,8 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
                     "subject": subject,
                     "protocol": protocol,
                     "endpoint": endpoint,
+                    "subscription_arn": subscription_arn,
+                    "message_attributes": attr_envelope,
                 }),
             };
             bus.publish(event);

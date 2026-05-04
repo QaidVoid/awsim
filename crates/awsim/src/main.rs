@@ -1449,6 +1449,12 @@ fn spawn_event_router(state: &AppState) {
                         .unwrap_or("")
                         .to_string();
                     let topic_arn = event.detail["topic_arn"].as_str().unwrap_or("").to_string();
+                    let subject = event.detail["subject"].as_str().map(str::to_string);
+                    let subscription_arn = event.detail["subscription_arn"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    let message_attributes = event.detail.get("message_attributes").cloned();
 
                     match event.event_type.as_str() {
                         "sns:Publish" if protocol == "sqs" => {
@@ -1471,14 +1477,42 @@ fn spawn_event_router(state: &AppState) {
                                 };
 
                                 // Wrap the SNS message in the SNS notification envelope that
-                                // real AWS delivers to SQS subscribers.
-                                let body = serde_json::json!({
+                                // real AWS delivers to SQS subscribers. The fixture
+                                // signature/cert URL/timestamp are stable per-message but not
+                                // cryptographically real — clients that verify the signature
+                                // (rare in test environments) will fail; clients that just
+                                // read the metadata (the common case) round-trip cleanly.
+                                let timestamp = iso8601_now();
+                                let unsubscribe_url = format!(
+                                    "http://sns.{region}.localhost/?Action=Unsubscribe&SubscriptionArn={sub}",
+                                    region = event.region,
+                                    sub = subscription_arn,
+                                );
+                                let signing_cert_url = format!(
+                                    "http://sns.{region}.localhost/SimpleNotificationService-awsim.pem",
+                                    region = event.region,
+                                );
+
+                                let mut envelope = serde_json::json!({
                                     "Type": "Notification",
                                     "MessageId": message_id,
                                     "TopicArn": topic_arn,
                                     "Message": message,
-                                })
-                                .to_string();
+                                    "Timestamp": timestamp,
+                                    "SignatureVersion": "1",
+                                    "Signature": "awsim-fixture-signature",
+                                    "SigningCertURL": signing_cert_url,
+                                    "UnsubscribeURL": unsubscribe_url,
+                                });
+                                if let Some(s) = &subject {
+                                    envelope["Subject"] = serde_json::Value::String(s.clone());
+                                }
+                                if let Some(attrs) = &message_attributes
+                                    && attrs.as_object().is_some_and(|m| !m.is_empty())
+                                {
+                                    envelope["MessageAttributes"] = attrs.clone();
+                                }
+                                let body = envelope.to_string();
 
                                 let input = serde_json::json!({
                                     "QueueUrl": queue_url,
@@ -1559,6 +1593,45 @@ fn spawn_event_router(state: &AppState) {
 ///
 /// Falls back to a best-effort URL using the supplied defaults when the ARN
 /// cannot be parsed.
+/// Format the current UTC time as the ISO 8601 string AWS uses on SNS
+/// notification envelopes (e.g. `2026-05-04T09:00:00.000Z`).
+fn iso8601_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let s = secs % 60;
+    let mins = secs / 60;
+    let min = mins % 60;
+    let hours = mins / 60;
+    let h = hours % 24;
+    let mut days = hours / 24;
+    let mut y = 1970u64;
+    loop {
+        let leap = (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400);
+        let dy = if leap { 366 } else { 365 };
+        if days < dy {
+            break;
+        }
+        days -= dy;
+        y += 1;
+    }
+    let leap = (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400);
+    let months = if leap {
+        [31u64, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+    let mut mo = 0usize;
+    while days >= months[mo] {
+        days -= months[mo];
+        mo += 1;
+    }
+    let d = days + 1;
+    format!("{y:04}-{:02}-{d:02}T{h:02}:{min:02}:{s:02}.000Z", mo + 1)
+}
+
 fn arn_to_sqs_url(arn: &str, default_region: &str, default_account: &str) -> String {
     // arn:aws:sqs:us-east-1:000000000000:my-queue
     let parts: Vec<&str> = arn.splitn(6, ':').collect();
