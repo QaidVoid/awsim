@@ -49,6 +49,7 @@ impl StsService {
 
         validate_role_arn(role_arn)?;
         validate_role_session_name(session_name)?;
+        validate_session_tags(input)?;
 
         let duration = input["DurationSeconds"]
             .as_str()
@@ -373,6 +374,70 @@ fn validate_role_session_name(name: &str) -> Result<(), AwsError> {
     Ok(())
 }
 
+/// Validate the optional `Tags` and `TransitiveTagKeys` inputs to
+/// AssumeRole. AWS rejects:
+///   - more than 50 tags per session
+///   - tag keys outside 1..=128 chars
+///   - tag values over 256 chars
+///   - duplicate tag keys (case-sensitive)
+///   - TransitiveTagKeys that aren't subsets of the supplied tag keys
+fn validate_session_tags(input: &Value) -> Result<(), AwsError> {
+    let tags = match input.get("Tags").and_then(Value::as_array) {
+        Some(arr) => arr,
+        None => return Ok(()),
+    };
+    if tags.len() > 50 {
+        return Err(AwsError::validation(format!(
+            "Cannot have more than 50 session tags; got {}",
+            tags.len()
+        )));
+    }
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for tag in tags {
+        let key = tag
+            .get("Key")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AwsError::validation("Each Tag entry must include Key and Value"))?;
+        let value = tag
+            .get("Value")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AwsError::validation("Each Tag entry must include Key and Value"))?;
+        if key.is_empty() || key.len() > 128 {
+            return Err(AwsError::validation(format!(
+                "Tag key length {} is outside 1..=128",
+                key.len()
+            )));
+        }
+        if value.len() > 256 {
+            return Err(AwsError::validation(format!(
+                "Tag value length {} exceeds 256",
+                value.len()
+            )));
+        }
+        if !seen.insert(key.to_string()) {
+            return Err(AwsError::validation(format!(
+                "Duplicate session tag key: {key}"
+            )));
+        }
+    }
+
+    if let Some(transitive) = input.get("TransitiveTagKeys").and_then(Value::as_array) {
+        for k in transitive {
+            let Some(s) = k.as_str() else {
+                return Err(AwsError::validation(
+                    "TransitiveTagKeys entries must be strings",
+                ));
+            };
+            if !seen.contains(s) {
+                return Err(AwsError::validation(format!(
+                    "TransitiveTagKeys entry {s} is not present in Tags"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Validate the DurationSeconds parameter for AssumeRole. AWS allows
 /// 900..=43200 seconds (the upper bound is role-specific in real AWS but
 /// we apply the global max).
@@ -673,6 +738,64 @@ mod tests {
             &json!({
                 "RoleArn": "arn:aws:iam::000000000000:role/team/dev/MyRole",
                 "RoleSessionName": "session",
+            }),
+            &ctx,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_assume_role_rejects_duplicate_tag_keys() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                    "RoleSessionName": "session",
+                    "Tags": [
+                        { "Key": "team", "Value": "infra" },
+                        { "Key": "team", "Value": "data" },
+                    ],
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("Duplicate"));
+    }
+
+    #[test]
+    fn test_assume_role_rejects_transitive_tag_not_in_tags() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                    "RoleSessionName": "session",
+                    "Tags": [{ "Key": "team", "Value": "infra" }],
+                    "TransitiveTagKeys": ["nonexistent"],
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn test_assume_role_accepts_well_formed_tags() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        svc.assume_role(
+            &json!({
+                "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                "RoleSessionName": "session",
+                "Tags": [
+                    { "Key": "team", "Value": "infra" },
+                    { "Key": "env", "Value": "prod" },
+                ],
+                "TransitiveTagKeys": ["team"],
             }),
             &ctx,
         )
