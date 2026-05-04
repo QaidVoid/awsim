@@ -109,18 +109,32 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
             // Increment receive_count now
             msg.receive_count += 1;
 
-            // Build attributes subset
+            // Update derived system attributes BEFORE collecting them for
+            // the response so the caller sees the post-receive values:
+            //   ApproximateReceiveCount — incremented every receive
+            //   ApproximateFirstReceiveTimestamp — set once on first receive
+            msg.attributes.insert(
+                "ApproximateReceiveCount".to_string(),
+                msg.receive_count.to_string(),
+            );
+            if msg.receive_count == 1 {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                msg.attributes.insert(
+                    "ApproximateFirstReceiveTimestamp".to_string(),
+                    now_ms.to_string(),
+                );
+            }
+
+            // Build attributes subset for the response
             let mut attrs = serde_json::Map::new();
             for (k, v) in &msg.attributes {
                 if want_all_attrs || attribute_names.contains(&k.as_str()) {
                     attrs.insert(k.clone(), Value::String(v.clone()));
                 }
             }
-            // Update receive count in the attribute map for the response
-            msg.attributes.insert(
-                "ApproximateReceiveCount".to_string(),
-                msg.receive_count.to_string(),
-            );
 
             // Build message attributes subset
             let mut msg_attrs = serde_json::Map::new();
@@ -241,4 +255,67 @@ fn message_attribute_entry(ma: &crate::state::MessageAttribute) -> serde_json::M
         entry.insert("BinaryValue".to_string(), Value::String(BASE64.encode(bv)));
     }
     entry
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::send_message;
+    use crate::state::{Queue, SqsState};
+    use std::collections::HashMap;
+
+    fn ctx() -> awsim_core::RequestContext {
+        awsim_core::RequestContext::new("sqs", "us-east-1")
+    }
+
+    fn standard_queue_state() -> SqsState {
+        let state = SqsState::default();
+        let q = Queue::new(
+            "std".to_string(),
+            "http://localhost/queue/std".to_string(),
+            "arn:aws:sqs:us-east-1:000000000000:std".to_string(),
+            false,
+            "now".to_string(),
+            HashMap::new(),
+        );
+        state.queues.insert("std".to_string(), q);
+        state
+    }
+
+    #[test]
+    fn first_receive_sets_approximate_first_receive_timestamp_and_count_one() {
+        let state = standard_queue_state();
+        let ctx = ctx();
+        send_message::handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/std",
+                "MessageBody": "hi",
+            }),
+            &ctx,
+        )
+        .unwrap();
+
+        let resp = handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/std",
+                "AttributeNames": ["All"],
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let msg = &resp["Messages"][0];
+        let attrs = msg["Attributes"].as_object().expect("attributes returned");
+        assert_eq!(
+            attrs["ApproximateReceiveCount"].as_str(),
+            Some("1"),
+            "first receive must report count = 1"
+        );
+        let first_ts = attrs["ApproximateFirstReceiveTimestamp"]
+            .as_str()
+            .expect("ApproximateFirstReceiveTimestamp present");
+        let parsed: u128 = first_ts.parse().expect("ms timestamp is numeric");
+        assert!(parsed > 0, "ApproximateFirstReceiveTimestamp must be > 0");
+    }
 }
