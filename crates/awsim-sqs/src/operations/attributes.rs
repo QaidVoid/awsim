@@ -4,7 +4,11 @@ use serde_json::{Value, json};
 use crate::state::SqsState;
 use crate::util::queue_name_from_url;
 
-// Attributes that are always present in GetQueueAttributes
+// Attributes recognized by GetQueueAttributes / SetQueueAttributes. Server-
+// managed counters (ApproximateNumberOf* and timestamps) are surfaced on Get
+// but not settable; we accept them in this list so SetQueueAttributes does
+// not raise InvalidAttributeName for callers echoing a previously fetched
+// attribute set.
 const KNOWN_ATTRIBUTES: &[&str] = &[
     "All",
     "ApproximateNumberOfMessages",
@@ -16,6 +20,9 @@ const KNOWN_ATTRIBUTES: &[&str] = &[
     "DelaySeconds",
     "FifoQueue",
     "FifoThroughputLimit",
+    // Server-side encryption: KMS-managed and SQS-managed.
+    "KmsDataKeyReusePeriodSeconds",
+    "KmsMasterKeyId",
     "LastModifiedTimestamp",
     "MaximumMessageSize",
     "MessageRetentionPeriod",
@@ -24,6 +31,7 @@ const KNOWN_ATTRIBUTES: &[&str] = &[
     "ReceiveMessageWaitTimeSeconds",
     "RedriveAllowPolicy",
     "RedrivePolicy",
+    "SqsManagedSseEnabled",
     "VisibilityTimeout",
 ];
 
@@ -128,4 +136,75 @@ pub fn set_queue_attributes(
     queue.refresh_redrive_policy();
 
     Ok(json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::Queue;
+    use std::collections::HashMap;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("sqs", "us-east-1")
+    }
+
+    fn standard_queue() -> SqsState {
+        let state = SqsState::default();
+        let q = Queue::new(
+            "q".to_string(),
+            "http://localhost/queue/q".to_string(),
+            "arn:aws:sqs:us-east-1:000000000000:q".to_string(),
+            false,
+            "now".to_string(),
+            HashMap::new(),
+        );
+        state.queues.insert("q".to_string(), q);
+        state
+    }
+
+    #[test]
+    fn set_queue_attributes_accepts_kms_attributes() {
+        let state = standard_queue();
+        set_queue_attributes(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/q",
+                "Attributes": {
+                    "KmsMasterKeyId": "alias/aws/sqs",
+                    "KmsDataKeyReusePeriodSeconds": "300",
+                    "SqsManagedSseEnabled": "true",
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = get_queue_attributes(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/q",
+                "AttributeNames": ["All"],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let attrs = resp["Attributes"].as_object().unwrap();
+        assert_eq!(attrs["KmsMasterKeyId"], json!("alias/aws/sqs"));
+        assert_eq!(attrs["KmsDataKeyReusePeriodSeconds"], json!("300"));
+        assert_eq!(attrs["SqsManagedSseEnabled"], json!("true"));
+    }
+
+    #[test]
+    fn set_queue_attributes_rejects_unknown_attribute() {
+        let state = standard_queue();
+        let err = set_queue_attributes(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/q",
+                "Attributes": { "MadeUpAttribute": "x" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidAttributeName");
+    }
 }
