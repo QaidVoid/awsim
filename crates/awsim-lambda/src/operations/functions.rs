@@ -24,7 +24,7 @@ pub fn function_configuration(f: &LambdaFunction) -> Value {
         json!({ "Variables": vars })
     };
 
-    json!({
+    let mut out = json!({
         "FunctionName": f.name,
         "FunctionArn": f.arn,
         "Runtime": f.runtime,
@@ -47,7 +47,129 @@ pub fn function_configuration(f: &LambdaFunction) -> Value {
         "LastUpdateStatus": "Successful",
         "LastUpdateStatusReason": Value::Null,
         "LastUpdateStatusReasonCode": Value::Null,
-    })
+        "Architectures": f.architectures,
+        "EphemeralStorage": { "Size": f.ephemeral_storage_size },
+        "PackageType": f.package_type,
+        // TracingConfig defaults to PassThrough when unset; AWS always
+        // emits the field on the response, even for new functions that
+        // never set it.
+        "TracingConfig": f.tracing_config.clone()
+            .unwrap_or_else(|| json!({ "Mode": "PassThrough" })),
+    });
+    let obj = out.as_object_mut().expect("object");
+    if !f.layers.is_empty() {
+        // ListFunctions surfaces layers as `[{ Arn, CodeSize, SigningProfileVersionArn, SigningJobArn }]`.
+        // We only round-trip the ARN since the rest of those metadata fields
+        // come from the layer-version record and aren't worth synthesizing.
+        let layers: Vec<Value> = f.layers.iter().map(|arn| json!({ "Arn": arn })).collect();
+        obj.insert("Layers".into(), Value::Array(layers));
+    }
+    if let Some(v) = &f.vpc_config {
+        obj.insert("VpcConfig".into(), v.clone());
+    }
+    if let Some(v) = &f.dead_letter_config {
+        obj.insert("DeadLetterConfig".into(), v.clone());
+    }
+    if let Some(arn) = &f.kms_key_arn {
+        obj.insert("KMSKeyArn".into(), Value::String(arn.clone()));
+    }
+    if let Some(v) = &f.file_system_configs {
+        obj.insert("FileSystemConfigs".into(), v.clone());
+    }
+    if let Some(v) = &f.logging_config {
+        obj.insert("LoggingConfig".into(), v.clone());
+    }
+    if let Some(v) = &f.snap_start {
+        // SDK reads SnapStart.OptimizationStatus alongside ApplyOn; default
+        // to Off for ApplyOn=None and On for PublishedVersions.
+        let mut snap = v.clone();
+        if let Some(o) = snap.as_object_mut() {
+            let apply_on = o
+                .get("ApplyOn")
+                .and_then(|v| v.as_str())
+                .unwrap_or("None")
+                .to_string();
+            let opt = if apply_on == "PublishedVersions" {
+                "On"
+            } else {
+                "Off"
+            };
+            o.entry("OptimizationStatus")
+                .or_insert(Value::String(opt.to_string()));
+        }
+        obj.insert("SnapStart".into(), snap);
+    }
+    if let Some(v) = &f.image_config {
+        obj.insert("ImageConfigResponse".into(), json!({ "ImageConfig": v }));
+    }
+    out
+}
+
+/// Validate Architectures: AWS allows at most one entry of "x86_64" or "arm64".
+fn parse_architectures(input: &Value) -> Result<Option<Vec<String>>, AwsError> {
+    let Some(arr) = input.get("Architectures").and_then(|v| v.as_array()) else {
+        return Ok(None);
+    };
+    if arr.len() != 1 {
+        return Err(invalid_parameter(
+            "Architectures must contain exactly one value",
+        ));
+    }
+    let arch = arr[0]
+        .as_str()
+        .ok_or_else(|| invalid_parameter("Architectures entries must be strings"))?;
+    if arch != "x86_64" && arch != "arm64" {
+        return Err(invalid_parameter(
+            "Architectures must be one of: x86_64, arm64",
+        ));
+    }
+    Ok(Some(vec![arch.to_string()]))
+}
+
+/// Validate EphemeralStorage: AWS allows Size in [512, 10240] MiB.
+fn parse_ephemeral_storage_size(input: &Value) -> Result<Option<u32>, AwsError> {
+    let Some(size) = input
+        .get("EphemeralStorage")
+        .and_then(|v| v.get("Size"))
+        .and_then(|v| v.as_u64())
+    else {
+        return Ok(None);
+    };
+    if !(512..=10240).contains(&size) {
+        return Err(invalid_parameter(
+            "EphemeralStorage.Size must be between 512 and 10240",
+        ));
+    }
+    Ok(Some(size as u32))
+}
+
+/// Validate SnapStart: ApplyOn is one of None | PublishedVersions.
+fn validate_snap_start(input: &Value) -> Result<Option<Value>, AwsError> {
+    let Some(snap) = input.get("SnapStart").cloned() else {
+        return Ok(None);
+    };
+    let apply_on = snap
+        .get("ApplyOn")
+        .and_then(|v| v.as_str())
+        .unwrap_or("None");
+    if apply_on != "None" && apply_on != "PublishedVersions" {
+        return Err(invalid_parameter(
+            "SnapStart.ApplyOn must be None or PublishedVersions",
+        ));
+    }
+    Ok(Some(snap))
+}
+
+fn parse_layers(input: &Value) -> Vec<String> {
+    input
+        .get("Layers")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Resolve code bytes (either from ZipFile base64 or a placeholder for S3).
@@ -162,6 +284,12 @@ pub fn create_function(
         })
         .unwrap_or_default();
 
+    let architectures = parse_architectures(input)?.unwrap_or_else(|| vec!["x86_64".to_string()]);
+    let ephemeral_storage_size = parse_ephemeral_storage_size(input)?.unwrap_or(512);
+    let snap_start = validate_snap_start(input)?;
+    let package_type = opt_str(input, "PackageType").unwrap_or("Zip").to_string();
+    let layers = parse_layers(input);
+
     let func = LambdaFunction {
         name: name.to_string(),
         arn: arn.clone(),
@@ -185,6 +313,18 @@ pub fn create_function(
         tags,
         reserved_concurrent_executions: None,
         provisioned_concurrency: HashMap::new(),
+        architectures,
+        ephemeral_storage_size,
+        package_type,
+        layers,
+        vpc_config: input.get("VpcConfig").cloned(),
+        dead_letter_config: input.get("DeadLetterConfig").cloned(),
+        tracing_config: input.get("TracingConfig").cloned(),
+        kms_key_arn: opt_str(input, "KMSKeyArn").map(str::to_string),
+        file_system_configs: input.get("FileSystemConfigs").cloned(),
+        logging_config: input.get("LoggingConfig").cloned(),
+        snap_start,
+        image_config: input.get("ImageConfig").cloned(),
     };
 
     let config = function_configuration(&func);
@@ -336,6 +476,39 @@ pub fn update_function_configuration(
             .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
             .collect();
     }
+    if let Some(arch) = parse_architectures(input)? {
+        f.architectures = arch;
+    }
+    if let Some(size) = parse_ephemeral_storage_size(input)? {
+        f.ephemeral_storage_size = size;
+    }
+    if let Some(snap) = validate_snap_start(input)? {
+        f.snap_start = Some(snap);
+    }
+    if input.get("VpcConfig").is_some() {
+        f.vpc_config = input.get("VpcConfig").cloned();
+    }
+    if input.get("DeadLetterConfig").is_some() {
+        f.dead_letter_config = input.get("DeadLetterConfig").cloned();
+    }
+    if input.get("TracingConfig").is_some() {
+        f.tracing_config = input.get("TracingConfig").cloned();
+    }
+    if let Some(arn) = opt_str(input, "KMSKeyArn") {
+        f.kms_key_arn = Some(arn.to_string());
+    }
+    if input.get("FileSystemConfigs").is_some() {
+        f.file_system_configs = input.get("FileSystemConfigs").cloned();
+    }
+    if input.get("LoggingConfig").is_some() {
+        f.logging_config = input.get("LoggingConfig").cloned();
+    }
+    if input.get("ImageConfig").is_some() {
+        f.image_config = input.get("ImageConfig").cloned();
+    }
+    if input.get("Layers").is_some() {
+        f.layers = parse_layers(input);
+    }
     f.last_modified = now_iso8601();
 
     Ok(function_configuration(&f))
@@ -404,6 +577,119 @@ mod tests {
             create_function(&state, &create_input("python3.12", "app.handler"), &ctx()).unwrap();
         assert_eq!(resp["Runtime"], json!("python3.12"));
         assert_eq!(resp["Handler"], json!("app.handler"));
+    }
+
+    #[test]
+    fn create_function_emits_default_architectures_and_ephemeral_storage() {
+        let state = LambdaState::default();
+        let resp =
+            create_function(&state, &create_input("nodejs20.x", "index.handler"), &ctx()).unwrap();
+        assert_eq!(resp["Architectures"], json!(["x86_64"]));
+        assert_eq!(resp["EphemeralStorage"]["Size"], json!(512));
+        assert_eq!(resp["PackageType"], json!("Zip"));
+        assert_eq!(resp["TracingConfig"]["Mode"], json!("PassThrough"));
+    }
+
+    #[test]
+    fn create_function_round_trips_architectures_and_ephemeral_storage() {
+        let state = LambdaState::default();
+        let mut input = create_input("nodejs20.x", "index.handler");
+        input["Architectures"] = json!(["arm64"]);
+        input["EphemeralStorage"] = json!({ "Size": 2048 });
+        let resp = create_function(&state, &input, &ctx()).unwrap();
+        assert_eq!(resp["Architectures"], json!(["arm64"]));
+        assert_eq!(resp["EphemeralStorage"]["Size"], json!(2048));
+    }
+
+    #[test]
+    fn create_function_rejects_invalid_architecture() {
+        let state = LambdaState::default();
+        let mut input = create_input("nodejs20.x", "index.handler");
+        input["Architectures"] = json!(["mips"]);
+        let err = create_function(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn create_function_rejects_ephemeral_storage_out_of_range() {
+        let state = LambdaState::default();
+        let mut input = create_input("nodejs20.x", "index.handler");
+        input["EphemeralStorage"] = json!({ "Size": 256 });
+        let err = create_function(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+
+        let state = LambdaState::default();
+        let mut input = create_input("nodejs20.x", "index.handler");
+        input["EphemeralStorage"] = json!({ "Size": 20480 });
+        let err = create_function(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn create_function_round_trips_vpc_and_dead_letter_and_tracing() {
+        let state = LambdaState::default();
+        let mut input = create_input("nodejs20.x", "index.handler");
+        input["VpcConfig"] = json!({
+            "SubnetIds": ["subnet-1"],
+            "SecurityGroupIds": ["sg-1"],
+        });
+        input["DeadLetterConfig"] =
+            json!({ "TargetArn": "arn:aws:sqs:us-east-1:000000000000:dlq" });
+        input["TracingConfig"] = json!({ "Mode": "Active" });
+        input["KMSKeyArn"] = json!("arn:aws:kms:us-east-1:000000000000:key/abc");
+        input["Layers"] = json!(["arn:aws:lambda:us-east-1:000000000000:layer:shared:1",]);
+        let resp = create_function(&state, &input, &ctx()).unwrap();
+        assert_eq!(resp["VpcConfig"]["SubnetIds"], json!(["subnet-1"]));
+        assert_eq!(
+            resp["DeadLetterConfig"]["TargetArn"],
+            json!("arn:aws:sqs:us-east-1:000000000000:dlq")
+        );
+        assert_eq!(resp["TracingConfig"]["Mode"], json!("Active"));
+        assert_eq!(
+            resp["KMSKeyArn"],
+            json!("arn:aws:kms:us-east-1:000000000000:key/abc")
+        );
+        assert_eq!(
+            resp["Layers"][0]["Arn"],
+            json!("arn:aws:lambda:us-east-1:000000000000:layer:shared:1")
+        );
+    }
+
+    #[test]
+    fn create_function_snap_start_published_versions_emits_optimization_status_on() {
+        let state = LambdaState::default();
+        let mut input = create_input("nodejs20.x", "index.handler");
+        input["SnapStart"] = json!({ "ApplyOn": "PublishedVersions" });
+        let resp = create_function(&state, &input, &ctx()).unwrap();
+        assert_eq!(resp["SnapStart"]["ApplyOn"], json!("PublishedVersions"));
+        assert_eq!(resp["SnapStart"]["OptimizationStatus"], json!("On"));
+    }
+
+    #[test]
+    fn create_function_rejects_invalid_snap_start_apply_on() {
+        let state = LambdaState::default();
+        let mut input = create_input("nodejs20.x", "index.handler");
+        input["SnapStart"] = json!({ "ApplyOn": "Always" });
+        let err = create_function(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn update_function_configuration_can_change_architecture_and_ephemeral_storage() {
+        let state = LambdaState::default();
+        create_function(&state, &create_input("nodejs20.x", "index.handler"), &ctx()).unwrap();
+        let resp = update_function_configuration(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "Architectures": ["arm64"],
+                "EphemeralStorage": { "Size": 1024 },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Architectures"], json!(["arm64"]));
+        assert_eq!(resp["EphemeralStorage"]["Size"], json!(1024));
     }
 
     #[test]

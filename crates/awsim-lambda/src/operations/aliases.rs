@@ -246,6 +246,18 @@ mod tests {
                 tags: HashMap::new(),
                 reserved_concurrent_executions: None,
                 provisioned_concurrency: HashMap::new(),
+                architectures: vec!["x86_64".into()],
+                ephemeral_storage_size: 512,
+                package_type: "Zip".into(),
+                layers: vec![],
+                vpc_config: None,
+                dead_letter_config: None,
+                tracing_config: None,
+                kms_key_arn: None,
+                file_system_configs: None,
+                logging_config: None,
+                snap_start: None,
+                image_config: None,
             },
         );
         state

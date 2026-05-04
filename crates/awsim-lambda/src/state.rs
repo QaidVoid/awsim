@@ -82,6 +82,18 @@ impl Snapshottable for LambdaState {
                     state: f.state.clone(),
                     policy_statements: f.policy_statements.clone(),
                     tags: f.tags.clone(),
+                    architectures: f.architectures.clone(),
+                    ephemeral_storage_size: f.ephemeral_storage_size,
+                    package_type: f.package_type.clone(),
+                    layers: f.layers.clone(),
+                    vpc_config: f.vpc_config.clone(),
+                    dead_letter_config: f.dead_letter_config.clone(),
+                    tracing_config: f.tracing_config.clone(),
+                    kms_key_arn: f.kms_key_arn.clone(),
+                    file_system_configs: f.file_system_configs.clone(),
+                    logging_config: f.logging_config.clone(),
+                    snap_start: f.snap_start.clone(),
+                    image_config: f.image_config.clone(),
                 }
             })
             .collect();
@@ -149,6 +161,18 @@ impl Snapshottable for LambdaState {
                 tags: fs.tags,
                 reserved_concurrent_executions: None,
                 provisioned_concurrency: HashMap::new(),
+                architectures: fs.architectures,
+                ephemeral_storage_size: fs.ephemeral_storage_size,
+                package_type: fs.package_type,
+                layers: fs.layers,
+                vpc_config: fs.vpc_config,
+                dead_letter_config: fs.dead_letter_config,
+                tracing_config: fs.tracing_config,
+                kms_key_arn: fs.kms_key_arn,
+                file_system_configs: fs.file_system_configs,
+                logging_config: fs.logging_config,
+                snap_start: fs.snap_start,
+                image_config: fs.image_config,
             };
             state.functions.insert(fs.name, func);
         }
@@ -200,6 +224,32 @@ pub struct LambdaFunction {
     /// or function version). Each entry tracks the requested capacity along
     /// with a simulated state machine that flips IN_PROGRESS -> READY.
     pub provisioned_concurrency: HashMap<String, ProvisionedConcurrencyConfig>,
+    /// CPU architecture set: `["x86_64"]` or `["arm64"]`. Defaults to
+    /// `["x86_64"]` per AWS.
+    pub architectures: Vec<String>,
+    /// `/tmp` size in MiB. Defaults to 512; AWS allows 512..=10240.
+    pub ephemeral_storage_size: u32,
+    /// "Zip" or "Image". Defaults to "Zip".
+    pub package_type: String,
+    /// Optional layer-version ARNs attached to the function.
+    pub layers: Vec<String>,
+    /// VpcConfig as supplied by the caller plus the synthesized VpcId field.
+    pub vpc_config: Option<serde_json::Value>,
+    /// DeadLetterConfig (`{ TargetArn }`).
+    pub dead_letter_config: Option<serde_json::Value>,
+    /// TracingConfig (`{ Mode }`). Defaults to `{ Mode: "PassThrough" }`.
+    pub tracing_config: Option<serde_json::Value>,
+    /// KMS key ARN used to encrypt environment variables at rest.
+    pub kms_key_arn: Option<String>,
+    /// EFS mounts: array of `{ Arn, LocalMountPath }`.
+    pub file_system_configs: Option<serde_json::Value>,
+    /// LoggingConfig (`{ LogFormat, ApplicationLogLevel, SystemLogLevel, LogGroup }`).
+    pub logging_config: Option<serde_json::Value>,
+    /// SnapStart configuration. Stored as supplied; the serializer adds the
+    /// computed `OptimizationStatus` field.
+    pub snap_start: Option<serde_json::Value>,
+    /// ImageConfig for container-image functions.
+    pub image_config: Option<serde_json::Value>,
 }
 
 /// Provisioned concurrency configuration for a single (function, qualifier)
@@ -334,6 +384,42 @@ pub struct FunctionSnapshot {
     pub policy_statements: HashMap<String, serde_json::Value>,
     #[serde(default)]
     pub tags: HashMap<String, String>,
+    #[serde(default = "default_architectures")]
+    pub architectures: Vec<String>,
+    #[serde(default = "default_ephemeral_storage_size")]
+    pub ephemeral_storage_size: u32,
+    #[serde(default = "default_package_type")]
+    pub package_type: String,
+    #[serde(default)]
+    pub layers: Vec<String>,
+    #[serde(default)]
+    pub vpc_config: Option<serde_json::Value>,
+    #[serde(default)]
+    pub dead_letter_config: Option<serde_json::Value>,
+    #[serde(default)]
+    pub tracing_config: Option<serde_json::Value>,
+    #[serde(default)]
+    pub kms_key_arn: Option<String>,
+    #[serde(default)]
+    pub file_system_configs: Option<serde_json::Value>,
+    #[serde(default)]
+    pub logging_config: Option<serde_json::Value>,
+    #[serde(default)]
+    pub snap_start: Option<serde_json::Value>,
+    #[serde(default)]
+    pub image_config: Option<serde_json::Value>,
+}
+
+fn default_architectures() -> Vec<String> {
+    vec!["x86_64".to_string()]
+}
+
+fn default_ephemeral_storage_size() -> u32 {
+    512
+}
+
+fn default_package_type() -> String {
+    "Zip".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
