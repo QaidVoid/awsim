@@ -116,8 +116,7 @@ pub fn delete_imported_key_material(
         .ok_or_else(|| error::not_found("Key"))?;
 
     if !key.key_material_imported {
-        return Err(AwsError::bad_request(
-            "InvalidStateException",
+        return Err(error::kms_invalid_state(
             "Key does not have imported key material",
         ));
     }

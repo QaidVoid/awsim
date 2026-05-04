@@ -764,6 +764,24 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_imported_key_material_without_import_returns_kms_invalid_state() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        // Default origin is AWS_KMS — there is no imported material to delete.
+        let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+
+        let err = block_on(svc.handle(
+            "DeleteImportedKeyMaterial",
+            json!({ "KeyId": key_id }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "KMSInvalidStateException");
+        assert_eq!(err.status.as_u16(), 409);
+    }
+
+    #[test]
     fn test_import_key_material() {
         let svc = KmsService::new();
         let ctx = ctx();

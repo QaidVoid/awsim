@@ -19,11 +19,12 @@ pub fn key_disabled(key_id: &str) -> AwsError {
     AwsError::bad_request("DisabledException", format!("Key {key_id} is disabled"))
 }
 
+pub fn kms_invalid_state(message: impl Into<String>) -> AwsError {
+    AwsError::conflict("KMSInvalidStateException", message)
+}
+
 pub fn key_pending_deletion(key_id: &str) -> AwsError {
-    AwsError::bad_request(
-        "KMSInvalidStateException",
-        format!("Key {key_id} is pending deletion"),
-    )
+    kms_invalid_state(format!("Key {key_id} is pending deletion"))
 }
 
 pub fn missing_parameter(param: &str) -> AwsError {

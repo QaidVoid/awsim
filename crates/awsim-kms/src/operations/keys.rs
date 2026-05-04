@@ -242,10 +242,9 @@ pub fn cancel_key_deletion(
         .ok_or_else(|| error::not_found("Key"))?;
 
     if key.key_state != "PendingDeletion" {
-        return Err(AwsError::bad_request(
-            "KMSInvalidStateException",
-            format!("Key {resolved_id} is not pending deletion"),
-        ));
+        return Err(error::kms_invalid_state(format!(
+            "Key {resolved_id} is not pending deletion"
+        )));
     }
 
     key.key_state = "Disabled".to_string();
