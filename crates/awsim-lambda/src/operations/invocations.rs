@@ -114,9 +114,15 @@ pub fn invoke(
 
     let (runtime, handler, code_data, code_sha256, env_vars, timeout, memory_size) = function_info;
 
-    // For DryRun, just validate and return 204 equivalent (no payload)
+    // DryRun validates the call without executing. AWS responds with HTTP
+    // 204 No Content and an empty body — set __status_code so the gateway
+    // emits the right status, and skip Payload entirely so callers don't
+    // see a synthetic body.
     if invocation_type == "DryRun" {
-        return Ok(json!({ "StatusCode": 204 }));
+        return Ok(json!({
+            "StatusCode": 204u64,
+            "__status_code": 204u64,
+        }));
     }
 
     let request_id = new_uuid();
@@ -334,6 +340,24 @@ mod tests {
         // for diagnostics.
         let f = state.functions.get("f").unwrap();
         assert!(f.invocations.is_empty());
+    }
+
+    #[test]
+    fn dry_run_invocation_returns_204_with_no_payload() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        let resp = invoke(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "InvocationType": "DryRun",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["StatusCode"], json!(204));
+        assert_eq!(resp["__status_code"], json!(204));
+        assert!(resp.get("Payload").is_none());
     }
 
     #[test]
