@@ -41,6 +41,13 @@ pub fn generate_mac(
     if key.key_state != "Enabled" {
         return Err(error::key_disabled(&resolved_id));
     }
+    if key.key_usage != "GENERATE_VERIFY_MAC" {
+        return Err(error::invalid_key_usage(format!(
+            "Key {resolved_id} cannot be used for MAC operations because its KeyUsage is \
+             {}, not GENERATE_VERIFY_MAC",
+            key.key_usage
+        )));
+    }
 
     let message = BASE64
         .decode(message_b64)
@@ -80,6 +87,13 @@ pub fn verify_mac(
         .ok_or_else(|| error::not_found("Key"))?;
     if key.key_state != "Enabled" {
         return Err(error::key_disabled(&resolved_id));
+    }
+    if key.key_usage != "GENERATE_VERIFY_MAC" {
+        return Err(error::invalid_key_usage(format!(
+            "Key {resolved_id} cannot be used for MAC operations because its KeyUsage is \
+             {}, not GENERATE_VERIFY_MAC",
+            key.key_usage
+        )));
     }
 
     let message = BASE64

@@ -53,9 +53,10 @@ pub fn sign(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Va
         return Err(error::key_pending_deletion(&key.key_id));
     }
     if key.key_usage != "SIGN_VERIFY" {
-        return Err(error::invalid_parameter(
-            "Key usage must be SIGN_VERIFY for signing operations",
-        ));
+        return Err(error::invalid_key_usage(format!(
+            "Key {} cannot be used for signing because its KeyUsage is {}, not SIGN_VERIFY",
+            key.key_id, key.key_usage
+        )));
     }
 
     // Return a random 64-byte fake signature
@@ -99,9 +100,10 @@ pub fn verify(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<
         return Err(error::key_pending_deletion(&key.key_id));
     }
     if key.key_usage != "SIGN_VERIFY" {
-        return Err(error::invalid_parameter(
-            "Key usage must be SIGN_VERIFY for verify operations",
-        ));
+        return Err(error::invalid_key_usage(format!(
+            "Key {} cannot be used for verifying because its KeyUsage is {}, not SIGN_VERIFY",
+            key.key_id, key.key_usage
+        )));
     }
 
     // Stub: always report valid
@@ -249,6 +251,13 @@ pub fn derive_shared_secret(
     }
     if key.key_state == "PendingDeletion" {
         return Err(error::key_pending_deletion(&key.key_id));
+    }
+    if key.key_usage != "KEY_AGREEMENT" {
+        return Err(error::invalid_key_usage(format!(
+            "Key {} cannot be used for DeriveSharedSecret because its KeyUsage is {}, \
+             not KEY_AGREEMENT",
+            key.key_id, key.key_usage
+        )));
     }
 
     // Return a fake 32-byte shared secret

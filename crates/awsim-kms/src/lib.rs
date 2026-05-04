@@ -593,6 +593,41 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_mac_rejects_non_mac_key_usage() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        // Default CreateKey uses ENCRYPT_DECRYPT — wrong for MAC.
+        let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+        let err = block_on(svc.handle(
+            "GenerateMac",
+            json!({ "KeyId": key_id, "Message": BASE64.encode(b"data") }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidKeyUsageException");
+    }
+
+    #[test]
+    fn test_derive_shared_secret_rejects_non_key_agreement_key() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+        let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
+        let err = block_on(svc.handle(
+            "DeriveSharedSecret",
+            json!({
+                "KeyId": key_id,
+                "PublicKey": BASE64.encode(b"public"),
+                "KeyAgreementAlgorithm": "ECDH",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidKeyUsageException");
+    }
+
+    #[test]
     fn test_sign_symmetric_key_fails() {
         let svc = KmsService::new();
         let ctx = ctx();
@@ -609,7 +644,7 @@ mod tests {
             &ctx,
         ))
         .unwrap_err();
-        assert_eq!(err.code, "InvalidParameterException");
+        assert_eq!(err.code, "InvalidKeyUsageException");
     }
 
     #[test]
