@@ -41,8 +41,13 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     // Determine which attributes the caller wants. Per the SQS spec, omitting
     // AttributeNames / MessageAttributeNames returns no attributes — only an
     // explicit ["All"] expands to every attribute.
-    let attribute_names: Vec<&str> = input["AttributeNames"]
+    //
+    // The 2019 API revision deprecated AttributeNames in favor of
+    // MessageSystemAttributeNames; AWS still accepts both, with
+    // MessageSystemAttributeNames taking precedence when both are present.
+    let attribute_names: Vec<&str> = input["MessageSystemAttributeNames"]
         .as_array()
+        .or_else(|| input["AttributeNames"].as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_default();
     let want_all_attrs = attribute_names.contains(&"All");
@@ -280,6 +285,35 @@ mod tests {
         );
         state.queues.insert("std".to_string(), q);
         state
+    }
+
+    #[test]
+    fn message_system_attribute_names_takes_precedence_over_attribute_names() {
+        let state = standard_queue_state();
+        let ctx = ctx();
+        send_message::handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/std",
+                "MessageBody": "hi",
+            }),
+            &ctx,
+        )
+        .unwrap();
+
+        // New parameter name (post-2019 API revision).
+        let resp = handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/std",
+                "MessageSystemAttributeNames": ["All"],
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let msg = &resp["Messages"][0];
+        let attrs = msg["Attributes"].as_object().expect("attributes returned");
+        assert!(attrs.contains_key("ApproximateReceiveCount"));
     }
 
     #[test]
