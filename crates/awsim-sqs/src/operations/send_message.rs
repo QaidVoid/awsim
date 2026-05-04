@@ -83,9 +83,30 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     };
 
     let dedup_id = if queue.is_fifo {
-        input["MessageDeduplicationId"]
-            .as_str()
-            .map(|s| s.to_string())
+        if let Some(id) = input["MessageDeduplicationId"].as_str() {
+            Some(id.to_string())
+        } else {
+            // Fall back to sha256(body) when ContentBasedDeduplication is
+            // enabled; otherwise AWS rejects the message with
+            // InvalidParameterValue.
+            let cbd_enabled = queue
+                .attributes
+                .get("ContentBasedDeduplication")
+                .map(|v| v == "true")
+                .unwrap_or(false);
+            if cbd_enabled {
+                use sha2::{Digest, Sha256};
+                let mut hasher = Sha256::new();
+                hasher.update(body.as_bytes());
+                Some(format!("{:x}", hasher.finalize()))
+            } else {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterValue",
+                    "The Queue should either have ContentBasedDeduplication enabled \
+                     or MessageDeduplicationId provided explicitly",
+                ));
+            }
+        }
     } else {
         if input
             .get("MessageDeduplicationId")
@@ -327,6 +348,26 @@ mod tests {
         state
     }
 
+    fn fifo_queue(content_based_dedup: bool) -> SqsState {
+        let state = SqsState::default();
+        let mut attrs = HashMap::new();
+        attrs.insert("FifoQueue".to_string(), "true".to_string());
+        attrs.insert(
+            "ContentBasedDeduplication".to_string(),
+            content_based_dedup.to_string(),
+        );
+        let q = Queue::new(
+            "q.fifo".to_string(),
+            "http://localhost/queue/q.fifo".to_string(),
+            "arn:aws:sqs:us-east-1:000000000000:q.fifo".to_string(),
+            true,
+            "now".to_string(),
+            attrs,
+        );
+        state.queues.insert("q.fifo".to_string(), q);
+        state
+    }
+
     #[test]
     fn standard_queue_rejects_message_deduplication_id() {
         let state = standard_queue();
@@ -361,6 +402,101 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterValue");
         assert!(err.message.contains("MessageGroupId"));
+    }
+
+    #[test]
+    fn fifo_with_content_based_dedup_derives_id_from_body_hash() {
+        let state = fifo_queue(true);
+        let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
+
+        // First send — duplicates should be suppressed by the SHA-256 of
+        // the body when ContentBasedDeduplication is enabled.
+        let r1 = handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/q.fifo",
+                "MessageBody": "payload",
+                "MessageGroupId": "g",
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let id1 = r1["MessageId"].as_str().unwrap().to_string();
+
+        // Same body — should be deduped (returns the original message id).
+        let r2 = handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/q.fifo",
+                "MessageBody": "payload",
+                "MessageGroupId": "g",
+            }),
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(r2["MessageId"].as_str().unwrap(), id1);
+
+        // Different body — should NOT be deduped.
+        let r3 = handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/q.fifo",
+                "MessageBody": "payload-2",
+                "MessageGroupId": "g",
+            }),
+            &ctx,
+        )
+        .unwrap();
+        assert_ne!(r3["MessageId"].as_str().unwrap(), id1);
+    }
+
+    #[test]
+    fn fifo_without_dedup_id_or_content_based_returns_invalid_parameter() {
+        let state = fifo_queue(false);
+        let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
+        let err = handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/q.fifo",
+                "MessageBody": "x",
+                "MessageGroupId": "g",
+            }),
+            &ctx,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+        assert!(err.message.contains("ContentBasedDeduplication"));
+    }
+
+    #[test]
+    fn fifo_explicit_dedup_id_takes_precedence_over_content_based() {
+        let state = fifo_queue(true);
+        let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
+        // Same body, but two different explicit dedup IDs → both deliver.
+        handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/q.fifo",
+                "MessageBody": "same",
+                "MessageGroupId": "g",
+                "MessageDeduplicationId": "first",
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let r2 = handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/q.fifo",
+                "MessageBody": "same",
+                "MessageGroupId": "g",
+                "MessageDeduplicationId": "second",
+            }),
+            &ctx,
+        )
+        .unwrap();
+        // Second send must produce a different message id (no dedup).
+        assert!(r2["MessageId"].as_str().unwrap().len() == 36);
     }
 
     #[test]
