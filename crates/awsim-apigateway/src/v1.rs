@@ -1434,9 +1434,7 @@ fn get_api_key(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsErr
         .api_keys
         .get(id)
         .map(|e| api_key_to_json(e.value()))
-        .ok_or_else(|| {
-            AwsError::not_found("NotFoundException", format!("ApiKey {id} not found"))
-        })
+        .ok_or_else(|| AwsError::not_found("NotFoundException", format!("ApiKey {id} not found")))
 }
 
 fn get_api_keys(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
@@ -1446,9 +1444,7 @@ fn get_api_keys(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsEr
         .iter()
         .map(|e| {
             let mut v = api_key_to_json(e.value());
-            if !include_values
-                && let Some(map) = v.as_object_mut()
-            {
+            if !include_values && let Some(map) = v.as_object_mut() {
                 map.remove("value");
             }
             v
@@ -1471,9 +1467,7 @@ fn delete_api_key(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aws
             format!("ApiKey {id} not found"),
         ));
     }
-    state
-        .usage_plan_keys
-        .retain(|_, edge| edge.key_id != id);
+    state.usage_plan_keys.retain(|_, edge| edge.key_id != id);
     Ok(json!({}))
 }
 
@@ -1495,10 +1489,7 @@ fn create_usage_plan(state: &ApiGatewayV1State, input: &Value) -> Result<Value, 
         .unwrap_or_default();
     let throttle = input["throttle"].as_object().map(|t| UsageThrottle {
         rate_limit: t.get("rateLimit").and_then(Value::as_f64).unwrap_or(0.0),
-        burst_limit: t
-            .get("burstLimit")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u32,
+        burst_limit: t.get("burstLimit").and_then(Value::as_u64).unwrap_or(0) as u32,
     });
     let quota = input["quota"].as_object().map(|q| UsageQuota {
         limit: q.get("limit").and_then(Value::as_u64).unwrap_or(0) as u32,
@@ -2533,10 +2524,7 @@ mod tests {
         assert_eq!(raw_value.len(), 40);
 
         // Default GetApiKeys hides the value.
-        let listed = svc
-            .handle("GetApiKeys", json!({}), &ctx())
-            .await
-            .unwrap();
+        let listed = svc.handle("GetApiKeys", json!({}), &ctx()).await.unwrap();
         let item = &listed["items"][0];
         assert_eq!(item["id"], id);
         assert!(item["value"].is_null());
@@ -2608,12 +2596,10 @@ mod tests {
         // Missing header rejected.
         assert!(validate_api_key(&store, None, &api_id, "prod").is_err());
         // Disabled key rejected.
-        store
-            .api_keys
-            .alter(&key_id, |_, mut k| {
-                k.enabled = false;
-                k
-            });
+        store.api_keys.alter(&key_id, |_, mut k| {
+            k.enabled = false;
+            k
+        });
         assert!(validate_api_key(&store, Some(&key_value), &api_id, "prod").is_err());
     }
 

@@ -258,7 +258,11 @@ async fn resolve_authorization(
                         ));
                     }
                 };
-                let cache = &state.apigw_v1.store().get(&state.default_account_id, &state.default_region).authorizer_cache;
+                let cache = &state
+                    .apigw_v1
+                    .store()
+                    .get(&state.default_account_id, &state.default_region)
+                    .authorizer_cache;
                 step = apply_lambda_response(cache, &invocation, &response);
             }
         }

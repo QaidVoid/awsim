@@ -121,9 +121,7 @@ fn build_method_arn(
     path: &str,
 ) -> String {
     let path_no_leading = path.trim_start_matches('/');
-    format!(
-        "arn:aws:execute-api:{region}:{account_id}:{api_id}/{stage}/{method}/{path_no_leading}"
-    )
+    format!("arn:aws:execute-api:{region}:{account_id}:{api_id}/{stage}/{method}/{path_no_leading}")
 }
 
 /// Decide what to do with a request based on the method's authorization
@@ -307,7 +305,9 @@ pub fn apply_lambda_response(
         .unwrap_or("user")
         .to_string();
 
-    let policy = response.get("policyDocument").or_else(|| response.get("policy"));
+    let policy = response
+        .get("policyDocument")
+        .or_else(|| response.get("policy"));
     let Some(policy) = policy else {
         return AuthorizationStep::Forbidden(
             "Lambda authorizer response missing policyDocument".to_string(),
@@ -537,11 +537,7 @@ mod tests {
         );
         let mut headers = HashMap::new();
         headers.insert("Authorization".into(), "Bearer abc".into());
-        let step = evaluate_t(
-            &method_with_authorizer("CUSTOM"),
-            &authorizers,
-            headers,
-        );
+        let step = evaluate_t(&method_with_authorizer("CUSTOM"), &authorizers, headers);
         let inv = match step {
             AuthorizationStep::InvokeLambda(i) => i,
             _ => panic!("expected InvokeLambda"),
@@ -549,8 +545,7 @@ mod tests {
         assert_eq!(inv.event["type"], "TOKEN");
         assert_eq!(inv.event["authorizationToken"], "Bearer abc");
         assert!(
-            inv.method_arn
-                .ends_with(":api1/prod/GET/items"),
+            inv.method_arn.ends_with(":api1/prod/GET/items"),
             "method arn was {}",
             inv.method_arn
         );
@@ -627,8 +622,7 @@ mod tests {
             event: json!({}),
             cache_key: "k1".into(),
             ttl_seconds: 60,
-            method_arn:
-                "arn:aws:execute-api:us-east-1:000000000000:api1/prod/GET/items".into(),
+            method_arn: "arn:aws:execute-api:us-east-1:000000000000:api1/prod/GET/items".into(),
         };
         let response = json!({
             "principalId": "alice",
@@ -661,8 +655,7 @@ mod tests {
             event: json!({}),
             cache_key: "k2".into(),
             ttl_seconds: 60,
-            method_arn:
-                "arn:aws:execute-api:us-east-1:000000000000:api1/prod/GET/items".into(),
+            method_arn: "arn:aws:execute-api:us-east-1:000000000000:api1/prod/GET/items".into(),
         };
         let response = json!({
             "principalId": "alice",
@@ -694,8 +687,7 @@ mod tests {
     /// Assemble a fake JWT with the given claims, no signature checking.
     fn make_jwt(claims: &Value) -> String {
         let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
-        let payload =
-            URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).unwrap());
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).unwrap());
         format!("{header}.{payload}.")
     }
 }

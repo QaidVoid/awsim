@@ -89,7 +89,9 @@ pub(crate) async fn call_chat_stream(
     })?;
     let mut req = build(model_tag)?;
     req.stream = Some(true);
-    req.stream_options = Some(openai::StreamOptions { include_usage: true });
+    req.stream_options = Some(openai::StreamOptions {
+        include_usage: true,
+    });
 
     let url = format!("{}/chat/completions", backend.endpoint());
     let mut http_req = backend.client().post(&url).json(&req);
@@ -484,7 +486,9 @@ pub(crate) async fn stream_response(
     // Build the OpenAI-compat chat request from the Converse input.
     let mut req = converse::to_openai_request(model_tag, &input)?;
     req.stream = Some(true);
-    req.stream_options = Some(openai::StreamOptions { include_usage: true });
+    req.stream_options = Some(openai::StreamOptions {
+        include_usage: true,
+    });
 
     let url = format!("{}/chat/completions", backend.endpoint());
     let mut http_req = backend.client().post(&url).json(&req);
