@@ -92,7 +92,7 @@ pub fn start_backup_job(
     let now = now_secs();
     let recovery_point_arn = format!(
         "arn:aws:backup:{}:{}:recovery-point:{}",
-        ctx.region, ctx.account_id, &job_id
+        ctx.region, ctx.account_id, job_id
     );
     // Emulator collapses the queued/running cycle — jobs land in COMPLETED
     // immediately so callers don't have to poll. The recovery-point bookkeeping

@@ -17,7 +17,7 @@ pub fn describe_stream(
 
     let table = find_table_by_stream_arn(state, stream_arn)?;
 
-    let shard_id = format!("shardId-00000000000000000000-{}", &table.name);
+    let shard_id = format!("shardId-00000000000000000000-{}", table.name);
     let description = json!({
         "StreamArn": stream_arn,
         "StreamLabel": stream_label_from_arn(stream_arn),
