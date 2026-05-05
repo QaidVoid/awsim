@@ -127,11 +127,78 @@ pub struct Authorizer {
     pub provider_arns: Vec<String>,
 }
 
+/// API key as stored. The `value` is the bearer string the SDK sends in
+/// `x-api-key`; the `id` is a short opaque handle the management API
+/// uses. Keys exist at the account+region level — not under any one API.
+#[derive(Debug, Clone)]
+pub struct ApiKey {
+    pub id: String,
+    pub value: String,
+    pub name: String,
+    pub description: String,
+    pub enabled: bool,
+    pub customer_id: String,
+    pub created_date: u64,
+    pub last_updated_date: u64,
+    /// Stage associations recorded at creation time as `"apiId/stage"`.
+    /// Real AWS uses these to seed CloudWatch dimensions; we only store
+    /// them for round-trip fidelity.
+    pub stage_keys: Vec<String>,
+}
+
+/// Usage plan grouping keys that share quota / throttle limits and a
+/// list of API stages they're allowed to call.
+#[derive(Debug, Clone)]
+pub struct UsagePlan {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub api_stages: Vec<UsagePlanApiStage>,
+    pub throttle: Option<UsageThrottle>,
+    pub quota: Option<UsageQuota>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UsagePlanApiStage {
+    pub api_id: String,
+    pub stage: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UsageThrottle {
+    pub rate_limit: f64,
+    pub burst_limit: u32,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UsageQuota {
+    pub limit: u32,
+    pub period: String,
+    pub offset: u32,
+}
+
+/// Edge linking an `ApiKey` (by id) to a `UsagePlan` (by id). One ApiKey
+/// can belong to multiple plans; one plan holds many keys.
+#[derive(Debug, Clone)]
+pub struct UsagePlanKey {
+    pub id: String,
+    pub key_id: String,
+    pub key_type: String,
+    pub usage_plan_id: String,
+}
+
 #[derive(Default)]
 pub struct ApiGatewayV1State {
     pub apis: DashMap<String, RestApi>,
     /// Cache of authorizer decisions, keyed by `(authorizer_id, identity)`.
     pub authorizer_cache: crate::authorizer::AuthorizerCache,
+    /// API keys keyed by their opaque `id`.
+    pub api_keys: DashMap<String, ApiKey>,
+    /// Usage plans keyed by id.
+    pub usage_plans: DashMap<String, UsagePlan>,
+    /// Edges from a usage plan to the keys it covers, keyed by
+    /// `"{usage_plan_id}/{key_id}"`.
+    pub usage_plan_keys: DashMap<String, UsagePlanKey>,
 }
 
 pub struct ApiGatewayV1Service {
@@ -333,6 +400,75 @@ impl ServiceHandler for ApiGatewayV1Service {
                 operation: "DeleteAuthorizer",
                 required_query_param: None,
             },
+            // API keys
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/apikeys",
+                operation: "CreateApiKey",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/apikeys",
+                operation: "GetApiKeys",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/apikeys/{api_key}",
+                operation: "GetApiKey",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/apikeys/{api_key}",
+                operation: "DeleteApiKey",
+                required_query_param: None,
+            },
+            // Usage plans
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/usageplans",
+                operation: "CreateUsagePlan",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/usageplans",
+                operation: "GetUsagePlans",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/usageplans/{usageplanId}",
+                operation: "GetUsagePlan",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/usageplans/{usageplanId}",
+                operation: "DeleteUsagePlan",
+                required_query_param: None,
+            },
+            // Usage plan keys
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/usageplans/{usageplanId}/keys",
+                operation: "CreateUsagePlanKey",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/usageplans/{usageplanId}/keys",
+                operation: "GetUsagePlanKeys",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/usageplans/{usageplanId}/keys/{keyId}",
+                operation: "DeleteUsagePlanKey",
+                required_query_param: None,
+            },
         ]
     }
 
@@ -371,6 +507,17 @@ impl ServiceHandler for ApiGatewayV1Service {
             "GetAuthorizers" => get_authorizers(&state, &input),
             "CreateAuthorizer" => create_authorizer(&state, &input),
             "DeleteAuthorizer" => delete_authorizer(&state, &input),
+            "CreateApiKey" => create_api_key(&state, &input),
+            "GetApiKey" => get_api_key(&state, &input),
+            "GetApiKeys" => get_api_keys(&state, &input),
+            "DeleteApiKey" => delete_api_key(&state, &input),
+            "CreateUsagePlan" => create_usage_plan(&state, &input),
+            "GetUsagePlan" => get_usage_plan(&state, &input),
+            "GetUsagePlans" => Ok(get_usage_plans(&state)),
+            "DeleteUsagePlan" => delete_usage_plan(&state, &input),
+            "CreateUsagePlanKey" => create_usage_plan_key(&state, &input),
+            "GetUsagePlanKeys" => get_usage_plan_keys(&state, &input),
+            "DeleteUsagePlanKey" => delete_usage_plan_key(&state, &input),
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
@@ -1177,6 +1324,345 @@ fn delete_authorizer(state: &ApiGatewayV1State, input: &Value) -> Result<Value, 
     })
 }
 
+// --- API keys + usage plans ---------------------------------------------
+
+fn api_key_to_json(k: &ApiKey) -> Value {
+    json!({
+        "id": k.id,
+        "value": k.value,
+        "name": k.name,
+        "description": k.description,
+        "enabled": k.enabled,
+        "customerId": k.customer_id,
+        "createdDate": k.created_date,
+        "lastUpdatedDate": k.last_updated_date,
+        "stageKeys": k.stage_keys,
+    })
+}
+
+fn usage_plan_to_json(p: &UsagePlan) -> Value {
+    let stages: Vec<Value> = p
+        .api_stages
+        .iter()
+        .map(|s| json!({"apiId": s.api_id, "stage": s.stage}))
+        .collect();
+    let mut obj = json!({
+        "id": p.id,
+        "name": p.name,
+        "description": p.description,
+        "apiStages": stages,
+    });
+    if let Some(t) = &p.throttle
+        && let Some(map) = obj.as_object_mut()
+    {
+        map.insert(
+            "throttle".to_string(),
+            json!({
+                "rateLimit": t.rate_limit,
+                "burstLimit": t.burst_limit,
+            }),
+        );
+    }
+    if let Some(q) = &p.quota
+        && let Some(map) = obj.as_object_mut()
+    {
+        map.insert(
+            "quota".to_string(),
+            json!({
+                "limit": q.limit,
+                "period": q.period,
+                "offset": q.offset,
+            }),
+        );
+    }
+    obj
+}
+
+fn usage_plan_key_to_json(k: &UsagePlanKey) -> Value {
+    json!({
+        "id": k.id,
+        "type": k.key_type,
+        "value": k.id, // AWS surfaces the underlying key id here
+    })
+}
+
+/// Generate a 40-char alphanumeric API key value, matching AWS' format.
+fn generate_api_key_value() -> String {
+    let raw = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    raw.chars().take(40).collect()
+}
+
+fn create_api_key(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let name = input["name"].as_str().unwrap_or("").to_string();
+    let description = input["description"].as_str().unwrap_or("").to_string();
+    let enabled = input["enabled"].as_bool().unwrap_or(true);
+    let customer_id = input["customerId"].as_str().unwrap_or("").to_string();
+    let provided_value = input["value"].as_str().map(String::from);
+    let stage_keys = input["stageKeys"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| {
+                    let restapi_id = v["restApiId"].as_str()?;
+                    let stage = v["stageName"].as_str()?;
+                    Some(format!("{restapi_id}/{stage}"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let id = short_id();
+    let now = now_epoch();
+    let key = ApiKey {
+        id: id.clone(),
+        value: provided_value.unwrap_or_else(generate_api_key_value),
+        name,
+        description,
+        enabled,
+        customer_id,
+        created_date: now,
+        last_updated_date: now,
+        stage_keys,
+    };
+    let json = api_key_to_json(&key);
+    state.api_keys.insert(id, key);
+    Ok(json)
+}
+
+fn get_api_key(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let id = require_str(input, "api_key")?;
+    state
+        .api_keys
+        .get(id)
+        .map(|e| api_key_to_json(e.value()))
+        .ok_or_else(|| {
+            AwsError::not_found("NotFoundException", format!("ApiKey {id} not found"))
+        })
+}
+
+fn get_api_keys(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let include_values = input["includeValues"].as_bool().unwrap_or(false);
+    let mut items: Vec<Value> = state
+        .api_keys
+        .iter()
+        .map(|e| {
+            let mut v = api_key_to_json(e.value());
+            if !include_values
+                && let Some(map) = v.as_object_mut()
+            {
+                map.remove("value");
+            }
+            v
+        })
+        .collect();
+    items.sort_by(|a, b| {
+        a["createdDate"]
+            .as_u64()
+            .unwrap_or(0)
+            .cmp(&b["createdDate"].as_u64().unwrap_or(0))
+    });
+    Ok(json!({"items": items}))
+}
+
+fn delete_api_key(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let id = require_str(input, "api_key")?;
+    if state.api_keys.remove(id).is_none() {
+        return Err(AwsError::not_found(
+            "NotFoundException",
+            format!("ApiKey {id} not found"),
+        ));
+    }
+    state
+        .usage_plan_keys
+        .retain(|_, edge| edge.key_id != id);
+    Ok(json!({}))
+}
+
+fn create_usage_plan(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let name = require_str(input, "name")?.to_string();
+    let description = input["description"].as_str().unwrap_or("").to_string();
+    let api_stages = input["apiStages"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| {
+                    Some(UsagePlanApiStage {
+                        api_id: v["apiId"].as_str()?.to_string(),
+                        stage: v["stage"].as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let throttle = input["throttle"].as_object().map(|t| UsageThrottle {
+        rate_limit: t.get("rateLimit").and_then(Value::as_f64).unwrap_or(0.0),
+        burst_limit: t
+            .get("burstLimit")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32,
+    });
+    let quota = input["quota"].as_object().map(|q| UsageQuota {
+        limit: q.get("limit").and_then(Value::as_u64).unwrap_or(0) as u32,
+        period: q
+            .get("period")
+            .and_then(Value::as_str)
+            .unwrap_or("MONTH")
+            .to_string(),
+        offset: q.get("offset").and_then(Value::as_u64).unwrap_or(0) as u32,
+    });
+
+    let id = short_id();
+    let plan = UsagePlan {
+        id: id.clone(),
+        name,
+        description,
+        api_stages,
+        throttle,
+        quota,
+    };
+    let json = usage_plan_to_json(&plan);
+    state.usage_plans.insert(id, plan);
+    Ok(json)
+}
+
+fn get_usage_plan(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let id = require_str(input, "usageplanId")?;
+    state
+        .usage_plans
+        .get(id)
+        .map(|e| usage_plan_to_json(e.value()))
+        .ok_or_else(|| {
+            AwsError::not_found("NotFoundException", format!("UsagePlan {id} not found"))
+        })
+}
+
+fn get_usage_plans(state: &ApiGatewayV1State) -> Value {
+    let mut items: Vec<Value> = state
+        .usage_plans
+        .iter()
+        .map(|e| usage_plan_to_json(e.value()))
+        .collect();
+    items.sort_by(|a, b| {
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
+    });
+    json!({"items": items})
+}
+
+fn delete_usage_plan(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let id = require_str(input, "usageplanId")?;
+    if state.usage_plans.remove(id).is_none() {
+        return Err(AwsError::not_found(
+            "NotFoundException",
+            format!("UsagePlan {id} not found"),
+        ));
+    }
+    state
+        .usage_plan_keys
+        .retain(|_, edge| edge.usage_plan_id != id);
+    Ok(json!({}))
+}
+
+fn create_usage_plan_key(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let usage_plan_id = require_str(input, "usageplanId")?.to_string();
+    let key_id = require_str(input, "keyId")?.to_string();
+    let key_type = input["keyType"].as_str().unwrap_or("API_KEY").to_string();
+    if !state.usage_plans.contains_key(&usage_plan_id) {
+        return Err(AwsError::not_found(
+            "NotFoundException",
+            format!("UsagePlan {usage_plan_id} not found"),
+        ));
+    }
+    if !state.api_keys.contains_key(&key_id) {
+        return Err(AwsError::not_found(
+            "NotFoundException",
+            format!("ApiKey {key_id} not found"),
+        ));
+    }
+    let edge_id = format!("{usage_plan_id}/{key_id}");
+    let edge = UsagePlanKey {
+        id: key_id.clone(),
+        key_id,
+        key_type,
+        usage_plan_id,
+    };
+    let json = usage_plan_key_to_json(&edge);
+    state.usage_plan_keys.insert(edge_id, edge);
+    Ok(json)
+}
+
+fn get_usage_plan_keys(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let usage_plan_id = require_str(input, "usageplanId")?.to_string();
+    let items: Vec<Value> = state
+        .usage_plan_keys
+        .iter()
+        .filter(|e| e.value().usage_plan_id == usage_plan_id)
+        .map(|e| usage_plan_key_to_json(e.value()))
+        .collect();
+    Ok(json!({"items": items}))
+}
+
+fn delete_usage_plan_key(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let usage_plan_id = require_str(input, "usageplanId")?.to_string();
+    let key_id = require_str(input, "keyId")?.to_string();
+    let edge_id = format!("{usage_plan_id}/{key_id}");
+    if state.usage_plan_keys.remove(&edge_id).is_none() {
+        return Err(AwsError::not_found(
+            "NotFoundException",
+            format!("UsagePlanKey {key_id} not found in plan {usage_plan_id}"),
+        ));
+    }
+    Ok(json!({}))
+}
+
+/// Look up an `x-api-key` header against the configured ApiKeys + their
+/// linked UsagePlans. Returns Ok if the key is enabled and at least one
+/// usage plan covers `(api_id, stage)`. Modeled after AWS' enforcement —
+/// throttle / quota aren't tracked yet so any matching plan grants
+/// access.
+pub fn validate_api_key(
+    state: &ApiGatewayV1State,
+    api_key_value: Option<&str>,
+    api_id: &str,
+    stage: &str,
+) -> Result<(), &'static str> {
+    let value = api_key_value.ok_or("Missing x-api-key header")?;
+    if value.is_empty() {
+        return Err("Missing x-api-key header");
+    }
+    let key = state
+        .api_keys
+        .iter()
+        .find(|e| e.value().value == value)
+        .ok_or("Invalid API key")?;
+    if !key.value().enabled {
+        return Err("API key is disabled");
+    }
+    let key_id = key.value().id.clone();
+    drop(key);
+
+    let covered = state.usage_plan_keys.iter().any(|edge| {
+        if edge.value().key_id != key_id {
+            return false;
+        }
+        state
+            .usage_plans
+            .get(&edge.value().usage_plan_id)
+            .map(|plan| {
+                plan.value()
+                    .api_stages
+                    .iter()
+                    .any(|s| s.api_id == api_id && s.stage == stage)
+            })
+            .unwrap_or(false)
+    });
+    if !covered {
+        return Err("API key is not associated with a usage plan covering this API stage");
+    }
+    Ok(())
+}
+
 // --- Stage proxy routing -------------------------------------------------
 
 /// Result of matching a stage-invocation request against a REST API's
@@ -1289,22 +1775,48 @@ pub fn proxy_request(
         "isBase64Encoded": false,
     });
 
-    let authorization = crate::authorizer::evaluate(
-        &state.authorizer_cache,
-        m,
-        &api.authorizers,
-        headers,
-        &path_params_map,
-        &query_params_map,
-        &stage_vars,
-        &request_context,
-        region,
-        account_id,
-        api_id,
-        stage,
-        &http_method_upper,
-        path,
-    );
+    let authorization = if m.api_key_required {
+        let api_key_value = headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("x-api-key"))
+            .map(|(_, v)| v.as_str());
+        match validate_api_key(state, api_key_value, api_id, stage) {
+            Ok(()) => crate::authorizer::evaluate(
+                &state.authorizer_cache,
+                m,
+                &api.authorizers,
+                headers,
+                &path_params_map,
+                &query_params_map,
+                &stage_vars,
+                &request_context,
+                region,
+                account_id,
+                api_id,
+                stage,
+                &http_method_upper,
+                path,
+            ),
+            Err(reason) => crate::authorizer::AuthorizationStep::Forbidden(reason.to_string()),
+        }
+    } else {
+        crate::authorizer::evaluate(
+            &state.authorizer_cache,
+            m,
+            &api.authorizers,
+            headers,
+            &path_params_map,
+            &query_params_map,
+            &stage_vars,
+            &request_context,
+            region,
+            account_id,
+            api_id,
+            stage,
+            &http_method_upper,
+            path,
+        )
+    };
 
     Some(V1ProxyMatch {
         integration_type: integration.r#type.clone(),
@@ -2003,5 +2515,147 @@ mod tests {
             Some("live")
         );
         assert_eq!(m.event["stageVariables"]["env"], "live");
+    }
+
+    #[tokio::test]
+    async fn create_api_key_round_trips_and_lists() {
+        let svc = ApiGatewayV1Service::new();
+        let resp = svc
+            .handle(
+                "CreateApiKey",
+                json!({"name": "k1", "enabled": true}),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let id = resp["id"].as_str().unwrap().to_string();
+        let raw_value = resp["value"].as_str().unwrap();
+        assert_eq!(raw_value.len(), 40);
+
+        // Default GetApiKeys hides the value.
+        let listed = svc
+            .handle("GetApiKeys", json!({}), &ctx())
+            .await
+            .unwrap();
+        let item = &listed["items"][0];
+        assert_eq!(item["id"], id);
+        assert!(item["value"].is_null());
+
+        let with_values = svc
+            .handle("GetApiKeys", json!({"includeValues": true}), &ctx())
+            .await
+            .unwrap();
+        assert_eq!(with_values["items"][0]["value"], raw_value);
+    }
+
+    #[tokio::test]
+    async fn validate_api_key_requires_usage_plan_for_stage() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, _root) = make_api(&svc).await;
+        // Make the stage exist so we have something to bind the plan to.
+        svc.handle(
+            "CreateDeployment",
+            json!({"restapi_id": api_id.clone(), "stageName": "prod"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+
+        let key = svc
+            .handle("CreateApiKey", json!({"name": "k1"}), &ctx())
+            .await
+            .unwrap();
+        let key_id = key["id"].as_str().unwrap().to_string();
+        let key_value = key["value"].as_str().unwrap().to_string();
+
+        let store = svc.store.get("000000000000", "us-east-1");
+
+        // No usage plan yet → rejected.
+        assert!(validate_api_key(&store, Some(&key_value), &api_id, "prod").is_err());
+
+        let plan = svc
+            .handle(
+                "CreateUsagePlan",
+                json!({
+                    "name": "plan1",
+                    "apiStages": [{"apiId": &api_id, "stage": "prod"}]
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let plan_id = plan["id"].as_str().unwrap().to_string();
+
+        // Plan exists but no key linkage → still rejected.
+        assert!(validate_api_key(&store, Some(&key_value), &api_id, "prod").is_err());
+
+        svc.handle(
+            "CreateUsagePlanKey",
+            json!({
+                "usageplanId": plan_id,
+                "keyId": key_id,
+                "keyType": "API_KEY"
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+
+        // Now associated with a plan covering this stage → accepted.
+        validate_api_key(&store, Some(&key_value), &api_id, "prod").unwrap();
+        // Wrong stage still rejected.
+        assert!(validate_api_key(&store, Some(&key_value), &api_id, "dev").is_err());
+        // Missing header rejected.
+        assert!(validate_api_key(&store, None, &api_id, "prod").is_err());
+        // Disabled key rejected.
+        store
+            .api_keys
+            .alter(&key_id, |_, mut k| {
+                k.enabled = false;
+                k
+            });
+        assert!(validate_api_key(&store, Some(&key_value), &api_id, "prod").is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_usage_plan_drops_associated_keys() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, _root) = make_api(&svc).await;
+        let key = svc
+            .handle("CreateApiKey", json!({"name": "k"}), &ctx())
+            .await
+            .unwrap();
+        let key_id = key["id"].as_str().unwrap().to_string();
+        let plan = svc
+            .handle(
+                "CreateUsagePlan",
+                json!({
+                    "name": "p",
+                    "apiStages": [{"apiId": &api_id, "stage": "prod"}]
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let plan_id = plan["id"].as_str().unwrap().to_string();
+        svc.handle(
+            "CreateUsagePlanKey",
+            json!({"usageplanId": &plan_id, "keyId": &key_id}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+
+        svc.handle(
+            "DeleteUsagePlan",
+            json!({"usageplanId": plan_id.clone()}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+
+        let store = svc.store.get("000000000000", "us-east-1");
+        let edge_id = format!("{plan_id}/{key_id}");
+        assert!(!store.usage_plan_keys.contains_key(&edge_id));
     }
 }
