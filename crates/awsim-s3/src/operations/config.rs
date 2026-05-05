@@ -1773,7 +1773,7 @@ pub fn put_object_legal_hold(state: &S3State, input: &Value) -> Result<Value, Aw
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
     let versions = bucket.objects.get(key);
-    if !versions.is_some_and(|v| v.current().is_some()) {
+    if versions.is_none_or(|v| v.current().is_none()) {
         return Err(AwsError::not_found(
             "NoSuchKey",
             format!("Key '{key}' not found"),
@@ -1799,7 +1799,7 @@ pub fn get_object_retention(state: &S3State, input: &Value) -> Result<Value, Aws
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
     let versions = bucket.objects.get(key);
-    if !versions.is_some_and(|v| v.current().is_some()) {
+    if versions.is_none_or(|v| v.current().is_none()) {
         return Err(AwsError::not_found(
             "NoSuchKey",
             format!("Key '{key}' not found"),
@@ -1856,7 +1856,7 @@ pub fn put_object_retention(state: &S3State, input: &Value) -> Result<Value, Aws
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
     let versions = bucket.objects.get(key);
-    if !versions.is_some_and(|v| v.current().is_some()) {
+    if versions.is_none_or(|v| v.current().is_none()) {
         return Err(AwsError::not_found(
             "NoSuchKey",
             format!("Key '{key}' not found"),
@@ -1882,7 +1882,7 @@ pub fn put_object_acl(state: &S3State, input: &Value) -> Result<Value, AwsError>
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
     let versions = bucket.objects.get(key);
-    if !versions.is_some_and(|v| v.current().is_some()) {
+    if versions.is_none_or(|v| v.current().is_none()) {
         return Err(AwsError::not_found(
             "NoSuchKey",
             format!("Key '{key}' not found"),
@@ -1931,7 +1931,7 @@ pub fn restore_object(state: &S3State, input: &Value) -> Result<Value, AwsError>
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
     let versions = bucket.objects.get(key);
-    if !versions.is_some_and(|v| v.current().is_some()) {
+    if versions.is_none_or(|v| v.current().is_none()) {
         return Err(AwsError::not_found(
             "NoSuchKey",
             format!("Key '{key}' not found"),
