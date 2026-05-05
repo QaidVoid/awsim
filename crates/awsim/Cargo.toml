@@ -106,7 +106,7 @@ rlimit = "0.10"
 # jemalloc keeps idle RSS flat after burst workloads (DDB query loops,
 # bulk imports). Unsupported on MSVC + lacks broad Windows testing, so
 # only wire it on non-msvc targets — Linux + macOS get the upgrade.
-[target.'cfg(not(target_env = "msvc"))'.dependencies]
+[target.'cfg(all(not(target_env = "msvc"), not(target_env = "musl")))'.dependencies]
 tikv-jemallocator = { workspace = true }
 
 [dev-dependencies]

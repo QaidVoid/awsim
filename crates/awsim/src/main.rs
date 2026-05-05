@@ -14,7 +14,7 @@ use tracing::{debug, error, info, warn};
 // malloc, so idle RSS stays flat after burst workloads (DDB query
 // loops, bulk imports). MSVC builds keep the system allocator since
 // jemalloc isn't well supported there.
-#[cfg(not(target_env = "msvc"))]
+#[cfg(all(not(target_env = "msvc"), not(target_env = "musl")))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
