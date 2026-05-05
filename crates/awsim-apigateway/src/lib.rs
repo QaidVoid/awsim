@@ -1,3 +1,4 @@
+pub mod authorizer;
 mod operations;
 pub mod proxy;
 mod state;
@@ -18,8 +19,13 @@ use state::ApiGatewayState;
 
 pub use proxy::{ProxyResponse, proxy_request};
 pub use state::ApiGatewayState as State;
+pub use authorizer::{
+    AuthorizationOutcome, AuthorizationStep, AuthorizerCache, LambdaInvocation,
+    apply_lambda_response,
+};
 pub use v1::{
-    ApiGatewayV1Service, ApiGatewayV1State, Integration, IntegrationResponse, V1ProxyMatch,
+    ApiGatewayV1Service, ApiGatewayV1State, Authorizer, Integration, IntegrationResponse, Method,
+    V1ProxyMatch,
 };
 
 pub struct ApiGatewayService {

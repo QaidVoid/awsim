@@ -119,11 +119,19 @@ pub struct Authorizer {
     pub auth_type: String,
     pub authorizer_uri: String,
     pub identity_source: String,
+    /// Seconds an Allow / Deny decision is cached for. AWS' default is
+    /// 300; 0 disables caching.
+    pub result_ttl_in_seconds: u32,
+    /// Cognito User Pool ARNs the authorizer trusts. Populated for
+    /// COGNITO_USER_POOLS authorizers; ignored for the others.
+    pub provider_arns: Vec<String>,
 }
 
 #[derive(Default)]
 pub struct ApiGatewayV1State {
     pub apis: DashMap<String, RestApi>,
+    /// Cache of authorizer decisions, keyed by `(authorizer_id, identity)`.
+    pub authorizer_cache: crate::authorizer::AuthorizerCache,
 }
 
 pub struct ApiGatewayV1Service {
@@ -503,6 +511,8 @@ fn authorizer_to_json(a: &Authorizer) -> Value {
         "authType": a.auth_type,
         "authorizerUri": a.authorizer_uri,
         "identitySource": a.identity_source,
+        "authorizerResultTtlInSeconds": a.result_ttl_in_seconds,
+        "providerARNs": a.provider_arns,
     })
 }
 
@@ -1122,6 +1132,19 @@ fn create_authorizer(state: &ApiGatewayV1State, input: &Value) -> Result<Value, 
         .as_str()
         .unwrap_or("method.request.header.Authorization")
         .to_string();
+    let result_ttl_in_seconds = input["authorizerResultTtlInSeconds"]
+        .as_u64()
+        .map(|v| v as u32)
+        .unwrap_or(300);
+    let provider_arns = input["providerARNs"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
 
     with_api_mut(state, &api_id, |api| {
         let authorizer = Authorizer {
@@ -1131,6 +1154,8 @@ fn create_authorizer(state: &ApiGatewayV1State, input: &Value) -> Result<Value, 
             auth_type,
             authorizer_uri,
             identity_source,
+            result_ttl_in_seconds,
+            provider_arns,
         };
         let json = authorizer_to_json(&authorizer);
         api.authorizers.insert(authorizer.id.clone(), authorizer);
@@ -1179,6 +1204,11 @@ pub struct V1ProxyMatch {
     pub headers: HashMap<String, String>,
     /// `requestContext` object — same shape as the proxy event sub-object.
     pub request_context: Value,
+    /// What the caller must do for authorization before running the
+    /// integration. May be `NotConfigured` (run integration unchanged),
+    /// `Allowed` (cache hit / Cognito), `InvokeLambda` (caller invokes),
+    /// or a short-circuit `Unauthorized` / `Forbidden`.
+    pub authorization: crate::authorizer::AuthorizationStep,
 }
 
 /// Look up a stage-invocation against the REST API's resources, returning
@@ -1202,6 +1232,8 @@ pub fn proxy_request(
     query_string: &str,
     headers: &std::collections::HashMap<String, String>,
     body: &[u8],
+    account_id: &str,
+    region: &str,
 ) -> Option<V1ProxyMatch> {
     let api = state.apis.get(api_id)?;
     let resource = match_resource(&api.resources, path)?;
@@ -1257,6 +1289,23 @@ pub fn proxy_request(
         "isBase64Encoded": false,
     });
 
+    let authorization = crate::authorizer::evaluate(
+        &state.authorizer_cache,
+        m,
+        &api.authorizers,
+        headers,
+        &path_params_map,
+        &query_params_map,
+        &stage_vars,
+        &request_context,
+        region,
+        account_id,
+        api_id,
+        stage,
+        &http_method_upper,
+        path,
+    );
+
     Some(V1ProxyMatch {
         integration_type: integration.r#type.clone(),
         integration_uri: integration.uri.clone(),
@@ -1268,6 +1317,7 @@ pub fn proxy_request(
         query_params: query_params_map,
         headers: headers.clone(),
         request_context,
+        authorization,
     })
 }
 
@@ -1742,6 +1792,8 @@ mod tests {
             "",
             &HashMap::new(),
             &[],
+            "000000000000",
+            "us-east-1",
         )
         .expect("match");
         assert_eq!(m.matched_resource_path, "/users/{id}");
@@ -1942,6 +1994,8 @@ mod tests {
             "",
             &HashMap::new(),
             &[],
+            "000000000000",
+            "us-east-1",
         )
         .expect("match");
         assert_eq!(

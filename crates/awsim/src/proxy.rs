@@ -15,7 +15,8 @@ use tracing::{debug, warn};
 
 use awsim_apigateway::vtl::{self, RenderContext};
 use awsim_apigateway::{
-    ApiGatewayService, ApiGatewayV1Service, Integration, IntegrationResponse, V1ProxyMatch,
+    ApiGatewayService, ApiGatewayV1Service, AuthorizationOutcome, AuthorizationStep, Integration,
+    IntegrationResponse, LambdaInvocation, V1ProxyMatch, apply_lambda_response,
 };
 use awsim_core::{RequestContext, ServiceHandler};
 
@@ -127,6 +128,8 @@ pub async fn handle_proxy(
         query_string,
         &headers_map,
         &body,
+        &state.default_account_id,
+        &state.default_region,
     );
 
     match v1_match {
@@ -157,13 +160,30 @@ async fn dispatch_v1(
     headers: &HeaderMap,
     body: &Bytes,
     query_string: &str,
-    m: V1ProxyMatch,
+    mut m: V1ProxyMatch,
 ) -> Response<Body> {
     debug!(
         integration_type = %m.integration_type,
         resource = %m.matched_resource_path,
         "v1 stage invocation matched"
     );
+
+    // Drive the authorizer state machine to a terminal step. Custom
+    // Lambda authorizers may take one Lambda call before resolving.
+    let outcome = match resolve_authorization(state, method, uri, &mut m).await {
+        AuthResolution::Allowed(o) => Some(o),
+        AuthResolution::None => None,
+        AuthResolution::Unauthorized(reason) => {
+            return error_response(StatusCode::UNAUTHORIZED, &reason);
+        }
+        AuthResolution::Forbidden(reason) => {
+            return error_response(StatusCode::FORBIDDEN, &reason);
+        }
+    };
+    if let Some(outcome) = outcome {
+        merge_authorizer_into_event(&mut m, &outcome);
+    }
+
     let render_ctx = render_context_from_match(&m, body);
     match m.integration_type.as_str() {
         "MOCK" => dispatch_mock(&m, &render_ctx),
@@ -199,6 +219,114 @@ async fn dispatch_v1(
             StatusCode::NOT_IMPLEMENTED,
             &format!("Integration type {other} is not yet supported by AWSim"),
         ),
+    }
+}
+
+enum AuthResolution {
+    None,
+    Allowed(AuthorizationOutcome),
+    Unauthorized(String),
+    Forbidden(String),
+}
+
+/// Drive the authorizer state machine. Most cases resolve in one step;
+/// custom Lambda authorizers take one Lambda invocation first, then
+/// `apply_lambda_response` returns the final step. The loop bound is
+/// 2 — there's no scenario in which a single authorizer needs more
+/// than one Lambda round-trip.
+async fn resolve_authorization(
+    state: &ProxyState,
+    method: &Method,
+    uri: &Uri,
+    m: &mut V1ProxyMatch,
+) -> AuthResolution {
+    // Take ownership so we can re-assign as the state machine runs.
+    let mut step = std::mem::replace(&mut m.authorization, AuthorizationStep::NotConfigured);
+    for _ in 0..2 {
+        match step {
+            AuthorizationStep::NotConfigured => return AuthResolution::None,
+            AuthorizationStep::Allowed(outcome) => return AuthResolution::Allowed(outcome),
+            AuthorizationStep::Unauthorized(reason) => return AuthResolution::Unauthorized(reason),
+            AuthorizationStep::Forbidden(reason) => return AuthResolution::Forbidden(reason),
+            AuthorizationStep::InvokeLambda(invocation) => {
+                let response = match invoke_authorizer_lambda(state, method, uri, &invocation).await
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return AuthResolution::Forbidden(format!(
+                            "Lambda authorizer invocation failed: {e}"
+                        ));
+                    }
+                };
+                let cache = &state.apigw_v1.store().get(&state.default_account_id, &state.default_region).authorizer_cache;
+                step = apply_lambda_response(cache, &invocation, &response);
+            }
+        }
+    }
+    AuthResolution::Forbidden(
+        "Authorizer state machine did not converge after one Lambda round-trip".to_string(),
+    )
+}
+
+async fn invoke_authorizer_lambda(
+    state: &ProxyState,
+    method: &Method,
+    uri: &Uri,
+    invocation: &LambdaInvocation,
+) -> Result<serde_json::Value, String> {
+    let lambda = state
+        .lambda
+        .as_ref()
+        .ok_or_else(|| "Lambda service not registered — cannot invoke authorizer".to_string())?;
+    let function_name = extract_function_name(&invocation.authorizer_uri);
+    let ctx = RequestContext {
+        account_id: state.default_account_id.clone(),
+        region: state.default_region.clone(),
+        service: "lambda".to_string(),
+        access_key: None,
+        request_id: uuid::Uuid::new_v4().to_string(),
+        method: method.to_string(),
+        uri: uri.to_string(),
+        event_bus: None,
+    };
+    let invoke_input = json!({
+        "FunctionName": function_name,
+        "InvocationType": "RequestResponse",
+        "Payload": invocation.event.clone(),
+    });
+    let result = lambda
+        .handle("Invoke", invoke_input, &ctx)
+        .await
+        .map_err(|e| e.message)?;
+    // The Lambda service returns the function's raw return value.
+    Ok(result)
+}
+
+/// Fold the authorizer's outcome into the proxy event so the integration
+/// — and any VTL templates — can access it as `requestContext.authorizer`
+/// or `$context.authorizer`.
+fn merge_authorizer_into_event(m: &mut V1ProxyMatch, outcome: &AuthorizationOutcome) {
+    let mut authorizer = serde_json::Map::new();
+    authorizer.insert(
+        "principalId".to_string(),
+        serde_json::Value::String(outcome.principal_id.clone()),
+    );
+    if let Some(ctx_obj) = outcome.context.as_object() {
+        for (k, v) in ctx_obj {
+            authorizer.insert(k.clone(), v.clone());
+        }
+    }
+    let authorizer_value = serde_json::Value::Object(authorizer);
+
+    if let Some(rc) = m
+        .event
+        .get_mut("requestContext")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        rc.insert("authorizer".to_string(), authorizer_value.clone());
+    }
+    if let Some(rc) = m.request_context.as_object_mut() {
+        rc.insert("authorizer".to_string(), authorizer_value);
     }
 }
 
