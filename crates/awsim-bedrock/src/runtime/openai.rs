@@ -23,6 +23,17 @@ pub struct ChatRequest {
     pub stop: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
+}
+
+/// OpenAI streaming options. The only field that exists today is
+/// `include_usage`, which makes the server emit a final chunk with
+/// the token counters — without it usage stays absent and downstream
+/// `prompt_tokens` / `completion_tokens` ride out at 0.
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamOptions {
+    pub include_usage: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

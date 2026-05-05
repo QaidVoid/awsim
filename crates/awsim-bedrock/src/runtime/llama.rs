@@ -39,6 +39,7 @@ fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, AwsEr
         top_p: body.get("top_p").and_then(Value::as_f64).map(|v| v as f32),
         stop: None,
         stream: None,
+        stream_options: None,
     })
 }
 

@@ -85,6 +85,7 @@ pub fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, A
         top_p,
         stop,
         stream: None,
+        stream_options: None,
     })
 }
 

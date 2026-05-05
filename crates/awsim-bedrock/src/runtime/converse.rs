@@ -95,6 +95,7 @@ pub(crate) fn to_openai_request(model_tag: &str, input: &Value) -> Result<ChatRe
         top_p,
         stop,
         stream: None,
+        stream_options: None,
     })
 }
 

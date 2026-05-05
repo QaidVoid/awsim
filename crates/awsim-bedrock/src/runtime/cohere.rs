@@ -51,6 +51,7 @@ fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, AwsEr
                     .collect()
             }),
         stream: None,
+        stream_options: None,
     })
 }
 

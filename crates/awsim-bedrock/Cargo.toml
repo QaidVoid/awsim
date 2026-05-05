@@ -14,7 +14,7 @@ serde_json = { workspace = true }
 dashmap = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
 toml = { workspace = true }
 thiserror = { workspace = true }
 arc-swap = { workspace = true }

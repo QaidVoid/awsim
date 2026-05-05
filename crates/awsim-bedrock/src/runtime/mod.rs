@@ -89,6 +89,7 @@ pub(crate) async fn call_chat_stream(
     })?;
     let mut req = build(model_tag)?;
     req.stream = Some(true);
+    req.stream_options = Some(openai::StreamOptions { include_usage: true });
 
     let url = format!("{}/chat/completions", backend.endpoint());
     let mut http_req = backend.client().post(&url).json(&req);
@@ -483,6 +484,7 @@ pub(crate) async fn stream_response(
     // Build the OpenAI-compat chat request from the Converse input.
     let mut req = converse::to_openai_request(model_tag, &input)?;
     req.stream = Some(true);
+    req.stream_options = Some(openai::StreamOptions { include_usage: true });
 
     let url = format!("{}/chat/completions", backend.endpoint());
     let mut http_req = backend.client().post(&url).json(&req);
@@ -822,5 +824,41 @@ mod tests {
         let input = json!({ "modelId": "x", "body": "not json" });
         let err = extract_body(&input).unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn stream_request_serializes_with_include_usage() {
+        let req = openai::ChatRequest {
+            model: "m".into(),
+            messages: vec![],
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            stop: None,
+            stream: Some(true),
+            stream_options: Some(openai::StreamOptions {
+                include_usage: true,
+            }),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["stream"], true);
+        assert_eq!(v["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn non_streaming_request_omits_stream_options() {
+        let req = openai::ChatRequest {
+            model: "m".into(),
+            messages: vec![],
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            stop: None,
+            stream: None,
+            stream_options: None,
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert!(v.get("stream").is_none());
+        assert!(v.get("stream_options").is_none());
     }
 }
