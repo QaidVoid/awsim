@@ -74,6 +74,23 @@ pub struct Integration {
     pub passthrough_behavior: String,
     pub timeout_in_millis: u32,
     pub cache_namespace: String,
+    /// Request body mapping templates keyed by content-type.
+    /// Used for non-proxy integrations (AWS, HTTP, MOCK).
+    pub request_templates: HashMap<String, String>,
+    /// Integration responses keyed by status code (`"200"`, `"default"`, ...).
+    pub integration_responses: HashMap<String, IntegrationResponse>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IntegrationResponse {
+    pub status_code: String,
+    /// Regex on the integration's raw output that picks this response.
+    /// Empty string means "default" — used when no other pattern matches.
+    pub selection_pattern: String,
+    /// Response body mapping templates keyed by content-type.
+    pub response_templates: HashMap<String, String>,
+    /// Response header mappings (header-name → source expression).
+    pub response_parameters: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +250,24 @@ impl ServiceHandler for ApiGatewayV1Service {
                 operation: "DeleteIntegration",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/restapis/{restapi_id}/resources/{resource_id}/methods/{http_method}/integration/responses/{status_code}",
+                operation: "GetIntegrationResponse",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/restapis/{restapi_id}/resources/{resource_id}/methods/{http_method}/integration/responses/{status_code}",
+                operation: "PutIntegrationResponse",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/restapis/{restapi_id}/resources/{resource_id}/methods/{http_method}/integration/responses/{status_code}",
+                operation: "DeleteIntegrationResponse",
+                required_query_param: None,
+            },
             // Stages
             RouteDefinition {
                 method: "GET",
@@ -316,6 +351,9 @@ impl ServiceHandler for ApiGatewayV1Service {
             "GetIntegration" => get_integration(&state, &input),
             "PutIntegration" => put_integration(&state, &input),
             "DeleteIntegration" => delete_integration(&state, &input),
+            "GetIntegrationResponse" => get_integration_response(&state, &input),
+            "PutIntegrationResponse" => put_integration_response(&state, &input),
+            "DeleteIntegrationResponse" => delete_integration_response(&state, &input),
             "GetStages" => get_stages(&state, &input),
             "CreateStage" => create_stage(&state, &input),
             "DeleteStage" => delete_stage(&state, &input),
@@ -410,6 +448,11 @@ fn method_to_json(m: &Method) -> Value {
 }
 
 fn integration_to_json(i: &Integration) -> Value {
+    let responses: serde_json::Map<String, Value> = i
+        .integration_responses
+        .iter()
+        .map(|(k, v)| (k.clone(), integration_response_to_json(v)))
+        .collect();
     json!({
         "type": i.r#type,
         "httpMethod": i.http_method,
@@ -418,6 +461,17 @@ fn integration_to_json(i: &Integration) -> Value {
         "passthroughBehavior": i.passthrough_behavior,
         "timeoutInMillis": i.timeout_in_millis,
         "cacheNamespace": i.cache_namespace,
+        "requestTemplates": i.request_templates,
+        "integrationResponses": Value::Object(responses),
+    })
+}
+
+fn integration_response_to_json(r: &IntegrationResponse) -> Value {
+    json!({
+        "statusCode": r.status_code,
+        "selectionPattern": r.selection_pattern,
+        "responseTemplates": r.response_templates,
+        "responseParameters": r.response_parameters,
     })
 }
 
@@ -806,6 +860,8 @@ fn put_integration(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aw
             .to_string(),
         timeout_in_millis: input["timeoutInMillis"].as_u64().unwrap_or(29000) as u32,
         cache_namespace: input["cacheNamespace"].as_str().unwrap_or("").to_string(),
+        request_templates: parse_template_map(&input["requestTemplates"]),
+        integration_responses: HashMap::new(),
     };
     with_api_mut(state, &api_id, |api| {
         let resource = api.resources.get_mut(&resource_id).ok_or_else(|| {
@@ -823,6 +879,125 @@ fn put_integration(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aw
         let json = integration_to_json(&integration);
         method.integration = Some(integration);
         Ok(json)
+    })
+}
+
+fn parse_template_map(v: &Value) -> HashMap<String, String> {
+    v.as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn get_integration_response(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let resource_id = require_str(input, "resource_id")?.to_string();
+    let http_method = require_str(input, "http_method")?.to_uppercase();
+    let status_code = require_str(input, "status_code")?.to_string();
+    with_api_mut(state, &api_id, |api| {
+        let r = api.resources.get_mut(&resource_id).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Resource {resource_id} not found"),
+            )
+        })?;
+        let method = r.methods.get_mut(&http_method).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Method {http_method} not configured"),
+            )
+        })?;
+        let integration = method
+            .integration
+            .as_mut()
+            .ok_or_else(|| AwsError::not_found("NotFoundException", "No integration configured"))?;
+        integration
+            .integration_responses
+            .get(&status_code)
+            .map(integration_response_to_json)
+            .ok_or_else(|| {
+                AwsError::not_found(
+                    "NotFoundException",
+                    format!("IntegrationResponse {status_code} not found"),
+                )
+            })
+    })
+}
+
+fn put_integration_response(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let resource_id = require_str(input, "resource_id")?.to_string();
+    let http_method = require_str(input, "http_method")?.to_uppercase();
+    let status_code = require_str(input, "status_code")?.to_string();
+    let response = IntegrationResponse {
+        status_code: status_code.clone(),
+        selection_pattern: input["selectionPattern"].as_str().unwrap_or("").to_string(),
+        response_templates: parse_template_map(&input["responseTemplates"]),
+        response_parameters: parse_template_map(&input["responseParameters"]),
+    };
+    with_api_mut(state, &api_id, |api| {
+        let r = api.resources.get_mut(&resource_id).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Resource {resource_id} not found"),
+            )
+        })?;
+        let method = r.methods.get_mut(&http_method).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Method {http_method} not configured"),
+            )
+        })?;
+        let integration = method
+            .integration
+            .as_mut()
+            .ok_or_else(|| AwsError::not_found("NotFoundException", "No integration configured"))?;
+        let json = integration_response_to_json(&response);
+        integration
+            .integration_responses
+            .insert(status_code, response);
+        Ok(json)
+    })
+}
+
+fn delete_integration_response(
+    state: &ApiGatewayV1State,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let resource_id = require_str(input, "resource_id")?.to_string();
+    let http_method = require_str(input, "http_method")?.to_uppercase();
+    let status_code = require_str(input, "status_code")?.to_string();
+    with_api_mut(state, &api_id, |api| {
+        let r = api.resources.get_mut(&resource_id).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Resource {resource_id} not found"),
+            )
+        })?;
+        let method = r.methods.get_mut(&http_method).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Method {http_method} not configured"),
+            )
+        })?;
+        let integration = method
+            .integration
+            .as_mut()
+            .ok_or_else(|| AwsError::not_found("NotFoundException", "No integration configured"))?;
+        integration
+            .integration_responses
+            .remove(&status_code)
+            .ok_or_else(|| {
+                AwsError::not_found(
+                    "NotFoundException",
+                    format!("IntegrationResponse {status_code} not found"),
+                )
+            })?;
+        Ok(json!({}))
     })
 }
 
@@ -990,6 +1165,20 @@ pub struct V1ProxyMatch {
     pub event: Value,
     /// Path of the matched resource — used purely for diagnostics.
     pub matched_resource_path: String,
+    /// Full integration record so the caller can run request/response
+    /// template mapping for non-PROXY integrations.
+    pub integration: Integration,
+    /// Stage variables — exposed so non-PROXY templates can resolve
+    /// `$stageVariables.x`.
+    pub stage_variables: HashMap<String, String>,
+    /// Path parameters extracted from the matched resource pattern.
+    pub path_params: HashMap<String, String>,
+    /// Query parameters parsed from the URL.
+    pub query_params: HashMap<String, String>,
+    /// Request headers as a string→string map.
+    pub headers: HashMap<String, String>,
+    /// `requestContext` object — same shape as the proxy event sub-object.
+    pub request_context: Value,
 }
 
 /// Look up a stage-invocation against the REST API's resources, returning
@@ -1024,27 +1213,46 @@ pub fn proxy_request(
     let integration = m.integration.as_ref()?;
 
     let body_str = std::str::from_utf8(body).ok().map(|s| s.to_string());
-    let path_params = extract_path_params(&resource.path, path);
-    let query_params = parse_query_params(query_string);
+    let path_params_value = extract_path_params(&resource.path, path);
+    let query_params_value = parse_query_params(query_string);
+    let path_params_map = json_string_map(&path_params_value);
+    let query_params_map = json_string_map(&query_params_value);
+    let stage_vars = api
+        .stages
+        .get(stage)
+        .map(|s| s.variables.clone())
+        .unwrap_or_default();
+    let stage_vars_value = if stage_vars.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(
+            stage_vars
+                .iter()
+                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                .collect(),
+        )
+    };
+
+    let request_context = json!({
+        "apiId": api_id,
+        "httpMethod": http_method_upper,
+        "path": path,
+        "stage": stage,
+        "requestId": Uuid::new_v4().to_string(),
+        "identity": {
+            "sourceIp": "127.0.0.1",
+        },
+    });
 
     let event = json!({
         "resource": resource.path,
         "path": path,
         "httpMethod": http_method_upper,
         "headers": headers,
-        "queryStringParameters": query_params,
-        "pathParameters": path_params,
-        "stageVariables": null,
-        "requestContext": {
-            "apiId": api_id,
-            "httpMethod": http_method_upper,
-            "path": path,
-            "stage": stage,
-            "requestId": Uuid::new_v4().to_string(),
-            "identity": {
-                "sourceIp": "127.0.0.1",
-            },
-        },
+        "queryStringParameters": query_params_value,
+        "pathParameters": path_params_value,
+        "stageVariables": stage_vars_value,
+        "requestContext": request_context,
         "body": body_str,
         "isBase64Encoded": false,
     });
@@ -1054,7 +1262,23 @@ pub fn proxy_request(
         integration_uri: integration.uri.clone(),
         event,
         matched_resource_path: resource.path.clone(),
+        integration: integration.clone(),
+        stage_variables: stage_vars,
+        path_params: path_params_map,
+        query_params: query_params_map,
+        headers: headers.clone(),
+        request_context,
     })
+}
+
+fn json_string_map(v: &Value) -> HashMap<String, String> {
+    v.as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn match_resource<'a>(
@@ -1566,5 +1790,164 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(listed["items"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn put_integration_round_trips_request_templates() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        svc.handle(
+            "PutMethod",
+            json!({"restapi_id": api_id.clone(), "resource_id": root_id.clone(), "http_method": "GET"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "PutIntegration",
+            json!({
+                "restapi_id": api_id.clone(),
+                "resource_id": root_id.clone(),
+                "http_method": "GET",
+                "type": "MOCK",
+                "requestTemplates": {
+                    "application/json": "{\"statusCode\": 200}"
+                }
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        let got = svc
+            .handle(
+                "GetIntegration",
+                json!({"restapi_id": api_id, "resource_id": root_id, "http_method": "GET"}),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            got["requestTemplates"]["application/json"],
+            "{\"statusCode\": 200}"
+        );
+    }
+
+    #[tokio::test]
+    async fn put_integration_response_round_trips() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        svc.handle(
+            "PutMethod",
+            json!({"restapi_id": api_id.clone(), "resource_id": root_id.clone(), "http_method": "GET"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "PutIntegration",
+            json!({
+                "restapi_id": api_id.clone(),
+                "resource_id": root_id.clone(),
+                "http_method": "GET",
+                "type": "MOCK"
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "PutIntegrationResponse",
+            json!({
+                "restapi_id": api_id.clone(),
+                "resource_id": root_id.clone(),
+                "http_method": "GET",
+                "status_code": "200",
+                "selectionPattern": "",
+                "responseTemplates": {
+                    "application/json": "{\"ok\":true}"
+                }
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        let got = svc
+            .handle(
+                "GetIntegrationResponse",
+                json!({
+                    "restapi_id": api_id,
+                    "resource_id": root_id,
+                    "http_method": "GET",
+                    "status_code": "200"
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(got["statusCode"], "200");
+        assert_eq!(
+            got["responseTemplates"]["application/json"],
+            "{\"ok\":true}"
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_match_includes_stage_variables() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        svc.handle(
+            "PutMethod",
+            json!({"restapi_id": api_id.clone(), "resource_id": root_id.clone(), "http_method": "GET"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "PutIntegration",
+            json!({
+                "restapi_id": api_id.clone(),
+                "resource_id": root_id,
+                "http_method": "GET",
+                "type": "MOCK"
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        let dep = svc
+            .handle(
+                "CreateDeployment",
+                json!({"restapi_id": api_id.clone(), "stageName": "prod"}),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        // CreateDeployment with stageName auto-creates the stage.
+        let _ = dep;
+        // Set stage variables via internal mutation, since UpdateStage isn't
+        // implemented — walk the state directly.
+        {
+            let store = svc.store.get("000000000000", "us-east-1");
+            let mut entry = store.apis.get_mut(&api_id).unwrap();
+            let stage = entry.value_mut().stages.get_mut("prod").unwrap();
+            stage.variables.insert("env".into(), "live".into());
+        }
+        let store = svc.store.get("000000000000", "us-east-1");
+        let m = proxy_request(
+            &store,
+            &api_id,
+            "prod",
+            "GET",
+            "/",
+            "",
+            &HashMap::new(),
+            &[],
+        )
+        .expect("match");
+        assert_eq!(
+            m.stage_variables.get("env").map(String::as_str),
+            Some("live")
+        );
+        assert_eq!(m.event["stageVariables"]["env"], "live");
     }
 }
