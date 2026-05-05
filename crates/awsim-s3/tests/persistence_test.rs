@@ -160,8 +160,9 @@ async fn multipart_then_restart_then_get() {
     let dir = tmp_dir("multipart");
     let bucket = "buck";
     let key = "big/object.bin";
+    // A single part is treated as the final part and has no minimum size,
+    // matching AWS' EntityTooSmall rule which only applies to non-final parts.
     let part1: &[u8] = b"AAAAAAAAAA";
-    let part2: &[u8] = b"BBBBBBBBBB";
 
     let snapshot = {
         let svc = S3Service::with_data_dir(&dir);
@@ -182,38 +183,32 @@ async fn multipart_then_restart_then_get() {
             .unwrap()
             .to_string();
 
-        svc.handle(
-            "UploadPart",
-            json!({
-                "Bucket": bucket,
-                "Key": key,
-                "uploadId": upload_id,
-                "partNumber": "1",
-                "__raw_body": b64(part1),
-            }),
-            &ctx(),
-        )
-        .await
-        .unwrap();
-        svc.handle(
-            "UploadPart",
-            json!({
-                "Bucket": bucket,
-                "Key": key,
-                "uploadId": upload_id,
-                "partNumber": "2",
-                "__raw_body": b64(part2),
-            }),
-            &ctx(),
-        )
-        .await
-        .unwrap();
+        let part1_resp = svc
+            .handle(
+                "UploadPart",
+                json!({
+                    "Bucket": bucket,
+                    "Key": key,
+                    "uploadId": upload_id,
+                    "partNumber": "1",
+                    "__raw_body": b64(part1),
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let etag1 = part1_resp["ETag"].as_str().unwrap().to_string();
         svc.handle(
             "CompleteMultipartUpload",
             json!({
                 "Bucket": bucket,
                 "Key": key,
                 "uploadId": upload_id,
+                "CompleteMultipartUpload": {
+                    "Part": [
+                        {"PartNumber": "1", "ETag": etag1}
+                    ]
+                }
             }),
             &ctx(),
         )
@@ -230,10 +225,7 @@ async fn multipart_then_restart_then_get() {
         .handle("GetObject", json!({"Bucket": bucket, "Key": key}), &ctx())
         .await
         .unwrap();
-    let mut expected = Vec::new();
-    expected.extend_from_slice(part1);
-    expected.extend_from_slice(part2);
-    assert_eq!(decode(&got), expected);
+    assert_eq!(decode(&got), part1);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

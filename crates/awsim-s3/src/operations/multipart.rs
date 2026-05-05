@@ -265,6 +265,13 @@ fn copy_source_range(data: &[u8], header: &str) -> Result<Vec<u8>, AwsError> {
 }
 
 /// POST /{Bucket}/{Key+}?uploadId={id} — complete a multipart upload.
+///
+/// AWS' Complete is "validate everything, then consume." A failure during
+/// validation (missing part, ETag mismatch, minimum-size violation, bad
+/// ordering, IO failure) leaves the upload intact so the client can retry.
+/// Only on a successful object write do we remove the upload metadata and
+/// drop the per-part blobs from disk. After that, a duplicate Complete
+/// returns NoSuchUpload, matching real S3.
 pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
@@ -275,11 +282,6 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
-    let (_, upload) = bucket
-        .multipart_uploads
-        .remove(upload_id)
-        .ok_or_else(|| no_such_upload(upload_id))?;
-
     let requested_parts = parse_complete_parts(input);
     if requested_parts.is_empty() {
         return Err(AwsError::bad_request(
@@ -287,40 +289,76 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
             "The XML you provided was not well-formed or did not validate against our published schema. At least one Part must be specified.",
         ));
     }
-
-    let mut combined_data: Vec<u8> = Vec::new();
-    let mut part_md5s: Vec<Vec<u8>> = Vec::new();
-    let mut part_count: usize = 0;
-    for (part_number, expected_etag) in &requested_parts {
-        let part = upload.parts.get(part_number).ok_or_else(|| {
-            AwsError::bad_request(
-                "InvalidPart",
-                format!("The specified upload does not contain a part with number {part_number}"),
-            )
-        })?;
-        if let Some(expected) = expected_etag
-            && part.etag != *expected
-        {
+    let mut last_seen: u32 = 0;
+    for (part_number, _) in &requested_parts {
+        if *part_number <= last_seen {
             return Err(AwsError::bad_request(
-                "InvalidPart",
-                format!(
-                    "ETag mismatch for part {part_number}: expected {expected}, got {}",
-                    part.etag
-                ),
+                "InvalidPartOrder",
+                "The list of parts was not in ascending order. Parts must be ordered by part number.",
             ));
         }
-        let bytes = part
-            .body
-            .read_all()
-            .map_err(|e| AwsError::internal(format!("read part body: {e}")))?;
-        let mut hasher = md5::Md5::new();
-        hasher.update(&bytes);
-        part_md5s.push(hasher.finalize().to_vec());
-        combined_data.extend_from_slice(&bytes);
-        part_count += 1;
+        last_seen = *part_number;
     }
 
-    let etag = compute_multipart_etag(&part_md5s, part_count);
+    let (combined_data, etag, content_type, metadata) = {
+        let upload = bucket
+            .multipart_uploads
+            .get(upload_id)
+            .ok_or_else(|| no_such_upload(upload_id))?;
+
+        let mut combined_data: Vec<u8> = Vec::new();
+        let mut part_md5s: Vec<Vec<u8>> = Vec::new();
+        let total_parts = requested_parts.len();
+        for (idx, (part_number, expected_etag)) in requested_parts.iter().enumerate() {
+            let part = upload.parts.get(part_number).ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidPart",
+                    format!(
+                        "One or more of the specified parts could not be found. The part might not have been uploaded, or the specified entity tag might not have matched the part's entity tag. Part number: {part_number}"
+                    ),
+                )
+            })?;
+            if let Some(expected) = expected_etag {
+                let expected = expected.trim_matches('"');
+                let actual = part.etag.trim_matches('"');
+                if expected != actual {
+                    return Err(AwsError::bad_request(
+                        "InvalidPart",
+                        format!(
+                            "Part number {part_number} does not match the supplied ETag. Expected: {expected}, actual: {actual}"
+                        ),
+                    ));
+                }
+            }
+            let bytes = part
+                .body
+                .read_all()
+                .map_err(|e| AwsError::internal(format!("read part body: {e}")))?;
+            let is_final = idx + 1 == total_parts;
+            if !is_final && bytes.len() < MIN_PART_SIZE {
+                return Err(AwsError::bad_request(
+                    "EntityTooSmall",
+                    format!(
+                        "Your proposed upload is smaller than the minimum allowed object size. Each part must be at least 5 MiB; part {part_number} is {} bytes.",
+                        bytes.len()
+                    ),
+                ));
+            }
+            let mut hasher = md5::Md5::new();
+            hasher.update(&bytes);
+            part_md5s.push(hasher.finalize().to_vec());
+            combined_data.extend_from_slice(&bytes);
+        }
+
+        let etag = compute_multipart_etag(&part_md5s, total_parts);
+        (
+            combined_data,
+            etag,
+            upload.content_type.clone(),
+            upload.metadata.clone(),
+        )
+    };
+
     let content_length = combined_data.len() as u64;
     let last_modified = now_rfc7231();
 
@@ -345,11 +383,11 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
     let obj = S3Object {
         key: key.to_string(),
         body,
-        content_type: upload.content_type.clone(),
+        content_type,
         content_length,
         etag: etag.clone(),
         last_modified,
-        metadata: upload.metadata.clone(),
+        metadata,
         version_id: version_id.clone(),
         tags: Default::default(),
         content_encoding: None,
@@ -366,6 +404,7 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
     super::object::record_version(&mut versions, obj, &status);
     drop(versions);
 
+    bucket.multipart_uploads.remove(upload_id);
     if let Some(store) = state.body_store()
         && let Err(e) = store.delete_bucket("multipart", &format!("{bucket_name}/{upload_id}"))
     {
@@ -386,6 +425,9 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
     }
     Ok(result)
 }
+
+/// AWS minimum part size for non-final parts in a multipart upload.
+const MIN_PART_SIZE: usize = 5 * 1024 * 1024;
 
 /// DELETE /{Bucket}/{Key+}?uploadId={id} — abort a multipart upload.
 pub fn abort_multipart_upload(state: &S3State, input: &Value) -> Result<Value, AwsError> {
@@ -608,5 +650,173 @@ mod tests {
         let upload = bucket.multipart_uploads.get(&upload_id).unwrap();
         let part = upload.parts.get(&1).unwrap();
         assert_eq!(part.body.read_all().unwrap(), b"cdef");
+    }
+
+    /// Helper: stage a single-part upload of `payload` and return the upload id
+    /// plus the ETag the server assigned to part 1.
+    fn stage_single_part_upload(payload: &[u8]) -> (S3State, String, String) {
+        let state = S3State::default();
+        let bucket = Bucket::new("dst", "us-east-1", "now");
+        state.buckets.insert("dst".to_string(), bucket);
+        let init =
+            create_multipart_upload(&state, &json!({"Bucket": "dst", "Key": "obj"})).unwrap();
+        let upload_id = init["UploadId"].as_str().unwrap().to_string();
+        let part = upload_part(
+            &state,
+            &json!({
+                "Bucket": "dst",
+                "Key": "obj",
+                "uploadId": upload_id,
+                "partNumber": "1",
+                "__raw_body": base64::engine::general_purpose::STANDARD.encode(payload),
+            }),
+        )
+        .unwrap();
+        let etag = part["ETag"].as_str().unwrap().to_string();
+        (state, upload_id, etag)
+    }
+
+    #[test]
+    fn complete_with_invalid_etag_leaves_upload_intact_for_retry() {
+        let (state, upload_id, _real_etag) = stage_single_part_upload(b"hello");
+        let bad_etag = "\"deadbeef\"";
+
+        let err = complete_multipart_upload(
+            &state,
+            &json!({
+                "Bucket": "dst",
+                "Key": "obj",
+                "uploadId": upload_id,
+                "CompleteMultipartUpload": {
+                    "Part": [{"PartNumber": "1", "ETag": bad_etag}]
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidPart");
+
+        // Upload still exists — retry with the right ETag must succeed.
+        let bucket = state.buckets.get("dst").unwrap();
+        assert!(bucket.multipart_uploads.contains_key(&upload_id));
+    }
+
+    #[test]
+    fn complete_with_unknown_part_leaves_upload_intact_for_retry() {
+        let (state, upload_id, _) = stage_single_part_upload(b"hello");
+
+        let err = complete_multipart_upload(
+            &state,
+            &json!({
+                "Bucket": "dst",
+                "Key": "obj",
+                "uploadId": upload_id,
+                "CompleteMultipartUpload": {
+                    "Part": [{"PartNumber": "7"}]
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidPart");
+
+        let bucket = state.buckets.get("dst").unwrap();
+        assert!(bucket.multipart_uploads.contains_key(&upload_id));
+    }
+
+    #[test]
+    fn complete_rejects_non_ascending_part_order() {
+        let (state, upload_id, _) = stage_single_part_upload(b"hello");
+
+        let err = complete_multipart_upload(
+            &state,
+            &json!({
+                "Bucket": "dst",
+                "Key": "obj",
+                "uploadId": upload_id,
+                "CompleteMultipartUpload": {
+                    "Part": [
+                        {"PartNumber": "2"},
+                        {"PartNumber": "1"}
+                    ]
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidPartOrder");
+    }
+
+    #[test]
+    fn complete_rejects_non_final_part_under_5mib() {
+        let state = S3State::default();
+        let bucket = Bucket::new("dst", "us-east-1", "now");
+        state.buckets.insert("dst".to_string(), bucket);
+        let init =
+            create_multipart_upload(&state, &json!({"Bucket": "dst", "Key": "obj"})).unwrap();
+        let upload_id = init["UploadId"].as_str().unwrap().to_string();
+        // Two small parts — part 1 is non-final, so it must be ≥ 5 MiB.
+        for n in 1..=2 {
+            upload_part(
+                &state,
+                &json!({
+                    "Bucket": "dst",
+                    "Key": "obj",
+                    "uploadId": upload_id,
+                    "partNumber": n.to_string(),
+                    "__raw_body": base64::engine::general_purpose::STANDARD.encode(b"small"),
+                }),
+            )
+            .unwrap();
+        }
+
+        let err = complete_multipart_upload(
+            &state,
+            &json!({
+                "Bucket": "dst",
+                "Key": "obj",
+                "uploadId": upload_id,
+                "CompleteMultipartUpload": {
+                    "Part": [
+                        {"PartNumber": "1"},
+                        {"PartNumber": "2"}
+                    ]
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "EntityTooSmall");
+    }
+
+    #[test]
+    fn complete_succeeds_then_duplicate_returns_no_such_upload() {
+        let (state, upload_id, etag) = stage_single_part_upload(b"hello");
+
+        complete_multipart_upload(
+            &state,
+            &json!({
+                "Bucket": "dst",
+                "Key": "obj",
+                "uploadId": upload_id,
+                "CompleteMultipartUpload": {
+                    "Part": [{"PartNumber": "1", "ETag": etag}]
+                }
+            }),
+        )
+        .unwrap();
+
+        let bucket = state.buckets.get("dst").unwrap();
+        assert!(!bucket.multipart_uploads.contains_key(&upload_id));
+
+        let err = complete_multipart_upload(
+            &state,
+            &json!({
+                "Bucket": "dst",
+                "Key": "obj",
+                "uploadId": upload_id,
+                "CompleteMultipartUpload": {
+                    "Part": [{"PartNumber": "1"}]
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NoSuchUpload");
     }
 }
