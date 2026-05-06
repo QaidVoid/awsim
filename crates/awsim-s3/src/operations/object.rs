@@ -5,7 +5,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::state::{ObjectVersions, S3Object, S3State, VersioningStatus};
+use crate::state::{Bucket, ObjectVersions, S3Object, S3State, VersioningStatus};
 use crate::util::{compute_etag, now_iso8601, now_rfc7231, parse_rfc7231};
 
 use super::bucket::no_such_bucket;
@@ -18,6 +18,113 @@ enum ConditionOutcome {
     /// `If-None-Match` matched (or `If-Modified-Since` failed): respond 304
     /// with metadata headers and no body.
     NotModified,
+}
+
+/// Check whether `key` is currently locked against modification or deletion
+/// by an Object Lock retention or legal hold.
+///
+/// Real S3 enforces:
+/// - Legal hold "ON" -> blocks delete and overwrite until cleared, regardless
+///   of retention mode.
+/// - Retention "GOVERNANCE" -> blocks until RetainUntilDate, but a caller
+///   that supplies `x-amz-bypass-governance-retention: true` may proceed.
+/// - Retention "COMPLIANCE" -> blocks until RetainUntilDate, never bypassable.
+fn check_object_lock(
+    bucket: &Bucket,
+    key: &str,
+    bypass_governance: bool,
+) -> Result<(), AwsError> {
+    if let Some(raw) = bucket.configs.get(&format!("legal-hold:{key}"))
+        && let Ok(parsed) = serde_json::from_str::<Value>(raw)
+        && parsed.get("Status").and_then(Value::as_str) == Some("ON")
+    {
+        return Err(AwsError::bad_request(
+            "AccessDenied",
+            format!("Object '{key}' is under a legal hold"),
+        ));
+    }
+
+    if let Some(raw) = bucket.configs.get(&format!("retention:{key}"))
+        && let Ok(parsed) = serde_json::from_str::<Value>(raw)
+    {
+        let mode = parsed
+            .get("Mode")
+            .and_then(Value::as_str)
+            .unwrap_or("GOVERNANCE");
+        let until = parsed
+            .get("RetainUntilDate")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let until_secs = parse_iso8601_or_rfc7231(until);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if let Some(until_secs) = until_secs
+            && until_secs > now
+        {
+            if mode == "COMPLIANCE" {
+                return Err(AwsError::bad_request(
+                    "AccessDenied",
+                    format!(
+                        "Object '{key}' is under a COMPLIANCE retention until {until}"
+                    ),
+                ));
+            }
+            if mode == "GOVERNANCE" && !bypass_governance {
+                return Err(AwsError::bad_request(
+                    "AccessDenied",
+                    format!(
+                        "Object '{key}' is under GOVERNANCE retention until {until}; \
+                         set x-amz-bypass-governance-retention to override"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_iso8601_or_rfc7231(s: &str) -> Option<i64> {
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(secs) = parse_rfc7231(s) {
+        return Some(secs);
+    }
+    // Best-effort ISO 8601 parser: `YYYY-MM-DDTHH:MM:SS[.fff]Z`. Only the
+    // up-to-second prefix is needed for retention comparisons.
+    let main = s.split('.').next()?.trim_end_matches('Z');
+    let mut parts = main.split('T');
+    let date = parts.next()?;
+    let time = parts.next().unwrap_or("00:00:00");
+    let mut d = date.split('-');
+    let y: i64 = d.next()?.parse().ok()?;
+    let mo: i64 = d.next()?.parse().ok()?;
+    let dd: i64 = d.next()?.parse().ok()?;
+    let mut t = time.split(':');
+    let h: i64 = t.next()?.parse().ok()?;
+    let mi: i64 = t.next()?.parse().ok()?;
+    let se: i64 = t.next().unwrap_or("0").parse().ok()?;
+    if y < 1970 {
+        return None;
+    }
+    let is_leap = |yy: i64| (yy % 4 == 0 && yy % 100 != 0) || yy % 400 == 0;
+    let mut days: i64 = 0;
+    for yy in 1970..y {
+        days += if is_leap(yy) { 366 } else { 365 };
+    }
+    let leap = is_leap(y);
+    let monthly: [i64; 12] = if leap {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+    for &dim in monthly.iter().take((mo - 1) as usize) {
+        days += dim;
+    }
+    days += dd - 1;
+    Some(days * 86400 + h * 3600 + mi * 60 + se)
 }
 
 /// Compare an `If-Match` / `If-None-Match` header value against an ETag.
@@ -295,6 +402,24 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
 
     let metadata = extract_user_metadata(input);
     let (checksum_algorithm, checksum_value) = parse_request_checksum(input)?;
+    let bypass_governance = input
+        .get("BypassGovernanceRetention")
+        .and_then(Value::as_str)
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    // PutObject on a non-versioned bucket overwrites the existing object,
+    // which counts as a modification under Object Lock. On versioned buckets
+    // the previous version is preserved, so the lock has nothing to defend.
+    {
+        let bucket = state
+            .buckets
+            .get(bucket_name)
+            .ok_or_else(|| no_such_bucket(bucket_name))?;
+        if matches!(bucket.versioning, VersioningStatus::Disabled) {
+            check_object_lock(&bucket, key, bypass_governance)?;
+        }
+    }
 
     // Verify any caller-supplied integrity headers against the body before
     // we commit it to storage. Real S3 rejects mismatches with BadDigest.
@@ -561,11 +686,26 @@ pub fn delete_object(state: &S3State, input: &Value) -> Result<Value, AwsError> 
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
     let requested_version = version_id_input(input);
+    let bypass_governance = input
+        .get("BypassGovernanceRetention")
+        .and_then(Value::as_str)
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
 
     let bucket = state
         .buckets
         .get(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
+
+    // Object Lock applies to permanent deletes (per-version delete and
+    // delete-on-non-versioned-bucket). Creating a delete marker on a
+    // versioned bucket leaves the underlying versions untouched, so the
+    // lock check is skipped in that case.
+    let needs_lock_check = requested_version.is_some()
+        || matches!(bucket.versioning, VersioningStatus::Disabled);
+    if needs_lock_check {
+        check_object_lock(&bucket, key, bypass_governance)?;
+    }
 
     let mut response = json!({});
 
@@ -1437,5 +1577,102 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "PreconditionFailed");
+    }
+
+    fn put_with_legal_hold(state: &S3State, bucket: &str, key: &str) {
+        put_and_get_etag(state, bucket, key, "hello");
+        let mut b = state.buckets.get_mut(bucket).unwrap();
+        b.configs
+            .insert(format!("legal-hold:{key}"), r#"{"Status":"ON"}"#.to_string());
+    }
+
+    fn put_with_compliance_retention(
+        state: &S3State,
+        bucket: &str,
+        key: &str,
+        until_iso: &str,
+    ) {
+        put_and_get_etag(state, bucket, key, "hello");
+        let mut b = state.buckets.get_mut(bucket).unwrap();
+        b.configs.insert(
+            format!("retention:{key}"),
+            format!(r#"{{"Mode":"COMPLIANCE","RetainUntilDate":"{until_iso}"}}"#),
+        );
+    }
+
+    fn put_with_governance_retention(
+        state: &S3State,
+        bucket: &str,
+        key: &str,
+        until_iso: &str,
+    ) {
+        put_and_get_etag(state, bucket, key, "hello");
+        let mut b = state.buckets.get_mut(bucket).unwrap();
+        b.configs.insert(
+            format!("retention:{key}"),
+            format!(r#"{{"Mode":"GOVERNANCE","RetainUntilDate":"{until_iso}"}}"#),
+        );
+    }
+
+    #[test]
+    fn legal_hold_blocks_delete_on_unversioned_bucket() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        put_with_legal_hold(&state, "b", "k");
+        let err =
+            delete_object(&state, &json!({ "Bucket": "b", "Key": "k" })).unwrap_err();
+        assert_eq!(err.code, "AccessDenied");
+    }
+
+    #[test]
+    fn compliance_retention_blocks_delete_even_with_bypass() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        put_with_compliance_retention(&state, "b", "k", "2999-01-01T00:00:00Z");
+        let err = delete_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "k", "BypassGovernanceRetention": "true" }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AccessDenied");
+    }
+
+    #[test]
+    fn governance_retention_can_be_bypassed_explicitly() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        put_with_governance_retention(&state, "b", "k", "2999-01-01T00:00:00Z");
+        // Without the bypass header: blocked.
+        let err =
+            delete_object(&state, &json!({ "Bucket": "b", "Key": "k" })).unwrap_err();
+        assert_eq!(err.code, "AccessDenied");
+        // With the bypass header: allowed.
+        delete_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "k", "BypassGovernanceRetention": "true" }),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn expired_retention_does_not_block_delete() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        put_with_compliance_retention(&state, "b", "k", "1971-01-01T00:00:00Z");
+        delete_object(&state, &json!({ "Bucket": "b", "Key": "k" })).unwrap();
+    }
+
+    #[test]
+    fn legal_hold_blocks_overwrite_on_unversioned_bucket() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        put_with_legal_hold(&state, "b", "k");
+        let err = put_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "k", "Body": "second" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AccessDenied");
     }
 }
