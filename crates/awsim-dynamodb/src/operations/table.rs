@@ -615,7 +615,13 @@ pub fn update_table(
         }
     }
 
-    // Update GSI (add new ones from GlobalSecondaryIndexUpdates)
+    // Update GSI (add new ones from GlobalSecondaryIndexUpdates).
+    // Track whether the index set changed: if so, re-project every
+    // existing item's GSI key columns. AWS handles this as an
+    // asynchronous backfill (status CREATING -> ACTIVE), but a local
+    // emulator can do it synchronously: small enough tables to make
+    // it tractable, and tests immediately get queryable results.
+    let mut gsi_set_changed = false;
     if let Some(gsi_updates) = input
         .get("GlobalSecondaryIndexUpdates")
         .and_then(|v| v.as_array())
@@ -635,12 +641,34 @@ pub fn update_table(
                     projection,
                     status: "ACTIVE".to_string(),
                 });
+                gsi_set_changed = true;
             } else if let Some(delete) = update.get("Delete")
                 && let Some(index_name) = delete.get("IndexName").and_then(|v| v.as_str())
             {
                 table.gsi.retain(|g| g.index_name != index_name);
+                gsi_set_changed = true;
             }
         }
+    }
+
+    if gsi_set_changed {
+        // Snapshot the table schema and drop the dashmap guard so the
+        // SQLite scan + reprojection pass doesn't hold the cross-shard
+        // lock for the duration.
+        let snapshot = table.clone();
+        drop(table);
+        reproject_gsi_columns(sqlite, ctx, &snapshot)?;
+        let table = state.tables.get(table_name).ok_or_else(|| {
+            AwsError::service_not_found(
+                "ResourceNotFoundException",
+                format!("Table disappeared during GSI reprojection: {table_name}"),
+            )
+        })?;
+        let count = sqlite
+            .count_items(&ctx.account_id, &ctx.region, table_name)
+            .unwrap_or(0);
+        let desc = table_description(&table, count);
+        return Ok(json!({ "TableDescription": desc }));
     }
 
     let count = sqlite
@@ -648,6 +676,57 @@ pub fn update_table(
         .unwrap_or(0);
     let desc = table_description(&table, count);
     Ok(json!({ "TableDescription": desc }))
+}
+
+/// Walk every item in `table` and rewrite its `gsi{N}_pk` / `gsi{N}_sk`
+/// columns to match the current `table.gsi` set. Used after a GSI is
+/// added or removed so existing items are visible (or no longer
+/// visible) to queries against the affected index.
+///
+/// This is the synchronous local-emulator equivalent of AWS's async
+/// GSI backfill, where new items would land in CREATING state and
+/// get backfilled in the background. We pull the full row set into
+/// memory first to avoid holding both a read cursor and a write
+/// connection at the same time; tables in awsim are intentionally
+/// small enough that this is fine, and a `--data-dir` deployment
+/// with very large tables can still use the operation - it just
+/// takes proportional time.
+fn reproject_gsi_columns(
+    sqlite: &SqliteStore,
+    ctx: &RequestContext,
+    table: &crate::state::Table,
+) -> Result<(), AwsError> {
+    let mut rows: Vec<(String, String, serde_json::Value)> = Vec::new();
+    sqlite.scan_table(
+        &ctx.account_id,
+        &ctx.region,
+        &table.name,
+        None,
+        |pk, sk, attrs| {
+            rows.push((pk.to_string(), sk.to_string(), attrs));
+            Ok(true)
+        },
+    )?;
+    for (pk, sk, attrs) in rows {
+        let item = match crate::keys::storage_value_to_item(attrs.clone()) {
+            Some(i) => i,
+            None => continue,
+        };
+        let keys = match crate::keys::extract_item_keys(table, &item) {
+            Some(k) => k,
+            None => continue,
+        };
+        sqlite.put_item(
+            &ctx.account_id,
+            &ctx.region,
+            &table.name,
+            &pk,
+            &sk,
+            &attrs,
+            &keys.gsi,
+        )?;
+    }
+    Ok(())
 }
 
 // ─── DescribeEndpoints ────────────────────────────────────────────────────────
@@ -1726,5 +1805,178 @@ mod tests {
             .filter_map(|v| v["GlobalTableName"].as_str().map(String::from))
             .collect();
         assert_eq!(names, vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn update_table_add_gsi_backfills_existing_items() {
+        use crate::operations::item::put_item;
+        use crate::operations::query::query;
+        use crate::sqlite_store::SqliteStore;
+
+        let state = state_with_table("t");
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+
+        // Seed three items before the GSI exists. They carry the future
+        // GSI key attribute already; the index-maintenance step on
+        // PutItem just doesn't have a GSI to project them into yet.
+        for i in 0..3 {
+            put_item(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "Item": {
+                        "pk":  { "S": format!("p-{i}") },
+                        "tag": { "S": "shared" },
+                    },
+                }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        // Querying the GSI before it exists must fail with the
+        // 'no such index' validation error.
+        let err = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "IndexName": "byTag",
+                "KeyConditionExpression": "tag = :t",
+                "ExpressionAttributeValues": { ":t": { "S": "shared" } },
+            }),
+            &c,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+
+        // Add the GSI through UpdateTable. This is where backfill must
+        // happen: the three pre-existing items need their gsi1_pk
+        // column set so the subsequent query finds them.
+        update_table(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "GlobalSecondaryIndexUpdates": [{
+                    "Create": {
+                        "IndexName": "byTag",
+                        "KeySchema": [{ "AttributeName": "tag", "KeyType": "HASH" }],
+                        "Projection": { "ProjectionType": "ALL" }
+                    }
+                }]
+            }),
+            &c,
+        )
+        .unwrap();
+
+        let resp = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "IndexName": "byTag",
+                "KeyConditionExpression": "tag = :t",
+                "ExpressionAttributeValues": { ":t": { "S": "shared" } },
+            }),
+            &c,
+        )
+        .unwrap();
+        // All three pre-existing items must surface from the new index.
+        assert_eq!(resp["Count"], json!(3));
+    }
+
+    #[test]
+    fn update_table_drop_gsi_clears_columns() {
+        use crate::operations::item::put_item;
+        use crate::operations::query::query;
+        use crate::sqlite_store::SqliteStore;
+        use crate::state::{GlobalSecondaryIndex, Projection};
+
+        // Start with a GSI in place, seed an item, then drop the GSI.
+        // After the drop, querying it should fail with ValidationException
+        // because the index no longer exists.
+        let state = DynamoState::default();
+        state.tables.insert(
+            "t".to_string(),
+            Table {
+                name: "t".into(),
+                arn: "arn:aws:dynamodb:us-east-1:000000000000:table/t".into(),
+                key_schema: vec![KeySchemaElement {
+                    attribute_name: "pk".into(),
+                    key_type: "HASH".into(),
+                }],
+                attribute_definitions: vec![],
+                billing_mode: "PAY_PER_REQUEST".into(),
+                status: "ACTIVE".into(),
+                created_at: 0.0,
+                gsi: vec![GlobalSecondaryIndex {
+                    index_name: "byTag".into(),
+                    key_schema: vec![KeySchemaElement {
+                        attribute_name: "tag".into(),
+                        key_type: "HASH".into(),
+                    }],
+                    projection: Projection {
+                        projection_type: "ALL".into(),
+                        non_key_attributes: vec![],
+                    },
+                    status: "ACTIVE".into(),
+                }],
+                lsi: vec![],
+                stream_enabled: false,
+                stream_arn: None,
+                stream_view_type: None,
+                stream_records: VecDeque::new(),
+                stream_sequence: 0,
+                ttl: Default::default(),
+                tags: Default::default(),
+                deletion_protection_enabled: false,
+                sse: Default::default(),
+                read_capacity_units: 0,
+                write_capacity_units: 0,
+            },
+        );
+
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": { "pk": { "S": "p1" }, "tag": { "S": "shared" } },
+            }),
+            &c,
+        )
+        .unwrap();
+
+        update_table(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "GlobalSecondaryIndexUpdates": [{
+                    "Delete": { "IndexName": "byTag" }
+                }]
+            }),
+            &c,
+        )
+        .unwrap();
+
+        let err = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "IndexName": "byTag",
+                "KeyConditionExpression": "tag = :t",
+                "ExpressionAttributeValues": { ":t": { "S": "shared" } },
+            }),
+            &c,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 }
