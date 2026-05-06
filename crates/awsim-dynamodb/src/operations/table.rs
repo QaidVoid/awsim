@@ -709,11 +709,17 @@ pub fn update_table(
                     vec![(index_name.as_str(), &key_schema)];
                 validate_key_schema_against_attrs(&effective_attrs, &owners)?;
                 table.attribute_definitions = effective_attrs;
+                // Real AWS reports CREATING while the backfill is in
+                // flight and ACTIVE once the index is queryable. Even
+                // though awsim runs the backfill synchronously, we set
+                // the status to CREATING here so a concurrent
+                // DescribeTable seen between this lock drop and the
+                // post-backfill flip below sees an honest snapshot.
                 table.gsi.push(GlobalSecondaryIndex {
                     index_name: index_name.clone(),
                     key_schema,
                     projection,
-                    status: "ACTIVE".to_string(),
+                    status: "CREATING".to_string(),
                 });
                 gsi_set_changed = true;
             } else if let Some(delete) = update.get("Delete")
@@ -732,6 +738,17 @@ pub fn update_table(
         let snapshot = table.clone();
         drop(table);
         reproject_gsi_columns(sqlite, ctx, &snapshot)?;
+        // Backfill complete: flip every CREATING index to ACTIVE.
+        // We grab a fresh mutable borrow so a parallel DescribeTable
+        // that came in during the reprojection sees CREATING, then
+        // immediately the post-flip ACTIVE on its next call.
+        if let Some(mut t) = state.tables.get_mut(table_name) {
+            for g in t.gsi.iter_mut() {
+                if g.status == "CREATING" || g.status == "UPDATING" {
+                    g.status = "ACTIVE".to_string();
+                }
+            }
+        }
         let table = state.tables.get(table_name).ok_or_else(|| {
             AwsError::service_not_found(
                 "ResourceNotFoundException",
@@ -2108,6 +2125,41 @@ mod tests {
             &ctx(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn update_table_returns_active_status_on_added_gsi() {
+        // The synchronous in-line backfill flips the index from
+        // CREATING (its initial state) to ACTIVE before update_table
+        // returns, so apps that DescribeTable straight after see a
+        // queryable index without a polling loop.
+        use crate::sqlite_store::SqliteStore;
+        let state = state_with_table("t");
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let resp = update_table(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "AttributeDefinitions": [
+                    { "AttributeName": "tag", "AttributeType": "S" }
+                ],
+                "GlobalSecondaryIndexUpdates": [{
+                    "Create": {
+                        "IndexName": "byTag",
+                        "KeySchema": [{ "AttributeName": "tag", "KeyType": "HASH" }],
+                        "Projection": { "ProjectionType": "ALL" }
+                    }
+                }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let gsis = resp["TableDescription"]["GlobalSecondaryIndexes"]
+            .as_array()
+            .expect("GSI list present");
+        assert_eq!(gsis.len(), 1);
+        assert_eq!(gsis[0]["IndexStatus"].as_str(), Some("ACTIVE"));
     }
 
     #[test]
