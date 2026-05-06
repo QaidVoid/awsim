@@ -381,6 +381,23 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
         Vec::new()
     };
 
+    // Cap single-PUT bodies. Real S3 rejects single-object uploads above
+    // 5 GiB with `EntityTooLarge` and tells the caller to use multipart.
+    // Without this gate awsim would happily buffer an arbitrary upload in
+    // memory, and a single curl-piped pseudo-infinite stream would trip
+    // the OOM killer.
+    const MAX_SINGLE_PUT_BYTES: usize = 5 * 1024 * 1024 * 1024;
+    if data.len() > MAX_SINGLE_PUT_BYTES {
+        return Err(AwsError::bad_request(
+            "EntityTooLarge",
+            format!(
+                "PutObject body of {} bytes exceeds the 5 GiB single-PUT cap; \
+                 use the multipart upload API instead",
+                data.len()
+            ),
+        ));
+    }
+
     // Collect x-amz-meta-* entries that arrived as PascalCase headers.
     // The gateway strips "x-amz-" prefix and converts to PascalCase via header_to_param_name.
     // We re-extract metadata from the input object: any key starting with "Meta" that isn't
