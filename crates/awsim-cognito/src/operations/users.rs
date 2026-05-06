@@ -627,46 +627,58 @@ pub fn forgot_password(
         .iter()
         .find(|e| e.clients.contains_key(client_id));
 
-    if pool_entry.is_none() {
-        return Err(AwsError::not_found(
-            "ResourceNotFoundException",
-            format!("No pool found for client: {client_id}"),
-        ));
-    }
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
         AwsError::not_found(
             "ResourceNotFoundException",
             format!("No pool found for client: {client_id}"),
         )
     })?;
-    let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-        AwsError::not_found(
-            "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
-        )
-    })?;
 
-    if !pool.users.contains_key(username) {
-        return Err(AwsError::not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        ));
-    }
-
-    let dest = pool
-        .users
-        .get(username)
-        .and_then(|u| u.attributes.get("email").cloned())
-        .unwrap_or_else(|| "***@example.com".to_string());
-
-    // Custom Message trigger (fire-and-forget)
-    if let Some(arn) = pool.lambda_config.get("CustomMessage") {
-        let trigger_event = json!({
-            "userPoolId": pool_id,
-            "userName": username,
-            "triggerSource": "CustomMessage_ForgotPassword"
-        });
-        invoke_trigger(ctx, "CustomMessage_ForgotPassword", arn, &trigger_event);
+    // Generate + persist a 6-digit code so ConfirmForgotPassword has
+    // something to validate against. We log it at info level so devs
+    // can grab it from the awsim console — a real Cognito would email
+    // it. Stashed under the existing `pending_verifications` map with
+    // the conventional key `forgot_password`.
+    let code = generate_reset_code();
+    let dest;
+    {
+        let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("User pool not found: {pool_id}"),
+            )
+        })?;
+        let lambda_arn = pool.lambda_config.get("CustomMessage").cloned();
+        let user = pool.users.get_mut(username).ok_or_else(|| {
+            AwsError::not_found(
+                "UserNotFoundException",
+                format!("User not found: {username}"),
+            )
+        })?;
+        user.pending_verifications
+            .insert(FORGOT_PASSWORD_KEY.to_string(), code.clone());
+        dest = user
+            .attributes
+            .get("email")
+            .cloned()
+            .unwrap_or_else(|| "***@example.com".to_string());
+        info!(
+            username = %username,
+            pool_id = %pool_id,
+            code = %code,
+            "Cognito: ForgotPassword code issued (dev: also visible at /cognito/<pool>/oauth2/forgot-password/confirm)"
+        );
+        // Custom Message trigger (fire-and-forget) — kept here so the
+        // immutable Lambda ARN we cloned out is still in scope.
+        if let Some(arn) = lambda_arn {
+            let trigger_event = json!({
+                "userPoolId": pool_id,
+                "userName": username,
+                "triggerSource": "CustomMessage_ForgotPassword",
+                "codeParameter": code,
+            });
+            invoke_trigger(ctx, "CustomMessage_ForgotPassword", &arn, &trigger_event);
+        }
     }
 
     Ok(json!({
@@ -676,6 +688,16 @@ pub fn forgot_password(
             "Destination": dest
         }
     }))
+}
+
+/// Convention key for the stored ForgotPassword code on each user's
+/// `pending_verifications` map.
+pub(crate) const FORGOT_PASSWORD_KEY: &str = "forgot_password";
+
+fn generate_reset_code() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    format!("{:06}", rng.gen_range(0..1_000_000u32))
 }
 
 // ---------------------------------------------------------------------------
@@ -696,6 +718,9 @@ pub fn confirm_forgot_password(
     let password = input["Password"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Password is required"))?;
+    let confirmation_code = input["ConfirmationCode"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "ConfirmationCode is required")
+    })?;
 
     let pool_entry = state
         .user_pools
@@ -724,6 +749,24 @@ pub fn confirm_forgot_password(
         )
     })?;
 
+    let expected = user
+        .pending_verifications
+        .get(FORGOT_PASSWORD_KEY)
+        .cloned()
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "ExpiredCodeException",
+                "No active forgot-password code for this user",
+            )
+        })?;
+    if expected != confirmation_code {
+        return Err(AwsError::bad_request(
+            "CodeMismatchException",
+            "Invalid verification code provided, please try again.",
+        ));
+    }
+
+    user.pending_verifications.remove(FORGOT_PASSWORD_KEY);
     user.password = password.to_string();
     user.status = "CONFIRMED".to_string();
     user.failed_login_attempts = 0;
@@ -947,13 +990,47 @@ pub fn admin_update_user_attributes(
         )
     })?;
 
-    let new_attrs = parse_user_attributes(input, "UserAttributes");
-    for (k, v) in new_attrs {
-        user.attributes.insert(k, v);
-    }
+    apply_attribute_updates(user, parse_user_attributes(input, "UserAttributes"))?;
 
     info!(username = %username, pool_id = %pool_id, "Cognito: admin updated user attributes");
     Ok(json!({}))
+}
+
+/// Merge a set of attribute updates into a user, mirroring the
+/// invariants real AWS Cognito enforces:
+///
+/// - `sub` is auto-generated and read-only — attempting to change it
+///   returns `InvalidParameterException`.
+/// - Mutating `email` or `phone_number` flips the corresponding
+///   `_verified` flag back to `false` so we don't accidentally promote
+///   an unverified address.
+fn apply_attribute_updates(
+    user: &mut CognitoUser,
+    new_attrs: HashMap<String, String>,
+) -> Result<(), AwsError> {
+    for (k, v) in new_attrs {
+        if k == "sub" {
+            if user.attributes.get("sub").map(String::as_str) == Some(v.as_str()) {
+                continue;
+            }
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                "user.sub is read-only",
+            ));
+        }
+        if k == "email" && user.attributes.get("email").map(String::as_str) != Some(v.as_str()) {
+            user.attributes
+                .insert("email_verified".to_string(), "false".to_string());
+        }
+        if k == "phone_number"
+            && user.attributes.get("phone_number").map(String::as_str) != Some(v.as_str())
+        {
+            user.attributes
+                .insert("phone_number_verified".to_string(), "false".to_string());
+        }
+        user.attributes.insert(k, v);
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1025,9 +1102,7 @@ pub fn update_user_attributes(
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
-            for (k, v) in new_attrs {
-                user.attributes.insert(k, v);
-            }
+            apply_attribute_updates(user, new_attrs)?;
             return Ok(json!({ "CodeDeliveryDetailsList": [] }));
         }
     }

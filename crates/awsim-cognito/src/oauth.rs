@@ -106,6 +106,15 @@ pub fn router(state: Arc<CognitoOAuthState>) -> axum::Router {
             axum::routing::post(revoke),
         )
         .route("/cognito/{pool_id}/logout", axum::routing::get(logout))
+        .route(
+            "/cognito/{pool_id}/oauth2/forgot-password",
+            axum::routing::get(forgot_password_get).post(forgot_password_post),
+        )
+        .route(
+            "/cognito/{pool_id}/oauth2/forgot-password/confirm",
+            axum::routing::get(forgot_password_confirm_get)
+                .post(forgot_password_confirm_post),
+        )
         .with_state(state)
 }
 
@@ -239,6 +248,19 @@ fn escape_html(s: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+/// Build a `&`-joined query string from `(key, value)` pairs, skipping
+/// empty values. Used to forward OAuth params across hosted-UI pages
+/// (login → forgot-password → confirm) so the user lands back on
+/// `/authorize` with PKCE/state intact after a password reset.
+fn build_oauth_query(pairs: &[(&str, &str)]) -> String {
+    pairs
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| format!("{}={}", urlencoding(k), urlencoding(v)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
 #[allow(clippy::too_many_arguments)]
 fn login_page_html(
     pool_id: &str,
@@ -267,6 +289,20 @@ fn login_page_html(
     let code_challenge_e = escape_html(code_challenge);
     let code_challenge_method_e = escape_html(code_challenge_method);
     let username_e = prefill_username.map(escape_html).unwrap_or_default();
+    // Carry every OAuth parameter onto the forgot-password page so the
+    // confirm step can hop back to /authorize without losing PKCE +
+    // state.
+    let forgot_query = build_oauth_query(&[
+        ("response_type", response_type),
+        ("client_id", client_id),
+        ("redirect_uri", redirect_uri),
+        ("scope", scope),
+        ("state", state_param),
+        ("nonce", nonce),
+        ("code_challenge", code_challenge),
+        ("code_challenge_method", code_challenge_method),
+    ]);
+    let forgot_query_e = escape_html(&forgot_query);
 
     let html = format!(
         r#"<!DOCTYPE html>
@@ -280,6 +316,9 @@ button {{ width: 100%; padding: 10px; background: #ea580c; border: none; border-
 button:hover {{ background: #f97316; }}
 .pool {{ color: #71717a; font-size: 12px; margin-bottom: 16px; }}
 .error {{ background: #450a0a; border: 1px solid #991b1b; border-radius: 6px; padding: 10px; margin-bottom: 12px; color: #fca5a5; font-size: 14px; }}
+.links {{ margin-top: 16px; font-size: 13px; text-align: center; }}
+.links a {{ color: #fb923c; text-decoration: none; }}
+.links a:hover {{ text-decoration: underline; }}
 </style></head>
 <body>
 <div class="card">
@@ -299,6 +338,7 @@ button:hover {{ background: #f97316; }}
 <input type="password" name="password" placeholder="Password" required>
 <button type="submit">Sign In</button>
 </form>
+<div class="links"><a href="/cognito/{pool_id_e}/oauth2/forgot-password?{forgot_query_e}">Forgot password?</a></div>
 </div></body></html>"#
     );
 
@@ -380,6 +420,192 @@ button:hover {{ background: #f97316; }}
 </div></body></html>"#
     );
 
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/html; charset=utf-8")
+        .body(Body::from(html))
+        .expect("well-known header values cannot fail")
+}
+
+/// Render the "request a reset code" page (forgot-password step 1).
+#[allow(clippy::too_many_arguments)]
+fn forgot_password_page_html(
+    pool_id: &str,
+    response_type: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    scope: &str,
+    state_param: &str,
+    nonce: &str,
+    code_challenge: &str,
+    code_challenge_method: &str,
+    error_msg: Option<&str>,
+    info_msg: Option<&str>,
+    prefill_username: Option<&str>,
+) -> Response {
+    let pool_id_e = escape_html(pool_id);
+    let username_e = prefill_username.map(escape_html).unwrap_or_default();
+    let error_html = error_msg
+        .map(|e| format!(r#"<div class="error">{}</div>"#, escape_html(e)))
+        .unwrap_or_default();
+    let info_html = info_msg
+        .map(|m| format!(r#"<div class="notice">{}</div>"#, escape_html(m)))
+        .unwrap_or_default();
+    let oauth_query = build_oauth_query(&[
+        ("response_type", response_type),
+        ("client_id", client_id),
+        ("redirect_uri", redirect_uri),
+        ("scope", scope),
+        ("state", state_param),
+        ("nonce", nonce),
+        ("code_challenge", code_challenge),
+        ("code_challenge_method", code_challenge_method),
+    ]);
+    let oauth_query_e = escape_html(&oauth_query);
+    let response_type_e = escape_html(response_type);
+    let client_id_e = escape_html(client_id);
+    let redirect_uri_e = escape_html(redirect_uri);
+    let scope_e = escape_html(scope);
+    let state_param_e = escape_html(state_param);
+    let nonce_e = escape_html(nonce);
+    let code_challenge_e = escape_html(code_challenge);
+    let code_challenge_method_e = escape_html(code_challenge_method);
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html><head><title>AWSim Forgot Password</title>
+<style>
+body {{ font-family: sans-serif; background: #18181b; color: #e4e4e7; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
+.card {{ background: #27272a; border: 1px solid #3f3f46; border-radius: 12px; padding: 32px; width: 360px; }}
+h2 {{ margin-top: 0; color: #fb923c; }}
+input {{ width: 100%; padding: 10px; margin: 8px 0; background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; box-sizing: border-box; }}
+button {{ width: 100%; padding: 10px; background: #ea580c; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; margin-top: 12px; }}
+button:hover {{ background: #f97316; }}
+.pool {{ color: #71717a; font-size: 12px; margin-bottom: 16px; }}
+.notice {{ color: #a1a1aa; font-size: 13px; margin-bottom: 12px; }}
+.error {{ background: #450a0a; border: 1px solid #991b1b; border-radius: 6px; padding: 10px; margin-bottom: 12px; color: #fca5a5; font-size: 14px; }}
+.links {{ margin-top: 16px; font-size: 13px; text-align: center; }}
+.links a {{ color: #fb923c; text-decoration: none; }}
+.links a:hover {{ text-decoration: underline; }}
+</style></head>
+<body>
+<div class="card">
+<h2>Reset password</h2>
+<div class="pool">Pool: {pool_id_e}</div>
+{info_html}{error_html}
+<form method="POST" action="/cognito/{pool_id_e}/oauth2/forgot-password?{oauth_query_e}">
+<input type="hidden" name="response_type" value="{response_type_e}">
+<input type="hidden" name="client_id" value="{client_id_e}">
+<input type="hidden" name="redirect_uri" value="{redirect_uri_e}">
+<input type="hidden" name="scope" value="{scope_e}">
+<input type="hidden" name="state" value="{state_param_e}">
+<input type="hidden" name="nonce" value="{nonce_e}">
+<input type="hidden" name="code_challenge" value="{code_challenge_e}">
+<input type="hidden" name="code_challenge_method" value="{code_challenge_method_e}">
+<input type="text" name="username" placeholder="Username" required autofocus value="{username_e}">
+<button type="submit">Send reset code</button>
+</form>
+<div class="links"><a href="/cognito/{pool_id_e}/oauth2/authorize?{oauth_query_e}">Back to sign in</a></div>
+</div></body></html>"#
+    );
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/html; charset=utf-8")
+        .body(Body::from(html))
+        .expect("well-known header values cannot fail")
+}
+
+/// Render the "enter code + new password" page (forgot-password step 2).
+#[allow(clippy::too_many_arguments)]
+fn forgot_password_confirm_page_html(
+    pool_id: &str,
+    response_type: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    scope: &str,
+    state_param: &str,
+    nonce: &str,
+    code_challenge: &str,
+    code_challenge_method: &str,
+    username: &str,
+    code_hint: Option<&str>,
+    error_msg: Option<&str>,
+) -> Response {
+    let pool_id_e = escape_html(pool_id);
+    let username_e = escape_html(username);
+    let error_html = error_msg
+        .map(|e| format!(r#"<div class="error">{}</div>"#, escape_html(e)))
+        .unwrap_or_default();
+    // Show the freshly-issued code right on the page in dev mode so
+    // the user doesn't have to scrape it from awsim's logs. This is
+    // explicitly an emulator affordance — real Cognito would email it.
+    let code_html = code_hint
+        .map(|c| {
+            format!(
+                r#"<div class="hint">DEV: code is <code>{}</code></div>"#,
+                escape_html(c)
+            )
+        })
+        .unwrap_or_default();
+    let oauth_query = build_oauth_query(&[
+        ("response_type", response_type),
+        ("client_id", client_id),
+        ("redirect_uri", redirect_uri),
+        ("scope", scope),
+        ("state", state_param),
+        ("nonce", nonce),
+        ("code_challenge", code_challenge),
+        ("code_challenge_method", code_challenge_method),
+    ]);
+    let oauth_query_e = escape_html(&oauth_query);
+    let response_type_e = escape_html(response_type);
+    let client_id_e = escape_html(client_id);
+    let redirect_uri_e = escape_html(redirect_uri);
+    let scope_e = escape_html(scope);
+    let state_param_e = escape_html(state_param);
+    let nonce_e = escape_html(nonce);
+    let code_challenge_e = escape_html(code_challenge);
+    let code_challenge_method_e = escape_html(code_challenge_method);
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html><head><title>AWSim Confirm Reset</title>
+<style>
+body {{ font-family: sans-serif; background: #18181b; color: #e4e4e7; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
+.card {{ background: #27272a; border: 1px solid #3f3f46; border-radius: 12px; padding: 32px; width: 360px; }}
+h2 {{ margin-top: 0; color: #fb923c; }}
+input {{ width: 100%; padding: 10px; margin: 8px 0; background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; box-sizing: border-box; }}
+button {{ width: 100%; padding: 10px; background: #ea580c; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; margin-top: 12px; }}
+button:hover {{ background: #f97316; }}
+.pool {{ color: #71717a; font-size: 12px; margin-bottom: 16px; }}
+.error {{ background: #450a0a; border: 1px solid #991b1b; border-radius: 6px; padding: 10px; margin-bottom: 12px; color: #fca5a5; font-size: 14px; }}
+.hint {{ background: #1f2937; border: 1px solid #374151; border-radius: 6px; padding: 8px 10px; margin-bottom: 12px; font-size: 12px; color: #fbbf24; }}
+.hint code {{ font-family: monospace; font-size: 14px; background: transparent; }}
+.links {{ margin-top: 16px; font-size: 13px; text-align: center; }}
+.links a {{ color: #fb923c; text-decoration: none; }}
+.links a:hover {{ text-decoration: underline; }}
+</style></head>
+<body>
+<div class="card">
+<h2>Set new password</h2>
+<div class="pool">Pool: {pool_id_e}</div>
+{code_html}{error_html}
+<form method="POST" action="/cognito/{pool_id_e}/oauth2/forgot-password/confirm?{oauth_query_e}">
+<input type="hidden" name="response_type" value="{response_type_e}">
+<input type="hidden" name="client_id" value="{client_id_e}">
+<input type="hidden" name="redirect_uri" value="{redirect_uri_e}">
+<input type="hidden" name="scope" value="{scope_e}">
+<input type="hidden" name="state" value="{state_param_e}">
+<input type="hidden" name="nonce" value="{nonce_e}">
+<input type="hidden" name="code_challenge" value="{code_challenge_e}">
+<input type="hidden" name="code_challenge_method" value="{code_challenge_method_e}">
+<input type="hidden" name="username" value="{username_e}">
+<input type="text" name="code" placeholder="Verification code" required autofocus inputmode="numeric" pattern="[0-9]*">
+<input type="password" name="new_password" placeholder="New password" required>
+<input type="password" name="confirm_password" placeholder="Confirm new password" required>
+<button type="submit">Set password</button>
+</form>
+<div class="links"><a href="/cognito/{pool_id_e}/oauth2/authorize?{oauth_query_e}">Back to sign in</a></div>
+</div></body></html>"#
+    );
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "text/html; charset=utf-8")
@@ -1584,6 +1810,284 @@ async fn logout(
         "logout requires either logout_uri or redirect_uri",
     )
         .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// 7. Forgot-password endpoints (hosted UI)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Default)]
+struct ForgotPasswordParams {
+    response_type: Option<String>,
+    client_id: Option<String>,
+    redirect_uri: Option<String>,
+    scope: Option<String>,
+    state: Option<String>,
+    nonce: Option<String>,
+    code_challenge: Option<String>,
+    code_challenge_method: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct ForgotPasswordForm {
+    response_type: Option<String>,
+    client_id: Option<String>,
+    redirect_uri: Option<String>,
+    scope: Option<String>,
+    state: Option<String>,
+    nonce: Option<String>,
+    code_challenge: Option<String>,
+    code_challenge_method: Option<String>,
+    username: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct ForgotPasswordConfirmForm {
+    response_type: Option<String>,
+    client_id: Option<String>,
+    redirect_uri: Option<String>,
+    scope: Option<String>,
+    state: Option<String>,
+    nonce: Option<String>,
+    code_challenge: Option<String>,
+    code_challenge_method: Option<String>,
+    username: Option<String>,
+    code: Option<String>,
+    new_password: Option<String>,
+    confirm_password: Option<String>,
+}
+
+async fn forgot_password_get(
+    State(_oauth_state): State<Arc<CognitoOAuthState>>,
+    Path(pool_id): Path<String>,
+    Query(params): Query<ForgotPasswordParams>,
+) -> Response {
+    forgot_password_page_html(
+        &pool_id,
+        params.response_type.as_deref().unwrap_or("code"),
+        params.client_id.as_deref().unwrap_or(""),
+        params.redirect_uri.as_deref().unwrap_or(""),
+        params.scope.as_deref().unwrap_or("openid"),
+        params.state.as_deref().unwrap_or(""),
+        params.nonce.as_deref().unwrap_or(""),
+        params.code_challenge.as_deref().unwrap_or(""),
+        params.code_challenge_method.as_deref().unwrap_or(""),
+        None,
+        None,
+        None,
+    )
+}
+
+async fn forgot_password_post(
+    State(oauth_state): State<Arc<CognitoOAuthState>>,
+    Path(pool_id): Path<String>,
+    Form(form): Form<ForgotPasswordForm>,
+) -> Response {
+    let response_type = form.response_type.as_deref().unwrap_or("code");
+    let client_id = form.client_id.as_deref().unwrap_or("");
+    let redirect_uri = form.redirect_uri.as_deref().unwrap_or("");
+    let scope = form.scope.as_deref().unwrap_or("openid");
+    let state_param = form.state.as_deref().unwrap_or("");
+    let nonce = form.nonce.as_deref().unwrap_or("");
+    let code_challenge = form.code_challenge.as_deref().unwrap_or("");
+    let code_challenge_method = form.code_challenge_method.as_deref().unwrap_or("");
+
+    let username = match form.username.as_deref().filter(|u| !u.is_empty()) {
+        Some(u) => u,
+        None => {
+            return forgot_password_page_html(
+                &pool_id,
+                response_type,
+                client_id,
+                redirect_uri,
+                scope,
+                state_param,
+                nonce,
+                code_challenge,
+                code_challenge_method,
+                Some("Username is required"),
+                None,
+                None,
+            );
+        }
+    };
+
+    // Reuse the SDK-side ForgotPassword handler so the code-issuance
+    // path is exactly the same. We synthesize a minimal request value
+    // because we already have the pool_id route param.
+    let req_input = json!({ "ClientId": client_id, "Username": username });
+    let ctx = awsim_core::RequestContext::new_with_account(
+        "cognito-idp",
+        &oauth_state.default_region,
+        &oauth_state.default_account_id,
+    );
+    if let Err(e) = crate::operations::users::forgot_password(&oauth_state.cognito, &req_input, &ctx) {
+        // For a non-existent user we still surface a generic notice +
+        // route to the confirm page — real Cognito is intentionally
+        // vague about whether an account exists. But we'll only show
+        // the dev-mode hint when the user actually exists, so a wrong
+        // username won't get a code.
+        warn!(
+            username = %username,
+            pool_id = %pool_id,
+            error = %e,
+            "OAuth forgot-password: SDK handler rejected"
+        );
+        return forgot_password_page_html(
+            &pool_id,
+            response_type,
+            client_id,
+            redirect_uri,
+            scope,
+            state_param,
+            nonce,
+            code_challenge,
+            code_challenge_method,
+            Some(&e.message),
+            None,
+            Some(username),
+        );
+    }
+
+    // Pull the freshly stored code so we can show it to the dev
+    // directly. In real AWS this code would arrive by email; awsim
+    // also logs it at info.
+    let code_hint = oauth_state
+        .cognito
+        .user_pools
+        .get(&pool_id)
+        .and_then(|p| p.users.get(username).cloned())
+        .and_then(|u| {
+            u.pending_verifications
+                .get(crate::operations::users::FORGOT_PASSWORD_KEY)
+                .cloned()
+        });
+
+    forgot_password_confirm_page_html(
+        &pool_id,
+        response_type,
+        client_id,
+        redirect_uri,
+        scope,
+        state_param,
+        nonce,
+        code_challenge,
+        code_challenge_method,
+        username,
+        code_hint.as_deref(),
+        None,
+    )
+}
+
+async fn forgot_password_confirm_get(
+    State(_oauth_state): State<Arc<CognitoOAuthState>>,
+    Path(pool_id): Path<String>,
+    Query(params): Query<ForgotPasswordParams>,
+) -> Response {
+    // Direct GET: we don't have a username yet, so route back to the
+    // request page rather than rendering an empty confirm form.
+    forgot_password_page_html(
+        &pool_id,
+        params.response_type.as_deref().unwrap_or("code"),
+        params.client_id.as_deref().unwrap_or(""),
+        params.redirect_uri.as_deref().unwrap_or(""),
+        params.scope.as_deref().unwrap_or("openid"),
+        params.state.as_deref().unwrap_or(""),
+        params.nonce.as_deref().unwrap_or(""),
+        params.code_challenge.as_deref().unwrap_or(""),
+        params.code_challenge_method.as_deref().unwrap_or(""),
+        None,
+        Some("Start a fresh reset by entering your username."),
+        None,
+    )
+}
+
+async fn forgot_password_confirm_post(
+    State(oauth_state): State<Arc<CognitoOAuthState>>,
+    Path(pool_id): Path<String>,
+    Form(form): Form<ForgotPasswordConfirmForm>,
+) -> Response {
+    let response_type = form.response_type.as_deref().unwrap_or("code");
+    let client_id = form.client_id.as_deref().unwrap_or("");
+    let redirect_uri = form.redirect_uri.as_deref().unwrap_or("");
+    let scope = form.scope.as_deref().unwrap_or("openid");
+    let state_param = form.state.as_deref().unwrap_or("");
+    let nonce = form.nonce.as_deref().unwrap_or("");
+    let code_challenge = form.code_challenge.as_deref().unwrap_or("");
+    let code_challenge_method = form.code_challenge_method.as_deref().unwrap_or("");
+
+    let username = form.username.as_deref().unwrap_or("");
+    let code = form.code.as_deref().unwrap_or("");
+    let new_password = form.new_password.as_deref().unwrap_or("");
+    let confirm_password = form.confirm_password.as_deref().unwrap_or("");
+
+    let render_error = |msg: &str| {
+        forgot_password_confirm_page_html(
+            &pool_id,
+            response_type,
+            client_id,
+            redirect_uri,
+            scope,
+            state_param,
+            nonce,
+            code_challenge,
+            code_challenge_method,
+            username,
+            None,
+            Some(msg),
+        )
+    };
+
+    if username.is_empty() || code.is_empty() || new_password.is_empty() {
+        return render_error("All fields are required");
+    }
+    if new_password != confirm_password {
+        return render_error("Passwords do not match");
+    }
+
+    let req_input = json!({
+        "ClientId": client_id,
+        "Username": username,
+        "ConfirmationCode": code,
+        "Password": new_password,
+    });
+    let ctx = awsim_core::RequestContext::new_with_account(
+        "cognito-idp",
+        &oauth_state.default_region,
+        &oauth_state.default_account_id,
+    );
+    if let Err(e) = crate::operations::users::confirm_forgot_password(
+        &oauth_state.cognito,
+        &req_input,
+        &ctx,
+    ) {
+        return render_error(&e.message);
+    }
+
+    info!(
+        pool_id = %pool_id,
+        username = %username,
+        "OAuth: forgot-password completed via hosted UI"
+    );
+
+    // Send the user back to /authorize with a hint that they should
+    // sign in with their new password.
+    let oauth_query = build_oauth_query(&[
+        ("response_type", response_type),
+        ("client_id", client_id),
+        ("redirect_uri", redirect_uri),
+        ("scope", scope),
+        ("state", state_param),
+        ("nonce", nonce),
+        ("code_challenge", code_challenge),
+        ("code_challenge_method", code_challenge_method),
+    ]);
+    let url = if oauth_query.is_empty() {
+        format!("/cognito/{pool_id}/oauth2/authorize")
+    } else {
+        format!("/cognito/{pool_id}/oauth2/authorize?{oauth_query}")
+    };
+    Redirect::to(&url).into_response()
 }
 
 // ---------------------------------------------------------------------------
