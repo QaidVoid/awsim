@@ -11,6 +11,82 @@ pub fn compute_etag(data: &[u8]) -> String {
     format!("\"{:x}\"", result)
 }
 
+/// Decode an `aws-chunked` framed body into its raw bytes.
+///
+/// AWS SDKs use this encoding when uploading with SigV4 streaming. Each
+/// chunk is prefixed with `<hex-size>;chunk-signature=<sig>\r\n`, followed
+/// by `<data>\r\n`, and the body terminates with a zero-sized chunk plus
+/// optional trailers. We don't currently re-verify the per-chunk
+/// signatures (SigV4 verification is skipped at the gateway anyway), so
+/// the decoder just strips the framing and concatenates the data.
+///
+/// Returns Err if the framing is malformed (truncated mid-chunk, garbage
+/// hex size, etc.) so callers surface InvalidRequest rather than storing
+/// a corrupt object body.
+pub fn decode_aws_chunked(framed: &[u8]) -> Result<Vec<u8>, AwsError> {
+    let mut out = Vec::with_capacity(framed.len());
+    let mut i = 0usize;
+    while i < framed.len() {
+        // Locate the first \r\n that closes the chunk header.
+        let nl = match find_crlf(framed, i) {
+            Some(n) => n,
+            None => {
+                return Err(AwsError::bad_request(
+                    "InvalidRequest",
+                    "aws-chunked: chunk header missing CRLF",
+                ));
+            }
+        };
+        let header = std::str::from_utf8(&framed[i..nl]).map_err(|_| {
+            AwsError::bad_request("InvalidRequest", "aws-chunked: chunk header is not UTF-8")
+        })?;
+        // Header is `<hex-size>;chunk-signature=<sig>` (signature optional).
+        let size_str = header.split(';').next().unwrap_or(header).trim();
+        let size = usize::from_str_radix(size_str, 16).map_err(|_| {
+            AwsError::bad_request(
+                "InvalidRequest",
+                format!("aws-chunked: bad hex chunk size '{size_str}'"),
+            )
+        })?;
+        let data_start = nl + 2;
+        if size == 0 {
+            // Final chunk; trailers (if any) follow but we don't need them.
+            return Ok(out);
+        }
+        let data_end = data_start.checked_add(size).ok_or_else(|| {
+            AwsError::bad_request("InvalidRequest", "aws-chunked: chunk size overflow")
+        })?;
+        if data_end + 2 > framed.len() {
+            return Err(AwsError::bad_request(
+                "InvalidRequest",
+                "aws-chunked: truncated chunk body",
+            ));
+        }
+        if &framed[data_end..data_end + 2] != b"\r\n" {
+            return Err(AwsError::bad_request(
+                "InvalidRequest",
+                "aws-chunked: chunk body missing trailing CRLF",
+            ));
+        }
+        out.extend_from_slice(&framed[data_start..data_end]);
+        i = data_end + 2;
+    }
+    // Body ended without a 0-sized terminator. Some clients still send
+    // valid chunks back-to-back without one; accept what we decoded.
+    Ok(out)
+}
+
+fn find_crlf(buf: &[u8], from: usize) -> Option<usize> {
+    let mut i = from;
+    while i + 1 < buf.len() {
+        if buf[i] == b'\r' && buf[i + 1] == b'\n' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Validate the optional `Content-MD5` header against the actual body.
 ///
 /// AWS S3 expects the value to be a base64-encoded 16-byte MD5 of the body.
@@ -388,5 +464,36 @@ mod tests {
         let b64 = BASE64.encode(h.finalize());
         assert!(verify_object_checksum(body, "SHA1", &b64).is_ok());
         assert!(verify_object_checksum(b"goodbye", "SHA1", &b64).is_err());
+    }
+
+    #[test]
+    fn aws_chunked_single_chunk_decodes() {
+        // 5-byte payload "hello" framed as a single SigV4-streaming chunk.
+        let framed = b"5;chunk-signature=abc\r\nhello\r\n0;chunk-signature=def\r\n\r\n";
+        let decoded = decode_aws_chunked(framed).unwrap();
+        assert_eq!(decoded, b"hello");
+    }
+
+    #[test]
+    fn aws_chunked_multi_chunk_concatenates() {
+        let framed =
+            b"3;chunk-signature=a\r\nfoo\r\n3;chunk-signature=b\r\nbar\r\n0;chunk-signature=c\r\n";
+        let decoded = decode_aws_chunked(framed).unwrap();
+        assert_eq!(decoded, b"foobar");
+    }
+
+    #[test]
+    fn aws_chunked_rejects_truncated_chunk_body() {
+        // Header says 10 bytes but body is shorter.
+        let framed = b"a;chunk-signature=x\r\nfoo";
+        let err = decode_aws_chunked(framed).unwrap_err();
+        assert_eq!(err.code, "InvalidRequest");
+    }
+
+    #[test]
+    fn aws_chunked_rejects_bad_hex_size() {
+        let framed = b"zz;chunk-signature=x\r\nhello\r\n";
+        let err = decode_aws_chunked(framed).unwrap_err();
+        assert_eq!(err.code, "InvalidRequest");
     }
 }

@@ -370,7 +370,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     validate_object_key(key)?;
 
     // Decode body: may be raw bytes (base64 in __raw_body) or a plain string.
-    let data: Vec<u8> = if let Some(raw) = input.get("__raw_body").and_then(Value::as_str) {
+    let mut data: Vec<u8> = if let Some(raw) = input.get("__raw_body").and_then(Value::as_str) {
         base64::engine::general_purpose::STANDARD
             .decode(raw)
             .map_err(|_| AwsError::bad_request("InvalidRequest", "Cannot decode request body"))?
@@ -380,6 +380,36 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     } else {
         Vec::new()
     };
+
+    // SigV4-streaming uploads send the body as `aws-chunked` framing; the
+    // SDK signals it with `Content-Encoding: aws-chunked` and/or
+    // `x-amz-content-sha256: STREAMING-...`. Strip the framing so the
+    // rest of the path operates on the raw body. The SDK also sends the
+    // post-decode length in `x-amz-decoded-content-length`; if it
+    // disagrees with what we decoded, surface an error rather than
+    // storing a partial object.
+    let is_chunked = opt_str(input, "ContentEncoding")
+        .map(|v| v.eq_ignore_ascii_case("aws-chunked"))
+        .unwrap_or(false)
+        || opt_str(input, "ContentSha256")
+            .map(|v| v.starts_with("STREAMING-"))
+            .unwrap_or(false);
+    if is_chunked {
+        data = crate::util::decode_aws_chunked(&data)?;
+        if let Some(expected) =
+            opt_str(input, "DecodedContentLength").and_then(|s| s.parse::<usize>().ok())
+            && expected != data.len()
+        {
+            return Err(AwsError::bad_request(
+                "InvalidRequest",
+                format!(
+                    "x-amz-decoded-content-length {expected} does not match \
+                     decoded body length {}",
+                    data.len()
+                ),
+            ));
+        }
+    }
 
     // Cap single-PUT bodies. Real S3 rejects single-object uploads above
     // 5 GiB with `EntityTooLarge` and tells the caller to use multipart.
@@ -1477,6 +1507,62 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "KeyTooLongError");
+    }
+
+    #[test]
+    fn put_object_decodes_aws_chunked_body() {
+        // SDK sends a SigV4-streaming PUT: ContentEncoding aws-chunked,
+        // ContentSha256 marker, body framed with one chunk.
+        use base64::Engine as _;
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        let framed = b"5;chunk-signature=ab\r\nhello\r\n0;chunk-signature=cd\r\n";
+        let raw_b64 = base64::engine::general_purpose::STANDARD.encode(framed);
+        put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "__raw_body": raw_b64,
+                "ContentEncoding": "aws-chunked",
+                "ContentSha256": "STREAMING-AWS4-HMAC-SHA256-PAYLOAD",
+                "DecodedContentLength": "5",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let got = get_object(&state, &json!({ "Bucket": "b", "Key": "k" }), &ctx()).unwrap();
+        // Body comes back base64-encoded on the wire.
+        let body_b64 = got["Body"].as_str().unwrap();
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(body_b64)
+            .unwrap();
+        assert_eq!(body, b"hello");
+        // Stored content length matches the decoded payload, not the framed
+        // bytes — the chunk framing was stripped before storage.
+        assert_eq!(got["ContentLength"].as_u64(), Some(5));
+    }
+
+    #[test]
+    fn put_object_rejects_aws_chunked_with_wrong_decoded_length() {
+        use base64::Engine as _;
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        let framed = b"5;chunk-signature=ab\r\nhello\r\n0;chunk-signature=cd\r\n";
+        let raw_b64 = base64::engine::general_purpose::STANDARD.encode(framed);
+        let err = put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "__raw_body": raw_b64,
+                "ContentEncoding": "aws-chunked",
+                "DecodedContentLength": "999",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidRequest");
     }
 
     #[test]

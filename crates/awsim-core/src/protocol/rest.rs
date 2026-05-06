@@ -110,6 +110,7 @@ pub fn parse_xml_request(
                     | "if-modified-since"
                     | "if-unmodified-since"
                     | "content-md5"
+                    | "content-encoding"
             );
             if (is_amz || is_http_input)
                 && let Ok(v) = value.to_str()
