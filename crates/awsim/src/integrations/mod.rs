@@ -298,6 +298,8 @@ pub async fn handle_s3_event(
                         method: "POST".to_string(),
                         uri: "/".to_string(),
                         event_bus: None,
+                        source_ip: None,
+                        is_secure: false,
                     };
                     let input = serde_json::json!({
                         "QueueUrl": queue_url,
@@ -330,6 +332,8 @@ pub async fn handle_s3_event(
                         method: "POST".to_string(),
                         uri: "/".to_string(),
                         event_bus: None,
+                        source_ip: None,
+                        is_secure: false,
                     };
                     let input = serde_json::json!({
                         "TopicArn": dest_arn,
@@ -363,6 +367,8 @@ pub async fn handle_s3_event(
                         method: "POST".to_string(),
                         uri: "/".to_string(),
                         event_bus: None,
+                        source_ip: None,
+                        is_secure: false,
                     };
                     let invoke_input = serde_json::json!({
                         "FunctionName": dest_arn,
@@ -433,6 +439,8 @@ pub async fn handle_dynamodb_stream(
         method: "GET".to_string(),
         uri: "/".to_string(),
         event_bus: None,
+        source_ip: None,
+        is_secure: false,
     };
 
     let list_input = serde_json::json!({ "EventSourceArn": stream_arn });
@@ -486,6 +494,8 @@ pub async fn handle_dynamodb_stream(
             method: "POST".to_string(),
             uri: format!("/2015-03-31/functions/{function_arn}/invocations"),
             event_bus: None,
+            source_ip: None,
+            is_secure: false,
         };
 
         let invoke_input = serde_json::json!({
@@ -910,6 +920,8 @@ pub async fn handle_cf_create_resource(
         method: "POST".to_string(),
         uri: "/".to_string(),
         event_bus: None,
+        source_ip: None,
+        is_secure: false,
     };
 
     match resource_type {
@@ -1123,6 +1135,8 @@ pub async fn handle_cf_delete_resource(
         method: "POST".to_string(),
         uri: "/".to_string(),
         event_bus: None,
+        source_ip: None,
+        is_secure: false,
     };
 
     match resource_type {

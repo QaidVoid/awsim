@@ -15,6 +15,10 @@ pub struct ResolvedPrincipal {
     pub identity_policies: Vec<PolicyDocument>,
     pub permissions_boundary: Option<PolicyDocument>,
     pub is_root: bool,
+    /// Principal tags, surfaced into `aws:PrincipalTag/<key>` for IAM
+    /// condition evaluation. Empty for root and for federated principals
+    /// without a backing IAM record.
+    pub tags: HashMap<String, String>,
 }
 
 pub trait PrincipalLookup: Send + Sync {
@@ -124,7 +128,7 @@ impl AuthzEngine {
             .get(&ctx.service)
             .and_then(|lookup| lookup.lookup(resource));
 
-        let context: HashMap<String, ContextValue> = HashMap::new();
+        let context = build_request_context(ctx, &principal);
 
         let req = AuthzRequest {
             principal_arn: &principal.arn,
@@ -179,4 +183,51 @@ impl Default for AuthzEngine {
     fn default() -> Self {
         Self::new(false)
     }
+}
+
+/// Build the IAM condition-context map for one request. Populates the
+/// AWS-standard variables that the policy evaluator consumes:
+///
+/// * `aws:CurrentTime` (Date)
+/// * `aws:EpochTime` (Number) — same instant as seconds since 1970
+/// * `aws:SourceIp` (Ip), when the request carried a recoverable client IP
+/// * `aws:SecureTransport` (Bool)
+/// * `aws:PrincipalArn` / `aws:PrincipalAccount` — already known to the
+///   evaluator's variable resolver but mirrored here so condition lookups
+///   that reference them as keys (rare but legal) also see them.
+/// * `aws:PrincipalTag/<key>` (String) for every tag on the resolved
+///   principal.
+fn build_request_context(
+    ctx: &RequestContext,
+    principal: &ResolvedPrincipal,
+) -> HashMap<String, ContextValue> {
+    let mut context = HashMap::new();
+    let now = chrono::Utc::now();
+    context.insert("aws:CurrentTime".to_string(), ContextValue::Date(now));
+    context.insert(
+        "aws:EpochTime".to_string(),
+        ContextValue::Number(now.timestamp() as f64),
+    );
+    context.insert(
+        "aws:SecureTransport".to_string(),
+        ContextValue::Bool(ctx.is_secure),
+    );
+    if let Some(ref ip) = ctx.source_ip {
+        context.insert("aws:SourceIp".to_string(), ContextValue::Ip(ip.clone()));
+    }
+    context.insert(
+        "aws:PrincipalArn".to_string(),
+        ContextValue::String(principal.arn.clone()),
+    );
+    context.insert(
+        "aws:PrincipalAccount".to_string(),
+        ContextValue::String(principal.account.clone()),
+    );
+    for (k, v) in &principal.tags {
+        context.insert(
+            format!("aws:PrincipalTag/{k}"),
+            ContextValue::String(v.clone()),
+        );
+    }
+    context
 }

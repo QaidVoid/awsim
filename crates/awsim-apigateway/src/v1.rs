@@ -1953,6 +1953,7 @@ mod tests {
             method: "GET".to_string(),
             uri: "/".to_string(),
             event_bus: None,
+            ..Default::default()
         }
     }
 

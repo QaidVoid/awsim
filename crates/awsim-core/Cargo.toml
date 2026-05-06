@@ -28,3 +28,4 @@ tracing = { workspace = true }
 dashmap = { workspace = true }
 uuid = { workspace = true }
 base64 = { workspace = true }
+chrono = { workspace = true }

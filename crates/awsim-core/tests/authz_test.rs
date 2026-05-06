@@ -15,6 +15,7 @@ impl PrincipalLookup for StubLookup {
             identity_policies: p.identity_policies.clone(),
             permissions_boundary: p.permissions_boundary.clone(),
             is_root: p.is_root,
+            tags: p.tags.clone(),
         })
     }
 }
@@ -30,6 +31,7 @@ fn make_principal(arn: &str, account: &str, docs: Vec<&str>, is_root: bool) -> R
         identity_policies,
         permissions_boundary: None,
         is_root,
+        tags: Default::default(),
     }
 }
 
@@ -131,6 +133,7 @@ fn enforcement_on_root_bypass() {
         identity_policies: vec![],
         permissions_boundary: None,
         is_root: true,
+        tags: Default::default(),
     };
     let mut engine = AuthzEngine::new(true);
     engine.principal_lookup = Arc::new(StubLookup {
@@ -140,6 +143,122 @@ fn enforcement_on_root_bypass() {
     assert!(
         engine
             .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/key")
+            .is_ok()
+    );
+}
+
+#[test]
+fn ip_address_condition_uses_aws_source_ip() {
+    // Identity policy that only allows when the caller's IP matches
+    // 10.0.0.0/8. Without aws:SourceIp populated this would never match.
+    let policy = r#"{
+        "Version":"2012-10-17",
+        "Statement":[{
+            "Effect":"Allow",
+            "Action":"s3:GetObject",
+            "Resource":"*",
+            "Condition":{"IpAddress":{"aws:SourceIp":["10.0.0.0/8"]}}
+        }]
+    }"#;
+    let principal = make_principal(
+        "arn:aws:iam::000000000000:user/u",
+        "000000000000",
+        vec![policy],
+        false,
+    );
+    let mut engine = AuthzEngine::new(true);
+    engine.principal_lookup = Arc::new(StubLookup {
+        principal: Some(principal),
+    });
+    let mut ctx = ctx_with_key(Some("AKIA"));
+    ctx.source_ip = Some("10.1.2.3".to_string());
+    assert!(
+        engine
+            .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/key")
+            .is_ok(),
+        "policy should match in-network source IP"
+    );
+
+    // Out-of-network IP must fall to implicit deny.
+    ctx.source_ip = Some("203.0.113.1".to_string());
+    assert!(
+        engine
+            .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/key")
+            .is_err()
+    );
+}
+
+#[test]
+fn principal_tag_condition_consumes_resolved_tags() {
+    let policy = r#"{
+        "Version":"2012-10-17",
+        "Statement":[{
+            "Effect":"Allow",
+            "Action":"s3:GetObject",
+            "Resource":"*",
+            "Condition":{"StringEquals":{"aws:PrincipalTag/team":"infra"}}
+        }]
+    }"#;
+    let mut principal = make_principal(
+        "arn:aws:iam::000000000000:user/u",
+        "000000000000",
+        vec![policy],
+        false,
+    );
+    principal.tags.insert("team".into(), "infra".into());
+
+    let mut engine = AuthzEngine::new(true);
+    engine.principal_lookup = Arc::new(StubLookup {
+        principal: Some(principal),
+    });
+    let ctx = ctx_with_key(Some("AKIA"));
+    assert!(
+        engine
+            .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/key")
+            .is_ok(),
+        "principal with team=infra tag should match"
+    );
+}
+
+#[test]
+fn secure_transport_condition_reflects_ctx_flag() {
+    let policy = r#"{
+        "Version":"2012-10-17",
+        "Statement":[{
+            "Effect":"Deny",
+            "Action":"*",
+            "Resource":"*",
+            "Condition":{"Bool":{"aws:SecureTransport":"false"}}
+        },
+        {
+            "Effect":"Allow",
+            "Action":"s3:GetObject",
+            "Resource":"*"
+        }]
+    }"#;
+    let principal = make_principal(
+        "arn:aws:iam::000000000000:user/u",
+        "000000000000",
+        vec![policy],
+        false,
+    );
+    let mut engine = AuthzEngine::new(true);
+    engine.principal_lookup = Arc::new(StubLookup {
+        principal: Some(principal),
+    });
+    // Plain HTTP: explicit Deny fires.
+    let mut ctx = ctx_with_key(Some("AKIA"));
+    ctx.is_secure = false;
+    assert!(
+        engine
+            .check(&ctx, "s3:GetObject", "arn:aws:s3:::b/k")
+            .is_err()
+    );
+    // HTTPS: deny doesn't apply, allow takes over.
+    ctx.is_secure = true;
+    assert!(
+        engine
+            .check(&ctx, "s3:GetObject", "arn:aws:s3:::b/k")
             .is_ok()
     );
 }

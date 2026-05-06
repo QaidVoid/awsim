@@ -40,6 +40,7 @@ impl IamPrincipalLookup {
                     identity_policies,
                     permissions_boundary,
                     is_root: false,
+                    tags: user.tags.clone(),
                 });
             }
             if let Some(role) = state
@@ -65,6 +66,7 @@ impl IamPrincipalLookup {
                     identity_policies,
                     permissions_boundary,
                     is_root: false,
+                    tags: role.tags.clone(),
                 });
             }
         }
@@ -94,6 +96,7 @@ impl PrincipalLookup for IamPrincipalLookup {
                     identity_policies,
                     permissions_boundary,
                     is_root: false,
+                    tags: user.tags.clone(),
                 });
             }
         }

@@ -2,7 +2,7 @@
 ///
 /// Contains the account ID, region, service, and request metadata
 /// needed by service handlers to process the request.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RequestContext {
     /// AWS account ID (default: "000000000000" in bypass mode)
     pub account_id: String,
@@ -28,6 +28,15 @@ pub struct RequestContext {
     /// Internal event bus — present for requests routed through the gateway;
     /// `None` in unit tests or any context where no bus was configured.
     pub event_bus: Option<crate::events::EventBus>,
+
+    /// Source IP of the caller, if recoverable from `X-Forwarded-For` (or
+    /// any future axum-side wiring of `ConnectInfo`). Surfaced into
+    /// `aws:SourceIp` for IAM condition evaluation.
+    pub source_ip: Option<String>,
+
+    /// Whether the original request reached us over TLS, recovered from
+    /// `X-Forwarded-Proto` when present. Surfaced as `aws:SecureTransport`.
+    pub is_secure: bool,
 }
 
 impl RequestContext {
@@ -41,6 +50,8 @@ impl RequestContext {
             method: "POST".to_string(),
             uri: "/".to_string(),
             event_bus: None,
+            source_ip: None,
+            is_secure: false,
         }
     }
 
@@ -60,6 +71,8 @@ impl RequestContext {
             method: "POST".to_string(),
             uri: "/".to_string(),
             event_bus: None,
+            source_ip: None,
+            is_secure: false,
         }
     }
 

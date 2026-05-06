@@ -17,6 +17,7 @@ impl PrincipalLookup for StubLookup {
             identity_policies: p.identity_policies.clone(),
             permissions_boundary: p.permissions_boundary.clone(),
             is_root: p.is_root,
+            tags: Default::default(),
         })
     }
 }
@@ -53,6 +54,7 @@ fn resource_policy_grants_access_when_identity_has_none() {
         identity_policies: vec![],
         permissions_boundary: None,
         is_root: false,
+        tags: Default::default(),
     };
 
     let resource_policy = r#"{
@@ -94,6 +96,7 @@ fn resource_policy_only_used_for_matching_service() {
         identity_policies: vec![],
         permissions_boundary: None,
         is_root: false,
+        tags: Default::default(),
     };
 
     let resource_policy = r#"{

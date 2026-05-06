@@ -477,7 +477,21 @@ async fn process_request(
         "Dispatching operation"
     );
 
-    // 6. Build request context
+    // 6. Build request context. Source IP and TLS marker come from the
+    // `X-Forwarded-For` / `X-Forwarded-Proto` headers a fronting proxy
+    // (or our own dev shim) sets; without them we leave `source_ip = None`
+    // so policies that gate on `aws:SourceIp` simply can't match rather
+    // than matching a fake `0.0.0.0`.
+    let source_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
+        .filter(|s| !s.is_empty());
+    let is_secure = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("https"))
+        .unwrap_or(false);
     let ctx = crate::router::RequestContext {
         account_id,
         region,
@@ -487,6 +501,8 @@ async fn process_request(
         method: method.to_string(),
         uri: uri.to_string(),
         event_bus: Some(state.event_bus.clone()),
+        source_ip,
+        is_secure,
     };
 
     // 6b. IAM authorization (opt-in via AWSIM_IAM_ENFORCE)

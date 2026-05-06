@@ -292,6 +292,8 @@ async fn invoke_authorizer_lambda(
         method: method.to_string(),
         uri: uri.to_string(),
         event_bus: None,
+        source_ip: None,
+        is_secure: false,
     };
     let invoke_input = json!({
         "FunctionName": function_name,
@@ -692,6 +694,8 @@ async fn invoke_lambda_raw(
         method: method.to_string(),
         uri: uri.to_string(),
         event_bus: None,
+        source_ip: None,
+        is_secure: false,
     };
     let invoke_input = json!({
         "FunctionName": function_name,
@@ -829,6 +833,8 @@ async fn invoke_lambda(
         method: method.to_string(),
         uri: uri.to_string(),
         event_bus: None,
+        source_ip: None,
+        is_secure: false,
     };
     let invoke_input = json!({
         "FunctionName": function_name,

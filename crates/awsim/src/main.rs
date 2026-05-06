@@ -1515,6 +1515,8 @@ fn spawn_event_router(state: &AppState) {
                                     method: "POST".to_string(),
                                     uri: "/".to_string(),
                                     event_bus: None,
+                                    source_ip: None,
+                                    is_secure: false,
                                 };
 
                                 // RawMessageDelivery=true subscriptions skip the SNS

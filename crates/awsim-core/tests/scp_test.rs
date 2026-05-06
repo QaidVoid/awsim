@@ -15,6 +15,7 @@ impl PrincipalLookup for StubPrincipal {
             identity_policies: self.principal.identity_policies.clone(),
             permissions_boundary: self.principal.permissions_boundary.clone(),
             is_root: self.principal.is_root,
+            tags: Default::default(),
         })
     }
 }
@@ -40,6 +41,7 @@ fn make_principal(docs: Vec<&str>) -> ResolvedPrincipal {
         identity_policies,
         permissions_boundary: None,
         is_root: false,
+        tags: Default::default(),
     }
 }
 
