@@ -84,8 +84,12 @@ pub async fn seed(State(state): State<Arc<SeedS3State>>, Json(body): Json<SeedS3
                 "Seeded S3"
             );
             Json(json!({
-                "buckets_created": out.buckets_created,
-                "objects_created": out.objects_created,
+                "buckets_created":    out.buckets_created,
+                "objects_created":    out.objects_created,
+                "bytes_written":      out.bytes_written,
+                "elapsed_ms":         out.elapsed_ms,
+                "objects_per_bucket": body.objects_per_bucket,
+                "sample_buckets":     out.sample_buckets,
             }))
             .into_response()
         }

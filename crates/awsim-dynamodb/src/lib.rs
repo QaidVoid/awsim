@@ -200,9 +200,11 @@ impl DynamoDbService {
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
 
+        let started = std::time::Instant::now();
         let mut tables_created = 0u64;
         let mut items_created = 0u64;
         let mut errors: Vec<String> = Vec::new();
+        let mut sample_tables: Vec<String> = Vec::with_capacity(SEED_SAMPLE_LIMIT);
         let empty_gsi: [(Option<String>, Option<String>); MAX_GSI_SLOTS] = Default::default();
 
         for t in 0..input.tables {
@@ -239,6 +241,9 @@ impl DynamoDbService {
                 write_capacity_units: 0,
             };
             state.tables.insert(table_name.clone(), table);
+            if sample_tables.len() < SEED_SAMPLE_LIMIT {
+                sample_tables.push(table_name.clone());
+            }
             tables_created += 1;
 
             for i in 0..input.items_per_table {
@@ -273,9 +278,13 @@ impl DynamoDbService {
             tables_created,
             items_created,
             errors,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            sample_tables,
         }
     }
 }
+
+const SEED_SAMPLE_LIMIT: usize = 5;
 
 /// Input shape for `DynamoDbService::seed`.
 pub struct SeedDatasetInput {
@@ -291,6 +300,8 @@ pub struct SeedDatasetOutput {
     pub tables_created: u64,
     pub items_created: u64,
     pub errors: Vec<String>,
+    pub elapsed_ms: u64,
+    pub sample_tables: Vec<String>,
 }
 
 impl Default for DynamoDbService {

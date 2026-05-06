@@ -53,6 +53,7 @@ const STATUSES: &[&str] = &[
 ];
 
 const MAX_COUNT: u64 = 100_000;
+const SAMPLE_LIMIT: usize = 5;
 
 pub async fn seed(
     State(state): State<Arc<CognitoState>>,
@@ -83,13 +84,19 @@ pub async fn seed(
         .unwrap_or(0);
 
     let result = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let started = std::time::Instant::now();
         let mut pool = state
             .user_pools
             .get_mut(&body.pool_id)
             .ok_or_else(|| format!("Pool not found: {}", body.pool_id))?;
 
+        let pool_name = pool.name.clone();
         let mut created = 0u64;
         let mut skipped = 0u64;
+        let mut status_confirmed = 0u64;
+        let mut status_force_change = 0u64;
+        let mut status_unconfirmed = 0u64;
+        let mut samples: Vec<Value> = Vec::with_capacity(SAMPLE_LIMIT);
         for i in 0..body.count {
             let username = format!("{prefix}{i}-{}", Uuid::new_v4().simple());
             if pool.users.contains_key(&username) {
@@ -103,15 +110,30 @@ pub async fn seed(
             let enabled = probability(0.95);
             let email_verified = status == "CONFIRMED" && probability(0.9);
 
+            match status.as_str() {
+                "CONFIRMED" => status_confirmed += 1,
+                "FORCE_CHANGE_PASSWORD" => status_force_change += 1,
+                "UNCONFIRMED" => status_unconfirmed += 1,
+                _ => {}
+            }
+
             let mut attributes = HashMap::new();
             let sub = Uuid::new_v4().to_string();
             attributes.insert("sub".to_string(), sub.clone());
-            attributes.insert("email".to_string(), email);
+            attributes.insert("email".to_string(), email.clone());
             attributes.insert("given_name".to_string(), given);
             attributes.insert("family_name".to_string(), family);
             attributes.insert("name".to_string(), name);
             if email_verified {
                 attributes.insert("email_verified".to_string(), "true".to_string());
+            }
+
+            if samples.len() < SAMPLE_LIMIT {
+                samples.push(json!({
+                    "username": username,
+                    "email": email,
+                    "status": status,
+                }));
             }
 
             let user = CognitoUser {
@@ -141,7 +163,22 @@ pub async fn seed(
             pool.users.insert(username, user);
             created += 1;
         }
-        Ok(json!({ "created": created, "skipped": skipped, "pool_id": body.pool_id }))
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        Ok(json!({
+            "created": created,
+            "skipped": skipped,
+            "pool_id": body.pool_id,
+            "pool_name": pool_name,
+            "password": password,
+            "username_prefix": prefix,
+            "elapsed_ms": elapsed_ms,
+            "status_breakdown": {
+                "CONFIRMED": status_confirmed,
+                "FORCE_CHANGE_PASSWORD": status_force_change,
+                "UNCONFIRMED": status_unconfirmed,
+            },
+            "sample_users": samples,
+        }))
     })
     .await;
 

@@ -41,6 +41,7 @@ pub struct SeedSqsState {
 
 const MAX_QUEUES: u64 = 1_000;
 const MAX_MESSAGES_PER_QUEUE: u64 = 100_000;
+const SAMPLE_LIMIT: usize = 5;
 
 pub async fn seed(
     State(state): State<Arc<SeedSqsState>>,
@@ -76,8 +77,10 @@ pub async fn seed(
     let region = body.region.unwrap_or_else(|| state.default_region.clone());
     let prefix = body.prefix.unwrap_or_else(|| "seed".to_string());
     let port = state.default_port;
+    let messages_per_queue = body.messages_per_queue;
 
     let result = tokio::task::spawn_blocking(move || {
+        let started = std::time::Instant::now();
         let sqs_state = state.store.get(&account, &region);
         let now_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -87,6 +90,7 @@ pub async fn seed(
 
         let mut queues_created = 0u64;
         let mut messages_created = 0u64;
+        let mut samples: Vec<serde_json::Value> = Vec::with_capacity(SAMPLE_LIMIT);
 
         for _ in 0..body.queues {
             let name = format!("{prefix}-{}", fake_slug(2));
@@ -126,20 +130,34 @@ pub async fn seed(
                 messages_created += 1;
             }
             queue.messages = messages;
+            if samples.len() < SAMPLE_LIMIT {
+                samples.push(json!({
+                    "name": name.clone(),
+                    "url":  queue.url.clone(),
+                }));
+            }
             sqs_state.queues.insert(name, queue);
             queues_created += 1;
         }
 
-        (queues_created, messages_created)
+        (
+            queues_created,
+            messages_created,
+            samples,
+            started.elapsed().as_millis() as u64,
+        )
     })
     .await;
 
     match result {
-        Ok((q, m)) => {
+        Ok((q, m, sample_queues, elapsed_ms)) => {
             info!(target = "seed", queues = q, messages = m, "Seeded SQS");
             Json(json!({
-                "queues_created": q,
-                "messages_created": m,
+                "queues_created":     q,
+                "messages_created":   m,
+                "elapsed_ms":         elapsed_ms,
+                "messages_per_queue": messages_per_queue,
+                "sample_queues":      sample_queues,
             }))
             .into_response()
         }

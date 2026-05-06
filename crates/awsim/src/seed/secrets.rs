@@ -38,6 +38,7 @@ pub struct SeedSecretsState {
 }
 
 const MAX_COUNT: u64 = 50_000;
+const SAMPLE_LIMIT: usize = 5;
 
 pub async fn seed(
     State(state): State<Arc<SeedSecretsState>>,
@@ -64,6 +65,7 @@ pub async fn seed(
     let prefix = body.prefix.unwrap_or_else(|| "seed".to_string());
 
     let result = tokio::task::spawn_blocking(move || {
+        let started = std::time::Instant::now();
         let secrets_state = state.store.get(&account, &region);
         let now_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -71,6 +73,7 @@ pub async fn seed(
             .unwrap_or(0.0);
 
         let mut created = 0u64;
+        let mut samples: Vec<serde_json::Value> = Vec::with_capacity(SAMPLE_LIMIT);
         for _ in 0..body.count {
             let name = format!("{prefix}-{}", fake_slug(2));
             if secrets_state.secrets.contains_key(&name) {
@@ -118,17 +121,28 @@ pub async fn seed(
                 last_rotated_date: None,
                 last_accessed_date: None,
             };
+            if samples.len() < SAMPLE_LIMIT {
+                samples.push(json!({
+                    "name": name.clone(),
+                    "arn":  secret.arn.clone(),
+                }));
+            }
             secrets_state.secrets.insert(name, secret);
             created += 1;
         }
-        created
+        (created, samples, started.elapsed().as_millis() as u64)
     })
     .await;
 
     match result {
-        Ok(created) => {
+        Ok((created, sample_secrets, elapsed_ms)) => {
             info!(target = "seed", created, "Seeded Secrets Manager");
-            Json(json!({ "created": created })).into_response()
+            Json(json!({
+                "created":        created,
+                "elapsed_ms":     elapsed_ms,
+                "sample_secrets": sample_secrets,
+            }))
+            .into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

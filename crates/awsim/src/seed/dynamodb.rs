@@ -93,9 +93,12 @@ pub async fn seed(
                 "Seeded DynamoDB"
             );
             Json(json!({
-                "tables_created": out.tables_created,
-                "items_created":  out.items_created,
-                "errors":         out.errors,
+                "tables_created":  out.tables_created,
+                "items_created":   out.items_created,
+                "errors":          out.errors,
+                "elapsed_ms":      out.elapsed_ms,
+                "items_per_table": body.items_per_table,
+                "sample_tables":   out.sample_tables,
             }))
             .into_response()
         }

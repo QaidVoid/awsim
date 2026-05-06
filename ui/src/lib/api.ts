@@ -128,10 +128,22 @@ async function seedPost<T>(path: string, body: unknown): Promise<T> {
   return parsed as T;
 }
 
+export interface SeedSampleUser {
+  username: string;
+  email: string;
+  status: string;
+}
+
 export interface SeedCognitoResult {
   created: number;
   skipped: number;
   pool_id?: string;
+  pool_name?: string;
+  password?: string;
+  username_prefix?: string;
+  elapsed_ms?: number;
+  status_breakdown?: Record<string, number>;
+  sample_users?: SeedSampleUser[];
 }
 export async function seedCognitoUsers(input: {
   pool_id: string;
@@ -146,6 +158,9 @@ export interface SeedDdbResult {
   tables_created: number;
   items_created: number;
   errors: string[];
+  elapsed_ms?: number;
+  items_per_table?: number;
+  sample_tables?: string[];
 }
 export async function seedDynamoDb(input: {
   tables: number;
@@ -158,6 +173,10 @@ export async function seedDynamoDb(input: {
 export interface SeedS3Result {
   buckets_created: number;
   objects_created: number;
+  bytes_written?: number;
+  elapsed_ms?: number;
+  objects_per_bucket?: number;
+  sample_buckets?: string[];
 }
 export async function seedS3(input: {
   buckets: number;
@@ -168,8 +187,15 @@ export async function seedS3(input: {
   return seedPost("s3", input);
 }
 
+export interface SeedSampleSecret {
+  name: string;
+  arn: string;
+}
+
 export interface SeedSecretsResult {
   created: number;
+  elapsed_ms?: number;
+  sample_secrets?: SeedSampleSecret[];
 }
 export async function seedSecrets(input: {
   count: number;
@@ -178,9 +204,17 @@ export async function seedSecrets(input: {
   return seedPost("secrets", input);
 }
 
+export interface SeedSampleQueue {
+  name: string;
+  url: string;
+}
+
 export interface SeedSqsResult {
   queues_created: number;
   messages_created: number;
+  elapsed_ms?: number;
+  messages_per_queue?: number;
+  sample_queues?: SeedSampleQueue[];
 }
 export async function seedSqs(input: {
   queues: number;

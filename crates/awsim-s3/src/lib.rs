@@ -100,8 +100,10 @@ impl S3Service {
         // Stable etag for the shared body — md5 of the byte string.
         let etag_hex = md5_hex(&body_data);
 
+        let started = std::time::Instant::now();
         let mut buckets_created = 0u64;
         let mut objects_created = 0u64;
+        let mut sample_buckets: Vec<String> = Vec::with_capacity(SEED_SAMPLE_LIMIT);
 
         for b in 0..input.buckets {
             let name = format!("{}-{}-{}", input.prefix, b, Uuid::new_v4().simple());
@@ -135,16 +137,25 @@ impl S3Service {
                 );
                 objects_created += 1;
             }
+            if sample_buckets.len() < SEED_SAMPLE_LIMIT {
+                sample_buckets.push(name.clone());
+            }
             state.buckets.insert(name, bucket);
             buckets_created += 1;
         }
 
+        let bytes_written = (body_data.len() as u64).saturating_mul(objects_created);
         SeedDatasetOutput {
             buckets_created,
             objects_created,
+            bytes_written,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            sample_buckets,
         }
     }
 }
+
+const SEED_SAMPLE_LIMIT: usize = 5;
 
 /// Input shape for `S3Service::seed`.
 pub struct SeedDatasetInput {
@@ -161,6 +172,9 @@ pub struct SeedDatasetInput {
 pub struct SeedDatasetOutput {
     pub buckets_created: u64,
     pub objects_created: u64,
+    pub bytes_written: u64,
+    pub elapsed_ms: u64,
+    pub sample_buckets: Vec<String>,
 }
 
 fn md5_hex(bytes: &[u8]) -> String {
