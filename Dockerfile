@@ -42,13 +42,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
     NODE_ENV=production bun run build
 
 # ---------- Rust builder stage ----------
-# `--platform=$TARGETPLATFORM` makes BuildKit run a native (or QEMU-emulated)
-# rust:slim image for each target arch — amd64 image for amd64 target, arm64
-# image emulated for arm64 target. That way `musl-tools`' `musl-gcc` always
-# matches the running arch, so cc-rs can build native musl binaries without
-# us shipping a separate cross-toolchain. The arm64 leg is QEMU-emulated and
-# noticeably slower; that trade is acceptable for nightly + release cadence.
-FROM --platform=$TARGETPLATFORM rust:${RUST_VERSION}-slim AS builder
+FROM rust:${RUST_VERSION}-slim AS builder
 ARG TARGETARCH
 
 WORKDIR /app
