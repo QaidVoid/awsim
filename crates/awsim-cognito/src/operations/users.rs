@@ -456,9 +456,17 @@ pub fn admin_set_user_password(
     })?;
 
     user.password = password.to_string();
-    if permanent {
-        user.status = "CONFIRMED".to_string();
-    }
+    // AWS semantics: Permanent=true → CONFIRMED, Permanent=false → the
+    // password is treated as temporary and the user must change it on
+    // next sign-in. We were previously only flipping to CONFIRMED on
+    // Permanent=true and leaving the status alone otherwise, which let
+    // a CONFIRMED user keep CONFIRMED status when given a temp password
+    // — opposite of what AWS does.
+    user.status = if permanent {
+        "CONFIRMED".to_string()
+    } else {
+        "FORCE_CHANGE_PASSWORD".to_string()
+    };
     // Setting a fresh password administratively unlocks the account.
     user.failed_login_attempts = 0;
     user.locked_until_secs = None;

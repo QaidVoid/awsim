@@ -659,6 +659,27 @@ async fn authorize_post(
         );
     }
 
+    if user.status == "RESET_REQUIRED" {
+        // Mirrors the `PasswordResetRequiredException` the SDK paths
+        // return — the user must complete a forgot-password flow before
+        // direct sign-in is allowed again.
+        return login_page_html(
+            &pool_id,
+            &response_type,
+            &client_id,
+            &redirect_uri,
+            &scope_str,
+            &state_param,
+            nonce.as_deref().unwrap_or(""),
+            code_challenge.as_deref().unwrap_or(""),
+            code_challenge_method.as_deref().unwrap_or(""),
+            Some(
+                "Password reset required — finish the forgot-password flow or have an admin run AdminSetUserPassword to clear the reset state.",
+            ),
+            Some(&username),
+        );
+    }
+
     let policy_for_change = pool_ref.policies.clone();
     drop(pool_ref);
 
