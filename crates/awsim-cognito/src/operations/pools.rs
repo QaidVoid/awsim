@@ -107,6 +107,9 @@ pub fn create_user_pool(
         })
         .unwrap_or_default();
 
+    let username_attributes = parse_string_list(&input["UsernameAttributes"]);
+    let alias_attributes = parse_string_list(&input["AliasAttributes"]);
+
     let lambda_config = parse_lambda_config(&input["LambdaConfig"]);
 
     let pool = UserPool {
@@ -121,6 +124,8 @@ pub fn create_user_pool(
         mfa_configuration,
         software_token_mfa_enabled: false,
         auto_verified_attributes,
+        username_attributes,
+        alias_attributes,
         lambda_config,
         schema: Vec::new(),
         email_configuration: None,
@@ -205,6 +210,8 @@ pub fn describe_user_pool(
             "LastModifiedDate": pool.created_date,
             "MfaConfiguration": pool.mfa_configuration,
             "AutoVerifiedAttributes": pool.auto_verified_attributes,
+            "UsernameAttributes": pool.username_attributes,
+            "AliasAttributes": pool.alias_attributes,
             "Policies": {
                 "PasswordPolicy": password_policy_to_value(&pool.policies)
             },
@@ -691,6 +698,16 @@ fn parse_lambda_config(v: &Value) -> HashMap<String, String> {
         }
     }
     map
+}
+
+fn parse_string_list(v: &Value) -> Vec<String> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------

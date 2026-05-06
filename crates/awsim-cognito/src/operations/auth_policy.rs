@@ -291,6 +291,8 @@ mod tests {
             mfa_configuration: "OFF".into(),
             software_token_mfa_enabled: false,
             auto_verified_attributes: Vec::new(),
+            username_attributes: Vec::new(),
+            alias_attributes: Vec::new(),
             lambda_config: Default::default(),
             schema: Vec::new(),
             email_configuration: None,

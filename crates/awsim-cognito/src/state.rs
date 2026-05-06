@@ -175,6 +175,15 @@ pub struct UserPool {
     pub mfa_configuration: String, // OFF, OPTIONAL, ON
     pub software_token_mfa_enabled: bool,
     pub auto_verified_attributes: Vec<String>,
+    /// Attributes (`email`, `phone_number`) treated as the canonical Username.
+    /// When set, the `Username` field on every API is the matching attribute
+    /// value and the corresponding attribute is pinned to it.
+    #[serde(default)]
+    pub username_attributes: Vec<String>,
+    /// Attributes accepted as sign-in aliases (`email`, `phone_number`,
+    /// `preferred_username`).
+    #[serde(default)]
+    pub alias_attributes: Vec<String>,
     pub lambda_config: HashMap<String, String>, // trigger_type → function_arn
     pub schema: Vec<SchemaAttribute>,
     pub email_configuration: Option<EmailConfig>,
