@@ -27,6 +27,22 @@ impl TokenValidity {
     }
 }
 
+/// MFA / SRP challenge sessions live this long before the server forgets
+/// them, matching Cognito's 5-minute default `auth_session_validity`.
+const SESSION_VALIDITY_SECS: u64 = 5 * 60;
+
+fn now_epoch() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn session_still_valid(issued_at: u64) -> bool {
+    now_epoch().saturating_sub(issued_at) < SESSION_VALIDITY_SECS
+}
+
 /// Build the list of GroupRolePair for a user from pool group data.
 fn group_role_pairs(pool: &UserPool, user_groups: &[String]) -> Vec<GroupRolePair> {
     user_groups
@@ -360,6 +376,7 @@ pub fn initiate_auth(
                     MfaSession {
                         pool_id: pool_id.clone(),
                         username: username.to_string(),
+                        issued_at: now_epoch(),
                     },
                 );
                 info!(username = %username, "Cognito: InitiateAuth → MFA challenge");
@@ -664,6 +681,7 @@ pub fn admin_initiate_auth(
                     MfaSession {
                         pool_id: pool_id.to_string(),
                         username: username.to_string(),
+                        issued_at: now_epoch(),
                     },
                 );
                 info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth → MFA challenge");
@@ -850,6 +868,13 @@ pub fn respond_to_auth_challenge(
                 .ok_or_else(|| {
                     AwsError::bad_request("NotAuthorizedException", "Invalid session")
                 })?;
+            if !session_still_valid(session_meta.issued_at) {
+                state.mfa_sessions.remove(session_id);
+                return Err(AwsError::bad_request(
+                    "NotAuthorizedException",
+                    "MFA session has expired; restart the auth flow",
+                ));
+            }
 
             let pool = state.user_pools.get(&session_meta.pool_id).ok_or_else(|| {
                 AwsError::not_found("ResourceNotFoundException", "Pool not found")
@@ -998,6 +1023,12 @@ pub fn admin_respond_to_auth_challenge(
         "SOFTWARE_TOKEN_MFA" => {
             let session_id = input["Session"].as_str().unwrap_or("");
             if let Some(session) = state.mfa_sessions.remove(session_id) {
+                if !session_still_valid(session.1.issued_at) {
+                    return Err(AwsError::bad_request(
+                        "NotAuthorizedException",
+                        "MFA session has expired; restart the auth flow",
+                    ));
+                }
                 let pool = state.user_pools.get(&session.1.pool_id).ok_or_else(|| {
                     AwsError::not_found("ResourceNotFoundException", "Pool not found")
                 })?;
@@ -1215,6 +1246,7 @@ fn start_srp_challenge(
             b_pub_hex: b_pub_hex.clone(),
             salt_hex: salt_hex.clone(),
             secret_block_b64: secret_block.clone(),
+            issued_at: now_epoch(),
         },
     );
 
@@ -1255,6 +1287,13 @@ fn verify_srp_password(
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Session does not match client or pool",
+        ));
+    }
+    if !session_still_valid(session.issued_at) {
+        state.srp_sessions.remove(session_id);
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "SRP session has expired; restart the auth flow",
         ));
     }
 
@@ -1361,4 +1400,26 @@ fn verify_srp_password(
     state.srp_sessions.remove(session_id);
     info!(username = %session.username, "Cognito: SRP PASSWORD_VERIFIER success");
     Ok(result)
+}
+
+#[cfg(test)]
+mod session_expiry_tests {
+    use super::*;
+
+    #[test]
+    fn fresh_session_is_valid() {
+        assert!(session_still_valid(now_epoch()));
+    }
+
+    #[test]
+    fn session_within_window_is_valid() {
+        // 4 minutes old, well inside the 5-minute cap.
+        assert!(session_still_valid(now_epoch() - 4 * 60));
+    }
+
+    #[test]
+    fn session_past_window_is_expired() {
+        // 6 minutes old.
+        assert!(!session_still_valid(now_epoch() - 6 * 60));
+    }
 }

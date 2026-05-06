@@ -358,6 +358,10 @@ pub struct TokenRevocationStore {
 pub struct MfaSession {
     pub pool_id: String,
     pub username: String,
+    /// Unix seconds at which this session was issued. Sessions older than
+    /// the auth_session_validity (5 minutes by default) are rejected, so
+    /// a leaked session id can't be replayed indefinitely.
+    pub issued_at: u64,
 }
 
 /// Pending SRP exchange: emitted on InitiateAuth(USER_SRP_AUTH) and
@@ -375,6 +379,8 @@ pub struct SrpSession {
     pub salt_hex: String,
     /// Opaque secret block the client must echo back.
     pub secret_block_b64: String,
+    /// Unix seconds at which this session was issued.
+    pub issued_at: u64,
 }
 
 /// Per-account/region Cognito state.
