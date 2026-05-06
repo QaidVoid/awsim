@@ -112,8 +112,7 @@ pub fn router(state: Arc<CognitoOAuthState>) -> axum::Router {
         )
         .route(
             "/cognito/{pool_id}/oauth2/forgot-password/confirm",
-            axum::routing::get(forgot_password_confirm_get)
-                .post(forgot_password_confirm_post),
+            axum::routing::get(forgot_password_confirm_get).post(forgot_password_confirm_post),
         )
         .with_state(state)
 }
@@ -816,8 +815,11 @@ async fn authorize_post(
             .into_response();
     }
 
-    // Authenticate user.
-    let user = pool_ref.users.get(&username).cloned();
+    let resolved_username =
+        crate::operations::users::resolve_username_for_signin(&pool_ref, &username);
+    let user = resolved_username
+        .as_ref()
+        .and_then(|u| pool_ref.users.get(u).cloned());
     let user = match user {
         Some(u) => u,
         None => {
@@ -836,6 +838,7 @@ async fn authorize_post(
             );
         }
     };
+    let username = resolved_username.expect("user lookup matched, so resolution succeeded");
 
     if user.password != password {
         return login_page_html(
@@ -1921,7 +1924,9 @@ async fn forgot_password_post(
         &oauth_state.default_region,
         &oauth_state.default_account_id,
     );
-    if let Err(e) = crate::operations::users::forgot_password(&oauth_state.cognito, &req_input, &ctx) {
+    if let Err(e) =
+        crate::operations::users::forgot_password(&oauth_state.cognito, &req_input, &ctx)
+    {
         // For a non-existent user we still surface a generic notice +
         // route to the confirm page — real Cognito is intentionally
         // vague about whether an account exists. But we'll only show
@@ -2056,11 +2061,9 @@ async fn forgot_password_confirm_post(
         &oauth_state.default_region,
         &oauth_state.default_account_id,
     );
-    if let Err(e) = crate::operations::users::confirm_forgot_password(
-        &oauth_state.cognito,
-        &req_input,
-        &ctx,
-    ) {
+    if let Err(e) =
+        crate::operations::users::confirm_forgot_password(&oauth_state.cognito, &req_input, &ctx)
+    {
         return render_error(&e.message);
     }
 

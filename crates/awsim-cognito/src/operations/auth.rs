@@ -198,12 +198,26 @@ pub fn initiate_auth(
     match auth_flow {
         "USER_PASSWORD_AUTH" | "USER_SRP_AUTH" => {
             // For USER_SRP_AUTH we skip the SRP challenge and just do password auth
-            let username = params["USERNAME"]
+            let raw_username = params["USERNAME"]
                 .as_str()
                 .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required"))?;
             let password = params["PASSWORD"]
                 .as_str()
                 .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PASSWORD is required"))?;
+            let username = {
+                let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
+                    AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                })?;
+                super::users::resolve_username_for_signin(&pool, raw_username).ok_or_else(
+                    || {
+                        AwsError::not_found(
+                            "UserNotFoundException",
+                            format!("User not found: {raw_username}"),
+                        )
+                    },
+                )?
+            };
+            let username = username.as_str();
 
             // Pre-Authentication trigger (fire-and-forget) — read pool with
             // an immutable borrow first to fire the trigger, then drop so we
@@ -472,12 +486,26 @@ pub fn admin_initiate_auth(
 
     match auth_flow {
         "USER_PASSWORD_AUTH" | "ADMIN_USER_PASSWORD_AUTH" | "USER_SRP_AUTH" => {
-            let username = params["USERNAME"]
+            let raw_username = params["USERNAME"]
                 .as_str()
                 .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required"))?;
             let password = params["PASSWORD"]
                 .as_str()
                 .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PASSWORD is required"))?;
+            let username = {
+                let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+                    AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                })?;
+                super::users::resolve_username_for_signin(&pool, raw_username).ok_or_else(
+                    || {
+                        AwsError::not_found(
+                            "UserNotFoundException",
+                            format!("User not found: {raw_username}"),
+                        )
+                    },
+                )?
+            };
+            let username = username.as_str();
 
             // Pre-Authentication trigger (fire-and-forget) — separate
             // immutable scope so we can take a mutable borrow below.

@@ -190,6 +190,40 @@ fn ensure_attribute_unique(
     Ok(())
 }
 
+/// Resolve a sign-in identifier (Username from `InitiateAuth` /
+/// `AdminInitiateAuth` / hosted UI) to the actual user-pool key.
+///
+/// First tries a literal match against `pool.users`. If that misses and
+/// the pool has `AliasAttributes` configured, scans users for one whose
+/// matching attribute equals the input (case-insensitive for `email` and
+/// `preferred_username`). Returns `None` if no user is found by either
+/// route.
+pub fn resolve_username_for_signin(pool: &UserPool, input: &str) -> Option<String> {
+    if pool.users.contains_key(input) {
+        return Some(input.to_string());
+    }
+    if pool.alias_attributes.is_empty() {
+        return None;
+    }
+    for alias in &pool.alias_attributes {
+        let case_insensitive = matches!(alias.as_str(), "email" | "preferred_username");
+        for (key, user) in pool.users.iter() {
+            let Some(stored) = user.attributes.get(alias) else {
+                continue;
+            };
+            let matches = if case_insensitive {
+                stored.eq_ignore_ascii_case(input)
+            } else {
+                stored == input
+            };
+            if matches {
+                return Some(key.clone());
+            }
+        }
+    }
+    None
+}
+
 fn looks_like_email(s: &str) -> bool {
     let mut parts = s.splitn(2, '@');
     let local = parts.next().unwrap_or("");
