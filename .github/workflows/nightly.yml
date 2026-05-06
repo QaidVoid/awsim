@@ -242,7 +242,9 @@ jobs:
 
       - name: Create multi-arch manifest
         working-directory: /tmp/digests
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
-          tags=$(jq -cr '.tags | map("--tag " + .) | join(" ")' <<< "${{ steps.meta.outputs.json }}")
-          digests=$(printf '${{ steps.image.outputs.name }}@sha256:%s ' *)
+          tags=$(jq -cr '.tags | map("--tag " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          digests=$(printf "$IMAGE_NAME@sha256:%s " *)
           docker buildx imagetools create $tags $digests
