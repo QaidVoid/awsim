@@ -131,6 +131,13 @@ struct Cli {
     #[arg(long, env = "AWSIM_BEDROCK_CONFIG")]
     bedrock_config: Option<std::path::PathBuf>,
 
+    /// Force IAM enforcement on at startup, regardless of the persisted
+    /// runtime config. Useful for containers where the operator wants
+    /// IAM policies enforced from boot without first opening the UI.
+    /// The setting is still hot-reloadable from the UI afterwards.
+    #[arg(long, env = "AWSIM_ENFORCE_IAM")]
+    enforce_iam: Option<bool>,
+
     /// One-shot subcommand. Without one, `awsim` runs the server
     /// (the default for backwards compatibility).
     #[command(subcommand)]
@@ -531,8 +538,21 @@ async fn async_main() -> Result<()> {
 
     // Apply the runtime-config IAM enforce flag, then register a hook
     // so flipping it from the UI takes effect on the next request.
+    // `--enforce-iam` / `AWSIM_ENFORCE_IAM` overrides whatever was
+    // persisted, and also writes the override back into the runtime
+    // config so the UI shows the same state.
     {
         let authz = Arc::clone(&state.authz);
+        if let Some(forced) = cli.enforce_iam {
+            let mut cfg = runtime_config_store.current().as_ref().clone();
+            if cfg.iam.enforce != forced {
+                cfg.iam.enforce = forced;
+                if let Err(e) = runtime_config_store.apply(cfg) {
+                    warn!(error = %e, "Failed to persist forced IAM enforcement flag");
+                }
+            }
+            info!(enforce = forced, "IAM enforcement set from CLI/env");
+        }
         authz.set_enabled(runtime_config_store.current().iam.enforce);
         let authz = Arc::clone(&authz);
         runtime_config_store.on_change(Box::new(move |cfg| {
