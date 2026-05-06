@@ -199,9 +199,7 @@ fn looks_like_email(s: &str) -> bool {
 
 fn looks_like_phone(s: &str) -> bool {
     let bytes = s.as_bytes();
-    bytes.len() >= 8
-        && bytes[0] == b'+'
-        && bytes[1..].iter().all(|b| b.is_ascii_digit())
+    bytes.len() >= 8 && bytes[0] == b'+' && bytes[1..].iter().all(|b| b.is_ascii_digit())
 }
 
 // ---------------------------------------------------------------------------
@@ -1092,6 +1090,7 @@ pub fn admin_update_user_attributes(
         )
     })?;
 
+    let username_attrs = pool.username_attributes.clone();
     let user = pool.users.get_mut(username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
@@ -1099,23 +1098,30 @@ pub fn admin_update_user_attributes(
         )
     })?;
 
-    apply_attribute_updates(user, parse_user_attributes(input, "UserAttributes"))?;
+    apply_attribute_updates(
+        user,
+        parse_user_attributes(input, "UserAttributes"),
+        &username_attrs,
+    )?;
 
     info!(username = %username, pool_id = %pool_id, "Cognito: admin updated user attributes");
     Ok(json!({}))
 }
 
-/// Merge a set of attribute updates into a user, mirroring the
-/// invariants real AWS Cognito enforces:
+/// Merge a set of attribute updates into a user, mirroring real Cognito.
 ///
-/// - `sub` is auto-generated and read-only — attempting to change it
-///   returns `InvalidParameterException`.
-/// - Mutating `email` or `phone_number` flips the corresponding
-///   `_verified` flag back to `false` so we don't accidentally promote
-///   an unverified address.
+/// Enforces:
+/// - `sub` is read-only (`InvalidParameterException` on change).
+/// - When the pool's `UsernameAttributes` includes the attribute being
+///   changed, the attribute is the canonical Username and is therefore
+///   read-only (matches AWS's "you can't change your email if email is
+///   the username" rule).
+/// - Mutating `email` / `phone_number` flips `_verified` back to
+///   `false`.
 fn apply_attribute_updates(
     user: &mut CognitoUser,
     new_attrs: HashMap<String, String>,
+    pool_username_attributes: &[String],
 ) -> Result<(), AwsError> {
     for (k, v) in new_attrs {
         if k == "sub" {
@@ -1125,6 +1131,14 @@ fn apply_attribute_updates(
             return Err(AwsError::bad_request(
                 "InvalidParameterException",
                 "user.sub is read-only",
+            ));
+        }
+        if pool_username_attributes.iter().any(|a| a == &k)
+            && user.attributes.get(&k).map(String::as_str) != Some(v.as_str())
+        {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!("{k} is the pool's username and cannot be changed"),
             ));
         }
         if k == "email" && user.attributes.get("email").map(String::as_str) != Some(v.as_str()) {
@@ -1210,8 +1224,10 @@ pub fn update_user_attributes(
     let new_attrs = parse_user_attributes(input, "UserAttributes");
 
     for mut pool_entry in state.user_pools.iter_mut() {
-        if let Some(user) = pool_entry.users.get_mut(&username) {
-            apply_attribute_updates(user, new_attrs)?;
+        if pool_entry.users.contains_key(&username) {
+            let username_attrs = pool_entry.username_attributes.clone();
+            let user = pool_entry.users.get_mut(&username).expect("just checked");
+            apply_attribute_updates(user, new_attrs, &username_attrs)?;
             return Ok(json!({ "CodeDeliveryDetailsList": [] }));
         }
     }
