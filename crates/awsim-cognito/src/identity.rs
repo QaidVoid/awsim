@@ -2088,11 +2088,10 @@ mod tests {
         )
         .unwrap();
         let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
-        // Build the ARN the same way our tag_resource helper expects it
-        let arn = format!(
-            "arn:aws:cognito-identity:us-east-1:123456789012:identitypool/{}",
-            pool_id.replace(':', "_")
-        );
+        // Real Cognito identity pool ARNs preserve the colon inside the
+        // pool id (`region:uuid`), so the resource segment carries that
+        // colon literally rather than being mangled.
+        let arn = format!("arn:aws:cognito-identity:us-east-1:123456789012:identitypool/{pool_id}");
 
         tag_resource(
             &state,
