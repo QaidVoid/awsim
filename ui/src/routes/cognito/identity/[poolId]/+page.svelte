@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto, replaceState } from '$app/navigation';
+	import { route } from '$lib/url';
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import {
@@ -86,7 +87,7 @@
 		try {
 			await deleteIdentityPool(poolId!);
 			toast.success('Identity pool deleted');
-			goto('/cognito');
+			goto(route('/cognito'));
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
 		}
@@ -99,7 +100,7 @@
 
 <div class="flex h-full min-h-0 flex-col overflow-hidden">
 	<header class="flex items-center gap-3 border-b border-border bg-background px-6 py-3">
-		<Button variant="ghost" size="icon-sm" onclick={() => goto('/cognito')} title="Back">
+		<Button variant="ghost" size="icon-sm" onclick={() => goto(route('/cognito'))} title="Back">
 			<ArrowLeft class="size-4" />
 		</Button>
 		<div class="min-w-0 flex-1">

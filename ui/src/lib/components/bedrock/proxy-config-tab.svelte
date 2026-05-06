@@ -29,6 +29,7 @@
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import { toast } from 'svelte-sonner';
+	import { route } from '$lib/url';
 
 	let cfg = $state<BedrockProxyConfig | null>(null);
 	let loading = $state(true);
@@ -135,7 +136,7 @@
 				</p>
 				<p class="text-muted-foreground">
 					Each Bedrock model id is mapped to a backend-side model tag below.
-					Edit backends and mappings on the <a class="underline" href="/settings">Settings page</a>.
+					Edit backends and mappings on the <a class="underline" href={route('/settings')}>Settings page</a>.
 				</p>
 			</div>
 		</div>
@@ -149,7 +150,7 @@
 			</p>
 		</div>
 		<div class="flex gap-2">
-			<Button variant="outline" size="sm" href="/settings">
+			<Button variant="outline" size="sm" href={route('/settings')}>
 				<SettingsIcon class="h-4 w-4" />
 				<span class="ml-2">Edit</span>
 			</Button>

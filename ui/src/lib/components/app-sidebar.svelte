@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import { cn } from '$lib/utils';
 	import { CATEGORY_ORDER, servicesByCategory, type ServiceCategory } from '$lib/services-catalog';
+	import { route, isActiveRoute } from '$lib/url';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import PanelLeftClose from '@lucide/svelte/icons/panel-left-close';
 	import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open';
@@ -24,8 +25,7 @@
 	);
 
 	function isActive(href: string): boolean {
-		const path = page.url?.pathname ?? '';
-		return path === href || path.startsWith(href + '/');
+		return isActiveRoute(page.url?.pathname ?? '', href);
 	}
 
 	function toggleCategory(c: ServiceCategory) {
@@ -44,13 +44,13 @@
 		 separated from the category groups. -->
 	<div class="px-2 py-2">
 		<a
-			href="/"
+			href={route('/')}
 			onclick={onNavigate}
 			class={cn(
 				'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-all duration-100',
 				'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
 				'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-				isActive('/') && page.url?.pathname === '/'
+				page.url?.pathname === route('/')
 					? 'bg-sidebar-accent text-foreground'
 					: 'text-muted-foreground'
 			)}
@@ -104,7 +104,7 @@
 												{#snippet child({ props })}
 													<a
 														{...props}
-														href={svc.href}
+														href={route(svc.href)}
 														onclick={onNavigate}
 														class={cn(
 															'relative flex h-8 w-full items-center justify-center rounded-md transition-all duration-100',
@@ -126,7 +126,7 @@
 										</Tooltip>
 									{:else}
 										<a
-											href={svc.href}
+											href={route(svc.href)}
 											onclick={onNavigate}
 											class={cn(
 												'relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-all duration-100',

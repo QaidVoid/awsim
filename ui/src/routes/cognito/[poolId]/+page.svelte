@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto, replaceState } from '$app/navigation';
+	import { route } from '$lib/url';
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { describeUserPool, type UserPool } from '$lib/api/cognito';
@@ -87,7 +88,7 @@
 <div class="flex h-full min-h-0 flex-col overflow-hidden">
 	<!-- Pool header -->
 	<header class="flex items-center gap-3 border-b border-border bg-background px-6 py-3">
-		<Button variant="ghost" size="icon-sm" onclick={() => goto('/cognito')} title="Back to pools">
+		<Button variant="ghost" size="icon-sm" onclick={() => goto(route('/cognito'))} title="Back to pools">
 			<ArrowLeft class="size-4" />
 		</Button>
 		<div class="min-w-0 flex-1">

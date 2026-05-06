@@ -11,6 +11,7 @@
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import Boxes from '@lucide/svelte/icons/boxes';
 	import { goto } from '$app/navigation';
+	import { route } from '$lib/url';
 	import { dashboardState } from '$lib/dashboard-state.svelte';
 	import { SERVICES, type Service } from '$lib/services-catalog';
 	import { bytesHuman } from '$lib/format';
@@ -109,7 +110,7 @@
 					<li>
 						<button
 							type="button"
-							onclick={() => goto(row.svc.href)}
+							onclick={() => goto(route(row.svc.href))}
 							class="flex w-full items-center gap-3 px-4 py-2 text-left text-xs transition-colors hover:bg-muted/40"
 						>
 							<span class={`size-2 shrink-0 rounded-full ${healthClass(row.health)}`}></span>

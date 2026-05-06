@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { route } from '$lib/url';
 	import { listIdentityPools, type IdentityPool } from '$lib/api/cognito';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Badge } from '$lib/components/ui/badge';
@@ -29,7 +30,7 @@
 	}
 
 	function open(p: IdentityPool) {
-		void goto(`/cognito/identity/${encodeURIComponent(p.id)}`);
+		void goto(route(`/cognito/identity/${encodeURIComponent(p.id)}`));
 	}
 
 	onMount(load);

@@ -9,6 +9,7 @@
 	import Menu from '@lucide/svelte/icons/menu';
 	import Keyboard from '@lucide/svelte/icons/keyboard';
 	import Settings from '@lucide/svelte/icons/settings';
+	import { route } from '$lib/url';
 
 	interface Props {
 		region?: string;
@@ -55,7 +56,7 @@
 
 	<!-- Brand -->
 	<a
-		href="/"
+		href={route('/')}
 		class="flex items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 	>
 		<div
@@ -124,7 +125,7 @@
 		<Button
 			variant="ghost"
 			size="icon"
-			href="/settings"
+			href={route('/settings')}
 			aria-label="Settings"
 		>
 			<Settings class="size-4" />
@@ -144,7 +145,7 @@
 		<Button
 			variant="ghost"
 			size="icon"
-			href="/"
+			href={route('/')}
 			aria-label="Documentation"
 		>
 			<BookOpen class="size-4" />

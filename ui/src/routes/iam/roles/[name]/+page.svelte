@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto, replaceState } from '$app/navigation';
+	import { route } from '$lib/url';
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import {
@@ -104,7 +105,7 @@
 		try {
 			await deleteRole(roleName);
 			toast.success(`Deleted ${roleName}`);
-			goto('/iam');
+			goto(route('/iam'));
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
 		}
@@ -137,7 +138,7 @@
 
 <div class="flex h-full min-h-0 flex-col overflow-hidden">
 	<header class="flex items-center gap-3 border-b border-border bg-background px-6 py-3">
-		<Button variant="ghost" size="icon-sm" onclick={() => goto('/iam')} title="Back to IAM">
+		<Button variant="ghost" size="icon-sm" onclick={() => goto(route('/iam'))} title="Back to IAM">
 			<ArrowLeft class="size-4" />
 		</Button>
 		<div class="min-w-0 flex-1">

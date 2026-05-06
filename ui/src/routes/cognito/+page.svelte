@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { route } from '$lib/url';
 	import { useTab } from '$lib/util/tab.svelte';
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
@@ -16,7 +17,7 @@
 	);
 
 	function openPool(p: UserPool) {
-		void goto(`/cognito/${p.id}`);
+		void goto(route(`/cognito/${p.id}`));
 	}
 </script>
 

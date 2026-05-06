@@ -13,6 +13,7 @@
 	import LeaderHint from '$lib/components/leader-hint.svelte';
 	import InspectDrawer from '$lib/components/inspect-drawer.svelte';
 	import { fetchConfig } from '$lib/api';
+	import { route } from '$lib/url';
 	import { recent } from '$lib/recent.svelte';
 	import { shortcuts } from '$lib/shortcuts.svelte';
 	import { dashboardState } from '$lib/dashboard-state.svelte';
@@ -45,23 +46,23 @@
 			},
 
 			// Navigation (g leader)
-			{ keys: 'g d', category: 'Navigation', description: 'Dashboard', action: () => goto('/') },
-			{ keys: 'g r', category: 'Navigation', description: 'Request log', action: () => goto('/logs') },
-			{ keys: 'g s', category: 'Navigation', description: 'S3', action: () => goto('/s3') },
-			{ keys: 'g f', category: 'Navigation', description: 'Lambda (function)', action: () => goto('/lambda') },
-			{ keys: 'g t', category: 'Navigation', description: 'DynamoDB (table)', action: () => goto('/dynamodb') },
-			{ keys: 'g i', category: 'Navigation', description: 'IAM', action: () => goto('/iam') },
-			{ keys: 'g q', category: 'Navigation', description: 'SQS (queue)', action: () => goto('/sqs') },
-			{ keys: 'g n', category: 'Navigation', description: 'SNS (notify)', action: () => goto('/sns') },
-			{ keys: 'g k', category: 'Navigation', description: 'KMS (key)', action: () => goto('/kms') },
-			{ keys: 'g e', category: 'Navigation', description: 'EC2', action: () => goto('/ec2') },
-			{ keys: 'g c', category: 'Navigation', description: 'Cognito', action: () => goto('/cognito') },
-			{ keys: 'g m', category: 'Navigation', description: 'Metrics', action: () => goto('/monitoring') },
-			{ keys: 'g x', category: 'Navigation', description: 'CloudTrail', action: () => goto('/cloudtrail') },
-			{ keys: 'g w', category: 'Navigation', description: 'CloudWatch logs', action: () => goto('/cloudwatch') },
-			{ keys: 'g b', category: 'Navigation', description: 'Bedrock', action: () => goto('/bedrock') },
-			{ keys: 'g p', category: 'Navigation', description: 'API Gateway', action: () => goto('/apigateway') },
-			{ keys: 'g ,', category: 'Navigation', description: 'Settings', action: () => goto('/settings') },
+			{ keys: 'g d', category: 'Navigation', description: 'Dashboard', action: () => goto(route('/')) },
+			{ keys: 'g r', category: 'Navigation', description: 'Request log', action: () => goto(route('/logs')) },
+			{ keys: 'g s', category: 'Navigation', description: 'S3', action: () => goto(route('/s3')) },
+			{ keys: 'g f', category: 'Navigation', description: 'Lambda (function)', action: () => goto(route('/lambda')) },
+			{ keys: 'g t', category: 'Navigation', description: 'DynamoDB (table)', action: () => goto(route('/dynamodb')) },
+			{ keys: 'g i', category: 'Navigation', description: 'IAM', action: () => goto(route('/iam')) },
+			{ keys: 'g q', category: 'Navigation', description: 'SQS (queue)', action: () => goto(route('/sqs')) },
+			{ keys: 'g n', category: 'Navigation', description: 'SNS (notify)', action: () => goto(route('/sns')) },
+			{ keys: 'g k', category: 'Navigation', description: 'KMS (key)', action: () => goto(route('/kms')) },
+			{ keys: 'g e', category: 'Navigation', description: 'EC2', action: () => goto(route('/ec2')) },
+			{ keys: 'g c', category: 'Navigation', description: 'Cognito', action: () => goto(route('/cognito')) },
+			{ keys: 'g m', category: 'Navigation', description: 'Metrics', action: () => goto(route('/monitoring')) },
+			{ keys: 'g x', category: 'Navigation', description: 'CloudTrail', action: () => goto(route('/cloudtrail')) },
+			{ keys: 'g w', category: 'Navigation', description: 'CloudWatch logs', action: () => goto(route('/cloudwatch')) },
+			{ keys: 'g b', category: 'Navigation', description: 'Bedrock', action: () => goto(route('/bedrock')) },
+			{ keys: 'g p', category: 'Navigation', description: 'API Gateway', action: () => goto(route('/apigateway')) },
+			{ keys: 'g ,', category: 'Navigation', description: 'Settings', action: () => goto(route('/settings')) },
 		]);
 	}
 

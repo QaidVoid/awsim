@@ -12,6 +12,7 @@
 	} from '$lib/components/ui/command';
 	import { CATEGORY_ORDER, SERVICES, findService } from '$lib/services-catalog';
 	import { recent } from '$lib/recent.svelte';
+	import { route } from '$lib/url';
 	import { THEMES, theme, type Theme } from '$lib/theme.svelte';
 	import { dashboardState } from '$lib/dashboard-state.svelte';
 	import { inspectState } from '$lib/inspect-state.svelte';
@@ -43,7 +44,7 @@
 		open = false;
 		value = '';
 		recent.push(path);
-		goto(path);
+		goto(route(path));
 	}
 
 	function pickTheme(id: Theme) {

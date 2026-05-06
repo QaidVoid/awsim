@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { route } from '$lib/url';
 	import { listRoles, type IamRole } from '$lib/api/iam';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Badge } from '$lib/components/ui/badge';
@@ -32,7 +33,7 @@
 	}
 
 	function openDetail(r: IamRole) {
-		goto(`/iam/roles/${encodeURIComponent(r.roleName)}`);
+		goto(route(`/iam/roles/${encodeURIComponent(r.roleName)}`));
 	}
 
 	onMount(load);
