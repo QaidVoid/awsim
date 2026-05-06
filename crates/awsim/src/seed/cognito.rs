@@ -163,6 +163,7 @@ pub async fn seed(
                 groups: Vec::new(),
                 created_date: now,
                 pending_verifications: HashMap::new(),
+                pending_verifications_issued: HashMap::new(),
                 revoked_refresh_tokens: Vec::new(),
                 mfa_enabled: false,
                 mfa_preferred: None,

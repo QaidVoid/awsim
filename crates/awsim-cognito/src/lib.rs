@@ -428,6 +428,8 @@ impl ServiceHandler for CognitoService {
             state.resource_tags.clear();
             state.mfa_sessions.clear();
             state.confirmation_codes.clear();
+            state.confirmation_codes_issued.clear();
+            state.srp_sessions.clear();
             for (id, pool) in cs.pools {
                 state.user_pools.insert(id, pool);
             }

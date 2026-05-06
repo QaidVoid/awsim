@@ -32,6 +32,20 @@ fn now_epoch() -> u64 {
         .as_secs()
 }
 
+/// Default validity window for confirmation / reset codes, matching real
+/// Cognito's 24-hour expiry.
+const CODE_VALIDITY_SECS: u64 = 24 * 3600;
+
+/// Returns true when `issued_at` is within `CODE_VALIDITY_SECS` of now.
+/// Missing timestamps (legacy entries before the expiry was added) are
+/// treated as expired so a stale code from a snapshot can't be replayed.
+fn code_still_valid(issued_at: Option<u64>) -> bool {
+    match issued_at {
+        Some(ts) => now_epoch().saturating_sub(ts) < CODE_VALIDITY_SECS,
+        None => false,
+    }
+}
+
 pub fn user_to_value(user: &CognitoUser) -> Value {
     let attributes: Vec<Value> = user
         .attributes
@@ -73,6 +87,7 @@ fn make_user(
         groups: Vec::new(),
         created_date: now_epoch(),
         pending_verifications: HashMap::new(),
+        pending_verifications_issued: HashMap::new(),
         revoked_refresh_tokens: Vec::new(),
         mfa_enabled: false,
         mfa_preferred: None,
@@ -385,6 +400,20 @@ pub fn confirm_sign_up(
                 "Invalid verification code provided",
             ));
         }
+        let issued = state
+            .confirmation_codes_issued
+            .get(&code_key)
+            .map(|e| *e.value());
+        if !code_still_valid(issued) {
+            // Drop the stale entry so a retry isn't tempted to keep
+            // probing the same code.
+            state.confirmation_codes.remove(&code_key);
+            state.confirmation_codes_issued.remove(&code_key);
+            return Err(AwsError::bad_request(
+                "ExpiredCodeException",
+                "Confirmation code has expired",
+            ));
+        }
     } else if !input["ConfirmationCode"].is_null() {
         let provided = input["ConfirmationCode"].as_str().unwrap_or("");
         if provided.is_empty() {
@@ -396,6 +425,7 @@ pub fn confirm_sign_up(
     }
 
     let _ = state.confirmation_codes.remove(&code_key);
+    let _ = state.confirmation_codes_issued.remove(&code_key);
 
     let user = pool.users.get_mut(username).ok_or_else(|| {
         AwsError::not_found(
@@ -829,6 +859,8 @@ pub fn forgot_password(
         })?;
         user.pending_verifications
             .insert(FORGOT_PASSWORD_KEY.to_string(), code.clone());
+        user.pending_verifications_issued
+            .insert(FORGOT_PASSWORD_KEY.to_string(), now_epoch());
         dest = user
             .attributes
             .get("email")
@@ -937,6 +969,19 @@ pub fn confirm_forgot_password(
                 "No active forgot-password code for this user",
             )
         })?;
+    let issued = user
+        .pending_verifications_issued
+        .get(FORGOT_PASSWORD_KEY)
+        .copied();
+    if !code_still_valid(issued) {
+        user.pending_verifications.remove(FORGOT_PASSWORD_KEY);
+        user.pending_verifications_issued
+            .remove(FORGOT_PASSWORD_KEY);
+        return Err(AwsError::bad_request(
+            "ExpiredCodeException",
+            "Forgot-password code has expired",
+        ));
+    }
     if expected != confirmation_code {
         return Err(AwsError::bad_request(
             "CodeMismatchException",
@@ -945,6 +990,8 @@ pub fn confirm_forgot_password(
     }
 
     user.pending_verifications.remove(FORGOT_PASSWORD_KEY);
+    user.pending_verifications_issued
+        .remove(FORGOT_PASSWORD_KEY);
     user.password_hash = crate::password::hash(password)?;
     let (s, v) = crate::password::srp_material(&pool_id, username, password);
     user.srp_salt = Some(s);
@@ -1451,9 +1498,9 @@ pub fn resend_confirmation_code(
     }
 
     let code = format!("{:06}", rand::random::<u32>() % 1_000_000);
-    state
-        .confirmation_codes
-        .insert(format!("{pool_id}:{username}"), code.clone());
+    let key = format!("{pool_id}:{username}");
+    state.confirmation_codes.insert(key.clone(), code.clone());
+    state.confirmation_codes_issued.insert(key, now_epoch());
 
     info!(username = %username, code = %code, "Cognito: resend confirmation code");
     Ok(json!({
@@ -1496,6 +1543,8 @@ pub fn get_user_attribute_verification_code(
             let code = format!("{:06}", rand::random::<u32>() % 1_000_000);
             user.pending_verifications
                 .insert(attribute_name.to_string(), code.clone());
+            user.pending_verifications_issued
+                .insert(attribute_name.to_string(), now_epoch());
             info!(username = %username, attribute_name = %attribute_name, code = %code, "Cognito: attribute verification code sent");
             return Ok(json!({
                 "CodeDeliveryDetails": {
@@ -1544,17 +1593,30 @@ pub fn verify_user_attribute(
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
-            if let Some(expected) = user.pending_verifications.get(attribute_name)
-                && _code != expected
-            {
-                return Err(AwsError::bad_request(
-                    "CodeMismatchException",
-                    "Invalid verification code provided",
-                ));
+            if let Some(expected) = user.pending_verifications.get(attribute_name) {
+                let issued = user
+                    .pending_verifications_issued
+                    .get(attribute_name)
+                    .copied();
+                if !code_still_valid(issued) {
+                    user.pending_verifications.remove(attribute_name);
+                    user.pending_verifications_issued.remove(attribute_name);
+                    return Err(AwsError::bad_request(
+                        "ExpiredCodeException",
+                        "Attribute verification code has expired",
+                    ));
+                }
+                if _code != expected {
+                    return Err(AwsError::bad_request(
+                        "CodeMismatchException",
+                        "Invalid verification code provided",
+                    ));
+                }
             }
             let verified_key = format!("{attribute_name}_verified");
             user.attributes.insert(verified_key, "true".to_string());
             user.pending_verifications.remove(attribute_name);
+            user.pending_verifications_issued.remove(attribute_name);
             info!(username = %username, attribute_name = %attribute_name, "Cognito: verified user attribute");
             return Ok(json!({}));
         }
@@ -1683,4 +1745,32 @@ pub fn admin_list_user_auth_events(
         .collect();
 
     Ok(json!({ "AuthEvents": events }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_just_issued_is_valid() {
+        assert!(code_still_valid(Some(now_epoch())));
+    }
+
+    #[test]
+    fn code_within_window_is_valid() {
+        // 23 hours old: still inside the 24-hour window.
+        assert!(code_still_valid(Some(now_epoch() - 23 * 3600)));
+    }
+
+    #[test]
+    fn code_past_window_is_expired() {
+        // 25 hours old: just past the cap.
+        assert!(!code_still_valid(Some(now_epoch() - 25 * 3600)));
+    }
+
+    #[test]
+    fn missing_timestamp_treated_as_expired() {
+        // Legacy snapshot codes have no issued time; fail closed.
+        assert!(!code_still_valid(None));
+    }
 }

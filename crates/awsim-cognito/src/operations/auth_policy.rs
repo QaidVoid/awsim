@@ -228,6 +228,7 @@ mod tests {
             groups: Vec::new(),
             created_date: 0,
             pending_verifications: Default::default(),
+            pending_verifications_issued: Default::default(),
             revoked_refresh_tokens: Vec::new(),
             mfa_enabled: false,
             mfa_preferred: None,

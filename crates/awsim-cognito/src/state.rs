@@ -274,6 +274,13 @@ pub struct CognitoUser {
     pub created_date: u64,
     /// Pending verification codes, keyed by attribute name.
     pub pending_verifications: HashMap<String, String>,
+    /// Issue time (Unix seconds) for each entry in `pending_verifications`,
+    /// used to enforce code expiry. Codes whose key is in
+    /// `pending_verifications` but missing here are treated as legacy
+    /// pre-expiry entries and rejected as expired (fail-closed) so an
+    /// imported snapshot can't make a stale code re-usable.
+    #[serde(default)]
+    pub pending_verifications_issued: HashMap<String, u64>,
     /// Revoked refresh tokens for this user.
     pub revoked_refresh_tokens: Vec<String>,
     /// Whether MFA is enabled for this user.
@@ -383,8 +390,12 @@ pub struct CognitoState {
     pub resource_tags: DashMap<String, HashMap<String, String>>,
     /// In-flight MFA sessions: session_id → (pool_id, username).
     pub mfa_sessions: DashMap<String, MfaSession>,
-    /// Pending confirmation codes: "pool_id:username" → code.
+    /// Pending confirmation codes: "pool_id:username" -> code.
     pub confirmation_codes: DashMap<String, String>,
+    /// Issue times (Unix seconds) for entries in `confirmation_codes`.
+    /// Treated the same way as `pending_verifications_issued` on the
+    /// user record: missing entry == expired.
+    pub confirmation_codes_issued: DashMap<String, u64>,
     /// In-flight SRP exchanges: session_id → SrpSession.
     pub srp_sessions: DashMap<String, SrpSession>,
 }
