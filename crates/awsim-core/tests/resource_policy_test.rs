@@ -128,3 +128,61 @@ fn resource_policy_only_used_for_matching_service() {
         .unwrap_err();
     assert_eq!(err.code, "AccessDenied");
 }
+
+#[test]
+fn resource_policy_explicit_deny_overrides_identity_allow() {
+    // Identity policy says yes; bucket policy says no. Real S3
+    // semantics: explicit deny in any policy wins.
+    let identity = r#"{
+        "Version":"2012-10-17",
+        "Statement":[{
+            "Effect":"Allow",
+            "Action":"s3:GetObject",
+            "Resource":"*"
+        }]
+    }"#;
+    let principal = ResolvedPrincipal {
+        arn: "arn:aws:iam::000000000000:user/Erin".to_string(),
+        account: "000000000000".to_string(),
+        identity_policies: vec![awsim_iam_policy::parse(identity).expect("parses")],
+        permissions_boundary: None,
+        is_root: false,
+        tags: Default::default(),
+    };
+
+    let bucket_policy = r#"{
+        "Version":"2012-10-17",
+        "Statement":[{
+            "Effect":"Deny",
+            "Principal":"*",
+            "Action":"s3:GetObject",
+            "Resource":"arn:aws:s3:::bucket/secret"
+        }]
+    }"#;
+    let doc = awsim_iam_policy::parse(bucket_policy).expect("policy parses");
+
+    let mut engine = AuthzEngine::new(true);
+    engine.principal_lookup = Arc::new(StubLookup {
+        principal: Some(principal),
+    });
+    engine.resource_policy_lookups.insert(
+        "s3".to_string(),
+        Arc::new(StubResourcePolicyLookup {
+            policy: doc,
+            expected_arn: "arn:aws:s3:::bucket/secret".to_string(),
+        }),
+    );
+
+    let ctx = ctx_with_key("s3", "AKIATEST");
+    let err = engine
+        .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/secret")
+        .unwrap_err();
+    assert_eq!(err.code, "AccessDenied");
+
+    // Different key -> no resource policy match -> identity allow stands.
+    assert!(
+        engine
+            .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/public")
+            .is_ok()
+    );
+}
