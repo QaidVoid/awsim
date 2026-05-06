@@ -164,6 +164,8 @@ pub async fn seed(
                 created_date: now,
                 pending_verifications: HashMap::new(),
                 pending_verifications_issued: HashMap::new(),
+                code_failed_attempts: 0,
+                code_locked_until_secs: None,
                 revoked_refresh_tokens: Vec::new(),
                 mfa_enabled: false,
                 mfa_preferred: None,

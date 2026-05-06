@@ -46,6 +46,53 @@ fn code_still_valid(issued_at: Option<u64>) -> bool {
     }
 }
 
+/// How many consecutive wrong codes we tolerate before locking the user
+/// out of code submission for [`CODE_LOCKOUT_SECS`].
+const CODE_ATTEMPT_LIMIT: u32 = 5;
+/// Length of the cool-off applied once a user crosses the attempt limit.
+/// 15 minutes matches Cognito's documented behaviour of throttling brute
+/// force attempts on its 6-digit codes.
+const CODE_LOCKOUT_SECS: u64 = 15 * 60;
+
+/// Reject the request if the user is currently locked out from submitting
+/// codes; otherwise return Ok and let the caller verify the code itself.
+fn check_code_rate_limit(user: &mut CognitoUser) -> Result<(), AwsError> {
+    if let Some(until) = user.code_locked_until_secs {
+        if now_epoch() < until {
+            return Err(AwsError::bad_request(
+                "TooManyRequestsException",
+                "Too many attempts in a short period of time; try again later.",
+            ));
+        }
+        // Cool-off elapsed; clear so the user can try again.
+        user.code_locked_until_secs = None;
+        user.code_failed_attempts = 0;
+    }
+    Ok(())
+}
+
+/// Record a failed code attempt and engage the cool-off if we cross the
+/// attempt limit. Always returns the original `mismatch_err` (or the
+/// rate-limit error once the lockout fires) so callers can `?` it.
+fn record_code_failure(user: &mut CognitoUser, mismatch_err: AwsError) -> AwsError {
+    user.code_failed_attempts = user.code_failed_attempts.saturating_add(1);
+    if user.code_failed_attempts >= CODE_ATTEMPT_LIMIT {
+        user.code_locked_until_secs = Some(now_epoch() + CODE_LOCKOUT_SECS);
+        return AwsError::bad_request(
+            "TooManyRequestsException",
+            "Too many attempts in a short period of time; try again later.",
+        );
+    }
+    mismatch_err
+}
+
+/// Reset the failure counter and any pending lockout after a successful
+/// code consumption.
+fn record_code_success(user: &mut CognitoUser) {
+    user.code_failed_attempts = 0;
+    user.code_locked_until_secs = None;
+}
+
 pub fn user_to_value(user: &CognitoUser) -> Value {
     let attributes: Vec<Value> = user
         .attributes
@@ -88,6 +135,8 @@ fn make_user(
         created_date: now_epoch(),
         pending_verifications: HashMap::new(),
         pending_verifications_issued: HashMap::new(),
+        code_failed_attempts: 0,
+        code_locked_until_secs: None,
         revoked_refresh_tokens: Vec::new(),
         mfa_enabled: false,
         mfa_preferred: None,
@@ -392,14 +441,20 @@ pub fn confirm_sign_up(
     })?;
 
     let code_key = format!("{pool_id}:{username}");
-    if let Some(expected) = state.confirmation_codes.get(&code_key) {
+    let user = pool.users.get_mut(username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    check_code_rate_limit(user)?;
+
+    let stored = state
+        .confirmation_codes
+        .get(&code_key)
+        .map(|e| e.value().clone());
+    if let Some(expected) = stored {
         let provided = input["ConfirmationCode"].as_str().unwrap_or("");
-        if provided != *expected {
-            return Err(AwsError::bad_request(
-                "CodeMismatchException",
-                "Invalid verification code provided",
-            ));
-        }
         let issued = state
             .confirmation_codes_issued
             .get(&code_key)
@@ -414,6 +469,15 @@ pub fn confirm_sign_up(
                 "Confirmation code has expired",
             ));
         }
+        if provided != expected {
+            return Err(record_code_failure(
+                user,
+                AwsError::bad_request(
+                    "CodeMismatchException",
+                    "Invalid verification code provided",
+                ),
+            ));
+        }
     } else if !input["ConfirmationCode"].is_null() {
         let provided = input["ConfirmationCode"].as_str().unwrap_or("");
         if provided.is_empty() {
@@ -424,15 +488,9 @@ pub fn confirm_sign_up(
         }
     }
 
+    record_code_success(user);
     let _ = state.confirmation_codes.remove(&code_key);
     let _ = state.confirmation_codes_issued.remove(&code_key);
-
-    let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
-    })?;
 
     user.status = "CONFIRMED".to_string();
     info!(username = %username, "Cognito: user confirmed sign-up");
@@ -958,6 +1016,7 @@ pub fn confirm_forgot_password(
             format!("User not found: {username}"),
         )
     })?;
+    check_code_rate_limit(user)?;
 
     let expected = user
         .pending_verifications
@@ -983,12 +1042,16 @@ pub fn confirm_forgot_password(
         ));
     }
     if expected != confirmation_code {
-        return Err(AwsError::bad_request(
-            "CodeMismatchException",
-            "Invalid verification code provided, please try again.",
+        return Err(record_code_failure(
+            user,
+            AwsError::bad_request(
+                "CodeMismatchException",
+                "Invalid verification code provided, please try again.",
+            ),
         ));
     }
 
+    record_code_success(user);
     user.pending_verifications.remove(FORGOT_PASSWORD_KEY);
     user.pending_verifications_issued
         .remove(FORGOT_PASSWORD_KEY);
@@ -1593,7 +1656,8 @@ pub fn verify_user_attribute(
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
-            if let Some(expected) = user.pending_verifications.get(attribute_name) {
+            check_code_rate_limit(user)?;
+            if let Some(expected) = user.pending_verifications.get(attribute_name).cloned() {
                 let issued = user
                     .pending_verifications_issued
                     .get(attribute_name)
@@ -1607,12 +1671,16 @@ pub fn verify_user_attribute(
                     ));
                 }
                 if _code != expected {
-                    return Err(AwsError::bad_request(
-                        "CodeMismatchException",
-                        "Invalid verification code provided",
+                    return Err(record_code_failure(
+                        user,
+                        AwsError::bad_request(
+                            "CodeMismatchException",
+                            "Invalid verification code provided",
+                        ),
                     ));
                 }
             }
+            record_code_success(user);
             let verified_key = format!("{attribute_name}_verified");
             user.attributes.insert(verified_key, "true".to_string());
             user.pending_verifications.remove(attribute_name);
@@ -1772,5 +1840,80 @@ mod tests {
     fn missing_timestamp_treated_as_expired() {
         // Legacy snapshot codes have no issued time; fail closed.
         assert!(!code_still_valid(None));
+    }
+
+    fn fixture_user() -> CognitoUser {
+        CognitoUser {
+            username: "u".into(),
+            sub: "s".into(),
+            password_hash: "x".into(),
+            srp_salt: None,
+            srp_verifier: None,
+            attributes: Default::default(),
+            status: "CONFIRMED".into(),
+            enabled: true,
+            groups: Vec::new(),
+            created_date: 0,
+            pending_verifications: Default::default(),
+            pending_verifications_issued: Default::default(),
+            code_failed_attempts: 0,
+            code_locked_until_secs: None,
+            revoked_refresh_tokens: Vec::new(),
+            mfa_enabled: false,
+            mfa_preferred: None,
+            totp_secret: None,
+            totp_verified: false,
+            devices: Vec::new(),
+            linked_providers: Vec::new(),
+            mfa_options: Vec::new(),
+            webauthn_credentials: Vec::new(),
+            webauthn_pending_challenge: None,
+            failed_login_attempts: 0,
+            locked_until_secs: None,
+            auth_events: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn rate_limit_engages_after_threshold_failures() {
+        let mut user = fixture_user();
+        let dummy = || AwsError::bad_request("CodeMismatchException", "Invalid verification code");
+
+        // First (LIMIT - 1) failures bubble up the original mismatch error.
+        for _ in 0..(CODE_ATTEMPT_LIMIT - 1) {
+            let err = record_code_failure(&mut user, dummy());
+            assert_eq!(err.code, "CodeMismatchException");
+        }
+        assert!(user.code_locked_until_secs.is_none());
+
+        // The threshold-th failure flips the lockout.
+        let err = record_code_failure(&mut user, dummy());
+        assert_eq!(err.code, "TooManyRequestsException");
+        assert!(user.code_locked_until_secs.is_some());
+
+        // Subsequent attempts are rejected by the rate-limit gate even if
+        // the caller would have provided the right code.
+        let err = check_code_rate_limit(&mut user).unwrap_err();
+        assert_eq!(err.code, "TooManyRequestsException");
+    }
+
+    #[test]
+    fn rate_limit_clears_on_success() {
+        let mut user = fixture_user();
+        user.code_failed_attempts = 3;
+        record_code_success(&mut user);
+        assert_eq!(user.code_failed_attempts, 0);
+        assert!(user.code_locked_until_secs.is_none());
+    }
+
+    #[test]
+    fn rate_limit_releases_after_lockout_window() {
+        let mut user = fixture_user();
+        user.code_failed_attempts = CODE_ATTEMPT_LIMIT;
+        // Lockout that already expired in the past.
+        user.code_locked_until_secs = Some(now_epoch().saturating_sub(1));
+        check_code_rate_limit(&mut user).expect("expired lockout should clear");
+        assert!(user.code_locked_until_secs.is_none());
+        assert_eq!(user.code_failed_attempts, 0);
     }
 }

@@ -281,6 +281,16 @@ pub struct CognitoUser {
     /// imported snapshot can't make a stale code re-usable.
     #[serde(default)]
     pub pending_verifications_issued: HashMap<String, u64>,
+    /// Consecutive failed attempts to consume any verification code on this
+    /// user (sign-up confirmation, forgot-password, attribute-verify). Reset
+    /// to 0 on a successful match.
+    #[serde(default)]
+    pub code_failed_attempts: u32,
+    /// Unix seconds until which this user is rate-limited from submitting
+    /// any code. Set after `code_failed_attempts` crosses the threshold,
+    /// cleared once expired or after a successful match.
+    #[serde(default)]
+    pub code_locked_until_secs: Option<u64>,
     /// Revoked refresh tokens for this user.
     pub revoked_refresh_tokens: Vec<String>,
     /// Whether MFA is enabled for this user.
