@@ -90,11 +90,25 @@ struct Cli {
     #[arg(long, env = "AWSIM_MAX_BLOCKING_THREADS", default_value_t = 32)]
     max_blocking_threads: usize,
 
-    /// Per-request body size cap in bytes. Lower this when you're
-    /// hammering DDB with large `BatchWriteItem` payloads — axum
-    /// reserves up to this much per connection. Default 100 MiB.
+    /// Per-request body size cap in bytes for non-S3-upload routes.
+    /// axum aborts the body stream once this many bytes have arrived
+    /// and returns 413, so memory per request is bounded by what the
+    /// client actually transmits up to the cap. Default 100 MiB.
     #[arg(long, env = "AWSIM_MAX_BODY_BYTES", default_value_t = 100 * 1024 * 1024)]
     max_body_bytes: usize,
+
+    /// Body cap for S3 PutObject / UploadPart routes specifically.
+    /// S3 single-PUT objects can legitimately reach 5 GiB and multipart
+    /// parts up to 5 GiB each; raising the global `--max-body-bytes`
+    /// to that level would let a misbehaving non-S3 client buffer a
+    /// gigabyte under any other endpoint, so we apply this larger cap
+    /// only on bucket/key-shaped paths via a route layer. Default 5 GiB.
+    #[arg(
+        long,
+        env = "AWSIM_MAX_S3_UPLOAD_BYTES",
+        default_value_t = 5 * 1024 * 1024 * 1024
+    )]
+    max_s3_upload_bytes: usize,
 
     /// Hours to retain captured SES outbound emails before the
     /// hourly sweep deletes them. Default 720 (30 days). Set to 0
@@ -979,6 +993,16 @@ async fn async_main() -> Result<()> {
     let cognito_oauth_router = awsim_cognito::oauth::router(cognito_oauth_state);
 
     // Build the main router (finalized with AppState).
+    //
+    // S3 upload routes (PutObject path-style and UploadPart) get a
+    // dedicated route with a much larger body cap so single-object PUTs
+    // up to 5 GiB work without forcing every other endpoint to inherit
+    // that headroom. The pattern matches `/{bucket}/{key+}` PUTs that
+    // either AWS SDKs use directly or that point at multipart upload
+    // (which the gateway distinguishes via the `uploadId` query string
+    // before dispatching). Other methods on the same path fall through
+    // to the universal gateway with the smaller `--max-body-bytes` cap.
+    let s3_upload_limit = cli.max_s3_upload_bytes;
     let main_router: axum::Router<()> = axum::Router::new()
         .route("/_awsim/health", axum::routing::get(admin::health))
         .route("/_awsim/services", axum::routing::get(admin::list_services))
@@ -997,6 +1021,11 @@ async fn async_main() -> Result<()> {
         .route(
             "/_awsim/requests/{id}/replay",
             axum::routing::post(admin::replay_request),
+        )
+        .route(
+            "/{bucket}/{*key}",
+            axum::routing::put(awsim_core::gateway::handle_request)
+                .route_layer(axum::extract::DefaultBodyLimit::max(s3_upload_limit)),
         )
         .fallback(awsim_core::gateway::handle_request)
         .with_state(state.clone());
