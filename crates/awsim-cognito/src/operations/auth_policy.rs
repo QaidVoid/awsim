@@ -311,6 +311,8 @@ mod tests {
             import_jobs: Vec::new(),
             log_delivery_configuration: None,
             terms: Vec::new(),
+            custom_auth_expected_answer: None,
+            custom_auth_challenge_parameters: Default::default(),
         };
 
         // No risk config — None.

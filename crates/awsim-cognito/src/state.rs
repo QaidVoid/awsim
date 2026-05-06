@@ -203,6 +203,18 @@ pub struct UserPool {
     pub log_delivery_configuration: Option<LogDeliveryConfiguration>,
     /// Terms entries.
     pub terms: Vec<TermsEntry>,
+    /// Test-only fixture for the CUSTOM_AUTH flow: when set, awsim emits a
+    /// CUSTOM_CHALLENGE on InitiateAuth(CUSTOM_AUTH) and only accepts
+    /// `ChallengeResponses["ANSWER"]` equal to this string. Without it,
+    /// CUSTOM_AUTH still emits a challenge but accepts any non-empty
+    /// answer (the production wiring would invoke a Lambda
+    /// VerifyAuthChallengeResponse trigger to make the call).
+    #[serde(default)]
+    pub custom_auth_expected_answer: Option<String>,
+    /// Public ChallengeParameters echoed back to the client on
+    /// CUSTOM_CHALLENGE. Configurable per pool so tests can pin them.
+    #[serde(default)]
+    pub custom_auth_challenge_parameters: HashMap<String, String>,
 }
 
 /// A Cognito User Pool App Client.

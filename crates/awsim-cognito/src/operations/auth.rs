@@ -213,6 +213,7 @@ pub fn initiate_auth(
 
     match auth_flow {
         "USER_SRP_AUTH" => start_srp_challenge(state, client_id, &pool_id, params),
+        "CUSTOM_AUTH" => start_custom_auth_challenge(state, client_id, &pool_id, params, ctx),
         "USER_PASSWORD_AUTH" => {
             let raw_username = params["USERNAME"]
                 .as_str()
@@ -924,6 +925,9 @@ pub fn respond_to_auth_challenge(
             "Session": input["Session"]
         })),
         "PASSWORD_VERIFIER" => verify_srp_password(state, &pool_id, client_id, &ctx.region, input),
+        "CUSTOM_CHALLENGE" => {
+            verify_custom_auth_response(state, &pool_id, client_id, &ctx.region, input, ctx)
+        }
         name => Err(AwsError::bad_request(
             "InvalidParameter",
             format!("Unsupported ChallengeName: {name}"),
@@ -1399,6 +1403,205 @@ fn verify_srp_password(
     drop(pool);
     state.srp_sessions.remove(session_id);
     info!(username = %session.username, "Cognito: SRP PASSWORD_VERIFIER success");
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// CUSTOM_AUTH flow
+// ---------------------------------------------------------------------------
+
+/// Phase 1 of CUSTOM_AUTH. Real Cognito invokes the DefineAuthChallenge and
+/// CreateAuthChallenge Lambda triggers to decide what challenge to issue
+/// and what parameters to expose to the client. awsim has no synchronous
+/// Lambda invocation path, so we publish those triggers as fire-and-forget
+/// events and emit a CUSTOM_CHALLENGE backed by the pool's
+/// `custom_auth_challenge_parameters` fixture. Tests can configure that
+/// fixture or the expected answer directly via UpdateUserPool.
+fn start_custom_auth_challenge(
+    state: &CognitoState,
+    client_id: &str,
+    pool_id: &str,
+    params: &serde_json::Value,
+    ctx: &RequestContext,
+) -> Result<serde_json::Value, AwsError> {
+    let raw_username = params["USERNAME"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required"))?;
+    crate::secret_hash::validate_for_client(
+        state,
+        client_id,
+        params["SECRET_HASH"].as_str(),
+        raw_username,
+    )?;
+
+    let pool = state
+        .user_pools
+        .get(pool_id)
+        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "User pool not found"))?;
+    let resolved_username = super::users::resolve_username_for_signin(&pool, raw_username)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "UserNotFoundException",
+                format!("User not found: {raw_username}"),
+            )
+        })?;
+    if let Some(user) = pool.users.get(&resolved_username)
+        && !user.enabled
+    {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "User is disabled.",
+        ));
+    }
+
+    let challenge_params = pool.custom_auth_challenge_parameters.clone();
+
+    if let Some(arn) = pool.lambda_config.get("DefineAuthChallenge") {
+        invoke_trigger(
+            ctx,
+            "DefineAuthChallenge_Authentication",
+            arn,
+            &json!({
+                "userPoolId": pool_id,
+                "userName": resolved_username,
+                "callerContext": { "clientId": client_id },
+                "request": { "session": [], "userAttributes": {} }
+            }),
+        );
+    }
+    if let Some(arn) = pool.lambda_config.get("CreateAuthChallenge") {
+        invoke_trigger(
+            ctx,
+            "CreateAuthChallenge_Authentication",
+            arn,
+            &json!({
+                "userPoolId": pool_id,
+                "userName": resolved_username,
+                "callerContext": { "clientId": client_id },
+                "request": { "challengeName": "CUSTOM_CHALLENGE", "session": [] }
+            }),
+        );
+    }
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    state.mfa_sessions.insert(
+        session_id.clone(),
+        crate::state::MfaSession {
+            pool_id: pool_id.to_string(),
+            username: resolved_username.clone(),
+            issued_at: now_epoch(),
+        },
+    );
+
+    let mut params_json = serde_json::Map::new();
+    params_json.insert(
+        "USERNAME".to_string(),
+        Value::String(resolved_username.clone()),
+    );
+    for (k, v) in challenge_params {
+        params_json.insert(k, Value::String(v));
+    }
+
+    info!(username = %resolved_username, "Cognito: CUSTOM_AUTH -> CUSTOM_CHALLENGE");
+    Ok(json!({
+        "ChallengeName": "CUSTOM_CHALLENGE",
+        "Session": session_id,
+        "ChallengeParameters": params_json,
+    }))
+}
+
+/// Phase 2 of CUSTOM_AUTH. Real Cognito would call the
+/// VerifyAuthChallengeResponse Lambda to decide if `ANSWER` is correct.
+/// awsim does the simplest equivalent: compare against the pool's
+/// `custom_auth_expected_answer` fixture (when set), or accept any
+/// non-empty answer otherwise. The Lambda trigger is still emitted as a
+/// fire-and-forget event so tests can observe it.
+fn verify_custom_auth_response(
+    state: &CognitoState,
+    pool_id: &str,
+    client_id: &str,
+    region: &str,
+    input: &serde_json::Value,
+    ctx: &RequestContext,
+) -> Result<serde_json::Value, AwsError> {
+    let session_id = input["Session"].as_str().unwrap_or("");
+    let session = state
+        .mfa_sessions
+        .get(session_id)
+        .map(|e| e.value().clone())
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?;
+    if !session_still_valid(session.issued_at) {
+        state.mfa_sessions.remove(session_id);
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Custom auth session has expired; restart the auth flow",
+        ));
+    }
+    if session.pool_id != pool_id {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Session does not match pool",
+        ));
+    }
+
+    let resp = &input["ChallengeResponses"];
+    let answer = resp["ANSWER"].as_str().unwrap_or("");
+    if answer.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "ChallengeResponses.ANSWER is required",
+        ));
+    }
+
+    let pool = state
+        .user_pools
+        .get(pool_id)
+        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "User pool not found"))?;
+    if let Some(arn) = pool.lambda_config.get("VerifyAuthChallengeResponse") {
+        invoke_trigger(
+            ctx,
+            "VerifyAuthChallengeResponse_Authentication",
+            arn,
+            &json!({
+                "userPoolId": pool_id,
+                "userName": session.username,
+                "callerContext": { "clientId": client_id },
+                "request": { "challengeAnswer": answer }
+            }),
+        );
+    }
+    if let Some(expected) = pool.custom_auth_expected_answer.as_deref()
+        && expected != answer
+    {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Incorrect answer to custom challenge",
+        ));
+    }
+
+    let user = pool
+        .users
+        .get(&session.username)
+        .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
+    let pairs = group_role_pairs(&pool, &user.groups);
+    let validity = pool
+        .clients
+        .get(client_id)
+        .map(TokenValidity::from_client)
+        .unwrap_or_else(TokenValidity::defaults);
+    let result = build_auth_result_validity(
+        &user.sub,
+        &user.username,
+        region,
+        pool_id,
+        client_id,
+        &user.attributes,
+        &pairs,
+        &validity,
+    );
+    drop(pool);
+    state.mfa_sessions.remove(session_id);
+    info!(username = %session.username, "Cognito: CUSTOM_CHALLENGE success");
     Ok(result)
 }
 

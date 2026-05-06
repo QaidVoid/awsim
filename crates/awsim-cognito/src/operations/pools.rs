@@ -139,6 +139,8 @@ pub fn create_user_pool(
         import_jobs: Vec::new(),
         log_delivery_configuration: None,
         terms: Vec::new(),
+        custom_auth_expected_answer: None,
+        custom_auth_challenge_parameters: HashMap::new(),
     };
 
     info!(pool_id = %pool_id, "Cognito: created user pool");
