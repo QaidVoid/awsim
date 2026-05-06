@@ -238,17 +238,21 @@ fn evaluate_value_expr(
         let left_val = evaluate_value_expr(&left_expr, item, expr_attr_names, expr_attr_values)?;
         let right_val = evaluate_value_expr(&right_expr, item, expr_attr_names, expr_attr_values)?;
 
-        let ln = extract_num(&left_val).unwrap_or(0.0);
-        let rn = extract_num(&right_val).unwrap_or(0.0);
-        let result = if op == '+' { ln + rn } else { ln - rn };
-
-        // Format number: no trailing .0 if integer
-        let s = if result.fract() == 0.0 {
-            format!("{}", result as i64)
+        let zero = rust_decimal::Decimal::ZERO;
+        let ln = extract_num(&left_val).unwrap_or(zero);
+        let rn = extract_num(&right_val).unwrap_or(zero);
+        let result = if op == '+' {
+            ln.checked_add(rn)
         } else {
-            result.to_string()
-        };
-        return Ok(json!({ "N": s }));
+            ln.checked_sub(rn)
+        }
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "ValidationException",
+                "Arithmetic in UpdateExpression overflowed the DynamoDB decimal range",
+            )
+        })?;
+        return Ok(json!({ "N": format_dynamo_number(result) }));
     }
 
     // Simple placeholder
@@ -301,10 +305,15 @@ fn find_top_level_arithmetic(expr: &str) -> Option<(String, char, String)> {
     None
 }
 
-fn extract_num(val: &Value) -> Option<f64> {
+/// Extract a DynamoDB N attribute as a precise decimal. f64 cannot round-trip
+/// the 38 significant digits AWS guarantees, so all internal arithmetic
+/// (`SET counter = counter + :n`, `ADD counter :n`, etc.) goes through this
+/// helper.
+fn extract_num(val: &Value) -> Option<rust_decimal::Decimal> {
+    use std::str::FromStr;
     val.get("N")
         .and_then(|v| v.as_str())
-        .and_then(|s| s.parse().ok())
+        .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
 }
 
 /// Get a possibly-nested attribute value from an item. Delegates to the
@@ -434,15 +443,12 @@ where
     }
 }
 
-/// Format the result of a DynamoDB numeric ADD. Integer-valued floats are
-/// emitted without a decimal so SDK clients see canonical "1" rather than
-/// "1.0", matching AWS.
-fn format_dynamo_number(n: f64) -> String {
-    if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
-        format!("{}", n as i64)
-    } else {
-        n.to_string()
-    }
+/// Format the result of a DynamoDB numeric ADD. Whole-number decimals are
+/// emitted without a trailing zero/decimal so SDK clients see canonical "1"
+/// rather than "1.0", matching AWS.
+fn format_dynamo_number(n: rust_decimal::Decimal) -> String {
+    let n = n.normalize();
+    n.to_string()
 }
 
 /// Set-type tag: SS (string), NS (number), BS (binary).
@@ -455,6 +461,7 @@ fn set_tag(v: &Value) -> Option<&'static str> {
 
 /// Apply ADD operation: numeric increment for N, set union for SS/NS/BS.
 fn apply_add(item: &mut DynamoItem, path: &str, value: &Value) -> Result<(), AwsError> {
+    let mut overflow = false;
     with_leaf_mut(item, path, |map, key| {
         let existing = map.get(key).cloned();
         match existing {
@@ -466,12 +473,21 @@ fn apply_add(item: &mut DynamoItem, path: &str, value: &Value) -> Result<(), Aws
                     existing.get("N").and_then(|v| v.as_str()),
                     value.get("N").and_then(|v| v.as_str()),
                 ) {
-                    let result =
-                        en.parse::<f64>().unwrap_or(0.0) + vn.parse::<f64>().unwrap_or(0.0);
-                    map.insert(
-                        key.to_string(),
-                        json!({ "N": format_dynamo_number(result) }),
-                    );
+                    use std::str::FromStr;
+                    let zero = rust_decimal::Decimal::ZERO;
+                    let lhs = rust_decimal::Decimal::from_str(en).unwrap_or(zero);
+                    let rhs = rust_decimal::Decimal::from_str(vn).unwrap_or(zero);
+                    match lhs.checked_add(rhs) {
+                        Some(result) => {
+                            map.insert(
+                                key.to_string(),
+                                json!({ "N": format_dynamo_number(result) }),
+                            );
+                        }
+                        None => {
+                            overflow = true;
+                        }
+                    }
                 } else if let Some(tag) = set_tag(&existing)
                     && value.get(tag).is_some()
                 {
@@ -492,6 +508,12 @@ fn apply_add(item: &mut DynamoItem, path: &str, value: &Value) -> Result<(), Aws
             }
         }
     });
+    if overflow {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            "Numeric ADD overflowed the DynamoDB decimal range",
+        ));
+    }
     Ok(())
 }
 

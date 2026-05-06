@@ -220,6 +220,11 @@ regex = "1"
 ipnet = "2"
 chrono = { version = "0.4", features = ["serde"] }
 
+# Numeric (DynamoDB stores numbers as up-to-38-digit decimals; rust_decimal
+# gives ~28 significant digits with exact arithmetic, far better than f64
+# for IDs / timestamps / financial values that DDB customers actually use).
+rust_decimal = "1"
+
 # Allocator — wired into the awsim binary for Linux + macOS only
 # (MSVC builds keep the system allocator). Returns memory to the OS
 # more aggressively than glibc malloc, which keeps idle RSS flat

@@ -125,7 +125,7 @@ pub fn evaluate_condition(
             match (attr_val, right_val) {
                 (Some(av), Some(rv)) => {
                     let sz = dynamo_size(av) as i64;
-                    let rn = extract_number_from_dynamo(rv).unwrap_or(0.0) as i64;
+                    let rn = extract_number_from_dynamo(rv).unwrap_or(0);
                     Ok(match op {
                         CompareOp::Eq => sz == rn,
                         CompareOp::Ne => sz != rn,
@@ -219,21 +219,42 @@ pub fn get_nested<'a>(item: &'a DynamoItem, path: &str) -> Option<&'a Value> {
 
 /// Compare two DynamoDB typed values with a comparison operator.
 fn compare_values(left: &Value, op: &CompareOp, right: &Value) -> bool {
-    // Numeric comparison if both N
+    // Numeric comparison if both N. DynamoDB stores numbers as variable-precision
+    // decimals (up to 38 significant digits), so f64's ~15-digit mantissa is not
+    // enough: comparing 9_999_999_999_999_999 to 10_000_000_000_000_000 as f64
+    // would say they are equal. rust_decimal carries ~28-29 significant digits
+    // exactly, which covers timestamps in nanos, IDs above 2^53, and money in
+    // millicents — every real DDB workload we have seen. Numbers that fail to
+    // parse (malformed wire input) compare as not-equal.
     if let (Some(ln), Some(rn)) = (
         left.get("N").and_then(|v| v.as_str()),
         right.get("N").and_then(|v| v.as_str()),
     ) {
-        let lf: f64 = ln.parse().unwrap_or(0.0);
-        let rf: f64 = rn.parse().unwrap_or(0.0);
-        return match op {
-            CompareOp::Eq => (lf - rf).abs() < f64::EPSILON,
-            CompareOp::Ne => (lf - rf).abs() >= f64::EPSILON,
-            CompareOp::Lt => lf < rf,
-            CompareOp::Le => lf <= rf,
-            CompareOp::Gt => lf > rf,
-            CompareOp::Ge => lf >= rf,
-        };
+        use std::str::FromStr;
+        match (
+            rust_decimal::Decimal::from_str(ln),
+            rust_decimal::Decimal::from_str(rn),
+        ) {
+            (Ok(l), Ok(r)) => {
+                return match op {
+                    CompareOp::Eq => l == r,
+                    CompareOp::Ne => l != r,
+                    CompareOp::Lt => l < r,
+                    CompareOp::Le => l <= r,
+                    CompareOp::Gt => l > r,
+                    CompareOp::Ge => l >= r,
+                };
+            }
+            _ => {
+                // Fall back to literal string equality so equal stringy
+                // numbers still compare equal even when out of decimal range.
+                return match op {
+                    CompareOp::Eq => ln == rn,
+                    CompareOp::Ne => ln != rn,
+                    _ => false,
+                };
+            }
+        }
     }
 
     // String comparison
@@ -289,10 +310,17 @@ fn extract_string_from_dynamo(val: &Value) -> Option<String> {
     None
 }
 
-fn extract_number_from_dynamo(val: &Value) -> Option<f64> {
-    val.get("N")
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.parse().ok())
+/// Extract a DynamoDB number as i64. Used only by `size()` comparisons,
+/// where the right-hand side is a small whole-number byte count — losing
+/// fractional precision is fine, and clipping to i64 range is safer than
+/// silently wrapping. Returns None when the value isn't numeric or doesn't
+/// fit in i64.
+fn extract_number_from_dynamo(val: &Value) -> Option<i64> {
+    use std::str::FromStr;
+    let s = val.get("N").and_then(|v| v.as_str())?;
+    rust_decimal::Decimal::from_str(s)
+        .ok()
+        .and_then(|d| <i64 as TryFrom<rust_decimal::Decimal>>::try_from(d).ok())
 }
 
 fn dynamo_size(val: &Value) -> usize {
@@ -369,6 +397,27 @@ mod tests {
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD as BASE64;
     use serde_json::json;
+
+    #[test]
+    fn high_precision_numbers_compare_distinctly() {
+        // 16 nines vs 17 nines: f64 cannot tell these apart, but DDB
+        // promises 38 sig digits. Without rust_decimal, both `Eq` and
+        // `Lt` would lie here.
+        let a = json!({ "N": "9999999999999999" });
+        let b = json!({ "N": "99999999999999999" });
+        assert!(!compare_values(&a, &CompareOp::Eq, &b));
+        assert!(compare_values(&a, &CompareOp::Lt, &b));
+        assert!(compare_values(&b, &CompareOp::Gt, &a));
+    }
+
+    #[test]
+    fn whole_number_decimals_compare_equal() {
+        // Trailing zero / decimal-vs-int formatting must not change
+        // numeric equality.
+        let a = json!({ "N": "1.0" });
+        let b = json!({ "N": "1" });
+        assert!(compare_values(&a, &CompareOp::Eq, &b));
+    }
 
     #[test]
     fn size_of_string_returns_utf8_byte_length() {
