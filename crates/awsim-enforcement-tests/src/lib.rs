@@ -9,12 +9,19 @@ use awsim_iam_policy::PolicyDocument;
 pub struct ServerHandle {
     shutdown: tokio::sync::oneshot::Sender<()>,
     task: tokio::task::JoinHandle<()>,
+    authz: Arc<AuthzEngine>,
 }
 
 impl ServerHandle {
     pub async fn shutdown(self) {
         let _ = self.shutdown.send(());
         let _ = self.task.await;
+    }
+
+    /// Live toggle: enable IAM enforcement without restarting the
+    /// server, mirroring the runtime-config flip the UI performs.
+    pub fn set_enforcement(&self, enabled: bool) {
+        self.authz.set_enabled(enabled);
     }
 }
 
@@ -57,6 +64,29 @@ pub async fn start_server_with_scp(
     let s3_routes = s3.routes();
     state.register(Arc::new(s3), s3_routes);
 
+    let dynamodb = Arc::new(awsim_dynamodb::DynamoDbService::new());
+    state.register(dynamodb, vec![]);
+
+    let lambda = awsim_lambda::LambdaService::new();
+    let lambda_store = lambda.store();
+    let lambda_routes = lambda.routes();
+    state.register(Arc::new(lambda), lambda_routes);
+
+    let sqs = awsim_sqs::SqsService::new();
+    let sqs_store = sqs.store();
+    state.register(Arc::new(sqs), vec![]);
+
+    let sns = Arc::new(awsim_sns::SnsService::new());
+    state.register(sns, vec![]);
+
+    let secrets = awsim_secretsmanager::SecretsManagerService::new();
+    let secrets_store = secrets.store();
+    state.register(Arc::new(secrets), vec![]);
+
+    let kms = awsim_kms::KmsService::new();
+    let kms_store = kms.store();
+    state.register(Arc::new(kms), vec![]);
+
     let mut authz = AuthzEngine::new(enforce);
     authz.principal_lookup = Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store));
     authz.resource_policy_lookups.insert(
@@ -64,8 +94,33 @@ pub async fn start_server_with_scp(
         Arc::new(awsim_s3::S3ResourcePolicyLookup::new(s3_store))
             as Arc<dyn awsim_core::ResourcePolicyLookup>,
     );
+    authz.resource_policy_lookups.insert(
+        "lambda".to_string(),
+        Arc::new(awsim_lambda::LambdaResourcePolicyLookup::new(lambda_store))
+            as Arc<dyn awsim_core::ResourcePolicyLookup>,
+    );
+    authz.resource_policy_lookups.insert(
+        "sqs".to_string(),
+        Arc::new(awsim_sqs::SqsResourcePolicyLookup::new(sqs_store))
+            as Arc<dyn awsim_core::ResourcePolicyLookup>,
+    );
+    authz.resource_policy_lookups.insert(
+        "secretsmanager".to_string(),
+        Arc::new(awsim_secretsmanager::SecretsManagerResourcePolicyLookup::new(secrets_store))
+            as Arc<dyn awsim_core::ResourcePolicyLookup>,
+    );
+    authz.resource_policy_lookups.insert(
+        "kms".to_string(),
+        Arc::new(awsim_kms::KmsResourcePolicyLookup::new(kms_store.clone()))
+            as Arc<dyn awsim_core::ResourcePolicyLookup>,
+    );
+    authz.grant_lookups.insert(
+        "kms".to_string(),
+        Arc::new(awsim_kms::KmsGrantLookup::new(kms_store)) as Arc<dyn awsim_core::GrantLookup>,
+    );
     authz.scp_lookup = scp;
-    state.authz = Arc::new(authz);
+    let authz_arc = Arc::new(authz);
+    state.authz = Arc::clone(&authz_arc);
 
     let app: axum::Router<()> = axum::Router::new()
         .fallback(awsim_core::gateway::handle_request)
@@ -85,7 +140,14 @@ pub async fn start_server_with_scp(
             .await;
     });
 
-    (ServerHandle { shutdown: tx, task }, port)
+    (
+        ServerHandle {
+            shutdown: tx,
+            task,
+            authz: authz_arc,
+        },
+        port,
+    )
 }
 
 pub async fn start_server_enforced(iam: Arc<awsim_iam::IamService>) -> (ServerHandle, u16) {
@@ -217,3 +279,81 @@ pub const DENY_PUTOBJECT: &str = r#"{
     "Resource": "arn:aws:s3:::test-bucket/*"
   }]
 }"#;
+
+pub const ALLOW_DDB_TABLE: &str = r#"{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["dynamodb:CreateTable","dynamodb:DescribeTable","dynamodb:PutItem","dynamodb:GetItem","dynamodb:Query","dynamodb:Scan","dynamodb:DeleteTable"],
+    "Resource": "arn:aws:dynamodb:us-east-1:000000000000:table/widgets"
+  }]
+}"#;
+
+pub const ALLOW_LAMBDA_INVOKE: &str = r#"{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "lambda:InvokeFunction",
+    "Resource": "arn:aws:lambda:us-east-1:000000000000:function:hello"
+  }]
+}"#;
+
+pub const ALLOW_SQS_SEND: &str = r#"{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["sqs:CreateQueue","sqs:GetQueueUrl","sqs:GetQueueAttributes","sqs:SendMessage","sqs:ReceiveMessage","sqs:DeleteMessage"],
+    "Resource": "arn:aws:sqs:us-east-1:000000000000:work"
+  }]
+}"#;
+
+pub const ALLOW_SNS_PUBLISH: &str = r#"{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["sns:CreateTopic","sns:Publish","sns:GetTopicAttributes"],
+    "Resource": "arn:aws:sns:us-east-1:000000000000:alerts"
+  }]
+}"#;
+
+pub const ALLOW_SECRET_READ: &str = r#"{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["secretsmanager:CreateSecret","secretsmanager:GetSecretValue","secretsmanager:DescribeSecret"],
+    "Resource": "*"
+  }]
+}"#;
+
+pub const ALLOW_IAM_RO: &str = r#"{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["iam:GetUser","iam:ListUsers","iam:ListPolicies"],
+    "Resource": "*"
+  }]
+}"#;
+
+pub fn dynamodb_client(cfg: &SdkConfig) -> aws_sdk_dynamodb::Client {
+    aws_sdk_dynamodb::Client::new(cfg)
+}
+
+pub fn lambda_client(cfg: &SdkConfig) -> aws_sdk_lambda::Client {
+    aws_sdk_lambda::Client::new(cfg)
+}
+
+pub fn sqs_client(cfg: &SdkConfig) -> aws_sdk_sqs::Client {
+    aws_sdk_sqs::Client::new(cfg)
+}
+
+pub fn sns_client(cfg: &SdkConfig) -> aws_sdk_sns::Client {
+    aws_sdk_sns::Client::new(cfg)
+}
+
+pub fn secretsmanager_client(cfg: &SdkConfig) -> aws_sdk_secretsmanager::Client {
+    aws_sdk_secretsmanager::Client::new(cfg)
+}
+
+pub fn kms_client(cfg: &SdkConfig) -> aws_sdk_kms::Client {
+    aws_sdk_kms::Client::new(cfg)
+}
