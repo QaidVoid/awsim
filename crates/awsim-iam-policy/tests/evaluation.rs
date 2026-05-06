@@ -1251,23 +1251,17 @@ fn condition_date_equals_not_equals() {
     let dt: DateTime<Utc> = "2024-01-01T00:00:00Z".parse().unwrap();
     ctx.insert("aws:CurrentTime".into(), ContextValue::Date(dt));
     assert_decision(
-        allow_with_condition(
-            r#"{"DateEquals":{"aws:CurrentTime":"2024-01-01T00:00:00Z"}}"#,
-        ),
+        allow_with_condition(r#"{"DateEquals":{"aws:CurrentTime":"2024-01-01T00:00:00Z"}}"#),
         &ctx,
         Decision::Allow,
     );
     assert_decision(
-        allow_with_condition(
-            r#"{"DateNotEquals":{"aws:CurrentTime":"2024-01-01T00:00:00Z"}}"#,
-        ),
+        allow_with_condition(r#"{"DateNotEquals":{"aws:CurrentTime":"2024-01-01T00:00:00Z"}}"#),
         &ctx,
         Decision::ImplicitDeny,
     );
     assert_decision(
-        allow_with_condition(
-            r#"{"DateNotEquals":{"aws:CurrentTime":"2025-01-01T00:00:00Z"}}"#,
-        ),
+        allow_with_condition(r#"{"DateNotEquals":{"aws:CurrentTime":"2025-01-01T00:00:00Z"}}"#),
         &ctx,
         Decision::Allow,
     );
@@ -1293,9 +1287,7 @@ fn condition_date_lte_gte_boundaries() {
         Decision::Allow,
     );
     assert_decision(
-        allow_with_condition(
-            r#"{"DateLessThan":{"aws:CurrentTime":"2024-06-15T12:00:00Z"}}"#,
-        ),
+        allow_with_condition(r#"{"DateLessThan":{"aws:CurrentTime":"2024-06-15T12:00:00Z"}}"#),
         &ctx,
         Decision::ImplicitDeny,
     );
@@ -1356,16 +1348,12 @@ fn condition_arn_not_like() {
         ContextValue::String("arn:aws:lambda:us-east-1:1:function:f".into()),
     );
     assert_decision(
-        allow_with_condition(
-            r#"{"ArnNotLike":{"aws:SourceArn":"arn:aws:lambda:*:1:function:*"}}"#,
-        ),
+        allow_with_condition(r#"{"ArnNotLike":{"aws:SourceArn":"arn:aws:lambda:*:1:function:*"}}"#),
         &ctx,
         Decision::ImplicitDeny,
     );
     assert_decision(
-        allow_with_condition(
-            r#"{"ArnNotLike":{"aws:SourceArn":"arn:aws:s3:::*"}}"#,
-        ),
+        allow_with_condition(r#"{"ArnNotLike":{"aws:SourceArn":"arn:aws:s3:::*"}}"#),
         &ctx,
         Decision::Allow,
     );
@@ -1414,9 +1402,7 @@ fn condition_for_any_value_no_overlap_denies() {
         ContextValue::StringList(vec!["env".into(), "team".into()]),
     );
     assert_decision(
-        allow_with_condition(
-            r#"{"ForAnyValue:StringEquals":{"aws:TagKeys":["cost","owner"]}}"#,
-        ),
+        allow_with_condition(r#"{"ForAnyValue:StringEquals":{"aws:TagKeys":["cost","owner"]}}"#),
         &ctx,
         Decision::ImplicitDeny,
     );
@@ -1428,14 +1414,9 @@ fn condition_for_all_values_empty_list_no_match() {
     // vacuously allow — AWS treats an empty/missing multivalue
     // as not matching.
     let mut ctx = HashMap::new();
-    ctx.insert(
-        "aws:TagKeys".into(),
-        ContextValue::StringList(Vec::new()),
-    );
+    ctx.insert("aws:TagKeys".into(), ContextValue::StringList(Vec::new()));
     assert_decision(
-        allow_with_condition(
-            r#"{"ForAllValues:StringEquals":{"aws:TagKeys":["env"]}}"#,
-        ),
+        allow_with_condition(r#"{"ForAllValues:StringEquals":{"aws:TagKeys":["env"]}}"#),
         &ctx,
         Decision::ImplicitDeny,
     );
@@ -1446,9 +1427,7 @@ fn condition_for_any_value_missing_key() {
     // Missing context key with ForAnyValue: no values to test → deny.
     let ctx = HashMap::new();
     assert_decision(
-        allow_with_condition(
-            r#"{"ForAnyValue:StringEquals":{"aws:TagKeys":["env"]}}"#,
-        ),
+        allow_with_condition(r#"{"ForAnyValue:StringEquals":{"aws:TagKeys":["env"]}}"#),
         &ctx,
         Decision::ImplicitDeny,
     );
@@ -1517,10 +1496,9 @@ fn deny_with_not_action_blocks_everything_outside_set() {
     // Combined with admin Allow: only s3:GetObject survives.
     let ctx = HashMap::new();
     let allow = admin();
-    let deny = parse(
-        r#"{"Statement":[{"Effect":"Deny","NotAction":"s3:GetObject","Resource":"*"}]}"#,
-    )
-    .unwrap();
+    let deny =
+        parse(r#"{"Statement":[{"Effect":"Deny","NotAction":"s3:GetObject","Resource":"*"}]}"#)
+            .unwrap();
     let identity = vec![allow, deny];
     let ec = EvalContext {
         identity_policies: &identity,
@@ -1938,12 +1916,16 @@ fn evaluate_detailed_reports_missing_context_keys() {
     let ctx = HashMap::new();
     let details = evaluate_detailed(&r_basic(&ctx), &ec, &pa);
     assert_eq!(details.decision, Decision::ImplicitDeny);
-    assert!(details
-        .missing_context_values
-        .contains(&"aws:username".to_string()));
-    assert!(details
-        .missing_context_values
-        .contains(&"aws:RequestTag/team".to_string()));
+    assert!(
+        details
+            .missing_context_values
+            .contains(&"aws:username".to_string())
+    );
+    assert!(
+        details
+            .missing_context_values
+            .contains(&"aws:RequestTag/team".to_string())
+    );
 }
 
 #[test]

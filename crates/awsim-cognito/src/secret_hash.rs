@@ -24,8 +24,8 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// Compute the expected SecretHash for a given client + username.
 fn compute(secret: &str, username: &str, client_id: &str) -> String {
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC accepts any key length");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
     mac.update(username.as_bytes());
     mac.update(client_id.as_bytes());
     STANDARD.encode(mac.finalize().into_bytes())
@@ -139,8 +139,8 @@ mod tests {
     #[test]
     fn confidential_client_rejects_wrong_hash() {
         let c = client_with_secret(Some("topsecret"));
-        let err = validate(&c, Some("not-the-right-hash"), "alice", "abc123")
-            .expect_err("must reject");
+        let err =
+            validate(&c, Some("not-the-right-hash"), "alice", "abc123").expect_err("must reject");
         assert_eq!(err.code, "NotAuthorizedException");
     }
 

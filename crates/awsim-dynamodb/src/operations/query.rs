@@ -603,11 +603,9 @@ fn validate_sort_key_term(
                 return validation_err("Sort key condition must be 'sortKey OP :value'");
             }
             match op {
-                CompareOp::Eq
-                | CompareOp::Lt
-                | CompareOp::Le
-                | CompareOp::Gt
-                | CompareOp::Ge => Ok(()),
+                CompareOp::Eq | CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge => {
+                    Ok(())
+                }
                 CompareOp::Ne => validation_err(
                     "Sort key condition does not allow '<>': use FilterExpression instead",
                 ),
@@ -633,12 +631,10 @@ fn validate_sort_key_term(
         ConditionExpr::Contains(_, _) => validation_err(
             "KeyConditionExpression does not support contains(): use FilterExpression instead",
         ),
-        ConditionExpr::AttributeExists(_) | ConditionExpr::AttributeNotExists(_) => {
-            validation_err(
-                "KeyConditionExpression does not support attribute_exists/not_exists: \
+        ConditionExpr::AttributeExists(_) | ConditionExpr::AttributeNotExists(_) => validation_err(
+            "KeyConditionExpression does not support attribute_exists/not_exists: \
                  use FilterExpression instead",
-            )
-        }
+        ),
         ConditionExpr::AttributeType(_, _) => validation_err(
             "KeyConditionExpression does not support attribute_type(): use FilterExpression instead",
         ),

@@ -99,11 +99,10 @@ pub fn evaluate_condition(
                 Some(v) => v,
                 None => return Ok(false),
             };
-            let type_val =
-                match resolve_operand(type_op, item, expr_attr_names, expr_attr_values) {
-                    Some(v) => v,
-                    None => return Ok(false),
-                };
+            let type_val = match resolve_operand(type_op, item, expr_attr_names, expr_attr_values) {
+                Some(v) => v,
+                None => return Ok(false),
+            };
             // The type identifier arrives as a DynamoDB S-typed value:
             // {"S": "S"} for string, {"S": "N"} for number, etc. The
             // attribute itself is stored as a one-key object whose key is

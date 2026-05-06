@@ -743,9 +743,12 @@ pub fn respond_to_auth_challenge(
         .as_str()
         .map(String::from)
         .or_else(|| {
-            input["Session"]
-                .as_str()
-                .and_then(|s| state.mfa_sessions.get(s).map(|e| e.value().username.clone()))
+            input["Session"].as_str().and_then(|s| {
+                state
+                    .mfa_sessions
+                    .get(s)
+                    .map(|e| e.value().username.clone())
+            })
         })
         .unwrap_or_default();
     crate::secret_hash::validate_for_client(
@@ -839,9 +842,7 @@ pub fn respond_to_auth_challenge(
             let user = pool
                 .users
                 .get(&session_meta.username)
-                .ok_or_else(|| {
-                    AwsError::not_found("UserNotFoundException", "User not found")
-                })?;
+                .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
             let secret = user.totp_secret.as_deref().ok_or_else(|| {
                 AwsError::bad_request(
                     "NotAuthorizedException",

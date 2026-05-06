@@ -18,9 +18,9 @@ pub fn compute_etag(data: &[u8]) -> String {
 /// store the object. awsim previously accepted (and stored!) any MD5 the
 /// caller wrote in the header.
 pub fn verify_content_md5(body: &[u8], provided_b64: &str) -> Result<(), AwsError> {
-    let decoded = BASE64.decode(provided_b64).map_err(|_| {
-        AwsError::bad_request("InvalidDigest", "Content-MD5 is not valid base64")
-    })?;
+    let decoded = BASE64
+        .decode(provided_b64)
+        .map_err(|_| AwsError::bad_request("InvalidDigest", "Content-MD5 is not valid base64"))?;
     if decoded.len() != 16 {
         return Err(AwsError::bad_request(
             "InvalidDigest",
@@ -53,7 +53,10 @@ pub fn verify_object_checksum(
     provided_b64: &str,
 ) -> Result<(), AwsError> {
     let provided = BASE64.decode(provided_b64).map_err(|_| {
-        AwsError::bad_request("InvalidRequest", format!("{algorithm} checksum is not valid base64"))
+        AwsError::bad_request(
+            "InvalidRequest",
+            format!("{algorithm} checksum is not valid base64"),
+        )
     })?;
     let actual: Vec<u8> = match algorithm {
         "SHA256" => {

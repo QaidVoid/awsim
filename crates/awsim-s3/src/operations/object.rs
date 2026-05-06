@@ -29,11 +29,7 @@ enum ConditionOutcome {
 /// - Retention "GOVERNANCE" -> blocks until RetainUntilDate, but a caller
 ///   that supplies `x-amz-bypass-governance-retention: true` may proceed.
 /// - Retention "COMPLIANCE" -> blocks until RetainUntilDate, never bypassable.
-fn check_object_lock(
-    bucket: &Bucket,
-    key: &str,
-    bypass_governance: bool,
-) -> Result<(), AwsError> {
+fn check_object_lock(bucket: &Bucket, key: &str, bypass_governance: bool) -> Result<(), AwsError> {
     if let Some(raw) = bucket.configs.get(&format!("legal-hold:{key}"))
         && let Ok(parsed) = serde_json::from_str::<Value>(raw)
         && parsed.get("Status").and_then(Value::as_str) == Some("ON")
@@ -66,9 +62,7 @@ fn check_object_lock(
             if mode == "COMPLIANCE" {
                 return Err(AwsError::bad_request(
                     "AccessDenied",
-                    format!(
-                        "Object '{key}' is under a COMPLIANCE retention until {until}"
-                    ),
+                    format!("Object '{key}' is under a COMPLIANCE retention until {until}"),
                 ));
             }
             if mode == "GOVERNANCE" && !bypass_governance {
@@ -701,8 +695,8 @@ pub fn delete_object(state: &S3State, input: &Value) -> Result<Value, AwsError> 
     // delete-on-non-versioned-bucket). Creating a delete marker on a
     // versioned bucket leaves the underlying versions untouched, so the
     // lock check is skipped in that case.
-    let needs_lock_check = requested_version.is_some()
-        || matches!(bucket.versioning, VersioningStatus::Disabled);
+    let needs_lock_check =
+        requested_version.is_some() || matches!(bucket.versioning, VersioningStatus::Disabled);
     if needs_lock_check {
         check_object_lock(&bucket, key, bypass_governance)?;
     }
@@ -1582,16 +1576,13 @@ mod tests {
     fn put_with_legal_hold(state: &S3State, bucket: &str, key: &str) {
         put_and_get_etag(state, bucket, key, "hello");
         let mut b = state.buckets.get_mut(bucket).unwrap();
-        b.configs
-            .insert(format!("legal-hold:{key}"), r#"{"Status":"ON"}"#.to_string());
+        b.configs.insert(
+            format!("legal-hold:{key}"),
+            r#"{"Status":"ON"}"#.to_string(),
+        );
     }
 
-    fn put_with_compliance_retention(
-        state: &S3State,
-        bucket: &str,
-        key: &str,
-        until_iso: &str,
-    ) {
+    fn put_with_compliance_retention(state: &S3State, bucket: &str, key: &str, until_iso: &str) {
         put_and_get_etag(state, bucket, key, "hello");
         let mut b = state.buckets.get_mut(bucket).unwrap();
         b.configs.insert(
@@ -1600,12 +1591,7 @@ mod tests {
         );
     }
 
-    fn put_with_governance_retention(
-        state: &S3State,
-        bucket: &str,
-        key: &str,
-        until_iso: &str,
-    ) {
+    fn put_with_governance_retention(state: &S3State, bucket: &str, key: &str, until_iso: &str) {
         put_and_get_etag(state, bucket, key, "hello");
         let mut b = state.buckets.get_mut(bucket).unwrap();
         b.configs.insert(
@@ -1619,8 +1605,7 @@ mod tests {
         let bucket = Bucket::new("b", "us-east-1", "now");
         let state = state_with(bucket);
         put_with_legal_hold(&state, "b", "k");
-        let err =
-            delete_object(&state, &json!({ "Bucket": "b", "Key": "k" })).unwrap_err();
+        let err = delete_object(&state, &json!({ "Bucket": "b", "Key": "k" })).unwrap_err();
         assert_eq!(err.code, "AccessDenied");
     }
 
@@ -1643,8 +1628,7 @@ mod tests {
         let state = state_with(bucket);
         put_with_governance_retention(&state, "b", "k", "2999-01-01T00:00:00Z");
         // Without the bypass header: blocked.
-        let err =
-            delete_object(&state, &json!({ "Bucket": "b", "Key": "k" })).unwrap_err();
+        let err = delete_object(&state, &json!({ "Bucket": "b", "Key": "k" })).unwrap_err();
         assert_eq!(err.code, "AccessDenied");
         // With the bypass header: allowed.
         delete_object(
