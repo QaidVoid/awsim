@@ -81,7 +81,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     && cp "target/$(cat /tmp/rust-target)/release/awsim" /usr/local/bin/awsim
 
 # ---------- Runtime stage ----------
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12
 
 LABEL org.opencontainers.image.title="AWSim"
 LABEL org.opencontainers.image.description="Fully offline AWS development environment"
