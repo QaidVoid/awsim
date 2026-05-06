@@ -174,7 +174,6 @@ pub fn verify_software_token(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserCode is required"))?;
 
-    // Dev emulator: accept any 6-digit code
     if user_code.len() != 6 || !user_code.chars().all(|c| c.is_ascii_digit()) {
         return Err(AwsError::bad_request(
             "EnableSoftwareTokenMFAException",
@@ -199,16 +198,33 @@ pub fn verify_software_token(
         ));
     };
 
-    // Mark TOTP as verified on the user
+    // Verify the supplied code against the user's TOTP secret. Without a
+    // secret this call is meaningless: AssociateSoftwareToken must have run
+    // first.
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
+            let secret = user.totp_secret.clone().ok_or_else(|| {
+                AwsError::bad_request(
+                    "EnableSoftwareTokenMFAException",
+                    "No software token associated for this user",
+                )
+            })?;
+            if !crate::totp::verify(&secret, user_code) {
+                return Err(AwsError::bad_request(
+                    "EnableSoftwareTokenMFAException",
+                    "Invalid software token code",
+                ));
+            }
             user.totp_verified = true;
             info!(username = %username, "Cognito: software token verified");
-            break;
+            return Ok(json!({ "Status": "SUCCESS" }));
         }
     }
 
-    Ok(json!({ "Status": "SUCCESS" }))
+    Err(AwsError::not_found(
+        "UserNotFoundException",
+        format!("User not found: {username}"),
+    ))
 }
 
 // ---------------------------------------------------------------------------

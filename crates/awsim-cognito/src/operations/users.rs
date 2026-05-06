@@ -254,6 +254,12 @@ pub fn sign_up(
     let password = input["Password"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Password is required"))?;
+    crate::secret_hash::validate_for_client(
+        state,
+        client_id,
+        input["SecretHash"].as_str(),
+        username,
+    )?;
 
     let pool_entry = state
         .user_pools
@@ -340,6 +346,12 @@ pub fn confirm_sign_up(
     let username = input["Username"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+    crate::secret_hash::validate_for_client(
+        state,
+        client_id,
+        input["SecretHash"].as_str(),
+        username,
+    )?;
 
     let pool_entry = state
         .user_pools
@@ -762,6 +774,12 @@ pub fn forgot_password(
     let username = input["Username"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+    crate::secret_hash::validate_for_client(
+        state,
+        client_id,
+        input["SecretHash"].as_str(),
+        username,
+    )?;
 
     let pool_entry = state
         .user_pools
@@ -862,6 +880,12 @@ pub fn confirm_forgot_password(
     let confirmation_code = input["ConfirmationCode"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ConfirmationCode is required"))?;
+    crate::secret_hash::validate_for_client(
+        state,
+        client_id,
+        input["SecretHash"].as_str(),
+        username,
+    )?;
 
     let pool_entry = state
         .user_pools
@@ -1374,6 +1398,12 @@ pub fn resend_confirmation_code(
     let username = input["Username"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+    crate::secret_hash::validate_for_client(
+        state,
+        client_id,
+        input["SecretHash"].as_str(),
+        username,
+    )?;
 
     let pool_entry = state
         .user_pools

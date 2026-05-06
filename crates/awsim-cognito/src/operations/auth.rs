@@ -204,6 +204,12 @@ pub fn initiate_auth(
             let password = params["PASSWORD"]
                 .as_str()
                 .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PASSWORD is required"))?;
+            crate::secret_hash::validate_for_client(
+                state,
+                client_id,
+                params["SECRET_HASH"].as_str(),
+                raw_username,
+            )?;
             let username = {
                 let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
                     AwsError::not_found("ResourceNotFoundException", "User pool not found")
@@ -406,6 +412,15 @@ pub fn initiate_auth(
                 .strip_prefix("refresh-")
                 .and_then(|s| s.split('.').next())
                 .unwrap_or("unknown");
+            // Cognito accepts SECRET_HASH on REFRESH_TOKEN_AUTH using the
+            // *sub* as the username component (since the original username
+            // may not be on the wire). Skip when public-client.
+            crate::secret_hash::validate_for_client(
+                state,
+                client_id,
+                params["SECRET_HASH"].as_str(),
+                sub,
+            )?;
 
             // Find user by sub
             let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
@@ -490,6 +505,12 @@ pub fn admin_initiate_auth(
             let password = params["PASSWORD"]
                 .as_str()
                 .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PASSWORD is required"))?;
+            crate::secret_hash::validate_for_client(
+                state,
+                client_id,
+                params["SECRET_HASH"].as_str(),
+                raw_username,
+            )?;
             let username = {
                 let pool = state.user_pools.get(pool_id).ok_or_else(|| {
                     AwsError::not_found("ResourceNotFoundException", "User pool not found")
@@ -714,6 +735,26 @@ pub fn respond_to_auth_challenge(
         )
     })?;
 
+    // Cognito clients with a secret carry SECRET_HASH inside ChallengeResponses
+    // for every challenge response. The username can come either from the
+    // explicit USERNAME response field or from the linked MFA session, so we
+    // try both.
+    let challenge_username = responses["USERNAME"]
+        .as_str()
+        .map(String::from)
+        .or_else(|| {
+            input["Session"]
+                .as_str()
+                .and_then(|s| state.mfa_sessions.get(s).map(|e| e.value().username.clone()))
+        })
+        .unwrap_or_default();
+    crate::secret_hash::validate_for_client(
+        state,
+        client_id,
+        responses["SECRET_HASH"].as_str(),
+        &challenge_username,
+    )?;
+
     match challenge_name {
         "NEW_PASSWORD_REQUIRED" => {
             let username = responses["USERNAME"].as_str().ok_or_else(|| {
@@ -771,34 +812,70 @@ pub fn respond_to_auth_challenge(
         }
         "SOFTWARE_TOKEN_MFA" => {
             let session_id = input["Session"].as_str().unwrap_or("");
-            if let Some(session) = state.mfa_sessions.remove(session_id) {
-                let pool = state.user_pools.get(&session.1.pool_id).ok_or_else(|| {
-                    AwsError::not_found("ResourceNotFoundException", "Pool not found")
+            let user_code = input["ChallengeResponses"]["SOFTWARE_TOKEN_MFA_CODE"]
+                .as_str()
+                .ok_or_else(|| {
+                    AwsError::bad_request(
+                        "InvalidParameterException",
+                        "ChallengeResponses.SOFTWARE_TOKEN_MFA_CODE is required",
+                    )
                 })?;
-                let user = pool.users.get(&session.1.username).ok_or_else(|| {
+
+            // Look up the session without consuming it so that an invalid
+            // code surfaces NotAuthorizedException and the user can retry,
+            // matching real Cognito's behaviour. Only on a successful
+            // verify do we drop the session.
+            let session_meta = state
+                .mfa_sessions
+                .get(session_id)
+                .map(|e| e.value().clone())
+                .ok_or_else(|| {
+                    AwsError::bad_request("NotAuthorizedException", "Invalid session")
+                })?;
+
+            let pool = state.user_pools.get(&session_meta.pool_id).ok_or_else(|| {
+                AwsError::not_found("ResourceNotFoundException", "Pool not found")
+            })?;
+            let user = pool
+                .users
+                .get(&session_meta.username)
+                .ok_or_else(|| {
                     AwsError::not_found("UserNotFoundException", "User not found")
                 })?;
-                let pairs = group_role_pairs(&pool, &user.groups);
-                let validity = pool
-                    .clients
-                    .get(client_id)
-                    .map(TokenValidity::from_client)
-                    .unwrap_or_else(TokenValidity::defaults);
-                let result = build_auth_result_validity(
-                    &user.sub,
-                    &user.username,
-                    &ctx.region,
-                    &session.1.pool_id,
-                    client_id,
-                    &user.attributes,
-                    &pairs,
-                    &validity,
-                );
-                info!(username = %session.1.username, "Cognito: RespondToAuthChallenge SOFTWARE_TOKEN_MFA success");
-                Ok(result)
-            } else {
-                Ok(json!({ "AuthenticationResult": {} }))
+            let secret = user.totp_secret.as_deref().ok_or_else(|| {
+                AwsError::bad_request(
+                    "NotAuthorizedException",
+                    "User has no software token configured",
+                )
+            })?;
+            if !crate::totp::verify(secret, user_code) {
+                return Err(AwsError::bad_request(
+                    "CodeMismatchException",
+                    "Invalid software token code",
+                ));
             }
+
+            let pairs = group_role_pairs(&pool, &user.groups);
+            let validity = pool
+                .clients
+                .get(client_id)
+                .map(TokenValidity::from_client)
+                .unwrap_or_else(TokenValidity::defaults);
+            let result = build_auth_result_validity(
+                &user.sub,
+                &user.username,
+                &ctx.region,
+                &session_meta.pool_id,
+                client_id,
+                &user.attributes,
+                &pairs,
+                &validity,
+            );
+            // Drop the consumed session only after the code passed.
+            drop(pool);
+            state.mfa_sessions.remove(session_id);
+            info!(username = %session_meta.username, "Cognito: RespondToAuthChallenge SOFTWARE_TOKEN_MFA success");
+            Ok(result)
         }
         "MFA_SETUP" => Ok(json!({
             "ChallengeName": "MFA_SETUP",
