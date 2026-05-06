@@ -50,6 +50,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
         musl-tools \
         clang \
+        mold \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
