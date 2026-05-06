@@ -296,6 +296,17 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     let metadata = extract_user_metadata(input);
     let (checksum_algorithm, checksum_value) = parse_request_checksum(input)?;
 
+    // Verify any caller-supplied integrity headers against the body before
+    // we commit it to storage. Real S3 rejects mismatches with BadDigest.
+    if let Some(md5_b64) = opt_str(input, "ContentMd5")
+        && !md5_b64.is_empty()
+    {
+        crate::util::verify_content_md5(&data, md5_b64)?;
+    }
+    if let (Some(algo), Some(val)) = (checksum_algorithm.as_deref(), checksum_value.as_deref()) {
+        crate::util::verify_object_checksum(&data, algo, val)?;
+    }
+
     let content_length = data.len() as u64;
     let etag = compute_etag(&data);
     let last_modified = now_rfc7231();

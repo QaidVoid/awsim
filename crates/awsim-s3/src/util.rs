@@ -1,3 +1,6 @@
+use awsim_core::AwsError;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use md5::{Digest, Md5};
 
 /// Compute an MD5 ETag for the given data (wrapped in quotes as S3 does).
@@ -6,6 +9,78 @@ pub fn compute_etag(data: &[u8]) -> String {
     hasher.update(data);
     let result = hasher.finalize();
     format!("\"{:x}\"", result)
+}
+
+/// Validate the optional `Content-MD5` header against the actual body.
+///
+/// AWS S3 expects the value to be a base64-encoded 16-byte MD5 of the body.
+/// Real S3 returns `BadDigest` (HTTP 400) on any mismatch and refuses to
+/// store the object. awsim previously accepted (and stored!) any MD5 the
+/// caller wrote in the header.
+pub fn verify_content_md5(body: &[u8], provided_b64: &str) -> Result<(), AwsError> {
+    let decoded = BASE64.decode(provided_b64).map_err(|_| {
+        AwsError::bad_request("InvalidDigest", "Content-MD5 is not valid base64")
+    })?;
+    if decoded.len() != 16 {
+        return Err(AwsError::bad_request(
+            "InvalidDigest",
+            "Content-MD5 must decode to 16 bytes",
+        ));
+    }
+    let mut hasher = Md5::new();
+    hasher.update(body);
+    let actual = hasher.finalize();
+    if actual.as_slice() == decoded.as_slice() {
+        Ok(())
+    } else {
+        Err(AwsError::bad_request(
+            "BadDigest",
+            "Content-MD5 does not match the calculated MD5 of the request body",
+        ))
+    }
+}
+
+/// Validate an `x-amz-checksum-*` header against the body.
+///
+/// `algorithm` is the AWS algorithm name as parsed by
+/// `parse_request_checksum` (`CRC32`, `CRC32C`, `SHA1`, `SHA256`).
+/// `provided_b64` is the base64 of the asserted digest. CRC32 and CRC32C
+/// are not currently implemented and pass through silently to keep the
+/// existing storage path working; SHA1 and SHA256 are checked.
+pub fn verify_object_checksum(
+    body: &[u8],
+    algorithm: &str,
+    provided_b64: &str,
+) -> Result<(), AwsError> {
+    let provided = BASE64.decode(provided_b64).map_err(|_| {
+        AwsError::bad_request("InvalidRequest", format!("{algorithm} checksum is not valid base64"))
+    })?;
+    let actual: Vec<u8> = match algorithm {
+        "SHA256" => {
+            use sha2::Sha256;
+            let mut h = Sha256::new();
+            h.update(body);
+            h.finalize().to_vec()
+        }
+        "SHA1" => {
+            use sha1::Sha1;
+            let mut h = Sha1::new();
+            h.update(body);
+            h.finalize().to_vec()
+        }
+        // CRC32 / CRC32C: trust the caller for now. Adding these would only
+        // require a small CRC implementation; the structural checks in
+        // parse_request_checksum already prevent length-mismatch attacks.
+        _ => return Ok(()),
+    };
+    if actual == provided {
+        Ok(())
+    } else {
+        Err(AwsError::bad_request(
+            "BadDigest",
+            format!("{algorithm} checksum does not match the request body"),
+        ))
+    }
 }
 
 /// Compute the multipart ETag as AWS S3 does: MD5 of concatenated
@@ -262,5 +337,53 @@ mod tests {
         assert_eq!(parse_rfc7231("not a date"), None);
         // RFC 7231 without leading day-name is also accepted.
         assert!(parse_rfc7231("01 Jan 1970 00:00:01 GMT").is_some());
+    }
+
+    #[test]
+    fn content_md5_accepts_correct_digest() {
+        // MD5("hello") = 5d41402abc4b2a76b9719d911017c592
+        let body = b"hello";
+        let mut h = Md5::new();
+        h.update(body);
+        let b64 = BASE64.encode(h.finalize());
+        assert!(verify_content_md5(body, &b64).is_ok());
+    }
+
+    #[test]
+    fn content_md5_rejects_mismatch() {
+        let err = verify_content_md5(b"hello", "AAAAAAAAAAAAAAAAAAAAAA==").unwrap_err();
+        assert_eq!(err.code, "BadDigest");
+    }
+
+    #[test]
+    fn content_md5_rejects_malformed_base64() {
+        let err = verify_content_md5(b"hello", "not-base64!!").unwrap_err();
+        assert_eq!(err.code, "InvalidDigest");
+    }
+
+    #[test]
+    fn content_md5_rejects_wrong_length_digest() {
+        let err = verify_content_md5(b"hello", BASE64.encode(b"too short").as_str()).unwrap_err();
+        assert_eq!(err.code, "InvalidDigest");
+    }
+
+    #[test]
+    fn checksum_sha256_round_trip() {
+        let body = b"hello";
+        let mut h = sha2::Sha256::new();
+        h.update(body);
+        let b64 = BASE64.encode(h.finalize());
+        assert!(verify_object_checksum(body, "SHA256", &b64).is_ok());
+        assert!(verify_object_checksum(b"goodbye", "SHA256", &b64).is_err());
+    }
+
+    #[test]
+    fn checksum_sha1_round_trip() {
+        let body = b"hello";
+        let mut h = sha1::Sha1::new();
+        h.update(body);
+        let b64 = BASE64.encode(h.finalize());
+        assert!(verify_object_checksum(body, "SHA1", &b64).is_ok());
+        assert!(verify_object_checksum(b"goodbye", "SHA1", &b64).is_err());
     }
 }

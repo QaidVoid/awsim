@@ -93,6 +93,29 @@ pub fn upload_part(state: &S3State, input: &Value) -> Result<Value, AwsError> {
         Vec::new()
     };
 
+    // Reject parts whose Content-MD5 or x-amz-checksum-* header doesn't
+    // match the body. CompleteMultipartUpload uses the per-part ETags as
+    // the inputs to its multipart-ETag computation, so silently storing a
+    // corrupt part would propagate into a deceptively-correct final ETag.
+    if let Some(md5_b64) = input.get("ContentMd5").and_then(Value::as_str)
+        && !md5_b64.is_empty()
+    {
+        crate::util::verify_content_md5(&data, md5_b64)?;
+    }
+    for (field, algo) in &[
+        ("ChecksumCrc32", "CRC32"),
+        ("ChecksumCrc32c", "CRC32C"),
+        ("ChecksumSha1", "SHA1"),
+        ("ChecksumSha256", "SHA256"),
+    ] {
+        if let Some(v) = input.get(field).and_then(Value::as_str)
+            && !v.is_empty()
+        {
+            crate::util::verify_object_checksum(&data, algo, v)?;
+            break;
+        }
+    }
+
     let etag = compute_etag(&data);
 
     let bucket = state
