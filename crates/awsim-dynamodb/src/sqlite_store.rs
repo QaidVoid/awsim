@@ -17,7 +17,9 @@ use std::sync::Arc;
 
 use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{
+    Connection, OptionalExtension, ToSql, TransactionBehavior, params, params_from_iter,
+};
 use serde_json::Value;
 
 use awsim_core::AwsError;
@@ -27,9 +29,41 @@ mod embedded_migrations {
 }
 
 /// Maximum number of GSIs we materialise to dedicated key columns.
-/// DynamoDB's hard cap is 20; this covers every realistic use case
-/// while keeping the row width modest.
-pub const MAX_GSI_SLOTS: usize = 5;
+/// Matches AWS's per-table GSI limit. The schema reserves
+/// `gsi{1..MAX_GSI_SLOTS}_{pk,sk}` columns plus a partial index per
+/// slot; raising this further would mean another schema migration.
+pub const MAX_GSI_SLOTS: usize = 20;
+
+/// Build the comma-separated `gsi1_pk, gsi1_sk, ..., gsiN_pk, gsiN_sk`
+/// column list for use in INSERT column declarations and DO UPDATE SET.
+fn gsi_column_list() -> String {
+    let mut parts = Vec::with_capacity(MAX_GSI_SLOTS * 2);
+    for i in 1..=MAX_GSI_SLOTS {
+        parts.push(format!("gsi{i}_pk"));
+        parts.push(format!("gsi{i}_sk"));
+    }
+    parts.join(", ")
+}
+
+/// Build the `?N, ?N+1, ..., ?N+M-1` placeholder list for the GSI
+/// columns, starting at `start` (1-indexed, since rusqlite uses ?1...).
+fn gsi_placeholders(start: usize) -> String {
+    (0..MAX_GSI_SLOTS * 2)
+        .map(|i| format!("?{}", start + i))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Build the `gsi1_pk = excluded.gsi1_pk, gsi1_sk = excluded.gsi1_sk, ...`
+/// list used in the ON CONFLICT DO UPDATE clause of the put-item upsert.
+fn gsi_excluded_assignments() -> String {
+    let mut parts = Vec::with_capacity(MAX_GSI_SLOTS * 2);
+    for i in 1..=MAX_GSI_SLOTS {
+        parts.push(format!("gsi{i}_pk = excluded.gsi{i}_pk"));
+        parts.push(format!("gsi{i}_sk = excluded.gsi{i}_sk"));
+    }
+    parts.join(", ")
+}
 
 /// Connection pool ceiling. Lazy: only `MIN_IDLE` connections are
 /// kept warm, the pool grows on demand and shrinks back. WAL gives
@@ -189,42 +223,38 @@ impl SqliteStore {
     ) -> Result<(), AwsError> {
         let conn = self.conn()?;
         let attrs_json = serde_json::to_string(attrs).map_err(json_err)?;
-        conn.execute(
+        // Build the SQL once per call. Could be cached behind OnceLock —
+        // the column count never changes — but `format!` is cheap relative
+        // to the round-trip and the cost shows up only on writes.
+        let sql = format!(
             "INSERT INTO items (
                 account, region, table_name, pk, sk, attrs_json,
-                gsi1_pk, gsi1_sk, gsi2_pk, gsi2_sk, gsi3_pk, gsi3_sk,
-                gsi4_pk, gsi4_sk, gsi5_pk, gsi5_sk
+                {cols}
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6,
-                ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
+                {placeholders}
              )
              ON CONFLICT(account, region, table_name, pk, sk) DO UPDATE SET
                 attrs_json = excluded.attrs_json,
-                gsi1_pk = excluded.gsi1_pk, gsi1_sk = excluded.gsi1_sk,
-                gsi2_pk = excluded.gsi2_pk, gsi2_sk = excluded.gsi2_sk,
-                gsi3_pk = excluded.gsi3_pk, gsi3_sk = excluded.gsi3_sk,
-                gsi4_pk = excluded.gsi4_pk, gsi4_sk = excluded.gsi4_sk,
-                gsi5_pk = excluded.gsi5_pk, gsi5_sk = excluded.gsi5_sk",
-            params![
-                account,
-                region,
-                table,
-                pk,
-                sk,
-                attrs_json,
-                gsi_keys[0].0,
-                gsi_keys[0].1,
-                gsi_keys[1].0,
-                gsi_keys[1].1,
-                gsi_keys[2].0,
-                gsi_keys[2].1,
-                gsi_keys[3].0,
-                gsi_keys[3].1,
-                gsi_keys[4].0,
-                gsi_keys[4].1,
-            ],
-        )
-        .map_err(sqlite_err)?;
+                {assigns}",
+            cols = gsi_column_list(),
+            placeholders = gsi_placeholders(7),
+            assigns = gsi_excluded_assignments(),
+        );
+        // First six positional params plus 2 per GSI slot.
+        let mut bound: Vec<&dyn ToSql> = Vec::with_capacity(6 + MAX_GSI_SLOTS * 2);
+        bound.push(&account);
+        bound.push(&region);
+        bound.push(&table);
+        bound.push(&pk);
+        bound.push(&sk);
+        bound.push(&attrs_json);
+        for slot in gsi_keys {
+            bound.push(&slot.0 as &dyn ToSql);
+            bound.push(&slot.1 as &dyn ToSql);
+        }
+        conn.execute(&sql, params_from_iter(bound))
+            .map_err(sqlite_err)?;
         Ok(())
     }
 
@@ -704,42 +734,34 @@ impl<'tx> WriteTx<'tx> {
         gsi_keys: &[(Option<String>, Option<String>); MAX_GSI_SLOTS],
     ) -> Result<(), AwsError> {
         let attrs_json = serde_json::to_string(attrs).map_err(json_err)?;
+        let sql = format!(
+            "INSERT INTO items (
+                account, region, table_name, pk, sk, attrs_json,
+                {cols}
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6,
+                {placeholders}
+             )
+             ON CONFLICT(account, region, table_name, pk, sk) DO UPDATE SET
+                attrs_json = excluded.attrs_json,
+                {assigns}",
+            cols = gsi_column_list(),
+            placeholders = gsi_placeholders(7),
+            assigns = gsi_excluded_assignments(),
+        );
+        let mut bound: Vec<&dyn ToSql> = Vec::with_capacity(6 + MAX_GSI_SLOTS * 2);
+        bound.push(&account);
+        bound.push(&region);
+        bound.push(&table);
+        bound.push(&pk);
+        bound.push(&sk);
+        bound.push(&attrs_json);
+        for slot in gsi_keys {
+            bound.push(&slot.0 as &dyn ToSql);
+            bound.push(&slot.1 as &dyn ToSql);
+        }
         self.conn
-            .execute(
-                "INSERT INTO items (
-                    account, region, table_name, pk, sk, attrs_json,
-                    gsi1_pk, gsi1_sk, gsi2_pk, gsi2_sk, gsi3_pk, gsi3_sk,
-                    gsi4_pk, gsi4_sk, gsi5_pk, gsi5_sk
-                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6,
-                    ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
-                 )
-                 ON CONFLICT(account, region, table_name, pk, sk) DO UPDATE SET
-                    attrs_json = excluded.attrs_json,
-                    gsi1_pk = excluded.gsi1_pk, gsi1_sk = excluded.gsi1_sk,
-                    gsi2_pk = excluded.gsi2_pk, gsi2_sk = excluded.gsi2_sk,
-                    gsi3_pk = excluded.gsi3_pk, gsi3_sk = excluded.gsi3_sk,
-                    gsi4_pk = excluded.gsi4_pk, gsi4_sk = excluded.gsi4_sk,
-                    gsi5_pk = excluded.gsi5_pk, gsi5_sk = excluded.gsi5_sk",
-                params![
-                    account,
-                    region,
-                    table,
-                    pk,
-                    sk,
-                    attrs_json,
-                    gsi_keys[0].0,
-                    gsi_keys[0].1,
-                    gsi_keys[1].0,
-                    gsi_keys[1].1,
-                    gsi_keys[2].0,
-                    gsi_keys[2].1,
-                    gsi_keys[3].0,
-                    gsi_keys[3].1,
-                    gsi_keys[4].0,
-                    gsi_keys[4].1,
-                ],
-            )
+            .execute(&sql, params_from_iter(bound))
             .map_err(sqlite_err)?;
         Ok(())
     }
@@ -1150,5 +1172,84 @@ mod tests {
             .unwrap();
         assert_eq!(removed, 0);
         assert_eq!(store.count_items("a", "r", "t").unwrap(), 1);
+    }
+
+    #[test]
+    fn put_and_query_high_slot_gsi() {
+        // The schema reserves up to MAX_GSI_SLOTS dedicated key columns;
+        // exercise one past slot 5 to make sure the dynamic-SQL upsert
+        // and the query path both address the higher-numbered columns
+        // correctly. Slot 10 is the test target (gsi11_pk / gsi11_sk).
+        let store = SqliteStore::in_memory().unwrap();
+        let mut keys: [(Option<String>, Option<String>); MAX_GSI_SLOTS] = Default::default();
+        keys[10] = (Some("tenant-a".into()), Some("2024-12-01".into()));
+        store
+            .put_item(
+                "acct",
+                "us-east-1",
+                "t",
+                "pk1",
+                "sk1",
+                &json!({"id": {"S": "1"}}),
+                &keys,
+            )
+            .unwrap();
+
+        let mut hit_count = 0u32;
+        store
+            .query_gsi_partition(
+                "acct",
+                "us-east-1",
+                "t",
+                10,
+                "tenant-a",
+                true,
+                None,
+                |_pk, _sk, _gsi_sk, _attrs| {
+                    hit_count += 1;
+                    Ok(true)
+                },
+            )
+            .unwrap();
+        assert_eq!(hit_count, 1, "slot 10 lookup should find the seeded row");
+    }
+
+    #[test]
+    fn query_at_max_slot_index_works() {
+        // The very last legal slot. Useful as a boundary regression
+        // guard so a future bump of MAX_GSI_SLOTS doesn't quietly drop
+        // the upper-edge slot from the column list.
+        let store = SqliteStore::in_memory().unwrap();
+        let last = MAX_GSI_SLOTS - 1;
+        let mut keys: [(Option<String>, Option<String>); MAX_GSI_SLOTS] = Default::default();
+        keys[last] = (Some("partition".into()), Some("range".into()));
+        store
+            .put_item(
+                "acct",
+                "us-east-1",
+                "t",
+                "pk1",
+                "sk1",
+                &json!({"id": {"S": "1"}}),
+                &keys,
+            )
+            .unwrap();
+        let mut found = 0u32;
+        store
+            .query_gsi_partition(
+                "acct",
+                "us-east-1",
+                "t",
+                last,
+                "partition",
+                true,
+                None,
+                |_pk, _sk, _gsi_sk, _attrs| {
+                    found += 1;
+                    Ok(true)
+                },
+            )
+            .unwrap();
+        assert_eq!(found, 1);
     }
 }
