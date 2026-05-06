@@ -42,7 +42,13 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
     NODE_ENV=production bun run build
 
 # ---------- Rust builder stage ----------
-FROM --platform=$BUILDPLATFORM rust:${RUST_VERSION}-slim AS builder
+# `--platform=$TARGETPLATFORM` makes BuildKit run a native (or QEMU-emulated)
+# rust:slim image for each target arch — amd64 image for amd64 target, arm64
+# image emulated for arm64 target. That way `musl-tools`' `musl-gcc` always
+# matches the running arch, so cc-rs can build native musl binaries without
+# us shipping a separate cross-toolchain. The arm64 leg is QEMU-emulated and
+# noticeably slower; that trade is acceptable for nightly + release cadence.
+FROM --platform=$TARGETPLATFORM rust:${RUST_VERSION}-slim AS builder
 ARG TARGETARCH
 
 WORKDIR /app
@@ -54,20 +60,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Map docker target arch → rustup target triple.
 RUN case "${TARGETARCH}" in \
         amd64) echo "x86_64-unknown-linux-musl"  > /tmp/rust-target ;; \
         arm64) echo "aarch64-unknown-linux-musl" > /tmp/rust-target ;; \
         *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac && rustup target add "$(cat /tmp/rust-target)"
 
+# Point cc-rs at the host `musl-gcc` for either musl target. Without this
+# override cc-rs looks for `<triple>-gcc` (e.g. `aarch64-linux-musl-gcc`)
+# which Debian doesn't ship; since the builder runs on the same arch as the
+# target now, plain `musl-gcc` is the right tool.
+ENV CC_x86_64_unknown_linux_musl=musl-gcc \
+    AR_x86_64_unknown_linux_musl=ar \
+    CC_aarch64_unknown_linux_musl=musl-gcc \
+    AR_aarch64_unknown_linux_musl=ar
+
 COPY . .
-# Pull in the freshly-built UI assets so `rust-embed` finds them at compile time.
 COPY --from=ui-builder /ui/build ui/build
 
-# BuildKit cache mounts: persist cargo registry/git + the target dir between
-# builds. First build pulls + compiles everything; subsequent builds only
-# rebuild what changed.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
