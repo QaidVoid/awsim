@@ -206,6 +206,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: awsim-*
           merge-multiple: true
 
       - name: Generate checksums
