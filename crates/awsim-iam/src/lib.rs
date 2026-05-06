@@ -57,6 +57,22 @@ impl IamService {
     pub(crate) fn authz(&self) -> Option<&Arc<awsim_core::AuthzEngine>> {
         self.authz.get()
     }
+
+    /// Look up the AssumeRolePolicyDocument (trust policy) for `role_arn`
+    /// in `account_id`. Returns None if the role doesn't exist.
+    ///
+    /// Plumbed through to STS so AssumeRole can refuse callers that the
+    /// trust policy doesn't list. Real AWS evaluates the trust policy as
+    /// a resource-based policy with action `sts:AssumeRole` against the
+    /// role ARN, and so does our wiring in awsim-sts.
+    pub fn lookup_role_trust_policy(&self, account_id: &str, role_arn: &str) -> Option<String> {
+        let role_name = role_arn.rsplit_once('/').map(|(_, last)| last)?;
+        let state = self.store.get(account_id, IAM_REGION);
+        state
+            .roles
+            .get(role_name)
+            .map(|r| r.assume_role_policy_document.clone())
+    }
 }
 
 impl Default for IamService {

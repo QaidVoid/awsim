@@ -1,12 +1,42 @@
+use std::sync::{Arc, OnceLock};
+
 use awsim_core::{AwsError, Protocol, RequestContext, ServiceHandler};
 use serde_json::{Value, json};
 use tracing::debug;
 
-pub struct StsService;
+/// Look up the trust policy document for a role so AssumeRole can decide
+/// whether the calling principal is allowed to assume it.
+///
+/// The resolver returns a JSON-string `AssumeRolePolicyDocument`. None means
+/// "no such role in the given account", which AssumeRole treats the same as
+/// "trust policy denies": both surface as `AccessDenied` rather than leaking
+/// whether the role exists.
+pub trait TrustPolicyResolver: Send + Sync {
+    fn resolve(&self, account_id: &str, role_arn: &str) -> Option<String>;
+}
+
+pub struct StsService {
+    trust_policy: OnceLock<Arc<dyn TrustPolicyResolver>>,
+}
 
 impl StsService {
     pub fn new() -> Self {
-        Self
+        Self {
+            trust_policy: OnceLock::new(),
+        }
+    }
+
+    /// Wire in the trust-policy resolver. Idempotent: first call wins so the
+    /// gateway can install it after IAM is up without racing with itself.
+    /// When unset, AssumeRole keeps its old permissive behaviour: real
+    /// production deployments should always wire one in, but tests and
+    /// embedded uses that don't have IAM state can opt out.
+    pub fn set_trust_policy_resolver(&self, resolver: Arc<dyn TrustPolicyResolver>) {
+        let _ = self.trust_policy.set(resolver);
+    }
+
+    fn trust_policy_resolver(&self) -> Option<&Arc<dyn TrustPolicyResolver>> {
+        self.trust_policy.get()
     }
 
     fn get_caller_identity(&self, ctx: &RequestContext) -> Result<Value, AwsError> {
@@ -58,6 +88,10 @@ impl StsService {
             .or_else(|| input["DurationSeconds"].as_u64())
             .unwrap_or(3600);
         validate_assume_role_duration(duration)?;
+
+        if let Some(resolver) = self.trust_policy_resolver() {
+            evaluate_trust_policy(resolver.as_ref(), ctx, role_arn)?;
+        }
 
         debug!(role_arn = %role_arn, session_name = %session_name, "AssumeRole");
 
@@ -572,6 +606,68 @@ fn extract_saml_nameid(assertion_b64: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+/// Evaluate the trust policy on `role_arn` against the calling principal.
+///
+/// AWS rules: a role can be assumed only by a principal explicitly named
+/// in its trust policy (the `AssumeRolePolicyDocument`). This is a
+/// resource-based policy, so we feed it through the same evaluator as
+/// any other resource policy with action `sts:AssumeRole` and the role
+/// ARN as the resource.
+fn evaluate_trust_policy(
+    resolver: &dyn TrustPolicyResolver,
+    ctx: &RequestContext,
+    role_arn: &str,
+) -> Result<(), AwsError> {
+    let Some(policy_json) = resolver.resolve(&ctx.account_id, role_arn) else {
+        return Err(AwsError::access_denied_for(
+            "sts:AssumeRole",
+            "anonymous",
+            role_arn,
+        ));
+    };
+
+    let policy = awsim_iam_policy::parse(&policy_json).map_err(|e| {
+        AwsError::internal(format!(
+            "Stored AssumeRolePolicyDocument for {role_arn} is malformed: {e}"
+        ))
+    })?;
+
+    // Derive the calling principal from the SigV4 access key. Anonymous /
+    // unauthenticated callers fall through as the account root, mirroring
+    // GetCallerIdentity's existing behaviour.
+    let principal_arn = match ctx.access_key.as_deref() {
+        Some(k) if !k.is_empty() => format!("arn:aws:iam::{}:user/{}", ctx.account_id, k),
+        _ => format!("arn:aws:iam::{}:root", ctx.account_id),
+    };
+
+    let context = std::collections::HashMap::new();
+    let req = awsim_iam_policy::AuthzRequest {
+        principal_arn: &principal_arn,
+        principal_account: &ctx.account_id,
+        action: "sts:AssumeRole",
+        resource_arn: role_arn,
+        context: &context,
+    };
+    let scps: Vec<awsim_iam_policy::PolicyDocument> = Vec::new();
+    let identity_policies: Vec<awsim_iam_policy::PolicyDocument> = Vec::new();
+    let eval_ctx = awsim_iam_policy::EvalContext {
+        identity_policies: &identity_policies,
+        permissions_boundary: None,
+        resource_policy: Some(&policy),
+        scps: &scps,
+        session_policy: None,
+    };
+
+    match awsim_iam_policy::evaluate(&req, &eval_ctx) {
+        awsim_iam_policy::Decision::Allow => Ok(()),
+        _ => Err(AwsError::access_denied_for(
+            "sts:AssumeRole",
+            &principal_arn,
+            role_arn,
+        )),
     }
 }
 
@@ -1239,5 +1335,84 @@ mod tests {
         // Must match YYYY-MM-DDTHH:MM:SSZ
         assert!(ts.ends_with('Z'), "must end with Z: {ts}");
         assert_eq!(ts.len(), 20, "must be 20 chars: {ts}");
+    }
+
+    struct StaticResolver(Option<&'static str>);
+
+    impl TrustPolicyResolver for StaticResolver {
+        fn resolve(&self, _account_id: &str, _role_arn: &str) -> Option<String> {
+            self.0.map(String::from)
+        }
+    }
+
+    #[test]
+    fn assume_role_rejected_when_role_not_found() {
+        let svc = StsService::new();
+        svc.set_trust_policy_resolver(Arc::new(StaticResolver(None)));
+        let ctx = make_ctx();
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/Missing",
+                    "RoleSessionName": "session",
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "AccessDenied");
+    }
+
+    #[test]
+    fn assume_role_rejected_when_trust_policy_does_not_allow_caller() {
+        let svc = StsService::new();
+        // Trust policy only allows a different account. Our caller is anonymous
+        // (root of 000000000000), so evaluation must implicit-deny.
+        svc.set_trust_policy_resolver(Arc::new(StaticResolver(Some(
+            r#"{
+                "Version":"2012-10-17",
+                "Statement":[{
+                    "Effect":"Allow",
+                    "Principal":{"AWS":"arn:aws:iam::999999999999:root"},
+                    "Action":"sts:AssumeRole"
+                }]
+            }"#,
+        ))));
+        let ctx = make_ctx();
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/Locked",
+                    "RoleSessionName": "session",
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "AccessDenied");
+    }
+
+    #[test]
+    fn assume_role_succeeds_when_trust_policy_explicitly_allows_caller() {
+        let svc = StsService::new();
+        svc.set_trust_policy_resolver(Arc::new(StaticResolver(Some(
+            r#"{
+                "Version":"2012-10-17",
+                "Statement":[{
+                    "Effect":"Allow",
+                    "Principal":{"AWS":"arn:aws:iam::000000000000:root"},
+                    "Action":"sts:AssumeRole"
+                }]
+            }"#,
+        ))));
+        let ctx = make_ctx();
+        let resp = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/Open",
+                    "RoleSessionName": "session",
+                }),
+                &ctx,
+            )
+            .unwrap();
+        assert!(resp["Credentials"]["AccessKeyId"].as_str().is_some());
     }
 }

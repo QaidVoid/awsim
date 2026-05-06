@@ -1724,6 +1724,15 @@ fn arn_to_sqs_url(arn: &str, default_region: &str, default_account: &str) -> Str
     }
 }
 
+/// Resolves a role's trust policy from the IAM service for STS AssumeRole.
+struct IamTrustPolicyResolver(std::sync::Arc<awsim_iam::IamService>);
+
+impl awsim_sts::TrustPolicyResolver for IamTrustPolicyResolver {
+    fn resolve(&self, account_id: &str, role_arn: &str) -> Option<String> {
+        self.0.lookup_role_trust_policy(account_id, role_arn)
+    }
+}
+
 /// Bundle of handles returned by [`register_services`] for use by the router and OAuth layer.
 type RegisteredServices = (
     Arc<awsim_apigateway::ApiGatewayService>,
@@ -1876,6 +1885,9 @@ fn register_services(
     state.register(iam, vec![]);
 
     let sts = Arc::new(awsim_sts::StsService::new());
+    sts.set_trust_policy_resolver(Arc::new(IamTrustPolicyResolver(Arc::clone(
+        &iam_service_clone,
+    ))));
     state.register(sts, vec![]);
 
     let sns = Arc::new(awsim_sns::SnsService::new());
