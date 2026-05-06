@@ -311,6 +311,82 @@ button:hover {{ background: #f97316; }}
         .expect("well-known header values cannot fail")
 }
 
+#[allow(clippy::too_many_arguments)]
+fn change_password_page_html(
+    pool_id: &str,
+    response_type: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    scope: &str,
+    state_param: &str,
+    nonce: &str,
+    code_challenge: &str,
+    code_challenge_method: &str,
+    username: &str,
+    temp_password: &str,
+    error_msg: Option<&str>,
+) -> Response {
+    let error_html = error_msg
+        .map(|e| format!(r#"<div class="error">{}</div>"#, escape_html(e)))
+        .unwrap_or_default();
+
+    let pool_id_e = escape_html(pool_id);
+    let response_type_e = escape_html(response_type);
+    let client_id_e = escape_html(client_id);
+    let redirect_uri_e = escape_html(redirect_uri);
+    let scope_e = escape_html(scope);
+    let state_param_e = escape_html(state_param);
+    let nonce_e = escape_html(nonce);
+    let code_challenge_e = escape_html(code_challenge);
+    let code_challenge_method_e = escape_html(code_challenge_method);
+    let username_e = escape_html(username);
+    let temp_password_e = escape_html(temp_password);
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html><head><title>AWSim Change Password</title>
+<style>
+body {{ font-family: sans-serif; background: #18181b; color: #e4e4e7; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
+.card {{ background: #27272a; border: 1px solid #3f3f46; border-radius: 12px; padding: 32px; width: 360px; }}
+h2 {{ margin-top: 0; color: #fb923c; }}
+input {{ width: 100%; padding: 10px; margin: 8px 0; background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; box-sizing: border-box; }}
+button {{ width: 100%; padding: 10px; background: #ea580c; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; margin-top: 12px; }}
+button:hover {{ background: #f97316; }}
+.pool {{ color: #71717a; font-size: 12px; margin-bottom: 16px; }}
+.notice {{ color: #a1a1aa; font-size: 13px; margin-bottom: 12px; }}
+.error {{ background: #450a0a; border: 1px solid #991b1b; border-radius: 6px; padding: 10px; margin-bottom: 12px; color: #fca5a5; font-size: 14px; }}
+</style></head>
+<body>
+<div class="card">
+<h2>Change Password</h2>
+<div class="pool">Pool: {pool_id_e}</div>
+<div class="notice">A new password is required for {username_e} before sign-in.</div>
+{error_html}
+<form method="POST" action="/cognito/{pool_id_e}/oauth2/authorize">
+<input type="hidden" name="response_type" value="{response_type_e}">
+<input type="hidden" name="client_id" value="{client_id_e}">
+<input type="hidden" name="redirect_uri" value="{redirect_uri_e}">
+<input type="hidden" name="scope" value="{scope_e}">
+<input type="hidden" name="state" value="{state_param_e}">
+<input type="hidden" name="nonce" value="{nonce_e}">
+<input type="hidden" name="code_challenge" value="{code_challenge_e}">
+<input type="hidden" name="code_challenge_method" value="{code_challenge_method_e}">
+<input type="hidden" name="username" value="{username_e}">
+<input type="hidden" name="password" value="{temp_password_e}">
+<input type="password" name="new_password" placeholder="New password" required autofocus>
+<input type="password" name="confirm_password" placeholder="Confirm new password" required>
+<button type="submit">Set Password</button>
+</form>
+</div></body></html>"#
+    );
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/html; charset=utf-8")
+        .body(Body::from(html))
+        .expect("well-known header values cannot fail")
+}
+
 // ---------------------------------------------------------------------------
 // 1. OIDC Discovery
 // ---------------------------------------------------------------------------
@@ -445,6 +521,8 @@ struct AuthorizeForm {
     code_challenge_method: Option<String>,
     username: Option<String>,
     password: Option<String>,
+    new_password: Option<String>,
+    confirm_password: Option<String>,
 }
 
 async fn authorize_post(
@@ -581,23 +659,96 @@ async fn authorize_post(
         );
     }
 
+    let policy_for_change = pool_ref.policies.clone();
+    drop(pool_ref);
+
+    let mut user = user;
     if user.status == "FORCE_CHANGE_PASSWORD" {
-        return login_page_html(
-            &pool_id,
-            &response_type,
-            &client_id,
-            &redirect_uri,
-            &scope_str,
-            &state_param,
-            nonce.as_deref().unwrap_or(""),
-            code_challenge.as_deref().unwrap_or(""),
-            code_challenge_method.as_deref().unwrap_or(""),
-            Some(
-                "Password reset required — use AdminSetUserPassword or InitiateAuth with NEW_PASSWORD_REQUIRED",
-            ),
-            Some(&username),
+        let new_password = form.new_password.as_deref().unwrap_or("");
+        let confirm_password = form.confirm_password.as_deref().unwrap_or("");
+
+        if new_password.is_empty() {
+            return change_password_page_html(
+                &pool_id,
+                &response_type,
+                &client_id,
+                &redirect_uri,
+                &scope_str,
+                &state_param,
+                nonce.as_deref().unwrap_or(""),
+                code_challenge.as_deref().unwrap_or(""),
+                code_challenge_method.as_deref().unwrap_or(""),
+                &username,
+                password,
+                None,
+            );
+        }
+
+        if new_password != confirm_password {
+            return change_password_page_html(
+                &pool_id,
+                &response_type,
+                &client_id,
+                &redirect_uri,
+                &scope_str,
+                &state_param,
+                nonce.as_deref().unwrap_or(""),
+                code_challenge.as_deref().unwrap_or(""),
+                code_challenge_method.as_deref().unwrap_or(""),
+                &username,
+                password,
+                Some("Passwords do not match"),
+            );
+        }
+
+        if let Err(err) =
+            crate::operations::auth_policy::validate_password(&policy_for_change, new_password)
+        {
+            return change_password_page_html(
+                &pool_id,
+                &response_type,
+                &client_id,
+                &redirect_uri,
+                &scope_str,
+                &state_param,
+                nonce.as_deref().unwrap_or(""),
+                code_challenge.as_deref().unwrap_or(""),
+                code_challenge_method.as_deref().unwrap_or(""),
+                &username,
+                password,
+                Some(&err.message),
+            );
+        }
+
+        if let Some(mut pool_mut) = cognito.user_pools.get_mut(&pool_id)
+            && let Some(user_mut) = pool_mut.users.get_mut(&username)
+        {
+            user_mut.password = new_password.to_string();
+            user_mut.status = "CONFIRMED".to_string();
+            user_mut.failed_login_attempts = 0;
+            user_mut.locked_until_secs = None;
+        }
+
+        info!(
+            pool_id = %pool_id,
+            username = %username,
+            "OAuth: completed FORCE_CHANGE_PASSWORD via login form"
         );
+
+        user.password = new_password.to_string();
+        user.status = "CONFIRMED".to_string();
     }
+    let user = user;
+    let pool_ref = match cognito.user_pools.get(&pool_id) {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("User pool not found: {pool_id}"),
+            )
+                .into_response();
+        }
+    };
 
     // Validate scopes against client's allowed_oauth_scopes (if configured).
     let requested_scopes = parse_scopes(&scope_str);
