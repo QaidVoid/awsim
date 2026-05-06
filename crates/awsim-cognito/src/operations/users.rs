@@ -55,14 +55,14 @@ fn make_user(
     password: &str,
     attributes: HashMap<String, String>,
     status: &str,
-) -> CognitoUser {
+) -> Result<CognitoUser, AwsError> {
     let sub = Uuid::new_v4().to_string();
     let mut attrs = attributes;
     attrs.insert("sub".to_string(), sub.clone());
-    CognitoUser {
+    Ok(CognitoUser {
         username: username.to_string(),
         sub,
-        password: password.to_string(),
+        password_hash: crate::password::hash(password)?,
         attributes: attrs,
         status: status.to_string(),
         enabled: true,
@@ -82,7 +82,7 @@ fn make_user(
         failed_login_attempts: 0,
         locked_until_secs: None,
         auth_events: Vec::new(),
-    }
+    })
 }
 
 fn parse_user_attributes(input: &Value, key: &str) -> HashMap<String, String> {
@@ -287,7 +287,7 @@ pub fn sign_up(
 
     let raw_attrs = parse_user_attributes(input, "UserAttributes");
     let attributes = prepare_user_attributes(&pool, username, raw_attrs)?;
-    let user = make_user(username, password, attributes, "UNCONFIRMED");
+    let user = make_user(username, password, attributes, "UNCONFIRMED")?;
     let sub = user.sub.clone();
 
     // Pre Sign-Up trigger (fire-and-forget)
@@ -485,7 +485,7 @@ pub fn admin_create_user(
 
     let raw_attrs = parse_user_attributes(input, "UserAttributes");
     let attributes = prepare_user_attributes(&pool, username, raw_attrs)?;
-    let user = make_user(username, password, attributes, "FORCE_CHANGE_PASSWORD");
+    let user = make_user(username, password, attributes, "FORCE_CHANGE_PASSWORD")?;
     let user_value = user_to_value(&user);
     info!(username = %username, pool_id = %pool_id, "Cognito: admin created user");
     pool.users.insert(username.to_string(), user);
@@ -596,8 +596,8 @@ pub fn admin_set_user_password(
         )
     })?;
 
-    user.password = password.to_string();
-    // AWS semantics: Permanent=true → CONFIRMED, Permanent=false → the
+    user.password_hash = crate::password::hash(password)?;
+    // AWS semantics: Permanent=true => CONFIRMED, Permanent=false => the
     // password is treated as temporary and the user must change it on
     // next sign-in. We were previously only flipping to CONFIRMED on
     // Permanent=true and leaving the status alone otherwise, which let
@@ -908,7 +908,7 @@ pub fn confirm_forgot_password(
     }
 
     user.pending_verifications.remove(FORGOT_PASSWORD_KEY);
-    user.password = password.to_string();
+    user.password_hash = crate::password::hash(password)?;
     user.status = "CONFIRMED".to_string();
     user.failed_login_attempts = 0;
     user.locked_until_secs = None;
@@ -955,13 +955,13 @@ pub fn change_password(
                     format!("User not found: {username}"),
                 )
             })?;
-            if user.password != previous {
+            if !crate::password::verify(previous, &user.password_hash) {
                 return Err(AwsError::bad_request(
                     "NotAuthorizedException",
                     "Incorrect previous password",
                 ));
             }
-            user.password = proposed.to_string();
+            user.password_hash = crate::password::hash(proposed)?;
             user.failed_login_attempts = 0;
             user.locked_until_secs = None;
             return Ok(json!({}));

@@ -826,7 +826,7 @@ async fn authorize_post(
     };
     let username = resolved_username.expect("user lookup matched, so resolution succeeded");
 
-    if user.password != password {
+    if !crate::password::verify(password, &user.password_hash) {
         return login_page_html(
             &pool_id,
             &response_type,
@@ -956,10 +956,29 @@ async fn authorize_post(
             );
         }
 
+        let new_hash = match crate::password::hash(new_password) {
+            Ok(h) => h,
+            Err(e) => {
+                return login_page_html(
+                    &pool_id,
+                    &response_type,
+                    &client_id,
+                    &redirect_uri,
+                    &scope_str,
+                    &state_param,
+                    nonce.as_deref().unwrap_or(""),
+                    code_challenge.as_deref().unwrap_or(""),
+                    code_challenge_method.as_deref().unwrap_or(""),
+                    Some(&e.message),
+                    Some(&username),
+                );
+            }
+        };
+
         if let Some(mut pool_mut) = cognito.user_pools.get_mut(&pool_id)
             && let Some(user_mut) = pool_mut.users.get_mut(&username)
         {
-            user_mut.password = new_password.to_string();
+            user_mut.password_hash = new_hash.clone();
             user_mut.status = "CONFIRMED".to_string();
             user_mut.failed_login_attempts = 0;
             user_mut.locked_until_secs = None;
@@ -971,7 +990,7 @@ async fn authorize_post(
             "OAuth: completed FORCE_CHANGE_PASSWORD via login form"
         );
 
-        user.password = new_password.to_string();
+        user.password_hash = new_hash;
         user.status = "CONFIRMED".to_string();
     }
     let user = user;

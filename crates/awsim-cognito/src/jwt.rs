@@ -246,7 +246,8 @@ pub struct AccessClaims {
 /// returning the claims of interest. Returns `None` for any failure (bad
 /// signature, expired, wrong token kind, malformed payload).
 pub fn verify_access_token(token: &str) -> Option<AccessClaims> {
-    let data = jsonwebtoken::decode::<Value>(token, keys::decoding_key(), &keys::validation()).ok()?;
+    let data =
+        jsonwebtoken::decode::<Value>(token, keys::decoding_key(), &keys::validation()).ok()?;
     if data.claims.get("token_use").and_then(|v| v.as_str()) != Some("access") {
         return None;
     }
@@ -302,8 +303,7 @@ mod tests {
     #[test]
     fn forged_token_is_rejected() {
         // A token with the right shape but a bogus signature must not verify.
-        let header = URL_SAFE_NO_PAD
-            .encode(br#"{"alg":"RS256","typ":"JWT","kid":"awsim-key-1"}"#);
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT","kid":"awsim-key-1"}"#);
         let payload = URL_SAFE_NO_PAD.encode(
             br#"{"sub":"x","iss":"https://cognito-idp.us-east-1.amazonaws.com/p","exp":9999999999,"token_use":"access","username":"mallory"}"#,
         );

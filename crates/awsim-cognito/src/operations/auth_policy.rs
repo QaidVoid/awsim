@@ -219,7 +219,7 @@ mod tests {
         CognitoUser {
             username: "u".into(),
             sub: "s".into(),
-            password: "Hunter2!".into(),
+            password_hash: crate::password::hash("Hunter2!").expect("bcrypt"),
             attributes: Default::default(),
             status: "CONFIRMED".into(),
             enabled: true,

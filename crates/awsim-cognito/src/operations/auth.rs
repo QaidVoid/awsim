@@ -256,7 +256,7 @@ pub fn initiate_auth(
                 })?;
                 super::auth_policy::check_not_locked(user)?;
 
-                if user.password != password {
+                if !crate::password::verify(password, &user.password_hash) {
                     super::auth_policy::record_attempt(user, false);
                     super::auth_policy::record_auth_event(
                         user,
@@ -541,7 +541,7 @@ pub fn admin_initiate_auth(
                 })?;
                 super::auth_policy::check_not_locked(user)?;
 
-                if user.password != password {
+                if !crate::password::verify(password, &user.password_hash) {
                     super::auth_policy::record_attempt(user, false);
                     super::auth_policy::record_auth_event(
                         user,
@@ -741,7 +741,7 @@ pub fn respond_to_auth_challenge(
             })?;
 
             super::auth_policy::validate_password(&policy, new_password)?;
-            user.password = new_password.to_string();
+            user.password_hash = crate::password::hash(new_password)?;
             user.status = "CONFIRMED".to_string();
 
             // Collect needed values before releasing the mutable borrow on users.
@@ -870,7 +870,7 @@ pub fn admin_respond_to_auth_challenge(
             })?;
 
             super::auth_policy::validate_password(&policy, new_password)?;
-            user.password = new_password.to_string();
+            user.password_hash = crate::password::hash(new_password)?;
             user.status = "CONFIRMED".to_string();
 
             // Collect needed values before releasing the mutable borrow on users.

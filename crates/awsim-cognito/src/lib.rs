@@ -5,6 +5,7 @@ mod jwt;
 mod keys;
 pub mod oauth;
 mod operations;
+pub mod password;
 pub mod state;
 
 pub use identity::CognitoIdentityService;

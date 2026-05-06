@@ -77,6 +77,19 @@ pub async fn seed(
     let password = body
         .password
         .unwrap_or_else(|| "Seed-Pass-1234!".to_string());
+    let password_hash = match awsim_cognito::password::hash(&password) {
+        Ok(h) => h,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": "InternalError",
+                    "message": format!("password hash failed: {}", e.message),
+                })),
+            )
+                .into_response();
+        }
+    };
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -139,7 +152,7 @@ pub async fn seed(
             let user = CognitoUser {
                 username: username.clone(),
                 sub,
-                password: password.clone(),
+                password_hash: password_hash.clone(),
                 attributes,
                 status,
                 enabled,

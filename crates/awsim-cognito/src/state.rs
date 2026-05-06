@@ -252,8 +252,12 @@ pub struct LinkedProvider {
 pub struct CognitoUser {
     pub username: String,
     pub sub: String,
-    /// Store plaintext for dev/emulator use.
-    pub password: String,
+    /// Bcrypt hash of the user's password. Always set (the empty password
+    /// case is normalised by [`crate::password::hash`]) and never logged.
+    /// Field is named `password` on the wire for snapshot compatibility,
+    /// but its value is *only* a bcrypt hash, never plaintext.
+    #[serde(rename = "password")]
+    pub password_hash: String,
     pub attributes: HashMap<String, String>,
     /// CONFIRMED | UNCONFIRMED | FORCE_CHANGE_PASSWORD | RESET_REQUIRED
     pub status: String,
