@@ -4,16 +4,18 @@ A fully offline, free AWS development environment. Single binary, sub-second sta
 
 ## Quick Start
 
+### Docker
+
+```bash
+docker run --rm -p 4566:4566 -v awsim-data:/data ghcr.io/qaidvoid/awsim:latest
+```
+
+Multi-arch images (`linux/amd64`, `linux/arm64`), plus `:nightly` for the latest `main`. Admin UI at <http://localhost:4566/_awsim/ui/>. See [docs/guide/docker.md](docs/guide/docker.md) for compose, env vars, and persistence.
+
 ### From source
 
 ```bash
 cargo run -- --port 4566
-```
-
-### Docker
-
-```bash
-docker compose up
 ```
 
 ### Usage

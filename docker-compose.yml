@@ -1,6 +1,6 @@
 services:
   awsim:
-    build: .
+    image: ghcr.io/qaidvoid/awsim:latest
     ports:
       - "4566:4566"
     environment:
@@ -9,11 +9,6 @@ services:
       - AWSIM_LOG_LEVEL=info
     volumes:
       - awsim-data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4566/_awsim/health"]
-      interval: 10s
-      timeout: 3s
-      start-period: 5s
 
 volumes:
   awsim-data:
