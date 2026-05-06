@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-use crate::sqlite_store::{MAX_GSI_SLOTS, SqliteStore};
+use crate::sqlite_store::SqliteStore;
 use crate::state::{BackupItem, BackupRecord, DynamoState, Table};
 
 use super::{opt_str, require_str};
@@ -308,14 +308,21 @@ pub fn restore_table_from_backup(
         .map_err(|e| AwsError::internal(format!("DynamoDB schema serialize failed: {e}")))?;
     sqlite.put_table_schema(&ctx.account_id, &ctx.region, target_name, &schema_value)?;
 
-    // Replay every captured item. We pass empty GSI key slots —
-    // recomputing them would require knowing the GSI hash/range
-    // attribute names; for simplicity restored items skip GSI
-    // materialisation and rely on a future operation that reads them
-    // through the base table only. (UI Query/Scan against the base
-    // table works regardless.)
-    let empty_gsi: [(Option<String>, Option<String>); MAX_GSI_SLOTS] = Default::default();
+    // Replay every captured item, recomputing each row's GSI key
+    // columns from the destination table's schema so restored items
+    // are immediately visible to GSI queries. We don't fall back to
+    // empty slots even when the destination has no GSIs - the
+    // computed slice is just all-None in that case, which is exactly
+    // what `empty_gsi` would have been.
     for item in &backup.items {
+        let dyn_item = crate::keys::storage_value_to_item(item.attrs.clone());
+        let gsi_keys = match dyn_item
+            .as_ref()
+            .and_then(|i| crate::keys::extract_item_keys(&new_table, i))
+        {
+            Some(k) => k.gsi,
+            None => Default::default(),
+        };
         sqlite.put_item(
             &ctx.account_id,
             &ctx.region,
@@ -323,7 +330,7 @@ pub fn restore_table_from_backup(
             &item.pk,
             &item.sk,
             &item.attrs,
-            &empty_gsi,
+            &gsi_keys,
         )?;
     }
     let restored_count = backup.items.len() as u64;
@@ -450,4 +457,106 @@ pub fn update_continuous_backups(
             "PointInTimeRecoveryDescription": pitr_desc
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::item::put_item;
+    use crate::operations::query::query;
+    use crate::operations::table::create_table;
+    use crate::sqlite_store::SqliteStore;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("dynamodb", "us-east-1")
+    }
+
+    #[test]
+    fn restore_preserves_gsi_keys_so_restored_items_show_up_in_index_queries() {
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+
+        // Create a table with one GSI keyed on `tag`.
+        create_table(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "src",
+                "KeySchema": [
+                    { "AttributeName": "pk", "KeyType": "HASH" }
+                ],
+                "AttributeDefinitions": [
+                    { "AttributeName": "pk",  "AttributeType": "S" },
+                    { "AttributeName": "tag", "AttributeType": "S" }
+                ],
+                "BillingMode": "PAY_PER_REQUEST",
+                "GlobalSecondaryIndexes": [{
+                    "IndexName": "byTag",
+                    "KeySchema": [{ "AttributeName": "tag", "KeyType": "HASH" }],
+                    "Projection": { "ProjectionType": "ALL" }
+                }]
+            }),
+            &c,
+        )
+        .unwrap();
+
+        // Seed an item that materialises into the GSI.
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "src",
+                "Item": {
+                    "pk":  { "S": "p1" },
+                    "tag": { "S": "shared" }
+                }
+            }),
+            &c,
+        )
+        .unwrap();
+
+        // Snapshot the table, then restore into a new name.
+        create_backup(
+            &state,
+            &sqlite,
+            &json!({ "TableName": "src", "BackupName": "snap" }),
+            &c,
+        )
+        .unwrap();
+        // Restore needs a BackupArn; pull it from the registry.
+        let backup_arn = state
+            .backups
+            .iter()
+            .next()
+            .map(|e| e.value().backup_arn.clone())
+            .expect("backup recorded");
+        restore_table_from_backup(
+            &state,
+            &sqlite,
+            &json!({
+                "BackupArn": backup_arn,
+                "TargetTableName": "dst"
+            }),
+            &c,
+        )
+        .unwrap();
+
+        // The restored copy must still answer GSI queries; before this
+        // fix the items came back without their gsi1_* columns set, so
+        // a Query on the index returned zero rows.
+        let resp = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "dst",
+                "IndexName": "byTag",
+                "KeyConditionExpression": "tag = :t",
+                "ExpressionAttributeValues": { ":t": { "S": "shared" } }
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp["Count"], json!(1));
+    }
 }
