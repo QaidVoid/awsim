@@ -45,6 +45,69 @@ fn apply_projection_to_item(
     result
 }
 
+/// Resolved index Projection settings used to filter returned items so
+/// they reflect what the index would actually store.
+///
+/// AWS rules:
+/// * `ALL` -> every attribute survives.
+/// * `KEYS_ONLY` -> only the table partition + sort key plus the index
+///   partition + sort key.
+/// * `INCLUDE` -> KEYS_ONLY's set plus the listed `non_key_attributes`.
+struct IndexProjection {
+    /// None when projection_type is ALL (no filtering).
+    allowed: Option<std::collections::HashSet<String>>,
+}
+
+impl IndexProjection {
+    fn from_index(
+        projection: &crate::state::Projection,
+        table_hash: Option<String>,
+        table_range: Option<String>,
+        index_hash: Option<String>,
+        index_range: Option<String>,
+    ) -> Self {
+        match projection.projection_type.as_str() {
+            "ALL" => Self { allowed: None },
+            other => {
+                let mut allowed = std::collections::HashSet::new();
+                if let Some(h) = table_hash {
+                    allowed.insert(h);
+                }
+                if let Some(r) = table_range {
+                    allowed.insert(r);
+                }
+                if let Some(h) = index_hash {
+                    allowed.insert(h);
+                }
+                if let Some(r) = index_range {
+                    allowed.insert(r);
+                }
+                if other == "INCLUDE" {
+                    for n in &projection.non_key_attributes {
+                        allowed.insert(n.clone());
+                    }
+                }
+                Self {
+                    allowed: Some(allowed),
+                }
+            }
+        }
+    }
+
+    /// Apply the projection: drop attributes that the index would not
+    /// store. No-op when `allowed` is None (ALL projection).
+    fn filter(&self, item: &DynamoItem) -> DynamoItem {
+        match &self.allowed {
+            None => item.clone(),
+            Some(allow) => item
+                .iter()
+                .filter(|(k, _)| allow.contains(k.as_str()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        }
+    }
+}
+
 /// Build the LastEvaluatedKey JSON object from an item by extracting just
 /// the table's hash + range key attributes.
 fn last_evaluated_key(
@@ -116,11 +179,17 @@ pub fn query(
     // names different attributes than the base table; we look up the
     // index and pull its hash/range key names. Unknown index → 400 (AWS
     // raises ValidationException).
+    //
+    // We also capture the index's Projection setting so we can filter
+    // the returned attributes to KEYS_ONLY / INCLUDE / ALL, matching
+    // AWS. Without that filter awsim returns the full item regardless,
+    // which silently lies about what a non-ALL index would store.
     let index_name = opt_str(input, "IndexName");
-    let (hash_key_name, range_key_name, gsi_slot) = match index_name {
+    let (hash_key_name, range_key_name, gsi_slot, index_projection) = match index_name {
         None => (
             table.hash_key().unwrap_or("").to_string(),
             table.range_key().map(|s| s.to_string()),
+            None,
             None,
         ),
         Some(idx) => {
@@ -144,7 +213,14 @@ pub fn query(
                     .iter()
                     .find(|k| k.key_type == "RANGE")
                     .map(|k| k.attribute_name.clone());
-                (hk, rk, Some(slot))
+                let proj = IndexProjection::from_index(
+                    &gsi.projection,
+                    table.hash_key().map(str::to_string),
+                    table.range_key().map(str::to_string),
+                    Some(hk.clone()),
+                    rk.clone(),
+                );
+                (hk, rk, Some(slot), Some(proj))
             } else if let Some(lsi) = table.lsi.iter().find(|l| l.index_name == idx) {
                 // LSI shares the base hash key, only the range key differs.
                 let hk = table.hash_key().unwrap_or("").to_string();
@@ -153,7 +229,14 @@ pub fn query(
                     .iter()
                     .find(|k| k.key_type == "RANGE")
                     .map(|k| k.attribute_name.clone());
-                (hk, rk, None) // LSI uses base table's pk column → no slot
+                let proj = IndexProjection::from_index(
+                    &lsi.projection,
+                    table.hash_key().map(str::to_string),
+                    table.range_key().map(str::to_string),
+                    Some(hk.clone()),
+                    rk.clone(),
+                );
+                (hk, rk, None, Some(proj)) // LSI uses base table's pk column → no slot
             } else {
                 return Err(AwsError::validation(format!(
                     "The table does not have the specified index: {idx}"
@@ -209,7 +292,16 @@ pub fn query(
         let projected = if select == "COUNT" {
             DynamoItem::new()
         } else {
-            apply_projection_to_item(&item, &projection_paths, &expr_attr_names)
+            // AWS applies the GSI/LSI Projection BEFORE the request's
+            // own ProjectionExpression: a KEYS_ONLY index can never
+            // surface a non-key attribute even if the caller asks for
+            // it. Match that order so the response shape lines up
+            // with what the index would have stored.
+            let after_index = match &index_projection {
+                Some(p) => p.filter(&item),
+                None => item.clone(),
+            };
+            apply_projection_to_item(&after_index, &projection_paths, &expr_attr_names)
         };
         if select != "COUNT" {
             response_bytes += estimate_item_bytes(&projected);
@@ -1068,5 +1160,146 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resp["Count"], json!(1));
+    }
+
+    fn make_state_with_by_tag_gsi(projection_type: &str, non_key: Vec<String>) -> DynamoState {
+        use crate::state::Projection;
+        make_state_with_gsi(vec![crate::state::GlobalSecondaryIndex {
+            index_name: "byTag".into(),
+            key_schema: vec![KeySchemaElement {
+                attribute_name: "tag".into(),
+                key_type: "HASH".into(),
+            }],
+            projection: Projection {
+                projection_type: projection_type.into(),
+                non_key_attributes: non_key,
+            },
+            status: "ACTIVE".into(),
+        }])
+    }
+
+    #[test]
+    fn gsi_keys_only_projection_strips_non_key_attributes() {
+        let state = make_state_with_by_tag_gsi("KEYS_ONLY", vec![]);
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": {
+                    "pk":      { "S": "p1" },
+                    "sk":      { "S": "s1" },
+                    "tag":     { "S": "shared" },
+                    "secret":  { "S": "should-not-leak" },
+                    "another": { "N": "42" },
+                },
+            }),
+            &c,
+        )
+        .unwrap();
+
+        let resp = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "IndexName": "byTag",
+                "KeyConditionExpression": "tag = :t",
+                "ExpressionAttributeValues": { ":t": { "S": "shared" } },
+            }),
+            &c,
+        )
+        .unwrap();
+        let item = &resp["Items"][0];
+        // KEYS_ONLY: only pk + sk + tag. The base table's pk/sk plus
+        // the index's hash key (tag). Non-key attributes are gone.
+        assert!(item.get("pk").is_some());
+        assert!(item.get("sk").is_some());
+        assert!(item.get("tag").is_some());
+        assert!(item.get("secret").is_none(), "KEYS_ONLY leaked 'secret'");
+        assert!(item.get("another").is_none(), "KEYS_ONLY leaked 'another'");
+    }
+
+    #[test]
+    fn gsi_include_projection_returns_keys_plus_listed_attrs() {
+        let state = make_state_with_by_tag_gsi("INCLUDE", vec!["secret".into()]);
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": {
+                    "pk":      { "S": "p1" },
+                    "sk":      { "S": "s1" },
+                    "tag":     { "S": "shared" },
+                    "secret":  { "S": "in-include-list" },
+                    "another": { "N": "42" },
+                },
+            }),
+            &c,
+        )
+        .unwrap();
+
+        let resp = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "IndexName": "byTag",
+                "KeyConditionExpression": "tag = :t",
+                "ExpressionAttributeValues": { ":t": { "S": "shared" } },
+            }),
+            &c,
+        )
+        .unwrap();
+        let item = &resp["Items"][0];
+        assert!(item.get("pk").is_some());
+        assert!(item.get("tag").is_some());
+        assert!(item.get("secret").is_some(), "INCLUDE list missed 'secret'");
+        assert!(
+            item.get("another").is_none(),
+            "INCLUDE returned attribute not in list"
+        );
+    }
+
+    #[test]
+    fn gsi_all_projection_returns_full_item() {
+        let state = make_state_with_by_tag_gsi("ALL", vec![]);
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": {
+                    "pk":      { "S": "p1" },
+                    "sk":      { "S": "s1" },
+                    "tag":     { "S": "shared" },
+                    "secret":  { "S": "preserved" },
+                },
+            }),
+            &c,
+        )
+        .unwrap();
+
+        let resp = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "IndexName": "byTag",
+                "KeyConditionExpression": "tag = :t",
+                "ExpressionAttributeValues": { ":t": { "S": "shared" } },
+            }),
+            &c,
+        )
+        .unwrap();
+        let item = &resp["Items"][0];
+        assert!(item.get("secret").is_some());
     }
 }
