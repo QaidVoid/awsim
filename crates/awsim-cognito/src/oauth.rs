@@ -643,21 +643,7 @@ async fn openid_config(
 // ---------------------------------------------------------------------------
 
 async fn jwks() -> Json<Value> {
-    Json(json!({
-        "keys": [{
-            "kty": "RSA",
-            "alg": "RS256",
-            "use": "sig",
-            "kid": "awsim-key-1",
-            "n": "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAt\
-                  VT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn6\
-                  4tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_F\
-                  DW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n\
-                  91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksIN\
-                  HaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw",
-            "e": "AQAB"
-        }]
-    }))
+    Json(crate::keys::jwks_document())
 }
 
 // ---------------------------------------------------------------------------

@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use jsonwebtoken::{Header, encode};
 use serde_json::{Value, json};
+
+use crate::keys;
 
 /// Group membership with IAM role info for JWT claim generation.
 pub struct GroupRolePair {
@@ -18,17 +20,17 @@ fn now_epoch() -> u64 {
         .as_secs()
 }
 
-fn encode_part(v: &Value) -> String {
-    URL_SAFE_NO_PAD.encode(v.to_string().as_bytes())
+fn rs256_header() -> Header {
+    let mut h = Header::new(jsonwebtoken::Algorithm::RS256);
+    h.kid = Some(keys::KID.to_string());
+    h.typ = Some("JWT".to_string());
+    h
 }
 
-/// Build a simple JWT with a dummy RS256 signature (not cryptographically valid,
-/// but structurally correct so SDKs that skip verification accept it).
-fn build_jwt(header: &Value, payload: &Value) -> String {
-    let h = encode_part(header);
-    let p = encode_part(payload);
-    let sig = URL_SAFE_NO_PAD.encode(b"awsim-signature");
-    format!("{h}.{p}.{sig}")
+/// Sign a payload with the process-wide RSA key as RS256.
+fn sign(payload: &Value) -> String {
+    encode(&rs256_header(), payload, keys::encoding_key())
+        .expect("RS256 signing with a freshly generated key should not fail")
 }
 
 /// Generate an ID token for a user.
@@ -59,12 +61,6 @@ pub fn id_token(
     expires_in: u64,
 ) -> String {
     let now = now_epoch();
-    let header = json!({
-        "alg": "RS256",
-        "typ": "JWT",
-        "kid": "awsim-key-1"
-    });
-
     let scope_str = scopes.join(" ");
     let issuer = issuer_override
         .map(|s| s.to_string())
@@ -93,7 +89,6 @@ pub fn id_token(
         .as_object_mut()
         .expect("json!() always produces an object");
 
-    // Inject group/role claims if the user belongs to any groups.
     if !groups.is_empty() {
         let group_names: Vec<Value> = groups
             .iter()
@@ -107,7 +102,6 @@ pub fn id_token(
             .map(|arn| Value::String(arn.clone()))
             .collect();
         if !roles.is_empty() {
-            // preferred_role = role from group with lowest precedence (None treated as infinity).
             let preferred = groups
                 .iter()
                 .filter(|g| g.role_arn.is_some())
@@ -131,7 +125,6 @@ pub fn id_token(
         }
     }
 
-    // email scope: include email claims.
     if scopes.iter().any(|s| s == "email") {
         let scope_attrs = ["email", "email_verified"];
         for attr in &scope_attrs {
@@ -141,7 +134,6 @@ pub fn id_token(
         }
     }
 
-    // phone scope: include phone claims.
     if scopes.iter().any(|s| s == "phone") {
         let scope_attrs = ["phone_number", "phone_number_verified"];
         for attr in &scope_attrs {
@@ -151,7 +143,6 @@ pub fn id_token(
         }
     }
 
-    // profile scope: include profile claims.
     if scopes.iter().any(|s| s == "profile") {
         let profile_attrs = [
             "name",
@@ -175,19 +166,19 @@ pub fn id_token(
         }
     }
 
-    // Always merge remaining user attributes (cognito:* etc.) not already present.
     for (k, v) in attributes {
         obj.entry(k.clone())
             .or_insert_with(|| Value::String(v.clone()));
     }
 
-    build_jwt(&header, &payload)
+    sign(&payload)
 }
 
 /// Generate an access token for a user.
 ///
 /// The `scopes` list is included as a space-separated `scope` claim.
-/// `groups` is used to include `cognito:groups` in the access token (no roles — those are ID-token only per AWS spec).
+/// `groups` is used to include `cognito:groups` in the access token (no roles
+/// are emitted: those are ID-token only per AWS spec).
 // SAFETY: each parameter is an independent JWT claim sourced from distinct callers.
 #[allow(clippy::too_many_arguments)]
 pub fn access_token(
@@ -202,12 +193,6 @@ pub fn access_token(
     expires_in: u64,
 ) -> String {
     let now = now_epoch();
-    let header = json!({
-        "alg": "RS256",
-        "typ": "JWT",
-        "kid": "awsim-key-1"
-    });
-
     let scope_str = if scopes.is_empty() {
         "aws.cognito.signin.user.admin".to_string()
     } else {
@@ -231,7 +216,6 @@ pub fn access_token(
         "jti": uuid::Uuid::new_v4().to_string()
     });
 
-    // Include cognito:groups in access token (but NOT roles — those are ID-token only).
     if !groups.is_empty() {
         let group_names: Vec<Value> = groups
             .iter()
@@ -244,34 +228,107 @@ pub fn access_token(
             .insert("cognito:groups".to_string(), Value::Array(group_names));
     }
 
-    build_jwt(&header, &payload)
+    sign(&payload)
 }
 
-/// Generate a refresh token (opaque for local dev — just a UUID).
+/// Generate a refresh token (opaque for local dev, just a UUID).
 pub fn refresh_token(sub: &str) -> String {
     format!("refresh-{sub}.{}", uuid::Uuid::new_v4())
 }
 
-/// Extract the sub claim from an access token without verifying the signature.
-/// Returns None if the token is malformed.
-#[allow(dead_code)]
-pub fn extract_sub_from_access_token(token: &str) -> Option<String> {
-    let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-    let payload_bytes = URL_SAFE_NO_PAD.decode(parts[1]).ok()?;
-    let payload: Value = serde_json::from_slice(&payload_bytes).ok()?;
-    payload["sub"].as_str().map(String::from)
+/// Verified access-token claims.
+pub struct AccessClaims {
+    pub username: String,
+    pub sub: String,
 }
 
-/// Extract the username claim from an access token.
-pub fn extract_username_from_access_token(token: &str) -> Option<String> {
-    let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 {
+/// Verify an access token's RS256 signature, expiry, and `token_use=access`,
+/// returning the claims of interest. Returns `None` for any failure (bad
+/// signature, expired, wrong token kind, malformed payload).
+pub fn verify_access_token(token: &str) -> Option<AccessClaims> {
+    let data = jsonwebtoken::decode::<Value>(token, keys::decoding_key(), &keys::validation()).ok()?;
+    if data.claims.get("token_use").and_then(|v| v.as_str()) != Some("access") {
         return None;
     }
-    let payload_bytes = URL_SAFE_NO_PAD.decode(parts[1]).ok()?;
-    let payload: Value = serde_json::from_slice(&payload_bytes).ok()?;
-    payload["username"].as_str().map(String::from)
+    let username = data
+        .claims
+        .get("username")
+        .and_then(|v| v.as_str())
+        .map(String::from)?;
+    let sub = data
+        .claims
+        .get("sub")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_default();
+    Some(AccessClaims { username, sub })
+}
+
+/// Convenience: verify the access token and return its `username` claim.
+pub fn extract_username_from_access_token(token: &str) -> Option<String> {
+    verify_access_token(token).map(|c| c.username)
+}
+
+/// Convenience: verify the access token and return its `sub` claim.
+#[allow(dead_code)]
+pub fn extract_sub_from_access_token(token: &str) -> Option<String> {
+    verify_access_token(token).map(|c| c.sub)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    #[test]
+    fn access_token_round_trips_through_real_signature() {
+        let token = access_token(
+            "sub-123",
+            "us-east-1",
+            "us-east-1_pool",
+            "client-abc",
+            "alice",
+            &[],
+            &[],
+            None,
+            3600,
+        );
+        let claims = verify_access_token(&token).expect("token verifies under real RS256");
+        assert_eq!(claims.username, "alice");
+        assert_eq!(claims.sub, "sub-123");
+    }
+
+    #[test]
+    fn forged_token_is_rejected() {
+        // A token with the right shape but a bogus signature must not verify.
+        let header = URL_SAFE_NO_PAD
+            .encode(br#"{"alg":"RS256","typ":"JWT","kid":"awsim-key-1"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(
+            br#"{"sub":"x","iss":"https://cognito-idp.us-east-1.amazonaws.com/p","exp":9999999999,"token_use":"access","username":"mallory"}"#,
+        );
+        let sig = URL_SAFE_NO_PAD.encode(b"forged");
+        let forged = format!("{header}.{payload}.{sig}");
+        assert!(verify_access_token(&forged).is_none());
+    }
+
+    #[test]
+    fn wrong_token_use_is_rejected() {
+        // An ID-token-shaped JWT signed with our key must not pass the
+        // `token_use=access` gate.
+        let id = id_token(
+            "sub-123",
+            "us-east-1",
+            "us-east-1_pool",
+            "client-abc",
+            "alice",
+            &Default::default(),
+            &[],
+            None,
+            &[],
+            None,
+            3600,
+        );
+        assert!(verify_access_token(&id).is_none());
+    }
 }

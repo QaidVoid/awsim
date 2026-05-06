@@ -205,10 +205,15 @@ fake = "3"
 uuid = { version = "1", features = ["v4"] }
 md-5 = "0.10"
 base64 = "0.22"
+sha1 = "0.10"
 sha2 = "0.10"
+hmac = "0.12"
 zip = "2"
 rand = "0.8"
 aes-gcm = "0.10"
+rsa = { version = "0.9", features = ["sha2"] }
+jsonwebtoken = "9"
+bcrypt = "0.16"
 
 # Policy / matching
 regex = "1"

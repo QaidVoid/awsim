@@ -2,6 +2,7 @@
 
 mod identity;
 mod jwt;
+mod keys;
 pub mod oauth;
 mod operations;
 pub mod state;

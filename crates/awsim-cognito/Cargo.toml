@@ -16,5 +16,10 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 base64 = { workspace = true }
+sha1 = { workspace = true }
 sha2 = { workspace = true }
+hmac = { workspace = true }
 rand = { workspace = true }
+rsa = { workspace = true }
+jsonwebtoken = { workspace = true }
+bcrypt = { workspace = true }
