@@ -805,6 +805,8 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
         src_content_language,
         src_expires,
         src_version_id,
+        src_etag,
+        src_last_modified,
     ) = {
         let bucket = state
             .buckets
@@ -832,8 +834,47 @@ fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<
             obj.content_language.clone(),
             obj.expires.clone(),
             obj.version_id.clone(),
+            obj.etag.clone(),
+            obj.last_modified.clone(),
         )
     };
+
+    // Conditional CopySource-If-* headers gate the copy on the *source*
+    // object's ETag / Last-Modified. Real S3 returns 412 PreconditionFailed
+    // for any failure (note: NoneMatch + ModifiedSince fail with 412 here,
+    // not the 304 you would see on a regular GET).
+    if let Some(header) = opt_str(input, "CopySourceIfMatch")
+        && !etag_list_matches(header, &src_etag)
+    {
+        return Err(precondition_failed(
+            "CopySourceIfMatch did not match source ETag",
+        ));
+    }
+    if let Some(header) = opt_str(input, "CopySourceIfNoneMatch")
+        && etag_list_matches(header, &src_etag)
+    {
+        return Err(precondition_failed(
+            "CopySourceIfNoneMatch matched source ETag",
+        ));
+    }
+    if let Some(header) = opt_str(input, "CopySourceIfUnmodifiedSince")
+        && let (Some(req), Some(stored)) =
+            (parse_rfc7231(header), parse_rfc7231(&src_last_modified))
+        && stored > req
+    {
+        return Err(precondition_failed(
+            "Source object was modified after CopySourceIfUnmodifiedSince",
+        ));
+    }
+    if let Some(header) = opt_str(input, "CopySourceIfModifiedSince")
+        && let (Some(req), Some(stored)) =
+            (parse_rfc7231(header), parse_rfc7231(&src_last_modified))
+        && stored <= req
+    {
+        return Err(precondition_failed(
+            "Source object was not modified after CopySourceIfModifiedSince",
+        ));
+    }
 
     // MetadataDirective controls whether the destination's user metadata
     // and Content-* fields come from the source (COPY, default) or from
@@ -1658,5 +1699,86 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "AccessDenied");
+    }
+
+    fn put_then_get_etag(state: &S3State, bucket: &str, key: &str, body: &str) -> String {
+        let r = put_object(
+            state,
+            &json!({ "Bucket": bucket, "Key": key, "Body": body }),
+            &ctx(),
+        )
+        .unwrap();
+        r["ETag"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn copy_object_if_match_rejects_when_source_etag_differs() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        let _ = put_then_get_etag(&state, "b", "src", "hello");
+        let err = put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "dst",
+                "CopySource": "b/src",
+                "CopySourceIfMatch": "\"deadbeef\"",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "PreconditionFailed");
+    }
+
+    #[test]
+    fn copy_object_if_match_passes_when_source_etag_matches() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        let etag = put_then_get_etag(&state, "b", "src", "hello");
+        put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "dst",
+                "CopySource": "b/src",
+                "CopySourceIfMatch": etag,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn copy_object_if_none_match_rejects_when_source_etag_matches() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        let etag = put_then_get_etag(&state, "b", "src", "hello");
+        let err = put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "dst",
+                "CopySource": "b/src",
+                "CopySourceIfNoneMatch": etag,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "PreconditionFailed");
+    }
+
+    #[test]
+    fn copy_object_if_unmodified_since_rejects_when_source_modified_later() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        put_then_get_etag(&state, "b", "src", "hello");
+        let err = put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "dst",
+                "CopySource": "b/src",
+                "CopySourceIfUnmodifiedSince": "Thu, 01 Jan 1970 00:00:00 GMT",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "PreconditionFailed");
     }
 }
