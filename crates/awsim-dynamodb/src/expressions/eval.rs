@@ -93,6 +93,32 @@ pub fn evaluate_condition(
             Ok(get_nested(item, &resolved).is_none())
         }
 
+        ConditionExpr::AttributeType(path, type_op) => {
+            let resolved = resolve_path(path, expr_attr_names);
+            let attr = match get_nested(item, &resolved) {
+                Some(v) => v,
+                None => return Ok(false),
+            };
+            let type_val =
+                match resolve_operand(type_op, item, expr_attr_names, expr_attr_values) {
+                    Some(v) => v,
+                    None => return Ok(false),
+                };
+            // The type identifier arrives as a DynamoDB S-typed value:
+            // {"S": "S"} for string, {"S": "N"} for number, etc. The
+            // attribute itself is stored as a one-key object whose key is
+            // the type discriminator (S, N, B, BOOL, NULL, L, M, SS, NS,
+            // BS), so we just compare them.
+            let Some(want) = type_val.get("S").and_then(|v| v.as_str()) else {
+                return Ok(false);
+            };
+            let actual = attr
+                .as_object()
+                .and_then(|m| m.keys().next().map(String::from))
+                .unwrap_or_default();
+            Ok(actual == want)
+        }
+
         ConditionExpr::BeginsWith(path_op, val_op) => {
             let path_val = resolve_operand(path_op, item, expr_attr_names, expr_attr_values);
             let prefix_val = resolve_operand(val_op, item, expr_attr_names, expr_attr_values);

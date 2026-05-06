@@ -33,6 +33,8 @@ pub enum ConditionExpr {
     AttributeExists(String),
     /// attribute_not_exists(path)
     AttributeNotExists(String),
+    /// attribute_type(path, :val)
+    AttributeType(String, Operand),
     /// begins_with(path, :val)
     BeginsWith(Operand, Operand),
     /// contains(path, :val)
@@ -314,6 +316,18 @@ impl Parser {
                     self.advance();
                 }
                 return Ok(ConditionExpr::AttributeNotExists(path));
+            }
+            if name_lc == "attribute_type" && self.peek() == &Token::LParen {
+                self.advance();
+                let path = self.read_path()?;
+                if self.peek() == &Token::Comma {
+                    self.advance();
+                }
+                let type_val = self.parse_operand()?;
+                if self.peek() == &Token::RParen {
+                    self.advance();
+                }
+                return Ok(ConditionExpr::AttributeType(path, type_val));
             }
             if name_lc == "begins_with" && self.peek() == &Token::LParen {
                 self.advance();

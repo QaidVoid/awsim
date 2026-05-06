@@ -1,8 +1,13 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
+use std::collections::HashMap;
+
 use crate::{
-    expressions::{evaluate_condition, parse_condition, parse_projection, parser::resolve_path},
+    expressions::{
+        evaluate_condition, parse_condition, parse_projection,
+        parser::{CompareOp, ConditionExpr, LogicalOp, Operand, resolve_path},
+    },
     keys::storage_value_to_item,
     sqlite_store::SqliteStore,
     state::{DynamoItem, DynamoState, extract_scalar_str},
@@ -98,6 +103,12 @@ pub fn query(
 
     let key_condition = parse_condition(key_condition_expr)?;
     let filter_condition = filter_expr.map(parse_condition).transpose()?;
+    // KeyConditionExpression has stricter rules than FilterExpression:
+    // partition key may only use `=`, sort key only `=, <, <=, >, >=,
+    // BETWEEN, begins_with`, and the connective between them must be AND.
+    // Real DynamoDB rejects anything else with ValidationException; we
+    // were silently accepting them as if they were filter expressions.
+    validate_key_condition(&key_condition, &expr_attr_names)?;
 
     let projection_paths: Vec<String> = projection_expr.map(parse_projection).unwrap_or_default();
 
@@ -530,6 +541,120 @@ fn extract_pk_from_condition(
     None
 }
 
+/// Reject `KeyConditionExpression` shapes that real DynamoDB doesn't accept.
+///
+/// AWS rules:
+///   * Top level is either a single comparison (partition key only) or
+///     `<partition condition> AND <sort condition>`. Anything else
+///     (`OR`, `NOT`, multiple `AND` partition keys, function-only forms)
+///     is a `ValidationException`.
+///   * Partition-key term must be `pk = :v`.
+///   * Sort-key term must be one of `sk = :v`, `sk < :v`, `sk <= :v`,
+///     `sk > :v`, `sk >= :v`, `sk BETWEEN :a AND :b`, `begins_with(sk, :v)`.
+///   * `IN`, `<>`, `contains`, `attribute_exists`, `attribute_type`, etc.
+///     are filter-only and are rejected.
+///
+/// Without this check, awsim would silently treat invalid KeyConditions
+/// as full filter expressions, returning data that real DynamoDB would
+/// have refused at parse time.
+fn validate_key_condition(
+    expr: &ConditionExpr,
+    expr_attr_names: &HashMap<String, String>,
+) -> Result<(), AwsError> {
+    match expr {
+        ConditionExpr::Comparison {
+            op: CompareOp::Eq, ..
+        } => Ok(()),
+        ConditionExpr::Logical {
+            op: LogicalOp::And,
+            children,
+        } if children.len() == 2 => {
+            let pk_term = &children[0];
+            let sk_term = &children[1];
+            if !matches!(
+                pk_term,
+                ConditionExpr::Comparison {
+                    op: CompareOp::Eq,
+                    ..
+                }
+            ) {
+                return validation_err(
+                    "KeyConditionExpression's first term must be 'partitionKey = :value'",
+                );
+            }
+            validate_sort_key_term(sk_term, expr_attr_names)
+        }
+        _ => validation_err(
+            "KeyConditionExpression must be 'partitionKey = :v' or 'partitionKey = :v AND <sortKey condition>'",
+        ),
+    }
+}
+
+fn validate_sort_key_term(
+    expr: &ConditionExpr,
+    _expr_attr_names: &HashMap<String, String>,
+) -> Result<(), AwsError> {
+    match expr {
+        ConditionExpr::Comparison { op, left, right } => {
+            if !matches!(left, Operand::Path(_)) {
+                return validation_err("Sort key condition must be 'sortKey OP :value'");
+            }
+            if !matches!(right, Operand::Value(_)) {
+                return validation_err("Sort key condition must be 'sortKey OP :value'");
+            }
+            match op {
+                CompareOp::Eq
+                | CompareOp::Lt
+                | CompareOp::Le
+                | CompareOp::Gt
+                | CompareOp::Ge => Ok(()),
+                CompareOp::Ne => validation_err(
+                    "Sort key condition does not allow '<>': use FilterExpression instead",
+                ),
+            }
+        }
+        ConditionExpr::Between { operand, .. } => {
+            if matches!(operand, Operand::Path(_)) {
+                Ok(())
+            } else {
+                validation_err("BETWEEN must be applied to the sort key path")
+            }
+        }
+        ConditionExpr::BeginsWith(path, _) => {
+            if matches!(path, Operand::Path(_)) {
+                Ok(())
+            } else {
+                validation_err("begins_with must be applied to the sort key path")
+            }
+        }
+        ConditionExpr::In { .. } => validation_err(
+            "KeyConditionExpression does not support IN: use FilterExpression instead",
+        ),
+        ConditionExpr::Contains(_, _) => validation_err(
+            "KeyConditionExpression does not support contains(): use FilterExpression instead",
+        ),
+        ConditionExpr::AttributeExists(_) | ConditionExpr::AttributeNotExists(_) => {
+            validation_err(
+                "KeyConditionExpression does not support attribute_exists/not_exists: \
+                 use FilterExpression instead",
+            )
+        }
+        ConditionExpr::AttributeType(_, _) => validation_err(
+            "KeyConditionExpression does not support attribute_type(): use FilterExpression instead",
+        ),
+        ConditionExpr::SizeComparison { .. } => validation_err(
+            "KeyConditionExpression does not support size(): use FilterExpression instead",
+        ),
+        ConditionExpr::Logical { .. } | ConditionExpr::Not(_) => validation_err(
+            "KeyConditionExpression supports a single sort-key clause; combine in FilterExpression",
+        ),
+    }
+}
+
+fn validation_err<T>(msg: &str) -> Result<T, AwsError> {
+    Err(AwsError::bad_request("ValidationException", msg))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -821,5 +946,131 @@ mod tests {
         assert_eq!(resp["Count"], json!(1));
         // Only the matching key-condition item counts, not the two we skipped.
         assert_eq!(resp["ScannedCount"], json!(1));
+    }
+
+    #[test]
+    fn key_condition_rejects_partition_key_inequality() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditionExpression": "pk <> :p",
+                "ExpressionAttributeValues": { ":p": {"S": "x"} },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn key_condition_rejects_in_on_sort_key() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditionExpression": "pk = :p AND sk IN (:a, :b)",
+                "ExpressionAttributeValues": {
+                    ":p": {"S": "x"},
+                    ":a": {"S": "a"},
+                    ":b": {"S": "b"},
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn key_condition_rejects_contains_function() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditionExpression": "pk = :p AND contains(sk, :v)",
+                "ExpressionAttributeValues": {
+                    ":p": {"S": "x"},
+                    ":v": {"S": "y"},
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn key_condition_accepts_begins_with_on_sort_key() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        // Just ensure parse + validate succeed; we don't actually need data.
+        query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditionExpression": "pk = :p AND begins_with(sk, :v)",
+                "ExpressionAttributeValues": {
+                    ":p": {"S": "x"},
+                    ":v": {"S": "y"},
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn filter_attribute_type_string_matches_n_attribute() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": { "pk": {"S": "p"}, "sk": {"S": "s"}, "n": {"N": "5"} },
+            }),
+            &c,
+        )
+        .unwrap();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": { "pk": {"S": "p"}, "sk": {"S": "t"}, "n": {"S": "five"} },
+            }),
+            &c,
+        )
+        .unwrap();
+
+        let resp = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditionExpression": "pk = :pk",
+                "FilterExpression": "attribute_type(n, :ty)",
+                "ExpressionAttributeValues": {
+                    ":pk": {"S": "p"},
+                    ":ty": {"S": "N"},
+                },
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp["Count"], json!(1));
     }
 }
