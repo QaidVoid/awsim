@@ -96,6 +96,8 @@ uuid = { workspace = true }
 bytes = { workspace = true }
 base64 = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
+rust-embed = { workspace = true }
+mime_guess = { workspace = true }
 
 # rlimit is POSIX only — the crate's Resource::NOFILE / get/setrlimit don't
 # exist on Windows, so the unix-targeted fd watcher / soft-limit bumper

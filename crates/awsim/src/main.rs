@@ -32,6 +32,7 @@ mod runtime_config;
 mod seed;
 mod seed_cli;
 mod snapshot_cli;
+mod ui;
 
 #[derive(Parser)]
 #[command(
@@ -1210,6 +1211,7 @@ async fn async_main() -> Result<()> {
         .merge(bedrock_defaults_router)
         .merge(runtime_config_router)
         .merge(seed_router)
+        .merge(ui::router())
         .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_bytes))
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with
@@ -1253,6 +1255,9 @@ async fn async_main() -> Result<()> {
     println!("  Fully Offline AWS Dev Environment");
     println!();
     println!("  Endpoint:  http://localhost:{}", cli.port);
+    if ui::is_bundled() {
+        println!("  Admin UI:  http://localhost:{}/_awsim/ui/", cli.port);
+    }
     println!("  Region:    {}", cli.region);
     println!("  Account:   {}", cli.account_id);
     println!("  Services:  {} registered", service_count);
