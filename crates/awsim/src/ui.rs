@@ -14,8 +14,9 @@
 //! every route returns a short "UI not built" hint with build instructions.
 
 use axum::body::Body;
-use axum::extract::Path;
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::extract::{Path, Request};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use rust_embed::RustEmbed;
@@ -39,6 +40,54 @@ pub fn router() -> axum::Router {
 /// placeholder.
 pub fn is_bundled() -> bool {
     UiAssets::get(SPA_FALLBACK).is_some()
+}
+
+/// Layer middleware that redirects browser hits on `/` to the admin UI.
+///
+/// We can't blindly redirect `/` because AWS SDKs use it for root-level
+/// requests (e.g. S3 `ListBuckets` is `GET /` with SigV4 signing). The
+/// rule here keys on three browser-only signals so SDK calls fall
+/// through to the gateway untouched:
+///
+/// 1. The path is exactly `/`.
+/// 2. There is no AWS SigV4 `Authorization` header.
+/// 3. `Accept` advertises `text/html`.
+///
+/// Any one of those failing means the request is treated as an AWS API
+/// call and forwarded to the next layer (the service gateway).
+pub async fn root_redirect_middleware(req: Request, next: Next) -> Response {
+    if !is_bundled() {
+        return next.run(req).await;
+    }
+    if req.method() == Method::GET
+        && req.uri().path() == "/"
+        && !has_aws_auth(req.headers())
+        && wants_html(req.headers())
+    {
+        return Redirect::temporary("/_awsim/ui/").into_response();
+    }
+    next.run(req).await
+}
+
+fn has_aws_auth(headers: &HeaderMap) -> bool {
+    if let Some(value) = headers.get(header::AUTHORIZATION)
+        && let Ok(s) = value.to_str()
+    {
+        // SigV4 starts with `AWS4-HMAC-SHA256`. Pre-signed URLs put the
+        // signature in the query string instead of a header — those
+        // never carry an Authorization, so the query-string presence
+        // is checked separately below.
+        return s.starts_with("AWS4-");
+    }
+    false
+}
+
+fn wants_html(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|a| a.contains("text/html"))
+        .unwrap_or(false)
 }
 
 async fn redirect_to_index() -> Redirect {

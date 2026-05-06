@@ -1232,6 +1232,11 @@ async fn async_main() -> Result<()> {
         .merge(runtime_config_router)
         .merge(seed_router)
         .merge(ui::router())
+        // Redirect plain browser hits on `/` to the admin UI so users
+        // don't have to remember the `/_awsim/ui/` path. Skips when the
+        // request looks like an AWS SDK call (SigV4 Authorization +
+        // non-HTML Accept).
+        .layer(axum::middleware::from_fn(ui::root_redirect_middleware))
         .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_bytes))
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with
