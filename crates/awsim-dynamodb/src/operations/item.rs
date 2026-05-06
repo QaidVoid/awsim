@@ -146,6 +146,69 @@ pub fn parse_item(val: &Value) -> Option<DynamoItem> {
         .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
 }
 
+/// Validate the AWS rules for typed-set attributes (SS / NS / BS):
+///   * each set must be non-empty,
+///   * elements within a set must be unique.
+///
+/// AWS rejects violations with `ValidationException` ("One or more
+/// parameter values were invalid"). Walks `Value` recursively so sets
+/// nested inside lists/maps are caught too.
+pub(crate) fn validate_sets(name: &str, value: &Value) -> Result<(), AwsError> {
+    let Some(obj) = value.as_object() else {
+        return Ok(());
+    };
+    for tag in ["SS", "NS", "BS"] {
+        if let Some(arr) = obj.get(tag).and_then(Value::as_array) {
+            if arr.is_empty() {
+                return Err(AwsError::validation(format!(
+                    "One or more parameter values were invalid: \
+                     An {tag} attribute must contain at least one element \
+                     (attribute: {name})"
+                )));
+            }
+            let mut seen: std::collections::HashSet<&str> =
+                std::collections::HashSet::with_capacity(arr.len());
+            for elem in arr {
+                let Some(s) = elem.as_str() else {
+                    return Err(AwsError::validation(format!(
+                        "One or more parameter values were invalid: \
+                         {tag} elements must be strings (attribute: {name})"
+                    )));
+                };
+                if !seen.insert(s) {
+                    return Err(AwsError::validation(format!(
+                        "One or more parameter values were invalid: \
+                         {tag} contains duplicates (attribute: {name})"
+                    )));
+                }
+            }
+        }
+    }
+    // Recurse into list / map elements so a set buried inside an L or M
+    // attribute is also caught.
+    if let Some(arr) = obj.get("L").and_then(Value::as_array) {
+        for (i, v) in arr.iter().enumerate() {
+            validate_sets(&format!("{name}[{i}]"), v)?;
+        }
+    }
+    if let Some(map) = obj.get("M").and_then(Value::as_object) {
+        for (k, v) in map {
+            validate_sets(&format!("{name}.{k}"), v)?;
+        }
+    }
+    Ok(())
+}
+
+/// Run [`validate_sets`] over every attribute of an item. Used as the
+/// boundary check on PutItem / UpdateItem before the value lands in
+/// storage.
+pub(crate) fn validate_item_sets(item: &DynamoItem) -> Result<(), AwsError> {
+    for (name, value) in item {
+        validate_sets(name, value)?;
+    }
+    Ok(())
+}
+
 /// Apply projection to an item (return only specified attributes).
 fn apply_projection(
     item: &DynamoItem,
@@ -226,6 +289,7 @@ pub fn put_item(
 
     let item = parse_item(&input["Item"])
         .ok_or_else(|| AwsError::validation("Item is required and must be a map"))?;
+    validate_item_sets(&item)?;
 
     let item_bytes = estimate_item_bytes(&item);
     if item_bytes > ITEM_MAX_BYTES {
@@ -526,6 +590,11 @@ pub fn update_item(
         new_item.insert(k.clone(), v.clone());
     }
 
+    // The UpdateExpression may have left a set in an invalid state (empty
+    // after DELETE, duplicates after ADD, etc.). Re-validate the merged
+    // item so we don't persist something the AWS API would have rejected.
+    validate_item_sets(&new_item)?;
+
     // Re-extract SQLite keys from the merged item — UpdateExpression may
     // have introduced or changed GSI key attributes.
     let sqlite_keys = {
@@ -640,6 +709,48 @@ mod tests {
     use crate::state::{KeySchemaElement, Table};
     use serde_json::json;
     use std::collections::VecDeque;
+
+    #[test]
+    fn validate_sets_rejects_empty_string_set() {
+        let v = json!({ "SS": [] });
+        assert!(validate_sets("attr", &v).is_err());
+    }
+
+    #[test]
+    fn validate_sets_rejects_duplicate_string_set_elements() {
+        let v = json!({ "SS": ["a", "a"] });
+        let err = validate_sets("attr", &v).unwrap_err();
+        assert!(err.message.contains("duplicates"));
+    }
+
+    #[test]
+    fn validate_sets_accepts_unique_non_empty_set() {
+        let v = json!({ "SS": ["a", "b"] });
+        assert!(validate_sets("attr", &v).is_ok());
+    }
+
+    #[test]
+    fn validate_sets_recurses_into_lists_and_maps() {
+        // Set buried inside a list element must still be caught.
+        let v = json!({ "L": [ { "M": { "tags": { "NS": [] } } } ] });
+        assert!(validate_sets("attr", &v).is_err());
+    }
+
+    #[test]
+    fn validate_sets_handles_each_typed_set_kind() {
+        for tag in ["SS", "NS", "BS"] {
+            let dup = json!({ tag: ["x", "x"] });
+            assert!(
+                validate_sets("attr", &dup).is_err(),
+                "{tag} duplicates must reject"
+            );
+            let empty = json!({ tag: [] });
+            assert!(
+                validate_sets("attr", &empty).is_err(),
+                "{tag} empty must reject"
+            );
+        }
+    }
 
     fn ctx() -> RequestContext {
         RequestContext::new("dynamodb", "us-east-1")
