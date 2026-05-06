@@ -208,14 +208,12 @@ pub fn initiate_auth(
                 let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
                     AwsError::not_found("ResourceNotFoundException", "User pool not found")
                 })?;
-                super::users::resolve_username_for_signin(&pool, raw_username).ok_or_else(
-                    || {
-                        AwsError::not_found(
-                            "UserNotFoundException",
-                            format!("User not found: {raw_username}"),
-                        )
-                    },
-                )?
+                super::users::resolve_username_for_signin(&pool, raw_username).ok_or_else(|| {
+                    AwsError::not_found(
+                        "UserNotFoundException",
+                        format!("User not found: {raw_username}"),
+                    )
+                })?
             };
             let username = username.as_str();
 
@@ -496,14 +494,12 @@ pub fn admin_initiate_auth(
                 let pool = state.user_pools.get(pool_id).ok_or_else(|| {
                     AwsError::not_found("ResourceNotFoundException", "User pool not found")
                 })?;
-                super::users::resolve_username_for_signin(&pool, raw_username).ok_or_else(
-                    || {
-                        AwsError::not_found(
-                            "UserNotFoundException",
-                            format!("User not found: {raw_username}"),
-                        )
-                    },
-                )?
+                super::users::resolve_username_for_signin(&pool, raw_username).ok_or_else(|| {
+                    AwsError::not_found(
+                        "UserNotFoundException",
+                        format!("User not found: {raw_username}"),
+                    )
+                })?
             };
             let username = username.as_str();
 

@@ -130,18 +130,26 @@ jobs:
           } > NIGHTLY_NOTES.md
 
       - name: Refresh nightly tag
-        # Force-move the `nightly` tag to the current commit so the
-        # release page links to the right source.
         run: |
           git tag -f nightly
           git push origin nightly --force
 
-      - name: Republish nightly release
+      - name: Delete previous nightly release (keep tag)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete nightly \
+            --repo "${{ github.repository }}" \
+            --yes \
+            || true
+
+      - name: Publish nightly release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly
           name: Nightly
           prerelease: true
+          target_commitish: ${{ github.sha }}
           body_path: NIGHTLY_NOTES.md
           files: |
             awsim-*.tar.xz
