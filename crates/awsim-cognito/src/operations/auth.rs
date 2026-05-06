@@ -260,6 +260,12 @@ pub fn initiate_auth(
                         format!("User not found: {username}"),
                     )
                 })?;
+                if !user.enabled {
+                    return Err(AwsError::bad_request(
+                        "NotAuthorizedException",
+                        "User is disabled.",
+                    ));
+                }
                 super::auth_policy::check_not_locked(user)?;
 
                 if !crate::password::verify(password, &user.password_hash) {
@@ -560,6 +566,12 @@ pub fn admin_initiate_auth(
                         format!("User not found: {username}"),
                     )
                 })?;
+                if !user.enabled {
+                    return Err(AwsError::bad_request(
+                        "NotAuthorizedException",
+                        "User is disabled.",
+                    ));
+                }
                 super::auth_policy::check_not_locked(user)?;
 
                 if !crate::password::verify(password, &user.password_hash) {
@@ -1169,6 +1181,12 @@ fn start_srp_challenge(
         .users
         .get(&resolved_username)
         .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
+    if !user.enabled {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "User is disabled.",
+        ));
+    }
     let salt_hex = user.srp_salt.clone().ok_or_else(|| {
         AwsError::bad_request(
             "NotAuthorizedException",
