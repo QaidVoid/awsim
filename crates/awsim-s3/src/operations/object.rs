@@ -1096,13 +1096,14 @@ fn validate_object_key(key: &str) -> Result<(), AwsError> {
             "Object key must not be empty",
         ));
     }
-    if key.len() > 1024 {
+    // AWS caps object keys at 1024 *bytes* of UTF-8, not characters.
+    // Rust's `str::len()` already returns the byte length, so a key of
+    // 200 emoji (each 4 bytes wide) crosses the cap at the 257th char.
+    let bytes = key.len();
+    if bytes > 1024 {
         return Err(AwsError::bad_request(
             "KeyTooLongError",
-            format!(
-                "Object key length {} exceeds the 1024-byte limit",
-                key.len()
-            ),
+            format!("Object key length {bytes} bytes exceeds the 1024-byte UTF-8 limit"),
         ));
     }
     Ok(())
@@ -1459,6 +1460,37 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "KeyTooLongError");
+    }
+
+    #[test]
+    fn put_object_rejects_multibyte_key_above_byte_limit() {
+        // Each emoji is 4 UTF-8 bytes; 257 emoji = 1028 bytes, just over.
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        let key: String = std::iter::repeat_n("\u{1F980}", 257).collect();
+        assert_eq!(key.len(), 1028);
+        let err = put_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": key, "Body": "x" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "KeyTooLongError");
+    }
+
+    #[test]
+    fn put_object_accepts_multibyte_key_at_byte_limit() {
+        // 256 emoji = 1024 bytes exactly, must be accepted.
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        let key: String = std::iter::repeat_n("\u{1F980}", 256).collect();
+        assert_eq!(key.len(), 1024);
+        put_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": key, "Body": "x" }),
+            &ctx(),
+        )
+        .unwrap();
     }
 
     #[test]
