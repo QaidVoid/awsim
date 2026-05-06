@@ -56,6 +56,40 @@ fn parse_attribute_definitions(input: &Value) -> Vec<AttributeDefinition> {
         .unwrap_or_default()
 }
 
+/// AWS rejects CreateTable / UpdateTable when a KeySchema names an
+/// attribute that isn't present in AttributeDefinitions, with a
+/// ValidationException listing the offending names. awsim used to
+/// accept those silently and the resulting GSI was just unusable
+/// (its key column came back empty for every item).
+///
+/// `key_schema_owners` is `(label, KeySchema)` per source so the error
+/// message can point at the responsible block (the base table itself,
+/// or a specific GSI / LSI by name).
+fn validate_key_schema_against_attrs(
+    attrs: &[AttributeDefinition],
+    key_schema_owners: &[(&str, &[KeySchemaElement])],
+) -> Result<(), AwsError> {
+    let declared: std::collections::HashSet<&str> =
+        attrs.iter().map(|a| a.attribute_name.as_str()).collect();
+    let mut missing: Vec<String> = Vec::new();
+    for (owner, schema) in key_schema_owners {
+        for ke in *schema {
+            if !declared.contains(ke.attribute_name.as_str()) {
+                missing.push(format!("{}.{}", owner, ke.attribute_name));
+            }
+        }
+    }
+    if !missing.is_empty() {
+        return Err(AwsError::validation(format!(
+            "One or more parameter values were invalid: \
+             Some index key attributes are not defined in AttributeDefinitions. \
+             Missing: [{}]",
+            missing.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 fn parse_projection(input: &Value) -> Projection {
     let projection_type = input
         .get("ProjectionType")
@@ -313,6 +347,20 @@ pub fn create_table(
         .get("LocalSecondaryIndexes")
         .map(parse_lsi)
         .unwrap_or_default();
+
+    // Reject CreateTable when an index references an attribute that
+    // isn't declared in AttributeDefinitions. AWS surfaces the same
+    // check as a ValidationException; we'd previously accept it and
+    // the GSI/LSI would just stay empty for every item written.
+    let mut owners: Vec<(&str, &[KeySchemaElement])> = Vec::new();
+    owners.push(("KeySchema", &key_schema));
+    for g in &gsi {
+        owners.push((g.index_name.as_str(), &g.key_schema));
+    }
+    for l in &lsi {
+        owners.push((l.index_name.as_str(), &l.key_schema));
+    }
+    validate_key_schema_against_attrs(&attribute_definitions, &owners)?;
 
     let arn = format!(
         "arn:aws:dynamodb:{}:{}:table/{}",
@@ -635,6 +683,32 @@ pub fn update_table(
                     .to_string();
                 let key_schema = parse_key_schema(&create["KeySchema"]);
                 let projection = parse_projection(create.get("Projection").unwrap_or(&json!({})));
+                // The new GSI's KeySchema attributes must already be in
+                // AttributeDefinitions (which UpdateTable lets you augment
+                // via the optional AttributeDefinitions field). Build the
+                // effective set: existing definitions plus any new ones
+                // the caller is providing in this same call.
+                let mut effective_attrs = table.attribute_definitions.clone();
+                if let Some(arr) = input.get("AttributeDefinitions").and_then(|v| v.as_array()) {
+                    for el in arr {
+                        let Some(name) = el.get("AttributeName").and_then(|v| v.as_str()) else {
+                            continue;
+                        };
+                        let Some(ty) = el.get("AttributeType").and_then(|v| v.as_str()) else {
+                            continue;
+                        };
+                        if !effective_attrs.iter().any(|a| a.attribute_name == name) {
+                            effective_attrs.push(AttributeDefinition {
+                                attribute_name: name.to_string(),
+                                attribute_type: ty.to_string(),
+                            });
+                        }
+                    }
+                }
+                let owners: Vec<(&str, &[KeySchemaElement])> =
+                    vec![(index_name.as_str(), &key_schema)];
+                validate_key_schema_against_attrs(&effective_attrs, &owners)?;
+                table.attribute_definitions = effective_attrs;
                 table.gsi.push(GlobalSecondaryIndex {
                     index_name: index_name.clone(),
                     key_schema,
@@ -1860,6 +1934,9 @@ mod tests {
             &sqlite,
             &json!({
                 "TableName": "t",
+                "AttributeDefinitions": [
+                    { "AttributeName": "tag", "AttributeType": "S" }
+                ],
                 "GlobalSecondaryIndexUpdates": [{
                     "Create": {
                         "IndexName": "byTag",
@@ -1978,5 +2055,83 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_table_rejects_gsi_keying_on_undeclared_attribute() {
+        use crate::sqlite_store::SqliteStore;
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = create_table(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeySchema": [{ "AttributeName": "pk", "KeyType": "HASH" }],
+                "AttributeDefinitions": [{ "AttributeName": "pk", "AttributeType": "S" }],
+                "BillingMode": "PAY_PER_REQUEST",
+                "GlobalSecondaryIndexes": [{
+                    "IndexName": "byTag",
+                    "KeySchema": [{ "AttributeName": "tag", "KeyType": "HASH" }],
+                    "Projection": { "ProjectionType": "ALL" }
+                }]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("byTag.tag"));
+    }
+
+    #[test]
+    fn create_table_accepts_gsi_with_declared_attribute() {
+        use crate::sqlite_store::SqliteStore;
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        create_table(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeySchema": [{ "AttributeName": "pk", "KeyType": "HASH" }],
+                "AttributeDefinitions": [
+                    { "AttributeName": "pk",  "AttributeType": "S" },
+                    { "AttributeName": "tag", "AttributeType": "S" }
+                ],
+                "BillingMode": "PAY_PER_REQUEST",
+                "GlobalSecondaryIndexes": [{
+                    "IndexName": "byTag",
+                    "KeySchema": [{ "AttributeName": "tag", "KeyType": "HASH" }],
+                    "Projection": { "ProjectionType": "ALL" }
+                }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn update_table_rejects_added_gsi_with_undeclared_attribute() {
+        use crate::sqlite_store::SqliteStore;
+        let state = state_with_table("t");
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = update_table(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "GlobalSecondaryIndexUpdates": [{
+                    "Create": {
+                        "IndexName": "missing",
+                        "KeySchema": [{ "AttributeName": "ghost", "KeyType": "HASH" }],
+                        "Projection": { "ProjectionType": "ALL" }
+                    }
+                }]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("missing.ghost"));
     }
 }
