@@ -975,10 +975,15 @@ async fn authorize_post(
             }
         };
 
+        let (srp_salt, srp_verifier) =
+            crate::password::srp_material(&pool_id, &username, new_password);
+
         if let Some(mut pool_mut) = cognito.user_pools.get_mut(&pool_id)
             && let Some(user_mut) = pool_mut.users.get_mut(&username)
         {
             user_mut.password_hash = new_hash.clone();
+            user_mut.srp_salt = Some(srp_salt.clone());
+            user_mut.srp_verifier = Some(srp_verifier.clone());
             user_mut.status = "CONFIRMED".to_string();
             user_mut.failed_login_attempts = 0;
             user_mut.locked_until_secs = None;
@@ -991,6 +996,8 @@ async fn authorize_post(
         );
 
         user.password_hash = new_hash;
+        user.srp_salt = Some(srp_salt);
+        user.srp_verifier = Some(srp_verifier);
         user.status = "CONFIRMED".to_string();
     }
     let user = user;

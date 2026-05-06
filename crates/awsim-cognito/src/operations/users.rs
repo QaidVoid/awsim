@@ -51,6 +51,7 @@ pub fn user_to_value(user: &CognitoUser) -> Value {
 }
 
 fn make_user(
+    pool_id: &str,
     username: &str,
     password: &str,
     attributes: HashMap<String, String>,
@@ -59,10 +60,13 @@ fn make_user(
     let sub = Uuid::new_v4().to_string();
     let mut attrs = attributes;
     attrs.insert("sub".to_string(), sub.clone());
+    let (salt_hex, verifier_hex) = crate::password::srp_material(pool_id, username, password);
     Ok(CognitoUser {
         username: username.to_string(),
         sub,
         password_hash: crate::password::hash(password)?,
+        srp_salt: Some(salt_hex),
+        srp_verifier: Some(verifier_hex),
         attributes: attrs,
         status: status.to_string(),
         enabled: true,
@@ -293,7 +297,7 @@ pub fn sign_up(
 
     let raw_attrs = parse_user_attributes(input, "UserAttributes");
     let attributes = prepare_user_attributes(&pool, username, raw_attrs)?;
-    let user = make_user(username, password, attributes, "UNCONFIRMED")?;
+    let user = make_user(&pool.id, username, password, attributes, "UNCONFIRMED")?;
     let sub = user.sub.clone();
 
     // Pre Sign-Up trigger (fire-and-forget)
@@ -497,7 +501,13 @@ pub fn admin_create_user(
 
     let raw_attrs = parse_user_attributes(input, "UserAttributes");
     let attributes = prepare_user_attributes(&pool, username, raw_attrs)?;
-    let user = make_user(username, password, attributes, "FORCE_CHANGE_PASSWORD")?;
+    let user = make_user(
+        &pool.id,
+        username,
+        password,
+        attributes,
+        "FORCE_CHANGE_PASSWORD",
+    )?;
     let user_value = user_to_value(&user);
     info!(username = %username, pool_id = %pool_id, "Cognito: admin created user");
     pool.users.insert(username.to_string(), user);
@@ -609,6 +619,9 @@ pub fn admin_set_user_password(
     })?;
 
     user.password_hash = crate::password::hash(password)?;
+    let (s, v) = crate::password::srp_material(pool_id, username, password);
+    user.srp_salt = Some(s);
+    user.srp_verifier = Some(v);
     // AWS semantics: Permanent=true => CONFIRMED, Permanent=false => the
     // password is treated as temporary and the user must change it on
     // next sign-in. We were previously only flipping to CONFIRMED on
@@ -933,6 +946,9 @@ pub fn confirm_forgot_password(
 
     user.pending_verifications.remove(FORGOT_PASSWORD_KEY);
     user.password_hash = crate::password::hash(password)?;
+    let (s, v) = crate::password::srp_material(&pool_id, username, password);
+    user.srp_salt = Some(s);
+    user.srp_verifier = Some(v);
     user.status = "CONFIRMED".to_string();
     user.failed_login_attempts = 0;
     user.locked_until_secs = None;
@@ -973,6 +989,7 @@ pub fn change_password(
     for mut pool_entry in state.user_pools.iter_mut() {
         if pool_entry.users.contains_key(&username) {
             super::auth_policy::validate_password(&pool_entry.policies, proposed)?;
+            let pool_id = pool_entry.id.clone();
             let user = pool_entry.users.get_mut(&username).ok_or_else(|| {
                 AwsError::not_found(
                     "UserNotFoundException",
@@ -986,6 +1003,9 @@ pub fn change_password(
                 ));
             }
             user.password_hash = crate::password::hash(proposed)?;
+            let (s, v) = crate::password::srp_material(&pool_id, &username, proposed);
+            user.srp_salt = Some(s);
+            user.srp_verifier = Some(v);
             user.failed_login_attempts = 0;
             user.locked_until_secs = None;
             return Ok(json!({}));

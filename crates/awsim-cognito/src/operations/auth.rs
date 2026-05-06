@@ -196,8 +196,8 @@ pub fn initiate_auth(
     })?;
 
     match auth_flow {
-        "USER_PASSWORD_AUTH" | "USER_SRP_AUTH" => {
-            // For USER_SRP_AUTH we skip the SRP challenge and just do password auth
+        "USER_SRP_AUTH" => start_srp_challenge(state, client_id, &pool_id, params),
+        "USER_PASSWORD_AUTH" => {
             let raw_username = params["USERNAME"]
                 .as_str()
                 .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required"))?;
@@ -786,6 +786,9 @@ pub fn respond_to_auth_challenge(
 
             super::auth_policy::validate_password(&policy, new_password)?;
             user.password_hash = crate::password::hash(new_password)?;
+            let (s, v) = crate::password::srp_material(&pool_id, username, new_password);
+            user.srp_salt = Some(s);
+            user.srp_verifier = Some(v);
             user.status = "CONFIRMED".to_string();
 
             // Collect needed values before releasing the mutable borrow on users.
@@ -883,6 +886,7 @@ pub fn respond_to_auth_challenge(
             "ChallengeParameters": {},
             "Session": input["Session"]
         })),
+        "PASSWORD_VERIFIER" => verify_srp_password(state, &pool_id, client_id, &ctx.region, input),
         name => Err(AwsError::bad_request(
             "InvalidParameter",
             format!("Unsupported ChallengeName: {name}"),
@@ -949,6 +953,9 @@ pub fn admin_respond_to_auth_challenge(
 
             super::auth_policy::validate_password(&policy, new_password)?;
             user.password_hash = crate::password::hash(new_password)?;
+            let (s, v) = crate::password::srp_material(pool_id, username, new_password);
+            user.srp_salt = Some(s);
+            user.srp_verifier = Some(v);
             user.status = "CONFIRMED".to_string();
 
             // Collect needed values before releasing the mutable borrow on users.
@@ -1108,4 +1115,232 @@ pub fn get_user_auth_factors(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// SRP6a auth flow (USER_SRP_AUTH -> PASSWORD_VERIFIER challenge)
+// ---------------------------------------------------------------------------
+
+/// Phase 1 of USER_SRP_AUTH: the client has sent SRP_A and we respond with a
+/// PASSWORD_VERIFIER challenge carrying the per-user salt and a fresh
+/// server-side ephemeral key B. The session is stashed so we can finish the
+/// proof in `verify_srp_password` once the client comes back.
+fn start_srp_challenge(
+    state: &CognitoState,
+    client_id: &str,
+    pool_id: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, AwsError> {
+    use num_bigint::BigUint;
+    use num_traits::Num;
+
+    let raw_username = params["USERNAME"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required"))?;
+    crate::secret_hash::validate_for_client(
+        state,
+        client_id,
+        params["SECRET_HASH"].as_str(),
+        raw_username,
+    )?;
+    let srp_a_hex = params["SRP_A"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SRP_A is required"))?;
+    if BigUint::from_str_radix(srp_a_hex, 16).is_err() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "SRP_A is not a hex-encoded big integer",
+        ));
+    }
+
+    let pool = state
+        .user_pools
+        .get(pool_id)
+        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "User pool not found"))?;
+    let resolved_username = super::users::resolve_username_for_signin(&pool, raw_username)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "UserNotFoundException",
+                format!("User not found: {raw_username}"),
+            )
+        })?;
+
+    let user = pool
+        .users
+        .get(&resolved_username)
+        .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
+    let salt_hex = user.srp_salt.clone().ok_or_else(|| {
+        AwsError::bad_request(
+            "NotAuthorizedException",
+            "User has no SRP material; ask the admin to reset the password",
+        )
+    })?;
+    let verifier_hex = user.srp_verifier.clone().ok_or_else(|| {
+        AwsError::bad_request("NotAuthorizedException", "User has no SRP verifier")
+    })?;
+    let verifier_big = BigUint::from_str_radix(&verifier_hex, 16)
+        .map_err(|_| AwsError::internal("Stored SRP verifier is not valid hex"))?;
+
+    let (b_priv, b_pub) = crate::srp::server_keys(&verifier_big);
+    let b_priv_hex = b_priv.to_str_radix(16);
+    let b_pub_hex = b_pub.to_str_radix(16);
+    let secret_block = crate::srp::random_secret_block_b64();
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    state.srp_sessions.insert(
+        session_id.clone(),
+        crate::state::SrpSession {
+            pool_id: pool_id.to_string(),
+            username: resolved_username.clone(),
+            client_id: client_id.to_string(),
+            b_priv_hex,
+            b_pub_hex: b_pub_hex.clone(),
+            salt_hex: salt_hex.clone(),
+            secret_block_b64: secret_block.clone(),
+        },
+    );
+
+    Ok(json!({
+        "ChallengeName": "PASSWORD_VERIFIER",
+        "Session": session_id,
+        "ChallengeParameters": {
+            "SALT": salt_hex,
+            "SRP_B": b_pub_hex,
+            "SECRET_BLOCK": secret_block,
+            "USERNAME": resolved_username,
+            "USER_ID_FOR_SRP": resolved_username,
+        }
+    }))
+}
+
+/// Phase 2 of USER_SRP_AUTH: the client returns its proof M1 and we verify
+/// it against the value computed from `(b, B, A, v)`. On success we issue
+/// the regular auth-result tokens.
+fn verify_srp_password(
+    state: &CognitoState,
+    pool_id: &str,
+    client_id: &str,
+    region: &str,
+    input: &serde_json::Value,
+) -> Result<serde_json::Value, AwsError> {
+    use base64::Engine as _;
+    use num_bigint::BigUint;
+    use num_traits::Num;
+
+    let session_id = input["Session"].as_str().unwrap_or("");
+    let session = state
+        .srp_sessions
+        .get(session_id)
+        .map(|e| e.value().clone())
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?;
+    if session.client_id != client_id || session.pool_id != pool_id {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Session does not match client or pool",
+        ));
+    }
+
+    let resp = &input["ChallengeResponses"];
+    let username = resp["USERNAME"].as_str().unwrap_or(&session.username);
+    let secret_block_b64 = resp["PASSWORD_CLAIM_SECRET_BLOCK"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterException",
+                "PASSWORD_CLAIM_SECRET_BLOCK is required",
+            )
+        })?;
+    if secret_block_b64 != session.secret_block_b64 {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "PASSWORD_CLAIM_SECRET_BLOCK does not match server-issued value",
+        ));
+    }
+    let timestamp = resp["TIMESTAMP"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "TIMESTAMP is required")
+    })?;
+    let signature_b64 = resp["PASSWORD_CLAIM_SIGNATURE"].as_str().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "PASSWORD_CLAIM_SIGNATURE is required",
+        )
+    })?;
+    let provided_sig = base64::engine::general_purpose::STANDARD
+        .decode(signature_b64)
+        .map_err(|_| {
+            AwsError::bad_request(
+                "InvalidParameterException",
+                "PASSWORD_CLAIM_SIGNATURE is not valid base64",
+            )
+        })?;
+
+    let pool = state
+        .user_pools
+        .get(pool_id)
+        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "User pool not found"))?;
+    let user = pool
+        .users
+        .get(&session.username)
+        .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
+    let verifier_hex = user.srp_verifier.clone().ok_or_else(|| {
+        AwsError::internal("User has no SRP verifier; cannot complete PASSWORD_VERIFIER")
+    })?;
+    let verifier_big = BigUint::from_str_radix(&verifier_hex, 16)
+        .map_err(|_| AwsError::internal("Stored SRP verifier is not valid hex"))?;
+    let b_priv = BigUint::from_str_radix(&session.b_priv_hex, 16)
+        .map_err(|_| AwsError::internal("Stored SRP b is not valid hex"))?;
+    let b_pub = BigUint::from_str_radix(&session.b_pub_hex, 16)
+        .map_err(|_| AwsError::internal("Stored SRP B is not valid hex"))?;
+
+    // The client sends SRP_A (its public ephemeral) inside the challenge
+    // responses on the second leg too, since the server needs both A and B
+    // to derive K.
+    let a_hex = resp["SRP_A"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "SRP_A is required"))?;
+    let a_pub = BigUint::from_str_radix(a_hex, 16).map_err(|_| {
+        AwsError::bad_request("InvalidParameterException", "SRP_A is not valid hex")
+    })?;
+
+    let k_session =
+        crate::srp::derive_k(&a_pub, &b_pub, &b_priv, &verifier_big).ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "SRP key derivation failed")
+        })?;
+
+    let pool_short = crate::password::pool_short_name(pool_id);
+    let expected = crate::srp::expected_m1(
+        &k_session,
+        pool_short,
+        username,
+        secret_block_b64.as_bytes(),
+        timestamp,
+    );
+    if !crate::srp::ct_eq(&expected, &provided_sig) {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "PASSWORD_CLAIM_SIGNATURE does not match",
+        ));
+    }
+
+    // SRP succeeded; mint tokens. Drop the session so it can't be replayed.
+    let pairs = group_role_pairs(&pool, &user.groups);
+    let validity = pool
+        .clients
+        .get(client_id)
+        .map(TokenValidity::from_client)
+        .unwrap_or_else(TokenValidity::defaults);
+    let result = build_auth_result_validity(
+        &user.sub,
+        &user.username,
+        region,
+        pool_id,
+        client_id,
+        &user.attributes,
+        &pairs,
+        &validity,
+    );
+    drop(pool);
+    state.srp_sessions.remove(session_id);
+    info!(username = %session.username, "Cognito: SRP PASSWORD_VERIFIER success");
+    Ok(result)
 }

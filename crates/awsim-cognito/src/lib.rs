@@ -7,6 +7,7 @@ pub mod oauth;
 mod operations;
 pub mod password;
 mod secret_hash;
+mod srp;
 pub mod state;
 mod totp;
 

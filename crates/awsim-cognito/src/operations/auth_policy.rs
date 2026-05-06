@@ -220,6 +220,8 @@ mod tests {
             username: "u".into(),
             sub: "s".into(),
             password_hash: crate::password::hash("Hunter2!").expect("bcrypt"),
+            srp_salt: None,
+            srp_verifier: None,
             attributes: Default::default(),
             status: "CONFIRMED".into(),
             enabled: true,

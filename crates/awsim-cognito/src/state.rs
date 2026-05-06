@@ -258,6 +258,14 @@ pub struct CognitoUser {
     /// but its value is *only* a bcrypt hash, never plaintext.
     #[serde(rename = "password")]
     pub password_hash: String,
+    /// Hex-encoded 16-byte SRP salt, computed alongside `password_hash`
+    /// when a password is set. Only used by USER_SRP_AUTH.
+    #[serde(default)]
+    pub srp_salt: Option<String>,
+    /// Hex-encoded SRP verifier (g^x mod N), computed alongside the salt.
+    /// Only used by USER_SRP_AUTH.
+    #[serde(default)]
+    pub srp_verifier: Option<String>,
     pub attributes: HashMap<String, String>,
     /// CONFIRMED | UNCONFIRMED | FORCE_CHANGE_PASSWORD | RESET_REQUIRED
     pub status: String,
@@ -345,6 +353,23 @@ pub struct MfaSession {
     pub username: String,
 }
 
+/// Pending SRP exchange: emitted on InitiateAuth(USER_SRP_AUTH) and
+/// consumed by RespondToAuthChallenge(PASSWORD_VERIFIER).
+#[derive(Debug, Clone)]
+pub struct SrpSession {
+    pub pool_id: String,
+    pub username: String,
+    pub client_id: String,
+    /// Server private key b, hex-encoded.
+    pub b_priv_hex: String,
+    /// Server public key B, hex-encoded.
+    pub b_pub_hex: String,
+    /// Salt (hex) the client received in the challenge.
+    pub salt_hex: String,
+    /// Opaque secret block the client must echo back.
+    pub secret_block_b64: String,
+}
+
 /// Per-account/region Cognito state.
 #[derive(Debug, Default, Clone)]
 pub struct CognitoState {
@@ -360,4 +385,6 @@ pub struct CognitoState {
     pub mfa_sessions: DashMap<String, MfaSession>,
     /// Pending confirmation codes: "pool_id:username" → code.
     pub confirmation_codes: DashMap<String, String>,
+    /// In-flight SRP exchanges: session_id → SrpSession.
+    pub srp_sessions: DashMap<String, SrpSession>,
 }

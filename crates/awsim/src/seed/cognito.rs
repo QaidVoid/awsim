@@ -149,10 +149,14 @@ pub async fn seed(
                 }));
             }
 
+            let (srp_salt, srp_verifier) =
+                awsim_cognito::password::srp_material(&body.pool_id, &username, &password);
             let user = CognitoUser {
                 username: username.clone(),
                 sub,
                 password_hash: password_hash.clone(),
+                srp_salt: Some(srp_salt),
+                srp_verifier: Some(srp_verifier),
                 attributes,
                 status,
                 enabled,

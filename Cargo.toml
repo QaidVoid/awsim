@@ -225,6 +225,12 @@ chrono = { version = "0.4", features = ["serde"] }
 # for IDs / timestamps / financial values that DDB customers actually use).
 rust_decimal = "1"
 
+# Big-integer arithmetic for Cognito's SRP6a flow. RFC 5054 group 3072
+# uses a 3072-bit modulus that does not fit in any primitive integer type.
+num-bigint = "0.4"
+num-traits = "0.2"
+hkdf = "0.12"
+
 # Allocator — wired into the awsim binary for Linux + macOS only
 # (MSVC builds keep the system allocator). Returns memory to the OS
 # more aggressively than glibc malloc, which keeps idle RSS flat
