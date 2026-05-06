@@ -48,6 +48,20 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools mold clang
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build admin UI
+        # `rust-embed` reads `ui/build/` at compile time, so the UI must be
+        # built before cargo build or the binary ships the "UI not built"
+        # placeholder.
+        shell: bash
+        run: |
+          cd ui
+          bun install --frozen-lockfile
+          NODE_ENV=production bun run build
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: nightly-${{ matrix.target }}
