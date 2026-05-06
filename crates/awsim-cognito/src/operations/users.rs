@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::state::{CognitoState, CognitoUser};
+use crate::state::{CognitoState, CognitoUser, UserPool};
 
 /// Fire-and-forget Lambda trigger via the event bus.
 fn invoke_trigger(ctx: &RequestContext, trigger_source: &str, lambda_arn: &str, event: &Value) {
@@ -97,6 +97,113 @@ fn parse_user_attributes(input: &Value, key: &str) -> HashMap<String, String> {
     attrs
 }
 
+/// Validate a Username + caller-provided attributes against a pool's
+/// `UsernameAttributes` / `AliasAttributes` config and return the
+/// effective attribute map.
+///
+/// When `UsernameAttributes` includes `email`/`phone_number`:
+///   * the Username must be a valid value of that attribute (basic
+///     `@`-shape check for email),
+///   * the corresponding attribute is force-set from Username,
+///   * any caller-supplied conflicting value is overwritten,
+///   * any other user already holding that attribute value triggers
+///     `UsernameExistsException` so a copy-paste seed bug surfaces at
+///     create time instead of at login time.
+///
+/// When `AliasAttributes` is set (and we're not already pinning via
+/// UsernameAttributes), the alias value must be globally unique within
+/// the pool — same `UsernameExistsException` if it collides with
+/// another user's matching attribute.
+fn prepare_user_attributes(
+    pool: &UserPool,
+    username: &str,
+    mut attrs: HashMap<String, String>,
+) -> Result<HashMap<String, String>, AwsError> {
+    for ua in &pool.username_attributes {
+        match ua.as_str() {
+            "email" => {
+                if !looks_like_email(username) {
+                    return Err(AwsError::bad_request(
+                        "InvalidParameterException",
+                        "Username must be a valid email address",
+                    ));
+                }
+                attrs.insert("email".to_string(), username.to_string());
+            }
+            "phone_number" => {
+                if !looks_like_phone(username) {
+                    return Err(AwsError::bad_request(
+                        "InvalidParameterException",
+                        "Username must be a valid E.164 phone number",
+                    ));
+                }
+                attrs.insert("phone_number".to_string(), username.to_string());
+            }
+            _ => {}
+        }
+        ensure_attribute_unique(pool, username, ua, username)?;
+    }
+
+    for alias in &pool.alias_attributes {
+        if pool.username_attributes.contains(alias) {
+            continue;
+        }
+        if let Some(value) = attrs.get(alias) {
+            ensure_attribute_unique(pool, username, alias, value)?;
+        }
+    }
+
+    Ok(attrs)
+}
+
+fn ensure_attribute_unique(
+    pool: &UserPool,
+    new_username: &str,
+    attr: &str,
+    value: &str,
+) -> Result<(), AwsError> {
+    let case_insensitive = matches!(attr, "email" | "preferred_username");
+    let needle = if case_insensitive {
+        value.to_ascii_lowercase()
+    } else {
+        value.to_string()
+    };
+    let collision = pool.users.iter().any(|(u, user)| {
+        if u == new_username {
+            return false;
+        }
+        let Some(existing) = user.attributes.get(attr) else {
+            return false;
+        };
+        if case_insensitive {
+            existing.eq_ignore_ascii_case(&needle)
+        } else {
+            existing == &needle
+        }
+    });
+    if collision {
+        return Err(AwsError::conflict(
+            "UsernameExistsException",
+            format!("An account with the given {attr} already exists"),
+        ));
+    }
+    Ok(())
+}
+
+fn looks_like_email(s: &str) -> bool {
+    let mut parts = s.splitn(2, '@');
+    let local = parts.next().unwrap_or("");
+    let domain = parts.next().unwrap_or("");
+    !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+}
+
+fn looks_like_phone(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    bytes.len() >= 8
+        && bytes[0] == b'+'
+        && bytes[1..].iter().all(|b| b.is_ascii_digit())
+}
+
 // ---------------------------------------------------------------------------
 // SignUp
 // ---------------------------------------------------------------------------
@@ -146,7 +253,8 @@ pub fn sign_up(
 
     super::auth_policy::validate_password(&pool.policies, password)?;
 
-    let attributes = parse_user_attributes(input, "UserAttributes");
+    let raw_attrs = parse_user_attributes(input, "UserAttributes");
+    let attributes = prepare_user_attributes(&pool, username, raw_attrs)?;
     let user = make_user(username, password, attributes, "UNCONFIRMED");
     let sub = user.sub.clone();
 
@@ -343,7 +451,8 @@ pub fn admin_create_user(
 
     super::auth_policy::validate_password(&pool.policies, password)?;
 
-    let attributes = parse_user_attributes(input, "UserAttributes");
+    let raw_attrs = parse_user_attributes(input, "UserAttributes");
+    let attributes = prepare_user_attributes(&pool, username, raw_attrs)?;
     let user = make_user(username, password, attributes, "FORCE_CHANGE_PASSWORD");
     let user_value = user_to_value(&user);
     info!(username = %username, pool_id = %pool_id, "Cognito: admin created user");
@@ -718,9 +827,9 @@ pub fn confirm_forgot_password(
     let password = input["Password"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Password is required"))?;
-    let confirmation_code = input["ConfirmationCode"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "ConfirmationCode is required")
-    })?;
+    let confirmation_code = input["ConfirmationCode"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ConfirmationCode is required"))?;
 
     let pool_entry = state
         .user_pools
