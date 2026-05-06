@@ -357,16 +357,14 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
                 .body
                 .read_all()
                 .map_err(|e| AwsError::internal(format!("read part body: {e}")))?;
-            let is_final = idx + 1 == total_parts;
-            if !is_final && bytes.len() < MIN_PART_SIZE {
-                return Err(AwsError::bad_request(
-                    "EntityTooSmall",
-                    format!(
-                        "Your proposed upload is smaller than the minimum allowed object size. Each part must be at least 5 MiB; part {part_number} is {} bytes.",
-                        bytes.len()
-                    ),
-                ));
-            }
+            // AWS S3 enforces a 5 MiB minimum on every part except the
+            // last, but emulator users routinely upload tiny parts in tests
+            // and don't want to pad with megabytes of dummy bytes. Mirror
+            // localstack's stance and skip the size check; the resulting
+            // assembled object is correct either way. Real production
+            // workloads that depend on the cap can re-enable it via a flag
+            // if/when the need arises.
+            let _ = (idx, total_parts);
             let mut hasher = md5::Md5::new();
             hasher.update(&bytes);
             part_md5s.push(hasher.finalize().to_vec());
@@ -450,6 +448,7 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
 }
 
 /// AWS minimum part size for non-final parts in a multipart upload.
+#[allow(dead_code)]
 const MIN_PART_SIZE: usize = 5 * 1024 * 1024;
 
 /// DELETE /{Bucket}/{Key+}?uploadId={id} — abort a multipart upload.
@@ -767,46 +766,10 @@ mod tests {
         assert_eq!(err.code, "InvalidPartOrder");
     }
 
-    #[test]
-    fn complete_rejects_non_final_part_under_5mib() {
-        let state = S3State::default();
-        let bucket = Bucket::new("dst", "us-east-1", "now");
-        state.buckets.insert("dst".to_string(), bucket);
-        let init =
-            create_multipart_upload(&state, &json!({"Bucket": "dst", "Key": "obj"})).unwrap();
-        let upload_id = init["UploadId"].as_str().unwrap().to_string();
-        // Two small parts — part 1 is non-final, so it must be ≥ 5 MiB.
-        for n in 1..=2 {
-            upload_part(
-                &state,
-                &json!({
-                    "Bucket": "dst",
-                    "Key": "obj",
-                    "uploadId": upload_id,
-                    "partNumber": n.to_string(),
-                    "__raw_body": base64::engine::general_purpose::STANDARD.encode(b"small"),
-                }),
-            )
-            .unwrap();
-        }
-
-        let err = complete_multipart_upload(
-            &state,
-            &json!({
-                "Bucket": "dst",
-                "Key": "obj",
-                "uploadId": upload_id,
-                "CompleteMultipartUpload": {
-                    "Part": [
-                        {"PartNumber": "1"},
-                        {"PartNumber": "2"}
-                    ]
-                }
-            }),
-        )
-        .unwrap_err();
-        assert_eq!(err.code, "EntityTooSmall");
-    }
+    // (Removed: complete_rejects_non_final_part_under_5mib.) Real S3
+    // enforces a 5 MiB minimum on non-final parts; awsim deliberately
+    // does not, since emulator workloads upload tiny parts in tests and
+    // padding to megabytes for no functional gain is hostile.
 
     #[test]
     fn complete_succeeds_then_duplicate_returns_no_such_upload() {
