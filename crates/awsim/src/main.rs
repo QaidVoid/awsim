@@ -32,6 +32,7 @@ mod runtime_config;
 mod seed;
 mod seed_cli;
 mod snapshot_cli;
+mod tls;
 mod ui;
 
 #[derive(Parser)]
@@ -43,6 +44,31 @@ struct Cli {
     /// Port to listen on
     #[arg(short, long, default_value = "4566", env = "AWSIM_PORT")]
     port: u16,
+
+    /// HTTPS port. When set, AWSim serves the same router on this
+    /// port with a self-signed cert (or `--tls-cert` / `--tls-key` if
+    /// provided). The plain `--port` listener stays up so existing
+    /// `http://` clients keep working.
+    #[arg(long, env = "AWSIM_HTTPS_PORT")]
+    https_port: Option<u16>,
+
+    /// PEM-encoded TLS certificate (BYO). When set with `--tls-key`,
+    /// AWSim skips self-signed-cert generation and serves this cert
+    /// instead. Useful if you already have a locally-trusted CA via
+    /// `mkcert` or similar.
+    #[arg(long, env = "AWSIM_TLS_CERT", requires = "tls_key")]
+    tls_cert: Option<std::path::PathBuf>,
+
+    /// PEM-encoded TLS private key (BYO). Pair with `--tls-cert`.
+    #[arg(long, env = "AWSIM_TLS_KEY", requires = "tls_cert")]
+    tls_key: Option<std::path::PathBuf>,
+
+    /// Where to cache the auto-generated TLS cert + key. Defaults to
+    /// `<data-dir>/tls` if `--data-dir` is set, else
+    /// `$XDG_CACHE_HOME/awsim/tls` (or `$HOME/.cache/awsim/tls`).
+    /// Ignored when `--tls-cert` / `--tls-key` are set.
+    #[arg(long, env = "AWSIM_TLS_CACHE_DIR")]
+    tls_cache_dir: Option<std::path::PathBuf>,
 
     /// Default AWS region
     #[arg(short, long, default_value = "us-east-1", env = "AWSIM_REGION")]
@@ -1287,20 +1313,15 @@ async fn async_main() -> Result<()> {
 
     spawn_fd_pressure_watcher();
 
-    // Bind to the IPv6 unspecified address (`[::]`) so we accept both
-    // IPv6 and IPv4-mapped connections on a single socket. Node 20+
-    // resolves `localhost` to `::1` first, so an IPv4-only bind on
-    // `0.0.0.0` makes the SDK fail with ECONNREFUSED before any request
-    // ever reaches us. If the OS has `net.ipv6.bindv6only=1` (uncommon
-    // on dev machines) or IPv6 is disabled, fall back to plain v4.
-    let addr_v6 = std::net::SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, cli.port));
-    let listener = match tokio::net::TcpListener::bind(addr_v6).await {
-        Ok(l) => l,
-        Err(e) => {
-            warn!(error = %e, "Could not bind on [::] — falling back to 0.0.0.0");
-            let addr_v4 = std::net::SocketAddr::from(([0, 0, 0, 0], cli.port));
-            tokio::net::TcpListener::bind(addr_v4).await?
-        }
+    let listener = bind_dual_stack_tokio(cli.port).await?;
+
+    // Set up TLS *before* announcing the HTTP listener so a bogus
+    // `--tls-cert` path or unwritable cache dir fails fast instead of
+    // half-starting the server.
+    let https_runtime = if let Some(https_port) = cli.https_port {
+        Some(prepare_https_runtime(&cli, https_port).await?)
+    } else {
+        None
     };
 
     // Startup banner
@@ -1309,6 +1330,16 @@ async fn async_main() -> Result<()> {
     println!("  Fully Offline AWS Dev Environment");
     println!();
     println!("  Endpoint:  http://localhost:{}", cli.port);
+    if let Some(ref tls) = https_runtime {
+        println!("  HTTPS:     https://localhost:{}", tls.port);
+        println!(
+            "             export AWS_CA_BUNDLE={}",
+            tls.assets.cert_path.display()
+        );
+        if tls.assets.generated {
+            println!("             (self-signed cert generated; reused on subsequent boots)");
+        }
+    }
     if ui::is_bundled() {
         println!("  Admin UI:  http://localhost:{}/_awsim/ui/", cli.port);
     }
@@ -1322,15 +1353,113 @@ async fn async_main() -> Result<()> {
 
     info!(
         port = cli.port,
+        https_port = ?cli.https_port,
         region = %cli.region,
         account_id = %cli.account_id,
         services = service_count,
         "AWSim started"
     );
 
-    axum::serve(listener, app).await?;
+    match https_runtime {
+        Some(tls) => {
+            // Both listeners share the same `Router`. `Router` is
+            // `Clone` (Arc-backed internally), so cloning is cheap.
+            let http_app = app.clone();
+            let https_app = app;
+            let http_fut = async move {
+                axum::serve(listener, http_app)
+                    .await
+                    .context("HTTP listener failed")
+            };
+            let https_fut = async move {
+                axum_server::from_tcp_rustls(tls.std_listener, tls.assets.config)
+                    .serve(https_app.into_make_service())
+                    .await
+                    .context("HTTPS listener failed")
+            };
+            tokio::try_join!(http_fut, https_fut)?;
+        }
+        None => {
+            axum::serve(listener, app).await?;
+        }
+    }
 
     Ok(())
+}
+
+struct HttpsRuntime {
+    port: u16,
+    assets: tls::TlsAssets,
+    std_listener: std::net::TcpListener,
+}
+
+/// Build the TLS material + bound socket for the HTTPS listener.
+///
+/// BYO cert/key wins if both are provided; otherwise we generate (or
+/// reuse) a self-signed cert under `--tls-cache-dir` (default
+/// `<data-dir>/tls` or `$XDG_CACHE_HOME/awsim/tls`).
+async fn prepare_https_runtime(cli: &Cli, https_port: u16) -> Result<HttpsRuntime> {
+    let source = match (cli.tls_cert.as_deref(), cli.tls_key.as_deref()) {
+        (Some(cert), Some(key)) => tls::CertSource::Byo { cert, key },
+        _ => {
+            let dir = cli
+                .tls_cache_dir
+                .clone()
+                .or_else(|| {
+                    cli.data_dir
+                        .as_deref()
+                        .map(|d| std::path::PathBuf::from(d).join("tls"))
+                })
+                .unwrap_or_else(tls::default_cache_dir);
+            tls::CertSource::Managed { dir }
+        }
+    };
+
+    let assets = tls::load_or_generate(source).await?;
+    let std_listener = bind_dual_stack_std(https_port)
+        .with_context(|| format!("binding HTTPS listener on port {https_port}"))?;
+    Ok(HttpsRuntime {
+        port: https_port,
+        assets,
+        std_listener,
+    })
+}
+
+/// Bind a `tokio::net::TcpListener` on `[::]:port` with a fall back
+/// to `0.0.0.0:port`.
+///
+/// Node 20+ resolves `localhost` to `::1` first, so an IPv4-only
+/// bind on `0.0.0.0` makes the SDK fail with ECONNREFUSED before any
+/// request ever reaches us. If the OS has `net.ipv6.bindv6only=1`
+/// (uncommon on dev machines) or IPv6 is disabled, fall back to
+/// plain v4.
+async fn bind_dual_stack_tokio(port: u16) -> Result<tokio::net::TcpListener> {
+    let addr_v6 = std::net::SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port));
+    match tokio::net::TcpListener::bind(addr_v6).await {
+        Ok(l) => Ok(l),
+        Err(e) => {
+            warn!(port, error = %e, "Could not bind on [::] - falling back to 0.0.0.0");
+            let addr_v4 = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+            Ok(tokio::net::TcpListener::bind(addr_v4).await?)
+        }
+    }
+}
+
+/// Same dual-stack bind as `bind_dual_stack_tokio`, but returns a
+/// `std::net::TcpListener` (set non-blocking) so it can be handed to
+/// `axum_server::from_tcp_rustls`.
+fn bind_dual_stack_std(port: u16) -> Result<std::net::TcpListener> {
+    let addr_v6 = std::net::SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port));
+    let listener = match std::net::TcpListener::bind(addr_v6) {
+        Ok(l) => l,
+        Err(e) => {
+            warn!(port, error = %e, "Could not bind on [::] - falling back to 0.0.0.0");
+            let addr_v4 = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+            std::net::TcpListener::bind(addr_v4)?
+        }
+    };
+    listener.set_nonblocking(true)?;
+    Ok(listener)
 }
 
 /// Spawn a background task that consumes from the internal event bus and

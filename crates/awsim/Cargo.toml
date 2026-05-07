@@ -99,6 +99,17 @@ reqwest = { workspace = true, features = ["stream"] }
 rust-embed = { workspace = true }
 mime_guess = { workspace = true }
 
+# TLS - lets `awsim` serve HTTPS alongside the plain HTTP listener so
+# AWS SDKs that hard-require https endpoints (Cognito hosted UI, S3
+# transfer-acceleration, certain Java SDK code paths) work locally
+# without fronting the binary with nginx / Caddy. `axum-server` shares
+# the existing `axum::Router`, `rustls` is the TLS engine (matching
+# the workspace `reqwest` choice), and `rcgen` mints a self-signed
+# CA + server cert on first boot so users don't have to.
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+
 # rlimit is POSIX only — the crate's Resource::NOFILE / get/setrlimit don't
 # exist on Windows, so the unix-targeted fd watcher / soft-limit bumper
 # is cfg-gated below.
