@@ -108,13 +108,26 @@ async fn serve_path(Path(path): Path<String>) -> Response {
     }
     // SvelteKit emits per-route `*/index.html`. If a request comes in
     // without the trailing `index.html`, look it up explicitly.
-    let with_index = if path.ends_with('/') {
-        format!("{path}index.html")
+    //
+    // Trailing-slash handling: the UI sets `trailingSlash = 'always'`
+    // so every prerendered route lives at `<route>/index.html` *and*
+    // SvelteKit's client router expects the URL bar to end in `/`.
+    // When the request comes in without it (`/_awsim/ui/iam`), real
+    // static hosts (Netlify, Cloudflare Pages) emit a 308 redirect to
+    // the slash-suffixed URL so hydration sees the canonical form.
+    // We mirror that: if the slashed variant resolves to a real
+    // `index.html`, redirect rather than serve, so JS-side route
+    // matching doesn't see a stale URL and white-screen.
+    if !path.ends_with('/') {
+        let with_index = format!("{path}/index.html");
+        if UiAssets::get(&with_index).is_some() {
+            return Redirect::permanent(&format!("/_awsim/ui/{path}/")).into_response();
+        }
     } else {
-        format!("{path}/index.html")
-    };
-    if let Some(file) = UiAssets::get(&with_index) {
-        return file_response(&with_index, file);
+        let with_index = format!("{path}index.html");
+        if let Some(file) = UiAssets::get(&with_index) {
+            return file_response(&with_index, file);
+        }
     }
     serve_asset(SPA_FALLBACK)
 }
