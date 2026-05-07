@@ -365,9 +365,19 @@ pub async fn converse_stream(
     converse::invoke_streaming(backends, model_id, input).await
 }
 
-/// `body` arrives as a JSON-encoded string in the Bedrock wire
-/// format. The router unwraps it to a `Value` for the SDK; we
-/// further normalise here so translators get an object to walk.
+/// Pull the model body out of the parsed RestJson1 input.
+///
+/// The Bedrock REST contract is "send the model body as the raw
+/// HTTP body" - `POST /model/{modelId}/invoke` with body
+/// `{"inputText":"..."}`. The awsim REST parser deserializes that
+/// JSON directly into the input object and merges path parameters
+/// (just `modelId`) on top, so the body fields and the path param
+/// arrive flattened together. Strip the path param and what's left
+/// is the model body.
+///
+/// The `Some(body)` branches are retained for defensiveness - some
+/// internal call sites (replay infra, hand-built test fixtures)
+/// may wrap the body explicitly. Production SDK traffic never does.
 fn extract_body(input: &Value) -> Result<Value, AwsError> {
     match input.get("body") {
         Some(Value::Object(_)) | Some(Value::Array(_)) => Ok(input["body"].clone()),
@@ -377,7 +387,18 @@ fn extract_body(input: &Value) -> Result<Value, AwsError> {
                 format!("body is not valid JSON: {e}"),
             )
         }),
-        Some(Value::Null) | None => Ok(Value::Object(serde_json::Map::new())),
+        Some(Value::Null) | None => {
+            let Value::Object(map) = input else {
+                return Ok(Value::Object(serde_json::Map::new()));
+            };
+            // Path params merged in by `awsim-core`'s REST parser.
+            // Bedrock's invoke / converse routes only declare
+            // `modelId`, so dropping it leaves exactly the model
+            // body the SDK sent on the wire.
+            let mut body = map.clone();
+            body.remove("modelId");
+            Ok(Value::Object(body))
+        }
         Some(other) => Err(AwsError::bad_request(
             "ValidationException",
             format!(
@@ -822,6 +843,38 @@ mod tests {
         let input = json!({ "modelId": "x", "body": "not json" });
         let err = extract_body(&input).unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    /// Real SDK wire shape: the REST parser deserializes the HTTP
+    /// body directly into the input and merges `modelId` from the
+    /// path, so there is *no* `body` wrapper. The model body is
+    /// whatever isn't a path param. Regression for
+    /// `EmbeddingService` + KB indexing returning
+    /// `ValidationException: inputText is required` because the
+    /// old extract_body returned an empty object whenever the
+    /// `body` field was absent.
+    #[test]
+    fn extract_body_unwraps_rest_shape_minus_path_params() {
+        let input = json!({
+            "modelId": "amazon.titan-embed-text-v2:0",
+            "inputText": "hello world",
+            "dimensions": 1024,
+            "normalize": true,
+        });
+        let body = extract_body(&input).unwrap();
+        assert_eq!(body["inputText"], "hello world");
+        assert_eq!(body["dimensions"], 1024);
+        assert_eq!(body["normalize"], true);
+        // `modelId` is the path param, not part of the model body.
+        assert!(body.get("modelId").is_none());
+    }
+
+    #[test]
+    fn extract_body_is_empty_object_for_empty_input() {
+        let input = json!({ "modelId": "amazon.titan-text-express-v1" });
+        let body = extract_body(&input).unwrap();
+        assert!(body.is_object());
+        assert_eq!(body.as_object().unwrap().len(), 0);
     }
 
     #[test]
