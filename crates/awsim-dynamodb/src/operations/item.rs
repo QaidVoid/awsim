@@ -8,6 +8,7 @@ use crate::{
     keys::{extract_item_keys, extract_pk_sk, item_to_storage_value, storage_value_to_item},
     sqlite_store::SqliteStore,
     state::{DynamoItem, DynamoState, StreamRecord, StreamRecordData},
+    throttle::BucketKind,
 };
 
 /// Look up an item by `(pk, sk)` in SQLite and decode it back to a
@@ -390,6 +391,7 @@ pub fn put_item(
         result["Attributes"] = item_to_json(&old);
     }
     let write_units = write_capacity_units(item_bytes, false);
+    state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units) {
         result["ConsumedCapacity"] = cc;
     }
@@ -439,6 +441,7 @@ pub fn get_item(
         }
     };
     let read_units = read_capacity_units(bytes, consistent_read, false);
+    state.enforce_throughput(table_name, BucketKind::Read, read_units)?;
     if let Some(cc) = build_consumed_capacity(input, table_name, read_units, 0.0) {
         response["ConsumedCapacity"] = cc;
     }
@@ -522,6 +525,7 @@ pub fn delete_item(
         result["Attributes"] = item_to_json(&old);
     }
     let write_units = write_capacity_units(old_bytes, false);
+    state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units) {
         result["ConsumedCapacity"] = cc;
     }
@@ -697,6 +701,7 @@ pub fn update_item(
     }
 
     let write_units = write_capacity_units(new_item_bytes, false);
+    state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units) {
         result["ConsumedCapacity"] = cc;
     }
@@ -1130,5 +1135,57 @@ mod tests {
             .unwrap()
             .expect("sqlite mirror");
         assert_eq!(stored["value"], json!({"S": "hello"}));
+    }
+
+    /// Spin up a PROVISIONED 1-WCU table with a tiny burst window
+    /// (1 WCU * 300 s = 300 burst tokens) and PutItem until the
+    /// bucket runs dry. Once exhausted every further write should
+    /// surface `ProvisionedThroughputExceededException`.
+    #[test]
+    fn put_item_throttles_when_wcu_exhausted_on_provisioned_table() {
+        let state = make_state_with_table();
+        // Flip the table from PAY_PER_REQUEST to PROVISIONED + 1 WCU.
+        state.tables.alter("t", |_, mut t| {
+            t.billing_mode = "PROVISIONED".into();
+            t.write_capacity_units = 1;
+            t
+        });
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let ctx = ctx();
+
+        // Each item is well under 1 KiB, so each PutItem charges 1
+        // WCU. 300 succeed, 301st throttles.
+        for i in 0..300 {
+            let input = json!({
+                "TableName": "t",
+                "Item": { "pk": {"S": "p"}, "sk": {"S": format!("{i}")} }
+            });
+            put_item(&state, &sqlite, &input, &ctx)
+                .unwrap_or_else(|e| panic!("put {i} failed: {}", e.message));
+        }
+        let input = json!({
+            "TableName": "t",
+            "Item": { "pk": {"S": "p"}, "sk": {"S": "exhausted"} }
+        });
+        let err = put_item(&state, &sqlite, &input, &ctx).unwrap_err();
+        assert_eq!(err.code, "ProvisionedThroughputExceededException");
+    }
+
+    /// PAY_PER_REQUEST is the documented "no throttling" path: the
+    /// emulator must never reject a write on capacity grounds even
+    /// after firing thousands of operations in a row.
+    #[test]
+    fn pay_per_request_table_is_never_throttled() {
+        let state = make_state_with_table(); // defaults to PAY_PER_REQUEST
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let ctx = ctx();
+
+        for i in 0..5_000 {
+            let input = json!({
+                "TableName": "t",
+                "Item": { "pk": {"S": "p"}, "sk": {"S": format!("{i}")} }
+            });
+            put_item(&state, &sqlite, &input, &ctx).unwrap();
+        }
     }
 }

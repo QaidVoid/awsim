@@ -5,11 +5,13 @@ use crate::{
     keys::{extract_item_keys, extract_pk_sk, item_to_storage_value, storage_value_to_item},
     sqlite_store::SqliteStore,
     state::DynamoState,
+    throttle::BucketKind,
 };
 
 use super::item::{
     ITEM_MAX_BYTES, estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item,
 };
+use super::{read_capacity_units, write_capacity_units};
 
 /// AWS BatchGetItem caps a single call at 100 keys total across all
 /// tables, and at 16 MB of response payload. Items beyond the byte
@@ -89,6 +91,8 @@ pub fn batch_get_item(
     let mut unprocessed: std::collections::HashMap<String, Vec<Value>> =
         std::collections::HashMap::new();
     let mut response_bytes = 0usize;
+    let mut per_table_bytes: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut cap_reached = false;
 
     for key in pending {
@@ -130,7 +134,17 @@ pub fn batch_get_item(
         }
 
         response_bytes += item_bytes;
+        *per_table_bytes.entry(key.table_name.clone()).or_default() += item_bytes;
         responses.entry(key.table_name).or_default().push(item_json);
+    }
+
+    // Charge each touched table's read bucket with the bytes we
+    // ended up returning for it. Eventually-consistent reads
+    // (the BatchGetItem default) round to 4 KiB / 0.5 RCU per
+    // chunk via `read_capacity_units`.
+    for (table, bytes) in &per_table_bytes {
+        let units = read_capacity_units(*bytes, false, false);
+        state.enforce_throughput(table, BucketKind::Read, units)?;
     }
 
     let responses_json: serde_json::Map<String, Value> = responses
@@ -194,6 +208,8 @@ pub fn batch_write_item(
         },
     }
     let mut sqlite_ops: Vec<SqliteOp> = Vec::new();
+    let mut write_bytes_by_table: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
 
     for (table_name, requests) in request_items {
         let requests_arr = requests.as_array().ok_or_else(|| {
@@ -226,6 +242,7 @@ pub fn batch_write_item(
                 }
                 if let Some(keys) = extract_item_keys(&table, &item) {
                     let attrs = item_to_storage_value(&item);
+                    *write_bytes_by_table.entry(table_name.clone()).or_default() += item_bytes;
                     sqlite_ops.push(SqliteOp::Put {
                         table: table_name.clone(),
                         pk: keys.pk,
@@ -240,6 +257,10 @@ pub fn batch_write_item(
                     None => continue,
                 };
                 if let Some((pk, sk)) = extract_pk_sk(&table, &key) {
+                    // DeleteRequest charges based on the deleted
+                    // item size; without an upfront SQLite read we
+                    // approximate at the 1 KiB-per-WCU minimum.
+                    *write_bytes_by_table.entry(table_name.clone()).or_default() += 1;
                     sqlite_ops.push(SqliteOp::Delete {
                         table: table_name.clone(),
                         pk,
@@ -248,6 +269,15 @@ pub fn batch_write_item(
                 }
             }
         }
+    }
+
+    // Charge each touched table's write bucket *before* mutating
+    // SQLite. If a table is throttled, none of its writes (and no
+    // other table's writes either) land. Matches what the SDK
+    // expects for a batch op that hits a capacity wall.
+    for (table, bytes) in &write_bytes_by_table {
+        let units = write_capacity_units(*bytes, false);
+        state.enforce_throughput(table, BucketKind::Write, units)?;
     }
 
     for op in sqlite_ops {

@@ -8,12 +8,13 @@ use crate::{
     keys::{extract_item_keys, extract_pk_sk, item_to_storage_value, storage_value_to_item},
     sqlite_store::{MAX_GSI_SLOTS, ReadTx, SqliteStore, WriteTx},
     state::{DynamoItem, DynamoState},
+    throttle::BucketKind,
 };
 
 use super::{
     get_expr_attr_names, get_expr_attr_values,
-    item::{estimate_value_bytes, item_to_json, parse_item},
-    opt_str,
+    item::{estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item},
+    opt_str, read_capacity_units, write_capacity_units,
 };
 
 /// Decode a stored sqlite row into a `DynamoItem`. Returns `None` when
@@ -131,27 +132,38 @@ pub fn transact_get_items(
 
     // Snapshot read across all gets — a deferred sqlite txn pins the
     // visible commit point.
-    let responses =
-        sqlite.with_read_transaction(|tx: &ReadTx<'_>| -> Result<Vec<Value>, AwsError> {
-            let mut out = Vec::with_capacity(gets.len());
-            let mut response_bytes = 0usize;
-            for g in &gets {
-                let stored =
-                    tx.get_item(&ctx.account_id, &ctx.region, &g.table_name, &g.pk, &g.sk)?;
-                let entry = match decode_existing(stored)? {
-                    None => json!({}),
-                    Some(item) => json!({ "Item": item_to_json(&item) }),
-                };
-                response_bytes += estimate_value_bytes(&entry);
-                if response_bytes > TRANSACT_GET_MAX_RESPONSE_BYTES {
-                    return Err(AwsError::validation(format!(
-                        "TransactGetItems response exceeds the {TRANSACT_GET_MAX_RESPONSE_BYTES}-byte cap"
-                    )));
-                }
-                out.push(entry);
+    let (responses, per_table_bytes) = sqlite.with_read_transaction(|tx: &ReadTx<'_>| -> Result<
+        (Vec<Value>, std::collections::HashMap<String, usize>),
+        AwsError,
+    > {
+        let mut out = Vec::with_capacity(gets.len());
+        let mut response_bytes = 0usize;
+        let mut per_table: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for g in &gets {
+            let stored = tx.get_item(&ctx.account_id, &ctx.region, &g.table_name, &g.pk, &g.sk)?;
+            let entry = match decode_existing(stored)? {
+                None => json!({}),
+                Some(item) => json!({ "Item": item_to_json(&item) }),
+            };
+            let entry_bytes = estimate_value_bytes(&entry);
+            response_bytes += entry_bytes;
+            *per_table.entry(g.table_name.clone()).or_default() += entry_bytes;
+            if response_bytes > TRANSACT_GET_MAX_RESPONSE_BYTES {
+                return Err(AwsError::validation(format!(
+                    "TransactGetItems response exceeds the {TRANSACT_GET_MAX_RESPONSE_BYTES}-byte cap"
+                )));
             }
-            Ok(out)
-        })?;
+            out.push(entry);
+        }
+        Ok((out, per_table))
+    })?;
+
+    // TransactGet uses the transactional read multiplier (2x).
+    for (table, bytes) in &per_table_bytes {
+        let units = read_capacity_units(*bytes, false, true);
+        state.enforce_throughput(table, BucketKind::Read, units)?;
+    }
 
     Ok(json!({ "Responses": responses }))
 }
@@ -218,6 +230,11 @@ pub fn transact_write_items(
         action: Action,
     }
     let mut mutations: Vec<Mutation> = Vec::new();
+    // Track per-table write bytes so each table's WCU bucket gets
+    // charged once at the end of the action-building phase. Real
+    // DynamoDB transactional writes charge at the 2x multiplier.
+    let mut write_bytes_by_table: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
 
     for tx_item in transact_items {
         if let Some(put) = tx_item.get("Put") {
@@ -238,6 +255,8 @@ pub fn transact_write_items(
                 extract_item_keys(&table, &item)
                     .ok_or_else(|| AwsError::validation("Could not construct key"))?
             };
+            *write_bytes_by_table.entry(table_name.clone()).or_default() +=
+                estimate_item_bytes(&item);
             mutations.push(Mutation {
                 table_name,
                 action: Action::Put {
@@ -268,6 +287,10 @@ pub fn transact_write_items(
                 extract_pk_sk(&table, &key)
                     .ok_or_else(|| AwsError::validation("Could not construct key"))?
             };
+            // No upfront read of the existing item, so charge the
+            // 1 KiB-per-WCU minimum the same way BatchWriteItem
+            // approximates Delete.
+            *write_bytes_by_table.entry(table_name.clone()).or_default() += 1;
             mutations.push(Mutation {
                 table_name,
                 action: Action::Delete {
@@ -299,6 +322,11 @@ pub fn transact_write_items(
                 extract_pk_sk(&table, &key)
                     .ok_or_else(|| AwsError::validation("Could not construct key"))?
             };
+            // Updates charge based on the larger of pre/post item
+            // sizes. Without a pre-read here, fall back to the 1 KiB
+            // minimum; the per-item Update path in `item.rs`
+            // computes the precise figure.
+            *write_bytes_by_table.entry(table_name.clone()).or_default() += 1;
             mutations.push(Mutation {
                 table_name,
                 action: Action::Update {
@@ -329,6 +357,8 @@ pub fn transact_write_items(
                 extract_pk_sk(&table, &key)
                     .ok_or_else(|| AwsError::validation("Could not construct key"))?
             };
+            // ConditionCheck still consumes 1 WCU per call.
+            *write_bytes_by_table.entry(table_name.clone()).or_default() += 1;
             mutations.push(Mutation {
                 table_name,
                 action: Action::ConditionCheck {
@@ -388,6 +418,16 @@ pub fn transact_write_items(
     }
 
     let mutation_count = mutations.len();
+
+    // Charge each touched table's WCU bucket *before* opening the
+    // SQLite write transaction. Transactional writes carry the 2x
+    // multiplier; if any table is throttled the whole transact
+    // aborts (consistent with AWS's "either everything commits or
+    // nothing does" contract).
+    for (table, bytes) in &write_bytes_by_table {
+        let units = write_capacity_units(*bytes, true);
+        state.enforce_throughput(table, BucketKind::Write, units)?;
+    }
 
     // Run the entire validation + mutation sequence inside one sqlite
     // write transaction. If any condition fails or any sqlite call

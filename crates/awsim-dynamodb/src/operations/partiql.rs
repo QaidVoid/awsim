@@ -19,6 +19,12 @@ use crate::{
     keys::{extract_item_keys, item_to_storage_value, storage_value_to_item},
     sqlite_store::SqliteStore,
     state::{DynamoItem, DynamoState},
+    throttle::BucketKind,
+};
+
+use super::{
+    item::{estimate_item_bytes, estimate_value_bytes},
+    read_capacity_units, write_capacity_units,
 };
 
 // ─── Public entry points ──────────────────────────────────────────────────────
@@ -184,6 +190,7 @@ fn run_select(
     }
 
     let mut items: Vec<Value> = Vec::new();
+    let mut response_bytes = 0usize;
     sqlite.scan_table(
         &ctx.account_id,
         &ctx.region,
@@ -196,11 +203,15 @@ fn run_select(
                 _ => true,
             };
             if keep {
-                items.push(json!(item));
+                let entry = json!(item);
+                response_bytes += estimate_value_bytes(&entry);
+                items.push(entry);
             }
             Ok(true)
         },
     )?;
+    let read_units = read_capacity_units(response_bytes, false, false);
+    state.enforce_throughput(&table_name, BucketKind::Read, read_units)?;
     Ok(items)
 }
 
@@ -250,6 +261,10 @@ fn run_insert(
             AwsError::bad_request("ValidationException", "Item missing primary key")
         })?
     };
+
+    let item_bytes = estimate_item_bytes(&ddb_item);
+    let write_units = write_capacity_units(item_bytes, false);
+    state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
 
     let attrs = item_to_storage_value(&ddb_item);
     sqlite.put_item(
@@ -331,6 +346,10 @@ fn run_update(
             .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?
     };
 
+    let item_bytes = estimate_item_bytes(&item);
+    let write_units = write_capacity_units(item_bytes, false);
+    state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
+
     let attrs = item_to_storage_value(&item);
     sqlite.put_item(
         &ctx.account_id,
@@ -384,6 +403,13 @@ fn run_delete(
             Ok(true)
         },
     )?;
+
+    // Charge 1 WCU per deleted item (the AWS minimum). Without an
+    // upfront read of the deleted items we can't compute exact
+    // sizes; the per-item Delete path in `item.rs` does so when
+    // size matters.
+    let delete_units = (targets.len() as f64).max(1.0);
+    state.enforce_throughput(&table_name, BucketKind::Write, delete_units)?;
 
     for (pk, sk) in targets {
         sqlite.delete_item(&ctx.account_id, &ctx.region, &table_name, &pk, &sk)?;

@@ -1,8 +1,12 @@
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
+use awsim_core::AwsError;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::throttle::{BucketKind, ThrottleRegistry};
 
 /// Data captured for a single item change in a DynamoDB Stream.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -287,7 +291,7 @@ pub struct GlobalTable {
     pub replication_group: Vec<GlobalTableReplica>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct DynamoState {
     pub tables: DashMap<String, Table>,
     pub backups: DashMap<String, BackupRecord>,
@@ -299,6 +303,70 @@ pub struct DynamoState {
     /// Global tables keyed by GlobalTableName. The implementation models
     /// the metadata only — there's no cross-region data replication.
     pub global_tables: DashMap<String, GlobalTable>,
+    /// Per-table token buckets driving `BillingMode == PROVISIONED`
+    /// throttling. Looked up after each item / query / batch op so
+    /// over-quota requests get a real
+    /// `ProvisionedThroughputExceededException` instead of the
+    /// silently-unmetered behaviour earlier versions had. Bypassed
+    /// for `PAY_PER_REQUEST` tables (the supported "no throttling"
+    /// path).
+    pub throttle: Arc<ThrottleRegistry>,
+}
+
+impl std::fmt::Debug for DynamoState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Skip `throttle` (interior mutexes don't impl Debug
+        // through the registry's lock guards).
+        f.debug_struct("DynamoState")
+            .field("tables", &self.tables)
+            .field("backups", &self.backups)
+            .field("exports", &self.exports)
+            .field("imports", &self.imports)
+            .field("kinesis_destinations", &self.kinesis_destinations)
+            .field("pitr_enabled", &self.pitr_enabled)
+            .field("resource_policies", &self.resource_policies)
+            .field("global_tables", &self.global_tables)
+            .finish()
+    }
+}
+
+impl DynamoState {
+    /// Charge `units` against the table's read or write bucket.
+    /// `Ok(())` when the request is within budget *or* the table
+    /// is on `PAY_PER_REQUEST` (no enforcement). Otherwise returns
+    /// `ProvisionedThroughputExceededException`.
+    ///
+    /// Looking up the table inside the helper keeps the call
+    /// site at every operation a single line and centralises the
+    /// PAY_PER_REQUEST short-circuit so callers can't forget it.
+    pub fn enforce_throughput(
+        &self,
+        table_name: &str,
+        kind: BucketKind,
+        units: f64,
+    ) -> Result<(), AwsError> {
+        // Floor at the AWS minimum charge of one unit per call.
+        // Real DynamoDB never bills less than 1 RCU / 1 WCU even
+        // for empty results, and rounding here prevents a series
+        // of empty-response Query / Scan calls from getting free
+        // capacity.
+        let charge = units.max(1.0);
+        let Some(table) = self.tables.get(table_name) else {
+            // Operation handlers already return the canonical
+            // ResourceNotFoundException when the table is
+            // missing; treating that as "no enforcement" here
+            // keeps behaviour identical for existing tests.
+            return Ok(());
+        };
+        if !table.billing_mode.eq_ignore_ascii_case("PROVISIONED") {
+            return Ok(());
+        }
+        let read_rate = table.read_capacity_units as f64;
+        let write_rate = table.write_capacity_units as f64;
+        drop(table);
+        self.throttle
+            .enforce(table_name, kind, charge, read_rate, write_rate)
+    }
 }
 
 impl std::fmt::Debug for Table {

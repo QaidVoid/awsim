@@ -518,6 +518,11 @@ pub fn delete_table(
         )
     })?;
 
+    // Drop any per-table token bucket so a recreated table starts
+    // with a fresh burst-credit window rather than inheriting the
+    // depleted state of its predecessor.
+    state.throttle.forget(table_name);
+
     // Capture the row count BEFORE dropping the SQLite mirror so the
     // returned TableDescription reports the right ItemCount.
     let count = sqlite

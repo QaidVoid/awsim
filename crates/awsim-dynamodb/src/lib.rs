@@ -5,6 +5,7 @@ mod keys;
 mod operations;
 mod sqlite_store;
 mod state;
+mod throttle;
 
 pub use sqlite_store::{MAX_GSI_SLOTS, SqliteStore};
 

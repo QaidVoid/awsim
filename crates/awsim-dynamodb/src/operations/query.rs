@@ -11,6 +11,7 @@ use crate::{
     keys::storage_value_to_item,
     sqlite_store::SqliteStore,
     state::{DynamoItem, DynamoState, extract_scalar_str},
+    throttle::BucketKind,
 };
 
 use super::{
@@ -402,6 +403,7 @@ pub fn query(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let read_units = read_capacity_units(response_bytes, consistent_read, false);
+    state.enforce_throughput(table_name, BucketKind::Read, read_units)?;
     if let Some(cc) = build_consumed_capacity(input, table_name, read_units, 0.0) {
         result["ConsumedCapacity"] = cc;
     }
@@ -538,6 +540,7 @@ pub fn scan(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let read_units = read_capacity_units(response_bytes, consistent_read, false);
+    state.enforce_throughput(table_name, BucketKind::Read, read_units)?;
     if let Some(cc) = build_consumed_capacity(input, table_name, read_units, 0.0) {
         result["ConsumedCapacity"] = cc;
     }
