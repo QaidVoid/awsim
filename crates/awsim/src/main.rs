@@ -1061,10 +1061,25 @@ async fn async_main() -> Result<()> {
             "/_awsim/requests/{id}/replay",
             axum::routing::post(admin::replay_request),
         )
+        // Wide-open catch-all on `/{bucket}/{*key}`. Hands every
+        // method to the gateway (which routes to the right service
+        // by inspecting headers / path / verb internally) and
+        // applies the larger body cap so S3 PutObject / UploadPart
+        // up to 5 GiB work. Earlier versions registered only PUT
+        // here, but axum's MethodRouter returns a 405
+        // `Allow: PUT` for any other method on a registered path -
+        // it does NOT fall through to `.fallback(...)` - which
+        // silently broke every multi-segment AWS REST endpoint
+        // (`GET /v1/apps`, `GET /v2/email/identities`, S3
+        // GetObject, Lambda Invoke, ...) the moment they were
+        // requested via something other than PUT. The looser cap
+        // on non-PUT methods is fine: SDK-generated GET / DELETE /
+        // POST bodies are naturally small, and the cap is a
+        // streaming upper bound, not a forced allocation.
         .route(
             "/{bucket}/{*key}",
-            axum::routing::put(awsim_core::gateway::handle_request)
-                .route_layer(axum::extract::DefaultBodyLimit::max(s3_upload_limit)),
+            axum::routing::any(awsim_core::gateway::handle_request)
+                .layer(axum::extract::DefaultBodyLimit::max(s3_upload_limit)),
         )
         .fallback(awsim_core::gateway::handle_request)
         .with_state(state.clone());
