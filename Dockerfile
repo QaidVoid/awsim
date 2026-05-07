@@ -91,9 +91,14 @@ LABEL org.opencontainers.image.licenses="MIT OR Apache-2.0"
 # `/data` is the default persistence directory inside the container. Set
 # `AWSIM_DATA_DIR=/data` so plain `docker run` persists by default; bind-mount
 # the volume (or set `AWSIM_DATA_DIR=` empty) to override.
+#
+# 4567 is the conventional HTTPS port. Operators opt in by setting
+# `AWSIM_HTTPS_PORT=4567` (or any other port) and publishing it; the
+# binary serves the bundled publicly-trusted `aws.qaidvoid.dev` cert
+# automatically when no `--tls-cert` / `--tls-key` is provided.
 ENV AWSIM_PORT=4566 \
     AWSIM_DATA_DIR=/data
-EXPOSE 4566
+EXPOSE 4566 4567
 VOLUME ["/data"]
 
 COPY --from=builder /usr/local/bin/awsim /usr/local/bin/awsim

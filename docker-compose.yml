@@ -2,11 +2,20 @@ services:
   awsim:
     image: ghcr.io/qaidvoid/awsim:latest
     ports:
+      # Plain HTTP - the historical default.
       - "4566:4566"
+      # HTTPS - serves the bundled publicly-trusted cert for
+      # `aws.qaidvoid.dev` (and `*.aws.qaidvoid.dev`). DNS A records
+      # for those names resolve to 127.0.0.1, so traffic stays
+      # loopback-only while clients validate against the system
+      # trust store with no env-var setup. Drop the `AWSIM_HTTPS_PORT`
+      # env var below to disable the HTTPS listener.
+      - "4567:4567"
     environment:
       - AWSIM_REGION=us-east-1
       - AWSIM_ACCOUNT_ID=000000000000
       - AWSIM_LOG_LEVEL=info
+      - AWSIM_HTTPS_PORT=4567
     volumes:
       - awsim-data:/data
 

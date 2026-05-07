@@ -41,6 +41,7 @@ export default defineConfig({
           text: 'Deployment',
           items: [
             { text: 'Docker', link: '/guide/docker' },
+            { text: 'HTTPS / TLS', link: '/guide/tls' },
             { text: 'Nix', link: '/guide/nix' },
           ]
         }

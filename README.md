@@ -12,6 +12,16 @@ docker run --rm -p 4566:4566 -v awsim-data:/data ghcr.io/qaidvoid/awsim:latest
 
 Multi-arch images (`linux/amd64`, `linux/arm64`), plus `:nightly` for the latest `main`. Admin UI at <http://localhost:4566/_awsim/ui/>. See [docs/guide/docker.md](docs/guide/docker.md) for compose, env vars, and persistence.
 
+For a publicly-trusted HTTPS endpoint with zero client-side trust setup, publish port `4567` and turn the listener on:
+
+```bash
+docker run --rm -p 4566:4566 -p 4567:4567 -v awsim-data:/data \
+  -e AWSIM_HTTPS_PORT=4567 \
+  ghcr.io/qaidvoid/awsim:latest
+```
+
+`https://aws.qaidvoid.dev:4567` resolves to your loopback (DNS A record pinned to `127.0.0.1`) and serves a real Let's Encrypt cert browsers / SDKs already trust. See [docs/guide/tls.md](docs/guide/tls.md) for the LocalStack-style story.
+
 ### From source
 
 ```bash
