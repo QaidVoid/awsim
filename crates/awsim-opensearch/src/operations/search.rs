@@ -344,12 +344,47 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
             return 1.0;
         }
 
-        // bool: { "must": [...], "should": [...], "filter": [...] }
+        // bool: { "must": [...], "should": [...], "filter": [...], "must_not": [...] }
+        //
+        // Semantics (mirrors OpenSearch / Lucene):
+        //   must     : every clause must match; contributes to score.
+        //   filter   : every clause must match; no score contribution.
+        //   must_not : no clause may match; no score contribution.
+        //   should   : when must / filter present -> optional, additive
+        //              score. Otherwise -> at least one must match.
+        //   empty    : `{ "bool": {} }` (or only `must_not` clauses with
+        //              no positive-match clauses) is a `match_all`
+        //              baseline: every doc matches with score 1.0,
+        //              gated only by the `must_not` exclusions.
+        //
+        // The third case is the captify-permission filter shape:
+        //
+        //   { "bool": { "should": [
+        //       { "bool": { "must_not": [
+        //           { "terms": { "type": ["chat","message",...] }}
+        //       ] } }
+        //   ] } }
+        //
+        // The inner bool has only `must_not`, so it must score 1.0 on
+        // any doc whose `type` *isn't* in that list - otherwise the
+        // outer `should` never has a match and the unified search
+        // returns zero hits.
         if let Some(bool_obj) = obj.get("bool").and_then(|b| b.as_object()) {
-            let mut total_score = 0.0;
-            let mut must_pass = true;
+            // must_not: any clause matches -> bool fails outright.
+            if let Some(must_not) = bool_obj.get("must_not").and_then(|n| n.as_array()) {
+                for clause in must_not {
+                    if match_score(clause, doc) > 0.0 {
+                        return 0.0;
+                    }
+                }
+            }
+
             let has_must_or_filter =
                 bool_obj.contains_key("must") || bool_obj.contains_key("filter");
+            let has_should = bool_obj.contains_key("should");
+
+            let mut total_score = 0.0;
+            let mut must_pass = true;
 
             if let Some(must) = bool_obj.get("must").and_then(|m| m.as_array()) {
                 for clause in must {
@@ -387,13 +422,21 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
                 }
             }
 
-            // If there are must/filter clauses, should is optional and
-            // just adds to score. If there are only should clauses, at
-            // least one must match.
+            // Bool with no positive-match clauses (`must`, `filter`,
+            // `should`) acts as `match_all` minus the `must_not`
+            // exclusions. We've already short-circuited above when a
+            // must_not matched, so getting here means the doc passes.
+            if !has_must_or_filter && !has_should {
+                return 1.0;
+            }
+
+            // Only `should` (no must/filter): at least one should
+            // clause must match for the bool to score.
             if !has_must_or_filter {
                 return if should_matched { should_score } else { 0.0 };
             }
 
+            // Has must/filter: should is purely additive.
             total_score += should_score;
 
             return if total_score > 0.0 { total_score } else { 1.0 };
@@ -421,8 +464,15 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
 }
 
 /// Check if an expected term value matches a field value.
-/// Supports string, number, and boolean comparisons.
+/// Supports string, number, and boolean comparisons. Recurses into
+/// JSON arrays so a `term` / `terms` query against a multi-value
+/// field like `tags: ["rust", "systems"]` matches when *any*
+/// element equals `expected` - which is how real OpenSearch
+/// (and Lucene's term queries on `keyword`/`text` arrays) behave.
 fn term_match(expected: &Value, field_val: &Value) -> bool {
+    if let Some(arr) = field_val.as_array() {
+        return arr.iter().any(|el| term_match(expected, el));
+    }
     if let Some(s) = expected.as_str() {
         return value_to_string(field_val) == s;
     }
@@ -829,6 +879,90 @@ mod tests {
         let hits = result["hits"]["hits"].as_array().unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0]["_source"]["title"], "AWS Lambda");
+    }
+
+    /// `bool` with only `must_not` is `match_all` minus the exclusions.
+    /// Three docs in the corpus, two have `rust` in tags - the
+    /// `must_not: [terms tags=[rust]]` should leave the Python doc
+    /// only.
+    #[test]
+    fn test_bool_must_not_only_acts_as_match_all_minus_exclusions() {
+        let state = test_state();
+        let (_, result) = search(
+            &state,
+            "articles",
+            &json!({
+                "query": {
+                    "bool": {
+                        "must_not": [
+                            { "terms": { "tags": ["rust"] } }
+                        ]
+                    }
+                }
+            }),
+        );
+        let hits = result["hits"]["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 1, "only the Python doc should remain");
+        assert_eq!(hits[0]["_source"]["title"], "Python Guide");
+    }
+
+    /// Captify permission-filter shape: `bool { should: [bool { must_not: [...] }] }`.
+    /// Before the fix the inner bool returned 0 (no must / filter /
+    /// should) and the outer should never matched, so the unified
+    /// search returned zero hits regardless of doc contents.
+    #[test]
+    fn test_bool_should_with_nested_must_not_returns_excluded_docs() {
+        let state = test_state();
+        let (_, result) = search(
+            &state,
+            "articles",
+            &json!({
+                "query": {
+                    "bool": {
+                        "should": [
+                            {
+                                "bool": {
+                                    "must_not": [
+                                        { "terms": { "tags": ["python", "data"] } }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                }
+            }),
+        );
+        let hits = result["hits"]["hits"].as_array().unwrap();
+        let titles: Vec<&str> = hits
+            .iter()
+            .map(|h| h["_source"]["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(hits.len(), 2, "non-Python docs should match");
+        assert!(titles.contains(&"Rust Programming"));
+        assert!(titles.contains(&"AWS Lambda"));
+    }
+
+    /// `must_not` short-circuits regardless of whether other clauses
+    /// match: a doc that satisfies the `must` but is in the
+    /// exclusion list must not be returned.
+    #[test]
+    fn test_bool_must_not_excludes_even_when_must_matches() {
+        let state = test_state();
+        let (_, result) = search(
+            &state,
+            "articles",
+            &json!({
+                "query": {
+                    "bool": {
+                        "must":     [{ "match": { "body": "Rust" } }],
+                        "must_not": [{ "terms": { "tags": ["lambda"] } }],
+                    }
+                }
+            }),
+        );
+        let hits = result["hits"]["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0]["_source"]["title"], "Rust Programming");
     }
 
     #[test]
