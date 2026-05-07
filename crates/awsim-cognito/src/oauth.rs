@@ -66,12 +66,36 @@ pub struct CognitoOAuthState {
 }
 
 impl CognitoOAuthState {
-    fn base_url(&self) -> String {
-        format!("http://localhost:{}", self.port)
+    /// Effective public base URL for the request (`scheme://authority`).
+    ///
+    /// Derived per-request from `X-Forwarded-Proto` + `Host` so the
+    /// issuer / endpoint URLs we emit match exactly what the caller
+    /// used to reach us. That's load-bearing for OIDC: Auth.js (and
+    /// every other RFC8414-conformant client) verifies that the
+    /// `issuer` field of the discovery doc - and the `iss` claim on
+    /// every issued JWT - equals the URL it requested. A mismatch
+    /// (e.g. caller uses `https://localhost:4567` but we hardcode
+    /// `http://localhost:4566`) hard-fails the auth flow.
+    ///
+    /// Falls back to `http://localhost:{port}` only when neither
+    /// header is present, which only happens for synthesised
+    /// requests in tests.
+    fn base_url(&self, headers: &HeaderMap) -> String {
+        let scheme = headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_else(|| "http".to_string());
+        let host = headers
+            .get(axum::http::header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("localhost:{}", self.port));
+        format!("{scheme}://{host}")
     }
 
-    fn issuer(&self, pool_id: &str) -> String {
-        format!("{}/cognito/{}", self.base_url(), pool_id)
+    fn issuer(&self, headers: &HeaderMap, pool_id: &str) -> String {
+        format!("{}/cognito/{}", self.base_url(headers), pool_id)
     }
 }
 
@@ -619,15 +643,17 @@ button:hover {{ background: #f97316; }}
 async fn openid_config(
     State(state): State<Arc<CognitoOAuthState>>,
     Path(pool_id): Path<String>,
+    headers: HeaderMap,
 ) -> Json<Value> {
-    let base = state.issuer(&pool_id);
+    let base = state.issuer(&headers, &pool_id);
+    let public_base = state.base_url(&headers);
     Json(json!({
         "issuer": base,
         "authorization_endpoint": format!("{base}/oauth2/authorize"),
         "token_endpoint": format!("{base}/oauth2/token"),
         "userinfo_endpoint": format!("{base}/oauth2/userInfo"),
         "revocation_endpoint": format!("{base}/oauth2/revoke"),
-        "jwks_uri": format!("{}/cognito/{pool_id}/.well-known/jwks.json", state.base_url()),
+        "jwks_uri": format!("{public_base}/cognito/{pool_id}/.well-known/jwks.json"),
         "response_types_supported": ["code", "token", "id_token"],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
@@ -739,6 +765,7 @@ struct AuthorizeForm {
 async fn authorize_post(
     State(oauth_state): State<Arc<CognitoOAuthState>>,
     Path(pool_id): Path<String>,
+    headers: HeaderMap,
     Form(form): Form<AuthorizeForm>,
 ) -> Response {
     let response_type = form.response_type.as_deref().unwrap_or("code").to_string();
@@ -1030,7 +1057,7 @@ async fn authorize_post(
 
     // Collect group role pairs before dropping pool_ref.
     let group_pairs = user_group_role_pairs(&pool_ref, &user.groups);
-    let issuer_url = oauth_state.issuer(&pool_id);
+    let issuer_url = oauth_state.issuer(&headers, &pool_id);
     let token_validity = pool_ref
         .clients
         .get(&client_id)
@@ -1326,7 +1353,7 @@ async fn token(
 
             let scopes = entry.scopes.clone();
             let nonce = entry.nonce.clone();
-            let issuer_url = oauth_state.issuer(&pool_id);
+            let issuer_url = oauth_state.issuer(&headers, &pool_id);
 
             let validity = oauth_state
                 .cognito
@@ -1461,7 +1488,7 @@ async fn token(
                 .unwrap_or(3600);
 
             // client_credentials is machine-to-machine — no user groups.
-            let issuer_url = oauth_state.issuer(&pool_id);
+            let issuer_url = oauth_state.issuer(&headers, &pool_id);
             let access_tok = jwt::access_token(
                 &effective_client_id,
                 &oauth_state.default_region,
@@ -1556,7 +1583,7 @@ async fn token(
             };
 
             let scopes = parse_scopes(form.scope.as_deref().unwrap_or("openid"));
-            let issuer_url = oauth_state.issuer(&pool_id);
+            let issuer_url = oauth_state.issuer(&headers, &pool_id);
 
             let validity = pool
                 .clients
@@ -1750,6 +1777,7 @@ struct LogoutParams {
 async fn logout(
     State(oauth_state): State<Arc<CognitoOAuthState>>,
     Path(pool_id): Path<String>,
+    headers: HeaderMap,
     Query(params): Query<LogoutParams>,
 ) -> Response {
     let pool_ref = match oauth_state.cognito.user_pools.get(&pool_id) {
@@ -1807,7 +1835,7 @@ async fn logout(
         let state_param = params.state.as_deref().unwrap_or("");
         let mut url = format!(
             "{}/cognito/{pool_id}/oauth2/authorize?client_id={}&response_type={}&redirect_uri={}&scope={}",
-            oauth_state.base_url(),
+            oauth_state.base_url(&headers),
             urlencoding(&params.client_id),
             urlencoding(response_type),
             urlencoding(redirect_uri),

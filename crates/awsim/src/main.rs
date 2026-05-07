@@ -1364,8 +1364,14 @@ async fn async_main() -> Result<()> {
         Some(tls) => {
             // Both listeners share the same `Router`. `Router` is
             // `Clone` (Arc-backed internally), so cloning is cheap.
+            // The HTTPS clone gets an extra layer that injects
+            // `X-Forwarded-Proto: https` so handlers (and the
+            // gateway's existing forwarded-proto check) see the
+            // request as secure - matters for any URL builder that
+            // emits absolute URLs reflecting the request scheme
+            // (e.g. Cognito's OIDC discovery doc).
             let http_app = app.clone();
-            let https_app = app;
+            let https_app = app.layer(axum::middleware::from_fn(mark_request_https));
             let http_fut = async move {
                 axum::serve(listener, http_app)
                     .await
@@ -1423,6 +1429,38 @@ async fn prepare_https_runtime(cli: &Cli, https_port: u16) -> Result<HttpsRuntim
         assets,
         std_listener,
     })
+}
+
+/// Stamp `X-Forwarded-Proto: https` on every request that arrives
+/// via the HTTPS listener so downstream handlers (and the gateway's
+/// SigV4-side forwarded-proto check) can tell the request was
+/// secure. Existing values win - upstream proxies are authoritative.
+///
+/// Also materialises the `Host` header from the URI's `:authority`
+/// pseudo-header when absent. axum-server + rustls negotiates HTTP/2
+/// via ALPN, and HTTP/2 omits `Host` in favour of `:authority`. Our
+/// URL-builder code paths (Cognito issuer, SQS queue URLs, ...) read
+/// the `Host` header uniformly, so we copy authority across to keep
+/// them protocol-version-agnostic.
+async fn mark_request_https(
+    mut req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let authority = req.uri().authority().map(|a| a.to_string());
+    let headers = req.headers_mut();
+    if !headers.contains_key("x-forwarded-proto") {
+        headers.insert(
+            "x-forwarded-proto",
+            axum::http::HeaderValue::from_static("https"),
+        );
+    }
+    if !headers.contains_key("host")
+        && let Some(a) = authority
+        && let Ok(v) = axum::http::HeaderValue::from_str(&a)
+    {
+        headers.insert("host", v);
+    }
+    next.run(req).await
 }
 
 /// Bind a `tokio::net::TcpListener` on `[::]:port` with a fall back
