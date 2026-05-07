@@ -197,39 +197,32 @@ fn evaluate_value_expr(
     if let Some(args_str) = expr
         .strip_prefix("if_not_exists(")
         .and_then(|s| s.strip_suffix(')'))
+        && let Some((left, right)) = split_two_args(args_str)
     {
-        let parts: Vec<&str> = args_str.splitn(2, ',').collect();
-        if parts.len() == 2 {
-            let path = resolve_path(parts[0].trim(), expr_attr_names);
-            let default_expr = parts[1].trim();
-            // If attribute exists, return it; otherwise return default
-            if let Some(existing) = get_nested_val(item, &path) {
-                return Ok(existing.clone());
-            }
-            return evaluate_value_expr(default_expr, item, expr_attr_names, expr_attr_values);
+        let path = resolve_path(left.trim(), expr_attr_names);
+        // If attribute exists, return it; otherwise return default
+        if let Some(existing) = get_nested_val(item, &path) {
+            return Ok(existing.clone());
         }
+        return evaluate_value_expr(right.trim(), item, expr_attr_names, expr_attr_values);
     }
 
     // list_append(:list1, :list2)
     if let Some(args_str) = expr
         .strip_prefix("list_append(")
         .and_then(|s| s.strip_suffix(')'))
+        && let Some((left, right)) = split_two_args(args_str)
     {
-        let parts: Vec<&str> = args_str.splitn(2, ',').collect();
-        if parts.len() == 2 {
-            let left_val =
-                evaluate_value_expr(parts[0].trim(), item, expr_attr_names, expr_attr_values)?;
-            let right_val =
-                evaluate_value_expr(parts[1].trim(), item, expr_attr_names, expr_attr_values)?;
-            let mut combined = Vec::new();
-            if let Some(arr) = left_val.get("L").and_then(|v| v.as_array()) {
-                combined.extend(arr.clone());
-            }
-            if let Some(arr) = right_val.get("L").and_then(|v| v.as_array()) {
-                combined.extend(arr.clone());
-            }
-            return Ok(json!({ "L": combined }));
+        let left_val = evaluate_value_expr(left.trim(), item, expr_attr_names, expr_attr_values)?;
+        let right_val = evaluate_value_expr(right.trim(), item, expr_attr_names, expr_attr_values)?;
+        let mut combined = Vec::new();
+        if let Some(arr) = left_val.get("L").and_then(|v| v.as_array()) {
+            combined.extend(arr.clone());
         }
+        if let Some(arr) = right_val.get("L").and_then(|v| v.as_array()) {
+            combined.extend(arr.clone());
+        }
+        return Ok(json!({ "L": combined }));
     }
 
     // Check for arithmetic: path + :val or path - :val
@@ -274,6 +267,27 @@ fn evaluate_value_expr(
     Err(AwsError::validation(format!(
         "Cannot resolve value expression: {expr}"
     )))
+}
+
+/// Split a two-argument function body (e.g. the contents of
+/// `if_not_exists(...)` or `list_append(...)`) on the *top-level*
+/// comma. Naive `splitn(2, ',')` splits on the first comma it finds,
+/// which fragments nested calls: `list_append(if_not_exists(#h, :e),
+/// :n)` would split as `["if_not_exists(#h", " :e), :n"]` and the
+/// recursive evaluator would then fail with
+/// "Cannot resolve value expression: if_not_exists(#h" because the
+/// inner expression has been chopped in half.
+fn split_two_args(args: &str) -> Option<(&str, &str)> {
+    let mut depth = 0usize;
+    for (i, c) in args.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => return Some((&args[..i], &args[i + 1..])),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Find a top-level + or - operator in an expression (not inside parens).
@@ -631,5 +645,48 @@ mod tests {
         values.insert(":d".into(), json!({ "N": "0.5" }));
         apply_update_expression(&mut item, "ADD n :d", &names(), &values).unwrap();
         assert_eq!(item["n"]["N"], json!("2"));
+    }
+
+    /// Regression: `list_append(if_not_exists(#h, :empty), :new)` is the
+    /// canonical "append-or-init list" pattern. The naive `splitn(2, ',')`
+    /// split chopped the inner `if_not_exists(#h, :empty)` in half on its
+    /// internal comma and bubbled `Cannot resolve value expression:
+    /// if_not_exists(#h` back to the SDK.
+    #[test]
+    fn list_append_with_nested_if_not_exists_initializes_then_appends() {
+        let mut item = DynamoItem::new();
+        let mut names = HashMap::new();
+        names.insert("#h".into(), "history".into());
+        let mut values = empty_values();
+        values.insert(":empty".into(), json!({ "L": [] }));
+        values.insert(":new".into(), json!({ "L": [{ "S": "first-event" }] }));
+
+        // Round 1: attribute missing -> if_not_exists returns :empty,
+        // list_append yields the new entries only.
+        apply_update_expression(
+            &mut item,
+            "SET #h = list_append(if_not_exists(#h, :empty), :new)",
+            &names,
+            &values,
+        )
+        .unwrap();
+        assert_eq!(item["history"]["L"], json!([{ "S": "first-event" }]));
+
+        // Round 2: attribute present -> if_not_exists returns existing,
+        // list_append appends without losing prior entries.
+        let mut values2 = empty_values();
+        values2.insert(":empty".into(), json!({ "L": [] }));
+        values2.insert(":new".into(), json!({ "L": [{ "S": "second-event" }] }));
+        apply_update_expression(
+            &mut item,
+            "SET #h = list_append(if_not_exists(#h, :empty), :new)",
+            &names,
+            &values2,
+        )
+        .unwrap();
+        assert_eq!(
+            item["history"]["L"],
+            json!([{ "S": "first-event" }, { "S": "second-event" }])
+        );
     }
 }
