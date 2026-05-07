@@ -17,7 +17,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use futures::stream::{self, BoxStream};
 use serde_json::Value;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::backend::BedrockBackends;
 
@@ -261,34 +261,38 @@ pub async fn invoke_model(
 
     let body = extract_body(input)?;
 
-    if let Some(backends) = backends {
-        let routed = match ModelFamily::for_id(model_id) {
-            Some(ModelFamily::Anthropic) => {
-                Some(anthropic::invoke(backends, model_id, &body).await)
-            }
-            Some(ModelFamily::Titan) => Some(titan::invoke(backends, model_id, &body).await),
-            Some(ModelFamily::Llama) => Some(llama::invoke(backends, model_id, &body).await),
-            Some(ModelFamily::Mistral) => Some(mistral::invoke(backends, model_id, &body).await),
-            Some(ModelFamily::Cohere) => Some(cohere::invoke(backends, model_id, &body).await),
-            Some(ModelFamily::TitanEmbed) => {
-                Some(titan_embed::invoke(backends, model_id, &body).await)
-            }
-            Some(ModelFamily::CohereEmbed) => {
-                Some(cohere_embed::invoke(backends, model_id, &body).await)
-            }
-            Some(ModelFamily::Other) | None => None,
-        };
-        if let Some(result) = routed {
-            match result {
-                Ok(v) => return Ok(v),
-                Err(e) => {
-                    warn!(error = %e.message, model_id, "Bedrock backend failed; serving canned response");
-                }
-            }
-        }
-    }
+    // When no backend is configured at all, the canned mock keeps SDK
+    // wiring testable in CI / fresh-clone setups. As soon as the
+    // operator points awsim at a real backend, we *propagate* errors
+    // instead of masking them with a canned response - silently
+    // returning a synthetic embedding when Ollama doesn't have the
+    // embed model pulled (or the model id has no mapping in the
+    // model_map) is the kind of failure that turns into a 4-hour
+    // KB-indexing rabbit hole. Surface it instead.
+    let Some(backends) = backends else {
+        return canned::invoke_model(input);
+    };
 
-    canned::invoke_model(input)
+    match ModelFamily::for_id(model_id) {
+        Some(ModelFamily::Anthropic) => anthropic::invoke(backends, model_id, &body).await,
+        Some(ModelFamily::Titan) => titan::invoke(backends, model_id, &body).await,
+        Some(ModelFamily::Llama) => llama::invoke(backends, model_id, &body).await,
+        Some(ModelFamily::Mistral) => mistral::invoke(backends, model_id, &body).await,
+        Some(ModelFamily::Cohere) => cohere::invoke(backends, model_id, &body).await,
+        Some(ModelFamily::TitanEmbed) => titan_embed::invoke(backends, model_id, &body).await,
+        Some(ModelFamily::CohereEmbed) => cohere_embed::invoke(backends, model_id, &body).await,
+        Some(ModelFamily::Other) | None => Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "InvokeModel: no translator for `{model_id}`. Supported \
+                 prefixes: anthropic.claude*, amazon.titan-text*, \
+                 amazon.titan-embed*, meta.llama*, mistral.*, \
+                 cohere.command*, cohere.embed*. Add a mapping under \
+                 [invoke] / [embed] in your bedrock model map if you \
+                 need a custom id."
+            ),
+        )),
+    }
 }
 
 pub async fn invoke_model_with_response_stream(
@@ -301,36 +305,36 @@ pub async fn invoke_model_with_response_stream(
     debug!(model_id = %model_id, "InvokeModelWithResponseStream");
     let body = extract_body(input)?;
 
-    if let Some(backends) = backends {
-        let routed = match ModelFamily::for_id(model_id) {
-            Some(ModelFamily::Anthropic) => {
-                Some(anthropic::invoke_streaming(backends, model_id, &body).await)
-            }
-            Some(ModelFamily::Titan) => {
-                Some(titan::invoke_streaming(backends, model_id, &body).await)
-            }
-            Some(ModelFamily::Llama) => {
-                Some(llama::invoke_streaming(backends, model_id, &body).await)
-            }
-            Some(ModelFamily::Mistral) => {
-                Some(mistral::invoke_streaming(backends, model_id, &body).await)
-            }
-            Some(ModelFamily::Cohere) => {
-                Some(cohere::invoke_streaming(backends, model_id, &body).await)
-            }
-            // Embeddings + unmapped → canned (embeddings don't stream).
-            _ => None,
-        };
-        if let Some(result) = routed {
-            match result {
-                Ok(v) => return Ok(v),
-                Err(e) => {
-                    warn!(error = %e.message, model_id, "Bedrock streaming backend failed; serving canned response");
-                }
-            }
+    let Some(backends) = backends else {
+        return canned::invoke_model_with_response_stream(input);
+    };
+
+    match ModelFamily::for_id(model_id) {
+        Some(ModelFamily::Anthropic) => {
+            anthropic::invoke_streaming(backends, model_id, &body).await
         }
+        Some(ModelFamily::Titan) => titan::invoke_streaming(backends, model_id, &body).await,
+        Some(ModelFamily::Llama) => llama::invoke_streaming(backends, model_id, &body).await,
+        Some(ModelFamily::Mistral) => mistral::invoke_streaming(backends, model_id, &body).await,
+        Some(ModelFamily::Cohere) => cohere::invoke_streaming(backends, model_id, &body).await,
+        Some(ModelFamily::TitanEmbed) | Some(ModelFamily::CohereEmbed) => {
+            Err(AwsError::bad_request(
+                "ValidationException",
+                format!(
+                    "InvokeModelWithResponseStream is not valid for embedding model `{model_id}`. \
+                 Use InvokeModel instead."
+                ),
+            ))
+        }
+        Some(ModelFamily::Other) | None => Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "InvokeModelWithResponseStream: no translator for `{model_id}`. \
+                 Supported prefixes: anthropic.claude*, amazon.titan-text*, \
+                 meta.llama*, mistral.*, cohere.command*."
+            ),
+        )),
     }
-    canned::invoke_model_with_response_stream(input)
 }
 
 pub async fn converse(
@@ -341,15 +345,10 @@ pub async fn converse(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelId is required"))?;
     debug!(model_id = %model_id, "Converse");
-    if let Some(backends) = backends {
-        match converse::invoke(backends, model_id, input).await {
-            Ok(v) => return Ok(v),
-            Err(e) => {
-                warn!(error = %e.message, model_id, "Bedrock Converse backend failed; serving canned")
-            }
-        }
-    }
-    canned::converse(input)
+    let Some(backends) = backends else {
+        return canned::converse(input);
+    };
+    converse::invoke(backends, model_id, input).await
 }
 
 pub async fn converse_stream(
@@ -360,15 +359,10 @@ pub async fn converse_stream(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelId is required"))?;
     debug!(model_id = %model_id, "ConverseStream");
-    if let Some(backends) = backends {
-        match converse::invoke_streaming(backends, model_id, input).await {
-            Ok(v) => return Ok(v),
-            Err(e) => {
-                warn!(error = %e.message, model_id, "Bedrock ConverseStream backend failed; serving canned")
-            }
-        }
-    }
-    canned::converse_stream(input)
+    let Some(backends) = backends else {
+        return canned::converse_stream(input);
+    };
+    converse::invoke_streaming(backends, model_id, input).await
 }
 
 /// `body` arrives as a JSON-encoded string in the Bedrock wire
