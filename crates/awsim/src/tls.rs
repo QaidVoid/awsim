@@ -1,13 +1,19 @@
 //! TLS support for the gateway.
 //!
-//! Some AWS SDK code paths (Cognito hosted UI, S3 transfer
-//! acceleration, the Java SDK's CRT client) hard-require an `https`
-//! endpoint. To keep the local-dev story zero-config, AWSim mints a
-//! self-signed cert + private key on first boot and caches them so
-//! the user can point `AWS_CA_BUNDLE` at a stable path.
+//! Three cert sources, in order of preference:
 //!
-//! BYO cert/key is supported via `--tls-cert` / `--tls-key` for users
-//! who already trust an organisation CA on their machine.
+//! 1. **BYO** (`--tls-cert` + `--tls-key`): operator-provided PEMs.
+//! 2. **Bundled** (`cfg(has_bundled_cert)`): a publicly-trusted
+//!    Let's Encrypt cert for `aws.qaidvoid.dev` (and `*.aws.qaidvoid.dev`)
+//!    compiled into the binary. The wildcard A record points to
+//!    127.0.0.1, so traffic stays on loopback while browsers / SDKs
+//!    see a green-padlock cert with no out-of-band trust setup.
+//!    This is the upstream default and matches LocalStack's
+//!    `localhost.localstack.cloud` model.
+//! 3. **Managed** (fallback): a self-signed cert for `localhost`
+//!    auto-generated on first boot and cached on disk. Used when
+//!    the upstream bundle is absent (forks that strip
+//!    `crates/awsim/assets/aws.qaidvoid.dev/`).
 
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -16,14 +22,37 @@ use anyhow::{Context, Result};
 use axum_server::tls_rustls::RustlsConfig;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 
+/// PEM-encoded full-chain cert for `aws.qaidvoid.dev` /
+/// `*.aws.qaidvoid.dev`, signed by Let's Encrypt. Renewed via the
+/// repo's `tls-renew` GitHub Action.
+#[cfg(has_bundled_cert)]
+const BUNDLED_CERT: &[u8] = include_bytes!("../assets/aws.qaidvoid.dev/cert.pem");
+
+/// Matching private key. Distributing this publicly is operationally
+/// safe because the DNS A records are locked to 127.0.0.1 - no
+/// remote MITM scenario exists.
+#[cfg(has_bundled_cert)]
+const BUNDLED_KEY: &[u8] = include_bytes!("../assets/aws.qaidvoid.dev/key.pem");
+
+/// Primary domain the bundled cert advertises. Used for the startup
+/// banner and the `/_awsim/tls` admin response so tooling knows
+/// which URL to point clients at.
+#[cfg(has_bundled_cert)]
+pub const BUNDLED_DOMAIN: &str = "aws.qaidvoid.dev";
+
 /// Filesystem layout + live `RustlsConfig` for the HTTPS listener.
 ///
 /// `cert_path` is exposed so the startup banner can suggest
-/// `AWS_CA_BUNDLE=<cert_path>` - that's the cleanest way to make AWS
-/// SDKs trust the listener without touching the system trust store.
+/// `AWS_CA_BUNDLE=<cert_path>` for the rare client that doesn't
+/// follow the system trust store. When `public_trust` is `true` the
+/// cert chains to a publicly-trusted CA and the env var is purely
+/// informational - SDKs that follow the OS root store will trust it
+/// out of the box.
 pub struct TlsAssets {
     pub cert_path: PathBuf,
     pub config: RustlsConfig,
+    pub public_trust: bool,
+    pub domain: Option<String>,
     pub generated: bool,
 }
 
@@ -35,33 +64,50 @@ impl TlsAssets {
         TlsAdminInfo {
             https_port,
             cert_path: self.cert_path.clone(),
+            public_trust: self.public_trust,
+            domain: self.domain.clone(),
         }
     }
 }
 
 /// What the bootstrap script needs to wire up `NODE_EXTRA_CA_CERTS`
-/// without any out-of-band knowledge of the awsim install.
+/// (or skip it entirely) without any out-of-band knowledge of the
+/// awsim install.
 ///
 /// Surfaced via `GET /_awsim/tls` (200 when HTTPS is on, 404 when
-/// off). Tooling fetches once per run and stamps the result into
-/// the project's env files.
+/// off). Tooling fetches once per run and decides what to write
+/// into the project's env files.
 #[derive(Clone, Debug)]
 pub struct TlsAdminInfo {
     pub https_port: u16,
     pub cert_path: PathBuf,
+    /// `true` when the cert chains to a publicly-trusted CA -
+    /// clients that follow the system root store don't need
+    /// `AWS_CA_BUNDLE` / `NODE_EXTRA_CA_CERTS`.
+    pub public_trust: bool,
+    /// Primary DNS name on the cert, when known. `None` for
+    /// self-signed managed certs and BYO certs we didn't introspect.
+    pub domain: Option<String>,
 }
 
-/// Where AWSim looks for / writes the TLS material.
-///
-/// `Persistent` means "use these exact paths" (BYO cert) and
-/// `Managed` means "create them under this directory if missing".
+/// Where AWSim sources the TLS material.
 pub enum CertSource<'a> {
+    /// Operator-provided cert / key paths from `--tls-cert` / `--tls-key`.
     Byo { cert: &'a Path, key: &'a Path },
+    /// Compiled-in publicly-trusted cert. Materialised under
+    /// `dir` on each boot so `/_awsim/tls` can surface a real path.
+    #[cfg(has_bundled_cert)]
+    Bundled { dir: PathBuf },
+    /// Self-signed fallback. Cached under `dir` across runs. Only
+    /// constructed on builds without `cfg(has_bundled_cert)` (forks
+    /// that strip the publicly-trusted PEMs); silenced otherwise so
+    /// upstream builds don't warn.
+    #[cfg_attr(has_bundled_cert, allow(dead_code))]
     Managed { dir: PathBuf },
 }
 
-/// Load existing PEMs or generate a fresh self-signed pair, then
-/// build a `RustlsConfig` ready to hand to `axum_server`.
+/// Resolve the TLS material into a live `RustlsConfig`, generating
+/// or materialising on-disk PEMs as needed.
 pub async fn load_or_generate(source: CertSource<'_>) -> Result<TlsAssets> {
     // `rustls` 0.23 requires picking a default crypto provider before
     // any `RustlsConfig` is built. We use `ring` (matches the feature
@@ -69,18 +115,15 @@ pub async fn load_or_generate(source: CertSource<'_>) -> Result<TlsAssets> {
     // error so a hot-reload path doesn't blow up.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let (cert_path, key_path, generated) = match source {
-        CertSource::Byo { cert, key } => (cert.to_path_buf(), key.to_path_buf(), false),
-        CertSource::Managed { dir } => ensure_managed_cert(&dir).await?,
-    };
+    let resolved = resolve(source).await?;
 
-    let config = RustlsConfig::from_pem_file(&cert_path, &key_path)
+    let config = RustlsConfig::from_pem_file(&resolved.cert_path, &resolved.key_path)
         .await
         .with_context(|| {
             format!(
                 "loading TLS cert/key from {} + {}",
-                cert_path.display(),
-                key_path.display()
+                resolved.cert_path.display(),
+                resolved.key_path.display()
             )
         })?;
 
@@ -90,13 +133,84 @@ pub async fn load_or_generate(source: CertSource<'_>) -> Result<TlsAssets> {
     // `std::path::absolute` resolves `.` / `..` segments without
     // touching the FS or following symlinks, so it stays correct on
     // macOS where `/tmp` is a symlink to `/private/tmp`.
-    let cert_path = std::path::absolute(&cert_path).unwrap_or(cert_path);
+    let cert_path = std::path::absolute(&resolved.cert_path).unwrap_or(resolved.cert_path);
 
     Ok(TlsAssets {
         cert_path,
         config,
-        generated,
+        public_trust: resolved.public_trust,
+        domain: resolved.domain,
+        generated: resolved.generated,
     })
+}
+
+struct ResolvedSource {
+    cert_path: PathBuf,
+    key_path: PathBuf,
+    public_trust: bool,
+    domain: Option<String>,
+    generated: bool,
+}
+
+async fn resolve(source: CertSource<'_>) -> Result<ResolvedSource> {
+    match source {
+        CertSource::Byo { cert, key } => Ok(ResolvedSource {
+            cert_path: cert.to_path_buf(),
+            key_path: key.to_path_buf(),
+            // BYO cert may or may not be publicly trusted - we
+            // don't introspect. Operators who BYO know what they're
+            // doing and set their own trust expectations.
+            public_trust: false,
+            domain: None,
+            generated: false,
+        }),
+        #[cfg(has_bundled_cert)]
+        CertSource::Bundled { dir } => {
+            let (cert_path, key_path, generated) = materialise_bundled_cert(&dir).await?;
+            Ok(ResolvedSource {
+                cert_path,
+                key_path,
+                public_trust: true,
+                domain: Some(BUNDLED_DOMAIN.to_string()),
+                generated,
+            })
+        }
+        CertSource::Managed { dir } => {
+            let (cert_path, key_path, generated) = ensure_managed_cert(&dir).await?;
+            Ok(ResolvedSource {
+                cert_path,
+                key_path,
+                public_trust: false,
+                domain: None,
+                generated,
+            })
+        }
+    }
+}
+
+/// Write the compiled-in PEMs to `dir` so the rest of the loader
+/// (and `/_awsim/tls` consumers) have a real on-disk path. Always
+/// rewrites - the embedded bytes are the source of truth, and an
+/// awsim upgrade with a renewed cert needs to overwrite a stale
+/// on-disk copy.
+#[cfg(has_bundled_cert)]
+async fn materialise_bundled_cert(dir: &Path) -> Result<(PathBuf, PathBuf, bool)> {
+    tokio::fs::create_dir_all(dir)
+        .await
+        .with_context(|| format!("creating TLS bundle dir {}", dir.display()))?;
+
+    let cert_path = dir.join("awsim-bundled-cert.pem");
+    let key_path = dir.join("awsim-bundled-key.pem");
+
+    let prior = tokio::fs::try_exists(&cert_path).await.unwrap_or(false)
+        && tokio::fs::try_exists(&key_path).await.unwrap_or(false);
+
+    write_secret(&key_path, BUNDLED_KEY).await?;
+    tokio::fs::write(&cert_path, BUNDLED_CERT)
+        .await
+        .with_context(|| format!("writing bundled TLS cert to {}", cert_path.display()))?;
+
+    Ok((cert_path, key_path, !prior))
 }
 
 /// Return `(cert_path, key_path, generated_now)`.
@@ -185,12 +299,12 @@ async fn write_secret(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Default cache dir for managed TLS material when no `--data-dir`
-/// is set: `$XDG_CACHE_HOME/awsim/tls` (or `$HOME/.cache/awsim/tls`)
-/// when a HOME is available, falling back to `$TMPDIR/awsim-tls` on
-/// systems without one. The XDG path is stable across reboots so the
-/// generated cert + `AWS_CA_BUNDLE` line stay valid until the user
-/// removes the directory.
+/// Default cache dir for managed / bundled TLS material when no
+/// `--data-dir` is set: `$XDG_CACHE_HOME/awsim/tls` (or
+/// `$HOME/.cache/awsim/tls`) when a HOME is available, falling back
+/// to `$TMPDIR/awsim-tls` on systems without one. The XDG path is
+/// stable across reboots so the on-disk PEM stays valid until the
+/// user removes the directory.
 pub fn default_cache_dir() -> PathBuf {
     if let Ok(home) = std::env::var("HOME")
         && !home.is_empty()

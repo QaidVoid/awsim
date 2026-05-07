@@ -26,6 +26,8 @@ pub async fn tls_info(State(info): State<Option<Arc<crate::tls::TlsAdminInfo>>>)
         Some(info) => Json(json!({
             "https_port": info.https_port,
             "cert_path": info.cert_path.display().to_string(),
+            "public_trust": info.public_trust,
+            "domain": info.domain,
         }))
         .into_response(),
         None => (StatusCode::NOT_FOUND, "HTTPS is not enabled").into_response(),

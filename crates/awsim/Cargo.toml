@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+build = "build.rs"
+
 [[bin]]
 name = "awsim"
 path = "src/main.rs"

@@ -1355,13 +1355,20 @@ async fn async_main() -> Result<()> {
     println!();
     println!("  Endpoint:  http://localhost:{}", cli.port);
     if let Some(ref tls) = https_runtime {
-        println!("  HTTPS:     https://localhost:{}", tls.port);
-        println!(
-            "             export AWS_CA_BUNDLE={}",
-            tls.assets.cert_path.display()
-        );
-        if tls.assets.generated {
-            println!("             (self-signed cert generated; reused on subsequent boots)");
+        let host = tls.assets.domain.as_deref().unwrap_or("localhost");
+        println!("  HTTPS:     https://{}:{}", host, tls.port);
+        if tls.assets.public_trust {
+            println!(
+                "             (publicly-trusted cert - no AWS_CA_BUNDLE / NODE_EXTRA_CA_CERTS needed)"
+            );
+        } else {
+            println!(
+                "             export AWS_CA_BUNDLE={}",
+                tls.assets.cert_path.display()
+            );
+            if tls.assets.generated {
+                println!("             (self-signed cert generated; reused on subsequent boots)");
+            }
         }
     }
     if ui::is_bundled() {
@@ -1425,9 +1432,12 @@ struct HttpsRuntime {
 
 /// Build the TLS material + bound socket for the HTTPS listener.
 ///
-/// BYO cert/key wins if both are provided; otherwise we generate (or
-/// reuse) a self-signed cert under `--tls-cache-dir` (default
-/// `<data-dir>/tls` or `$XDG_CACHE_HOME/awsim/tls`).
+/// Selection precedence:
+///   1. BYO (`--tls-cert` + `--tls-key`).
+///   2. Bundled publicly-trusted cert (when this binary was built
+///      with the `aws.qaidvoid.dev` assets in place).
+///   3. Self-signed managed cert under `--tls-cache-dir` (default
+///      `<data-dir>/tls` or `$XDG_CACHE_HOME/awsim/tls`).
 async fn prepare_https_runtime(cli: &Cli, https_port: u16) -> Result<HttpsRuntime> {
     let source = match (cli.tls_cert.as_deref(), cli.tls_key.as_deref()) {
         (Some(cert), Some(key)) => tls::CertSource::Byo { cert, key },
@@ -1441,7 +1451,14 @@ async fn prepare_https_runtime(cli: &Cli, https_port: u16) -> Result<HttpsRuntim
                         .map(|d| std::path::PathBuf::from(d).join("tls"))
                 })
                 .unwrap_or_else(tls::default_cache_dir);
-            tls::CertSource::Managed { dir }
+            #[cfg(has_bundled_cert)]
+            {
+                tls::CertSource::Bundled { dir }
+            }
+            #[cfg(not(has_bundled_cert))]
+            {
+                tls::CertSource::Managed { dir }
+            }
         }
     };
 
