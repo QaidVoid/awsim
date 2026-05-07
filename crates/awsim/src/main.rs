@@ -1018,6 +1018,19 @@ async fn async_main() -> Result<()> {
     });
     let cognito_oauth_router = awsim_cognito::oauth::router(cognito_oauth_state);
 
+    // Set up TLS *before* the routers so the `/_awsim/tls` admin
+    // route can hand the cert path to bootstrap tooling, and so a
+    // bogus `--tls-cert` path / unwritable cache dir fails fast
+    // before we do all the heavy state init.
+    let https_runtime = if let Some(https_port) = cli.https_port {
+        Some(prepare_https_runtime(&cli, https_port).await?)
+    } else {
+        None
+    };
+    let tls_admin_info: Option<Arc<tls::TlsAdminInfo>> = https_runtime
+        .as_ref()
+        .map(|h| Arc::new(h.assets.admin_info(h.port)));
+
     // Build the main router (finalized with AppState).
     //
     // S3 upload routes (PutObject path-style and UploadPart) get a
@@ -1269,6 +1282,14 @@ async fn async_main() -> Result<()> {
         )
         .with_state(snapshot_state);
 
+    // Surfaces the active HTTPS port + on-disk cert path so
+    // bootstrap tooling can wire up `NODE_EXTRA_CA_CERTS` (or any
+    // other client trust knob) without out-of-band knowledge of the
+    // awsim install. Returns 404 when HTTPS is off.
+    let tls_admin_router: axum::Router<()> = axum::Router::new()
+        .route("/_awsim/tls", axum::routing::get(admin::tls_info))
+        .with_state(tls_admin_info.clone());
+
     // Merge all routers and add shared middleware.
     let app = cognito_oauth_router
         .merge(main_router)
@@ -1286,6 +1307,7 @@ async fn async_main() -> Result<()> {
         .merge(bedrock_defaults_router)
         .merge(runtime_config_router)
         .merge(seed_router)
+        .merge(tls_admin_router)
         .merge(ui::router())
         // Redirect plain browser hits on `/` to the admin UI so users
         // don't have to remember the `/_awsim/ui/` path. Skips when the
@@ -1314,15 +1336,6 @@ async fn async_main() -> Result<()> {
     spawn_fd_pressure_watcher();
 
     let listener = bind_dual_stack_tokio(cli.port).await?;
-
-    // Set up TLS *before* announcing the HTTP listener so a bogus
-    // `--tls-cert` path or unwritable cache dir fails fast instead of
-    // half-starting the server.
-    let https_runtime = if let Some(https_port) = cli.https_port {
-        Some(prepare_https_runtime(&cli, https_port).await?)
-    } else {
-        None
-    };
 
     // Startup banner
     println!();

@@ -27,6 +27,30 @@ pub struct TlsAssets {
     pub generated: bool,
 }
 
+impl TlsAssets {
+    /// Snapshot just the bits the `/_awsim/tls` admin endpoint
+    /// surfaces. Cloned so the live `RustlsConfig` (not `Clone`)
+    /// can keep moving into the listener owner.
+    pub fn admin_info(&self, https_port: u16) -> TlsAdminInfo {
+        TlsAdminInfo {
+            https_port,
+            cert_path: self.cert_path.clone(),
+        }
+    }
+}
+
+/// What the bootstrap script needs to wire up `NODE_EXTRA_CA_CERTS`
+/// without any out-of-band knowledge of the awsim install.
+///
+/// Surfaced via `GET /_awsim/tls` (200 when HTTPS is on, 404 when
+/// off). Tooling fetches once per run and stamps the result into
+/// the project's env files.
+#[derive(Clone, Debug)]
+pub struct TlsAdminInfo {
+    pub https_port: u16,
+    pub cert_path: PathBuf,
+}
+
 /// Where AWSim looks for / writes the TLS material.
 ///
 /// `Persistent` means "use these exact paths" (BYO cert) and

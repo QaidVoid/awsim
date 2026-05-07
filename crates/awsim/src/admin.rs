@@ -13,6 +13,25 @@ use std::sync::atomic::Ordering;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 
+/// `GET /_awsim/tls`
+///
+/// Returns `200 { https_port, cert_path }` when the awsim instance
+/// is serving HTTPS, `404` when it's not. Bootstrap tooling fetches
+/// this once per run and stamps the cert path into the project's
+/// shell-launched env (e.g. `NODE_EXTRA_CA_CERTS`) so client TLS
+/// trust stays in lockstep with whatever cert the server actually
+/// presents - even if the cache dir / data dir / BYO path changes.
+pub async fn tls_info(State(info): State<Option<Arc<crate::tls::TlsAdminInfo>>>) -> Response {
+    match info {
+        Some(info) => Json(json!({
+            "https_port": info.https_port,
+            "cert_path": info.cert_path.display().to_string(),
+        }))
+        .into_response(),
+        None => (StatusCode::NOT_FOUND, "HTTPS is not enabled").into_response(),
+    }
+}
+
 pub async fn health(State(state): State<AppState>) -> Json<Value> {
     let uptime = state.start_time.elapsed().as_secs();
     Json(json!({
