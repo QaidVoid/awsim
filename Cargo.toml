@@ -149,7 +149,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # Web
 axum = "0.8"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "decompression-gzip", "decompression-br", "decompression-zstd", "decompression-deflate"] }
 hyper = { version = "1", features = ["full"] }
 bytes = "1"
 futures = "0.3"

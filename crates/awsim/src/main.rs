@@ -1314,6 +1314,17 @@ async fn async_main() -> Result<()> {
         // request looks like an AWS SDK call (SigV4 Authorization +
         // non-HTML Accept).
         .layer(axum::middleware::from_fn(ui::root_redirect_middleware))
+        // Transparent request-body decompression. AWS SDKs that opt
+        // into compression (OpenSearch JS client with
+        // `compression: gzip`, CloudWatch Logs PutLogEvents, etc.)
+        // ship gzip-encoded bodies; without this layer the inner
+        // handlers see raw gzip bytes and 400 with an opaque error.
+        // Layered *after* DefaultBodyLimit so the limit applies to
+        // the decompressed payload rather than the wire bytes - the
+        // handler-visible body is what the user-facing cap should
+        // gate. tower-http strips `Content-Encoding` + `Content-Length`
+        // for the inner service.
+        .layer(tower_http::decompression::RequestDecompressionLayer::new())
         .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_bytes))
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with
