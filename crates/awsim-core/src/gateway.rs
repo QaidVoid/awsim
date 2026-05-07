@@ -603,7 +603,7 @@ fn extract_service_info(
     headers: &HeaderMap,
     uri: &Uri,
 ) -> (String, String, String, Option<String>) {
-    // Try Authorization header first
+    // 1. Authorization header — SigV4-signed direct calls.
     if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok())
         && let Some(creds) = auth::parse_authorization(auth_header)
     {
@@ -615,31 +615,14 @@ fn extract_service_info(
         );
     }
 
-    // Try X-Amz-Target header (for awsJson services)
-    if let Some(target) = headers.get("x-amz-target").and_then(|v| v.to_str().ok())
-        && let Some(service) = resolve_service_from_target(target)
-    {
-        return (
-            service,
-            state.default_region.clone(),
-            state.default_account_id.clone(),
-            None,
-        );
-    }
-
-    // Try Host header
-    if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok())
-        && let Some(service) = extract_service_from_host(host)
-    {
-        return (
-            service,
-            state.default_region.clone(),
-            state.default_account_id.clone(),
-            None,
-        );
-    }
-
-    // Check for pre-signed URL query parameters (SigV4 in query string)
+    // 2. X-Amz-Credential query string — presigned URLs (S3 GetObject /
+    //    PutObject, CloudFront, ...). Must beat Host detection because
+    //    the URL host is whatever bucket / CDN front-end the SDK
+    //    chose, which can be misleading: a presigned PUT against a
+    //    custom endpoint host like `aws.qaidvoid.dev` would otherwise
+    //    have its host-derived service ("aws") win over the real
+    //    `s3` baked into the credential scope, and S3's request
+    //    handler would never see the upload.
     if let Some(query) = uri.query()
         && query.contains("X-Amz-Credential")
         && let Some(cred_start) = query.find("X-Amz-Credential=")
@@ -659,7 +642,33 @@ fn extract_service_info(
         }
     }
 
-    // Try path-based detection as last resort (for REST services called without auth)
+    // 3. X-Amz-Target header — awsJson services (DynamoDB, Cognito, ...).
+    if let Some(target) = headers.get("x-amz-target").and_then(|v| v.to_str().ok())
+        && let Some(service) = resolve_service_from_target(target)
+    {
+        return (
+            service,
+            state.default_region.clone(),
+            state.default_account_id.clone(),
+            None,
+        );
+    }
+
+    // 4. Host header — convention-based, only trusted when the host's
+    //    leftmost segment matches a registered service signing name.
+    if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok())
+        && let Some(service) = extract_service_from_host(host, state)
+    {
+        return (
+            service,
+            state.default_region.clone(),
+            state.default_account_id.clone(),
+            None,
+        );
+    }
+
+    // 5. Path-based detection — last resort for unsigned REST calls
+    //    (admin console, health probes, ...).
     let path = uri.path();
     if let Some(service) = resolve_service_from_path(path) {
         return (
@@ -733,39 +742,29 @@ fn resolve_service_from_target(target: &str) -> Option<String> {
     Some(service.to_string())
 }
 
-/// Extract service name from Host header.
-/// e.g., "s3.us-east-1.localhost" → "s3"
-/// e.g., "sqs.us-east-1.amazonaws.com" → "sqs"
-fn extract_service_from_host(host: &str) -> Option<String> {
-    // Remove port
+/// Extract service name from Host header by walking dot-segments
+/// left-to-right and returning the first one that matches a
+/// registered service's signing name.
+///
+/// Examples:
+///   `s3.us-east-1.amazonaws.com`     → `s3`
+///   `sqs.us-east-1.localhost`        → `sqs`
+///   `sqs.us-east-1.aws.qaidvoid.dev` → `sqs`
+///   `aws.qaidvoid.dev`               → `None`  (no service segment)
+///   `localhost:4566`                 → `None`  (no service segment)
+///
+/// The earlier hard-coded allowlist + "skip if first contains a
+/// dash" heuristic falsely returned `aws` for the bundled
+/// `aws.qaidvoid.dev` cert host - which then beat
+/// `X-Amz-Credential` parsing and broke S3 presigned uploads.
+/// Anchoring on `state.services` (whose keys are the signing names
+/// every registered handler advertises) keeps this check honest
+/// without a parallel allowlist to maintain.
+fn extract_service_from_host(host: &str, state: &AppState) -> Option<String> {
     let host = host.split(':').next().unwrap_or(host);
-    let parts: Vec<&str> = host.split('.').collect();
-    if parts.len() >= 2 {
-        let first = parts[0];
-        // Skip if it looks like a bucket name (for S3 virtual-hosted style)
-        if !first.contains('-')
-            || [
-                "s3",
-                "sqs",
-                "sns",
-                "dynamodb",
-                "lambda",
-                "iam",
-                "sts",
-                "kms",
-                "logs",
-                "events",
-                "states",
-                "ssm",
-                "secretsmanager",
-                "execute-api",
-                "cognito-idp",
-                "cognito-identity",
-                "tagging",
-            ]
-            .contains(&first)
-        {
-            return Some(first.to_string());
+    for part in host.split('.') {
+        if state.services.contains_key(part) {
+            return Some(part.to_string());
         }
     }
     None
