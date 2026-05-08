@@ -50,8 +50,14 @@ pub fn create_group(
     let group_name = input["GroupName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "GroupName is required"))?;
-    let description = input["Description"].as_str().map(String::from);
-    let role_arn = input["RoleArn"].as_str().map(String::from);
+    let description = input["Description"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let role_arn = input["RoleArn"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(String::from);
     let precedence = input["Precedence"].as_u64().map(|v| v as u32);
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
@@ -161,12 +167,20 @@ pub fn update_group(
         )
     })?;
 
+    // Empty string clears, present value sets, absent leaves
+    // unchanged. AWS UpdateGroup itself uses "absent = leave alone";
+    // we extend that with empty-string-as-clear so the UI's edit
+    // dialog can blank a field without a separate Delete affordance.
     if let Some(desc) = input["Description"].as_str() {
-        group.description = Some(desc.to_string());
+        group.description = (!desc.is_empty()).then(|| desc.to_string());
     }
     if let Some(arn) = input["RoleArn"].as_str() {
-        warn_if_invalid_role_arn(arn);
-        group.role_arn = Some(arn.to_string());
+        if arn.is_empty() {
+            group.role_arn = None;
+        } else {
+            warn_if_invalid_role_arn(arn);
+            group.role_arn = Some(arn.to_string());
+        }
     }
     if let Some(p) = input["Precedence"].as_u64() {
         group.precedence = Some(p as u32);
