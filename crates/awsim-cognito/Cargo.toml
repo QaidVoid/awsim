@@ -10,6 +10,7 @@ repository.workspace = true
 awsim-core = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
+reqwest = { workspace = true }
 dashmap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

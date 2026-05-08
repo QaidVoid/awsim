@@ -1971,6 +1971,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "rand 0.8.6",
+ "reqwest",
  "rsa",
  "serde",
  "serde_json",

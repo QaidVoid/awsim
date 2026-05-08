@@ -1,5 +1,6 @@
 #![deny(warnings)]
 
+pub mod federation;
 mod identity;
 mod jwt;
 mod keys;

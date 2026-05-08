@@ -62,6 +62,8 @@ pub struct CognitoOAuthState {
     pub auth_codes: Arc<DashMap<String, AuthCodeEntry>>,
     /// Revoked refresh tokens (token string → ()).
     pub revoked_refresh_tokens: Arc<DashMap<String, ()>>,
+    /// In-flight federation state for OIDC IdP redirects.
+    pub federation: Arc<crate::federation::FederationState>,
     pub port: u16,
 }
 
@@ -116,6 +118,10 @@ pub fn router(state: Arc<CognitoOAuthState>) -> axum::Router {
         .route(
             "/cognito/{pool_id}/oauth2/authorize",
             axum::routing::get(authorize_get).post(authorize_post),
+        )
+        .route(
+            "/cognito/{pool_id}/oauth2/idpresponse",
+            axum::routing::get(idpresponse),
         )
         .route(
             "/cognito/{pool_id}/oauth2/token",
@@ -686,12 +692,19 @@ struct AuthorizeParams {
     nonce: Option<String>,
     code_challenge: Option<String>,
     code_challenge_method: Option<String>,
+    /// When set, the user is redirected to the matching `IdentityProvider`
+    /// for federated sign-in instead of the local username/password
+    /// form. The eventual code lands at our `/oauth2/idpresponse`
+    /// endpoint, which finishes the Cognito flow and bounces back to
+    /// `redirect_uri` with the app's authorization code.
+    identity_provider: Option<String>,
 }
 
 async fn authorize_get(
     State(oauth_state): State<Arc<CognitoOAuthState>>,
     Path(pool_id): Path<String>,
     Query(params): Query<AuthorizeParams>,
+    headers: HeaderMap,
 ) -> Response {
     let redirect_uri = match &params.redirect_uri {
         Some(u) => u.clone(),
@@ -727,6 +740,26 @@ async fn authorize_get(
             .into_response();
     }
 
+    // Federation: when ?identity_provider=Foo is present, look up
+    // Foo on the pool, redirect the user to its authorize URL, and
+    // park the original Cognito-side authorize parameters until the
+    // IdP redirects back to our /idpresponse endpoint.
+    if let Some(provider_name) = params
+        .identity_provider
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        return start_federation(
+            &oauth_state,
+            &headers,
+            &pool_id,
+            provider_name,
+            &params,
+            &redirect_uri,
+        )
+        .await;
+    }
+
     login_page_html(
         &pool_id,
         &params.response_type,
@@ -740,6 +773,89 @@ async fn authorize_get(
         None,
         None,
     )
+}
+
+async fn start_federation(
+    oauth_state: &Arc<CognitoOAuthState>,
+    headers: &HeaderMap,
+    pool_id: &str,
+    provider_name: &str,
+    params: &AuthorizeParams,
+    redirect_uri: &str,
+) -> Response {
+    let pool_ref = match oauth_state.cognito.user_pools.get(pool_id) {
+        Some(p) => p,
+        None => {
+            return (StatusCode::BAD_REQUEST, "user pool not found").into_response();
+        }
+    };
+    let idp = match pool_ref
+        .identity_providers
+        .iter()
+        .find(|i| i.provider_name == provider_name)
+        .cloned()
+    {
+        Some(i) => i,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("identity_provider {provider_name} is not registered on this pool"),
+            )
+                .into_response();
+        }
+    };
+    drop(pool_ref);
+
+    let cfg = match crate::federation::parse_oidc_config(&idp) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::BAD_REQUEST, e.message).into_response(),
+    };
+    let discovery =
+        match crate::federation::resolve_discovery(&oauth_state.federation, &idp, &cfg).await {
+            Ok(d) => d,
+            Err(e) => return (StatusCode::BAD_GATEWAY, e.message).into_response(),
+        };
+
+    // Stash original Cognito-side authorize params so the
+    // /idpresponse callback can recover them.
+    let pending = crate::federation::PendingFederation {
+        pool_id: pool_id.to_string(),
+        client_id: params.client_id.clone(),
+        redirect_uri: redirect_uri.to_string(),
+        scope: params.scope.clone().unwrap_or_else(|| "openid".to_string()),
+        app_state: params.state.clone().unwrap_or_default(),
+        nonce: params.nonce.clone().filter(|s| !s.is_empty()),
+        code_challenge: params.code_challenge.clone().filter(|s| !s.is_empty()),
+        code_challenge_method: params
+            .code_challenge_method
+            .clone()
+            .filter(|s| !s.is_empty()),
+        provider_name: provider_name.to_string(),
+        issued_at: now_epoch(),
+    };
+    let state_token = crate::federation::stash(&oauth_state.federation, pending);
+
+    // Build our /idpresponse URL using the same base-url resolution
+    // we use for the issuer / token endpoints, so the IdP's redirect
+    // hits us back on the exact host/scheme the user came in on.
+    let cognito_callback = format!(
+        "{}/cognito/{pool_id}/oauth2/idpresponse",
+        oauth_state.base_url(headers)
+    );
+
+    let url = crate::federation::build_idp_authorize_url(
+        &discovery,
+        &cfg,
+        &cognito_callback,
+        &state_token,
+        params.nonce.as_deref(),
+    );
+    info!(
+        pool_id = %pool_id,
+        provider = %provider_name,
+        "Cognito federation: redirecting to IdP authorize"
+    );
+    Redirect::to(&url).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -1149,6 +1265,151 @@ async fn authorize_post(
         )
             .into_response(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// 3c. IdP response endpoint — accepts the federated IdP's redirect
+//     after a successful authorize, exchanges the IdP code for an
+//     ID token, validates + maps claims, upserts the federated user,
+//     mints a Cognito authorization code, and finally redirects back
+//     to the original app `redirect_uri`.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct IdpResponseParams {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+async fn idpresponse(
+    State(oauth_state): State<Arc<CognitoOAuthState>>,
+    Path(pool_id): Path<String>,
+    Query(params): Query<IdpResponseParams>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(err) = params.error {
+        let msg = params.error_description.unwrap_or_default();
+        warn!(error = %err, description = %msg, "Cognito federation: IdP returned error");
+        return (StatusCode::BAD_GATEWAY, format!("IdP error: {err} {msg}")).into_response();
+    }
+
+    let state_token = match params.state.as_deref().filter(|s| !s.is_empty()) {
+        Some(s) => s,
+        None => return (StatusCode::BAD_REQUEST, "missing state").into_response(),
+    };
+    let code = match params.code.as_deref().filter(|s| !s.is_empty()) {
+        Some(c) => c,
+        None => return (StatusCode::BAD_REQUEST, "missing code").into_response(),
+    };
+
+    let pending = match crate::federation::take(&oauth_state.federation, state_token) {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "state token unknown or expired - retry the sign-in flow",
+            )
+                .into_response();
+        }
+    };
+
+    if pending.pool_id != pool_id {
+        return (
+            StatusCode::BAD_REQUEST,
+            "state token does not match this pool",
+        )
+            .into_response();
+    }
+
+    let pool_ref = match oauth_state.cognito.user_pools.get(&pool_id) {
+        Some(p) => p,
+        None => return (StatusCode::BAD_REQUEST, "user pool not found").into_response(),
+    };
+    let idp = match pool_ref
+        .identity_providers
+        .iter()
+        .find(|i| i.provider_name == pending.provider_name)
+        .cloned()
+    {
+        Some(i) => i,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "identity_provider {} no longer registered",
+                    pending.provider_name
+                ),
+            )
+                .into_response();
+        }
+    };
+    drop(pool_ref);
+
+    let cfg = match crate::federation::parse_oidc_config(&idp) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::BAD_REQUEST, e.message).into_response(),
+    };
+    let discovery =
+        match crate::federation::resolve_discovery(&oauth_state.federation, &idp, &cfg).await {
+            Ok(d) => d,
+            Err(e) => return (StatusCode::BAD_GATEWAY, e.message).into_response(),
+        };
+
+    let cognito_callback = format!(
+        "{}/cognito/{pool_id}/oauth2/idpresponse",
+        oauth_state.base_url(&headers)
+    );
+    let id_token =
+        match crate::federation::exchange_code(&discovery, &cfg, code, &cognito_callback).await {
+            Ok(t) => t,
+            Err(e) => return (StatusCode::BAD_GATEWAY, e.message).into_response(),
+        };
+
+    let claims = match crate::federation::verify_id_token(&discovery, &cfg, &id_token).await {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::BAD_GATEWAY, e.message).into_response(),
+    };
+    let idp_sub = match crate::federation::extract_idp_sub(&claims) {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::BAD_GATEWAY, e.message).into_response(),
+    };
+    let mapped = crate::federation::map_attributes(&idp, &claims);
+
+    let mut pool = match oauth_state.cognito.user_pools.get_mut(&pool_id) {
+        Some(p) => p,
+        None => return (StatusCode::BAD_REQUEST, "user pool gone").into_response(),
+    };
+    let (username, user_sub) =
+        crate::federation::upsert_user(&mut pool, &pending.provider_name, &idp_sub, mapped);
+    drop(pool);
+
+    let scopes = parse_scopes(&pending.scope);
+    let cognito_code = crate::federation::mint_cognito_code(
+        &oauth_state,
+        &pool_id,
+        &pending.client_id,
+        &pending.redirect_uri,
+        &user_sub,
+        &username,
+        scopes,
+        pending.nonce,
+        pending.code_challenge,
+        pending.code_challenge_method,
+    );
+
+    let mut url = format!("{}?code={cognito_code}", pending.redirect_uri);
+    if !pending.app_state.is_empty() {
+        url.push_str(&format!("&state={}", urlencoding(&pending.app_state)));
+    }
+    info!(
+        pool_id = %pool_id,
+        provider = %pending.provider_name,
+        username = %username,
+        "Cognito federation: handed app the final code"
+    );
+    Redirect::to(&url).into_response()
 }
 
 // ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ pub async fn start() -> String {
         default_region: region.clone(),
         auth_codes: Arc::new(dashmap::DashMap::new()),
         revoked_refresh_tokens: Arc::new(dashmap::DashMap::new()),
+        federation: awsim_cognito::federation::FederationState::new(),
         port: 0,
     });
     let cognito_oauth_router = awsim_cognito::oauth::router(cognito_oauth_state);
