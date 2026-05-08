@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
 use awsim_sts::{AssumedRoleSession, StsSessionStore};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use dashmap::DashMap;
 use serde_json::{Value, json};
 use tracing::debug;
@@ -677,7 +678,7 @@ fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Op
     if has_logins {
         // Check provider-specific role mappings first.
         if let Some(logins_map) = input_logins {
-            for (provider, _token) in logins_map {
+            for (provider, token) in logins_map {
                 if let Some(mapping) = pool.role_mappings.get(provider.as_str())
                     && let Some(mapping_obj) = mapping.as_object()
                 {
@@ -686,18 +687,57 @@ fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Op
                         .and_then(|t| t.as_str())
                         .unwrap_or("");
 
+                    // Decoded JWT claims for the provider, used by both
+                    // Token and Rules mappings. None means the token
+                    // wasn't a parseable JWT — Token mode then has to
+                    // fall back per AmbiguousRoleResolution; Rules just
+                    // skips rules that need claim values.
+                    let claims = token
+                        .as_str()
+                        .and_then(decode_jwt_payload)
+                        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+
                     match mapping_type {
                         "Token" => {
-                            // Token-based: role comes from cognito:preferred_role claim
-                            // in the decoded ID token. We cannot decode the token here
-                            // without the JWKS, so fall through to the default role.
-                            // Real implementations would decode the JWT and extract the
-                            // cognito:preferred_role claim.
+                            // Token-based: pick the role from
+                            // `cognito:preferred_role`, falling back to
+                            // the first entry in `cognito:roles` when
+                            // no preferred role is signalled. AWS uses
+                            // these exact claim names in the ID token
+                            // so the local JWT we mint slots straight
+                            // in.
+                            if let Some(preferred) = claims
+                                .get("cognito:preferred_role")
+                                .and_then(|v| v.as_str())
+                            {
+                                return Some(preferred.to_string());
+                            }
+                            if let Some(roles) =
+                                claims.get("cognito:roles").and_then(|v| v.as_array())
+                                && let Some(first) = roles.iter().find_map(|r| r.as_str())
+                            {
+                                return Some(first.to_string());
+                            }
+                            // No role claim. AmbiguousRoleResolution
+                            // governs the fallback: `Deny` means no
+                            // creds (return None so the caller raises
+                            // NotAuthorizedException), `AuthenticatedRole`
+                            // means use the pool default — same as the
+                            // implicit fallback below, so just break.
+                            let resolution = mapping_obj
+                                .get("AmbiguousRoleResolution")
+                                .and_then(|r| r.as_str())
+                                .unwrap_or("AuthenticatedRole");
+                            if resolution == "Deny" {
+                                return None;
+                            }
                         }
                         "Rules" => {
-                            // Rules-based: evaluate each rule against token claims.
-                            // Since we don't decode tokens, we evaluate rules against
-                            // the identity's stored login providers as a best-effort.
+                            // Rules-based: evaluate each rule against
+                            // the decoded JWT claims. The fallback for
+                            // a missing claim follows the same
+                            // AmbiguousRoleResolution semantics as
+                            // Token mode.
                             if let Some(rules_config) = mapping_obj.get("RulesConfiguration")
                                 && let Some(rules) =
                                     rules_config.get("Rules").and_then(|r| r.as_array())
@@ -712,24 +752,33 @@ fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Op
                                     let expected =
                                         rule.get("Value").and_then(|v| v.as_str()).unwrap_or("");
 
-                                    // For the "iss" claim, match against the provider name.
-                                    // For other claims we use the provider name as a
-                                    // proxy since we don't decode tokens here.
-                                    let claim_value = if claim == "iss" {
-                                        provider.as_str()
-                                    } else {
-                                        // Best-effort: use provider as the claim value.
-                                        // Real implementations decode the JWT payload.
-                                        provider.as_str()
+                                    let claim_value = claim_string(&claims, claim).or_else(|| {
+                                        // Real ID tokens always carry `iss`,
+                                        // but our local mint may have skipped
+                                        // it on synthetic tokens; fall back to
+                                        // the provider name so existing tests
+                                        // and bare-bones flows keep working.
+                                        (claim == "iss").then(|| provider.to_string())
+                                    });
+
+                                    let Some(claim_value) = claim_value else {
+                                        continue;
                                     };
 
-                                    if evaluate_rule(claim_value, match_type, expected)
+                                    if evaluate_rule(&claim_value, match_type, expected)
                                         && let Some(role) =
                                             rule.get("RoleARN").and_then(|r| r.as_str())
                                     {
                                         return Some(role.to_string());
                                     }
                                 }
+                            }
+                            let resolution = mapping_obj
+                                .get("AmbiguousRoleResolution")
+                                .and_then(|r| r.as_str())
+                                .unwrap_or("AuthenticatedRole");
+                            if resolution == "Deny" {
+                                return None;
                             }
                         }
                         _ => {}
@@ -748,6 +797,34 @@ fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Op
         }
         pool.roles.get("unauthenticated").cloned()
     }
+}
+
+/// Decode the payload section of a JWT without verifying its
+/// signature. Identity Pool role-mapping consumes claims our own
+/// authorization step minted, so re-verifying signatures here would
+/// cost crypto for no security gain on a single-process simulator.
+/// Returns `None` for anything that isn't a three-part dot-separated
+/// token whose middle segment is a valid base64url JSON object.
+fn decode_jwt_payload(token: &str) -> Option<Value> {
+    let payload_b64 = token.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Pull a JWT claim out as a string. Strings are returned verbatim;
+/// arrays of strings collapse to the first entry (matches how AWS
+/// describes Rules evaluation against multi-value claims —
+/// `cognito:groups` and `cognito:roles` arrive as arrays). Other
+/// shapes return `None` so the rule simply doesn't fire.
+fn claim_string(claims: &Value, key: &str) -> Option<String> {
+    let v = claims.get(key)?;
+    if let Some(s) = v.as_str() {
+        return Some(s.to_string());
+    }
+    if let Some(arr) = v.as_array() {
+        return arr.iter().find_map(|x| x.as_str().map(str::to_string));
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -1773,6 +1850,209 @@ mod tests {
         let creds = &creds_result["Credentials"];
         assert!(creds["AccessKeyId"].as_str().unwrap().starts_with("ASIA"));
         assert_eq!(creds["SecretKey"].as_str().unwrap().len(), 40);
+    }
+
+    /// Build a fake but well-shaped JWT carrying the given JSON
+    /// payload. The signature is a placeholder — Identity Pool role
+    /// mapping consumes our own tokens locally and doesn't verify
+    /// signatures in this simulator.
+    fn fake_jwt(payload: &Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let body = URL_SAFE_NO_PAD.encode(serde_json::to_vec(payload).unwrap());
+        format!("{header}.{body}.sig")
+    }
+
+    #[test]
+    fn token_mapping_uses_cognito_preferred_role_claim() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create_result = create_identity_pool(
+            &state,
+            &json!({
+                "IdentityPoolName": "token-pool",
+                "AllowUnauthenticatedIdentities": false,
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
+
+        let provider = "cognito-idp.us-east-1.amazonaws.com/us-east-1_ABCDEF";
+        let admin_role = "arn:aws:iam::000000000000:role/AdminRole";
+        set_identity_pool_roles(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "Roles": {
+                    "authenticated": "arn:aws:iam::000000000000:role/DefaultAuthRole",
+                },
+                "RoleMappings": {
+                    provider: { "Type": "Token", "AmbiguousRoleResolution": "AuthenticatedRole" }
+                }
+            }),
+        )
+        .unwrap();
+
+        let token = fake_jwt(&json!({
+            "sub": "user-1",
+            "cognito:preferred_role": admin_role,
+            "cognito:roles": [admin_role],
+            "cognito:groups": ["Administrators"],
+        }));
+        let id_result = get_id(
+            &state,
+            &json!({ "IdentityPoolId": pool_id, "Logins": { provider: token.clone() } }),
+            &ctx,
+        )
+        .unwrap();
+        let identity_id = id_result["IdentityId"].as_str().unwrap();
+
+        let sessions = StsSessionStore::new();
+        let creds = get_credentials_for_identity(
+            &state,
+            &json!({ "IdentityId": identity_id, "Logins": { provider: token } }),
+            &sessions,
+            "000000000000",
+        )
+        .unwrap();
+
+        let asia = creds["Credentials"]["AccessKeyId"].as_str().unwrap();
+        let session = sessions.lookup(asia).expect("session recorded");
+        assert_eq!(
+            session.role_arn, admin_role,
+            "Token mapping must vend the cognito:preferred_role-named role"
+        );
+    }
+
+    #[test]
+    fn token_mapping_falls_back_to_first_cognito_roles_entry() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let pool = create_identity_pool(
+            &state,
+            &json!({ "IdentityPoolName": "p", "AllowUnauthenticatedIdentities": false }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = pool["IdentityPoolId"].as_str().unwrap();
+
+        let provider = "cognito-idp.us-east-1.amazonaws.com/us-east-1_FALLBK";
+        let role = "arn:aws:iam::000000000000:role/SoleRole";
+        set_identity_pool_roles(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "Roles": { "authenticated": "arn:aws:iam::000000000000:role/Default" },
+                "RoleMappings": { provider: { "Type": "Token" } }
+            }),
+        )
+        .unwrap();
+
+        // No cognito:preferred_role, only cognito:roles.
+        let token = fake_jwt(&json!({ "sub": "u", "cognito:roles": [role] }));
+        let id_result = get_id(
+            &state,
+            &json!({ "IdentityPoolId": pool_id, "Logins": { provider: token.clone() } }),
+            &ctx,
+        )
+        .unwrap();
+        let identity_id = id_result["IdentityId"].as_str().unwrap();
+        let sessions = StsSessionStore::new();
+        let creds = get_credentials_for_identity(
+            &state,
+            &json!({ "IdentityId": identity_id, "Logins": { provider: token } }),
+            &sessions,
+            "000000000000",
+        )
+        .unwrap();
+        let asia = creds["Credentials"]["AccessKeyId"].as_str().unwrap();
+        assert_eq!(sessions.lookup(asia).unwrap().role_arn, role);
+    }
+
+    #[test]
+    fn token_mapping_deny_when_no_claim_and_resolution_is_deny() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let pool = create_identity_pool(
+            &state,
+            &json!({ "IdentityPoolName": "p", "AllowUnauthenticatedIdentities": false }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = pool["IdentityPoolId"].as_str().unwrap();
+
+        let provider = "cognito-idp.us-east-1.amazonaws.com/us-east-1_DENY";
+        set_identity_pool_roles(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "Roles": { "authenticated": "arn:aws:iam::000000000000:role/Default" },
+                "RoleMappings": { provider: { "Type": "Token", "AmbiguousRoleResolution": "Deny" } }
+            }),
+        )
+        .unwrap();
+
+        let token = fake_jwt(&json!({ "sub": "u" })); // no role claims
+        let id_result = get_id(
+            &state,
+            &json!({ "IdentityPoolId": pool_id, "Logins": { provider: token.clone() } }),
+            &ctx,
+        )
+        .unwrap();
+        let identity_id = id_result["IdentityId"].as_str().unwrap();
+        let sessions = StsSessionStore::new();
+        let err = get_credentials_for_identity(
+            &state,
+            &json!({ "IdentityId": identity_id, "Logins": { provider: token } }),
+            &sessions,
+            "000000000000",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+    }
+
+    #[test]
+    fn token_mapping_falls_through_to_default_when_resolution_is_authenticated_role() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let pool = create_identity_pool(
+            &state,
+            &json!({ "IdentityPoolName": "p", "AllowUnauthenticatedIdentities": false }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = pool["IdentityPoolId"].as_str().unwrap();
+        let provider = "cognito-idp.us-east-1.amazonaws.com/us-east-1_FALLBK";
+        let default = "arn:aws:iam::000000000000:role/Default";
+        set_identity_pool_roles(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "Roles": { "authenticated": default },
+                "RoleMappings": {
+                    provider: { "Type": "Token", "AmbiguousRoleResolution": "AuthenticatedRole" }
+                }
+            }),
+        )
+        .unwrap();
+        let token = fake_jwt(&json!({ "sub": "u" }));
+        let id_result = get_id(
+            &state,
+            &json!({ "IdentityPoolId": pool_id, "Logins": { provider: token.clone() } }),
+            &ctx,
+        )
+        .unwrap();
+        let identity_id = id_result["IdentityId"].as_str().unwrap();
+        let sessions = StsSessionStore::new();
+        let creds = get_credentials_for_identity(
+            &state,
+            &json!({ "IdentityId": identity_id, "Logins": { provider: token } }),
+            &sessions,
+            "000000000000",
+        )
+        .unwrap();
+        let asia = creds["Credentials"]["AccessKeyId"].as_str().unwrap();
+        assert_eq!(sessions.lookup(asia).unwrap().role_arn, default);
     }
 
     #[test]
