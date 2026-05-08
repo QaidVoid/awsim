@@ -26,7 +26,7 @@ AWSim includes a real IAM policy evaluation engine that implements AWS authoriza
 
 ## Estimated Billing
 
-AWSim ships with a billing meter that subscribes to every request that flows through the gateway, multiplies usage by canonical AWS pricing (vendored from the public AWS Pricing Bulk JSON), and surfaces a rolling estimated monthly bill at `/billing` in the admin console. Currently models per-request, byte-ingest, data-transfer-out, GB-month storage, GB-second compute, instance-hours, state-transition and per-character billing axes across 22+ services. See the [Billing guide](/guide/billing) for what's metered and how the rates were sourced.
+AWSim ships with a billing meter that subscribes to every request that flows through the gateway, multiplies usage by canonical AWS pricing (vendored from the public AWS Pricing Bulk JSON), and surfaces a rolling estimated monthly bill at `/billing` in the admin console. Currently models per-request, byte-ingest, data-transfer-out, GB-month storage, GB-second compute, instance-hours, state-transition and per-character billing axes across 25+ services. See the [Billing guide](/guide/billing) for what's metered and how the rates were sourced.
 
 ## What AWSim is not
 

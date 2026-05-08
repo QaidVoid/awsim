@@ -25,6 +25,17 @@ These knobs cap how much RAM AWSim can use under burst load. The defaults are ch
 | `--max-body-bytes` | `100 MiB` (`104857600`) | `AWSIM_MAX_BODY_BYTES` | Per-request body size cap. Lower this when hammering DDB with large `BatchWriteItem` payloads. |
 | `--max-blocking-threads` | `32` | `AWSIM_MAX_BLOCKING_THREADS` | Cap on the tokio blocking thread pool — used for SQLite IO and other `spawn_blocking` work. Each thread reserves ~2 MiB of stack, so this directly bounds RSS contribution from blocking work. Drop to `8` to clamp memory during bulk imports; raise for higher write throughput. |
 
+### TLS / HTTPS
+
+When `--https-port` is set, AWSim serves the same router on a TLS listener while keeping the plain `--port` listener up for existing `http://` clients. See the [TLS guide](/guide/tls) for the cert-source decision tree (BYO, bundled `aws.qaidvoid.dev`, self-signed managed).
+
+| Flag | Default | Env Var | Description |
+|------|---------|---------|-------------|
+| `--https-port` | _(disabled)_ | `AWSIM_HTTPS_PORT` | Enable HTTPS on this port. Reuses the same router as `--port`. |
+| `--tls-cert` | _(none)_ | `AWSIM_TLS_CERT` | PEM-encoded certificate (BYO). Pair with `--tls-key`. |
+| `--tls-key` | _(none)_ | `AWSIM_TLS_KEY` | PEM-encoded private key (BYO). Pair with `--tls-cert`. |
+| `--tls-cache-dir` | `<data-dir>/tls` or `$XDG_CACHE_HOME/awsim/tls` | `AWSIM_TLS_CACHE_DIR` | Where to cache the auto-generated self-signed cert. Ignored when BYO cert is set. |
+
 ### Service-specific
 
 | Flag | Default | Env Var | Description |
