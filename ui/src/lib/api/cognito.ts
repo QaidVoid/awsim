@@ -547,6 +547,52 @@ export async function adminSetUserPassword(input: {
   });
 }
 
+/// Declare new custom attributes on a user pool. The `name` is sent
+/// without the `custom:` prefix (Cognito always prepends it). Real
+/// AWS rejects duplicate names, type changes, or going past the
+/// 50-attr per-pool cap.
+export async function addCustomAttributes(
+  poolId: string,
+  attrs: {
+    name: string;
+    type: 'String' | 'Number' | 'DateTime' | 'Boolean';
+    mutable: boolean;
+    required?: boolean;
+    stringConstraints?: { minLength?: number; maxLength?: number };
+    numberConstraints?: { minValue?: number; maxValue?: number };
+  }[]
+): Promise<void> {
+  const customAttributes = attrs.map((a) => {
+    const entry: Record<string, unknown> = {
+      Name: a.name,
+      AttributeDataType: a.type,
+      Mutable: a.mutable,
+      Required: a.required ?? false,
+    };
+    if (a.type === 'String' && a.stringConstraints) {
+      const sc: Record<string, string> = {};
+      if (a.stringConstraints.minLength !== undefined)
+        sc.MinLength = String(a.stringConstraints.minLength);
+      if (a.stringConstraints.maxLength !== undefined)
+        sc.MaxLength = String(a.stringConstraints.maxLength);
+      if (Object.keys(sc).length > 0) entry.StringAttributeConstraints = sc;
+    }
+    if (a.type === 'Number' && a.numberConstraints) {
+      const nc: Record<string, string> = {};
+      if (a.numberConstraints.minValue !== undefined)
+        nc.MinValue = String(a.numberConstraints.minValue);
+      if (a.numberConstraints.maxValue !== undefined)
+        nc.MaxValue = String(a.numberConstraints.maxValue);
+      if (Object.keys(nc).length > 0) entry.NumberAttributeConstraints = nc;
+    }
+    return entry;
+  });
+  await idpRequest('AddCustomAttributes', {
+    UserPoolId: poolId,
+    CustomAttributes: customAttributes,
+  });
+}
+
 export async function adminUpdateUserAttributes(input: {
   poolId: string;
   username: string;

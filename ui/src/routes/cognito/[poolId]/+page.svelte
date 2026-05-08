@@ -15,6 +15,7 @@
 	import Shield from '@lucide/svelte/icons/shield';
 	import Network from '@lucide/svelte/icons/network';
 	import Palette from '@lucide/svelte/icons/palette';
+	import Tag from '@lucide/svelte/icons/tag';
 
 	import UsersSection from '$lib/components/cognito/users-section.svelte';
 	import GroupsSection from '$lib/components/cognito/groups-section.svelte';
@@ -27,11 +28,13 @@
 	import IdpTab from '$lib/components/cognito/idp-tab.svelte';
 	import ResourceServersTab from '$lib/components/cognito/resource-servers-tab.svelte';
 	import AppearanceSection from '$lib/components/cognito/appearance-section.svelte';
+	import AttributesTab from '$lib/components/cognito/attributes-tab.svelte';
 
 	const SECTIONS = [
 		{ id: 'users', label: 'Users', icon: Users },
 		{ id: 'groups', label: 'Groups', icon: UsersRound },
 		{ id: 'clients', label: 'App clients', icon: KeyRound },
+		{ id: 'attributes', label: 'Attributes', icon: Tag },
 		{ id: 'domain', label: 'Domain', icon: Globe },
 		{ id: 'triggers', label: 'Triggers', icon: Zap },
 		{ id: 'policies', label: 'Policies', icon: Shield },
@@ -130,6 +133,8 @@
 						<GroupsSection {poolId} />
 					{:else if active === 'clients'}
 						<ClientsSection {poolId} />
+					{:else if active === 'attributes'}
+						<AttributesTab {pool} onRefresh={() => loadPool(poolId)} />
 					{:else if active === 'domain'}
 						<div class="w-full overflow-y-auto">
 							<DomainSection {poolId} />
