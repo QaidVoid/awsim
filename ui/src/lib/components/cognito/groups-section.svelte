@@ -9,6 +9,7 @@
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import GroupDetail from './group-detail.svelte';
 	import CreateGroupDialog from './create-group-dialog.svelte';
+	import EditGroupDialog from './edit-group-dialog.svelte';
 	import ConfirmDialog from './confirm-dialog.svelte';
 
 	interface Props {
@@ -21,6 +22,8 @@
 	let loading = $state(false);
 	let expanded = $state<string | null>(null);
 	let createOpen = $state(false);
+	let editTarget = $state<CognitoGroup | null>(null);
+	let editOpen = $state(false);
 	let deleteName = $state<string | null>(null);
 	let deleteOpen = $state(false);
 	let deleteBusy = $state(false);
@@ -41,6 +44,11 @@
 	function openDelete(name: string) {
 		deleteName = name;
 		deleteOpen = true;
+	}
+
+	function openEdit(g: CognitoGroup) {
+		editTarget = g;
+		editOpen = true;
 	}
 
 	async function confirmDelete() {
@@ -113,6 +121,9 @@
 									{/if}
 								</div>
 							</button>
+							<Button variant="ghost" size="xs" onclick={() => openEdit(g)}>
+								Edit
+							</Button>
 							<Button
 								variant="ghost"
 								size="xs"
@@ -141,6 +152,16 @@
 	{poolId}
 	onClose={() => (createOpen = false)}
 	onCreated={() => void load()}
+/>
+<EditGroupDialog
+	bind:open={editOpen}
+	{poolId}
+	group={editTarget}
+	onClose={() => {
+		editOpen = false;
+		editTarget = null;
+	}}
+	onUpdated={() => void load()}
 />
 {#if deleteName}
 	<ConfirmDialog

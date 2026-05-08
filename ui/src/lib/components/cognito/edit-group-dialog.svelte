@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-	import { createGroup } from '$lib/api/cognito';
+	import { updateGroup, type CognitoGroup } from '$lib/api/cognito';
 	import {
 		Dialog,
 		DialogContent,
@@ -18,35 +18,34 @@
 	interface Props {
 		open: boolean;
 		poolId: string;
+		group: CognitoGroup | null;
 		onClose: () => void;
-		onCreated: () => void;
+		onUpdated: () => void;
 	}
 
-	let { open = $bindable(false), poolId, onClose, onCreated }: Props = $props();
+	let { open = $bindable(false), poolId, group, onClose, onUpdated }: Props = $props();
 
-	let name = $state('');
 	let description = $state('');
 	let roleArn = $state('');
 	let precedenceText = $state('');
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 
+	// Reset form to the group's current values whenever the dialog
+	// opens or the target group changes. Without this the inputs would
+	// keep stale state from a previous edit pass.
 	$effect(() => {
-		if (!open) {
-			name = '';
-			description = '';
-			roleArn = '';
-			precedenceText = '';
+		if (open && group) {
+			description = group.description ?? '';
+			roleArn = group.roleArn ?? '';
+			precedenceText = group.precedence !== undefined ? String(group.precedence) : '';
 			saving = false;
 			error = null;
 		}
 	});
 
 	async function submit() {
-		if (!name.trim()) {
-			error = 'Group name is required';
-			return;
-		}
+		if (!group) return;
 		const precedence = precedenceText.trim() ? Number(precedenceText.trim()) : undefined;
 		if (precedence !== undefined && Number.isNaN(precedence)) {
 			error = 'Precedence must be a number';
@@ -55,18 +54,22 @@
 		saving = true;
 		error = null;
 		try {
-			await createGroup({
+			// AWS UpdateGroup uses absent fields as "leave unchanged" and
+			// empty string to clear. Pass empty string for cleared values
+			// so blanking the description or role-arn actually removes
+			// them rather than getting silently dropped.
+			await updateGroup({
 				poolId,
-				name: name.trim(),
-				description: description.trim() || undefined,
-				roleArn: roleArn.trim() || undefined,
+				name: group.name,
+				description: description.trim(),
+				roleArn: roleArn.trim(),
 				precedence
 			});
-			toast.success(`Created group ${name.trim()}`);
-			onCreated();
+			toast.success(`Updated group ${group.name}`);
+			onUpdated();
 			onClose();
 		} catch (e) {
-			const msg = e instanceof Error ? e.message : 'Create group failed';
+			const msg = e instanceof Error ? e.message : 'Update group failed';
 			error = msg;
 			toast.error(msg);
 		} finally {
@@ -78,8 +81,8 @@
 <Dialog bind:open onOpenChange={(v: boolean) => !v && onClose()}>
 	<DialogContent class="sm:max-w-md">
 		<DialogHeader>
-			<DialogTitle>Create group</DialogTitle>
-			<DialogDescription>Groups become claims in the user's tokens.</DialogDescription>
+			<DialogTitle>Edit group {group?.name ?? ''}</DialogTitle>
+			<DialogDescription>Group name is immutable; everything else can change.</DialogDescription>
 		</DialogHeader>
 		<form
 			class="flex flex-col gap-3"
@@ -89,28 +92,22 @@
 			}}
 		>
 			<div class="flex flex-col gap-1.5">
-				<Label for="grp-name">Name</Label>
-				<Input id="grp-name" bind:value={name} placeholder="admins" autocomplete="off" />
+				<Label for="edit-grp-desc">Description</Label>
+				<Input id="edit-grp-desc" bind:value={description} autocomplete="off" />
 			</div>
 			<div class="flex flex-col gap-1.5">
-				<Label for="grp-desc">Description</Label>
-				<Input id="grp-desc" bind:value={description} autocomplete="off" />
-			</div>
-			<div class="flex flex-col gap-1.5">
-				<Label for="grp-role">Role ARN (optional)</Label>
-				<RoleArnPicker id="grp-role" bind:value={roleArn} />
+				<Label for="edit-grp-role">Role ARN</Label>
+				<RoleArnPicker id="edit-grp-role" bind:value={roleArn} />
 				<p class="text-[11px] text-muted-foreground">
-					Surfaces as <code class="font-mono">cognito:preferred_role</code> in the user's
-					ID token; Identity Pool Token-type role mapping vends temp creds for this role.
+					Empty clears the role binding for this group.
 				</p>
 			</div>
 			<div class="flex flex-col gap-1.5">
-				<Label for="grp-prec">Precedence (lower = higher priority)</Label>
+				<Label for="edit-grp-prec">Precedence (lower = higher priority)</Label>
 				<Input
-					id="grp-prec"
+					id="edit-grp-prec"
 					type="number"
 					bind:value={precedenceText}
-					placeholder="optional"
 					autocomplete="off"
 				/>
 			</div>
@@ -121,11 +118,11 @@
 				<Button type="button" variant="outline" onclick={onClose} disabled={saving}>
 					Cancel
 				</Button>
-				<Button type="submit" disabled={saving || !name.trim()}>
+				<Button type="submit" disabled={saving}>
 					{#if saving}
 						<Loader2 class="size-3.5 animate-spin" />
 					{/if}
-					Create
+					Save
 				</Button>
 			</DialogFooter>
 		</form>
