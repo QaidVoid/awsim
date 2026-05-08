@@ -3,6 +3,7 @@
 mod identity;
 mod jwt;
 mod keys;
+pub mod mock_idp;
 pub mod oauth;
 mod operations;
 pub mod password;

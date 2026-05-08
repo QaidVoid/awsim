@@ -1018,6 +1018,14 @@ async fn async_main() -> Result<()> {
     });
     let cognito_oauth_router = awsim_cognito::oauth::router(cognito_oauth_state);
 
+    // Built-in mock OIDC identity provider for offline federation
+    // testing. Self-hosted under `/_awsim/idp/{provider_id}/...`; a
+    // Cognito IdentityProvider of type `OIDC` whose ProviderDetails
+    // point at the discovery URL gets the full federation flow
+    // working without any external network calls.
+    let mock_idp_state = awsim_cognito::mock_idp::MockIdpState::new();
+    let mock_idp_router = awsim_cognito::mock_idp::router(mock_idp_state);
+
     // Set up TLS *before* the routers so the `/_awsim/tls` admin
     // route can hand the cert path to bootstrap tooling, and so a
     // bogus `--tls-cert` path / unwritable cache dir fails fast
@@ -1307,6 +1315,7 @@ async fn async_main() -> Result<()> {
 
     // Merge all routers and add shared middleware.
     let app = cognito_oauth_router
+        .merge(mock_idp_router)
         .merge(main_router)
         .merge(proxy_router)
         .merge(opensearch_nested)
