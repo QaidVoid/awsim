@@ -17,7 +17,7 @@ Published images live at [`ghcr.io/qaidvoid/awsim`](https://github.com/QaidVoid/
 docker run --rm -p 4566:4566 ghcr.io/qaidvoid/awsim:latest
 ```
 
-Open the admin UI at <http://localhost:4566/_awsim/ui/> or hit `localhost:4566` in a browser and it'll redirect for you.
+Open the admin UI at `http://localhost:4566/_awsim/ui/` or hit `localhost:4566` in a browser and it'll redirect for you.
 
 For a green-padlock HTTPS endpoint with no client trust setup, also publish 4567 and turn the listener on:
 

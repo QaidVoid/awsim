@@ -2,6 +2,11 @@
 
 AWSim emulates Cognito's hosted UI and OAuth 2.0 / OIDC endpoints. You can use it as a drop-in OIDC provider for local development.
 
+> Need federated sign-in (Google / Microsoft / GitHub-style)? See the
+> [Cognito Federation guide](/guide/cognito-federation) for the
+> built-in OIDC IdP at `/_awsim/idp/{id}` and the
+> `?identity_provider=` flow on `/oauth2/authorize`.
+
 ## Endpoints
 
 All OAuth endpoints are scoped to the user pool ID. The base URL is `http://localhost:4566`.
