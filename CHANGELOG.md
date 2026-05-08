@@ -1,4 +1,326 @@
 
+## 0.4.0 — 2026-05-08
+
+### Bug Fixes
+
+- **core:** Presigned-URL routing beats misleading host segments
+- **bedrock:** Unwrap REST-shape model body, not the imaginary `body` wrapper
+- **opensearch:** Handle bool must_not + match terms against array fields
+- **bedrock:** Propagate backend errors instead of masking with canned responses
+- **dynamodb:** Paren-aware split for nested function args
+- **awsim:** 308-redirect prerendered UI routes to the trailing-slash variant
+- **awsim:** Route every method through the S3-upload catch-all, not just PUT
+- **cognito:** Derive OIDC issuer / endpoints from request scheme + host
+- **dynamodb:** Reject GSI / LSI keying on undeclared attribute
+- **dynamodb:** Recompute GSI keys on backup restore
+- **dynamodb:** Honour GSI / LSI projection type on Query
+- **dynamodb:** Backfill GSI columns when UpdateTable adds a GSI
+- **gateway:** Apply S3-shaped body cap at the route layer
+- **s3:** Cap PutObject body at 5 GiB single-PUT limit
+- **s3:** Honour CopySource-If-* preconditions
+- **s3:** Drop 5 MiB minimum on non-final multipart parts
+- **dynamodb:** Reject empty / duplicate set attributes
+- **cognito:** Rate-limit verification code attempts
+- **cognito:** Expire MFA and SRP challenge sessions after 5 minutes
+- **cognito:** Expire confirmation and reset codes after 24h
+- **cognito:** Refuse auth for disabled users
+- **dynamodb:** Validate KeyCondition + add attribute_type()
+- **s3:** Enforce Object Lock retention and legal hold
+- **s3:** Validate Content-MD5 and x-amz-checksum-* against body
+- **dynamodb:** Use Decimal not f64 for N attribute math
+- **iam-policy:** Match ARNs per segment so wildcards stay scoped
+- **cognito:** Verify TOTP and SecretHash, drop bypassable MFA path
+- **cognito:** Hash passwords with bcrypt instead of plaintext
+- **cognito:** Sign JWTs with real RS256 + verify on use
+- **docker:** Drop :nonroot base for broader runtime compat
+- **ci:** Recreate nightly release each run so source links track HEAD
+- **cognito:** Respect RESET_REQUIRED on hosted UI and Permanent flag on AdminSetUserPassword
+- **docker:** Add mold dependency to dockerfile
+- **ui:** Prefix internal hrefs and goto() calls with paths.base
+- **awsim:** Skip jemalloc on musl targets to unbreak aarch64 cross-compile
+- **bedrock:** Request usage stats in OpenAI-compat streaming so token counts surface
+- **s3:** Make CompleteMultipartUpload validate parts before consuming the upload
+- **backup,dynamodb:** Drop redundant & in format args
+- **s3:** Simplify negated is_some_and to is_none_or in object-existence checks
+- **cognito:** Preserve username on hosted-UI login error and stop reissuing refresh tokens
+- **dynamodb:** Exclude items that failed KeyConditionExpression from ScannedCount
+- **lambda:** Distinguish Handled vs Unhandled FunctionError
+- **lambda:** Capture last 4KB of logs when LogType=Tail
+- **lambda:** Paginate ListFunctions / ListVersionsByFunction / ListAliases / ListEventSourceMappings / ListLayers / ListLayerVersions
+- **iam:** Paginate ListUsers / ListRoles / ListGroups / ListPolicies
+- **secretsmanager:** Validate secret name format on CreateSecret
+- **sts:** Derive AssumeRoleWithSAML/WebIdentity subject from token, not stub
+- **sts:** Enforce DurationSeconds bounds on every credential-issuing operation
+- **eventbridge:** DeleteRule rejects rules with attached targets unless Force=true
+- **eventbridge:** Emit ISO 8601 timestamps on archive/replay/connection state
+- **sts:** Validate AssumeRole Policy and PolicyArns inputs
+- **s3:** Validate CORS / Lifecycle / Website configurations on Put*
+- **sts:** Validate AssumeRole Tags and TransitiveTagKeys
+- **s3:** GetObjectTagging/PutObjectTagging/DeleteObjectTagging respect VersionId
+- **s3:** Paginate ListObjectVersions with key-marker / version-id-marker
+- **s3:** Reject object keys over 1024 UTF-8 bytes (KeyTooLongError)
+- **s3:** Honor x-amz-metadata-directive=REPLACE on CopyObject
+- **s3:** Validate CreateBucketConfiguration.LocationConstraint
+- **s3:** Emit LambdaFunctionConfiguration on GetBucketNotificationConfiguration
+- **iam:** GetUser/CreateAccessKey/ListAccessKeys default to caller when UserName omitted
+- **kms:** Origin=EXTERNAL keys start in PendingImport, not Enabled
+- **lambda:** PublishVersion validates optional CodeSha256 guard
+- **dynamodb:** UPDATED_OLD/UPDATED_NEW return only modified attributes
+- **dynamodb:** Size() of binary attribute returns decoded byte count
+- **dynamodb:** PutItem rejects missing sort key as well as missing hash key
+- **iam:** Block DeleteGroup when group has inline policies
+- **lambda:** Shape AddPermission Principal correctly per Principal type
+- **sns:** Validate FilterPolicy on Subscribe and SetSubscriptionAttributes
+- **sns:** Require confirmation token round-trip for HTTP/HTTPS/email/sms subscribers
+- **sns:** PublishBatch fans out to subscribers
+- **kms:** Reorder resolve_key_id so alias ARNs match before key ARNs
+- **kms:** Validate KeyUsage on Sign/Verify/GenerateMac/VerifyMac/DeriveSharedSecret
+- **lambda:** Allocate published versions monotonically
+- **lambda:** DryRun invocations return HTTP 204 with empty body
+- **lambda:** InvocationType=Event runs async with empty 202 body
+- **sqs:** Raise QueueAlreadyExists when CreateQueue collides with mismatched attrs
+- **sqs:** Set ApproximateFirstReceiveTimestamp on first receive
+- **sqs:** Reject SendMessageBatch with total payload over 256 KiB
+- **sqs:** Derive FIFO MessageDeduplicationId from sha256(body) when ContentBasedDeduplication=true
+- **sts:** Validate AssumeRole RoleArn format, RoleSessionName, DurationSeconds
+- **sts:** Derive GetCallerIdentity UserId/Arn from RequestContext
+- **iam:** Enforce attachment, key, group, and session-duration limits
+- **sns:** Include full notification envelope on SNS→SQS fan-out
+- **s3:** Treat Range header on zero-byte object as non-range GET (200)
+- **lambda:** Validate Runtime against allow-list and Handler shape
+- **lambda:** Include LastUpdateStatus on FunctionConfiguration responses
+- **sqs:** Compute MD5OfMessageAttributes per AWS algorithm
+- **lambda:** Wire UpdateAlias and GetLayerVersion into operation dispatch
+- **s3:** Emit base64 NextContinuationToken on ListObjectsV2
+- **s3:** Return 416 InvalidRange with ActualObjectSize on unsatisfiable Range
+- **kms:** Use KMSInvalidStateException with HTTP 409 on bad-state errors
+- **s3:** Validate bucket name reserved prefixes/suffixes/IP format, add Location header to CreateBucket, clean up multipart data on DeleteBucket
+- **s3:** Store content-encoding/cache-control/expires on objects, return CopySourceVersionId, Accept-Ranges header, 206 status for range requests, sanitize stored policy JSON
+- **s3:** Add Owner to ListObjects entries, support start-after param, fix list_parts XML element name
+- **s3:** HeadObject double meta prefix, correct error responses for unconfigured encryption/public-access-block/object-lock, check delete markers in ACL ops
+- **core:** Promote AwsError extras (DeleteMarker, VersionId) to HTTP response headers
+- **s3:** Parse part list from CompleteMultipartUpload body, validate ETags and part numbers, capture metadata
+- **s3:** Correct pagination token — use last emitted key instead of first skipped key
+- **s3:** Preserve tab selection across bucket open/reload instead of resetting to Objects
+- **s3:** Use authenticated blob downloads and image previews instead of bare URLs
+- **s3:** Use actual account ID in ACL responses instead of hardcoded owner-id
+- **s3:** ListObjectsV2 KeyCount should not include CommonPrefixes
+- **s3:** Include user metadata (x-amz-meta-*) in HeadObject response
+- **s3:** Return proper Error entries in DeleteObjects instead of silently swallowing failures
+- **s3:** Correct multipart ETag format (MD5 of per-part MD5s + part count), preserve content-type from initiation, remove double bucket lookup
+- **s3:** Add #![deny(warnings)] to lib.rs
+- **dynamodb:** Clear items silently on Query tab switch, only toast on explicit Run query click
+- **dynamodb:** Return BackupNotFoundException for non-existent backup in DeleteBackup
+- **dynamodb:** Use ctx.region/account_id for stream ARN in UpdateTable
+- **dynamodb:** Add #![deny(warnings)] to lib.rs
+- **cognito:** Clear identity pool state before restore
+- **cognito:** Include resource_tags in snapshot, clear state before restore
+- **cognito:** Validate allowed_oauth_flows in token endpoint
+- **cognito:** Validate confirmation codes in ConfirmSignUp and VerifyUserAttribute
+- **cognito:** Reject RESET_REQUIRED users in InitiateAuth/AdminInitiateAuth
+- **cognito:** Respect client token validity settings, escape HTML in login page, check user status in OAuth, deny warnings
+- **cognito:** Password validation in NEW_PASSWORD_REQUIRED, conditionally include ClientSecret in responses
+- **cognito:** Fix identity pool bugs — GetId dedup, GetOpenIdToken pool, ListIdentities filter, ARN parsing
+- **opensearch:** Fix 16 backend bugs, add missing query types and operations
+- **iam:** Enforce inline policy size limits (user 2048, role 10240, group 5120)
+- **iam:** Include PermissionsBoundary in GetUser/GetRole responses
+- **iam:** Support multi-value Filter in GetAccountAuthorizationDetails
+- **iam:** Add PathPrefix filtering to ListGroups
+- **iam:** GetUser without UserName returns first user
+- **iam:** Reject DeleteRole when role has inline policies
+- **iam:** Reject DeleteUser when user has inline policies
+- **iam:** Serialize all state fields in snapshot to prevent data loss on restart
+- **opensearch-ui:** Use absolute awsim endpoint, parse _cat JSON correctly
+- **ui:** Pull version from workspace Cargo.toml + paginate ListTables
+- **iam:** Simulator response parser handles nested <member> tags
+- **iam-simulator:** No layout shift, fuller actions list, dropdown not clipped
+- **settings:** Cascade backend rename + remove to references
+- **ui:** Cognito triggers — pin action bar without bottom gap
+- **ui:** Cognito pool detail — let main fill width, not shrink to content
+- **ui:** Contain DynamoDB items table horizontal scroll
+
+### Documentation
+
+- **awsim:** Document HTTPS listener + bundled aws.qaidvoid.dev cert
+- Refresh docker guide for ghcr images + distroless runtime
+- **s3:** Update behavior notes with all fixed issues from review
+- **s3:** Document multipart ETag format, DeleteObjects errors, user metadata, and ACL owner fixes
+- **dynamodb:** Update stale backup/TTL/export descriptions, add new operations
+- **opensearch:** Update service and guide docs for 3.6.0 compatibility
+- **bedrock:** Cover OpenAI-compat backend + new guide page
+- Correct service count — 60+ services everywhere
+- **persistence:** Cover SQLite stores for CWL/CWM/Kinesis/SES + outdated CWL JSONL
+- **ses,dynamodb:** Outbox + DDB AWS-defined limits
+- **cognito:** Hosted-UI logout endpoint + Admin Console section
+- New Memory & Diagnostics guide
+- New Seeding guide + sidebar entry
+- Cover every admin endpoint + new UI pages in admin-console.md
+- Cover memory + concurrency tuning flags + jemalloc
+
+### Features
+
+- **dynamodb:** Enforce RCU / WCU on PROVISIONED tables
+- **awsim:** Bundle publicly-trusted Let's Encrypt cert for aws.qaidvoid.dev
+- **awsim:** Transparently decompress gzip / br / deflate / zstd request bodies
+- **awsim:** Expose /_awsim/tls cert path for bootstrap tooling
+- **awsim:** Serve HTTPS with auto-generated self-signed cert
+- **dynamodb:** Cycle GSI status through CREATING -> ACTIVE on add
+- **dynamodb:** Lift GSI cap from 5 to 20 to match AWS
+- **cognito:** Plumb CUSTOM_AUTH challenge flow
+- **s3:** Decode aws-chunked SigV4 streaming PutObject bodies
+- **iam-policy:** Populate aws:SourceIp, CurrentTime, PrincipalTag, SecureTransport
+- **cognito:** Implement SRP6a USER_SRP_AUTH flow
+- **sts:** Enforce role trust policy on AssumeRole
+- **cognito:** Resolve sign-in usernames via AliasAttributes
+- **cognito:** Pin attribute on update when it backs the pool's Username
+- **cognito:** Enforce email/phone-as-username on create
+- **cognito:** Persist UsernameAttributes / AliasAttributes on user pool
+- **cognito:** Forgot-password hosted UI + immutable sub + email re-verify
+- **awsim:** Redirect plain browser hits on / to the admin UI
+- **awsim:** Add --enforce-iam CLI/env override
+- **awsim:** Bundle SvelteKit admin UI into the binary
+- **seed:** Return richer dataset metadata and surface it in the UI
+- **cognito:** Support FORCE_CHANGE_PASSWORD flow on hosted UI
+- **apigateway:** Enforce x-api-key against usage plans on requests
+- **apigateway:** Enforce method authorization via Cognito and Lambda authorizers
+- **apigateway:** Render VTL request/response templates for non-proxy integrations
+- **apigateway:** Support greedy {proxy+} path captures
+- **stepfunctions:** Support core ASL intrinsic functions
+- **stepfunctions:** Apply Parameters and ResultSelector to every state
+- **stepfunctions:** Support Retry and Catch on every state type
+- **stepfunctions:** Execute every branch / item in Parallel and Map
+- **eventbridge:** Dispatch Kinesis, Step Functions, and Logs targets
+- **kms:** Real AES-256-GCM with EncryptionContext binding
+- **dynamodb:** Support Query against GSI / LSI via IndexName
+- **eventbridge:** Support full event-pattern operator set
+- **secretsmanager:** Structural ValidateResourcePolicy and BlockPublicPolicy
+- **dynamodb:** ADD/DELETE traverse nested paths and recognize BS sets
+- **dynamodb:** Support list-index path syntax in attribute paths
+- **secretsmanager:** Persist KmsKeyId, LastRotatedDate, and ListSecrets filters
+- **secretsmanager:** Honor ClientRequestToken as idempotency key
+- **dynamodb:** Support parallel Scan via Segment/TotalSegments
+- **dynamodb:** Emit ConsumedCapacity when ReturnConsumedCapacity is set
+- **lambda:** Tag layer versions and event source mappings
+- **lambda:** Round-trip VpcConfig/Architectures/EphemeralStorage and friends
+- **lambda:** Support alias RoutingConfig.AdditionalVersionWeights
+- **core:** Add ServiceHandler::tick + 1s background tick loop
+- **eventbridge:** Persist InputTransformer; reject conflicting input modes
+- **s3:** Support x-amz-checksum-* round-trip on PutObject/GetObject
+- **s3:** Support encoding-type=url on ListObjectsV2
+- **iam:** Recognize AWS-managed policy ARNs (arn:aws:iam::aws:policy/*)
+- **sqs:** Accept MessageSystemAttributeNames on ReceiveMessage
+- **sns:** Support FilterPolicyScope=MessageBody for nested-body filters
+- **sns:** Honor RawMessageDelivery on SNS→SQS subscriptions
+- **sns:** Support MessageStructure=json with per-protocol body selection
+- **sqs:** Accept KMS encryption and SSE-managed queue attributes
+- **sns:** Support suffix, equals-ignore-case, anything-but, and cidr filter operators
+- **s3:** Honor If-Match/If-None-Match/If-Modified-Since/If-Unmodified-Since on GET/HEAD
+- **core:** Add pagination helper for opaque-token List operations
+- **s3:** Sync selected bucket and prefix to URL query params (?bucket=&prefix=)
+- **s3:** Add form/JSON toggle to CORS editor with expose-headers and max-age fields
+- **s3:** Add tabbed bucket detail UI with Objects, Properties, Policy, and CORS tabs
+- **s3:** Add bucket config APIs — versioning, encryption, tagging
+- **s3:** Add getBucketCors, putBucketCors, deleteBucketCors API functions
+- **s3:** Add prev/next pagination to object browser using continuation tokens
+- **dynamodb:** Sync selected table to ?table= URL param for shareable links
+- **dynamodb:** Replace Load More with proper page-based prev/next pagination and GSI query index selector
+- **dynamodb:** Add pagination to Items tab with Load More button
+- **dynamodb:** Add DescribeTableReplicaAutoScaling, UpdateTableReplicaAutoScaling, DescribeGlobalTableSettings, UpdateGlobalTableSettings stubs for Terraform compatibility
+- **ui:** Add tab persistence via URL + localStorage to all 40 service pages
+- **cognito/ui:** Add identity pool detail page with Identities, Roles, Tags tabs
+- **opensearch:** Report version 3.6.0 (Lucene 10.2) in cluster info
+- **ui:** Show group membership in IAM user detail sheet
+- **ui:** Add Instance Profiles tab to IAM page
+- **ui:** Wire up group inline policies in IAM groups tab
+- **opensearch:** Redb-backed storage + brute-force k-NN search
+- **opensearch:** JSON snapshot persistence behind --data-dir
+- **opensearch-ui:** Indices browser, doc CRUD, query DSL editor
+- **bedrock:** True token-by-token streaming for ConverseStream
+- **bedrock:** Emit AWS event-stream binary frames for streaming responses
+- **gateway:** Fall back to path-derived service when auth-derived has no route
+- **dynamodb:** Provisioned throughput tracking + Schema tab editor
+- **dynamodb:** Real backup + restore (items captured, replayed) + UI tab
+- **dynamodb:** SSE specification tracking + UI editor
+- **dynamodb-ui:** Edit TTL, tags, billing mode in Schema tab
+- **dynamodb-ui:** Show protected state in sidebar + header, inline disable+delete
+- **dynamodb:** TTL sweeper deletes expired items every 60s
+- **dynamodb:** Deletion protection support + UI toggle
+- **iam-policy:** Substitute ${aws:username}, ${aws:PrincipalArn} et al
+- **iam-ui:** Access key management on user detail sheet
+- **iam-ui:** Edit attached/inline policies, role trust policy, group members
+- **iam-ui:** Create + delete dialogs for users, roles, groups, policies
+- **iam:** Simulator surfaces matched statements + resource policies + SCPs
+- **settings:** Diff-vs-defaults badges, reset buttons, persistence footer
+- **logging:** Hot-reload log level via runtime config
+- **iam:** Hot-reloadable enforcement via runtime config
+- **bedrock-ui:** How-it-works, health check, built-in defaults
+- **ui:** Runtime settings page with hot-reload
+- **ses:** Hot-reload retention from runtime config
+- **bedrock:** Hot-reload backends via runtime config
+- **runtime-config:** Hot-reloadable config store + admin endpoint
+- **ui:** Bedrock proxy config tab + status chip
+- **bedrock:** Admin config endpoint
+- **bedrock:** TOML multi-backend config
+- **bedrock:** Multi-backend registry
+- **bedrock:** Proxy Converse + ConverseStream
+- **bedrock:** Proxy streaming for Titan/Llama/Mistral/Cohere
+- **bedrock:** Proxy Titan + Cohere embeddings
+- **bedrock:** Proxy Titan/Llama/Mistral/Cohere InvokeModel
+- **bedrock:** Proxy Anthropic InvokeModelWithResponseStream
+- **bedrock:** Proxy Anthropic InvokeModel via OpenAI chat backend
+- **bedrock:** Backend foundation + model map
+- **seed:** `awsim seed --file seed.toml` CLI subcommand
+- **ui:** /seed page — bulk-fill services with one click
+- **seed:** /_awsim/seed/sqs — queues + messages
+- **seed:** /_awsim/seed/secrets — Secrets Manager bulk
+- **seed:** /_awsim/seed/s3 — buckets + small objects
+- **seed:** /_awsim/seed/dynamodb — tables + items in bulk
+- **seed:** /_awsim/seed/cognito-users + shared fake helpers
+- **ui:** Cognito pool detail as a full route with left-nav
+- **ui:** Cognito CSV bulk user import
+- **ui:** Cognito user auth events viewer
+- **ui:** Cognito resource servers + scopes
+- **ui:** Cognito identity providers (federation)
+- **ui:** Cognito tags editor
+- **ui:** Cognito pool MFA configuration editor
+- **ui:** Cognito password policy editor
+- **ui:** Cognito Lambda triggers editor
+- **ui:** Cognito app-clients pagination via NextToken
+- **ui:** Cognito user-pool list pagination via NextToken
+- **ui:** Cognito users — server-side filter + Load More
+- **dynamodb:** Cap PutItem + UpdateItem at 400 KB/item
+- **dynamodb:** Cap TransactWriteItems at 100 actions
+- **dynamodb:** Cap BatchWriteItem at 25 items + 400 KB/item
+- **dynamodb:** Cap TransactGetItems at 100 actions + 4 MB response
+- **dynamodb:** Cap BatchGetItem at 100 keys + 16 MB response
+- **dynamodb:** Cap Query/Scan responses at 1 MiB to match real AWS
+- **ui:** /observability — live memory + per-subsystem diagnostic page
+- **admin:** /_awsim/debug/objects — in-memory growth diagnostic
+- **ses:** Expose SES SQLite stats + hourly retention sweep
+- **ses:** Persist sent emails to SQLite (survives restarts)
+- **ses:** SQLite store for outbound emails
+- **ui:** SES outbox tab — view captured emails
+- **admin:** /_awsim/ses/sent — list captured outbound emails
+- **ses:** Expose list_sent_emails() across all accounts/regions
+
+### Performance
+
+- **dynamodb:** Replace Vec::remove(0) with VecDeque for O(1) stream record eviction
+- Switch global allocator to jemalloc on linux + macos
+
+### Refactor
+
+- **cognito:** Replace unwrap() in lib code with proper error handling
+- **ui:** Replace IAM entity drawers with standalone detail pages
+
+### Tests
+
+- **s3:** Pin bucket-policy explicit-deny semantics
+- **s3:** Pin byte-length semantics on object key validation
+- **cognito:** Fix test_resource_tagging ARN construction
+- **enforcement:** Add multi-service E2E enforcement tests
+- **iam-policy:** Expand evaluator coverage to all operators + combos
+
 ## 0.3.0 — 2026-04-30
 
 ### Bug Fixes
