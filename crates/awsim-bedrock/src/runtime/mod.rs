@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use awsim_core::error::ErrorType;
 use awsim_core::{AwsError, HandlerByteStream, HandlerResult};
 use bytes::Bytes;
 use futures::StreamExt;
@@ -20,6 +21,82 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::backend::BedrockBackends;
+
+/// Translate an upstream HTTP status + body into a
+/// Bedrock-shape `AwsError` so SDK retry / error-handling logic
+/// matches what real Bedrock would produce.
+///
+/// Mapping mirrors the AWS Bedrock error catalogue:
+/// - 400          -> `ValidationException`
+/// - 401 / 403    -> `AccessDeniedException`
+/// - 404          -> `ResourceNotFoundException`
+/// - 408          -> `ModelTimeoutException`
+/// - 413          -> `ValidationException` (oversized request)
+/// - 429          -> `ThrottlingException` (this is the one that
+///   actually drives SDK exponential-backoff retries)
+/// - 5xx / other  -> `InternalServerException`
+///
+/// The upstream body is appended verbatim so consumers see the
+/// underlying provider message (e.g. Groq's
+/// "Rate limit reached for model ..., try again in 7.335s").
+fn map_upstream_error(status: reqwest::StatusCode, body: &str) -> AwsError {
+    use reqwest::StatusCode;
+    let summary = body.trim();
+    let summary = if summary.len() > 1024 {
+        &summary[..1024]
+    } else {
+        summary
+    };
+    let (mapped_status, code, error_type) = match status.as_u16() {
+        400 => (
+            StatusCode::BAD_REQUEST,
+            "ValidationException",
+            ErrorType::Sender,
+        ),
+        401 | 403 => (
+            StatusCode::FORBIDDEN,
+            "AccessDeniedException",
+            ErrorType::Sender,
+        ),
+        404 => (
+            StatusCode::NOT_FOUND,
+            "ResourceNotFoundException",
+            ErrorType::Sender,
+        ),
+        408 => (
+            StatusCode::REQUEST_TIMEOUT,
+            "ModelTimeoutException",
+            ErrorType::Receiver,
+        ),
+        413 => (
+            StatusCode::BAD_REQUEST,
+            "ValidationException",
+            ErrorType::Sender,
+        ),
+        429 => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "ThrottlingException",
+            ErrorType::Sender,
+        ),
+        500..=599 => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "InternalServerException",
+            ErrorType::Receiver,
+        ),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "InternalServerException",
+            ErrorType::Receiver,
+        ),
+    };
+    AwsError {
+        status: mapped_status,
+        code: code.to_string(),
+        message: format!("Bedrock backend returned {summary}"),
+        error_type,
+        extras: None,
+    }
+}
 
 mod anthropic;
 mod canned;
@@ -61,9 +138,7 @@ async fn call_chat(
     let status = resp.status();
     if !status.is_success() {
         let body_text = resp.text().await.unwrap_or_default();
-        return Err(AwsError::internal(format!(
-            "Bedrock backend returned {status}: {body_text}"
-        )));
+        return Err(map_upstream_error(status, &body_text));
     }
     resp.json::<openai::ChatResponse>()
         .await
@@ -105,9 +180,7 @@ pub(crate) async fn call_chat_stream(
     let status = resp.status();
     if !status.is_success() {
         let body_text = resp.text().await.unwrap_or_default();
-        return Err(AwsError::internal(format!(
-            "Bedrock backend returned {status}: {body_text}"
-        )));
+        return Err(map_upstream_error(status, &body_text));
     }
     let raw = resp
         .text()
@@ -237,9 +310,7 @@ async fn call_embed(
     let status = resp.status();
     if !status.is_success() {
         let body_text = resp.text().await.unwrap_or_default();
-        return Err(AwsError::internal(format!(
-            "Bedrock backend returned {status}: {body_text}"
-        )));
+        return Err(map_upstream_error(status, &body_text));
     }
     resp.json::<openai::EmbeddingsResponse>()
         .await
@@ -517,9 +588,7 @@ pub(crate) async fn stream_response(
     let status = resp.status();
     if !status.is_success() {
         let body_text = resp.text().await.unwrap_or_default();
-        return Err(AwsError::internal(format!(
-            "Bedrock backend returned {status}: {body_text}"
-        )));
+        return Err(map_upstream_error(status, &body_text));
     }
 
     // Header frame goes out before the SSE proxy starts so the
@@ -823,6 +892,46 @@ fn buffered_stream_to_streaming(value: Value) -> HandlerResult {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn map_upstream_429_to_throttling() {
+        let err = map_upstream_error(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            "{\"error\":{\"message\":\"Rate limit reached\",\"code\":\"rate_limit_exceeded\"}}",
+        );
+        assert_eq!(err.code, "ThrottlingException");
+        assert_eq!(err.status.as_u16(), 429);
+        assert!(err.message.contains("Rate limit reached"));
+    }
+
+    #[test]
+    fn map_upstream_403_to_access_denied() {
+        let err = map_upstream_error(reqwest::StatusCode::FORBIDDEN, "denied");
+        assert_eq!(err.code, "AccessDeniedException");
+        assert_eq!(err.status.as_u16(), 403);
+    }
+
+    #[test]
+    fn map_upstream_400_to_validation() {
+        let err = map_upstream_error(reqwest::StatusCode::BAD_REQUEST, "bad input");
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn map_upstream_500_to_internal_server() {
+        let err = map_upstream_error(reqwest::StatusCode::BAD_GATEWAY, "upstream down");
+        assert_eq!(err.code, "InternalServerException");
+        assert_eq!(err.status.as_u16(), 500);
+    }
+
+    #[test]
+    fn map_upstream_truncates_huge_body() {
+        let big = "x".repeat(2_000);
+        let err = map_upstream_error(reqwest::StatusCode::TOO_MANY_REQUESTS, &big);
+        // 1024 char limit + the leading "Bedrock backend returned " prefix
+        // leaves us under ~1100 chars regardless of the upstream payload.
+        assert!(err.message.len() < 1100, "got {} chars", err.message.len());
+    }
 
     #[test]
     fn extract_body_accepts_json_string() {
