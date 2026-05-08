@@ -60,6 +60,13 @@ pub struct AuthzEngine {
     /// `Relaxed` since enforcement-toggle ordering vs in-flight
     /// requests doesn't have correctness implications.
     enforced: AtomicBool,
+    /// Access key that bypasses IAM enforcement and is treated as
+    /// root-equivalent. Models the AWS account root credential —
+    /// IAM only governs IAM users/roles, not the account itself.
+    /// `None` means no bypass key is configured. The admin key is
+    /// also not subject to `principal_lookup`, so it works even
+    /// before any IAM users exist (bootstrap path).
+    pub admin_access_key: Option<String>,
 }
 
 impl AuthzEngine {
@@ -70,12 +77,17 @@ impl AuthzEngine {
             grant_lookups: HashMap::new(),
             scp_lookup: None,
             enforced: AtomicBool::new(enabled),
+            admin_access_key: None,
         }
     }
 
     pub fn from_env() -> Self {
         let enabled = std::env::var("AWSIM_IAM_ENFORCE").ok().as_deref() == Some("true");
-        Self::new(enabled)
+        let mut engine = Self::new(enabled);
+        engine.admin_access_key = std::env::var("AWSIM_ADMIN_ACCESS_KEY")
+            .ok()
+            .filter(|s| !s.is_empty());
+        engine
     }
 
     /// Enable or disable IAM enforcement. Hot-reload-safe: in-flight
@@ -89,6 +101,14 @@ impl AuthzEngine {
 
     pub fn enabled(&self) -> bool {
         self.enforced.load(Ordering::Relaxed)
+    }
+
+    /// Returns true when `key` matches the configured admin access
+    /// key. Constant-time comparison isn't needed: the simulator
+    /// doesn't verify signatures, so the key is already trivially
+    /// observable to anyone on the loopback interface.
+    fn is_admin_key(&self, key: &str) -> bool {
+        self.admin_access_key.as_deref() == Some(key)
     }
 
     pub fn check(
@@ -107,6 +127,14 @@ impl AuthzEngine {
                 return Err(AwsError::access_denied_for(action, "anonymous", resource));
             }
         };
+
+        // Admin key short-circuit. Mirrors how AWS root credentials sit
+        // outside IAM: the management UI and bootstrap flows use this
+        // key so they keep working once enforcement is on, even before
+        // any IAM users exist.
+        if self.is_admin_key(access_key) {
+            return Ok(());
+        }
 
         let principal = match self.principal_lookup.resolve_access_key(access_key) {
             Some(p) => p,

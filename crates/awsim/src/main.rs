@@ -178,6 +178,13 @@ struct Cli {
     #[arg(long, env = "AWSIM_ENFORCE_IAM")]
     enforce_iam: Option<bool>,
 
+    /// Access key that bypasses IAM enforcement, modeling AWS root
+    /// credentials. The management UI and bootstrap flows sign with
+    /// this key so they keep working once enforcement is on, even
+    /// before any IAM users exist. Set to an empty string to disable.
+    #[arg(long, env = "AWSIM_ADMIN_ACCESS_KEY", default_value = "awsim-admin")]
+    admin_access_key: String,
+
     /// One-shot subcommand. Without one, `awsim` runs the server
     /// (the default for backwards compatibility).
     #[command(subcommand)]
@@ -533,6 +540,8 @@ async fn async_main() -> Result<()> {
     awsim_billing::spawn_meter((*billing_meter).clone(), &state.events);
 
     if let Some(authz) = Arc::get_mut(&mut state.authz) {
+        authz.admin_access_key =
+            (!cli.admin_access_key.is_empty()).then(|| cli.admin_access_key.clone());
         authz.principal_lookup = Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store));
         authz.resource_policy_lookups.insert(
             "s3".to_string(),

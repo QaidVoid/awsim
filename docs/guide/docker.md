@@ -63,6 +63,8 @@ docker run --rm -p 4566:4566 \
 
 `AWSIM_ENFORCE_IAM=true` locks IAM enforcement on at boot regardless of any persisted runtime config. Useful when you want policy enforcement before anyone opens the UI.
 
+`AWSIM_ADMIN_ACCESS_KEY` (default `awsim-admin`) sets the access key that bypasses IAM enforcement, modeling AWS root credentials. The bundled UI signs with this key so it keeps working once enforcement is on, even before any IAM users exist. Set to an empty string to disable the bypass entirely.
+
 ## docker compose
 
 A `docker-compose.yml` ships in the repo with both the HTTP and HTTPS listeners enabled:

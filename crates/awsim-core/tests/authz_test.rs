@@ -262,3 +262,48 @@ fn secure_transport_condition_reflects_ctx_flag() {
             .is_ok()
     );
 }
+
+/// A `PrincipalLookup` that panics on use, so the test fails loudly
+/// if the admin-key short-circuit ever consults it.
+struct PanicLookup;
+impl PrincipalLookup for PanicLookup {
+    fn resolve_access_key(&self, _access_key: &str) -> Option<ResolvedPrincipal> {
+        panic!("admin key must bypass principal_lookup");
+    }
+}
+
+#[test]
+fn admin_access_key_bypasses_enforcement() {
+    let mut engine = AuthzEngine::new(true);
+    engine.admin_access_key = Some("awsim-admin".to_string());
+    engine.principal_lookup = Arc::new(PanicLookup);
+    let ctx = ctx_with_key(Some("awsim-admin"));
+    assert!(
+        engine
+            .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/key")
+            .is_ok()
+    );
+}
+
+#[test]
+fn admin_access_key_does_not_bypass_other_keys() {
+    let mut engine = AuthzEngine::new(true);
+    engine.admin_access_key = Some("awsim-admin".to_string());
+    engine.principal_lookup = Arc::new(StubLookup { principal: None });
+    let ctx = ctx_with_key(Some("not-admin"));
+    let err = engine
+        .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/key")
+        .unwrap_err();
+    assert_eq!(err.code, "AccessDenied");
+}
+
+#[test]
+fn admin_access_key_unset_does_not_match_empty_key() {
+    let engine = AuthzEngine::new(true);
+    assert!(engine.admin_access_key.is_none());
+    let ctx = ctx_with_key(Some(""));
+    let err = engine
+        .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/key")
+        .unwrap_err();
+    assert_eq!(err.code, "AccessDenied");
+}
