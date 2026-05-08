@@ -21,8 +21,13 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use rust_embed::RustEmbed;
 
+// `build.rs` stages the workspace `ui/build/` tree into
+// `$OUT_DIR/ui-build/` so this folder path is stable for both
+// in-tree workspace builds (real assets) and `cargo install` from a
+// published tarball (empty dir, runtime falls through to the
+// `not_built_response` path below).
 #[derive(RustEmbed)]
-#[folder = "$CARGO_MANIFEST_DIR/../../ui/build"]
+#[folder = "$OUT_DIR/ui-build"]
 struct UiAssets;
 
 const SPA_FALLBACK: &str = "200.html";
