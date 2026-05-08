@@ -8,7 +8,8 @@
 		adminConfirmSignUp,
 		adminResetUserPassword,
 		adminDeleteUser,
-		type CognitoUserSummary
+		type CognitoUserSummary,
+		type UserPoolDetail
 	} from '$lib/api/cognito';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -25,9 +26,10 @@
 
 	interface Props {
 		poolId: string;
+		pool: UserPoolDetail | null;
 	}
 
-	let { poolId }: Props = $props();
+	let { poolId, pool }: Props = $props();
 
 	const PAGE_SIZE_OPTIONS = [25, 50, 100];
 	const FILTER_DEBOUNCE_MS = 250;
@@ -313,6 +315,7 @@
 <CreateUserDialog
 	bind:open={createUserOpen}
 	{poolId}
+	{pool}
 	onClose={() => (createUserOpen = false)}
 	onCreated={() => void fetchPage(currentToken)}
 />

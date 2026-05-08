@@ -93,12 +93,28 @@ export interface PasswordPolicy {
   temporaryPasswordValidityDays?: number;
 }
 
+export interface SchemaAttribute {
+  name: string;
+  type: string;
+  required: boolean;
+  mutable: boolean;
+  stringConstraints?: { minLength?: number; maxLength?: number };
+  numberConstraints?: { minValue?: number; maxValue?: number };
+}
+
 export interface UserPoolDetail extends UserPool {
   arn?: string;
   mfaConfiguration?: string;
   estimatedNumberOfUsers?: number;
   lambdaConfig?: Record<string, string>;
-  schemaAttributes?: { name: string; type: string; required: boolean }[];
+  schemaAttributes?: SchemaAttribute[];
+  /** Attributes (`email` / `phone_number`) used as the canonical
+   * Username. When set, AdminCreateUser / SignUp must pass the
+   * matching attribute value as the Username. */
+  usernameAttributes?: string[];
+  /** Attributes accepted as sign-in aliases. */
+  aliasAttributes?: string[];
+  autoVerifiedAttributes?: string[];
   domain?: string;
   passwordPolicy?: PasswordPolicy;
 }
@@ -224,7 +240,19 @@ export async function describeUserPool(id: string): Promise<UserPoolDetail> {
         Name: string;
         AttributeDataType: string;
         Required: boolean;
+        Mutable?: boolean;
+        StringAttributeConstraints?: {
+          MinLength?: string;
+          MaxLength?: string;
+        };
+        NumberAttributeConstraints?: {
+          MinValue?: string;
+          MaxValue?: string;
+        };
       }[];
+      UsernameAttributes?: string[];
+      AliasAttributes?: string[];
+      AutoVerifiedAttributes?: string[];
       Domain?: string;
       Policies?: {
         PasswordPolicy?: {
@@ -240,6 +268,8 @@ export async function describeUserPool(id: string): Promise<UserPoolDetail> {
   };
   const p = data.UserPool ?? ({} as NonNullable<typeof data.UserPool>);
   const pp = p.Policies?.PasswordPolicy;
+  const parseInt10 = (s: string | undefined) =>
+    s !== undefined && s !== "" ? Number.parseInt(s, 10) : undefined;
   return {
     id: p.Id ?? id,
     name: p.Name ?? "",
@@ -255,7 +285,23 @@ export async function describeUserPool(id: string): Promise<UserPoolDetail> {
       name: a.Name,
       type: a.AttributeDataType,
       required: a.Required,
+      mutable: a.Mutable ?? true,
+      stringConstraints: a.StringAttributeConstraints
+        ? {
+            minLength: parseInt10(a.StringAttributeConstraints.MinLength),
+            maxLength: parseInt10(a.StringAttributeConstraints.MaxLength),
+          }
+        : undefined,
+      numberConstraints: a.NumberAttributeConstraints
+        ? {
+            minValue: parseInt10(a.NumberAttributeConstraints.MinValue),
+            maxValue: parseInt10(a.NumberAttributeConstraints.MaxValue),
+          }
+        : undefined,
     })),
+    usernameAttributes: p.UsernameAttributes ?? [],
+    aliasAttributes: p.AliasAttributes ?? [],
+    autoVerifiedAttributes: p.AutoVerifiedAttributes ?? [],
     domain: p.Domain,
     passwordPolicy: pp
       ? {

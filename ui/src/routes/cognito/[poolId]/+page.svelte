@@ -4,7 +4,7 @@
 	import { route } from '$lib/url';
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
-	import { describeUserPool, type UserPool } from '$lib/api/cognito';
+	import { describeUserPool, type UserPoolDetail } from '$lib/api/cognito';
 	import { Button } from '$lib/components/ui/button';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import Users from '@lucide/svelte/icons/users';
@@ -43,7 +43,7 @@
 	const SECTION_IDS = SECTIONS.map((s) => s.id) as readonly string[];
 
 	let poolId = $derived(page.params.poolId);
-	let pool = $state<UserPool | null>(null);
+	let pool = $state<UserPoolDetail | null>(null);
 	let loading = $state(true);
 	let active = $state<SectionId>(initialSection());
 
@@ -125,7 +125,7 @@
 			{#if poolId}
 				{#key poolId}
 					{#if active === 'users'}
-						<UsersSection {poolId} />
+						<UsersSection {poolId} {pool} />
 					{:else if active === 'groups'}
 						<GroupsSection {poolId} />
 					{:else if active === 'clients'}
