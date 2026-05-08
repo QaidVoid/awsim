@@ -56,7 +56,13 @@ pub async fn start_server_with_scp(
     let iam_store = iam.store();
     state.register(iam.clone(), vec![]);
 
-    let sts = Arc::new(awsim_sts::StsService::new());
+    // Shared STS session store: STS records issued temp creds here so
+    // the principal-lookup chain can resolve `ASIA…` keys back to the
+    // assumed role.
+    let sts_sessions = Arc::new(awsim_sts::StsSessionStore::new());
+    let sts = Arc::new(awsim_sts::StsService::with_session_store(Arc::clone(
+        &sts_sessions,
+    )));
     state.register(sts, vec![]);
 
     let s3 = awsim_s3::S3Service::new();
@@ -88,7 +94,12 @@ pub async fn start_server_with_scp(
     state.register(Arc::new(kms), vec![]);
 
     let mut authz = AuthzEngine::new(enforce);
-    authz.principal_lookup = Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store));
+    let iam_lookup: Arc<dyn awsim_core::PrincipalLookup> =
+        Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store));
+    authz.principal_lookup = Arc::new(awsim_sts::StsAwarePrincipalLookup::new(
+        Arc::clone(&sts_sessions),
+        iam_lookup,
+    ));
     authz.resource_policy_lookups.insert(
         "s3".to_string(),
         Arc::new(awsim_s3::S3ResourcePolicyLookup::new(s3_store))

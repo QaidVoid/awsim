@@ -475,6 +475,7 @@ async fn async_main() -> Result<()> {
         cw_metrics_service,
         kinesis_service,
         ses_service,
+        sts_sessions,
     ) = register_services(
         &mut state,
         &cli.account_id,
@@ -542,7 +543,12 @@ async fn async_main() -> Result<()> {
     if let Some(authz) = Arc::get_mut(&mut state.authz) {
         authz.admin_access_key =
             (!cli.admin_access_key.is_empty()).then(|| cli.admin_access_key.clone());
-        authz.principal_lookup = Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store));
+        let iam_lookup: Arc<dyn awsim_core::PrincipalLookup> =
+            Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store));
+        authz.principal_lookup = Arc::new(awsim_sts::StsAwarePrincipalLookup::new(
+            Arc::clone(&sts_sessions),
+            iam_lookup,
+        ));
         authz.resource_policy_lookups.insert(
             "s3".to_string(),
             Arc::new(awsim_s3::S3ResourcePolicyLookup::new(s3_store)),
@@ -667,6 +673,23 @@ async fn async_main() -> Result<()> {
             cleanup_tempdir("SES", ses_for_cleanup.tempdir_path());
             info!("Exiting.");
             std::process::exit(0);
+        });
+    }
+
+    // STS session expiry sweep — drops expired entries from the
+    // session store every 5 minutes so a long-running server doesn't
+    // accumulate dead temp creds. `lookup` already filters expired
+    // entries on the request path; this just keeps the map size
+    // bounded between lookups.
+    {
+        let sessions = Arc::clone(&sts_sessions);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+            tick.tick().await; // skip first immediate tick
+            loop {
+                tick.tick().await;
+                sessions.purge_expired();
+            }
         });
     }
 
@@ -2033,6 +2056,7 @@ type RegisteredServices = (
     Arc<awsim_cloudwatch_metrics::CloudWatchMetricsService>,
     Arc<awsim_kinesis::KinesisService>,
     Arc<awsim_ses::SesService>,
+    Arc<awsim_sts::StsSessionStore>,
 );
 
 /// Register all services and return handles needed by the router:
@@ -2157,7 +2181,14 @@ fn register_services(
     let iam_service_clone = Arc::clone(&iam);
     state.register(iam, vec![]);
 
-    let sts = Arc::new(awsim_sts::StsService::new());
+    // Shared STS session store: STS records every assumed-role
+    // credential it issues (and Cognito Identity does the same below)
+    // so the principal-lookup chain can resolve `ASIA…` keys back to
+    // the assumed role on follow-up signed requests.
+    let sts_sessions = Arc::new(awsim_sts::StsSessionStore::new());
+    let sts = Arc::new(awsim_sts::StsService::with_session_store(Arc::clone(
+        &sts_sessions,
+    )));
     sts.set_trust_policy_resolver(Arc::new(IamTrustPolicyResolver(Arc::clone(
         &iam_service_clone,
     ))));
@@ -2283,7 +2314,9 @@ fn register_services(
     let cognito_arc_state = cognito.state_for(default_account_id, default_region);
     state.register(cognito, vec![]);
 
-    let cognito_identity = Arc::new(awsim_cognito::CognitoIdentityService::new());
+    let cognito_identity = Arc::new(awsim_cognito::CognitoIdentityService::with_session_store(
+        Arc::clone(&sts_sessions),
+    ));
     state.register(cognito_identity, vec![]);
 
     let ecr = match data_dir {
@@ -2559,6 +2592,7 @@ fn register_services(
         cloudwatch_metrics_clone,
         kinesis_clone,
         ses_service,
+        sts_sessions,
     )
 }
 

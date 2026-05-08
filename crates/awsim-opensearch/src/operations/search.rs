@@ -357,7 +357,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
         //              baseline: every doc matches with score 1.0,
         //              gated only by the `must_not` exclusions.
         //
-        // The third case is the captify-permission filter shape:
+        // The third case is the permission-filter shape:
         //
         //   { "bool": { "should": [
         //       { "bool": { "must_not": [
@@ -906,7 +906,7 @@ mod tests {
         assert_eq!(hits[0]["_source"]["title"], "Python Guide");
     }
 
-    /// Captify permission-filter shape: `bool { should: [bool { must_not: [...] }] }`.
+    /// Permission-filter shape: `bool { should: [bool { must_not: [...] }] }`.
     /// Before the fix the inner bool returned 0 (no must / filter /
     /// should) and the outer should never matched, so the unified
     /// search returned zero hits regardless of doc contents.

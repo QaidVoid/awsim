@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
+use awsim_sts::{AssumedRoleSession, StsSessionStore};
 use dashmap::DashMap;
 use serde_json::{Value, json};
 use tracing::debug;
@@ -78,12 +79,28 @@ pub struct IdentityPoolState {
 
 pub struct CognitoIdentityService {
     state: AccountRegionStore<IdentityPoolState>,
+    /// Shared with [`awsim_sts::StsService`]: every credential
+    /// vended by `GetCredentialsForIdentity` is recorded here so
+    /// downstream services see the assumed-role principal under IAM
+    /// enforcement and so `sts:GetCallerIdentity` reports the right
+    /// ARN. Default-constructed empty; replace via
+    /// [`set_session_store`] for cross-service sharing.
+    sessions: Arc<StsSessionStore>,
 }
 
 impl CognitoIdentityService {
     pub fn new() -> Self {
+        Self::with_session_store(Arc::new(StsSessionStore::new()))
+    }
+
+    /// Construct the service backed by an externally-owned session
+    /// store. Pair with [`awsim_sts::StsService::with_session_store`]
+    /// passing the same `Arc` so credentials vended here are
+    /// recognised by the principal-lookup chain.
+    pub fn with_session_store(sessions: Arc<StsSessionStore>) -> Self {
         Self {
             state: AccountRegionStore::new(),
+            sessions,
         }
     }
 
@@ -128,7 +145,9 @@ impl ServiceHandler for CognitoIdentityService {
             "UpdateIdentityPool" => update_identity_pool(&state, &input),
             "ListIdentityPools" => list_identity_pools(&state, &input),
             "GetId" => get_id(&state, &input, ctx),
-            "GetCredentialsForIdentity" => get_credentials_for_identity(&state, &input),
+            "GetCredentialsForIdentity" => {
+                get_credentials_for_identity(&state, &input, &self.sessions, &ctx.account_id)
+            }
             "GetOpenIdToken" => get_open_id_token(&state, &input, ctx),
             "GetOpenIdTokenForDeveloperIdentity" => {
                 get_open_id_token_for_developer_identity(&state, &input, ctx)
@@ -561,6 +580,8 @@ fn get_id(
 fn get_credentials_for_identity(
     state: &IdentityPoolState,
     input: &Value,
+    sessions: &StsSessionStore,
+    account_id: &str,
 ) -> Result<Value, AwsError> {
     let identity_id = input["IdentityId"]
         .as_str()
@@ -596,6 +617,31 @@ fn get_credentials_for_identity(
     drop(identity);
 
     let credentials = generate_credentials_for_role(&role_arn, identity_id);
+
+    // Record the issued credential so the principal-lookup chain
+    // resolves the caller back to the assumed role on follow-up
+    // requests, and so `GetCallerIdentity` reports the assumed-role
+    // ARN. AWS uses an hour as the default; we don't currently
+    // surface the duration in the response so we just match it here.
+    let access_key = credentials["AccessKeyId"]
+        .as_str()
+        .expect("generate_credentials_for_role always emits AccessKeyId")
+        .to_string();
+    let role_name = awsim_sts::sessions::role_name_from_arn(&role_arn);
+    let assumed_role_id = format!(
+        "AROA{}:{identity_id}",
+        uuid::Uuid::new_v4().simple().to_string()[..20].to_uppercase()
+    );
+    sessions.record(AssumedRoleSession {
+        access_key,
+        role_arn: role_arn.clone(),
+        role_name,
+        // The session name AWS reports here is the IdentityId.
+        session_name: identity_id.to_string(),
+        account_id: account_id.to_string(),
+        assumed_role_id,
+        expiry: AssumedRoleSession::expiry_from_duration(3_600),
+    });
 
     Ok(json!({
         "IdentityId":  identity_id,
@@ -1554,14 +1600,23 @@ mod tests {
         let id_result = get_id(&state, &json!({ "IdentityPoolId": pool_id }), &ctx).unwrap();
         let identity_id = id_result["IdentityId"].as_str().unwrap();
 
-        let creds_result =
-            get_credentials_for_identity(&state, &json!({ "IdentityId": identity_id })).unwrap();
+        let sessions = StsSessionStore::new();
+        let creds_result = get_credentials_for_identity(
+            &state,
+            &json!({ "IdentityId": identity_id }),
+            &sessions,
+            "000000000000",
+        )
+        .unwrap();
 
         let creds = &creds_result["Credentials"];
         assert!(creds["AccessKeyId"].as_str().unwrap().starts_with("ASIA"));
         assert_eq!(creds["SecretKey"].as_str().unwrap().len(), 40);
         assert!(!creds["SessionToken"].as_str().unwrap().is_empty());
         assert!(creds["Expiration"].as_f64().unwrap() > 0.0);
+        // Vending creds must record a session under the issued ASIA key.
+        let asia = creds["AccessKeyId"].as_str().unwrap();
+        assert!(sessions.lookup(asia).is_some());
     }
 
     #[test]
@@ -1583,8 +1638,14 @@ mod tests {
         let id_result = get_id(&state, &json!({ "IdentityPoolId": pool_id }), &ctx).unwrap();
         let identity_id = id_result["IdentityId"].as_str().unwrap();
 
-        let err = get_credentials_for_identity(&state, &json!({ "IdentityId": identity_id }))
-            .unwrap_err();
+        let sessions = StsSessionStore::new();
+        let err = get_credentials_for_identity(
+            &state,
+            &json!({ "IdentityId": identity_id }),
+            &sessions,
+            "000000000000",
+        )
+        .unwrap_err();
         assert_eq!(err.code, "NotAuthorizedException");
     }
 
@@ -1626,8 +1687,14 @@ mod tests {
         .unwrap();
         let identity_id = id_result["IdentityId"].as_str().unwrap();
 
-        let creds_result =
-            get_credentials_for_identity(&state, &json!({ "IdentityId": identity_id })).unwrap();
+        let sessions = StsSessionStore::new();
+        let creds_result = get_credentials_for_identity(
+            &state,
+            &json!({ "IdentityId": identity_id }),
+            &sessions,
+            "000000000000",
+        )
+        .unwrap();
 
         let creds = &creds_result["Credentials"];
         assert!(creds["AccessKeyId"].as_str().unwrap().starts_with("ASIA"));
@@ -1691,12 +1758,15 @@ mod tests {
         let identity_id = id_result["IdentityId"].as_str().unwrap();
 
         // Pass logins so the rules mapping can evaluate the provider
+        let sessions = StsSessionStore::new();
         let creds_result = get_credentials_for_identity(
             &state,
             &json!({
                 "IdentityId": identity_id,
                 "Logins": { "accounts.google.com": "google-token-xyz" }
             }),
+            &sessions,
+            "000000000000",
         )
         .unwrap();
 

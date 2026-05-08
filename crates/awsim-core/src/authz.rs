@@ -9,6 +9,7 @@ use awsim_iam_policy::{
 use crate::error::AwsError;
 use crate::router::RequestContext;
 
+#[derive(Clone)]
 pub struct ResolvedPrincipal {
     pub arn: String,
     pub account: String,
@@ -23,6 +24,15 @@ pub struct ResolvedPrincipal {
 
 pub trait PrincipalLookup: Send + Sync {
     fn resolve_access_key(&self, access_key: &str) -> Option<ResolvedPrincipal>;
+
+    /// Look up a principal by its ARN. Used by chaining wrappers (the
+    /// STS-aware lookup in particular) that hold a role ARN and need
+    /// to materialise the role's identity policies. Default
+    /// implementation returns `None` so existing impls don't have to
+    /// add a stub.
+    fn resolve_arn(&self, _arn: &str) -> Option<ResolvedPrincipal> {
+        None
+    }
 }
 
 pub trait ResourcePolicyLookup: Send + Sync {

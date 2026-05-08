@@ -4,6 +4,12 @@ use awsim_core::{AwsError, Protocol, RequestContext, ServiceHandler};
 use serde_json::{Value, json};
 use tracing::debug;
 
+pub mod authz;
+pub mod sessions;
+
+pub use authz::StsAwarePrincipalLookup;
+pub use sessions::{AssumedRoleSession, StsSessionStore};
+
 /// Look up the trust policy document for a role so AssumeRole can decide
 /// whether the calling principal is allowed to assume it.
 ///
@@ -17,13 +23,34 @@ pub trait TrustPolicyResolver: Send + Sync {
 
 pub struct StsService {
     trust_policy: OnceLock<Arc<dyn TrustPolicyResolver>>,
+    /// Tracks credentials this service has issued so signed requests
+    /// using them resolve to the right principal under IAM enforcement
+    /// and so `GetCallerIdentity` reports the assumed-role ARN
+    /// instead of falling back to a synthesised IAM-user shape.
+    /// Default-constructed empty; share via [`set_session_store`] when
+    /// you want STS-issued creds usable across the gateway.
+    sessions: Arc<StsSessionStore>,
 }
 
 impl StsService {
     pub fn new() -> Self {
+        Self::with_session_store(Arc::new(StsSessionStore::new()))
+    }
+
+    /// Construct the service backed by an externally-owned session
+    /// store. Use this when other services (Cognito Identity, the
+    /// principal-lookup chain) need to see credentials issued by STS.
+    pub fn with_session_store(sessions: Arc<StsSessionStore>) -> Self {
         Self {
             trust_policy: OnceLock::new(),
+            sessions,
         }
+    }
+
+    /// Borrow the shared session store. Used by main.rs to wire the
+    /// same store into the principal-lookup chain.
+    pub fn session_store(&self) -> &Arc<StsSessionStore> {
+        &self.sessions
     }
 
     /// Wire in the trust-policy resolver. Idempotent: first call wins so the
@@ -45,24 +72,42 @@ impl StsService {
             access_key = ?ctx.access_key,
             "GetCallerIdentity"
         );
-        // Derive UserId and Arn from the SigV4-signed access key when one
-        // was supplied: a sigil access key keeps the historical "root"
-        // shape, otherwise we surface the access key itself as UserId so
-        // tools that compare callers across requests get a stable, distinct
-        // identifier per credential. Without an access key (anonymous /
-        // unauthenticated test calls), we fall back to root.
-        let (user_id, arn) = match ctx.access_key.as_deref() {
-            Some(key) if !key.is_empty() => (
-                key.to_string(),
-                format!("arn:aws:iam::{}:user/{}", ctx.account_id, key),
-            ),
-            _ => (
-                ctx.account_id.clone(),
-                format!("arn:aws:iam::{}:root", ctx.account_id),
-            ),
+        // Resolution order:
+        //   1. Recorded STS session (assumed-role temp creds) — emit
+        //      the proper `arn:aws:sts::…:assumed-role/Name/Session`
+        //      shape and `AROA…:Session` UserId.
+        //   2. Long-term access key — surface as a synthetic IAM-user
+        //      ARN. Real AWS would resolve this to the actual user via
+        //      the IAM record; we don't have a hook to that here, so
+        //      we fall back to using the key as the UserId. Tools that
+        //      key off UserId still get a stable per-credential value.
+        //   3. Anonymous — root shape, the historical default.
+        let (user_id, arn, account) = if let Some(session) = ctx
+            .access_key
+            .as_deref()
+            .and_then(|k| self.sessions.lookup(k))
+        {
+            let assumed_arn = format!(
+                "arn:aws:sts::{}:assumed-role/{}/{}",
+                session.account_id, session.role_name, session.session_name
+            );
+            (session.assumed_role_id, assumed_arn, session.account_id)
+        } else {
+            match ctx.access_key.as_deref() {
+                Some(key) if !key.is_empty() => (
+                    key.to_string(),
+                    format!("arn:aws:iam::{}:user/{}", ctx.account_id, key),
+                    ctx.account_id.clone(),
+                ),
+                _ => (
+                    ctx.account_id.clone(),
+                    format!("arn:aws:iam::{}:root", ctx.account_id),
+                    ctx.account_id.clone(),
+                ),
+            }
         };
         Ok(json!({
-            "Account": ctx.account_id,
+            "Account": account,
             "Arn": arn,
             "UserId": user_id,
         }))
@@ -95,8 +140,9 @@ impl StsService {
 
         debug!(role_arn = %role_arn, session_name = %session_name, "AssumeRole");
 
-        let (credentials, assumed_role_user) =
+        let (credentials, assumed_role_user, session) =
             generate_assumed_role_output(role_arn, session_name, &ctx.account_id, duration);
+        self.sessions.record(session);
 
         Ok(json!({
             "Credentials": credentials,
@@ -154,8 +200,9 @@ impl StsService {
 
         debug!(role_arn = %role_arn, session_name = %session_name, "AssumeRoleWithWebIdentity");
 
-        let (credentials, assumed_role_user) =
+        let (credentials, assumed_role_user, session) =
             generate_assumed_role_output(role_arn, session_name, &ctx.account_id, duration);
+        self.sessions.record(session);
 
         Ok(json!({
             "Credentials": credentials,
@@ -315,8 +362,9 @@ impl StsService {
 
         debug!(role_arn = %role_arn, "AssumeRoleWithSAML");
 
-        let (credentials, assumed_role_user) =
+        let (credentials, assumed_role_user, session) =
             generate_assumed_role_output(role_arn, &session_name, &ctx.account_id, duration);
+        self.sessions.record(session);
 
         Ok(json!({
             "Credentials": credentials,
@@ -810,29 +858,44 @@ fn generate_credentials(duration_seconds: u64) -> Value {
     })
 }
 
-/// Generate credentials + `AssumedRoleUser` for role assumption operations.
+/// Generate credentials + `AssumedRoleUser` for role assumption
+/// operations, plus a session record the caller is expected to drop
+/// into [`StsSessionStore`] so subsequent signed requests resolve to
+/// the assumed-role principal.
 fn generate_assumed_role_output(
     role_arn: &str,
     session_name: &str,
     account_id: &str,
     duration_seconds: u64,
-) -> (Value, Value) {
+) -> (Value, Value, AssumedRoleSession) {
     let role_id_suffix = uuid::Uuid::new_v4().simple().to_string()[..20].to_uppercase();
     let assumed_role_id = format!("AROA{role_id_suffix}:{session_name}");
 
-    // Derive the assumed-role ARN from the role ARN.
-    // role ARN format: arn:aws:iam::ACCOUNT:role/ROLE-NAME
-    let role_name = role_arn.split('/').next_back().unwrap_or("unknown-role");
+    let role_name = sessions::role_name_from_arn(role_arn);
     let assumed_role_arn =
         format!("arn:aws:sts::{account_id}:assumed-role/{role_name}/{session_name}");
 
     let credentials = generate_credentials(duration_seconds);
+    let access_key = credentials["AccessKeyId"]
+        .as_str()
+        .expect("generate_credentials always emits AccessKeyId")
+        .to_string();
     let assumed_role_user = json!({
         "AssumedRoleId": assumed_role_id,
         "Arn": assumed_role_arn,
     });
 
-    (credentials, assumed_role_user)
+    let session = AssumedRoleSession {
+        access_key,
+        role_arn: role_arn.to_string(),
+        role_name,
+        session_name: session_name.to_string(),
+        account_id: account_id.to_string(),
+        assumed_role_id,
+        expiry: AssumedRoleSession::expiry_from_duration(duration_seconds),
+    };
+
+    (credentials, assumed_role_user, session)
 }
 
 #[cfg(test)]
@@ -882,6 +945,34 @@ mod tests {
             result["Arn"].as_str().unwrap(),
             "arn:aws:iam::000000000000:user/AKIATESTAKID000000"
         );
+    }
+
+    #[test]
+    fn test_get_caller_identity_assumed_role_uses_session() {
+        // Round-trip: AssumeRole records a session, then a follow-up
+        // GetCallerIdentity with the issued ASIA key should report the
+        // assumed-role ARN and AROA…:session UserId — not the
+        // synthesised iam:user/ASIA… shape.
+        let svc = StsService::new();
+        let assume_input = json!({
+            "RoleArn": "arn:aws:iam::000000000000:role/AppAuthRole",
+            "RoleSessionName": "app-session",
+        });
+        let assume_out = svc.assume_role(&assume_input, &make_ctx()).unwrap();
+        let asia = assume_out["Credentials"]["AccessKeyId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let mut ctx = make_ctx();
+        ctx.access_key = Some(asia);
+        let id = svc.get_caller_identity(&ctx).unwrap();
+        assert_eq!(
+            id["Arn"].as_str().unwrap(),
+            "arn:aws:sts::000000000000:assumed-role/AppAuthRole/app-session"
+        );
+        assert!(id["UserId"].as_str().unwrap().starts_with("AROA"));
+        assert!(id["UserId"].as_str().unwrap().ends_with(":app-session"));
     }
 
     #[test]

@@ -15,7 +15,7 @@ impl IamPrincipalLookup {
         Self { store }
     }
 
-    pub fn resolve_arn(&self, arn: &str) -> Option<ResolvedPrincipal> {
+    fn resolve_arn_impl(&self, arn: &str) -> Option<ResolvedPrincipal> {
         for ((account_id, _region), state) in self.store.iter_all() {
             if let Some(user) = state
                 .users
@@ -75,6 +75,10 @@ impl IamPrincipalLookup {
 }
 
 impl PrincipalLookup for IamPrincipalLookup {
+    fn resolve_arn(&self, arn: &str) -> Option<ResolvedPrincipal> {
+        self.resolve_arn_impl(arn)
+    }
+
     fn resolve_access_key(&self, access_key: &str) -> Option<ResolvedPrincipal> {
         for ((account_id, _region), state) in self.store.iter_all() {
             if let Some(user) = find_user_with_key(&state, access_key) {

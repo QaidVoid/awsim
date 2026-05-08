@@ -1961,6 +1961,7 @@ version = "0.4.0"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "awsim-sts",
  "axum",
  "base64",
  "bcrypt",
@@ -2254,6 +2255,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sns",
  "aws-sdk-sqs",
+ "aws-sdk-sts",
  "aws-smithy-runtime-api",
  "aws-types",
  "awsim-core",
@@ -2737,6 +2739,7 @@ dependencies = [
  "awsim-core",
  "awsim-iam-policy",
  "base64",
+ "dashmap",
  "serde",
  "serde_json",
  "tracing",
