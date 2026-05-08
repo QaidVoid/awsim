@@ -11,7 +11,7 @@ const FAKE_DATE = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 const TARGET_PREFIX = "AWSStepFunctions";
 
 function authHeader(): string {
-  return `AWS4-HMAC-SHA256 Credential=test/${FAKE_DATE}/us-east-1/states/aws4_request, SignedHeaders=host;x-amz-date, Signature=fakesignature`;
+  return `AWS4-HMAC-SHA256 Credential=awsim-admin/${FAKE_DATE}/us-east-1/states/aws4_request, SignedHeaders=host;x-amz-date, Signature=fakesignature`;
 }
 
 function amzDate(): string {

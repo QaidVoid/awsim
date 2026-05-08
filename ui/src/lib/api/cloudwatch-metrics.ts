@@ -10,7 +10,7 @@ const ENDPOINT = "http://localhost:4566";
 const FAKE_DATE = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
 function authHeader(): string {
-  return `AWS4-HMAC-SHA256 Credential=test/${FAKE_DATE}/us-east-1/monitoring/aws4_request, SignedHeaders=host;x-amz-date, Signature=fakesignature`;
+  return `AWS4-HMAC-SHA256 Credential=awsim-admin/${FAKE_DATE}/us-east-1/monitoring/aws4_request, SignedHeaders=host;x-amz-date, Signature=fakesignature`;
 }
 
 function amzDate(): string {

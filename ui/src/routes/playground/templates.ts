@@ -25,7 +25,7 @@ const TODAY = '20260101';
 function authHeader(service: string): { key: string; value: string } {
   return {
     key: 'Authorization',
-    value: `AWS4-HMAC-SHA256 Credential=test/${TODAY}/us-east-1/${service}/aws4_request, SignedHeaders=host;x-amz-date, Signature=placeholder`,
+    value: `AWS4-HMAC-SHA256 Credential=awsim-admin/${TODAY}/us-east-1/${service}/aws4_request, SignedHeaders=host;x-amz-date, Signature=placeholder`,
   };
 }
 

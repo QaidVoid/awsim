@@ -12,7 +12,7 @@ const FAKE_DATE = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 const TARGET_PREFIX = "AmazonEC2ContainerServiceV20141113";
 
 function authHeader(): string {
-  return `AWS4-HMAC-SHA256 Credential=test/${FAKE_DATE}/us-east-1/ecs/aws4_request, SignedHeaders=host;x-amz-date, Signature=fakesignature`;
+  return `AWS4-HMAC-SHA256 Credential=awsim-admin/${FAKE_DATE}/us-east-1/ecs/aws4_request, SignedHeaders=host;x-amz-date, Signature=fakesignature`;
 }
 
 function amzDate(): string {
