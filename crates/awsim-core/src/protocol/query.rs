@@ -205,29 +205,12 @@ pub fn json_to_xml_fields(value: &Value) -> String {
             let mut xml = String::new();
             for (key, val) in map {
                 match val {
-                    Value::Object(_) => {
-                        xml.push_str(&format!("<{key}>\n{}</{key}>\n", json_to_xml_fields(val)));
-                    }
                     Value::Array(arr) => {
                         for item in arr {
-                            xml.push_str(&format!(
-                                "<{key}>\n{}</{key}>\n",
-                                json_to_xml_fields(item)
-                            ));
+                            xml.push_str(&render_element(key, item));
                         }
                     }
-                    Value::String(s) => {
-                        xml.push_str(&format!("<{key}>{s}</{key}>\n"));
-                    }
-                    Value::Number(n) => {
-                        xml.push_str(&format!("<{key}>{n}</{key}>\n"));
-                    }
-                    Value::Bool(b) => {
-                        xml.push_str(&format!("<{key}>{b}</{key}>\n"));
-                    }
-                    Value::Null => {
-                        xml.push_str(&format!("<{key}/>\n"));
-                    }
+                    _ => xml.push_str(&render_element(key, val)),
                 }
             }
             xml
@@ -236,6 +219,22 @@ pub fn json_to_xml_fields(value: &Value) -> String {
         Value::Number(n) => n.to_string(),
         Value::Bool(b) => b.to_string(),
         _ => String::new(),
+    }
+}
+
+/// Render a single `<key>...</key>` element. Pretty-prints structured
+/// content (Object) onto its own lines so nested elements stay readable,
+/// but writes scalars (String/Number/Bool) inline so we don't inject
+/// whitespace into the value — some clients string-compare list members
+/// and a leading newline shows up as part of the data.
+fn render_element(key: &str, value: &Value) -> String {
+    match value {
+        Value::Object(_) => format!("<{key}>\n{}</{key}>\n", json_to_xml_fields(value)),
+        Value::String(s) => format!("<{key}>{s}</{key}>\n"),
+        Value::Number(n) => format!("<{key}>{n}</{key}>\n"),
+        Value::Bool(b) => format!("<{key}>{b}</{key}>\n"),
+        Value::Null => format!("<{key}/>\n"),
+        Value::Array(_) => format!("<{key}>\n{}</{key}>\n", json_to_xml_fields(value)),
     }
 }
 
@@ -258,6 +257,35 @@ mod tests {
         assert_eq!(result.operation, "CreateUser");
         assert_eq!(result.input["UserName"], "testuser");
         assert_eq!(result.input["Path"], "/engineering/");
+    }
+
+    #[test]
+    fn scalar_array_items_render_inline() {
+        // Regression: previously the array branch wrapped every item with
+        // `<member>\n…</member>`, leaving a literal newline inside the
+        // string element when the item was a scalar. Clients that
+        // round-trip ListRolePolicies → GetRolePolicy ended up with
+        // names like "\nInline1".
+        let value = serde_json::json!({
+            "PolicyNames": { "member": ["Inline1", "Inline2"] },
+        });
+        let xml = json_to_xml_fields(&value);
+        assert!(xml.contains("<member>Inline1</member>"));
+        assert!(xml.contains("<member>Inline2</member>"));
+        assert!(!xml.contains("<member>\n"));
+    }
+
+    #[test]
+    fn nested_object_array_items_still_pretty_print() {
+        // Object array items retain their newline so nested fields stay
+        // readable.
+        let value = serde_json::json!({
+            "Tags": { "member": [{ "Key": "Env", "Value": "prod" }] },
+        });
+        let xml = json_to_xml_fields(&value);
+        assert!(xml.contains("<Key>Env</Key>"));
+        assert!(xml.contains("<Value>prod</Value>"));
+        assert!(xml.starts_with("<Tags>\n<member>\n"));
     }
 
     #[test]
