@@ -29,6 +29,7 @@ export default defineConfig({
             { text: 'Cross-Service Integrations', link: '/guide/integrations' },
             { text: 'IAM Policy Enforcement', link: '/guide/iam-enforcement' },
             { text: 'Cognito OAuth/OIDC', link: '/guide/cognito-oauth' },
+            { text: 'Cognito Federation (OIDC IdP)', link: '/guide/cognito-federation' },
             { text: 'Lambda Execution', link: '/guide/lambda-execution' },
             { text: 'API Gateway Proxy', link: '/guide/api-gateway' },
             { text: 'OpenSearch', link: '/guide/opensearch' },

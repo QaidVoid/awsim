@@ -10,8 +10,10 @@
 	import { Button } from '$lib/components/ui/button';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
+	import Sparkles from '@lucide/svelte/icons/sparkles';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import CreateIdpDialog from './create-idp-dialog.svelte';
+	import RegisterMockIdpDialog from './register-mock-idp-dialog.svelte';
 	import IdpDetail from './idp-detail.svelte';
 	import ConfirmDialog from './confirm-dialog.svelte';
 
@@ -25,6 +27,7 @@
 	let loading = $state(false);
 	let expanded = $state<string | null>(null);
 	let createOpen = $state(false);
+	let registerMockOpen = $state(false);
 	let deleteName = $state<string | null>(null);
 	let deleteOpen = $state(false);
 	let deleteBusy = $state(false);
@@ -74,9 +77,26 @@
 		<Button variant="ghost" size="icon-sm" onclick={load} disabled={loading} title="Refresh">
 			<RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
 		</Button>
+		<Button
+			size="xs"
+			variant="outline"
+			onclick={() => (registerMockOpen = true)}
+			title="One-click awsim built-in OIDC IdP for offline testing"
+		>
+			<Sparkles class="size-3.5" /> Add awsim mock IdP
+		</Button>
 		<Button size="xs" onclick={() => (createOpen = true)}>
 			<Plus class="size-3.5" /> Provider
 		</Button>
+	</div>
+
+	<div class="rounded border border-border/50 bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+		Federated sign-in is triggered by appending
+		<code class="rounded bg-background px-1">?identity_provider=&lt;ProviderName&gt;</code>
+		to your <code class="rounded bg-background px-1">/oauth2/authorize</code> URL. AWSim will
+		redirect the user to the named IdP and finish the flow on its
+		<code class="rounded bg-background px-1">/oauth2/idpresponse</code> callback.
+		See <a href="/guide/cognito-federation/" class="underline">the federation guide</a>.
 	</div>
 
 	{#if loading && providers.length === 0}
@@ -130,6 +150,12 @@
 	bind:open={createOpen}
 	{poolId}
 	onClose={() => (createOpen = false)}
+	onCreated={() => void load()}
+/>
+<RegisterMockIdpDialog
+	bind:open={registerMockOpen}
+	{poolId}
+	onClose={() => (registerMockOpen = false)}
 	onCreated={() => void load()}
 />
 {#if deleteName}
