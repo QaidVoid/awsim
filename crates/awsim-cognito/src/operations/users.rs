@@ -36,6 +36,21 @@ fn now_epoch() -> u64 {
         .as_secs()
 }
 
+/// Resolve a `Username` parameter to the canonical username key the
+/// pool stores against. Real Cognito's `AdminGetUser` accepts either
+/// the literal username (a UUID for native users, `<provider>_<id>`
+/// for federated users) or the user's `sub`. We try the literal key
+/// first, then scan for a matching sub. Returns `None` if neither
+/// hits — callers raise `UserNotFoundException`.
+pub(crate) fn resolve_username(pool: &UserPool, identifier: &str) -> Option<String> {
+    if pool.users.contains_key(identifier) {
+        return Some(identifier.to_string());
+    }
+    pool.users
+        .iter()
+        .find_map(|(name, user)| (user.sub == identifier).then(|| name.clone()))
+}
+
 /// Default validity window for confirmation / reset codes, matching real
 /// Cognito's 24-hour expiry.
 const CODE_VALIDITY_SECS: u64 = 24 * 3600;
@@ -537,7 +552,13 @@ pub fn admin_confirm_sign_up(
         )
     })?;
 
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
@@ -634,7 +655,13 @@ pub fn admin_delete_user(
         )
     })?;
 
-    if pool.users.remove(username).is_none() {
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    if pool.users.remove(&username).is_none() {
         return Err(AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
@@ -668,7 +695,13 @@ pub fn admin_get_user(
         )
     })?;
 
-    let user = pool.users.get(username).ok_or_else(|| {
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let user = pool.users.get(&username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
@@ -707,7 +740,13 @@ pub fn admin_set_user_password(
 
     super::auth_policy::validate_password(&pool.policies, password)?;
 
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
@@ -715,7 +754,7 @@ pub fn admin_set_user_password(
     })?;
 
     user.password_hash = crate::password::hash(password)?;
-    let (s, v) = crate::password::srp_material(pool_id, username, password);
+    let (s, v) = crate::password::srp_material(pool_id, &username, password);
     user.srp_salt = Some(s);
     user.srp_verifier = Some(v);
     // AWS semantics: Permanent=true => CONFIRMED, Permanent=false => the
@@ -1181,7 +1220,13 @@ pub fn admin_enable_user(
         )
     })?;
 
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
@@ -1216,7 +1261,13 @@ pub fn admin_disable_user(
         )
     })?;
 
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
@@ -1251,7 +1302,13 @@ pub fn admin_reset_user_password(
         )
     })?;
 
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
@@ -1288,7 +1345,13 @@ pub fn admin_update_user_attributes(
 
     let username_attrs = pool.username_attributes.clone();
     let schema = pool.schema.clone();
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
@@ -1377,7 +1440,13 @@ pub fn admin_delete_user_attributes(
     })?;
 
     let schema = pool.schema.clone();
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
@@ -1740,7 +1809,13 @@ pub fn admin_user_global_sign_out(
         )
     })?;
 
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
@@ -1801,7 +1876,13 @@ pub fn admin_list_user_auth_events(
         )
     })?;
 
-    let user = pool.users.get(username).ok_or_else(|| {
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let user = pool.users.get(&username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
@@ -2273,5 +2354,54 @@ mod tests {
             &ctx(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn admin_get_user_accepts_sub_as_username() {
+        // Captify regression: clients pass the user's `sub` (UUID) as
+        // the AdminGetUser `Username` parameter. AWS docs explicitly
+        // allow this when `sub` isn't an alias attribute on the pool.
+        let (state, pool_id) = schema_fixture();
+        admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "alice",
+                "TemporaryPassword": "Temp@1234",
+                "UserAttributes": [{ "Name": "custom:plan", "Value": "x" }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        // Find Alice's auto-generated sub.
+        let sub = state
+            .user_pools
+            .get(&pool_id)
+            .unwrap()
+            .users
+            .get("alice")
+            .unwrap()
+            .sub
+            .clone();
+
+        // AdminGetUser by sub should succeed and return Alice.
+        let by_sub = admin_get_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": sub }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(by_sub["Username"], "alice");
+
+        // Username that's neither a real username nor a known sub
+        // still raises UserNotFoundException.
+        let err = admin_get_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "nope" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "UserNotFoundException");
     }
 }

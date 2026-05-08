@@ -296,7 +296,13 @@ pub fn admin_add_user_to_group(
         ));
     }
 
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let username = super::users::resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
@@ -337,7 +343,13 @@ pub fn admin_remove_user_from_group(
         )
     })?;
 
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let username = super::users::resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
@@ -373,7 +385,13 @@ pub fn admin_list_groups_for_user(
         )
     })?;
 
-    let user = pool.users.get(username).ok_or_else(|| {
+    let username = super::users::resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::not_found(
+            "UserNotFoundException",
+            format!("User not found: {username}"),
+        )
+    })?;
+    let user = pool.users.get(&username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
