@@ -679,23 +679,54 @@ fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Op
         // Check provider-specific role mappings first.
         if let Some(logins_map) = input_logins {
             for (provider, token) in logins_map {
-                if let Some(mapping) = pool.role_mappings.get(provider.as_str())
+                let mapping = lookup_role_mapping(&pool.role_mappings, provider.as_str());
+                let claims = token
+                    .as_str()
+                    .and_then(decode_jwt_payload)
+                    .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+
+                // No explicit mapping configured for this provider:
+                // for Cognito User Pool federation, honour the
+                // `cognito:preferred_role` claim if the token carries
+                // one. Real AWS requires `Type: "Token"` to be set
+                // explicitly; we accept it implicitly because the
+                // common case in local dev is "I assigned a role to
+                // the group, why isn't it being used?" — and that
+                // intent is unambiguous when the only IdP is the
+                // user pool that minted the JWT in the first place.
+                if mapping.is_none() && provider.starts_with("cognito-idp.") {
+                    if let Some(preferred) = claims
+                        .get("cognito:preferred_role")
+                        .and_then(|v| v.as_str())
+                    {
+                        debug!(
+                            provider = %provider,
+                            role = %preferred,
+                            "GetCredentialsForIdentity: using cognito:preferred_role from ID token (no RoleMappings configured)"
+                        );
+                        return Some(preferred.to_string());
+                    }
+                    if let Some(role) = claims
+                        .get("cognito:roles")
+                        .and_then(|v| v.as_array())
+                        .and_then(|a| a.iter().find_map(|r| r.as_str()))
+                    {
+                        debug!(
+                            provider = %provider,
+                            role = %role,
+                            "GetCredentialsForIdentity: using first cognito:roles entry from ID token"
+                        );
+                        return Some(role.to_string());
+                    }
+                }
+
+                if let Some(mapping) = mapping
                     && let Some(mapping_obj) = mapping.as_object()
                 {
                     let mapping_type = mapping_obj
                         .get("Type")
                         .and_then(|t| t.as_str())
                         .unwrap_or("");
-
-                    // Decoded JWT claims for the provider, used by both
-                    // Token and Rules mappings. None means the token
-                    // wasn't a parseable JWT — Token mode then has to
-                    // fall back per AmbiguousRoleResolution; Rules just
-                    // skips rules that need claim values.
-                    let claims = token
-                        .as_str()
-                        .and_then(decode_jwt_payload)
-                        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
 
                     match mapping_type {
                         "Token" => {
@@ -797,6 +828,24 @@ fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Op
         }
         pool.roles.get("unauthenticated").cloned()
     }
+}
+
+/// Find a role mapping for a Logins-map provider key. AWS documents
+/// the `RoleMappings` key as `<provider>:<client_id>` for Cognito
+/// User Pool federation, but the `Logins` map only carries the bare
+/// `<provider>`. Match exact-key first, then accept any
+/// `<provider>:CLIENT_ID` suffixed key — same intent, more forgiving.
+fn lookup_role_mapping<'a>(
+    mappings: &'a HashMap<String, Value>,
+    provider: &str,
+) -> Option<&'a Value> {
+    if let Some(m) = mappings.get(provider) {
+        return Some(m);
+    }
+    let prefix = format!("{provider}:");
+    mappings
+        .iter()
+        .find_map(|(k, v)| k.starts_with(&prefix).then_some(v))
 }
 
 /// Decode the payload section of a JWT without verifying its
@@ -2009,6 +2058,113 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "NotAuthorizedException");
+    }
+
+    #[test]
+    fn cognito_idp_token_uses_preferred_role_without_explicit_mapping() {
+        // Real AWS would require the pool to have RoleMappings:
+        // {Type: Token} configured for the provider. The local
+        // simulator accepts the claim implicitly so a freshly-set
+        // group RoleArn "just works" without forcing the user to
+        // also call SetIdentityPoolRoles with a mapping.
+        let state = make_state();
+        let ctx = make_ctx();
+        let pool = create_identity_pool(
+            &state,
+            &json!({ "IdentityPoolName": "p", "AllowUnauthenticatedIdentities": false }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = pool["IdentityPoolId"].as_str().unwrap();
+        set_identity_pool_roles(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                // No RoleMappings — only a default authenticated role.
+                "Roles": { "authenticated": "arn:aws:iam::000000000000:role/Default" }
+            }),
+        )
+        .unwrap();
+
+        let provider = "cognito-idp.us-east-1.amazonaws.com/us-east-1_AUTOM";
+        let admin_role = "arn:aws:iam::000000000000:role/Admin";
+        let token = fake_jwt(&json!({
+            "sub": "u",
+            "cognito:preferred_role": admin_role,
+            "cognito:roles": [admin_role]
+        }));
+
+        let id_result = get_id(
+            &state,
+            &json!({ "IdentityPoolId": pool_id, "Logins": { provider: token.clone() } }),
+            &ctx,
+        )
+        .unwrap();
+        let identity_id = id_result["IdentityId"].as_str().unwrap();
+        let sessions = StsSessionStore::new();
+        let creds = get_credentials_for_identity(
+            &state,
+            &json!({ "IdentityId": identity_id, "Logins": { provider: token } }),
+            &sessions,
+            "000000000000",
+        )
+        .unwrap();
+        let asia = creds["Credentials"]["AccessKeyId"].as_str().unwrap();
+        assert_eq!(
+            sessions.lookup(asia).unwrap().role_arn,
+            admin_role,
+            "should follow preferred_role even without explicit RoleMappings"
+        );
+    }
+
+    #[test]
+    fn role_mapping_lookup_accepts_aws_style_client_suffix() {
+        // AWS documents RoleMappings keys as `<provider>:CLIENT_ID`,
+        // but the Logins map only carries `<provider>`. The lookup
+        // helper must bridge that.
+        let state = make_state();
+        let ctx = make_ctx();
+        let pool = create_identity_pool(
+            &state,
+            &json!({ "IdentityPoolName": "p", "AllowUnauthenticatedIdentities": false }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = pool["IdentityPoolId"].as_str().unwrap();
+        let provider = "cognito-idp.us-east-1.amazonaws.com/us-east-1_KEYFMT";
+        // Stored key includes :CLIENT_ID per AWS docs.
+        let mapping_key = format!("{provider}:abcd1234client");
+        set_identity_pool_roles(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "Roles": { "authenticated": "arn:aws:iam::000000000000:role/Default" },
+                "RoleMappings": {
+                    mapping_key: { "Type": "Token", "AmbiguousRoleResolution": "AuthenticatedRole" }
+                }
+            }),
+        )
+        .unwrap();
+
+        let admin = "arn:aws:iam::000000000000:role/Admin";
+        let token = fake_jwt(&json!({ "sub": "u", "cognito:preferred_role": admin }));
+        let id_result = get_id(
+            &state,
+            &json!({ "IdentityPoolId": pool_id, "Logins": { provider: token.clone() } }),
+            &ctx,
+        )
+        .unwrap();
+        let identity_id = id_result["IdentityId"].as_str().unwrap();
+        let sessions = StsSessionStore::new();
+        let creds = get_credentials_for_identity(
+            &state,
+            &json!({ "IdentityId": identity_id, "Logins": { provider: token } }),
+            &sessions,
+            "000000000000",
+        )
+        .unwrap();
+        let asia = creds["Credentials"]["AccessKeyId"].as_str().unwrap();
+        assert_eq!(sessions.lookup(asia).unwrap().role_arn, admin);
     }
 
     #[test]
