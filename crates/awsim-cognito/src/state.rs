@@ -27,14 +27,113 @@ impl Default for PasswordPolicy {
     }
 }
 
-/// A custom schema attribute definition.
+/// AWS-shape constraints attached to a `String` schema attribute.
+/// Encoded as decimal strings on the wire to match the Cognito API.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StringAttributeConstraints {
+    pub min_length: Option<u32>,
+    pub max_length: Option<u32>,
+}
+
+/// AWS-shape constraints attached to a `Number` schema attribute.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NumberAttributeConstraints {
+    pub min_value: Option<i64>,
+    pub max_value: Option<i64>,
+}
+
+/// One entry in a user pool's schema. Mirrors Cognito's `SchemaAttributeType`.
+///
+/// `name` is the canonical attribute name *including* the `custom:`
+/// prefix for custom attributes (so a schema lookup against a
+/// `user.attributes` key is a direct equality check). Standard
+/// OIDC attributes (`email`, `name`, `sub`, etc.) are stored
+/// unprefixed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaAttribute {
     pub name: String,
-    pub attribute_data_type: String, // String, Number, DateTime, Boolean
+    /// `String` | `Number` | `DateTime` | `Boolean`.
+    pub attribute_data_type: String,
     pub required: bool,
     pub mutable: bool,
+    /// Hidden from non-Admin* APIs. Stored for round-trip fidelity;
+    /// awsim does not yet filter responses by this flag.
+    #[serde(default)]
+    pub developer_only_attribute: bool,
+    #[serde(default)]
+    pub string_attribute_constraints: Option<StringAttributeConstraints>,
+    #[serde(default)]
+    pub number_attribute_constraints: Option<NumberAttributeConstraints>,
 }
+
+/// AWS-defined OIDC standard attributes that every Cognito user pool
+/// ships with. New pools start their schema with these so that
+/// existing flows that set `email`, `name`, etc. don't trip the
+/// "attribute does not exist in the schema" check.
+///
+/// Mirrors the Cognito console's "Required attributes" list: 19
+/// String attrs, two Boolean (`*_verified`), one Number (`updated_at`).
+/// `sub` is auto-generated and immutable; everything else is mutable
+/// and not required by default. Pools can override `Required` /
+/// `Mutable` per attribute via the `Schema` parameter on
+/// `CreateUserPool`.
+pub fn default_user_pool_schema() -> Vec<SchemaAttribute> {
+    let s = |name: &str, required: bool, mutable: bool| SchemaAttribute {
+        name: name.to_string(),
+        attribute_data_type: "String".to_string(),
+        required,
+        mutable,
+        developer_only_attribute: false,
+        string_attribute_constraints: Some(StringAttributeConstraints {
+            min_length: Some(0),
+            max_length: Some(2048),
+        }),
+        number_attribute_constraints: None,
+    };
+    let b = |name: &str| SchemaAttribute {
+        name: name.to_string(),
+        attribute_data_type: "Boolean".to_string(),
+        required: false,
+        mutable: true,
+        developer_only_attribute: false,
+        string_attribute_constraints: None,
+        number_attribute_constraints: None,
+    };
+    let n = |name: &str| SchemaAttribute {
+        name: name.to_string(),
+        attribute_data_type: "Number".to_string(),
+        required: false,
+        mutable: true,
+        developer_only_attribute: false,
+        string_attribute_constraints: None,
+        number_attribute_constraints: None,
+    };
+    vec![
+        s("sub", true, false),
+        s("name", false, true),
+        s("given_name", false, true),
+        s("family_name", false, true),
+        s("middle_name", false, true),
+        s("nickname", false, true),
+        s("preferred_username", false, true),
+        s("profile", false, true),
+        s("picture", false, true),
+        s("website", false, true),
+        s("email", false, true),
+        b("email_verified"),
+        s("gender", false, true),
+        s("birthdate", false, true),
+        s("zoneinfo", false, true),
+        s("locale", false, true),
+        s("phone_number", false, true),
+        b("phone_number_verified"),
+        s("address", false, true),
+        n("updated_at"),
+    ]
+}
+
+/// Maximum custom attributes per pool. Mirrors real Cognito's quota.
+pub const MAX_CUSTOM_ATTRIBUTES: usize = 50;
 
 /// Email configuration for a user pool.
 #[derive(Debug, Clone, Serialize, Deserialize)]

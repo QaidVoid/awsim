@@ -11,6 +11,7 @@ pub mod mfa;
 pub mod pools;
 pub mod resource_servers;
 pub mod risk;
+pub mod schema_validation;
 pub mod tags;
 pub mod terms;
 pub mod user_settings;

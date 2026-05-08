@@ -430,7 +430,15 @@ impl ServiceHandler for CognitoService {
             state.confirmation_codes.clear();
             state.confirmation_codes_issued.clear();
             state.srp_sessions.clear();
-            for (id, pool) in cs.pools {
+            for (id, mut pool) in cs.pools {
+                // Back-compat: snapshots written before schema bootstrap
+                // landed have an empty `schema`. Repopulate with the
+                // standard OIDC attrs so attribute-write paths can
+                // validate against them. Custom attrs that were already
+                // set on users are unaffected.
+                if pool.schema.is_empty() {
+                    pool.schema = crate::state::default_user_pool_schema();
+                }
                 state.user_pools.insert(id, pool);
             }
             for (domain, pool_id) in cs.domains {

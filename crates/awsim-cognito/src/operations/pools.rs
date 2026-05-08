@@ -7,7 +7,11 @@ use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::state::{CognitoState, PasswordPolicy, UserPool, UserPoolClient};
+use crate::state::{
+    CognitoState, MAX_CUSTOM_ATTRIBUTES, NumberAttributeConstraints, PasswordPolicy,
+    SchemaAttribute, StringAttributeConstraints, UserPool, UserPoolClient,
+    default_user_pool_schema,
+};
 
 fn now_epoch() -> u64 {
     SystemTime::now()
@@ -112,6 +116,8 @@ pub fn create_user_pool(
 
     let lambda_config = parse_lambda_config(&input["LambdaConfig"]);
 
+    let schema = build_initial_schema(&input["Schema"])?;
+
     let pool = UserPool {
         id: pool_id.clone(),
         name: pool_name.to_string(),
@@ -127,7 +133,7 @@ pub fn create_user_pool(
         username_attributes,
         alias_attributes,
         lambda_config,
-        schema: Vec::new(),
+        schema,
         email_configuration: None,
         domain: None,
         resource_servers: Vec::new(),
@@ -202,6 +208,8 @@ pub fn describe_user_pool(
         )
     })?;
 
+    let schema_attributes: Vec<Value> = pool.schema.iter().map(schema_attr_to_value).collect();
+
     Ok(json!({
         "UserPool": {
             "Id": pool.id,
@@ -214,6 +222,7 @@ pub fn describe_user_pool(
             "AutoVerifiedAttributes": pool.auto_verified_attributes,
             "UsernameAttributes": pool.username_attributes,
             "AliasAttributes": pool.alias_attributes,
+            "SchemaAttributes": schema_attributes,
             "Policies": {
                 "PasswordPolicy": password_policy_to_value(&pool.policies)
             },
@@ -634,28 +643,44 @@ pub fn add_custom_attributes(
         )
     })?;
 
-    if let Some(attrs) = input["CustomAttributes"].as_array() {
-        for attr in attrs {
-            let name = attr["Name"].as_str().ok_or_else(|| {
-                AwsError::bad_request("InvalidParameter", "Attribute Name is required")
-            })?;
-            let full_name = if name.starts_with("custom:") {
-                name.to_string()
-            } else {
-                format!("custom:{name}")
-            };
+    let Some(attrs) = input["CustomAttributes"].as_array() else {
+        return Ok(json!({}));
+    };
 
-            pool.schema.push(crate::state::SchemaAttribute {
-                name: full_name,
-                attribute_data_type: attr["AttributeDataType"]
-                    .as_str()
-                    .unwrap_or("String")
-                    .to_string(),
-                required: attr["Required"].as_bool().unwrap_or(false),
-                mutable: attr["Mutable"].as_bool().unwrap_or(true),
-            });
+    let mut parsed: Vec<SchemaAttribute> = Vec::with_capacity(attrs.len());
+    for attr in attrs {
+        let name = attr["Name"].as_str().ok_or_else(|| {
+            AwsError::bad_request("InvalidParameter", "Attribute Name is required")
+        })?;
+        parsed.push(parse_custom_schema_entry(name, attr)?);
+    }
+
+    let existing_custom = pool
+        .schema
+        .iter()
+        .filter(|a| a.name.starts_with("custom:"))
+        .count();
+    if existing_custom + parsed.len() > MAX_CUSTOM_ATTRIBUTES {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!(
+                "User pool already has {existing_custom} custom attributes; \
+                 adding {n} would exceed the limit of {MAX_CUSTOM_ATTRIBUTES}",
+                n = parsed.len()
+            ),
+        ));
+    }
+
+    for attr in &parsed {
+        if pool.schema.iter().any(|a| a.name == attr.name) {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!("custom attribute {} already exists.", attr.name),
+            ));
         }
     }
+
+    pool.schema.extend(parsed);
 
     info!(pool_id = %pool_id, "Cognito: added custom attributes");
     Ok(json!({}))
@@ -664,6 +689,187 @@ pub fn add_custom_attributes(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Build the initial schema for a new user pool: the AWS-defined
+/// 20 standard OIDC attributes, plus any entries supplied via the
+/// `Schema` parameter on `CreateUserPool`.
+///
+/// `Schema` entries with a `custom:`-prefixed name (or one without
+/// a prefix that doesn't collide with a standard attr) are added
+/// as new custom attributes. Entries whose name matches an existing
+/// standard attribute override that attribute's `Required` /
+/// `Mutable` / `DeveloperOnlyAttribute` flags - real Cognito uses
+/// this to let pool creators say e.g. "email is required at signup".
+fn build_initial_schema(input: &Value) -> Result<Vec<SchemaAttribute>, AwsError> {
+    let mut schema = default_user_pool_schema();
+    let Some(arr) = input.as_array() else {
+        return Ok(schema);
+    };
+
+    for entry in arr {
+        let name = entry["Name"].as_str().ok_or_else(|| {
+            AwsError::bad_request("InvalidParameterException", "Schema entry missing Name")
+        })?;
+
+        if let Some(existing) = schema.iter_mut().find(|a| a.name == name) {
+            if let Some(req) = entry["Required"].as_bool() {
+                existing.required = req;
+            }
+            if let Some(mut_) = entry["Mutable"].as_bool() {
+                existing.mutable = mut_;
+            }
+            if let Some(dev) = entry["DeveloperOnlyAttribute"].as_bool() {
+                existing.developer_only_attribute = dev;
+            }
+            if let Some(t) = entry["AttributeDataType"].as_str() {
+                validate_data_type(t)?;
+            }
+            apply_constraints(existing, entry);
+            continue;
+        }
+
+        let parsed = parse_custom_schema_entry(name, entry)?;
+        if schema.iter().any(|a| a.name == parsed.name) {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!("Schema attribute {} declared more than once.", parsed.name),
+            ));
+        }
+        schema.push(parsed);
+    }
+
+    let custom_count = schema
+        .iter()
+        .filter(|a| a.name.starts_with("custom:"))
+        .count();
+    if custom_count > MAX_CUSTOM_ATTRIBUTES {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!(
+                "Schema declares {custom_count} custom attributes, exceeding the limit of \
+                 {MAX_CUSTOM_ATTRIBUTES}"
+            ),
+        ));
+    }
+
+    Ok(schema)
+}
+
+/// Parse a single `Schema` / `CustomAttributes` entry, resolving the
+/// `custom:` prefix. Used by both `CreateUserPool` (for non-standard
+/// names) and `AddCustomAttributes`.
+fn parse_custom_schema_entry(name: &str, entry: &Value) -> Result<SchemaAttribute, AwsError> {
+    if name.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "Schema attribute Name is empty",
+        ));
+    }
+    let full_name = if name.starts_with("custom:") {
+        name.to_string()
+    } else {
+        format!("custom:{name}")
+    };
+
+    let data_type = entry["AttributeDataType"].as_str().unwrap_or("String");
+    validate_data_type(data_type)?;
+
+    let mut attr = SchemaAttribute {
+        name: full_name,
+        attribute_data_type: data_type.to_string(),
+        required: entry["Required"].as_bool().unwrap_or(false),
+        mutable: entry["Mutable"].as_bool().unwrap_or(true),
+        developer_only_attribute: entry["DeveloperOnlyAttribute"].as_bool().unwrap_or(false),
+        string_attribute_constraints: None,
+        number_attribute_constraints: None,
+    };
+    apply_constraints(&mut attr, entry);
+    Ok(attr)
+}
+
+fn validate_data_type(t: &str) -> Result<(), AwsError> {
+    match t {
+        "String" | "Number" | "DateTime" | "Boolean" => Ok(()),
+        other => Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!("Unknown AttributeDataType: {other}"),
+        )),
+    }
+}
+
+/// Mirror AWS's wire shape: `MinLength` / `MaxLength` / `MinValue` /
+/// `MaxValue` are string-encoded. Tolerate both string and numeric
+/// JSON for resilience against SDKs that auto-coerce.
+fn apply_constraints(attr: &mut SchemaAttribute, entry: &Value) {
+    if attr.attribute_data_type == "String" {
+        let c = &entry["StringAttributeConstraints"];
+        let min = parse_string_or_number(&c["MinLength"]);
+        let max = parse_string_or_number(&c["MaxLength"]);
+        if min.is_some() || max.is_some() {
+            attr.string_attribute_constraints = Some(StringAttributeConstraints {
+                min_length: min.map(|v| v.max(0) as u32),
+                max_length: max.map(|v| v.max(0) as u32),
+            });
+        }
+    }
+    if attr.attribute_data_type == "Number" {
+        let c = &entry["NumberAttributeConstraints"];
+        let min = parse_string_or_number(&c["MinValue"]);
+        let max = parse_string_or_number(&c["MaxValue"]);
+        if min.is_some() || max.is_some() {
+            attr.number_attribute_constraints = Some(NumberAttributeConstraints {
+                min_value: min,
+                max_value: max,
+            });
+        }
+    }
+}
+
+fn parse_string_or_number(v: &Value) -> Option<i64> {
+    if let Some(s) = v.as_str() {
+        s.parse().ok()
+    } else {
+        v.as_i64()
+    }
+}
+
+/// Render a `SchemaAttribute` in the `SchemaAttributeType` shape
+/// `DescribeUserPool` returns - constraints come back as decimal
+/// strings to match AWS.
+pub fn schema_attr_to_value(attr: &SchemaAttribute) -> Value {
+    let mut obj = json!({
+        "Name": attr.name,
+        "AttributeDataType": attr.attribute_data_type,
+        "DeveloperOnlyAttribute": attr.developer_only_attribute,
+        "Mutable": attr.mutable,
+        "Required": attr.required,
+    });
+    if let Some(c) = &attr.string_attribute_constraints {
+        let mut sc = serde_json::Map::new();
+        if let Some(min) = c.min_length {
+            sc.insert("MinLength".into(), Value::String(min.to_string()));
+        }
+        if let Some(max) = c.max_length {
+            sc.insert("MaxLength".into(), Value::String(max.to_string()));
+        }
+        obj.as_object_mut()
+            .expect("json!() macro produces object")
+            .insert("StringAttributeConstraints".into(), Value::Object(sc));
+    }
+    if let Some(c) = &attr.number_attribute_constraints {
+        let mut nc = serde_json::Map::new();
+        if let Some(min) = c.min_value {
+            nc.insert("MinValue".into(), Value::String(min.to_string()));
+        }
+        if let Some(max) = c.max_value {
+            nc.insert("MaxValue".into(), Value::String(max.to_string()));
+        }
+        obj.as_object_mut()
+            .expect("json!() macro produces object")
+            .insert("NumberAttributeConstraints".into(), Value::Object(nc));
+    }
+    obj
+}
 
 fn parse_password_policy(v: &Value) -> PasswordPolicy {
     let default = PasswordPolicy::default();
@@ -815,4 +1021,218 @@ pub fn set_log_delivery_configuration(
             "LogConfigurations": log_configs
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("cognito-idp", "us-east-1")
+    }
+
+    #[test]
+    fn create_user_pool_seeds_default_schema() {
+        let state = CognitoState::default();
+        create_user_pool(&state, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        let pool = state
+            .user_pools
+            .iter()
+            .next()
+            .expect("pool was created")
+            .clone();
+        // 20 standard OIDC attrs out of the box.
+        assert_eq!(pool.schema.len(), 20);
+        assert!(pool.schema.iter().any(|a| a.name == "email"));
+        assert!(pool.schema.iter().any(|a| a.name == "sub"));
+        assert!(pool.schema.iter().any(|a| a.name == "updated_at"));
+    }
+
+    #[test]
+    fn create_user_pool_with_custom_schema_attr_adds_to_schema() {
+        let state = CognitoState::default();
+        let input = json!({
+            "PoolName": "p",
+            "Schema": [
+                {
+                    "Name": "plan",
+                    "AttributeDataType": "String",
+                    "Mutable": true,
+                    "StringAttributeConstraints": { "MinLength": "1", "MaxLength": "32" }
+                },
+                {
+                    "Name": "rank",
+                    "AttributeDataType": "Number",
+                    "NumberAttributeConstraints": { "MinValue": "0", "MaxValue": "10" }
+                }
+            ]
+        });
+        create_user_pool(&state, &input, &ctx()).unwrap();
+        let pool = state
+            .user_pools
+            .iter()
+            .next()
+            .expect("pool was created")
+            .clone();
+        let plan = pool
+            .schema
+            .iter()
+            .find(|a| a.name == "custom:plan")
+            .expect("custom:plan in schema");
+        assert_eq!(plan.attribute_data_type, "String");
+        assert_eq!(
+            plan.string_attribute_constraints
+                .as_ref()
+                .unwrap()
+                .max_length,
+            Some(32)
+        );
+        let rank = pool
+            .schema
+            .iter()
+            .find(|a| a.name == "custom:rank")
+            .expect("custom:rank in schema");
+        assert_eq!(
+            rank.number_attribute_constraints
+                .as_ref()
+                .unwrap()
+                .max_value,
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn create_user_pool_schema_can_override_standard_attr_required_flag() {
+        let state = CognitoState::default();
+        let input = json!({
+            "PoolName": "p",
+            "Schema": [{ "Name": "email", "Required": true }]
+        });
+        create_user_pool(&state, &input, &ctx()).unwrap();
+        let pool = state
+            .user_pools
+            .iter()
+            .next()
+            .expect("pool was created")
+            .clone();
+        let email = pool.schema.iter().find(|a| a.name == "email").unwrap();
+        assert!(email.required);
+        // Schema length doesn't grow - the entry overrode rather than appended.
+        assert_eq!(pool.schema.len(), 20);
+    }
+
+    #[test]
+    fn create_user_pool_rejects_unknown_data_type() {
+        let state = CognitoState::default();
+        let input = json!({
+            "PoolName": "p",
+            "Schema": [{ "Name": "weird", "AttributeDataType": "Hex" }]
+        });
+        let err = create_user_pool(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn add_custom_attributes_rejects_duplicate() {
+        let state = CognitoState::default();
+        create_user_pool(&state, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        let pool_id = state
+            .user_pools
+            .iter()
+            .next()
+            .expect("pool created")
+            .id
+            .clone();
+
+        let input = json!({
+            "UserPoolId": pool_id,
+            "CustomAttributes": [{ "Name": "plan", "AttributeDataType": "String" }]
+        });
+        add_custom_attributes(&state, &input, &ctx()).unwrap();
+        let err = add_custom_attributes(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+        assert!(err.message.contains("already exists"));
+    }
+
+    #[test]
+    fn add_custom_attributes_enforces_50_cap() {
+        let state = CognitoState::default();
+        create_user_pool(&state, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        let pool_id = state
+            .user_pools
+            .iter()
+            .next()
+            .expect("pool created")
+            .id
+            .clone();
+
+        let attrs: Vec<Value> = (0..50)
+            .map(|i| json!({ "Name": format!("a{i}"), "AttributeDataType": "String" }))
+            .collect();
+        add_custom_attributes(
+            &state,
+            &json!({ "UserPoolId": pool_id, "CustomAttributes": attrs }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let err = add_custom_attributes(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "CustomAttributes": [{ "Name": "overflow", "AttributeDataType": "String" }]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+        assert!(err.message.contains("limit"));
+    }
+
+    #[test]
+    fn add_custom_attributes_rejects_unknown_data_type() {
+        let state = CognitoState::default();
+        create_user_pool(&state, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        let pool_id = state
+            .user_pools
+            .iter()
+            .next()
+            .expect("pool created")
+            .id
+            .clone();
+        let err = add_custom_attributes(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "CustomAttributes": [{ "Name": "weird", "AttributeDataType": "Hex" }]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn describe_user_pool_returns_schema_attributes() {
+        let state = CognitoState::default();
+        create_user_pool(&state, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        let pool_id = state
+            .user_pools
+            .iter()
+            .next()
+            .expect("pool created")
+            .id
+            .clone();
+        let resp = describe_user_pool(&state, &json!({ "UserPoolId": pool_id }), &ctx()).unwrap();
+        let attrs = resp["UserPool"]["SchemaAttributes"]
+            .as_array()
+            .expect("SchemaAttributes is an array");
+        assert_eq!(attrs.len(), 20);
+        let email = attrs
+            .iter()
+            .find(|a| a["Name"] == "email")
+            .expect("email in response");
+        assert_eq!(email["AttributeDataType"], "String");
+        assert!(email["StringAttributeConstraints"]["MaxLength"].is_string());
+    }
 }

@@ -6,6 +6,10 @@ use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
+use crate::operations::schema_validation::{
+    validate_attribute_values, validate_deletable_names, validate_mutability,
+    validate_required_present,
+};
 use crate::state::{CognitoState, CognitoUser, UserPool};
 
 /// Fire-and-forget Lambda trigger via the event bus.
@@ -360,6 +364,8 @@ pub fn sign_up(
     super::auth_policy::validate_password(&pool.policies, password)?;
 
     let raw_attrs = parse_user_attributes(input, "UserAttributes");
+    validate_attribute_values(&pool.schema, &raw_attrs)?;
+    validate_required_present(&pool.schema, &raw_attrs)?;
     let attributes = prepare_user_attributes(&pool, username, raw_attrs)?;
     let user = make_user(&pool.id, username, password, attributes, "UNCONFIRMED")?;
     let sub = user.sub.clone();
@@ -588,6 +594,8 @@ pub fn admin_create_user(
     super::auth_policy::validate_password(&pool.policies, password)?;
 
     let raw_attrs = parse_user_attributes(input, "UserAttributes");
+    validate_attribute_values(&pool.schema, &raw_attrs)?;
+    validate_required_present(&pool.schema, &raw_attrs)?;
     let attributes = prepare_user_attributes(&pool, username, raw_attrs)?;
     let user = make_user(
         &pool.id,
@@ -1279,6 +1287,7 @@ pub fn admin_update_user_attributes(
     })?;
 
     let username_attrs = pool.username_attributes.clone();
+    let schema = pool.schema.clone();
     let user = pool.users.get_mut(username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
@@ -1286,11 +1295,11 @@ pub fn admin_update_user_attributes(
         )
     })?;
 
-    apply_attribute_updates(
-        user,
-        parse_user_attributes(input, "UserAttributes"),
-        &username_attrs,
-    )?;
+    let new_attrs = parse_user_attributes(input, "UserAttributes");
+    validate_attribute_values(&schema, &new_attrs)?;
+    validate_mutability(&schema, &user.attributes, &new_attrs)?;
+
+    apply_attribute_updates(user, new_attrs, &username_attrs)?;
 
     info!(username = %username, pool_id = %pool_id, "Cognito: admin updated user attributes");
     Ok(json!({}))
@@ -1367,6 +1376,7 @@ pub fn admin_delete_user_attributes(
         )
     })?;
 
+    let schema = pool.schema.clone();
     let user = pool.users.get_mut(username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
@@ -1374,12 +1384,17 @@ pub fn admin_delete_user_attributes(
         )
     })?;
 
-    if let Some(names) = input["UserAttributeNames"].as_array() {
-        for name in names {
-            if let Some(n) = name.as_str() {
-                user.attributes.remove(n);
-            }
-        }
+    let names: Vec<String> = input["UserAttributeNames"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    validate_deletable_names(&schema, &names)?;
+    for name in &names {
+        user.attributes.remove(name);
     }
 
     info!(username = %username, pool_id = %pool_id, "Cognito: admin deleted user attributes");
@@ -1414,7 +1429,10 @@ pub fn update_user_attributes(
     for mut pool_entry in state.user_pools.iter_mut() {
         if pool_entry.users.contains_key(&username) {
             let username_attrs = pool_entry.username_attributes.clone();
+            let schema = pool_entry.schema.clone();
             let user = pool_entry.users.get_mut(&username).expect("just checked");
+            validate_attribute_values(&schema, &new_attrs)?;
+            validate_mutability(&schema, &user.attributes, &new_attrs)?;
             apply_attribute_updates(user, new_attrs, &username_attrs)?;
             return Ok(json!({ "CodeDeliveryDetailsList": [] }));
         }
@@ -1459,7 +1477,10 @@ pub fn delete_user_attributes(
         .unwrap_or_default();
 
     for mut pool_entry in state.user_pools.iter_mut() {
-        if let Some(user) = pool_entry.users.get_mut(&username) {
+        if pool_entry.users.contains_key(&username) {
+            let schema = pool_entry.schema.clone();
+            validate_deletable_names(&schema, &attr_names)?;
+            let user = pool_entry.users.get_mut(&username).expect("just checked");
             for name in &attr_names {
                 user.attributes.remove(name);
             }
@@ -1915,5 +1936,342 @@ mod tests {
         check_code_rate_limit(&mut user).expect("expired lockout should clear");
         assert!(user.code_locked_until_secs.is_none());
         assert_eq!(user.code_failed_attempts, 0);
+    }
+
+    // -----------------------------------------------------------------
+    // Schema enforcement on user write paths.
+    // -----------------------------------------------------------------
+
+    use crate::operations::pools::{add_custom_attributes, create_user_pool};
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("cognito-idp", "us-east-1")
+    }
+
+    /// Build a state + pool + admin-created confirmed user with a
+    /// `custom:plan` String attr declared and one client. Returns
+    /// (state, pool_id, client_id).
+    fn schema_fixture() -> (CognitoState, String) {
+        let state = CognitoState::default();
+        let input = json!({
+            "PoolName": "p",
+            "Schema": [
+                { "Name": "plan", "AttributeDataType": "String",
+                  "StringAttributeConstraints": { "MinLength": "1", "MaxLength": "32" } },
+                { "Name": "rank", "AttributeDataType": "Number",
+                  "NumberAttributeConstraints": { "MinValue": "0", "MaxValue": "10" } },
+                { "Name": "frozen", "AttributeDataType": "String", "Mutable": false }
+            ]
+        });
+        create_user_pool(&state, &input, &ctx()).unwrap();
+        let pool_id = state
+            .user_pools
+            .iter()
+            .next()
+            .expect("pool created")
+            .id
+            .clone();
+        // Add a client so SignUp has somewhere to land.
+        state.user_pools.alter(&pool_id, |_, mut pool| {
+            pool.clients.insert(
+                "c1".to_string(),
+                crate::state::UserPoolClient {
+                    client_id: "c1".to_string(),
+                    client_name: "test".to_string(),
+                    user_pool_id: pool.id.clone(),
+                    explicit_auth_flows: Vec::new(),
+                    created_date: 0,
+                    client_secret: None,
+                    additional_client_secrets: Vec::new(),
+                    callback_urls: Vec::new(),
+                    logout_urls: Vec::new(),
+                    allowed_oauth_flows: Vec::new(),
+                    allowed_oauth_scopes: Vec::new(),
+                    supported_identity_providers: Vec::new(),
+                    access_token_validity: 3600,
+                    id_token_validity: 3600,
+                    refresh_token_validity: 30,
+                },
+            );
+            pool
+        });
+        (state, pool_id)
+    }
+
+    #[test]
+    fn admin_create_user_rejects_undeclared_custom_attr() {
+        let (state, pool_id) = schema_fixture();
+        let err = admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "TemporaryPassword": "Temp@1234",
+                "UserAttributes": [
+                    { "Name": "custom:not_in_schema", "Value": "x" }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+        assert!(err.message.contains("does not exist in the schema"));
+    }
+
+    #[test]
+    fn admin_create_user_with_declared_custom_attr_succeeds() {
+        let (state, pool_id) = schema_fixture();
+        admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "TemporaryPassword": "Temp@1234",
+                "UserAttributes": [
+                    { "Name": "custom:plan", "Value": "enterprise" }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn admin_create_user_rejects_bad_number_value() {
+        let (state, pool_id) = schema_fixture();
+        let err = admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "TemporaryPassword": "Temp@1234",
+                "UserAttributes": [
+                    { "Name": "custom:rank", "Value": "high" }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("non-numeric"));
+    }
+
+    #[test]
+    fn admin_create_user_rejects_out_of_range_number() {
+        let (state, pool_id) = schema_fixture();
+        let err = admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "TemporaryPassword": "Temp@1234",
+                "UserAttributes": [
+                    { "Name": "custom:rank", "Value": "99" }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("greater than max"));
+    }
+
+    #[test]
+    fn admin_create_user_rejects_overlong_string() {
+        let (state, pool_id) = schema_fixture();
+        let too_long = "x".repeat(33);
+        let err = admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "TemporaryPassword": "Temp@1234",
+                "UserAttributes": [
+                    { "Name": "custom:plan", "Value": too_long }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("longer than max"));
+    }
+
+    #[test]
+    fn admin_create_user_required_attr_missing_rejected() {
+        let state = CognitoState::default();
+        // Required attr without default value.
+        create_user_pool(
+            &state,
+            &json!({
+                "PoolName": "p",
+                "Schema": [
+                    { "Name": "org", "AttributeDataType": "String", "Required": true }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let pool_id = state
+            .user_pools
+            .iter()
+            .next()
+            .expect("pool created")
+            .id
+            .clone();
+        let err = admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "TemporaryPassword": "Temp@1234"
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("required attribute missing"));
+        assert!(err.message.contains("custom:org"));
+    }
+
+    #[test]
+    fn admin_update_user_attributes_rejects_undeclared() {
+        let (state, pool_id) = schema_fixture();
+        admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "TemporaryPassword": "Temp@1234"
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = admin_update_user_attributes(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "UserAttributes": [
+                    { "Name": "custom:not_in_schema", "Value": "x" }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn admin_update_user_attributes_rejects_change_of_immutable() {
+        let (state, pool_id) = schema_fixture();
+        admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "TemporaryPassword": "Temp@1234",
+                "UserAttributes": [
+                    { "Name": "custom:frozen", "Value": "v1" }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // Same value should pass.
+        admin_update_user_attributes(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "UserAttributes": [{ "Name": "custom:frozen", "Value": "v1" }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // Different value rejected.
+        let err = admin_update_user_attributes(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "UserAttributes": [{ "Name": "custom:frozen", "Value": "v2" }]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+    }
+
+    #[test]
+    fn admin_delete_user_attributes_rejects_unknown_name() {
+        let (state, pool_id) = schema_fixture();
+        admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "TemporaryPassword": "Temp@1234"
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = admin_delete_user_attributes(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "UserAttributeNames": ["custom:not_in_schema"]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("does not exist"));
+    }
+
+    #[test]
+    fn add_custom_attributes_then_admin_create_user_succeeds() {
+        let state = CognitoState::default();
+        create_user_pool(&state, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        let pool_id = state
+            .user_pools
+            .iter()
+            .next()
+            .expect("pool created")
+            .id
+            .clone();
+
+        // Before AddCustomAttributes: rejected.
+        let err = admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "TemporaryPassword": "Temp@1234",
+                "UserAttributes": [{ "Name": "custom:plan", "Value": "x" }]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+
+        // Declare the attribute, then retry: ok.
+        add_custom_attributes(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "CustomAttributes": [{ "Name": "plan", "AttributeDataType": "String" }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "TemporaryPassword": "Temp@1234",
+                "UserAttributes": [{ "Name": "custom:plan", "Value": "x" }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
     }
 }

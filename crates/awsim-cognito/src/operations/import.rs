@@ -292,11 +292,15 @@ pub fn get_csv_header(
 
     let mut headers: Vec<String> = CSV_HEADER.iter().map(|s| s.to_string()).collect();
 
-    // Add any custom attributes defined in the schema
+    // Add any custom attributes defined in the schema. `name` already
+    // includes the `custom:` prefix, so the import-job CSV header is
+    // the canonical user-attribute key.
     for schema_attr in &pool.schema {
-        let custom_key = format!("custom:{}", schema_attr.name);
-        if !headers.contains(&custom_key) {
-            headers.push(custom_key);
+        if !schema_attr.name.starts_with("custom:") {
+            continue;
+        }
+        if !headers.contains(&schema_attr.name) {
+            headers.push(schema_attr.name.clone());
         }
     }
 
