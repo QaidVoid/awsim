@@ -8,8 +8,9 @@
 //! optional and unused servers tolerate them either way.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
@@ -25,6 +26,30 @@ pub struct ChatRequest {
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<StreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
+    /// String ("auto" / "none" / "required") or `{ "type": "function",
+    /// "function": { "name": "..." } }`. Modeled as a raw Value so we
+    /// can forward any shape the caller hands us.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<Value>,
+}
+
+/// OpenAI tool spec. Today only `function` tools exist; we still tag
+/// the `type` field so future tool kinds slot in cleanly.
+#[derive(Debug, Clone, Serialize)]
+pub struct Tool {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: FunctionDef,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FunctionDef {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub parameters: Value,
 }
 
 /// OpenAI streaming options. The only field that exists today is
@@ -38,10 +63,44 @@ pub struct StreamOptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
-    /// "system" | "user" | "assistant"
+    /// "system" | "user" | "assistant" | "tool"
     pub role: String,
     #[serde(default)]
     pub content: MessageContent,
+    /// Assistant messages that invoke tools carry the call list here.
+    /// Backends accept either `content: ""` or `content: null` next to
+    /// `tool_calls`; we serialize empty content so both paths work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    /// Set on `role: tool` messages to bind the result to the
+    /// originating call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+/// One entry in an assistant message's `tool_calls` array. OpenAI
+/// streams arguments as a partial string, so it stays stringified on
+/// the response side too; vendor translators that need a structured
+/// view parse it themselves.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type", default = "default_function_kind")]
+    pub kind: String,
+    pub function: ToolCallFunction,
+}
+
+fn default_function_kind() -> String {
+    "function".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallFunction {
+    pub name: String,
+    /// JSON-encoded argument object. OpenAI ships this as a string,
+    /// not a structured value, so callers parse it on demand.
+    #[serde(default)]
+    pub arguments: String,
 }
 
 /// OpenAI's chat content field is overloaded: either a plain string
@@ -147,6 +206,8 @@ impl Default for ChatMessage {
         Self {
             role: "assistant".to_string(),
             content: MessageContent::default(),
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 }

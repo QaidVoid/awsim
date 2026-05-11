@@ -24,11 +24,13 @@
 //! `{"type":"text","text":"…"}`).
 
 use awsim_core::AwsError;
+use base64::Engine;
 use serde_json::{Value, json};
 use tracing::warn;
 
 use super::openai::{
-    ChatMessage, ChatRequest, ChatResponse, ContentPart, ImageUrl, MessageContent,
+    ChatMessage, ChatRequest, ChatResponse, ContentPart, FunctionDef, ImageUrl, MessageContent,
+    Tool, ToolCall, ToolCallFunction,
 };
 use crate::backend::BedrockBackends;
 
@@ -61,6 +63,7 @@ pub fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, A
         messages.push(ChatMessage {
             role: "system".to_string(),
             content: MessageContent::text(system),
+            ..ChatMessage::default()
         });
     }
     let arr = body
@@ -70,13 +73,8 @@ pub fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, A
             AwsError::bad_request("ValidationException", "messages array is required")
         })?;
     for m in arr {
-        let role = m
-            .get("role")
-            .and_then(Value::as_str)
-            .unwrap_or("user")
-            .to_string();
-        let content = extract_content(m.get("content"));
-        messages.push(ChatMessage { role, content });
+        let role = m.get("role").and_then(Value::as_str).unwrap_or("user");
+        messages.extend(extract_anthropic_messages(role, m.get("content")));
     }
 
     Ok(ChatRequest {
@@ -86,49 +84,282 @@ pub fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, A
         temperature,
         top_p,
         stop,
-        stream: None,
-        stream_options: None,
+        tools: extract_tools(body.get("tools")),
+        tool_choice: extract_tool_choice(body.get("tool_choice")),
+        ..ChatRequest::default()
     })
 }
 
-/// Anthropic content fields can be either a plain string (legacy) or
-/// an array of typed content blocks. Text blocks are concatenated;
-/// `image` blocks are forwarded as OpenAI-compat `image_url` parts
-/// (data URL for base64 sources, raw URL for `url` sources). When the
-/// message has no images we collapse back to a plain string so
-/// text-only backends (which may reject the parts array) keep working.
-/// Tool-use / unknown blocks are dropped with a warning.
-fn extract_content(v: Option<&Value>) -> MessageContent {
-    match v {
-        Some(Value::String(s)) => MessageContent::Text(s.clone()),
-        Some(Value::Array(blocks)) => {
-            let mut parts: Vec<ContentPart> = Vec::new();
-            for block in blocks {
-                let kind = block.get("type").and_then(Value::as_str).unwrap_or("text");
-                match kind {
-                    "text" => {
-                        if let Some(t) = block.get("text").and_then(Value::as_str) {
-                            parts.push(ContentPart::Text {
-                                text: t.to_string(),
-                            });
-                        }
-                    }
-                    "image" => match anthropic_image_to_data_url(block.get("source")) {
-                        Some(url) => parts.push(ContentPart::ImageUrl {
-                            image_url: ImageUrl { url },
-                        }),
-                        None => warn!("Anthropic image block had no recognizable source, dropped"),
-                    },
-                    other => warn!(
-                        block_type = %other,
-                        "Anthropic content block dropped, backend doesn't support it"
-                    ),
+/// Translate Anthropic's `tools` array (each entry has `name`,
+/// `description`, and `input_schema`) into OpenAI function specs.
+/// Returns `None` if no tools were declared so the field gets
+/// `skip_serializing_if`'d off the wire.
+fn extract_tools(v: Option<&Value>) -> Option<Vec<Tool>> {
+    let arr = v.and_then(Value::as_array)?;
+    let mut out = Vec::new();
+    for t in arr {
+        let Some(name) = t.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let description = t
+            .get("description")
+            .and_then(Value::as_str)
+            .map(String::from);
+        let parameters = t
+            .get("input_schema")
+            .cloned()
+            .unwrap_or_else(|| json!({ "type": "object", "properties": {} }));
+        out.push(Tool {
+            kind: "function".to_string(),
+            function: FunctionDef {
+                name: name.to_string(),
+                description,
+                parameters,
+            },
+        });
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+/// Anthropic tool_choice -> OpenAI tool_choice. Mappings:
+/// `auto` -> `"auto"`, `any` -> `"required"`, `none` -> `"none"`,
+/// `tool` with `name` -> `{ "type": "function", "function": { "name": ... }}`.
+fn extract_tool_choice(v: Option<&Value>) -> Option<Value> {
+    let obj = v?.as_object()?;
+    let kind = obj.get("type").and_then(Value::as_str)?;
+    match kind {
+        "auto" => Some(json!("auto")),
+        "any" => Some(json!("required")),
+        "none" => Some(json!("none")),
+        "tool" => {
+            let name = obj.get("name").and_then(Value::as_str)?;
+            Some(json!({ "type": "function", "function": { "name": name } }))
+        }
+        _ => None,
+    }
+}
+
+/// Split one Anthropic message into the OpenAI messages it represents.
+/// Assistant messages collapse into a single OpenAI message whose
+/// `tool_calls` carries any `tool_use` blocks. User messages may emit
+/// multiple OpenAI messages: each `tool_result` block becomes a
+/// `role: tool` message (OpenAI requires tool replies to precede the
+/// next user turn) and any remaining text / image / document blocks
+/// form one trailing `role: user` message.
+fn extract_anthropic_messages(role: &str, content: Option<&Value>) -> Vec<ChatMessage> {
+    match content {
+        Some(Value::String(s)) => vec![ChatMessage {
+            role: role.to_string(),
+            content: MessageContent::text(s),
+            ..ChatMessage::default()
+        }],
+        Some(Value::Array(blocks)) => match role {
+            "assistant" => vec![extract_assistant_message(blocks)],
+            _ => extract_user_messages(blocks),
+        },
+        _ => vec![ChatMessage {
+            role: role.to_string(),
+            content: MessageContent::default(),
+            ..ChatMessage::default()
+        }],
+    }
+}
+
+fn extract_assistant_message(blocks: &[Value]) -> ChatMessage {
+    let mut parts: Vec<ContentPart> = Vec::new();
+    let mut tool_calls: Vec<ToolCall> = Vec::new();
+    for block in blocks {
+        let kind = block.get("type").and_then(Value::as_str).unwrap_or("text");
+        match kind {
+            "text" => {
+                if let Some(t) = block.get("text").and_then(Value::as_str) {
+                    parts.push(ContentPart::Text {
+                        text: t.to_string(),
+                    });
                 }
             }
-            collapse_parts(parts)
+            "image" => match anthropic_image_to_data_url(block.get("source")) {
+                Some(url) => parts.push(ContentPart::ImageUrl {
+                    image_url: ImageUrl { url },
+                }),
+                None => warn!("Anthropic image block had no recognizable source, dropped"),
+            },
+            "document" => {
+                if let Some(part) = anthropic_document_to_part(block) {
+                    parts.push(part);
+                }
+            }
+            "tool_use" => {
+                let id = block
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let name = block
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = block
+                    .get("input")
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "{}".to_string());
+                tool_calls.push(ToolCall {
+                    id,
+                    kind: "function".to_string(),
+                    function: ToolCallFunction { name, arguments },
+                });
+            }
+            other => warn!(
+                block_type = %other,
+                "Anthropic assistant content block dropped, backend doesn't support it"
+            ),
         }
-        _ => MessageContent::Text(String::new()),
     }
+    ChatMessage {
+        role: "assistant".to_string(),
+        content: collapse_parts(parts),
+        tool_calls: if tool_calls.is_empty() {
+            None
+        } else {
+            Some(tool_calls)
+        },
+        tool_call_id: None,
+    }
+}
+
+fn extract_user_messages(blocks: &[Value]) -> Vec<ChatMessage> {
+    let mut out: Vec<ChatMessage> = Vec::new();
+    let mut user_parts: Vec<ContentPart> = Vec::new();
+    for block in blocks {
+        let kind = block.get("type").and_then(Value::as_str).unwrap_or("text");
+        match kind {
+            "text" => {
+                if let Some(t) = block.get("text").and_then(Value::as_str) {
+                    user_parts.push(ContentPart::Text {
+                        text: t.to_string(),
+                    });
+                }
+            }
+            "image" => match anthropic_image_to_data_url(block.get("source")) {
+                Some(url) => user_parts.push(ContentPart::ImageUrl {
+                    image_url: ImageUrl { url },
+                }),
+                None => warn!("Anthropic image block had no recognizable source, dropped"),
+            },
+            "document" => {
+                if let Some(part) = anthropic_document_to_part(block) {
+                    user_parts.push(part);
+                }
+            }
+            "tool_result" => {
+                let id = block
+                    .get("tool_use_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let text = tool_result_to_text(block.get("content"));
+                out.push(ChatMessage {
+                    role: "tool".to_string(),
+                    content: MessageContent::text(text),
+                    tool_calls: None,
+                    tool_call_id: Some(id),
+                });
+            }
+            other => warn!(
+                block_type = %other,
+                "Anthropic user content block dropped, backend doesn't support it"
+            ),
+        }
+    }
+    if !user_parts.is_empty() {
+        out.push(ChatMessage {
+            role: "user".to_string(),
+            content: collapse_parts(user_parts),
+            ..ChatMessage::default()
+        });
+    }
+    out
+}
+
+/// Flatten a tool_result `content` field (string or array of typed
+/// blocks) into a plain string. The OpenAI tool message carries
+/// content as a single string.
+fn tool_result_to_text(v: Option<&Value>) -> String {
+    match v {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(blocks)) => {
+            let mut out = String::new();
+            for b in blocks {
+                if let Some(t) = b.get("text").and_then(Value::as_str) {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(t);
+                }
+            }
+            out
+        }
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
+}
+
+/// Translate an Anthropic `document` block into a content part.
+///
+/// Documents arrive shaped like images: a `source` of `{ "type":
+/// "base64", "media_type": "<mime>", "data": "<b64>" }` or `{ "type":
+/// "text", "media_type": "text/plain", "data": "..." }`. We try to
+/// inline the file as a text block (wrapping the body in a
+/// `<document>` envelope tagged with name/format) since that flows
+/// through every text-only backend. Binary payloads that don't decode
+/// as UTF-8 fall back to inlining a marker so the model at least
+/// knows an attachment was present.
+fn anthropic_document_to_part(block: &Value) -> Option<ContentPart> {
+    let source = block.get("source")?;
+    let stype = source
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("base64");
+    let name = block
+        .get("title")
+        .or_else(|| block.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("document");
+    let media_type = source
+        .get("media_type")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream");
+    let raw = match stype {
+        "text" => source.get("data").and_then(Value::as_str)?.to_string(),
+        "base64" => {
+            let data = source.get("data").and_then(Value::as_str)?;
+            match base64::engine::general_purpose::STANDARD.decode(data) {
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        return Some(ContentPart::Text {
+                            text: format!(
+                                "<document name=\"{name}\" media-type=\"{media_type}\">[binary content omitted, {} bytes base64-encoded]</document>",
+                                data.len()
+                            ),
+                        });
+                    }
+                },
+                Err(e) => {
+                    warn!(error = %e, "Anthropic document block had invalid base64, dropped");
+                    return None;
+                }
+            }
+        }
+        other => {
+            warn!(source_type = %other, "Anthropic document source type unsupported, dropped");
+            return None;
+        }
+    };
+    Some(ContentPart::Text {
+        text: format!("<document name=\"{name}\" media-type=\"{media_type}\">\n{raw}\n</document>"),
+    })
 }
 
 /// Translate an Anthropic image `source` object into a data URL the
@@ -183,21 +414,34 @@ fn collapse_parts(parts: Vec<ContentPart>) -> MessageContent {
 /// caller's bedrock id.
 pub fn to_bedrock_response(bedrock_id: &str, resp: ChatResponse) -> Value {
     let choice = resp.choices.into_iter().next();
-    let (text, finish) = match &choice {
+    let (text, tool_calls, finish) = match choice {
         Some(c) => (
             c.message.content.as_text(),
-            c.finish_reason
-                .clone()
-                .unwrap_or_else(|| "end_turn".to_string()),
+            c.message.tool_calls.unwrap_or_default(),
+            c.finish_reason.unwrap_or_else(|| "end_turn".to_string()),
         ),
-        None => (String::new(), "end_turn".to_string()),
+        None => (String::new(), Vec::new(), "end_turn".to_string()),
     };
-    let stop_reason = match finish.as_str() {
-        // OpenAI uses "stop"; Anthropic uses "end_turn".
-        "stop" => "end_turn",
-        "length" => "max_tokens",
-        "tool_calls" => "tool_use",
-        other => other,
+    let mut blocks: Vec<Value> = Vec::new();
+    if !text.is_empty() {
+        blocks.push(json!({ "type": "text", "text": text }));
+    }
+    for tc in &tool_calls {
+        blocks.push(tool_call_to_use_block(tc));
+    }
+    if blocks.is_empty() {
+        blocks.push(json!({ "type": "text", "text": "" }));
+    }
+    let stop_reason = if !tool_calls.is_empty() {
+        "tool_use"
+    } else {
+        match finish.as_str() {
+            // OpenAI uses "stop"; Anthropic uses "end_turn".
+            "stop" => "end_turn",
+            "length" => "max_tokens",
+            "tool_calls" => "tool_use",
+            other => other,
+        }
     };
     let usage = resp.usage.unwrap_or_default();
 
@@ -205,7 +449,7 @@ pub fn to_bedrock_response(bedrock_id: &str, resp: ChatResponse) -> Value {
         "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
         "type": "message",
         "role": "assistant",
-        "content": [{ "type": "text", "text": text }],
+        "content": blocks,
         "model": bedrock_id,
         "stop_reason": stop_reason,
         "stop_sequence": Value::Null,
@@ -213,6 +457,21 @@ pub fn to_bedrock_response(bedrock_id: &str, resp: ChatResponse) -> Value {
             "input_tokens":  usage.prompt_tokens,
             "output_tokens": usage.completion_tokens,
         }
+    })
+}
+
+/// Map one OpenAI `tool_calls` entry back to an Anthropic `tool_use`
+/// content block. The OpenAI side ships arguments as a stringified
+/// JSON object; Anthropic expects a structured value under `input`,
+/// so we parse on the way out (falling back to `{}` on malformed
+/// JSON rather than failing the whole response).
+fn tool_call_to_use_block(tc: &ToolCall) -> Value {
+    let input: Value = serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
+    json!({
+        "type": "tool_use",
+        "id": tc.id,
+        "name": tc.function.name,
+        "input": input,
     })
 }
 
@@ -229,21 +488,24 @@ pub async fn invoke_streaming(
     Ok(super::stream_envelope(events))
 }
 
-/// Convert an accumulated stream into the Anthropic event sequence:
-///
-/// 1. `message_start`
-/// 2. `content_block_start` (single text block, index 0)
-/// 3. `content_block_delta` (full text in one chunk for now)
-/// 4. `content_block_stop`
-/// 5. `message_delta` (with stop_reason)
-/// 6. `message_stop`
+/// Convert an accumulated stream into the Anthropic event sequence.
+/// The shape mirrors Anthropic's native API: a `message_start`, then
+/// one start/delta/stop trio per content block (index 0 for text,
+/// 1..N for any tool_use calls), then `message_delta` carrying the
+/// final stop_reason, then `message_stop`. When tool_calls are
+/// present the stop_reason is forced to `tool_use`.
 fn build_events(bedrock_id: &str, acc: &super::AccumulatedStream) -> Vec<Value> {
-    let stop_reason = match acc.finish_reason.as_deref() {
-        Some("stop") => "end_turn",
-        Some("length") => "max_tokens",
-        Some("tool_calls") => "tool_use",
-        Some(other) => other,
-        None => "end_turn",
+    let has_tools = !acc.tool_calls.is_empty();
+    let stop_reason = if has_tools {
+        "tool_use"
+    } else {
+        match acc.finish_reason.as_deref() {
+            Some("stop") => "end_turn",
+            Some("length") => "max_tokens",
+            Some("tool_calls") => "tool_use",
+            Some(other) => other,
+            None => "end_turn",
+        }
     };
 
     let msg_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
@@ -274,6 +536,30 @@ fn build_events(bedrock_id: &str, acc: &super::AccumulatedStream) -> Vec<Value> 
         }));
     }
     events.push(json!({ "type": "content_block_stop", "index": 0 }));
+    for (i, tc) in acc.tool_calls.iter().enumerate() {
+        let idx = i + 1;
+        events.push(json!({
+            "type": "content_block_start",
+            "index": idx,
+            "content_block": {
+                "type": "tool_use",
+                "id": tc.id,
+                "name": tc.name,
+                "input": {},
+            }
+        }));
+        // Anthropic streams partial JSON via input_json_delta; we ship
+        // the assembled object in a single delta since the backend
+        // accumulator already collapsed the chunks.
+        if !tc.arguments.is_empty() {
+            events.push(json!({
+                "type": "content_block_delta",
+                "index": idx,
+                "delta": { "type": "input_json_delta", "partial_json": tc.arguments }
+            }));
+        }
+        events.push(json!({ "type": "content_block_stop", "index": idx }));
+    }
     events.push(json!({
         "type": "message_delta",
         "delta": { "stop_reason": stop_reason, "stop_sequence": Value::Null },
@@ -422,6 +708,7 @@ mod tests {
             finish_reason: Some("stop".into()),
             prompt_tokens: 3,
             completion_tokens: 2,
+            ..super::super::AccumulatedStream::default()
         };
         let events = build_events("anthropic.claude-3-5-sonnet-20241022-v2:0", &acc);
         assert_eq!(events[0]["type"], "message_start");
@@ -460,6 +747,7 @@ mod tests {
                 message: ChatMessage {
                     role: "assistant".into(),
                     content: "Yo".into(),
+                    ..ChatMessage::default()
                 },
                 finish_reason: Some("length".into()),
             }],
@@ -475,5 +763,114 @@ mod tests {
         assert_eq!(v["content"][0]["text"], "Yo");
         assert_eq!(v["usage"]["input_tokens"], 5);
         assert_eq!(v["usage"]["output_tokens"], 7);
+    }
+
+    #[test]
+    fn forwards_tools_and_tool_choice() {
+        let body = json!({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 256,
+            "tools": [{
+                "name": "get_weather",
+                "description": "Look up weather",
+                "input_schema": {
+                    "type": "object",
+                    "properties": { "city": { "type": "string" } }
+                }
+            }],
+            "tool_choice": { "type": "any" },
+            "messages": [{ "role": "user", "content": "Hi" }],
+        });
+        let req = to_openai_request("m", &body).unwrap();
+        let tools = req.tools.as_deref().expect("tools present");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].function.name, "get_weather");
+        assert_eq!(
+            tools[0].function.description.as_deref(),
+            Some("Look up weather")
+        );
+        assert_eq!(req.tool_choice, Some(json!("required")));
+    }
+
+    #[test]
+    fn splits_user_tool_result_into_tool_message() {
+        let body = json!({
+            "messages": [
+                { "role": "assistant", "content": [
+                    { "type": "tool_use", "id": "tu_1", "name": "get_weather",
+                      "input": { "city": "Kathmandu" }}
+                ]},
+                { "role": "user", "content": [
+                    { "type": "tool_result", "tool_use_id": "tu_1", "content": "20C" }
+                ]}
+            ]
+        });
+        let req = to_openai_request("m", &body).unwrap();
+        assert_eq!(req.messages.len(), 2);
+        let calls = req.messages[0].tool_calls.as_deref().unwrap();
+        assert_eq!(calls[0].id, "tu_1");
+        assert_eq!(calls[0].function.arguments, "{\"city\":\"Kathmandu\"}");
+        assert_eq!(req.messages[1].role, "tool");
+        assert_eq!(req.messages[1].tool_call_id.as_deref(), Some("tu_1"));
+        assert_eq!(req.messages[1].content.as_text(), "20C");
+    }
+
+    #[test]
+    fn inlines_text_document_block() {
+        let csv_b64 = base64::engine::general_purpose::STANDARD.encode("a,b\n1,2\n");
+        let body = json!({
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": "summarize" },
+                    { "type": "document", "title": "rows.csv", "source": {
+                        "type": "base64",
+                        "media_type": "text/csv",
+                        "data": csv_b64
+                    }}
+                ]
+            }]
+        });
+        let req = to_openai_request("m", &body).unwrap();
+        let s = match &req.messages[0].content {
+            MessageContent::Text(s) => s.clone(),
+            other => panic!("expected text-only collapse, got {other:?}"),
+        };
+        assert!(s.contains("summarize"));
+        assert!(s.contains("<document name=\"rows.csv\" media-type=\"text/csv\">"));
+        assert!(s.contains("a,b"));
+    }
+
+    #[test]
+    fn response_emits_tool_use_block() {
+        let resp = ChatResponse {
+            id: "x".into(),
+            model: "m".into(),
+            choices: vec![super::super::openai::ChatChoice {
+                index: 0,
+                message: ChatMessage {
+                    role: "assistant".into(),
+                    content: MessageContent::default(),
+                    tool_calls: Some(vec![ToolCall {
+                        id: "tu_99".into(),
+                        kind: "function".into(),
+                        function: ToolCallFunction {
+                            name: "get_weather".into(),
+                            arguments: "{\"city\":\"Pokhara\"}".into(),
+                        },
+                    }]),
+                    tool_call_id: None,
+                },
+                finish_reason: Some("tool_calls".into()),
+            }],
+            usage: None,
+        };
+        let v = to_bedrock_response("anthropic.claude-3-5-sonnet-20241022-v2:0", resp);
+        assert_eq!(v["stop_reason"], "tool_use");
+        let use_block = &v["content"][0];
+        assert_eq!(use_block["type"], "tool_use");
+        assert_eq!(use_block["id"], "tu_99");
+        assert_eq!(use_block["name"], "get_weather");
+        assert_eq!(use_block["input"]["city"], "Pokhara");
     }
 }

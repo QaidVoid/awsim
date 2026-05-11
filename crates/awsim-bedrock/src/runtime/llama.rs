@@ -27,6 +27,7 @@ fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, AwsEr
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: MessageContent::text(prompt),
+            ..ChatMessage::default()
         }],
         max_tokens: body
             .get("max_gen_len")
@@ -37,9 +38,7 @@ fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, AwsEr
             .and_then(Value::as_f64)
             .map(|v| v as f32),
         top_p: body.get("top_p").and_then(Value::as_f64).map(|v| v as f32),
-        stop: None,
-        stream: None,
-        stream_options: None,
+        ..ChatRequest::default()
     })
 }
 

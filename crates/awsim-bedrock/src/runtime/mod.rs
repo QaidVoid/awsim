@@ -195,6 +195,19 @@ pub(crate) struct AccumulatedStream {
     pub finish_reason: Option<String>,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
+    pub tool_calls: Vec<AccumulatedToolCall>,
+}
+
+/// Per-index tool-call buffer. OpenAI streams tool calls as
+/// fragments: a chunk may carry just the `id`, just a slice of the
+/// function name, or just a slice of the JSON `arguments` string.
+/// We append everything by index so the assembled record is ready
+/// to forward back to the caller once the stream closes.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct AccumulatedToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
 }
 
 pub(crate) fn accumulate_sse(raw: &str) -> AccumulatedStream {
@@ -214,6 +227,11 @@ pub(crate) fn accumulate_sse(raw: &str) -> AccumulatedStream {
         if let Some(delta) = chunk["choices"][0]["delta"]["content"].as_str() {
             acc.text.push_str(delta);
         }
+        if let Some(tcs) = chunk["choices"][0]["delta"]["tool_calls"].as_array() {
+            for tc in tcs {
+                accumulate_tool_call_delta(&mut acc.tool_calls, tc);
+            }
+        }
         if let Some(fr) = chunk["choices"][0]["finish_reason"].as_str() {
             acc.finish_reason = Some(fr.to_string());
         }
@@ -225,6 +243,27 @@ pub(crate) fn accumulate_sse(raw: &str) -> AccumulatedStream {
         }
     }
     acc
+}
+
+/// Append one tool-call delta into the per-index slot. Indices are
+/// not guaranteed dense across chunks so we grow the buffer with
+/// blank slots as needed; missing fields stay empty until a later
+/// chunk supplies them.
+pub(crate) fn accumulate_tool_call_delta(slots: &mut Vec<AccumulatedToolCall>, delta: &Value) {
+    let index = delta["index"].as_u64().unwrap_or(0) as usize;
+    while slots.len() <= index {
+        slots.push(AccumulatedToolCall::default());
+    }
+    let slot = &mut slots[index];
+    if let Some(id) = delta["id"].as_str() {
+        slot.id.push_str(id);
+    }
+    if let Some(name) = delta["function"]["name"].as_str() {
+        slot.name.push_str(name);
+    }
+    if let Some(args) = delta["function"]["arguments"].as_str() {
+        slot.arguments.push_str(args);
+    }
 }
 
 /// Wrap per-family streaming chunks for `InvokeModelWithResponseStream`.
@@ -624,6 +663,9 @@ struct ConverseStreamState {
     finish_reason: Option<String>,
     started: std::time::Instant,
     done: bool,
+    /// Per-index buffer for streamed tool calls. We assemble them as
+    /// fragments arrive and flush the completed frames at EOF.
+    tool_calls: Vec<AccumulatedToolCall>,
     /// After upstream EOF we still have to emit closing frames in
     /// sequence — this queue holds them.
     trailing: std::collections::VecDeque<Bytes>,
@@ -647,6 +689,7 @@ fn converse_stream_from_sse(
         finish_reason: None,
         started,
         done: false,
+        tool_calls: Vec::new(),
         trailing: std::collections::VecDeque::new(),
     };
 
@@ -680,11 +723,39 @@ fn converse_stream_from_sse(
                     ));
                 }
                 None => {
-                    let stop_reason = converse::map_stop_reason(st.finish_reason.as_deref());
+                    let has_tools = !st.tool_calls.is_empty();
+                    let stop_reason = if has_tools {
+                        "tool_use"
+                    } else {
+                        converse::map_stop_reason(st.finish_reason.as_deref())
+                    };
                     st.trailing.push_back(Bytes::from(encode_event_frame(
                         "contentBlockStop",
                         &serde_json::json!({ "contentBlockIndex": 0 }),
                     )));
+                    for (i, tc) in st.tool_calls.iter().enumerate() {
+                        let idx = i + 1;
+                        st.trailing.push_back(Bytes::from(encode_event_frame(
+                            "contentBlockStart",
+                            &serde_json::json!({
+                                "start": { "toolUse": { "toolUseId": tc.id, "name": tc.name } },
+                                "contentBlockIndex": idx,
+                            }),
+                        )));
+                        if !tc.arguments.is_empty() {
+                            st.trailing.push_back(Bytes::from(encode_event_frame(
+                                "contentBlockDelta",
+                                &serde_json::json!({
+                                    "delta": { "toolUse": { "input": tc.arguments } },
+                                    "contentBlockIndex": idx,
+                                }),
+                            )));
+                        }
+                        st.trailing.push_back(Bytes::from(encode_event_frame(
+                            "contentBlockStop",
+                            &serde_json::json!({ "contentBlockIndex": idx }),
+                        )));
+                    }
                     st.trailing.push_back(Bytes::from(encode_event_frame(
                         "messageStop",
                         &serde_json::json!({ "stopReason": stop_reason }),
@@ -742,6 +813,11 @@ fn take_next_delta(st: &mut ConverseStreamState) -> Option<Bytes> {
         }
         if let Some(fr) = chunk["choices"][0]["finish_reason"].as_str() {
             st.finish_reason = Some(fr.to_string());
+        }
+        if let Some(tcs) = chunk["choices"][0]["delta"]["tool_calls"].as_array() {
+            for tc in tcs {
+                accumulate_tool_call_delta(&mut st.tool_calls, tc);
+            }
         }
         if let Some(text) = chunk["choices"][0]["delta"]["content"].as_str()
             && !text.is_empty()
@@ -990,15 +1066,11 @@ mod tests {
     fn stream_request_serializes_with_include_usage() {
         let req = openai::ChatRequest {
             model: "m".into(),
-            messages: vec![],
-            max_tokens: None,
-            temperature: None,
-            top_p: None,
-            stop: None,
             stream: Some(true),
             stream_options: Some(openai::StreamOptions {
                 include_usage: true,
             }),
+            ..openai::ChatRequest::default()
         };
         let v = serde_json::to_value(&req).unwrap();
         assert_eq!(v["stream"], true);
@@ -1009,16 +1081,27 @@ mod tests {
     fn non_streaming_request_omits_stream_options() {
         let req = openai::ChatRequest {
             model: "m".into(),
-            messages: vec![],
-            max_tokens: None,
-            temperature: None,
-            top_p: None,
-            stop: None,
-            stream: None,
-            stream_options: None,
+            ..openai::ChatRequest::default()
         };
         let v = serde_json::to_value(&req).unwrap();
         assert!(v.get("stream").is_none());
         assert!(v.get("stream_options").is_none());
+    }
+
+    /// OpenAI streams tool calls as fragments: `id` and `function.name`
+    /// arrive once, then `function.arguments` trickles in across many
+    /// chunks. The accumulator must stitch them back together by index.
+    #[test]
+    fn accumulate_sse_assembles_split_tool_call_fragments() {
+        let raw = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"tu_1\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\"}}]}}]}\n\
+data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"Kathmandu\\\"}\"}}]}}]}\n\
+data: {\"choices\":[{\"finish_reason\":\"tool_calls\"}]}\n\
+data: [DONE]\n";
+        let acc = accumulate_sse(raw);
+        assert_eq!(acc.tool_calls.len(), 1);
+        assert_eq!(acc.tool_calls[0].id, "tu_1");
+        assert_eq!(acc.tool_calls[0].name, "get_weather");
+        assert_eq!(acc.tool_calls[0].arguments, "{\"city\":\"Kathmandu\"}");
+        assert_eq!(acc.finish_reason.as_deref(), Some("tool_calls"));
     }
 }
