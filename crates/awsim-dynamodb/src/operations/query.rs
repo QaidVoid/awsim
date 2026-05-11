@@ -167,12 +167,6 @@ pub fn query(
 
     let key_condition = parse_condition(key_condition_expr)?;
     let filter_condition = filter_expr.map(parse_condition).transpose()?;
-    // KeyConditionExpression has stricter rules than FilterExpression:
-    // partition key may only use `=`, sort key only `=, <, <=, >, >=,
-    // BETWEEN, begins_with`, and the connective between them must be AND.
-    // Real DynamoDB rejects anything else with ValidationException; we
-    // were silently accepting them as if they were filter expressions.
-    validate_key_condition(&key_condition, &expr_attr_names)?;
 
     let projection_paths: Vec<String> = projection_expr.map(parse_projection).unwrap_or_default();
 
@@ -245,6 +239,20 @@ pub fn query(
             }
         }
     };
+
+    // KeyConditionExpression has stricter rules than FilterExpression:
+    // partition key may only use `=`, sort key only `=, <, <=, >, >=,
+    // BETWEEN, begins_with`, and the connective between them must be AND.
+    // Real DynamoDB rejects anything else with ValidationException; we
+    // were silently accepting them as if they were filter expressions.
+    // Runs after the key-name resolution so we can name the offending
+    // key in the error message, matching AWS wire behavior.
+    validate_key_condition(
+        &key_condition,
+        &expr_attr_names,
+        &hash_key_name,
+        range_key_name.as_deref(),
+    )?;
 
     // Pull the partition key value out of the KeyConditionExpression so we
     // can push the partition lookup down to SQLite. DynamoDB requires the
@@ -638,107 +646,218 @@ fn extract_pk_from_condition(
 
 /// Reject `KeyConditionExpression` shapes that real DynamoDB doesn't accept.
 ///
-/// AWS rules:
-///   * Top level is either a single comparison (partition key only) or
-///     `<partition condition> AND <sort condition>`. Anything else
-///     (`OR`, `NOT`, multiple `AND` partition keys, function-only forms)
-///     is a `ValidationException`.
-///   * Partition-key term must be `pk = :v`.
-///   * Sort-key term must be one of `sk = :v`, `sk < :v`, `sk <= :v`,
-///     `sk > :v`, `sk >= :v`, `sk BETWEEN :a AND :b`, `begins_with(sk, :v)`.
-///   * `IN`, `<>`, `contains`, `attribute_exists`, `attribute_type`, etc.
-///     are filter-only and are rejected.
+/// Error messages mirror the AWS wire surface so SDK consumers see the
+/// same strings they would against real DynamoDB:
 ///
-/// Without this check, awsim would silently treat invalid KeyConditions
-/// as full filter expressions, returning data that real DynamoDB would
-/// have refused at parse time.
+/// * Missing partition key clause:
+///   `"Query condition missed key schema element: <pk-name>"`
+/// * Non-`=` operator on the partition key, or any unsupported function
+///   in key position: `"Query key condition not supported"`
+/// * Two clauses pinned to the same key:
+///   `"KeyConditionExpressions must only contain one condition per key"`
+/// * `OR` / `NOT` at top level:
+///   `"KeyConditionExpressions must not contain '<OR|NOT>'"`
 fn validate_key_condition(
     expr: &ConditionExpr,
     expr_attr_names: &HashMap<String, String>,
+    hash_key_name: &str,
+    range_key_name: Option<&str>,
 ) -> Result<(), AwsError> {
     match expr {
-        ConditionExpr::Comparison {
-            op: CompareOp::Eq, ..
-        } => Ok(()),
+        // Single top-level comparison: must be `pk = :v`.
+        ConditionExpr::Comparison { op, left, right } => {
+            validate_single_pk_clause(op, left, right, expr_attr_names, hash_key_name)
+        }
+        // `<pk> AND <sk>` (in either order).
         ConditionExpr::Logical {
             op: LogicalOp::And,
             children,
-        } if children.len() == 2 => {
-            let pk_term = &children[0];
-            let sk_term = &children[1];
-            if !matches!(
-                pk_term,
-                ConditionExpr::Comparison {
-                    op: CompareOp::Eq,
-                    ..
-                }
-            ) {
-                return validation_err(
-                    "KeyConditionExpression's first term must be 'partitionKey = :value'",
-                );
-            }
-            validate_sort_key_term(sk_term, expr_attr_names)
-        }
-        _ => validation_err(
-            "KeyConditionExpression must be 'partitionKey = :v' or 'partitionKey = :v AND <sortKey condition>'",
+        } if children.len() == 2 => validate_and_pair(
+            &children[0],
+            &children[1],
+            expr_attr_names,
+            hash_key_name,
+            range_key_name,
         ),
+        // More than two ANDed clauses: at least one key has two conditions.
+        ConditionExpr::Logical {
+            op: LogicalOp::And, ..
+        } => validation_err("KeyConditionExpressions must only contain one condition per key"),
+        ConditionExpr::Logical {
+            op: LogicalOp::Or, ..
+        } => validation_err("KeyConditionExpressions must not contain 'OR'"),
+        ConditionExpr::Not(_) => validation_err("KeyConditionExpressions must not contain 'NOT'"),
+        // BeginsWith / Between / In / Contains / attribute_exists / etc. on
+        // their own — the partition-key Eq clause is missing.
+        _ => validation_err(&format!(
+            "Query condition missed key schema element: {hash_key_name}"
+        )),
+    }
+}
+
+fn validate_single_pk_clause(
+    op: &CompareOp,
+    left: &Operand,
+    right: &Operand,
+    expr_attr_names: &HashMap<String, String>,
+    hash_key_name: &str,
+) -> Result<(), AwsError> {
+    let Some(name) = operand_resolved_name(left, expr_attr_names) else {
+        // `:v = :w` style — no key path at all.
+        return validation_err(&format!(
+            "Query condition missed key schema element: {hash_key_name}"
+        ));
+    };
+    if name != hash_key_name {
+        return validation_err(&format!(
+            "Query condition missed key schema element: {hash_key_name}"
+        ));
+    }
+    if !matches!(op, CompareOp::Eq) {
+        return validation_err("Query key condition not supported");
+    }
+    if !matches!(right, Operand::Value(_)) {
+        return validation_err("Query key condition not supported");
+    }
+    Ok(())
+}
+
+fn validate_and_pair(
+    left: &ConditionExpr,
+    right: &ConditionExpr,
+    expr_attr_names: &HashMap<String, String>,
+    hash_key_name: &str,
+    range_key_name: Option<&str>,
+) -> Result<(), AwsError> {
+    // Real DynamoDB doesn't care which side the partition clause sits on.
+    let (pk_term, sk_term) = match classify_key_term(left, expr_attr_names, hash_key_name) {
+        KeyTermKind::PartitionEq => (left, right),
+        _ => match classify_key_term(right, expr_attr_names, hash_key_name) {
+            KeyTermKind::PartitionEq => (right, left),
+            _ => {
+                return validation_err(&format!(
+                    "Query condition missed key schema element: {hash_key_name}"
+                ));
+            }
+        },
+    };
+    // Re-validate the partition term so non-Eq comparisons surface a
+    // distinct "not supported" rather than the missing-key error.
+    if let ConditionExpr::Comparison { op, left, right } = pk_term {
+        validate_single_pk_clause(op, left, right, expr_attr_names, hash_key_name)?;
+    } else {
+        return validation_err(&format!(
+            "Query condition missed key schema element: {hash_key_name}"
+        ));
+    }
+    let Some(sk_name) = range_key_name else {
+        return validation_err("KeyConditionExpressions must only contain one condition per key");
+    };
+    validate_sort_key_term(sk_term, expr_attr_names, hash_key_name, sk_name)
+}
+
+#[derive(Debug)]
+enum KeyTermKind {
+    PartitionEq,
+    Other,
+}
+
+/// Classify a single term: is it `pk = :v`, or anything else?
+fn classify_key_term(
+    expr: &ConditionExpr,
+    expr_attr_names: &HashMap<String, String>,
+    hash_key_name: &str,
+) -> KeyTermKind {
+    let ConditionExpr::Comparison {
+        op: CompareOp::Eq,
+        left,
+        ..
+    } = expr
+    else {
+        return KeyTermKind::Other;
+    };
+    match operand_resolved_name(left, expr_attr_names) {
+        Some(name) if name == hash_key_name => KeyTermKind::PartitionEq,
+        _ => KeyTermKind::Other,
+    }
+}
+
+fn operand_resolved_name(op: &Operand, names: &HashMap<String, String>) -> Option<String> {
+    match op {
+        Operand::Path(p) => Some(resolve_attribute_name(p, names)),
+        Operand::Value(_) => None,
+    }
+}
+
+fn resolve_attribute_name(path: &str, names: &HashMap<String, String>) -> String {
+    if let Some(stripped) = path.strip_prefix('#') {
+        names
+            .get(&format!("#{stripped}"))
+            .cloned()
+            .unwrap_or_else(|| path.to_string())
+    } else {
+        path.to_string()
     }
 }
 
 fn validate_sort_key_term(
     expr: &ConditionExpr,
-    _expr_attr_names: &HashMap<String, String>,
+    expr_attr_names: &HashMap<String, String>,
+    hash_key_name: &str,
+    range_key_name: &str,
 ) -> Result<(), AwsError> {
+    let path = sort_key_path(expr, expr_attr_names);
+    if let Some(name) = &path
+        && name == hash_key_name
+    {
+        return validation_err("KeyConditionExpressions must only contain one condition per key");
+    }
+    if let Some(name) = &path
+        && name != range_key_name
+    {
+        return validation_err("Query key condition not supported");
+    }
     match expr {
-        ConditionExpr::Comparison { op, left, right } => {
-            if !matches!(left, Operand::Path(_)) {
-                return validation_err("Sort key condition must be 'sortKey OP :value'");
-            }
+        ConditionExpr::Comparison { op, right, .. } => {
             if !matches!(right, Operand::Value(_)) {
-                return validation_err("Sort key condition must be 'sortKey OP :value'");
+                return validation_err("Query key condition not supported");
             }
             match op {
                 CompareOp::Eq | CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge => {
                     Ok(())
                 }
-                CompareOp::Ne => validation_err(
-                    "Sort key condition does not allow '<>': use FilterExpression instead",
-                ),
+                CompareOp::Ne => validation_err("Query key condition not supported"),
             }
         }
-        ConditionExpr::Between { operand, .. } => {
-            if matches!(operand, Operand::Path(_)) {
-                Ok(())
-            } else {
-                validation_err("BETWEEN must be applied to the sort key path")
-            }
+        ConditionExpr::Between { .. } => Ok(()),
+        ConditionExpr::BeginsWith(_, _) => Ok(()),
+        // Anything else in sort-key position is rejected by real AWS with
+        // "Query key condition not supported".
+        _ => validation_err("Query key condition not supported"),
+    }
+}
+
+/// Return the attribute name a sort-key-position term operates on, if it
+/// has one. Used to detect "two clauses on the same key" and "clause on a
+/// non-key attribute" before we look at the operator.
+fn sort_key_path(
+    expr: &ConditionExpr,
+    expr_attr_names: &HashMap<String, String>,
+) -> Option<String> {
+    match expr {
+        ConditionExpr::Comparison { left, .. } => operand_resolved_name(left, expr_attr_names),
+        ConditionExpr::Between { operand, .. } => operand_resolved_name(operand, expr_attr_names),
+        ConditionExpr::BeginsWith(path, _) => operand_resolved_name(path, expr_attr_names),
+        ConditionExpr::Contains(path, _) => operand_resolved_name(path, expr_attr_names),
+        ConditionExpr::AttributeExists(p) | ConditionExpr::AttributeNotExists(p) => {
+            Some(resolve_attribute_name(p, expr_attr_names))
         }
-        ConditionExpr::BeginsWith(path, _) => {
-            if matches!(path, Operand::Path(_)) {
-                Ok(())
-            } else {
-                validation_err("begins_with must be applied to the sort key path")
-            }
+        ConditionExpr::AttributeType(p, _) => Some(resolve_attribute_name(p, expr_attr_names)),
+        ConditionExpr::SizeComparison { path, .. } => {
+            Some(resolve_attribute_name(path, expr_attr_names))
         }
-        ConditionExpr::In { .. } => validation_err(
-            "KeyConditionExpression does not support IN: use FilterExpression instead",
-        ),
-        ConditionExpr::Contains(_, _) => validation_err(
-            "KeyConditionExpression does not support contains(): use FilterExpression instead",
-        ),
-        ConditionExpr::AttributeExists(_) | ConditionExpr::AttributeNotExists(_) => validation_err(
-            "KeyConditionExpression does not support attribute_exists/not_exists: \
-                 use FilterExpression instead",
-        ),
-        ConditionExpr::AttributeType(_, _) => validation_err(
-            "KeyConditionExpression does not support attribute_type(): use FilterExpression instead",
-        ),
-        ConditionExpr::SizeComparison { .. } => validation_err(
-            "KeyConditionExpression does not support size(): use FilterExpression instead",
-        ),
-        ConditionExpr::Logical { .. } | ConditionExpr::Not(_) => validation_err(
-            "KeyConditionExpression supports a single sort-key clause; combine in FilterExpression",
-        ),
+        ConditionExpr::In { operand, .. } => operand_resolved_name(operand, expr_attr_names),
+        ConditionExpr::Logical { .. } | ConditionExpr::Not(_) => None,
     }
 }
 
@@ -786,6 +905,74 @@ mod tests {
         // Sanity: if someone bumps the const accidentally, fail loudly.
         // Real AWS DynamoDB Query/Scan response cap is exactly 1 MiB.
         assert_eq!(MAX_RESPONSE_BYTES, 1024 * 1024);
+    }
+
+    fn validate(expr: &str, hk: &str, rk: Option<&str>) -> Result<(), AwsError> {
+        let cond = parse_condition(expr)?;
+        validate_key_condition(&cond, &HashMap::new(), hk, rk)
+    }
+
+    #[test]
+    fn missing_partition_key_names_the_expected_attribute() {
+        let err = validate("begins_with(SK, :prefix)", "PK", Some("SK")).unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert_eq!(err.message, "Query condition missed key schema element: PK");
+    }
+
+    #[test]
+    fn sort_key_only_eq_also_misses_pk() {
+        let err = validate("SK = :v", "PK", Some("SK")).unwrap_err();
+        assert_eq!(err.message, "Query condition missed key schema element: PK");
+    }
+
+    #[test]
+    fn non_eq_on_partition_key_is_unsupported_op() {
+        let err = validate("PK < :v", "PK", Some("SK")).unwrap_err();
+        assert_eq!(err.message, "Query key condition not supported");
+    }
+
+    #[test]
+    fn or_at_top_level_is_rejected_with_aws_wording() {
+        let err = validate("PK = :a OR PK = :b", "PK", Some("SK")).unwrap_err();
+        assert_eq!(err.message, "KeyConditionExpressions must not contain 'OR'");
+    }
+
+    #[test]
+    fn two_partition_clauses_collapse_to_one_per_key_error() {
+        let err = validate("PK = :a AND PK = :b", "PK", Some("SK")).unwrap_err();
+        assert_eq!(
+            err.message,
+            "KeyConditionExpressions must only contain one condition per key"
+        );
+    }
+
+    #[test]
+    fn pk_and_sk_in_either_order_validates() {
+        validate("PK = :pk AND begins_with(SK, :prefix)", "PK", Some("SK")).unwrap();
+        validate("begins_with(SK, :prefix) AND PK = :pk", "PK", Some("SK")).unwrap();
+        validate("SK = :sk AND PK = :pk", "PK", Some("SK")).unwrap();
+    }
+
+    #[test]
+    fn sort_key_clause_on_non_key_attribute_is_unsupported() {
+        let err = validate("PK = :pk AND OtherAttr = :v", "PK", Some("SK")).unwrap_err();
+        assert_eq!(err.message, "Query key condition not supported");
+    }
+
+    #[test]
+    fn sort_key_clause_when_table_has_no_sort_key_rejects() {
+        let err = validate("PK = :pk AND SK = :sk", "PK", None).unwrap_err();
+        assert_eq!(
+            err.message,
+            "KeyConditionExpressions must only contain one condition per key"
+        );
+    }
+
+    #[test]
+    fn resolves_attribute_name_placeholders() {
+        let cond = parse_condition("#pk = :v").unwrap();
+        let names = HashMap::from([("#pk".to_string(), "PK".to_string())]);
+        validate_key_condition(&cond, &names, "PK", Some("SK")).unwrap();
     }
 
     use crate::operations::item::put_item;
