@@ -14,7 +14,7 @@
 use awsim_core::AwsError;
 use serde_json::{Value, json};
 
-use super::openai::{ChatMessage, ChatRequest, ChatResponse};
+use super::openai::{ChatMessage, ChatRequest, ChatResponse, MessageContent};
 use crate::backend::BedrockBackends;
 
 fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, AwsError> {
@@ -28,7 +28,7 @@ fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, AwsEr
         model: model_tag.to_string(),
         messages: vec![ChatMessage {
             role: "user".to_string(),
-            content: prompt,
+            content: MessageContent::text(prompt),
         }],
         max_tokens: cfg
             .get("maxTokenCount")
@@ -53,7 +53,7 @@ fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, AwsEr
 fn to_bedrock_response(resp: ChatResponse) -> Value {
     let choice = resp.choices.into_iter().next();
     let (text, finish) = match &choice {
-        Some(c) => (c.message.content.clone(), c.finish_reason.clone()),
+        Some(c) => (c.message.content.as_text(), c.finish_reason.clone()),
         None => (String::new(), None),
     };
     let completion_reason = match finish.as_deref() {
@@ -116,7 +116,7 @@ mod tests {
         let req = to_openai_request("llama3.1:8b", &body).unwrap();
         assert_eq!(req.messages.len(), 1);
         assert_eq!(req.messages[0].role, "user");
-        assert_eq!(req.messages[0].content, "Hello");
+        assert_eq!(req.messages[0].content.as_text(), "Hello");
         assert_eq!(req.max_tokens, Some(128));
     }
 

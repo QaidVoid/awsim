@@ -16,7 +16,7 @@ use awsim_core::AwsError;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::openai::{ChatMessage, ChatRequest, ChatResponse};
+use super::openai::{ChatMessage, ChatRequest, ChatResponse, MessageContent};
 use crate::backend::BedrockBackends;
 
 fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, AwsError> {
@@ -29,7 +29,7 @@ fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, AwsEr
         model: model_tag.to_string(),
         messages: vec![ChatMessage {
             role: "user".to_string(),
-            content: prompt,
+            content: MessageContent::text(prompt),
         }],
         max_tokens: body
             .get("max_tokens")
@@ -58,7 +58,7 @@ fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, AwsEr
 fn to_bedrock_response(prompt: &str, resp: ChatResponse) -> Value {
     let choice = resp.choices.into_iter().next();
     let (text, finish) = match &choice {
-        Some(c) => (c.message.content.clone(), c.finish_reason.clone()),
+        Some(c) => (c.message.content.as_text(), c.finish_reason.clone()),
         None => (String::new(), None),
     };
     let cohere_finish = match finish.as_deref() {

@@ -40,7 +40,81 @@ pub struct StreamOptions {
 pub struct ChatMessage {
     /// "system" | "user" | "assistant"
     pub role: String,
-    pub content: String,
+    #[serde(default)]
+    pub content: MessageContent,
+}
+
+/// OpenAI's chat content field is overloaded: either a plain string
+/// or an array of typed parts for multimodal inputs (text + images).
+/// Untagged so it round-trips both shapes. Backend responses are
+/// almost always plain strings; requests with attachments go out as
+/// the parts array.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MessageContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+impl Default for MessageContent {
+    fn default() -> Self {
+        MessageContent::Text(String::new())
+    }
+}
+
+impl From<String> for MessageContent {
+    fn from(s: String) -> Self {
+        MessageContent::Text(s)
+    }
+}
+
+impl From<&str> for MessageContent {
+    fn from(s: &str) -> Self {
+        MessageContent::Text(s.to_string())
+    }
+}
+
+impl MessageContent {
+    pub fn text(s: impl Into<String>) -> Self {
+        MessageContent::Text(s.into())
+    }
+
+    /// Flatten to plain text by joining text parts with newlines and
+    /// dropping non-text parts. Used when shaping responses back into
+    /// vendor envelopes that only carry a text payload.
+    pub fn as_text(&self) -> String {
+        match self {
+            MessageContent::Text(s) => s.clone(),
+            MessageContent::Parts(parts) => {
+                let mut out = String::new();
+                for p in parts {
+                    if let ContentPart::Text { text } = p {
+                        if !out.is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str(text);
+                    }
+                }
+                out
+            }
+        }
+    }
+}
+
+/// One element of a multimodal `content` array. We model the two
+/// part kinds the OpenAI compatibility surface defines and that local
+/// runners (Ollama / llama.cpp / vLLM / LM Studio) actually accept:
+/// `text` and `image_url` (data URL or http(s) URL).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUrl {
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -72,7 +146,7 @@ impl Default for ChatMessage {
     fn default() -> Self {
         Self {
             role: "assistant".to_string(),
-            content: String::new(),
+            content: MessageContent::default(),
         }
     }
 }

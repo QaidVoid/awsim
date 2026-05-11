@@ -27,7 +27,9 @@ use awsim_core::AwsError;
 use serde_json::{Value, json};
 use tracing::warn;
 
-use super::openai::{ChatMessage, ChatRequest, ChatResponse};
+use super::openai::{
+    ChatMessage, ChatRequest, ChatResponse, ContentPart, ImageUrl, MessageContent,
+};
 use crate::backend::BedrockBackends;
 
 /// Convert a Bedrock-flavoured Anthropic Messages request body into
@@ -58,7 +60,7 @@ pub fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, A
     {
         messages.push(ChatMessage {
             role: "system".to_string(),
-            content: system.to_string(),
+            content: MessageContent::text(system),
         });
     }
     let arr = body
@@ -73,7 +75,7 @@ pub fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, A
             .and_then(Value::as_str)
             .unwrap_or("user")
             .to_string();
-        let content = extract_content_text(m.get("content"));
+        let content = extract_content(m.get("content"));
         messages.push(ChatMessage { role, content });
     }
 
@@ -90,34 +92,87 @@ pub fn to_openai_request(model_tag: &str, body: &Value) -> Result<ChatRequest, A
 }
 
 /// Anthropic content fields can be either a plain string (legacy) or
-/// an array of typed content blocks. Concatenate every `text` block.
-/// Image / tool-use blocks are dropped with a warning since we proxy
-/// to a text-only backend.
-fn extract_content_text(v: Option<&Value>) -> String {
+/// an array of typed content blocks. Text blocks are concatenated;
+/// `image` blocks are forwarded as OpenAI-compat `image_url` parts
+/// (data URL for base64 sources, raw URL for `url` sources). When the
+/// message has no images we collapse back to a plain string so
+/// text-only backends (which may reject the parts array) keep working.
+/// Tool-use / unknown blocks are dropped with a warning.
+fn extract_content(v: Option<&Value>) -> MessageContent {
     match v {
-        Some(Value::String(s)) => s.clone(),
+        Some(Value::String(s)) => MessageContent::Text(s.clone()),
         Some(Value::Array(blocks)) => {
-            let mut out = String::new();
+            let mut parts: Vec<ContentPart> = Vec::new();
             for block in blocks {
                 let kind = block.get("type").and_then(Value::as_str).unwrap_or("text");
                 match kind {
                     "text" => {
                         if let Some(t) = block.get("text").and_then(Value::as_str) {
-                            if !out.is_empty() {
-                                out.push('\n');
-                            }
-                            out.push_str(t);
+                            parts.push(ContentPart::Text {
+                                text: t.to_string(),
+                            });
                         }
                     }
+                    "image" => match anthropic_image_to_data_url(block.get("source")) {
+                        Some(url) => parts.push(ContentPart::ImageUrl {
+                            image_url: ImageUrl { url },
+                        }),
+                        None => warn!("Anthropic image block had no recognizable source, dropped"),
+                    },
                     other => warn!(
                         block_type = %other,
-                        "Anthropic content block of type other than 'text' dropped — backend doesn't support it"
+                        "Anthropic content block dropped, backend doesn't support it"
                     ),
                 }
             }
-            out
+            collapse_parts(parts)
         }
-        _ => String::new(),
+        _ => MessageContent::Text(String::new()),
+    }
+}
+
+/// Translate an Anthropic image `source` object into a data URL the
+/// OpenAI-compat surface understands. Anthropic's two source shapes:
+///
+/// - `{ "type": "base64", "media_type": "image/png", "data": "..." }`
+/// - `{ "type": "url", "url": "https://..." }`
+fn anthropic_image_to_data_url(source: Option<&Value>) -> Option<String> {
+    let source = source?;
+    let stype = source
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("base64");
+    match stype {
+        "base64" => {
+            let mime = source
+                .get("media_type")
+                .and_then(Value::as_str)
+                .unwrap_or("image/png");
+            let data = source.get("data").and_then(Value::as_str)?;
+            Some(format!("data:{mime};base64,{data}"))
+        }
+        "url" => source.get("url").and_then(Value::as_str).map(String::from),
+        _ => None,
+    }
+}
+
+/// If every part is text, fold them into a single newline-joined
+/// string. Keeps requests for text-only backends in their native
+/// shape and matches the legacy behaviour of the old extractor.
+fn collapse_parts(parts: Vec<ContentPart>) -> MessageContent {
+    if parts.iter().all(|p| matches!(p, ContentPart::Text { .. })) {
+        let mut out = String::new();
+        for p in parts {
+            if let ContentPart::Text { text } = p {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(&text);
+            }
+        }
+        MessageContent::Text(out)
+    } else {
+        MessageContent::Parts(parts)
     }
 }
 
@@ -130,7 +185,7 @@ pub fn to_bedrock_response(bedrock_id: &str, resp: ChatResponse) -> Value {
     let choice = resp.choices.into_iter().next();
     let (text, finish) = match &choice {
         Some(c) => (
-            c.message.content.clone(),
+            c.message.content.as_text(),
             c.finish_reason
                 .clone()
                 .unwrap_or_else(|| "end_turn".to_string()),
@@ -255,27 +310,90 @@ mod tests {
         assert_eq!(req.model, "llama3.1:8b");
         assert_eq!(req.messages.len(), 1);
         assert_eq!(req.messages[0].role, "user");
-        assert_eq!(req.messages[0].content, "Hello");
+        assert_eq!(req.messages[0].content.as_text(), "Hello");
         assert_eq!(req.max_tokens, Some(256));
     }
 
     #[test]
-    fn extracts_text_from_typed_blocks() {
+    fn collapses_text_only_blocks_to_string() {
+        // No image present, so the parts list folds back into a single
+        // string and the wire format stays compatible with text-only
+        // backends that reject the OpenAI multimodal parts shape.
         let body = json!({
             "messages": [
                 {
                     "role": "user",
                     "content": [
                         { "type": "text", "text": "Hello" },
-                        { "type": "image", "source": { "data": "..." } },
                         { "type": "text", "text": "world" }
                     ]
                 }
             ]
         });
         let req = to_openai_request("m", &body).unwrap();
-        // Image block dropped, two text blocks newline-joined.
-        assert_eq!(req.messages[0].content, "Hello\nworld");
+        match &req.messages[0].content {
+            MessageContent::Text(s) => assert_eq!(s, "Hello\nworld"),
+            other => panic!("expected text-only collapse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forwards_image_block_as_image_url_part() {
+        let body = json!({
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": "what is this?" },
+                        { "type": "image", "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "iVBORw0KGgo="
+                        }}
+                    ]
+                }
+            ]
+        });
+        let req = to_openai_request("m", &body).unwrap();
+        let parts = match &req.messages[0].content {
+            MessageContent::Parts(p) => p,
+            other => panic!("expected parts array, got {other:?}"),
+        };
+        assert_eq!(parts.len(), 2);
+        match &parts[1] {
+            ContentPart::ImageUrl { image_url } => {
+                assert_eq!(image_url.url, "data:image/png;base64,iVBORw0KGgo=");
+            }
+            other => panic!("expected image_url part, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forwards_url_source_image_unchanged() {
+        let body = json!({
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "image", "source": {
+                            "type": "url",
+                            "url": "https://example.com/cat.png"
+                        }}
+                    ]
+                }
+            ]
+        });
+        let req = to_openai_request("m", &body).unwrap();
+        let parts = match &req.messages[0].content {
+            MessageContent::Parts(p) => p,
+            other => panic!("expected parts array, got {other:?}"),
+        };
+        match &parts[0] {
+            ContentPart::ImageUrl { image_url } => {
+                assert_eq!(image_url.url, "https://example.com/cat.png");
+            }
+            other => panic!("expected image_url part, got {other:?}"),
+        }
     }
 
     #[test]
@@ -287,7 +405,7 @@ mod tests {
         let req = to_openai_request("m", &body).unwrap();
         assert_eq!(req.messages.len(), 2);
         assert_eq!(req.messages[0].role, "system");
-        assert_eq!(req.messages[0].content, "You are a pirate.");
+        assert_eq!(req.messages[0].content.as_text(), "You are a pirate.");
     }
 
     #[test]
