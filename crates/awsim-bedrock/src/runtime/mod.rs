@@ -125,9 +125,38 @@ async fn call_chat(
             format!("No backend mapping for Bedrock model {bedrock_id}"),
         )
     })?;
-    let req = build(model_tag)?;
+    let mut req = build(model_tag)?;
     let url = format!("{}/chat/completions", backend.endpoint());
-    let mut http_req = backend.client().post(&url).json(&req);
+    let (status, body_text) = post_chat(backend, &url, &req).await?;
+    if status.is_success() {
+        return serde_json::from_str::<openai::ChatResponse>(&body_text)
+            .map_err(|e| AwsError::internal(format!("Bedrock backend JSON parse failed: {e}")));
+    }
+    if status == reqwest::StatusCode::BAD_REQUEST
+        && needs_string_content_fallback(&body_text)
+        && flatten_request_content(&mut req)
+    {
+        debug!("Bedrock backend rejected multimodal content array, retrying with flattened text");
+        let (status2, body2) = post_chat(backend, &url, &req).await?;
+        if status2.is_success() {
+            return serde_json::from_str::<openai::ChatResponse>(&body2).map_err(|e| {
+                AwsError::internal(format!("Bedrock backend JSON parse failed: {e}"))
+            });
+        }
+        return Err(map_upstream_error(status2, &body2));
+    }
+    Err(map_upstream_error(status, &body_text))
+}
+
+/// POST the OpenAI chat request and return the raw `(status, body)`
+/// pair. Keeping it factored out lets the call sites retry with a
+/// modified request without rebuilding the http client setup.
+async fn post_chat(
+    backend: &crate::backend::BedrockBackend,
+    url: &str,
+    req: &openai::ChatRequest,
+) -> Result<(reqwest::StatusCode, String), AwsError> {
+    let mut http_req = backend.client().post(url).json(req);
     if let Some(key) = backend.api_key() {
         http_req = http_req.bearer_auth(key);
     }
@@ -136,13 +165,56 @@ async fn call_chat(
         .await
         .map_err(|e| AwsError::internal(format!("Bedrock backend POST {url} failed: {e}")))?;
     let status = resp.status();
-    if !status.is_success() {
-        let body_text = resp.text().await.unwrap_or_default();
-        return Err(map_upstream_error(status, &body_text));
-    }
-    resp.json::<openai::ChatResponse>()
+    let body = resp
+        .text()
         .await
-        .map_err(|e| AwsError::internal(format!("Bedrock backend JSON parse failed: {e}")))
+        .map_err(|e| AwsError::internal(format!("Bedrock backend body read failed: {e}")))?;
+    Ok((status, body))
+}
+
+/// Detect the upstream 400 that backends raise when their OpenAI
+/// compatibility surface only accepts a string `content` field. Groq,
+/// gpt-oss-20b, and other text-only OpenAI-compat endpoints emit
+/// `"content must be a string"` for multimodal requests; we use that
+/// signal to flatten and retry once.
+fn needs_string_content_fallback(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("content must be a string")
+        || lower.contains("content: must be string")
+        || lower.contains("content should be a string")
+}
+
+/// Replace every message's multimodal parts array with a single
+/// joined text string. Image parts become an inline marker so the
+/// model still knows an attachment was present; text parts join with
+/// newlines. Returns true if any message actually changed shape.
+fn flatten_request_content(req: &mut openai::ChatRequest) -> bool {
+    let mut changed = false;
+    for m in &mut req.messages {
+        if let openai::MessageContent::Parts(parts) = &m.content {
+            let mut text = String::new();
+            for p in parts {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                match p {
+                    openai::ContentPart::Text { text: t } => text.push_str(t),
+                    openai::ContentPart::ImageUrl { image_url } => {
+                        if image_url.url.starts_with("data:") {
+                            text.push_str(
+                                "[Image attachment omitted, backend does not accept inline images]",
+                            );
+                        } else {
+                            text.push_str(&format!("[Image: {}]", image_url.url));
+                        }
+                    }
+                }
+            }
+            m.content = openai::MessageContent::Text(text);
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// Streaming variant: hits `/chat/completions` with `stream:true`,
@@ -169,24 +241,24 @@ pub(crate) async fn call_chat_stream(
     });
 
     let url = format!("{}/chat/completions", backend.endpoint());
-    let mut http_req = backend.client().post(&url).json(&req);
-    if let Some(key) = backend.api_key() {
-        http_req = http_req.bearer_auth(key);
+    let (status, raw) = post_chat(backend, &url, &req).await?;
+    if status.is_success() {
+        return Ok(accumulate_sse(&raw));
     }
-    let resp = http_req
-        .send()
-        .await
-        .map_err(|e| AwsError::internal(format!("Bedrock backend POST {url} failed: {e}")))?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body_text = resp.text().await.unwrap_or_default();
-        return Err(map_upstream_error(status, &body_text));
+    if status == reqwest::StatusCode::BAD_REQUEST
+        && needs_string_content_fallback(&raw)
+        && flatten_request_content(&mut req)
+    {
+        debug!(
+            "Bedrock backend rejected multimodal content array, retrying stream with flattened text"
+        );
+        let (status2, raw2) = post_chat(backend, &url, &req).await?;
+        if status2.is_success() {
+            return Ok(accumulate_sse(&raw2));
+        }
+        return Err(map_upstream_error(status2, &raw2));
     }
-    let raw = resp
-        .text()
-        .await
-        .map_err(|e| AwsError::internal(format!("Bedrock backend stream read failed: {e}")))?;
-    Ok(accumulate_sse(&raw))
+    Err(map_upstream_error(status, &raw))
 }
 
 #[derive(Debug, Default)]
@@ -616,19 +688,7 @@ pub(crate) async fn stream_response(
     });
 
     let url = format!("{}/chat/completions", backend.endpoint());
-    let mut http_req = backend.client().post(&url).json(&req);
-    if let Some(key) = backend.api_key() {
-        http_req = http_req.bearer_auth(key);
-    }
-    let resp = http_req
-        .send()
-        .await
-        .map_err(|e| AwsError::internal(format!("Bedrock backend POST {url} failed: {e}")))?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body_text = resp.text().await.unwrap_or_default();
-        return Err(map_upstream_error(status, &body_text));
-    }
+    let resp = open_chat_stream(backend, &url, &mut req).await?;
 
     // Header frame goes out before the SSE proxy starts so the
     // client sees the messageStart event right away even if the
@@ -651,6 +711,59 @@ pub(crate) async fn stream_response(
 
 #[allow(clippy::needless_pass_by_value)]
 fn void_use<T>(_: T) {}
+
+/// Open a streaming response, retrying once with flattened content if
+/// the backend rejects the multimodal parts array. Mirrors the
+/// non-streaming fallback in `call_chat` so live ConverseStream calls
+/// behave the same on text-only OpenAI-compat backends.
+async fn open_chat_stream(
+    backend: &crate::backend::BedrockBackend,
+    url: &str,
+    req: &mut openai::ChatRequest,
+) -> Result<reqwest::Response, AwsError> {
+    let resp = send_chat_stream(backend, url, req).await?;
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(resp);
+    }
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| AwsError::internal(format!("Bedrock backend stream read failed: {e}")))?;
+    if status == reqwest::StatusCode::BAD_REQUEST
+        && needs_string_content_fallback(&body)
+        && flatten_request_content(req)
+    {
+        debug!(
+            "Bedrock backend rejected multimodal content array, retrying stream with flattened text"
+        );
+        let resp2 = send_chat_stream(backend, url, req).await?;
+        if resp2.status().is_success() {
+            return Ok(resp2);
+        }
+        let body2 = resp2
+            .text()
+            .await
+            .map_err(|e| AwsError::internal(format!("Bedrock backend stream read failed: {e}")))?;
+        return Err(map_upstream_error(status, &body2));
+    }
+    Err(map_upstream_error(status, &body))
+}
+
+async fn send_chat_stream(
+    backend: &crate::backend::BedrockBackend,
+    url: &str,
+    req: &openai::ChatRequest,
+) -> Result<reqwest::Response, AwsError> {
+    let mut http_req = backend.client().post(url).json(req);
+    if let Some(key) = backend.api_key() {
+        http_req = http_req.bearer_auth(key);
+    }
+    http_req
+        .send()
+        .await
+        .map_err(|e| AwsError::internal(format!("Bedrock backend POST {url} failed: {e}")))
+}
 
 /// State carried across each `unfold` step of the Converse SSE
 /// translator. Public-in-private because `unfold`'s closure captures
@@ -1086,6 +1199,57 @@ mod tests {
         let v = serde_json::to_value(&req).unwrap();
         assert!(v.get("stream").is_none());
         assert!(v.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn detects_string_content_fallback_signal() {
+        let body = "{\"error\":{\"message\":\"messages[1].content must be a string\"}}";
+        assert!(needs_string_content_fallback(body));
+        assert!(!needs_string_content_fallback("rate limit reached"));
+    }
+
+    #[test]
+    fn flattens_multimodal_parts_for_text_only_retry() {
+        let mut req = openai::ChatRequest {
+            model: "m".into(),
+            messages: vec![openai::ChatMessage {
+                role: "user".into(),
+                content: openai::MessageContent::Parts(vec![
+                    openai::ContentPart::Text {
+                        text: "what is this?".into(),
+                    },
+                    openai::ContentPart::ImageUrl {
+                        image_url: openai::ImageUrl {
+                            url: "data:image/png;base64,AAA".into(),
+                        },
+                    },
+                ]),
+                ..openai::ChatMessage::default()
+            }],
+            ..openai::ChatRequest::default()
+        };
+        let changed = flatten_request_content(&mut req);
+        assert!(changed);
+        let text = match &req.messages[0].content {
+            openai::MessageContent::Text(s) => s.clone(),
+            other => panic!("expected text after flatten, got {other:?}"),
+        };
+        assert!(text.contains("what is this?"));
+        assert!(text.contains("[Image attachment omitted"));
+    }
+
+    #[test]
+    fn flatten_request_content_is_noop_on_text_only_messages() {
+        let mut req = openai::ChatRequest {
+            model: "m".into(),
+            messages: vec![openai::ChatMessage {
+                role: "user".into(),
+                content: openai::MessageContent::text("hello"),
+                ..openai::ChatMessage::default()
+            }],
+            ..openai::ChatRequest::default()
+        };
+        assert!(!flatten_request_content(&mut req));
     }
 
     /// OpenAI streams tool calls as fragments: `id` and `function.name`
