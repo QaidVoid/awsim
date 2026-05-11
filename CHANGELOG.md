@@ -1,4 +1,34 @@
 
+## 0.4.1 — 2026-05-11
+
+### Bug Fixes
+
+- **cognito:** Accept user sub as Username in admin operations
+- **cognito-identity:** Use preferred_role implicitly + accept AWS-style mapping keys
+- **cognito:** Treat empty Description/RoleArn as clear in CreateGroup/UpdateGroup
+- **cognito-identity:** Honor cognito:preferred_role for Token role mapping
+- **query-xml:** Drop spurious newline from scalar list members
+- **bedrock:** Forward upstream backend status to consumers
+- **awsim:** Stage ui/build into OUT_DIR so cargo publish --verify works
+
+### Documentation
+
+- Cross-link Cognito OAuth -> Federation, remove CLAUDE.md, fix dead link
+- **cognito:** Federation guide + UI button to register the mock IdP
+- Alphabetize service table, add TLS flags, refresh billing service count
+
+### Features
+
+- **ui/cognito:** Role-arn picker + edit dialog for groups
+- **authz:** Track STS-issued temp creds so they resolve under enforcement
+- **ui:** Sign requests with awsim-admin credential
+- **authz:** Admin access key bypasses IAM enforcement
+- **cognito:** Wire OIDC federation into the hosted-UI flow
+- **cognito:** Built-in mock OIDC IdP for offline federation
+- **ui/cognito:** Attributes tab to declare custom schema attrs
+- **ui/cognito:** Adapt create-user dialog to pool schema + username config
+- **cognito:** Enforce schema on user attribute writes
+
 ## 0.4.0 — 2026-05-08
 
 ### Bug Fixes
