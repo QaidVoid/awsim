@@ -20,6 +20,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use rust_embed::RustEmbed;
+use tower_http::compression::CompressionLayer;
 
 // `build.rs` stages the workspace `ui/build/` tree into
 // `$OUT_DIR/ui-build/` so this folder path is stable for both
@@ -37,6 +38,12 @@ pub fn router() -> axum::Router {
         .route("/_awsim/ui", get(redirect_to_index))
         .route("/_awsim/ui/", get(serve_index))
         .route("/_awsim/ui/{*path}", get(serve_path))
+        // Embedded assets are stored uncompressed; without this every JS
+        // and CSS chunk goes out at full size. Scoped to the UI router so
+        // AWS API responses (handled by other merged routers) are never
+        // touched. br/gzip negotiated per `Accept-Encoding`; the default
+        // predicate already skips tiny and pre-compressed payloads.
+        .layer(CompressionLayer::new())
 }
 
 /// True when the SvelteKit static build was embedded at compile time.
