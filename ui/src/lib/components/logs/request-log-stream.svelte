@@ -36,6 +36,14 @@
 		return () => clearInterval(id);
 	});
 
+	// A live tail nobody scrolls 500 rows deep into. Rendering (and
+	// re-diffing on every flush, plus re-rendering every Time cell on
+	// the 1s clock tick) that many keyed rows is the dominant cost on
+	// this page. The full 500-event history still lives in
+	// `dashboardState` for inspect / rps; we just cap what the DOM
+	// has to carry.
+	const MAX_ROWS = 150;
+
 	const filtered = $derived.by(() => {
 		const all = dashboardState.events;
 		const q = query.trim().toLowerCase();
@@ -48,7 +56,7 @@
 			}
 			return true;
 		});
-		return subset.slice(0, 500);
+		return subset.slice(0, MAX_ROWS);
 	});
 
 	$effect(() => {
