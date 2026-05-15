@@ -102,6 +102,14 @@
 	let lastFetched = $state<number>(0);
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let history = $state<HistoryPoint[]>([]);
+	// Hard cap so a long-lived tab can't grow the array (or its
+	// serialized form) past the visible window regardless of clock skew.
+	const MAX_HISTORY_POINTS = Math.ceil(HISTORY_WINDOW_MS / REFRESH_INTERVAL_MS) + 1;
+	// Serializing the whole window to localStorage on every 5s poll is
+	// pure main-thread waste — the snapshot only needs to survive a hard
+	// reload. Persist at most once per PERSIST_EVERY_MS instead.
+	const PERSIST_EVERY_MS = 30_000;
+	let lastPersistedAt = 0;
 
 	// Money you'd light on fire in a year before going broke. Default
 	// $1k — a reasonable "side project gets DDoSed" budget. Persisted so
@@ -256,20 +264,30 @@
 		const now = Date.now();
 		const services: Record<string, number> = {};
 		for (const s of r.services) services[s.service] = s.total_cost_usd;
+		const cutoff = now - HISTORY_WINDOW_MS;
+		// Points are appended in time order, so only a stale prefix can
+		// age out — find it with one scan instead of filtering the whole
+		// array, then keep the tail bounded by count as a backstop.
+		let drop = 0;
+		while (drop < history.length && history[drop].ts < cutoff) drop++;
 		const next = [
-			...history,
+			...history.slice(drop),
 			{
 				ts: now,
 				running_cost_usd: r.running_cost_usd,
 				projected_monthly_cost_usd: r.projected_monthly_cost_usd,
 				services,
 			},
-		].filter((p) => now - p.ts <= HISTORY_WINDOW_MS);
+		];
+		if (next.length > MAX_HISTORY_POINTS) next.splice(0, next.length - MAX_HISTORY_POINTS);
 		history = next;
-		try {
-			localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
-		} catch {
-			/* ignore — quota exceeded etc. */
+		if (now - lastPersistedAt >= PERSIST_EVERY_MS) {
+			lastPersistedAt = now;
+			try {
+				localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+			} catch {
+				/* ignore — quota exceeded etc. */
+			}
 		}
 	}
 
