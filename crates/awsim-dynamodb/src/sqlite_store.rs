@@ -95,6 +95,20 @@ const WAL_AUTOCHECKPOINT_PAGES: i64 = 256;
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 pub(crate) type Conn = PooledConnection<SqliteConnectionManager>;
 
+/// Outcome of a `PRAGMA wal_checkpoint(TRUNCATE)`.
+#[derive(Debug, Clone, Copy)]
+pub struct WalCheckpoint {
+    /// True when SQLite could not complete the checkpoint because a
+    /// reader or writer still held the WAL (`busy` column = 1). The
+    /// `-wal` file was not truncated this round; the caller retries on
+    /// its next tick.
+    pub busy: bool,
+    /// Total frames in the WAL when the checkpoint started.
+    pub log_frames: i64,
+    /// Frames written back into the main database file.
+    pub checkpointed_frames: i64,
+}
+
 /// One sqlite-backed store per AWSim instance. All accounts/regions/
 /// tables share the same database, partitioned by columns. Cheap to
 /// clone — backed by an Arc'd r2d2 connection pool.
@@ -166,6 +180,37 @@ impl SqliteStore {
         let conn = self.conn()?;
         conn.execute("VACUUM", []).map_err(sqlite_err)?;
         Ok(())
+    }
+
+    /// Force a `TRUNCATE` checkpoint: flush the WAL into the main
+    /// database file and shrink the `-wal` file back to zero bytes.
+    ///
+    /// The per-connection `wal_autocheckpoint` only performs a PASSIVE
+    /// checkpoint, which is a no-op whenever another pooled connection
+    /// holds the WAL. Under a sustained write firehose (bulk imports)
+    /// PASSIVE perpetually loses that race, so the `-wal` file — and
+    /// the WAL index mapped alongside it — grows without bound. A
+    /// periodic explicit TRUNCATE is the hard backstop.
+    ///
+    /// A `busy` result means the WAL was held this round and not
+    /// truncated; that is expected mid-burst and the caller simply
+    /// retries on its next tick.
+    pub fn checkpoint_truncate(&self) -> Result<WalCheckpoint, AwsError> {
+        let conn = self.conn()?;
+        let (busy, log_frames, checkpointed_frames) = conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(sqlite_err)?;
+        Ok(WalCheckpoint {
+            busy: busy != 0,
+            log_frames,
+            checkpointed_frames,
+        })
     }
 
     fn conn(&self) -> Result<Conn, AwsError> {
@@ -963,6 +1008,40 @@ mod tests {
             store.get_table_schema("a", "r", "t1").unwrap(),
             Some(json!({"TableName": "t1"}))
         );
+    }
+
+    #[test]
+    fn checkpoint_truncate_zeroes_wal_and_preserves_data() {
+        // `in_memory()` is file-backed (temp dir) so WAL applies.
+        let store = SqliteStore::in_memory().unwrap();
+        for i in 0..200 {
+            store
+                .put_item(
+                    "a",
+                    "r",
+                    "t",
+                    "p",
+                    &format!("s{i}"),
+                    &json!({ "v": i }),
+                    &empty_gsi(),
+                )
+                .unwrap();
+        }
+        // SQLite names the WAL `<dbpath>-wal` (suffix, not an
+        // extension swap), so append rather than with_extension.
+        let mut wal = store.db_path().as_os_str().to_owned();
+        wal.push("-wal");
+        let wal = std::path::PathBuf::from(wal);
+
+        let cp = store.checkpoint_truncate().unwrap();
+        assert!(!cp.busy, "single-threaded test should not see a busy WAL");
+
+        // TRUNCATE shrinks the -wal file to zero (or removes it).
+        let wal_len = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+        assert_eq!(wal_len, 0, "WAL file should be truncated to 0 bytes");
+
+        // Data written before the checkpoint is still readable.
+        assert_eq!(store.count_items("a", "r", "t").unwrap(), 200);
     }
 
     #[test]

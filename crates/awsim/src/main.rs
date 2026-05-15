@@ -100,6 +100,12 @@ struct Cli {
     #[arg(long, env = "AWSIM_GC_INTERVAL_SECS")]
     gc_interval_secs: Option<u64>,
 
+    /// Force a DynamoDB SQLite WAL TRUNCATE checkpoint every N seconds,
+    /// bounding `-wal` growth (and its memory) under sustained write
+    /// bursts like bulk imports. Unset = 60s; 0 disables.
+    #[arg(long, env = "AWSIM_DDB_WAL_CHECKPOINT_SECS")]
+    ddb_wal_checkpoint_secs: Option<u64>,
+
     /// Maximum concurrent in-flight HTTP requests. Requests above this cap
     /// are immediately rejected with 503 Service Unavailable instead of
     /// queuing — so a misbehaving client (e.g. one leaking connections
@@ -483,6 +489,7 @@ async fn async_main() -> Result<()> {
         cli.data_dir.as_deref(),
         cli.port,
         cli.max_blob_bytes,
+        cli.ddb_wal_checkpoint_secs,
         Arc::clone(&bedrock_swap),
     );
 
@@ -2172,6 +2179,7 @@ fn register_services(
     data_dir: Option<&str>,
     port: u16,
     max_blob_bytes: Option<u64>,
+    ddb_wal_checkpoint_secs: Option<u64>,
     bedrock_swap: awsim_bedrock::BedrockBackendsSwap,
 ) -> RegisteredServices {
     use std::sync::Arc;
@@ -2220,6 +2228,18 @@ fn register_services(
     // minute. Real DynamoDB allows up to ~48h slack; we're aggressive
     // since this is a dev tool and the sweep is cheap.
     dynamodb.spawn_ttl_sweeper(60);
+    // Background WAL checkpointer — the inline PASSIVE autocheckpoint
+    // starves under a sustained write firehose (bulk imports), so the
+    // `-wal` file and its mapped index grow unbounded. A periodic
+    // TRUNCATE checkpoint is the hard backstop. 0 opts out.
+    match ddb_wal_checkpoint_secs {
+        Some(0) => info!("DynamoDB WAL checkpointer disabled"),
+        secs => {
+            let interval = secs.unwrap_or(60);
+            info!(interval_secs = interval, "DynamoDB WAL checkpointer enabled");
+            dynamodb.spawn_wal_checkpointer(interval);
+        }
+    }
     let dynamodb_clone = Arc::clone(&dynamodb);
     state.register(dynamodb, vec![]);
 

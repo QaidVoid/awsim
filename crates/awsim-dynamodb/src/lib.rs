@@ -7,7 +7,7 @@ mod sqlite_store;
 mod state;
 mod throttle;
 
-pub use sqlite_store::{MAX_GSI_SLOTS, SqliteStore};
+pub use sqlite_store::{MAX_GSI_SLOTS, SqliteStore, WalCheckpoint};
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -169,6 +169,54 @@ impl DynamoDbService {
                                 tracing::warn!(error = %e, "DynamoDB TTL sweep join error");
                             }
                         }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Spawn a background tokio task that runs a `TRUNCATE` WAL
+    /// checkpoint every `interval_secs`, bounding `-wal` growth (and
+    /// the WAL index memory mapped alongside it) under sustained write
+    /// bursts such as bulk imports. The inline `wal_autocheckpoint`
+    /// only does a PASSIVE checkpoint, which starves under a write
+    /// firehose; this is the hard backstop.
+    ///
+    /// Returns immediately. The task lives until the process exits.
+    pub fn spawn_wal_checkpointer(&self, interval_secs: u64) {
+        let sqlite = Arc::clone(&self.sqlite);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            // Skip the immediate first tick: nothing has been written
+            // yet, so there is no WAL to truncate.
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let sqlite = Arc::clone(&sqlite);
+                // The checkpoint blocks (and briefly stalls writers);
+                // run it on the blocking pool so the runtime keeps
+                // serving requests.
+                let res = tokio::task::spawn_blocking(move || sqlite.checkpoint_truncate()).await;
+                match res {
+                    Ok(Ok(cp)) if cp.busy => {
+                        tracing::debug!(
+                            log_frames = cp.log_frames,
+                            "DynamoDB WAL checkpoint skipped (WAL busy); will retry"
+                        );
+                    }
+                    Ok(Ok(cp)) if cp.log_frames > 0 => {
+                        tracing::info!(
+                            log_frames = cp.log_frames,
+                            checkpointed_frames = cp.checkpointed_frames,
+                            "DynamoDB WAL checkpoint truncated"
+                        );
+                    }
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => {
+                        tracing::warn!(error = %e.message, "DynamoDB WAL checkpoint failed");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "DynamoDB WAL checkpoint join error");
                     }
                 }
             }
