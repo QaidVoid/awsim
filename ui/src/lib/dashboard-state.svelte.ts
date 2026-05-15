@@ -18,6 +18,13 @@ import type { RequestEvent } from "./events";
 
 const MAX_EVENTS = 500;
 const RECONNECT_DELAY_MS = 2000;
+// Coalesce incoming SSE messages and apply them on a fixed cadence. A
+// busy emulator (a test suite hammering endpoints) can emit hundreds of
+// events per second; reassigning `events` per message invalidated every
+// dashboard consumer (KPIs, rps, both stream tables) that many times a
+// second. Flushing in batches caps reactive churn at ~8/s regardless of
+// load while staying well under the threshold a human perceives as lag.
+const FLUSH_INTERVAL_MS = 120;
 
 export type ConnectionStatus = "connecting" | "open" | "closed" | "paused";
 
@@ -30,6 +37,9 @@ class DashboardState {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   /** Reference count so multiple components can mount/unmount safely. */
   private refs = 0;
+  /** Events received since the last flush, in arrival (oldest-first) order. */
+  private pending: RequestEvent[] = [];
+  private flushTimer: ReturnType<typeof setInterval> | null = null;
 
   connect() {
     this.refs++;
@@ -87,12 +97,12 @@ class DashboardState {
     this.es.onmessage = (e: MessageEvent) => {
       if (this.paused) return;
       try {
-        const evt = JSON.parse(e.data) as RequestEvent;
-        const next = [evt, ...this.events];
-        if (next.length > MAX_EVENTS) next.length = MAX_EVENTS;
-        this.events = next;
+        this.pending.push(JSON.parse(e.data) as RequestEvent);
       } catch {
         /* ignore malformed payload */
+      }
+      if (this.flushTimer === null) {
+        this.flushTimer = setInterval(() => this.flush(), FLUSH_INTERVAL_MS);
       }
     };
     this.es.onerror = () => {
@@ -101,11 +111,37 @@ class DashboardState {
     };
   }
 
+  /**
+   * Drain buffered events into `events` in one reassignment. Pending is
+   * oldest-first (arrival order); the buffer reverses onto the front so
+   * the newest event stays at index 0. Self-cancels its interval once
+   * the backlog clears so an idle stream costs nothing.
+   */
+  private flush() {
+    if (this.pending.length === 0) {
+      if (this.flushTimer !== null) {
+        clearInterval(this.flushTimer);
+        this.flushTimer = null;
+      }
+      return;
+    }
+    const batch = this.pending;
+    this.pending = [];
+    const next = batch.reverse().concat(this.events);
+    if (next.length > MAX_EVENTS) next.length = MAX_EVENTS;
+    this.events = next;
+  }
+
   private close() {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    if (this.flushTimer !== null) {
+      clearInterval(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.pending = [];
     if (this.es) {
       this.es.close();
       this.es = null;
