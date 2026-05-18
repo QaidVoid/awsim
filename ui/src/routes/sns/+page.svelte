@@ -207,6 +207,7 @@
 					<PublishTab
 						topicArn={selectedTopic.arn}
 						isFifo={selectedAttrs?.isFifo ?? false}
+						onViewSubscriptions={() => (active = 'subs')}
 					/>
 				</TabsContent>
 				<TabsContent value="attrs" class="m-0">
