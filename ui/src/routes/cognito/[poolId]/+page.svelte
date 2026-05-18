@@ -9,6 +9,7 @@
 	import Users from '@lucide/svelte/icons/users';
 	import UsersRound from '@lucide/svelte/icons/users-round';
 	import KeyRound from '@lucide/svelte/icons/key-round';
+	import LogIn from '@lucide/svelte/icons/log-in';
 	import Globe from '@lucide/svelte/icons/globe';
 	import Zap from '@lucide/svelte/icons/zap';
 	import Shield from '@lucide/svelte/icons/shield';
@@ -28,11 +29,13 @@
 	import ResourceServersTab from '$lib/components/cognito/resource-servers-tab.svelte';
 	import AppearanceSection from '$lib/components/cognito/appearance-section.svelte';
 	import AttributesTab from '$lib/components/cognito/attributes-tab.svelte';
+	import AuthenticateSection from '$lib/components/cognito/authenticate-section.svelte';
 
 	const SECTIONS = [
 		{ id: 'users', label: 'Users', icon: Users },
 		{ id: 'groups', label: 'Groups', icon: UsersRound },
 		{ id: 'clients', label: 'App clients', icon: KeyRound },
+		{ id: 'authenticate', label: 'Sign in', icon: LogIn },
 		{ id: 'attributes', label: 'Attributes', icon: Tag },
 		{ id: 'domain', label: 'Domain', icon: Globe },
 		{ id: 'triggers', label: 'Triggers', icon: Zap },
@@ -48,6 +51,12 @@
 	let pool = $state<UserPoolDetail | null>(null);
 	let loading = $state(true);
 	let active = $state<SectionId>(initialSection());
+	let prefillUser = $state('');
+
+	function signInAs(u: string) {
+		prefillUser = u;
+		active = 'authenticate';
+	}
 
 	function initialSection(): SectionId {
 		const tab = page.url.searchParams.get('section');
@@ -107,11 +116,13 @@
 			{#if poolId}
 				{#key poolId}
 					{#if active === 'users'}
-						<UsersSection {poolId} {pool} />
+						<UsersSection {poolId} {pool} onSignIn={signInAs} />
 					{:else if active === 'groups'}
 						<GroupsSection {poolId} />
 					{:else if active === 'clients'}
 						<ClientsSection {poolId} />
+					{:else if active === 'authenticate'}
+						<AuthenticateSection {poolId} {prefillUser} />
 					{:else if active === 'attributes'}
 						<AttributesTab {pool} onRefresh={() => loadPool(poolId)} />
 					{:else if active === 'domain'}

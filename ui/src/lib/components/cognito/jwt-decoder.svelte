@@ -5,7 +5,12 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 
-	let token = $state('');
+	interface Props {
+		/** Bindable so callers (e.g. the sign-in flow) can push a token in. */
+		token?: string;
+	}
+
+	let { token = $bindable('') }: Props = $props();
 
 	function base64UrlDecode(s: string): string {
 		const pad = s.length % 4;

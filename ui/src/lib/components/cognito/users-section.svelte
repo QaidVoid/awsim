@@ -28,9 +28,11 @@
 	interface Props {
 		poolId: string;
 		pool: UserPoolDetail | null;
+		/** Jump to the pool's sign-in flow prefilled with this user. */
+		onSignIn?: (username: string) => void;
 	}
 
-	let { poolId, pool }: Props = $props();
+	let { poolId, pool, onSignIn }: Props = $props();
 
 	const PAGE_SIZE_OPTIONS = [25, 50, 100];
 	const FILTER_DEBOUNCE_MS = 250;
@@ -294,6 +296,11 @@
 								<Button variant="ghost" size="xs" onclick={() => openSetPassword(u.username)}>
 									Set PW
 								</Button>
+								{#if onSignIn}
+									<Button variant="ghost" size="xs" onclick={() => onSignIn?.(u.username)}>
+										Sign in
+									</Button>
+								{/if}
 								<Button
 									variant="ghost"
 									size="xs"
