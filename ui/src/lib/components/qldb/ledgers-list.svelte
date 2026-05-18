@@ -9,6 +9,7 @@
 	import LockOpenIcon from '@lucide/svelte/icons/lock-open';
 	import BookTextIcon from '@lucide/svelte/icons/book-text';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import {
 		listLedgers,
 		describeLedger,
@@ -24,6 +25,9 @@
 	let newMode = $state<'STANDARD' | 'ALLOW_ALL'>('STANDARD');
 	let newDeletionProtection = $state(true);
 	let creating = $state(false);
+	let deleteTarget = $state<LedgerSummary | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		void load();
@@ -69,19 +73,32 @@
 		try {
 			const detail = await describeLedger(l.name);
 			if (detail.deletionProtection) {
-				if (
-					!confirm(
-						`Ledger "${l.name}" has DeletionProtection on. Disable it first then retry, or click OK to disable + delete now.`
-					)
-				)
-					return;
-				await updateLedgerProtection(l.name, false);
+				deleteTarget = l;
+				deleteOpen = true;
+				return;
 			}
 			await deleteLedger(l.name);
 			toast.success('Ledger deleted.');
 			await load();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete');
+		}
+	}
+
+	async function confirmRemove() {
+		if (!deleteTarget) return;
+		deleteBusy = true;
+		try {
+			await updateLedgerProtection(deleteTarget.name, false);
+			await deleteLedger(deleteTarget.name);
+			toast.success('Ledger deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
+			await load();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to delete');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -179,3 +196,15 @@
 		</Button>
 	</div>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete ledger?"
+	description={`Ledger "${deleteTarget?.name ?? ''}" has DeletionProtection on. Confirm to disable deletion protection and delete it now.`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => {
+		deleteOpen = false;
+		deleteTarget = null;
+	}}
+/>

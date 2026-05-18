@@ -8,6 +8,7 @@
 	} from '$lib/components/ui/sheet';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import PlayIcon from '@lucide/svelte/icons/play';
 	import PauseIcon from '@lucide/svelte/icons/pause';
@@ -33,6 +34,8 @@
 	let pipe = $state<Pipe | null>(null);
 	let loading = $state(false);
 	let busy = $state(false);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		if (open && name) {
@@ -83,19 +86,24 @@
 		}
 	}
 
-	async function handleDelete() {
+	function handleDelete() {
 		if (!pipe) return;
-		if (!confirm(`Delete pipe "${pipe.name}"?`)) return;
-		busy = true;
+		deleteOpen = true;
+	}
+
+	async function confirmDelete() {
+		if (!pipe) return;
+		deleteBusy = true;
 		try {
 			await deletePipe(pipe.name);
 			toast.success('Pipe deleted.');
+			deleteOpen = false;
 			onChanged?.();
 			onOpenChange(false);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete');
 		} finally {
-			busy = false;
+			deleteBusy = false;
 		}
 	}
 
@@ -223,3 +231,12 @@
 		</div>
 	</SheetContent>
 </Sheet>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete pipe?"
+	description={`Delete pipe "${pipe?.name ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmDelete}
+	onClose={() => (deleteOpen = false)}
+/>

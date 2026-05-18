@@ -17,6 +17,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import StopCircle from '@lucide/svelte/icons/stop-circle';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
@@ -35,6 +36,8 @@
 	let loading = $state(false);
 	let lastArn = $state('');
 	let detailTab = $state<'timeline' | 'io'>('timeline');
+	let stopOpen = $state(false);
+	let stopBusy = $state(false);
 
 	$effect(() => {
 		if (open && execution && execution.arn !== lastArn) {
@@ -65,15 +68,23 @@
 		}
 	}
 
-	async function handleStop() {
+	function handleStop() {
 		if (!execution) return;
-		if (!confirm(`Stop execution ${execution.name}?`)) return;
+		stopOpen = true;
+	}
+
+	async function confirmStop() {
+		if (!execution) return;
+		stopBusy = true;
 		try {
 			await stopExecution(execution.arn);
 			toast.success('Stop requested');
+			stopOpen = false;
 			await load();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Stop failed');
+		} finally {
+			stopBusy = false;
 		}
 	}
 
@@ -241,3 +252,13 @@
 		{/if}
 	</SheetContent>
 </Sheet>
+
+<ConfirmDialog
+	bind:open={stopOpen}
+	title="Stop execution?"
+	description={`Stop execution ${execution?.name ?? ''}.`}
+	confirmLabel="Stop"
+	busy={stopBusy}
+	onConfirm={confirmStop}
+	onClose={() => (stopOpen = false)}
+/>

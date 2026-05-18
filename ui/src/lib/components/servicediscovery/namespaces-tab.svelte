@@ -8,6 +8,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import MapPinIcon from '@lucide/svelte/icons/map-pin';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import {
 		listNamespaces,
 		createHttpNamespace,
@@ -29,6 +30,9 @@
 	let newName = $state('');
 	let newType = $state<'HTTP' | 'DNS_PRIVATE' | 'DNS_PUBLIC'>('HTTP');
 	let creating = $state(false);
+	let deleteTarget = $state<Namespace | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		refreshKey;
@@ -64,15 +68,25 @@
 		}
 	}
 
-	async function remove(n: Namespace) {
-		if (!confirm(`Delete namespace "${n.name}"? Services must be removed first.`)) return;
+	function remove(n: Namespace) {
+		deleteTarget = n;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		if (!deleteTarget) return;
+		deleteBusy = true;
 		try {
-			await deleteNamespace(n.id);
+			await deleteNamespace(deleteTarget.id);
 			toast.success('Namespace deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete namespace');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -145,3 +159,15 @@
 		<Trash2Icon class="text-destructive" />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete namespace?"
+	description={`Delete namespace "${deleteTarget?.name ?? ''}". Services must be removed first.`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => {
+		deleteOpen = false;
+		deleteTarget = null;
+	}}
+/>

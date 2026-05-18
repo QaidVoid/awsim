@@ -8,6 +8,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import {
 		listSegments,
 		createSegment,
@@ -26,6 +27,9 @@
 	let loading = $state(false);
 	let newName = $state('');
 	let creating = $state(false);
+	let deleteTarget = $state<Segment | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		appId;
@@ -59,14 +63,24 @@
 		}
 	}
 
-	async function remove(s: Segment) {
-		if (!confirm(`Delete segment "${s.name}"?`)) return;
+	function remove(s: Segment) {
+		deleteTarget = s;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		if (!deleteTarget) return;
+		deleteBusy = true;
 		try {
-			await deleteSegment(appId, s.id);
+			await deleteSegment(appId, deleteTarget.id);
 			toast.success('Segment deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 </script>
@@ -118,3 +132,15 @@
 		<Trash2Icon class="text-destructive" />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete segment?"
+	description={`Delete segment "${deleteTarget?.name ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => {
+		deleteOpen = false;
+		deleteTarget = null;
+	}}
+/>

@@ -5,6 +5,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { listApps, createApp, deleteApp, type App } from '$lib/api/pinpoint';
 
 	interface Props {
@@ -19,6 +20,9 @@
 	let loading = $state(false);
 	let newName = $state('');
 	let creating = $state(false);
+	let deleteTarget = $state<App | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	async function load() {
 		loading = true;
@@ -52,16 +56,26 @@
 		}
 	}
 
-	async function remove(a: App, ev: MouseEvent) {
+	function remove(a: App, ev: MouseEvent) {
 		ev.stopPropagation();
-		if (!confirm(`Delete app "${a.name}"? Cascades to endpoints/segments/campaigns.`)) return;
+		deleteTarget = a;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		if (!deleteTarget) return;
+		deleteBusy = true;
 		try {
-			await deleteApp(a.id);
+			await deleteApp(deleteTarget.id);
 			toast.success('App deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 </script>
@@ -104,3 +118,15 @@
 		{/if}
 	</div>
 </div>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete app?"
+	description={`Delete app "${deleteTarget?.name ?? ''}". Cascades to endpoints/segments/campaigns.`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => {
+		deleteOpen = false;
+		deleteTarget = null;
+	}}
+/>

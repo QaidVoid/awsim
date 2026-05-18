@@ -8,6 +8,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import NetworkIcon from '@lucide/svelte/icons/network';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import {
 		listNamespaces,
 		listServices,
@@ -31,6 +32,9 @@
 	let selectedNs = $state('');
 	let newName = $state('');
 	let creating = $state(false);
+	let deleteTarget = $state<SDService | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		selectedNs;
@@ -68,15 +72,25 @@
 		}
 	}
 
-	async function remove(s: SDService) {
-		if (!confirm(`Delete service "${s.name}"? Instances must be removed first.`)) return;
+	function remove(s: SDService) {
+		deleteTarget = s;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		if (!deleteTarget) return;
+		deleteBusy = true;
 		try {
-			await deleteService(s.id);
+			await deleteService(deleteTarget.id);
 			toast.success('Service deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete service');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 </script>
@@ -143,3 +157,15 @@
 		<Trash2Icon class="text-destructive" />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete service?"
+	description={`Delete service "${deleteTarget?.name ?? ''}". Instances must be removed first.`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => {
+		deleteOpen = false;
+		deleteTarget = null;
+	}}
+/>

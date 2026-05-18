@@ -11,6 +11,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import {
 		listInstances,
 		registerInstance,
@@ -34,6 +35,9 @@
 	let newIp = $state('');
 	let newPort = $state('');
 	let busy = $state(false);
+	let deleteTarget = $state<Instance | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		if (open && service) {
@@ -76,16 +80,26 @@
 		}
 	}
 
-	async function remove(inst: Instance) {
+	function remove(inst: Instance) {
 		if (!service) return;
-		if (!confirm(`Deregister instance "${inst.id}"?`)) return;
+		deleteTarget = inst;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		if (!service || !deleteTarget) return;
+		deleteBusy = true;
 		try {
-			await deregisterInstance(service.id, inst.id);
+			await deregisterInstance(service.id, deleteTarget.id);
 			toast.success('Instance deregistered.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load(service.id);
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to deregister');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 </script>
@@ -145,3 +159,16 @@
 		</div>
 	</SheetContent>
 </Sheet>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Deregister instance?"
+	description={`Deregister instance "${deleteTarget?.id ?? ''}".`}
+	confirmLabel="Deregister"
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => {
+		deleteOpen = false;
+		deleteTarget = null;
+	}}
+/>

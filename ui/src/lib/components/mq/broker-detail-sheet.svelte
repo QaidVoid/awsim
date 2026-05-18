@@ -9,6 +9,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
@@ -37,6 +38,11 @@
 	let loading = $state(false);
 	let busy = $state(false);
 	let newUsername = $state('');
+	let deleteBrokerOpen = $state(false);
+	let deleteBrokerBusy = $state(false);
+	let deleteUserTarget = $state<string | null>(null);
+	let deleteUserOpen = $state(false);
+	let deleteUserBusy = $state(false);
 
 	$effect(() => {
 		if (open && summary) {
@@ -72,19 +78,24 @@
 		}
 	}
 
-	async function handleDelete() {
+	function handleDelete() {
 		if (!broker) return;
-		if (!confirm(`Delete broker "${broker.brokerName}"? Users are cascaded.`)) return;
-		busy = true;
+		deleteBrokerOpen = true;
+	}
+
+	async function confirmDeleteBroker() {
+		if (!broker) return;
+		deleteBrokerBusy = true;
 		try {
 			await deleteBroker(broker.brokerId);
 			toast.success('Broker deleted.');
+			deleteBrokerOpen = false;
 			onChanged?.();
 			onOpenChange(false);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete');
 		} finally {
-			busy = false;
+			deleteBrokerBusy = false;
 		}
 	}
 
@@ -104,15 +115,25 @@
 		}
 	}
 
-	async function removeUser(username: string) {
+	function removeUser(username: string) {
 		if (!broker) return;
-		if (!confirm(`Delete user "${username}"?`)) return;
+		deleteUserTarget = username;
+		deleteUserOpen = true;
+	}
+
+	async function confirmRemoveUser() {
+		if (!broker || !deleteUserTarget) return;
+		deleteUserBusy = true;
 		try {
-			await deleteUser(broker.brokerId, username);
+			await deleteUser(broker.brokerId, deleteUserTarget);
+			deleteUserOpen = false;
+			deleteUserTarget = null;
 			await load(broker.brokerId);
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete user');
+		} finally {
+			deleteUserBusy = false;
 		}
 	}
 </script>
@@ -219,3 +240,24 @@
 		</div>
 	</SheetContent>
 </Sheet>
+
+<ConfirmDialog
+	bind:open={deleteBrokerOpen}
+	title="Delete broker?"
+	description={`Delete broker "${broker?.brokerName ?? ''}". Users are cascaded.`}
+	busy={deleteBrokerBusy}
+	onConfirm={confirmDeleteBroker}
+	onClose={() => (deleteBrokerOpen = false)}
+/>
+
+<ConfirmDialog
+	bind:open={deleteUserOpen}
+	title="Delete user?"
+	description={`Delete user "${deleteUserTarget ?? ''}".`}
+	busy={deleteUserBusy}
+	onConfirm={confirmRemoveUser}
+	onClose={() => {
+		deleteUserOpen = false;
+		deleteUserTarget = null;
+	}}
+/>

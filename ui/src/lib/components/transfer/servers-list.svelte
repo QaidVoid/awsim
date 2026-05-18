@@ -9,6 +9,7 @@
 	import PowerOffIcon from '@lucide/svelte/icons/power-off';
 	import UploadIcon from '@lucide/svelte/icons/upload';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import {
 		listServers,
 		createServer,
@@ -28,6 +29,9 @@
 	let rows = $state<ServerSummary[]>([]);
 	let loading = $state(false);
 	let creating = $state(false);
+	let deleteTarget = $state<ServerSummary | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		refreshKey;
@@ -74,15 +78,25 @@
 		}
 	}
 
-	async function remove(s: ServerSummary, ev: MouseEvent) {
+	function remove(s: ServerSummary, ev: MouseEvent) {
 		ev.stopPropagation();
-		if (!confirm(`Delete server ${s.serverId}? Users + SSH keys are cascaded.`)) return;
+		deleteTarget = s;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		if (!deleteTarget) return;
+		deleteBusy = true;
 		try {
-			await deleteServer(s.serverId);
+			await deleteServer(deleteTarget.serverId);
 			toast.success('Server deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -158,3 +172,15 @@
 		</Button>
 	</div>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete server?"
+	description={`Delete server ${deleteTarget?.serverId ?? ''}. Users + SSH keys are cascaded.`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => {
+		deleteOpen = false;
+		deleteTarget = null;
+	}}
+/>

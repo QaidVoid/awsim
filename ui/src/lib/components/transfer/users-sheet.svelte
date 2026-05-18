@@ -15,6 +15,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import KeyIcon from '@lucide/svelte/icons/key';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import {
 		listUsers,
 		createUser,
@@ -42,6 +43,10 @@
 
 	let keyForUser = $state('');
 	let keyBody = $state('');
+
+	let deleteTarget = $state<UserSummary | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		if (open && server) {
@@ -86,16 +91,26 @@
 		}
 	}
 
-	async function remove(u: UserSummary) {
+	function remove(u: UserSummary) {
 		if (!server) return;
-		if (!confirm(`Delete user "${u.userName}"? SSH keys are cascaded.`)) return;
+		deleteTarget = u;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		if (!server || !deleteTarget) return;
+		deleteBusy = true;
 		try {
-			await deleteUser(server.serverId, u.userName);
+			await deleteUser(server.serverId, deleteTarget.userName);
 			toast.success('User deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load(server.serverId);
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -215,3 +230,15 @@
 		</div>
 	</SheetContent>
 </Sheet>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete user?"
+	description={`Delete user "${deleteTarget?.userName ?? ''}". SSH keys are cascaded.`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => {
+		deleteOpen = false;
+		deleteTarget = null;
+	}}
+/>
