@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
+	import { pendingAction } from '$lib/pending-action.svelte';
 	import { ServicePage, EmptyState, ListSkeleton } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -51,6 +52,10 @@
 	);
 
 	let createOpen = $state(false);
+
+	onMount(() => {
+		if (pendingAction.consume('new-topic')) createOpen = true;
+	});
 	let confirmDelete = $state<{ arn: string; name: string } | null>(null);
 
 	let selectedTopic = $derived(topics.find((t) => t.arn === selectedArn) ?? null);

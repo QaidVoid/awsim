@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { pendingAction } from '$lib/pending-action.svelte';
 	import { goto } from '$app/navigation';
 	import { route } from '$lib/url';
 	import { listUsers, type IamUser } from '$lib/api/iam';
@@ -16,6 +17,10 @@
 	let loading = $state(false);
 	let filter = $state('');
 	let createOpen = $state(false);
+
+	onMount(() => {
+		if (pendingAction.consume('new-user')) createOpen = true;
+	});
 
 	const filtered = $derived(
 		filter.trim()

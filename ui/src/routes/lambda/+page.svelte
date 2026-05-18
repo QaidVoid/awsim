@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
+	import { pendingAction } from '$lib/pending-action.svelte';
 	import {
 		listFunctions,
 		getFunction,
@@ -55,6 +56,10 @@
 		})
 	);
 	let createOpen = $state(false);
+
+	onMount(() => {
+		if (pendingAction.consume('new-fn')) createOpen = true;
+	});
 	let confirmOpen = $state(false);
 	let confirmBusy = $state(false);
 

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
+	import { pendingAction } from '$lib/pending-action.svelte';
 	import { page } from '$app/state';
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import { browser } from '$app/environment';
@@ -43,6 +44,10 @@
 	let detailLoading = $state(false);
 
 	let createOpen = $state(false);
+
+	onMount(() => {
+		if (pendingAction.consume('new-table')) createOpen = true;
+	});
 	let globalTablesOpen = $state(false);
 	let confirmOpen = $state(false);
 	let confirmBusy = $state(false);

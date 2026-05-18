@@ -16,6 +16,7 @@
 	import { THEMES, theme, type Theme } from '$lib/theme.svelte';
 	import { dashboardState } from '$lib/dashboard-state.svelte';
 	import { inspectState } from '$lib/inspect-state.svelte';
+	import { pendingAction } from '$lib/pending-action.svelte';
 	import { fetchRecentRequestIds } from '$lib/api/requests';
 	import { toast } from 'svelte-sonner';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -46,6 +47,13 @@
 		value = '';
 		recent.push(path);
 		goto(route(path));
+	}
+
+	// Quick actions queue an intent the destination page consumes on
+	// mount (e.g. open its create dialog), then navigate normally.
+	function runQuickAction(action: { id: string; href: string }) {
+		pendingAction.request(action.id);
+		go(action.href);
 	}
 
 	function pickTheme(id: Theme) {
@@ -122,7 +130,7 @@
 			{#each QUICK_ACTIONS as action (action.id)}
 				<CommandItem
 					value={`${action.label} ${action.keywords.join(' ')}`}
-					onSelect={() => go(action.href)}
+					onSelect={() => runQuickAction(action)}
 				>
 					<Plus class="size-4" />
 					<span>{action.label}</span>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { pendingAction } from '$lib/pending-action.svelte';
 	import { page } from '$app/state';
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import { browser } from '$app/environment';
@@ -47,6 +48,10 @@
 
 	let bucketFilter = $state('');
 	let createOpen = $state(false);
+
+	onMount(() => {
+		if (pendingAction.consume('new-bucket')) createOpen = true;
+	});
 	let detailOpen = $state(false);
 	let detailObject = $state<S3Object | null>(null);
 
