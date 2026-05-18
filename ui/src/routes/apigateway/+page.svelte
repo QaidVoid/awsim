@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
-	import { ServicePage, EmptyState, ListSkeleton } from '$lib/components/service';
+	import { ResourceConsole, EmptyState } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		Tabs,
@@ -113,9 +113,16 @@
 	onMount(load);
 </script>
 
-<ServicePage
+<ResourceConsole
 	title="API Gateway"
 	description="REST APIs, resources, stages, and deployments."
+	listWidth="320px"
+	listError={error}
+	onListRetry={load}
+	listLoading={loading}
+	listIsEmpty={apis.length === 0}
+	listSkeletonRows={6}
+	hasSelection={!!selected}
 >
 	{#snippet actions()}
 		<Button variant="outline" size="sm" onclick={load} disabled={loading}>
@@ -128,106 +135,102 @@
 		</Button>
 	{/snippet}
 
-	{#if error}
-		<div class="px-6 py-4 text-sm text-destructive">{error}</div>
-	{:else if loading && apis.length === 0}
-		<div class="px-6 py-6">
-			<ListSkeleton rows={6} />
+	{#snippet listEmpty()}
+		<EmptyState
+			icon={GlobeIcon}
+			title="No REST APIs"
+			description="Create a REST API to start defining resources, methods, and stages."
+		>
+			{#snippet action()}
+				<Button onclick={() => (createOpen = true)}>
+					<PlusIcon />
+					Create API
+				</Button>
+			{/snippet}
+		</EmptyState>
+	{/snippet}
+
+	{#snippet list()}
+		<ApiList
+			{apis}
+			{selectedId}
+			{loading}
+			onSelect={(a) => (selectedId = a.id)}
+		/>
+	{/snippet}
+
+	{#snippet empty()}
+		<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+			Select an API to inspect.
 		</div>
-	{:else if apis.length === 0}
-		<div class="px-6 py-12">
-			<EmptyState
-				icon={GlobeIcon}
-				title="No REST APIs"
-				description="Create a REST API to start defining resources, methods, and stages."
+	{/snippet}
+
+	{#snippet detailHeader()}
+		{#if selected}
+			<header
+				class="flex items-center justify-between gap-3 border-b border-border px-5 py-3"
 			>
-				{#snippet action()}
-					<Button onclick={() => (createOpen = true)}>
-						<PlusIcon />
-						Create API
-					</Button>
-				{/snippet}
-			</EmptyState>
-		</div>
-	{:else}
-		<div class="grid h-full min-h-0 grid-cols-[320px_1fr]">
-			<ApiList
-				{apis}
-				{selectedId}
-				{loading}
-				onSelect={(a) => (selectedId = a.id)}
-			/>
-
-			<div class="flex h-full min-h-0 flex-col overflow-hidden">
-				{#if selected}
-					<header
-						class="flex items-center justify-between gap-3 border-b border-border px-5 py-3"
+				<div class="min-w-0">
+					<h2 class="truncate text-sm font-medium">{selected.name || selected.id}</h2>
+					<p class="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+						{selected.id}
+					</p>
+				</div>
+				<div class="flex items-center gap-2">
+					<Button
+						size="sm"
+						variant="outline"
+						onclick={() => (detailOpen = true)}
 					>
-						<div class="min-w-0">
-							<h2 class="truncate text-sm font-medium">{selected.name || selected.id}</h2>
-							<p class="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-								{selected.id}
-							</p>
-						</div>
-						<div class="flex items-center gap-2">
-							<Button
-								size="sm"
-								variant="outline"
-								onclick={() => (detailOpen = true)}
-							>
-								<InfoIcon />
-								Details
-							</Button>
-							<Button
-								size="sm"
-								variant="destructive"
-								onclick={() => (confirmDelete = selected)}
-							>
-								<Trash2Icon />
-								Delete
-							</Button>
-						</div>
-					</header>
+						<InfoIcon />
+						Details
+					</Button>
+					<Button
+						size="sm"
+						variant="destructive"
+						onclick={() => (confirmDelete = selected)}
+					>
+						<Trash2Icon />
+						Delete
+					</Button>
+				</div>
+			</header>
+		{/if}
+	{/snippet}
 
-				<Tabs
-					bind:value={active}
-					class="flex h-full min-h-0 flex-1 flex-col overflow-hidden"
-				>
-						<TabsList variant="line" class="border-b border-border px-4">
-							<TabsTrigger value="resources">Resources</TabsTrigger>
-							<TabsTrigger value="stages">Stages</TabsTrigger>
-							<TabsTrigger value="deployments">Deployments</TabsTrigger>
-							<TabsTrigger value="authorizers">Authorizers</TabsTrigger>
-							<TabsTrigger value="tester">Test</TabsTrigger>
-						</TabsList>
+	{#if selected}
+		<Tabs
+			bind:value={active}
+			class="flex h-full min-h-0 flex-1 flex-col overflow-hidden"
+		>
+			<TabsList variant="line" class="border-b border-border px-4">
+				<TabsTrigger value="resources">Resources</TabsTrigger>
+				<TabsTrigger value="stages">Stages</TabsTrigger>
+				<TabsTrigger value="deployments">Deployments</TabsTrigger>
+				<TabsTrigger value="authorizers">Authorizers</TabsTrigger>
+				<TabsTrigger value="tester">Test</TabsTrigger>
+			</TabsList>
 
-						<div class="min-h-0 flex-1 overflow-y-auto">
-							<TabsContent value="resources" class="m-0">
-								<ResourcesTab restApiId={selected.id} />
-							</TabsContent>
-							<TabsContent value="stages" class="m-0">
-								<StagesTab restApiId={selected.id} />
-							</TabsContent>
-							<TabsContent value="deployments" class="m-0 h-full">
-								<DeploymentsTab restApiId={selected.id} />
-							</TabsContent>
-							<TabsContent value="authorizers" class="m-0 h-full">
-								<AuthorizersTab restApiId={selected.id} />
-							</TabsContent>
-							<TabsContent value="tester" class="m-0 h-full">
-								<RouteTester restApiId={selected.id} />
-							</TabsContent>
-						</div>
-					</Tabs>
-				{:else}
-					<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-						Select an API to inspect.
-					</div>
-				{/if}
+			<div class="min-h-0 flex-1 overflow-y-auto">
+				<TabsContent value="resources" class="m-0">
+					<ResourcesTab restApiId={selected.id} />
+				</TabsContent>
+				<TabsContent value="stages" class="m-0">
+					<StagesTab restApiId={selected.id} />
+				</TabsContent>
+				<TabsContent value="deployments" class="m-0 h-full">
+					<DeploymentsTab restApiId={selected.id} />
+				</TabsContent>
+				<TabsContent value="authorizers" class="m-0 h-full">
+					<AuthorizersTab restApiId={selected.id} />
+				</TabsContent>
+				<TabsContent value="tester" class="m-0 h-full">
+					<RouteTester restApiId={selected.id} />
+				</TabsContent>
 			</div>
-		</div>
+		</Tabs>
 	{/if}
-</ServicePage>
+</ResourceConsole>
 
 <ApiDetailSheet
 	open={detailOpen}

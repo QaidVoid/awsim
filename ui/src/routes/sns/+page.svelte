@@ -2,7 +2,7 @@
 	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import { pendingAction } from '$lib/pending-action.svelte';
-	import { ServicePage, EmptyState, ListSkeleton } from '$lib/components/service';
+	import { ResourceConsole, EmptyState } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
@@ -115,9 +115,16 @@
 	onMount(loadTopics);
 </script>
 
-<ServicePage
+<ResourceConsole
 	title="SNS"
 	description="Simple Notification Service. Publish to topics, fan out to subscribers."
+	listError={error}
+	onListRetry={loadTopics}
+	listLoading={loading}
+	listIsEmpty={topics.length === 0}
+	listSkeletonRows={6}
+	listWidth="280px"
+	hasSelection={!!selectedTopic}
 >
 	{#snippet actions()}
 		<Button variant="outline" size="sm" onclick={loadTopics} disabled={loading}>
@@ -130,93 +137,89 @@
 		</Button>
 	{/snippet}
 
-	{#if error}
-		<div class="px-6 py-4 text-sm text-destructive">{error}</div>
-	{:else if loading && topics.length === 0}
-		<div class="px-6 py-6">
-			<ListSkeleton rows={6} />
+	{#snippet listEmpty()}
+		<EmptyState
+			icon={MegaphoneIcon}
+			title="No SNS topics"
+			description="Create a topic to publish messages and fan out to subscribers."
+		>
+			{#snippet action()}
+				<Button onclick={() => (createOpen = true)}>
+					<PlusIcon />
+					Create topic
+				</Button>
+			{/snippet}
+		</EmptyState>
+	{/snippet}
+
+	{#snippet list()}
+		<TopicList {topics} {selectedArn} onSelect={handleSelect} onCreate={() => (createOpen = true)} />
+	{/snippet}
+
+	{#snippet empty()}
+		<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+			Select a topic to inspect.
 		</div>
-	{:else if topics.length === 0}
-		<div class="px-6 py-12">
-			<EmptyState
-				icon={MegaphoneIcon}
-				title="No SNS topics"
-				description="Create a topic to publish messages and fan out to subscribers."
+	{/snippet}
+
+	{#snippet detailHeader()}
+		{#if selectedTopic}
+			<header
+				class="flex items-center justify-between gap-3 border-b border-border px-5 py-3"
 			>
-				{#snippet action()}
-					<Button onclick={() => (createOpen = true)}>
-						<PlusIcon />
-						Create topic
-					</Button>
-				{/snippet}
-			</EmptyState>
-		</div>
-	{:else}
-		<div class="grid h-full min-h-0 grid-cols-[280px_1fr]">
-			<TopicList {topics} {selectedArn} onSelect={handleSelect} onCreate={() => (createOpen = true)} />
-
-			<div class="flex h-full min-h-0 flex-col overflow-hidden">
-				{#if selectedTopic}
-					<header
-						class="flex items-center justify-between gap-3 border-b border-border px-5 py-3"
-					>
-						<div class="min-w-0">
-							<div class="flex items-center gap-2">
-								<h2 class="truncate font-mono text-sm font-medium">{selectedTopic.name}</h2>
-								{#if selectedAttrs?.isFifo}
-									<Badge variant="outline" class="h-4 px-1.5 text-[10px]">FIFO</Badge>
-								{/if}
-							</div>
-							<p class="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-								{selectedTopic.arn}
-							</p>
-						</div>
-						<Button
-							size="sm"
-							variant="destructive"
-							onclick={() =>
-								(confirmDelete = { arn: selectedTopic!.arn, name: selectedTopic!.name })}
-						>
-							<Trash2Icon />
-							Delete
-						</Button>
-					</header>
-
-					<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-						<TabsList variant="line" class="border-b border-border px-4">
-							<TabsTrigger value="subs">Subscriptions</TabsTrigger>
-							<TabsTrigger value="publish">Publish</TabsTrigger>
-							<TabsTrigger value="attrs">Attributes</TabsTrigger>
-						</TabsList>
-
-						<div class="min-h-0 flex-1 overflow-y-auto">
-							<TabsContent value="subs" class="m-0">
-								<SubscriptionsTab topicArn={selectedTopic.arn} />
-							</TabsContent>
-							<TabsContent value="publish" class="m-0">
-								<PublishTab
-									topicArn={selectedTopic.arn}
-									isFifo={selectedAttrs?.isFifo ?? false}
-								/>
-							</TabsContent>
-							<TabsContent value="attrs" class="m-0">
-								{#if attrsLoading || !selectedAttrs}
-									<p class="px-4 py-4 text-xs text-muted-foreground">Loading attributes…</p>
-								{:else}
-									<AttributesTab attrs={selectedAttrs} />
-								{/if}
-							</TabsContent>
-						</div>
-					</Tabs>
-				{:else}
-					<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-						Select a topic to inspect.
+				<div class="min-w-0">
+					<div class="flex items-center gap-2">
+						<h2 class="truncate font-mono text-sm font-medium">{selectedTopic.name}</h2>
+						{#if selectedAttrs?.isFifo}
+							<Badge variant="outline" class="h-4 px-1.5 text-[10px]">FIFO</Badge>
+						{/if}
 					</div>
-				{/if}
+					<p class="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+						{selectedTopic.arn}
+					</p>
+				</div>
+				<Button
+					size="sm"
+					variant="destructive"
+					onclick={() =>
+						(confirmDelete = { arn: selectedTopic!.arn, name: selectedTopic!.name })}
+				>
+					<Trash2Icon />
+					Delete
+				</Button>
+			</header>
+		{/if}
+	{/snippet}
+
+	{#if selectedTopic}
+		<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+			<TabsList variant="line" class="border-b border-border px-4">
+				<TabsTrigger value="subs">Subscriptions</TabsTrigger>
+				<TabsTrigger value="publish">Publish</TabsTrigger>
+				<TabsTrigger value="attrs">Attributes</TabsTrigger>
+			</TabsList>
+
+			<div class="min-h-0 flex-1 overflow-y-auto">
+				<TabsContent value="subs" class="m-0">
+					<SubscriptionsTab topicArn={selectedTopic.arn} />
+				</TabsContent>
+				<TabsContent value="publish" class="m-0">
+					<PublishTab
+						topicArn={selectedTopic.arn}
+						isFifo={selectedAttrs?.isFifo ?? false}
+					/>
+				</TabsContent>
+				<TabsContent value="attrs" class="m-0">
+					{#if attrsLoading || !selectedAttrs}
+						<p class="px-4 py-4 text-xs text-muted-foreground">Loading attributes…</p>
+					{:else}
+						<AttributesTab attrs={selectedAttrs} />
+					{/if}
+				</TabsContent>
 			</div>
-		</div>
+		</Tabs>
 	{/if}
-</ServicePage>
+</ResourceConsole>
 
 <CreateTopicDialog
 	open={createOpen}

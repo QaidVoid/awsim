@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
-	import { ServicePage, EmptyState, ListSkeleton } from '$lib/components/service';
+	import { ResourceConsole, EmptyState } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
@@ -90,9 +90,16 @@
 	onMount(loadZones);
 </script>
 
-<ServicePage
+<ResourceConsole
 	title="Route 53"
 	description="Hosted zones, DNS records, and health checks for global routing."
+	listWidth="300px"
+	hasSelection={!!selectedZone}
+	listError={error}
+	onListRetry={loadZones}
+	listLoading={loading}
+	listIsEmpty={zones.length === 0}
+	listSkeletonRows={5}
 >
 	{#snippet actions()}
 		<Button variant="outline" size="sm" onclick={loadZones} disabled={loading}>
@@ -105,98 +112,94 @@
 		</Button>
 	{/snippet}
 
-	{#if error}
-		<div class="px-6 py-4 text-sm text-destructive">{error}</div>
-	{:else if loading && zones.length === 0}
-		<div class="px-6 py-6">
-			<ListSkeleton rows={5} />
+	{#snippet listEmpty()}
+		<EmptyState
+			icon={GlobeIcon}
+			title="No hosted zones"
+			description="Create a hosted zone to manage DNS records for a domain."
+		>
+			{#snippet action()}
+				<Button onclick={() => (createZoneOpen = true)}>
+					<PlusIcon />
+					Create hosted zone
+				</Button>
+			{/snippet}
+		</EmptyState>
+	{/snippet}
+
+	{#snippet list()}
+		<HostedZonesList
+			{zones}
+			{selectedId}
+			onSelect={(id) => (selectedId = id)}
+			onCreate={() => (createZoneOpen = true)}
+		/>
+	{/snippet}
+
+	{#snippet empty()}
+		<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+			Select a hosted zone to inspect.
 		</div>
-	{:else if zones.length === 0}
-		<div class="px-6 py-12">
-			<EmptyState
-				icon={GlobeIcon}
-				title="No hosted zones"
-				description="Create a hosted zone to manage DNS records for a domain."
+	{/snippet}
+
+	{#snippet detailHeader()}
+		{#if selectedZone}
+			<header
+				class="flex items-center justify-between gap-3 border-b border-border px-5 py-3"
 			>
-				{#snippet action()}
-					<Button onclick={() => (createZoneOpen = true)}>
-						<PlusIcon />
-						Create hosted zone
-					</Button>
-				{/snippet}
-			</EmptyState>
-		</div>
-	{:else}
-		<div class="grid h-full min-h-0 grid-cols-[300px_1fr]">
-			<HostedZonesList
-				{zones}
-				{selectedId}
-				onSelect={(id) => (selectedId = id)}
-				onCreate={() => (createZoneOpen = true)}
-			/>
-
-			<div class="flex h-full min-h-0 flex-col overflow-hidden">
-				{#if selectedZone}
-					<header
-						class="flex items-center justify-between gap-3 border-b border-border px-5 py-3"
-					>
-						<div class="min-w-0">
-							<div class="flex items-center gap-2">
-								<h2 class="truncate font-mono text-sm font-medium">{selectedZone.name}</h2>
-								{#if selectedZone.privateZone}
-									<Badge variant="outline" class="h-4 px-1.5 text-[10px]">PRIVATE</Badge>
-								{/if}
-							</div>
-							<p class="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-								{selectedZone.id}
-							</p>
-						</div>
-						<div class="flex shrink-0 items-center gap-2">
-							<Button size="sm" variant="outline" onclick={() => (detailOpen = true)}>
-								<InfoIcon />
-								Details
-							</Button>
-							<Button
-								size="sm"
-								variant="destructive"
-								onclick={() =>
-									(confirmDelete = { id: selectedZone!.id, name: selectedZone!.name })}
-							>
-								<Trash2Icon />
-								Delete
-							</Button>
-						</div>
-					</header>
-
-					<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-						<TabsList variant="line" class="border-b border-border px-4">
-							<TabsTrigger value="records">Records</TabsTrigger>
-							<TabsTrigger value="health">Health checks</TabsTrigger>
-						</TabsList>
-
-						<div class="min-h-0 flex-1 overflow-y-auto">
-							<TabsContent value="records" class="m-0">
-								<RecordsTab
-									hostedZoneId={selectedZone.id}
-									zoneName={selectedZone.name}
-									onCreate={() => (createRecordOpen = true)}
-									refreshKey={recordsRefreshKey}
-								/>
-							</TabsContent>
-							<TabsContent value="health" class="m-0">
-								<HealthChecksTab />
-							</TabsContent>
-						</div>
-					</Tabs>
-				{:else}
-					<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-						Select a hosted zone to inspect.
+				<div class="min-w-0">
+					<div class="flex items-center gap-2">
+						<h2 class="truncate font-mono text-sm font-medium">{selectedZone.name}</h2>
+						{#if selectedZone.privateZone}
+							<Badge variant="outline" class="h-4 px-1.5 text-[10px]">PRIVATE</Badge>
+						{/if}
 					</div>
-				{/if}
+					<p class="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+						{selectedZone.id}
+					</p>
+				</div>
+				<div class="flex shrink-0 items-center gap-2">
+					<Button size="sm" variant="outline" onclick={() => (detailOpen = true)}>
+						<InfoIcon />
+						Details
+					</Button>
+					<Button
+						size="sm"
+						variant="destructive"
+						onclick={() =>
+							(confirmDelete = { id: selectedZone!.id, name: selectedZone!.name })}
+					>
+						<Trash2Icon />
+						Delete
+					</Button>
+				</div>
+			</header>
+		{/if}
+	{/snippet}
+
+	{#if selectedZone}
+		<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+			<TabsList variant="line" class="border-b border-border px-4">
+				<TabsTrigger value="records">Records</TabsTrigger>
+				<TabsTrigger value="health">Health checks</TabsTrigger>
+			</TabsList>
+
+			<div class="min-h-0 flex-1 overflow-y-auto">
+				<TabsContent value="records" class="m-0">
+					<RecordsTab
+						hostedZoneId={selectedZone.id}
+						zoneName={selectedZone.name}
+						onCreate={() => (createRecordOpen = true)}
+						refreshKey={recordsRefreshKey}
+					/>
+				</TabsContent>
+				<TabsContent value="health" class="m-0">
+					<HealthChecksTab />
+				</TabsContent>
 			</div>
-		</div>
+		</Tabs>
 	{/if}
-</ServicePage>
+</ResourceConsole>
 
 <CreateZoneDialog
 	open={createZoneOpen}

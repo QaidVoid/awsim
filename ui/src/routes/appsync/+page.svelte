@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ServicePage, EmptyState, ListSkeleton } from '$lib/components/service';
+	import { ResourceConsole, EmptyState } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		Dialog,
@@ -58,9 +58,16 @@
 	onMount(loadApis);
 </script>
 
-<ServicePage
+<ResourceConsole
 	title="AppSync"
 	description="Managed GraphQL APIs — data sources, resolvers, functions, schema."
+	listWidth="300px"
+	hasSelection={!!selectedApi}
+	listError={error}
+	onListRetry={loadApis}
+	listLoading={loading}
+	listIsEmpty={apis.length === 0}
+	listSkeletonRows={6}
 >
 	{#snippet actions()}
 		<Button variant="outline" size="sm" onclick={loadApis} disabled={loading}>
@@ -73,52 +80,46 @@
 		</Button>
 	{/snippet}
 
-	{#if error}
-		<div class="px-6 py-4 text-sm text-destructive">{error}</div>
-	{:else if loading && apis.length === 0}
-		<div class="px-6 py-6">
-			<ListSkeleton rows={6} />
-		</div>
-	{:else if apis.length === 0}
-		<div class="px-6 py-12">
-			<EmptyState
-				icon={LayersIcon}
-				title="No GraphQL APIs"
-				description="Create an API to define a schema, resolvers, and data sources."
-			>
-				{#snippet action()}
-					<Button onclick={() => (createOpen = true)}>
-						<PlusIcon />
-						Create API
-					</Button>
-				{/snippet}
-			</EmptyState>
-		</div>
-	{:else}
-		<div class="grid h-full min-h-0 grid-cols-[300px_1fr]">
-			<ApiList
-				{apis}
-				{selectedId}
-				onSelect={(id) => (selectedId = id)}
-				onCreate={() => (createOpen = true)}
-			/>
+	{#snippet listEmpty()}
+		<EmptyState
+			icon={LayersIcon}
+			title="No GraphQL APIs"
+			description="Create an API to define a schema, resolvers, and data sources."
+		>
+			{#snippet action()}
+				<Button onclick={() => (createOpen = true)}>
+					<PlusIcon />
+					Create API
+				</Button>
+			{/snippet}
+		</EmptyState>
+	{/snippet}
 
-			<div class="flex h-full min-h-0 flex-col overflow-hidden">
-				{#if selectedApi}
-					<ApiDetail
-						api={selectedApi}
-						onDelete={() =>
-							(confirmDelete = { apiId: selectedApi!.apiId, name: selectedApi!.name })}
-					/>
-				{:else}
-					<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-						Select an API to inspect.
-					</div>
-				{/if}
-			</div>
+	{#snippet list()}
+		<ApiList
+			{apis}
+			{selectedId}
+			onSelect={(id) => (selectedId = id)}
+			onCreate={() => (createOpen = true)}
+		/>
+	{/snippet}
+
+	{#snippet empty()}
+		<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+			Select an API to inspect.
+		</div>
+	{/snippet}
+
+	{#if selectedApi}
+		<div class="flex h-full min-h-0 flex-col overflow-hidden">
+			<ApiDetail
+				api={selectedApi}
+				onDelete={() =>
+					(confirmDelete = { apiId: selectedApi!.apiId, name: selectedApi!.name })}
+			/>
 		</div>
 	{/if}
-</ServicePage>
+</ResourceConsole>
 
 <CreateApiDialog
 	open={createOpen}

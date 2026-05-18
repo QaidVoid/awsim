@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ServicePage, EmptyState, ListSkeleton } from '$lib/components/service';
+	import { ResourceConsole, EmptyState } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
@@ -90,9 +90,16 @@
 	onMount(loadRepos);
 </script>
 
-<ServicePage
+<ResourceConsole
 	title="ECR"
 	description="Elastic Container Registry. Store, version, and pull OCI / Docker images."
+	listWidth="300px"
+	listError={error}
+	onListRetry={loadRepos}
+	listLoading={loading}
+	listIsEmpty={repositories.length === 0}
+	listSkeletonRows={6}
+	hasSelection={!!selectedRepo}
 >
 	{#snippet actions()}
 		<Button variant="outline" size="sm" onclick={loadRepos} disabled={loading}>
@@ -105,86 +112,82 @@
 		</Button>
 	{/snippet}
 
-	{#if error}
-		<div class="px-6 py-4 text-sm text-destructive">{error}</div>
-	{:else if loading && repositories.length === 0}
-		<div class="px-6 py-6">
-			<ListSkeleton rows={6} />
+	{#snippet listEmpty()}
+		<EmptyState
+			icon={ContainerIcon}
+			title="No ECR repositories"
+			description="Create a repository to push container images and use them from ECS, EKS, or Lambda."
+		>
+			{#snippet action()}
+				<Button onclick={() => (createOpen = true)}>
+					<PlusIcon />
+					Create repository
+				</Button>
+			{/snippet}
+		</EmptyState>
+	{/snippet}
+
+	{#snippet list()}
+		<RepositoryList
+			{repositories}
+			{selectedName}
+			onSelect={handleSelect}
+			onCreate={() => (createOpen = true)}
+		/>
+	{/snippet}
+
+	{#snippet empty()}
+		<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+			Select a repository to view its images.
 		</div>
-	{:else if repositories.length === 0}
-		<div class="px-6 py-12">
-			<EmptyState
-				icon={ContainerIcon}
-				title="No ECR repositories"
-				description="Create a repository to push container images and use them from ECS, EKS, or Lambda."
+	{/snippet}
+
+	{#snippet detailHeader()}
+		{#if selectedRepo}
+			<header
+				class="flex items-center justify-between gap-3 border-b border-border px-5 py-3"
 			>
-				{#snippet action()}
-					<Button onclick={() => (createOpen = true)}>
-						<PlusIcon />
-						Create repository
+				<div class="min-w-0">
+					<div class="flex items-center gap-2">
+						<h2 class="truncate font-mono text-sm font-medium">
+							{selectedRepo.repositoryName}
+						</h2>
+						{#if selectedRepo.imageTagMutability === 'IMMUTABLE'}
+							<Badge variant="outline" class="h-4 px-1.5 text-[10px]">IMMUTABLE</Badge>
+						{/if}
+					</div>
+					<p class="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+						{selectedRepo.repositoryUri}
+					</p>
+				</div>
+				<div class="flex shrink-0 items-center gap-2">
+					<Button size="sm" variant="outline" onclick={() => (detailOpen = true)}>
+						<InfoIcon />
+						Details
 					</Button>
-				{/snippet}
-			</EmptyState>
-		</div>
-	{:else}
-		<div class="grid h-full min-h-0 grid-cols-[300px_1fr]">
-			<RepositoryList
-				{repositories}
-				{selectedName}
-				onSelect={handleSelect}
-				onCreate={() => (createOpen = true)}
-			/>
-
-			<div class="flex h-full min-h-0 flex-col overflow-hidden">
-				{#if selectedRepo}
-					<header
-						class="flex items-center justify-between gap-3 border-b border-border px-5 py-3"
+					<Button
+						size="sm"
+						variant="destructive"
+						onclick={() => (confirmDelete = { name: selectedRepo!.repositoryName })}
 					>
-						<div class="min-w-0">
-							<div class="flex items-center gap-2">
-								<h2 class="truncate font-mono text-sm font-medium">
-									{selectedRepo.repositoryName}
-								</h2>
-								{#if selectedRepo.imageTagMutability === 'IMMUTABLE'}
-									<Badge variant="outline" class="h-4 px-1.5 text-[10px]">IMMUTABLE</Badge>
-								{/if}
-							</div>
-							<p class="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-								{selectedRepo.repositoryUri}
-							</p>
-						</div>
-						<div class="flex shrink-0 items-center gap-2">
-							<Button size="sm" variant="outline" onclick={() => (detailOpen = true)}>
-								<InfoIcon />
-								Details
-							</Button>
-							<Button
-								size="sm"
-								variant="destructive"
-								onclick={() => (confirmDelete = { name: selectedRepo!.repositoryName })}
-							>
-								<Trash2Icon />
-								Delete
-							</Button>
-						</div>
-					</header>
+						<Trash2Icon />
+						Delete
+					</Button>
+				</div>
+			</header>
+		{/if}
+	{/snippet}
 
-					<div class="min-h-0 flex-1 overflow-hidden">
-						<ImagesTab
-							repositoryName={selectedRepo.repositoryName}
-							onSelect={handleImageSelect}
-							refreshKey={imagesRefreshKey}
-						/>
-					</div>
-				{:else}
-					<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-						Select a repository to view its images.
-					</div>
-				{/if}
-			</div>
+	{#if selectedRepo}
+		<div class="min-h-0 flex-1 overflow-hidden">
+			<ImagesTab
+				repositoryName={selectedRepo.repositoryName}
+				onSelect={handleImageSelect}
+				refreshKey={imagesRefreshKey}
+			/>
 		</div>
 	{/if}
-</ServicePage>
+</ResourceConsole>
 
 <CreateRepoDialog
 	open={createOpen}

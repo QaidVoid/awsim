@@ -2,7 +2,7 @@
 	import { useTab } from '$lib/util/tab.svelte';
 	import { onMount } from 'svelte';
 	import { pendingAction } from '$lib/pending-action.svelte';
-	import { ServicePage, EmptyState, ListSkeleton } from '$lib/components/service';
+	import { ResourceConsole, EmptyState } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
@@ -127,9 +127,16 @@
 	onMount(loadAll);
 </script>
 
-<ServicePage
+<ResourceConsole
 	title="SQS"
 	description="Simple Queue Service. Send, receive, and manage messages."
+	listError={error}
+	onListRetry={loadAll}
+	listLoading={loading}
+	listIsEmpty={queues.length === 0}
+	listSkeletonRows={6}
+	listWidth="280px"
+	hasSelection={!!(selectedQueue && selectedAttrs)}
 >
 	{#snippet actions()}
 		<Button variant="outline" size="sm" onclick={loadAll} disabled={loading}>
@@ -142,135 +149,131 @@
 		</Button>
 	{/snippet}
 
-	{#if error}
-		<div class="px-6 py-4 text-sm text-destructive">{error}</div>
-	{:else if loading && queues.length === 0}
-		<div class="px-6 py-6">
-			<ListSkeleton rows={6} />
+	{#snippet listEmpty()}
+		<EmptyState
+			icon={InboxIcon}
+			title="No SQS queues"
+			description="Create a standard or FIFO queue to start sending messages."
+		>
+			{#snippet action()}
+				<Button onclick={() => (createOpen = true)}>
+					<PlusIcon />
+					Create queue
+				</Button>
+			{/snippet}
+		</EmptyState>
+	{/snippet}
+
+	{#snippet list()}
+		<QueueList
+			{queues}
+			selectedUrl={selectedUrl}
+			{attrsByUrl}
+			onSelect={handleSelect}
+			onCreate={() => (createOpen = true)}
+		/>
+	{/snippet}
+
+	{#snippet empty()}
+		<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+			Select a queue to inspect.
 		</div>
-	{:else if queues.length === 0}
-		<div class="px-6 py-12">
-			<EmptyState
-				icon={InboxIcon}
-				title="No SQS queues"
-				description="Create a standard or FIFO queue to start sending messages."
+	{/snippet}
+
+	{#snippet detailHeader()}
+		{#if selectedQueue && selectedAttrs}
+			<header
+				class="flex items-center justify-between gap-3 border-b border-border px-5 py-3"
 			>
-				{#snippet action()}
-					<Button onclick={() => (createOpen = true)}>
-						<PlusIcon />
-						Create queue
-					</Button>
-				{/snippet}
-			</EmptyState>
-		</div>
-	{:else}
-		<div class="grid h-full min-h-0 grid-cols-[280px_1fr]">
-			<QueueList
-				{queues}
-				selectedUrl={selectedUrl}
-				{attrsByUrl}
-				onSelect={handleSelect}
-				onCreate={() => (createOpen = true)}
-			/>
-
-			<div class="flex h-full min-h-0 flex-col overflow-hidden">
-				{#if selectedQueue && selectedAttrs}
-					<header
-						class="flex items-center justify-between gap-3 border-b border-border px-5 py-3"
-					>
-						<div class="min-w-0">
-							<div class="flex items-center gap-2">
-								<h2 class="truncate font-mono text-sm font-medium">
-									{selectedQueue.name}
-								</h2>
-								{#if selectedAttrs.isFifo}
-									<Badge variant="outline" class="h-4 px-1.5 text-[10px]">FIFO</Badge>
-								{/if}
-								{#if selectedAttrs.redrivePolicy}
-									<Badge variant="outline" class="h-4 px-1.5 text-[10px]">DLQ</Badge>
-								{/if}
-							</div>
-							<p class="mt-0.5 truncate text-[11px] text-muted-foreground">
-								{selectedAttrs.approximateNumberOfMessages} message(s) ·
-								{selectedAttrs.approximateNumberOfMessagesNotVisible} in flight
-							</p>
-						</div>
-						<div class="flex items-center gap-2">
-							<Button
-								size="sm"
-								variant="outline"
-								onclick={() =>
-									(confirmAction = {
-										type: 'purge',
-										url: selectedQueue!.url,
-										name: selectedQueue!.name,
-									})}
-							>
-								<EraserIcon />
-								Purge
-							</Button>
-							<Button
-								size="sm"
-								variant="destructive"
-								onclick={() =>
-									(confirmAction = {
-										type: 'delete',
-										url: selectedQueue!.url,
-										name: selectedQueue!.name,
-									})}
-							>
-								<Trash2Icon />
-								Delete
-							</Button>
-						</div>
-					</header>
-
-					<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-						<TabsList variant="line" class="border-b border-border px-4">
-							<TabsTrigger value="messages">Messages</TabsTrigger>
-							<TabsTrigger value="send">Send</TabsTrigger>
-							<TabsTrigger value="attributes">Attributes</TabsTrigger>
-							<TabsTrigger value="dlq">DLQ</TabsTrigger>
-						</TabsList>
-
-						<div class="min-h-0 flex-1 overflow-y-auto">
-							<TabsContent value="messages" class="m-0">
-								<MessagesTab queueUrl={selectedQueue.url} onSelect={openMessage} />
-							</TabsContent>
-							<TabsContent value="send" class="m-0">
-								<SendTab
-									queueUrl={selectedQueue.url}
-									isFifo={selectedAttrs.isFifo}
-									onSent={() => refreshAttrs(selectedQueue!.url)}
-								/>
-							</TabsContent>
-							<TabsContent value="attributes" class="m-0">
-								<AttributesTab
-									queueUrl={selectedQueue.url}
-									attrs={selectedAttrs}
-									onSaved={() => refreshAttrs(selectedQueue!.url)}
-								/>
-							</TabsContent>
-							<TabsContent value="dlq" class="m-0">
-								<DlqTab
-									current={selectedQueue}
-									attrs={selectedAttrs}
-									{queues}
-									{attrsByUrl}
-									onRedriven={() => loadAll()}
-								/>
-							</TabsContent>
-						</div>
-					</Tabs>
-				{:else}
-					<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-						Select a queue to inspect.
+				<div class="min-w-0">
+					<div class="flex items-center gap-2">
+						<h2 class="truncate font-mono text-sm font-medium">
+							{selectedQueue.name}
+						</h2>
+						{#if selectedAttrs.isFifo}
+							<Badge variant="outline" class="h-4 px-1.5 text-[10px]">FIFO</Badge>
+						{/if}
+						{#if selectedAttrs.redrivePolicy}
+							<Badge variant="outline" class="h-4 px-1.5 text-[10px]">DLQ</Badge>
+						{/if}
 					</div>
-				{/if}
+					<p class="mt-0.5 truncate text-[11px] text-muted-foreground">
+						{selectedAttrs.approximateNumberOfMessages} message(s) ·
+						{selectedAttrs.approximateNumberOfMessagesNotVisible} in flight
+					</p>
+				</div>
+				<div class="flex items-center gap-2">
+					<Button
+						size="sm"
+						variant="outline"
+						onclick={() =>
+							(confirmAction = {
+								type: 'purge',
+								url: selectedQueue!.url,
+								name: selectedQueue!.name,
+							})}
+					>
+						<EraserIcon />
+						Purge
+					</Button>
+					<Button
+						size="sm"
+						variant="destructive"
+						onclick={() =>
+							(confirmAction = {
+								type: 'delete',
+								url: selectedQueue!.url,
+								name: selectedQueue!.name,
+							})}
+					>
+						<Trash2Icon />
+						Delete
+					</Button>
+				</div>
+			</header>
+		{/if}
+	{/snippet}
+
+	{#if selectedQueue && selectedAttrs}
+		<Tabs bind:value={active} class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+			<TabsList variant="line" class="border-b border-border px-4">
+				<TabsTrigger value="messages">Messages</TabsTrigger>
+				<TabsTrigger value="send">Send</TabsTrigger>
+				<TabsTrigger value="attributes">Attributes</TabsTrigger>
+				<TabsTrigger value="dlq">DLQ</TabsTrigger>
+			</TabsList>
+
+			<div class="min-h-0 flex-1 overflow-y-auto">
+				<TabsContent value="messages" class="m-0">
+					<MessagesTab queueUrl={selectedQueue.url} onSelect={openMessage} />
+				</TabsContent>
+				<TabsContent value="send" class="m-0">
+					<SendTab
+						queueUrl={selectedQueue.url}
+						isFifo={selectedAttrs.isFifo}
+						onSent={() => refreshAttrs(selectedQueue!.url)}
+					/>
+				</TabsContent>
+				<TabsContent value="attributes" class="m-0">
+					<AttributesTab
+						queueUrl={selectedQueue.url}
+						attrs={selectedAttrs}
+						onSaved={() => refreshAttrs(selectedQueue!.url)}
+					/>
+				</TabsContent>
+				<TabsContent value="dlq" class="m-0">
+					<DlqTab
+						current={selectedQueue}
+						attrs={selectedAttrs}
+						{queues}
+						{attrsByUrl}
+						onRedriven={() => loadAll()}
+					/>
+				</TabsContent>
 			</div>
-		</div>
+		</Tabs>
 	{/if}
-</ServicePage>
+</ResourceConsole>
 
 <CreateQueueDialog
 	open={createOpen}
