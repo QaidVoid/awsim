@@ -20,6 +20,7 @@
 		DialogHeader,
 		DialogTitle,
 	} from '$lib/components/ui/dialog';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
@@ -42,6 +43,10 @@
 	let restoreFrom = $state<BackupSummary | null>(null);
 	let restoreTargetName = $state('');
 	let restoring = $state(false);
+
+	let deleteTarget = $state<BackupSummary | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		void detail.name;
@@ -74,14 +79,25 @@
 		}
 	}
 
-	async function removeBackup(b: BackupSummary) {
-		if (!confirm(`Delete backup "${b.name}"?`)) return;
+	function removeBackup(b: BackupSummary) {
+		deleteTarget = b;
+		deleteOpen = true;
+	}
+
+	async function confirmRemoveBackup() {
+		const b = deleteTarget;
+		if (!b) return;
+		deleteBusy = true;
 		try {
 			await deleteBackup(b.arn);
 			toast.success(`Deleted ${b.name}`);
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -233,3 +249,12 @@
 		</DialogFooter>
 	</DialogContent>
 </Dialog>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete backup?"
+	description={`Delete backup "${deleteTarget?.name ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmRemoveBackup}
+	onClose={() => (deleteOpen = false)}
+/>

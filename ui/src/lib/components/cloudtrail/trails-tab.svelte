@@ -19,6 +19,7 @@
 	} from '$lib/api/cloudtrail';
 	import { EmptyState } from '$lib/components/service';
 	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import Radar from '@lucide/svelte/icons/radar';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -30,6 +31,9 @@
 	let newName = $state('');
 	let newBucket = $state('');
 	let busy = $state(false);
+	let deleteTarget = $state<string | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	async function reload() {
 		loading = true;
@@ -84,14 +88,25 @@
 		}
 	}
 
-	async function handleDelete(name: string) {
-		if (!confirm(`Delete trail ${name}?`)) return;
+	function handleDelete(name: string) {
+		deleteTarget = name;
+		deleteOpen = true;
+	}
+
+	async function confirmDelete() {
+		const name = deleteTarget;
+		if (!name) return;
+		deleteBusy = true;
 		try {
 			await deleteTrail(name);
 			toast.success(`Deleted ${name}`);
+			deleteOpen = false;
+			deleteTarget = null;
 			await reload();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete trail');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -215,3 +230,12 @@
 		{/if}
 	</div>
 </div>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete trail?"
+	description={`Delete trail "${deleteTarget ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmDelete}
+	onClose={() => (deleteOpen = false)}
+/>

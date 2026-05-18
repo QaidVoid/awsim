@@ -9,6 +9,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { EmptyState } from '$lib/components/service';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -25,6 +26,9 @@
 
 	let locations = $state<Location[]>([]);
 	let loading = $state(true);
+	let deleteTarget = $state<Location | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	async function reload() {
 		loading = true;
@@ -38,15 +42,26 @@
 		}
 	}
 
-	async function handleDelete(l: Location, e: Event) {
+	function handleDelete(l: Location, e: Event) {
 		e.stopPropagation();
-		if (!confirm(`Delete location ${l.locationUri}?`)) return;
+		deleteTarget = l;
+		deleteOpen = true;
+	}
+
+	async function confirmDelete() {
+		const l = deleteTarget;
+		if (!l) return;
+		deleteBusy = true;
 		try {
 			await deleteLocation(l.locationArn);
 			toast.success('Location deleted');
+			deleteOpen = false;
+			deleteTarget = null;
 			await reload();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Delete failed');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -131,3 +146,12 @@
 		{/if}
 	</div>
 </div>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete location?"
+	description={`Delete location "${deleteTarget?.locationUri ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmDelete}
+	onClose={() => (deleteOpen = false)}
+/>

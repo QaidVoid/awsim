@@ -17,6 +17,7 @@
 		DialogFooter
 	} from '$lib/components/ui/dialog';
 	import { EmptyState } from '$lib/components/service';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import Plus from '@lucide/svelte/icons/plus';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
@@ -38,6 +39,10 @@
 	let newName = $state('');
 	let creating = $state(false);
 
+	let deleteTarget = $state<Cluster | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
+
 	async function handleCreate(e: Event) {
 		e.preventDefault();
 		if (!newName.trim()) return;
@@ -55,14 +60,25 @@
 		}
 	}
 
-	async function handleDelete(cluster: Cluster) {
-		if (!confirm(`Delete cluster "${cluster.name}"?`)) return;
+	function handleDelete(cluster: Cluster) {
+		deleteTarget = cluster;
+		deleteOpen = true;
+	}
+
+	async function confirmDelete() {
+		const cluster = deleteTarget;
+		if (!cluster) return;
+		deleteBusy = true;
 		try {
 			await deleteCluster(cluster.arn);
 			toast.success(`Deleted ${cluster.name}`);
+			deleteOpen = false;
+			deleteTarget = null;
 			onReload();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Delete failed');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -187,3 +203,12 @@
 		</form>
 	</DialogContent>
 </Dialog>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete cluster?"
+	description={`Delete cluster "${deleteTarget?.name ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmDelete}
+	onClose={() => (deleteOpen = false)}
+/>

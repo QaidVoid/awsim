@@ -8,6 +8,7 @@
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -23,6 +24,9 @@
 
 	let rows = $state<Guardrail[]>([]);
 	let loading = $state(true);
+	let deleteTarget = $state<Guardrail | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	onMount(load);
 
@@ -37,14 +41,25 @@
 		}
 	}
 
-	async function handleDelete(g: Guardrail) {
-		if (!confirm(`Delete guardrail ${g.name}?`)) return;
+	function handleDelete(g: Guardrail) {
+		deleteTarget = g;
+		deleteOpen = true;
+	}
+
+	async function confirmDelete() {
+		const g = deleteTarget;
+		if (!g) return;
+		deleteBusy = true;
 		try {
 			await deleteGuardrail(g.guardrailId);
 			toast.success(`Guardrail ${g.name} deleted.`);
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -117,3 +132,12 @@
 		{/snippet}
 	</DataTable>
 </div>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete guardrail?"
+	description={`Delete guardrail "${deleteTarget?.name ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmDelete}
+	onClose={() => (deleteOpen = false)}
+/>

@@ -13,6 +13,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import {
 		listMountTargets,
 		createMountTarget,
@@ -39,6 +40,17 @@
 	let loading = $state(false);
 	let busy = $state(false);
 	let newSubnet = $state('');
+
+	let mountTarget = $state<MountTarget | null>(null);
+	let mountOpen = $state(false);
+	let mountBusy = $state(false);
+
+	let apTarget = $state<AccessPoint | null>(null);
+	let apOpen = $state(false);
+	let apBusy = $state(false);
+
+	let fsDeleteOpen = $state(false);
+	let fsDeleteBusy = $state(false);
 
 	$effect(() => {
 		if (open && fs) {
@@ -76,42 +88,70 @@
 		}
 	}
 
-	async function removeMount(mt: MountTarget) {
-		if (!confirm(`Delete mount target ${mt.mountTargetId}?`)) return;
+	function removeMount(mt: MountTarget) {
+		mountTarget = mt;
+		mountOpen = true;
+	}
+
+	async function confirmRemoveMount() {
+		const mt = mountTarget;
+		if (!mt) return;
+		mountBusy = true;
 		try {
 			await deleteMountTarget(mt.mountTargetId);
+			mountOpen = false;
+			mountTarget = null;
 			if (fs) await load(fs.fileSystemId);
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete mount target');
+		} finally {
+			mountBusy = false;
 		}
 	}
 
-	async function removeAp(ap: AccessPoint) {
-		if (!confirm(`Delete access point ${ap.accessPointId}?`)) return;
+	function removeAp(ap: AccessPoint) {
+		apTarget = ap;
+		apOpen = true;
+	}
+
+	async function confirmRemoveAp() {
+		const ap = apTarget;
+		if (!ap) return;
+		apBusy = true;
 		try {
 			await deleteAccessPoint(ap.accessPointId);
+			apOpen = false;
+			apTarget = null;
 			if (fs) await load(fs.fileSystemId);
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete access point');
+		} finally {
+			apBusy = false;
 		}
 	}
 
-	async function handleDelete() {
+	function handleDelete() {
 		if (!fs) return;
-		if (!confirm(`Delete file system "${fs.fileSystemId}"? Mount targets must be removed first.`))
-			return;
+		fsDeleteOpen = true;
+	}
+
+	async function confirmDeleteFs() {
+		if (!fs) return;
+		fsDeleteBusy = true;
 		busy = true;
 		try {
 			await deleteFileSystem(fs.fileSystemId);
 			toast.success('File system deleted.');
+			fsDeleteOpen = false;
 			onChanged?.();
 			onOpenChange(false);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete');
 		} finally {
 			busy = false;
+			fsDeleteBusy = false;
 		}
 	}
 
@@ -252,3 +292,30 @@
 		</div>
 	</SheetContent>
 </Sheet>
+
+<ConfirmDialog
+	bind:open={mountOpen}
+	title="Delete mount target?"
+	description={`Delete mount target "${mountTarget?.mountTargetId ?? ''}".`}
+	busy={mountBusy}
+	onConfirm={confirmRemoveMount}
+	onClose={() => (mountOpen = false)}
+/>
+
+<ConfirmDialog
+	bind:open={apOpen}
+	title="Delete access point?"
+	description={`Delete access point "${apTarget?.accessPointId ?? ''}".`}
+	busy={apBusy}
+	onConfirm={confirmRemoveAp}
+	onClose={() => (apOpen = false)}
+/>
+
+<ConfirmDialog
+	bind:open={fsDeleteOpen}
+	title="Delete file system?"
+	description={`Delete file system "${fs?.fileSystemId ?? ''}". Mount targets must be removed first.`}
+	busy={fsDeleteBusy}
+	onConfirm={confirmDeleteFs}
+	onClose={() => (fsDeleteOpen = false)}
+/>

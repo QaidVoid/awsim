@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { DataTable, EmptyState } from '$lib/components/service';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -28,6 +29,10 @@
 	}
 
 	let { instances, loading, onReload, onSelect, onLaunch }: Props = $props();
+
+	let termTarget = $state<Instance | null>(null);
+	let termOpen = $state(false);
+	let termBusy = $state(false);
 
 	function stateVariant(state: string): 'default' | 'secondary' | 'destructive' | 'outline' {
 		if (state === 'running') return 'default';
@@ -50,9 +55,22 @@
 		}
 	}
 
-	async function handleTerminate(instance: Instance) {
-		if (!confirm(`Terminate instance ${instance.instanceId}?`)) return;
-		await action(terminateInstances, instance, 'Terminating');
+	function handleTerminate(instance: Instance) {
+		termTarget = instance;
+		termOpen = true;
+	}
+
+	async function confirmTerminate() {
+		const instance = termTarget;
+		if (!instance) return;
+		termBusy = true;
+		try {
+			await action(terminateInstances, instance, 'Terminating');
+			termOpen = false;
+			termTarget = null;
+		} finally {
+			termBusy = false;
+		}
 	}
 </script>
 
@@ -180,3 +198,13 @@
 		</Button>
 	</div>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={termOpen}
+	title="Terminate instance?"
+	description={`Terminate instance "${termTarget?.instanceId ?? ''}".`}
+	confirmLabel="Terminate"
+	busy={termBusy}
+	onConfirm={confirmTerminate}
+	onClose={() => (termOpen = false)}
+/>

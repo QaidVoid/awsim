@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import {
 		createGlobalTable,
 		listGlobalTables,
@@ -34,6 +35,9 @@
 	let createRegions = $state('');
 	let creating = $state(false);
 	let regionDrafts = $state<Record<string, string>>({});
+	let removeTarget = $state<{ name: string; region: string } | null>(null);
+	let removeOpen = $state(false);
+	let removeBusy = $state(false);
 
 	async function reload() {
 		loading = true;
@@ -92,14 +96,25 @@
 		}
 	}
 
-	async function removeReplica(name: string, region: string) {
-		if (!confirm(`Remove ${region} from ${name}?`)) return;
+	function removeReplica(name: string, region: string) {
+		removeTarget = { name, region };
+		removeOpen = true;
+	}
+
+	async function confirmRemoveReplica() {
+		const t = removeTarget;
+		if (!t) return;
+		removeBusy = true;
 		try {
-			await updateGlobalTable(name, [{ delete: region }]);
-			toast.success(`Removed replica ${region}`);
+			await updateGlobalTable(t.name, [{ delete: t.region }]);
+			toast.success(`Removed replica ${t.region}`);
+			removeOpen = false;
+			removeTarget = null;
 			await reload();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to remove replica');
+		} finally {
+			removeBusy = false;
 		}
 	}
 </script>
@@ -191,3 +206,13 @@
 		</DialogFooter>
 	</DialogContent>
 </Dialog>
+
+<ConfirmDialog
+	bind:open={removeOpen}
+	title="Remove replica?"
+	description={`Remove ${removeTarget?.region ?? ''} from ${removeTarget?.name ?? ''}.`}
+	confirmLabel="Remove"
+	busy={removeBusy}
+	onConfirm={confirmRemoveReplica}
+	onClose={() => (removeOpen = false)}
+/>

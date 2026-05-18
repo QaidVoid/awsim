@@ -17,6 +17,7 @@
 	import { bytesHuman } from '$lib/format';
 	import { EmptyState } from '$lib/components/service';
 	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { cn } from '$lib/utils';
 
 	interface Props {
@@ -32,6 +33,9 @@
 	let creating = $state(false);
 	let newName = $state('');
 	let busy = $state(false);
+	let deleteTarget = $state<string | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	async function handleCreate() {
 		const name = newName.trim();
@@ -50,15 +54,26 @@
 		}
 	}
 
-	async function handleDelete(name: string, ev: MouseEvent) {
+	function handleDelete(name: string, ev: MouseEvent) {
 		ev.stopPropagation();
-		if (!confirm(`Delete log group ${name}?`)) return;
+		deleteTarget = name;
+		deleteOpen = true;
+	}
+
+	async function confirmDelete() {
+		const name = deleteTarget;
+		if (!name) return;
+		deleteBusy = true;
 		try {
 			await deleteLogGroup(name);
 			toast.success(`Deleted ${name}`);
+			deleteOpen = false;
+			deleteTarget = null;
 			await onRefresh();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete log group');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 </script>
@@ -183,3 +198,12 @@
 		{/if}
 	</div>
 </div>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete log group?"
+	description={`Delete log group "${deleteTarget ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmDelete}
+	onClose={() => (deleteOpen = false)}
+/>

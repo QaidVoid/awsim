@@ -13,6 +13,7 @@
 		DialogFooter
 	} from '$lib/components/ui/dialog';
 	import { DataTable, EmptyState } from '$lib/components/service';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -37,6 +38,10 @@
 	let createdMaterial = $state('');
 	let createdName = $state('');
 
+	let deleteTarget = $state<KeyPair | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
+
 	async function handleCreate(e: Event) {
 		e.preventDefault();
 		if (!formName.trim()) return;
@@ -57,14 +62,25 @@
 		}
 	}
 
-	async function handleDelete(key: KeyPair) {
-		if (!confirm(`Delete key pair ${key.keyName}?`)) return;
+	function handleDelete(key: KeyPair) {
+		deleteTarget = key;
+		deleteOpen = true;
+	}
+
+	async function confirmDelete() {
+		const key = deleteTarget;
+		if (!key) return;
+		deleteBusy = true;
 		try {
 			await deleteKeyPair(key.keyName);
 			toast.success(`Deleted ${key.keyName}`);
+			deleteOpen = false;
+			deleteTarget = null;
 			onReload();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Delete failed');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -200,3 +216,12 @@
 		</DialogFooter>
 	</DialogContent>
 </Dialog>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete key pair?"
+	description={`Delete key pair "${deleteTarget?.keyName ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmDelete}
+	onClose={() => (deleteOpen = false)}
+/>
