@@ -39,6 +39,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import FlameIcon from '@lucide/svelte/icons/flame';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import {
 		fetchChaosRules,
@@ -66,6 +67,8 @@
 
 	// Add-rule dialog state.
 	let addOpen = $state(false);
+	let clearOpen = $state(false);
+	let clearBusy = $state(false);
 	let formService = $state('*');
 	let formOperation = $state('*');
 	let formProbability = $state(1.0);
@@ -142,14 +145,21 @@
 		}
 	}
 
-	async function clearAll() {
-		if (!confirm('Clear all chaos rules and reset counters?')) return;
+	function clearAll() {
+		clearOpen = true;
+	}
+
+	async function confirmClearAll() {
+		clearBusy = true;
 		try {
 			await clearChaosRules();
 			toast.success('All rules cleared');
+			clearOpen = false;
 			await refresh();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Failed to clear');
+		} finally {
+			clearBusy = false;
 		}
 	}
 
@@ -670,3 +680,13 @@
 		{/if}
 	</div>
 </ServicePage>
+
+<ConfirmDialog
+	bind:open={clearOpen}
+	title="Clear all chaos rules?"
+	description="Delete every chaos rule and reset the injection counters. This cannot be undone."
+	confirmLabel="Clear all"
+	busy={clearBusy}
+	onConfirm={confirmClearAll}
+	onClose={() => (clearOpen = false)}
+/>

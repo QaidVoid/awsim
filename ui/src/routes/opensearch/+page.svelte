@@ -34,6 +34,7 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import Play from '@lucide/svelte/icons/play';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 
 	let indices = $state<IndexSummary[]>([]);
@@ -42,6 +43,13 @@
 
 	let createOpen = $state(false);
 	let newIndexName = $state('');
+
+	let deleteIndexTarget = $state<IndexSummary | null>(null);
+	let deleteIndexOpen = $state(false);
+	let deleteIndexBusy = $state(false);
+	let deleteDocId = $state<string | null>(null);
+	let deleteDocOpen = $state(false);
+	let deleteDocBusy = $state(false);
 
 	let selected = $state<IndexSummary | null>(null);
 	let docs = $state<SearchHit[]>([]);
@@ -148,11 +156,20 @@
 		}
 	}
 
-	async function handleDeleteIndex(i: IndexSummary) {
-		if (!confirm(`Delete index "${i.index}" and all its documents?`)) return;
+	function handleDeleteIndex(i: IndexSummary) {
+		deleteIndexTarget = i;
+		deleteIndexOpen = true;
+	}
+
+	async function confirmDeleteIndex() {
+		const i = deleteIndexTarget;
+		if (!i) return;
+		deleteIndexBusy = true;
 		try {
 			await deleteIndex(i.index);
 			toast.success(`Deleted ${i.index}`);
+			deleteIndexOpen = false;
+			deleteIndexTarget = null;
 			if (selected?.index === i.index) {
 				selected = null;
 				docs = [];
@@ -160,18 +177,31 @@
 			await loadAll();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteIndexBusy = false;
 		}
 	}
 
-	async function handleDeleteDoc(id: string) {
+	function handleDeleteDoc(id: string) {
 		if (!selected) return;
-		if (!confirm(`Delete document "${id}"?`)) return;
+		deleteDocId = id;
+		deleteDocOpen = true;
+	}
+
+	async function confirmDeleteDoc() {
+		const id = deleteDocId;
+		if (!selected || !id) return;
+		deleteDocBusy = true;
 		try {
 			await deleteDocument(selected.index, id);
 			toast.success(`Deleted ${id}`);
+			deleteDocOpen = false;
+			deleteDocId = null;
 			await reloadDocs(selected.index);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteDocBusy = false;
 		}
 	}
 
@@ -465,3 +495,21 @@
 		</DialogFooter>
 	</DialogContent>
 </Dialog>
+
+<ConfirmDialog
+	bind:open={deleteIndexOpen}
+	title="Delete index?"
+	description={`Permanently delete index "${deleteIndexTarget?.index ?? ''}" and all its documents.`}
+	busy={deleteIndexBusy}
+	onConfirm={confirmDeleteIndex}
+	onClose={() => (deleteIndexOpen = false)}
+/>
+
+<ConfirmDialog
+	bind:open={deleteDocOpen}
+	title="Delete document?"
+	description={`Permanently delete document "${deleteDocId ?? ''}".`}
+	busy={deleteDocBusy}
+	onConfirm={confirmDeleteDoc}
+	onClose={() => (deleteDocOpen = false)}
+/>
