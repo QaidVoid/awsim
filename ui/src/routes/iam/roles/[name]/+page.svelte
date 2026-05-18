@@ -21,9 +21,9 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
+	import { DetailPage, DetailNavItem } from '$lib/components/service';
 	import EntityPoliciesEditor from '$lib/components/iam/entity-policies-editor.svelte';
 	import PolicyEditor from '$lib/components/iam/policy-editor.svelte';
-	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import Shield from '@lucide/svelte/icons/shield';
 	import FileBadge from '@lucide/svelte/icons/file-badge';
 	import Save from '@lucide/svelte/icons/save';
@@ -145,49 +145,36 @@
 	});
 </script>
 
-<div class="flex h-full min-h-0 flex-col overflow-hidden">
-	<header class="flex items-center gap-3 border-b border-border bg-background px-6 py-3">
-		<Button variant="ghost" size="icon-sm" onclick={() => goto(route('/iam'))} title="Back to IAM">
-			<ArrowLeft class="size-4" />
-		</Button>
-		<div class="min-w-0 flex-1">
-			<h1 class="truncate text-base font-semibold">{roleName}</h1>
-			<code class="truncate text-xs text-muted-foreground">{role?.arn ?? '—'}</code>
-		</div>
-		{#if loading}
-			<span class="text-xs text-muted-foreground">Loading...</span>
-		{/if}
-	</header>
+<DetailPage
+	title={roleName}
+	subtitle={role?.arn ?? '—'}
+	backHref="/iam"
+	backLabel="Back to IAM"
+	loading={loading}
+>
+	{#snippet nav()}
+		{#each SECTIONS as s (s.id)}
+			<DetailNavItem
+				icon={s.icon}
+				label={s.label}
+				active={active === s.id}
+				onclick={() => (active = s.id)}
+			/>
+		{/each}
 
-	<div class="flex flex-1 min-h-0 overflow-hidden">
-		<nav class="flex w-56 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-muted/30 p-3">
-			{#each SECTIONS as s (s.id)}
-				<button
-					type="button"
-					class="flex items-center gap-2 rounded px-3 py-2 text-left text-sm transition-colors {active === s.id
-						? 'bg-primary/15 font-medium text-primary'
-						: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-					onclick={() => (active = s.id)}
-				>
-					<s.icon class="size-4 shrink-0" />
-					{s.label}
-				</button>
-			{/each}
+		<div class="flex-1"></div>
 
-			<div class="flex-1"></div>
+		<button
+			type="button"
+			class="flex items-center gap-2 rounded px-3 py-2 text-left text-sm text-destructive transition-colors hover:bg-destructive/10"
+			onclick={handleDelete}
+		>
+			<Trash2 class="size-4 shrink-0" />
+			Delete role
+		</button>
+	{/snippet}
 
-			<button
-				type="button"
-				class="flex items-center gap-2 rounded px-3 py-2 text-left text-sm text-destructive transition-colors hover:bg-destructive/10"
-				onclick={handleDelete}
-			>
-				<Trash2 class="size-4 shrink-0" />
-				Delete role
-			</button>
-		</nav>
-
-		<main class="flex min-w-0 flex-1 flex-col overflow-hidden">
-			{#if role}
+	{#if role}
 				{#if active === 'trust'}
 					<div class="overflow-y-auto p-6">
 						<dl class="mb-6 grid grid-cols-3 gap-x-4 gap-y-2 text-sm">
@@ -223,11 +210,9 @@
 							onMutated={reloadPolicies}
 						/>
 					</div>
-				{/if}
 			{/if}
-		</main>
-	</div>
-</div>
+		{/if}
+</DetailPage>
 
 <ConfirmDialog
 	bind:open={deleteOpen}

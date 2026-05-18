@@ -17,8 +17,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
+	import { DetailPage, DetailNavItem } from '$lib/components/service';
 	import PolicyEditor from '$lib/components/iam/policy-editor.svelte';
-	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import FileBadge from '@lucide/svelte/icons/file-badge';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 
@@ -120,60 +120,47 @@
 	}
 </script>
 
-<div class="flex h-full min-h-0 flex-col overflow-hidden">
-	<header class="flex items-center gap-3 border-b border-border bg-background px-6 py-3">
-		<Button variant="ghost" size="icon-sm" onclick={() => goto(route('/iam'))} title="Back to IAM">
-			<ArrowLeft class="size-4" />
-		</Button>
-		<div class="min-w-0 flex-1">
-			<h1 class="truncate text-base font-semibold">{policy?.policyName ?? '—'}</h1>
-			<code class="truncate text-xs text-muted-foreground">{policyArn}</code>
-		</div>
-		{#if loading}
-			<span class="text-xs text-muted-foreground">Loading...</span>
+<DetailPage
+	title={policy?.policyName ?? '—'}
+	subtitle={policyArn}
+	backHref="/iam"
+	backLabel="Back to IAM"
+	loading={loading}
+>
+	{#snippet nav()}
+		{#each SECTIONS as s (s.id)}
+			<DetailNavItem
+				icon={s.icon}
+				label={s.label}
+				active={active === s.id}
+				onclick={() => (active = s.id)}
+			/>
+		{/each}
+
+		{#if policy}
+			<div class="mt-4 border-t border-border pt-3">
+				<div class="px-3 text-xs text-muted-foreground">Details</div>
+				{#if policy.description}
+					<div class="mt-2 px-3 text-xs">{policy.description}</div>
+				{/if}
+				<div class="mt-1 px-3 text-xs text-muted-foreground">Attachments: {policy.attachmentCount}</div>
+				<div class="mt-1 px-3 text-xs text-muted-foreground">Default: {policy.defaultVersionId ?? '—'}</div>
+			</div>
 		{/if}
-	</header>
 
-	<div class="flex flex-1 min-h-0 overflow-hidden">
-		<nav class="flex w-56 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-muted/30 p-3">
-			{#each SECTIONS as s (s.id)}
-				<button
-					type="button"
-					class="flex items-center gap-2 rounded px-3 py-2 text-left text-sm transition-colors {active === s.id
-						? 'bg-primary/15 font-medium text-primary'
-						: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-					onclick={() => (active = s.id)}
-				>
-					<s.icon class="size-4 shrink-0" />
-					{s.label}
-				</button>
-			{/each}
+		<div class="flex-1"></div>
 
-			{#if policy}
-				<div class="mt-4 border-t border-border pt-3">
-					<div class="px-3 text-xs text-muted-foreground">Details</div>
-					{#if policy.description}
-						<div class="mt-2 px-3 text-xs">{policy.description}</div>
-					{/if}
-					<div class="mt-1 px-3 text-xs text-muted-foreground">Attachments: {policy.attachmentCount}</div>
-					<div class="mt-1 px-3 text-xs text-muted-foreground">Default: {policy.defaultVersionId ?? '—'}</div>
-				</div>
-			{/if}
+		<button
+			type="button"
+			class="flex items-center gap-2 rounded px-3 py-2 text-left text-sm text-destructive transition-colors hover:bg-destructive/10"
+			onclick={handleDelete}
+		>
+			<Trash2 class="size-4 shrink-0" />
+			Delete policy
+		</button>
+	{/snippet}
 
-			<div class="flex-1"></div>
-
-			<button
-				type="button"
-				class="flex items-center gap-2 rounded px-3 py-2 text-left text-sm text-destructive transition-colors hover:bg-destructive/10"
-				onclick={handleDelete}
-			>
-				<Trash2 class="size-4 shrink-0" />
-				Delete policy
-			</button>
-		</nav>
-
-		<main class="flex min-w-0 flex-1 flex-col overflow-hidden">
-			{#if active === 'document'}
+	{#if active === 'document'}
 				<div class="overflow-y-auto p-6">
 					<div class="mb-3">
 						<h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -206,9 +193,7 @@
 					</div>
 				</div>
 			{/if}
-		</main>
-	</div>
-</div>
+</DetailPage>
 
 <ConfirmDialog
 	bind:open={deleteOpen}
