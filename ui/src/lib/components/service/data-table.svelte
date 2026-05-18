@@ -86,7 +86,9 @@
 								{#if col.cell}
 									{@render col.cell(row)}
 								{:else}
-									{(row as Record<string, unknown>)[col.key] ?? ''}
+									<span class="block max-w-[28rem] truncate">
+										{(row as Record<string, unknown>)[col.key] ?? ''}
+									</span>
 								{/if}
 							</td>
 						{/each}

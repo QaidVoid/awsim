@@ -207,7 +207,10 @@
 
 	function valueDisplay(v: AttributeValue | undefined): string {
 		if (v === undefined) return '—';
-		return attributeToString(v);
+		const s = attributeToString(v);
+		// Hard-cap the cell text so one huge attribute can't blow out the
+		// table; the full value is in the item editor (row click).
+		return s.length > 300 ? s.slice(0, 300) + ' ...' : s;
 	}
 
 	function valueType(v: AttributeValue | undefined): string {
@@ -440,7 +443,7 @@
 			</div>
 		{:else}
 			<div class="h-full overflow-auto">
-				<table class="w-full min-w-max text-xs">
+				<table class="w-full text-xs">
 					<thead
 						class="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur-sm"
 					>
@@ -469,12 +472,19 @@
 							>
 								{#each columns as col (col)}
 									<td class="px-3 py-1.5 align-top">
-										<span class="font-mono">{valueDisplay(item[col])}</span>
-										{#if item[col]}
-											<Badge variant="outline" class="ml-1 align-baseline text-[9px]">
-												{valueType(item[col])}
-											</Badge>
-										{/if}
+										<div class="flex items-baseline gap-1">
+											<span class="block max-w-[24rem] truncate font-mono">
+												{valueDisplay(item[col])}
+											</span>
+											{#if item[col]}
+												<Badge
+													variant="outline"
+													class="shrink-0 align-baseline text-[9px]"
+												>
+													{valueType(item[col])}
+												</Badge>
+											{/if}
+										</div>
 									</td>
 								{/each}
 								<td class="px-2 align-top">
