@@ -7,13 +7,16 @@
 	import { Input } from '$lib/components/ui/input';
 	import KeyIcon from '@lucide/svelte/icons/key';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+	import Plus from '@lucide/svelte/icons/plus';
 	import KeyDetailSheet from './key-detail-sheet.svelte';
+	import CreateKeyDialog from './create-key-dialog.svelte';
 
 	let keys = $state<Key[]>([]);
 	let loading = $state(false);
 	let filter = $state('');
 	let selected = $state<Key | null>(null);
 	let detailOpen = $state(false);
+	let createOpen = $state(false);
 
 	const filtered = $derived(
 		filter.trim() ? keys.filter((k) => k.keyId.includes(filter.trim())) : keys
@@ -33,6 +36,12 @@
 		detailOpen = true;
 	}
 
+	async function handleCreated(keyId: string) {
+		await load();
+		const k = keys.find((x) => x.keyId === keyId);
+		if (k) open(k);
+	}
+
 	onMount(load);
 </script>
 
@@ -43,6 +52,10 @@
 		<Badge variant="secondary">{filtered.length} of {keys.length}</Badge>
 		<Button variant="ghost" size="icon-sm" onclick={load} disabled={loading} title="Refresh">
 			<RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
+		</Button>
+		<Button size="sm" onclick={() => (createOpen = true)}>
+			<Plus class="size-3.5" />
+			Create key
 		</Button>
 	</div>
 	<div class="min-h-0 flex-1 overflow-hidden">
@@ -61,7 +74,14 @@
 					icon={KeyIcon}
 					title="No KMS keys"
 					description="KMS keys are managed cryptographic keys used to encrypt and decrypt data and to sign and verify messages across your services."
-				/>
+				>
+					{#snippet action()}
+						<Button onclick={() => (createOpen = true)}>
+							<Plus class="size-3.5" />
+							Create your first key
+						</Button>
+					{/snippet}
+				</EmptyState>
 			{/snippet}
 		</DataTable>
 	</div>
@@ -74,4 +94,11 @@
 		detailOpen = v;
 		if (!v) selected = null;
 	}}
+	onChanged={load}
+/>
+
+<CreateKeyDialog
+	open={createOpen}
+	onOpenChange={(o) => (createOpen = o)}
+	onCreated={handleCreated}
 />

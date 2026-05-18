@@ -90,11 +90,7 @@ export interface Service {
  * page behind it. Deliberately conservative: only ids with hard
  * evidence of being read-mostly in the UI; extend as consoles change.
  */
-const BASIC_TIER = new Set<string>([
-  "resourcegroupstagging",
-  "xray",
-  "kms",
-]);
+const BASIC_TIER = new Set<string>(["resourcegroupstagging", "xray"]);
 
 /** True when a service is read-only / metadata-only in this UI. */
 export function isBasicService(id: string): boolean {

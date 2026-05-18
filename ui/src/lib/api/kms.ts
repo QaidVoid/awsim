@@ -96,6 +96,28 @@ export async function describeKey(keyId: string): Promise<KeyDetail> {
   };
 }
 
+export async function createKey(description?: string): Promise<Key> {
+  const body: Record<string, unknown> = { KeyUsage: "ENCRYPT_DECRYPT" };
+  if (description) body.Description = description;
+  const data = (await kmsRequest("CreateKey", body)) as {
+    KeyMetadata?: { KeyId?: string; Arn?: string };
+  };
+  return {
+    keyId: data.KeyMetadata?.KeyId ?? "",
+    keyArn: data.KeyMetadata?.Arn ?? "",
+  };
+}
+
+export async function scheduleKeyDeletion(
+  keyId: string,
+  pendingWindowInDays = 7,
+): Promise<void> {
+  await kmsRequest("ScheduleKeyDeletion", {
+    KeyId: keyId,
+    PendingWindowInDays: pendingWindowInDays,
+  });
+}
+
 export async function listAliases(): Promise<Alias[]> {
   const data = (await kmsRequest("ListAliases")) as {
     Aliases?: { AliasName: string; AliasArn: string; TargetKeyId?: string }[];
