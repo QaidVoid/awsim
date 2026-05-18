@@ -3,6 +3,7 @@
 	import { ServicePage } from '$lib/components/service';
 	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import WebAclsTab from '$lib/components/waf/web-acls-tab.svelte';
 	import RuleGroupsTab from '$lib/components/waf/rule-groups-tab.svelte';
 	import IpSetsTab from '$lib/components/waf/ip-sets-tab.svelte';
@@ -25,14 +26,15 @@
 		<Label for="waf-scope" class="text-xs uppercase tracking-wide text-muted-foreground"
 			>Scope</Label
 		>
-		<select
-			id="waf-scope"
-			bind:value={scope}
-			class="h-8 rounded-md border border-input bg-background px-2 text-xs shadow-xs"
-		>
-			<option value="REGIONAL">REGIONAL</option>
-			<option value="CLOUDFRONT">CLOUDFRONT</option>
-		</select>
+		<Select type="single" value={scope} onValueChange={(v) => (scope = v as WafScope)}>
+			<SelectTrigger id="waf-scope" size="sm" class="w-[160px] text-xs">
+				{scope}
+			</SelectTrigger>
+			<SelectContent>
+				<SelectItem value="REGIONAL" label="REGIONAL">REGIONAL</SelectItem>
+				<SelectItem value="CLOUDFRONT" label="CLOUDFRONT">CLOUDFRONT</SelectItem>
+			</SelectContent>
+		</Select>
 	{/snippet}
 
 	<Tabs bind:value={active} class="flex h-full min-h-0 flex-col">
