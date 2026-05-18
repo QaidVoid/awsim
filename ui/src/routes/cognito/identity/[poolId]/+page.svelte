@@ -16,8 +16,12 @@
 	} from '$lib/api/cognito';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { DataTable, EmptyState } from '$lib/components/service';
-	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+	import {
+		DataTable,
+		EmptyState,
+		DetailPage,
+		DetailNavItem
+	} from '$lib/components/service';
 	import Fingerprint from '@lucide/svelte/icons/fingerprint';
 	import Users from '@lucide/svelte/icons/users';
 	import Shield from '@lucide/svelte/icons/shield';
@@ -98,71 +102,58 @@
 	});
 </script>
 
-<div class="flex h-full min-h-0 flex-col overflow-hidden">
-	<header class="flex items-center gap-3 border-b border-border bg-background px-6 py-3">
-		<Button variant="ghost" size="icon-sm" onclick={() => goto(route('/cognito'))} title="Back">
-			<ArrowLeft class="size-4" />
-		</Button>
-		<div class="min-w-0 flex-1">
-			<h1 class="truncate text-base font-semibold">{pool?.name ?? '—'}</h1>
-			<code class="truncate text-xs text-muted-foreground">{poolId}</code>
-		</div>
+<DetailPage
+	title={pool?.name ?? '—'}
+	subtitle={poolId}
+	backHref="/cognito"
+	backLabel="Back"
+	loading={loading}
+>
+	{#snippet headerActions()}
 		{#if pool}
 			<Badge variant={pool.allowUnauthenticated ? 'outline' : 'secondary'}>
 				{pool.allowUnauthenticated ? 'Unauth enabled' : 'Unauth disabled'}
 			</Badge>
 		{/if}
-		{#if loading}
-			<span class="text-xs text-muted-foreground">Loading...</span>
-		{/if}
-	</header>
+	{/snippet}
 
-	<div class="flex flex-1 min-h-0 overflow-hidden">
-		<nav
-			class="flex w-56 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-muted/30 p-3"
-		>
-			{#each SECTIONS as s (s.id)}
-				<button
-					type="button"
-					class="flex items-center gap-2 rounded px-3 py-2 text-left text-sm transition-colors {active ===
-					s.id
-						? 'bg-primary/15 font-medium text-primary'
-						: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-					onclick={() => (active = s.id)}
-				>
-					<s.icon class="size-4 shrink-0" />
-					{s.label}
-				</button>
-			{/each}
+	{#snippet nav()}
+		{#each SECTIONS as s (s.id)}
+			<DetailNavItem
+				icon={s.icon}
+				label={s.label}
+				active={active === s.id}
+				onclick={() => (active = s.id)}
+			/>
+		{/each}
 
-			<div class="mt-auto pt-4">
-				{#if showDeleteConfirm}
-					<div class="space-y-2 rounded border border-destructive/40 bg-destructive/5 p-3">
-						<p class="text-xs text-destructive">Delete this identity pool?</p>
-						<div class="flex gap-2">
-							<Button variant="destructive" size="sm" onclick={handleDelete}>
-								Delete
-							</Button>
-							<Button variant="ghost" size="sm" onclick={() => (showDeleteConfirm = false)}>
-								Cancel
-							</Button>
-						</div>
+		<div class="mt-auto pt-4">
+			{#if showDeleteConfirm}
+				<div class="space-y-2 rounded border border-destructive/40 bg-destructive/5 p-3">
+					<p class="text-xs text-destructive">Delete this identity pool?</p>
+					<div class="flex gap-2">
+						<Button variant="destructive" size="sm" onclick={handleDelete}>
+							Delete
+						</Button>
+						<Button variant="ghost" size="sm" onclick={() => (showDeleteConfirm = false)}>
+							Cancel
+						</Button>
 					</div>
-				{:else}
-					<Button
-						variant="ghost"
-						size="sm"
-						class="w-full text-destructive hover:bg-destructive/10"
-						onclick={() => (showDeleteConfirm = true)}
-					>
-						<Trash2 class="mr-2 size-3.5" />
-						Delete pool
-					</Button>
-				{/if}
-			</div>
-		</nav>
+				</div>
+			{:else}
+				<Button
+					variant="ghost"
+					size="sm"
+					class="w-full text-destructive hover:bg-destructive/10"
+					onclick={() => (showDeleteConfirm = true)}
+				>
+					<Trash2 class="mr-2 size-3.5" />
+					Delete pool
+				</Button>
+			{/if}
+		</div>
+	{/snippet}
 
-		<main class="flex min-w-0 flex-1 flex-col overflow-hidden">
 			{#if poolId}
 				{#key poolId}
 					{#if active === 'identities'}
@@ -280,9 +271,7 @@
 					{/if}
 				{/key}
 			{/if}
-		</main>
-	</div>
-</div>
+</DetailPage>
 
 {#snippet cellProviders(r: IdentityPoolIdentity)}
 	{#if Object.keys(r.logins).length}

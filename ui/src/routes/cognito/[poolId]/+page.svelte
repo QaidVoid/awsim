@@ -5,8 +5,7 @@
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { describeUserPool, type UserPoolDetail } from '$lib/api/cognito';
-	import { Button } from '$lib/components/ui/button';
-	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+	import { DetailPage, DetailNavItem } from '$lib/components/service';
 	import Users from '@lucide/svelte/icons/users';
 	import UsersRound from '@lucide/svelte/icons/users-round';
 	import KeyRound from '@lucide/svelte/icons/key-round';
@@ -88,43 +87,23 @@
 	});
 </script>
 
-<div class="flex h-full min-h-0 flex-col overflow-hidden">
-	<!-- Pool header -->
-	<header class="flex items-center gap-3 border-b border-border bg-background px-6 py-3">
-		<Button variant="ghost" size="icon-sm" onclick={() => goto(route('/cognito'))} title="Back to pools">
-			<ArrowLeft class="size-4" />
-		</Button>
-		<div class="min-w-0 flex-1">
-			<h1 class="truncate text-base font-semibold">{pool?.name ?? '—'}</h1>
-			<code class="truncate text-xs text-muted-foreground">{poolId}</code>
-		</div>
-		{#if loading}
-			<span class="text-xs text-muted-foreground">Loading...</span>
-		{/if}
-	</header>
-
-	<div class="flex flex-1 min-h-0 overflow-hidden">
-		<!-- Left nav -->
-		<nav
-			class="flex w-56 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-muted/30 p-3"
-		>
-			{#each SECTIONS as s (s.id)}
-				<button
-					type="button"
-					class="flex items-center gap-2 rounded px-3 py-2 text-left text-sm transition-colors {active ===
-					s.id
-						? 'bg-primary/15 font-medium text-primary'
-						: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-					onclick={() => (active = s.id)}
-				>
-					<s.icon class="size-4 shrink-0" />
-					{s.label}
-				</button>
-			{/each}
-		</nav>
-
-		<!-- Section content -->
-		<main class="flex min-w-0 flex-1 flex-col overflow-hidden">
+<DetailPage
+	title={pool?.name ?? '—'}
+	subtitle={poolId}
+	backHref="/cognito"
+	backLabel="Back to pools"
+	loading={loading}
+>
+	{#snippet nav()}
+		{#each SECTIONS as s (s.id)}
+			<DetailNavItem
+				icon={s.icon}
+				label={s.label}
+				active={active === s.id}
+				onclick={() => (active = s.id)}
+			/>
+		{/each}
+	{/snippet}
 			{#if poolId}
 				{#key poolId}
 					{#if active === 'users'}
@@ -167,6 +146,4 @@
 					{/if}
 				{/key}
 			{/if}
-		</main>
-	</div>
-</div>
+</DetailPage>
