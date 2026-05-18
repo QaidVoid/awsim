@@ -46,14 +46,14 @@
 	<div class="min-h-0 flex-1 overflow-auto">
 		<table class="w-full border-collapse text-sm">
 			<thead
-				class="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur-sm"
+				class="sticky top-0 z-10 border-b border-border bg-card/80 backdrop-blur"
 			>
 				<tr>
 					{#each columns as col, ci (ci)}
 						<th
 							class={cn(
-								'px-4 text-left font-medium text-muted-foreground',
-								dense ? 'py-2' : 'py-3',
+								'px-4 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground',
+								dense ? 'py-2' : 'py-2.5',
 								col.align === 'right' && 'text-right',
 								col.align === 'center' && 'text-center'
 							)}
@@ -68,8 +68,8 @@
 				{#each rows as row, idx (rowKey(row, idx))}
 					<tr
 						class={cn(
-							'border-b border-border/40 transition-colors',
-							onRowClick && 'cursor-pointer hover:bg-muted/40'
+							'border-b border-border/50 transition-colors',
+							onRowClick && 'cursor-pointer hover:bg-muted/50'
 						)}
 						onclick={onRowClick ? () => onRowClick(row) : undefined}
 					>

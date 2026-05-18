@@ -23,12 +23,14 @@
 
 <div class={cn('flex h-full min-h-0 flex-col overflow-hidden', className)}>
 	<header
-		class="flex shrink-0 items-start justify-between gap-4 border-b border-border bg-background/40 px-6 py-4"
+		class="flex shrink-0 items-start justify-between gap-4 border-b border-border bg-gradient-to-b from-card/50 to-transparent px-6 py-3.5"
 	>
 		<div class="min-w-0">
-			<h1 class="truncate text-xl font-semibold tracking-tight">{title}</h1>
+			<h1 class="truncate text-lg font-semibold tracking-tight">{title}</h1>
 			{#if description}
-				<p class="mt-1 text-sm text-muted-foreground">{description}</p>
+				<p class="mt-0.5 max-w-3xl text-pretty text-[13px] text-muted-foreground">
+					{description}
+				</p>
 			{/if}
 		</div>
 		{#if actions}
