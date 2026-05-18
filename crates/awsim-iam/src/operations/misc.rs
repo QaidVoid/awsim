@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use awsim_core::{AuthzEngine, AwsError};
 use awsim_iam_policy::{
-    AuthzRequest, ContextValue, Decision, EvalContext, MatchedStatement, PolicyAttribution,
-    PolicyAttributions, PolicyDocument, PolicySource, evaluate_detailed,
+    AuthzRequest, ContextValue, Decision, DecisionReason, EvalContext, MatchedStatement,
+    PolicyAttribution, PolicyAttributions, PolicyDocument, PolicySource, evaluate_detailed,
 };
 use serde_json::{Value, json};
 
@@ -443,6 +443,7 @@ fn build_evaluation_results(
                 "EvalActionName": action,
                 "EvalResourceName": resource,
                 "EvalDecision": decision_to_str(details.decision),
+                "EvalDecisionReason": reason_to_xml(&details.reason),
                 "MatchedStatements": {
                     "member": details.matched_statements.iter().map(matched_statement_to_xml).collect::<Vec<_>>()
                 },
@@ -459,9 +460,49 @@ fn matched_statement_to_xml(m: &MatchedStatement) -> Value {
     json!({
         "SourcePolicyId": m.source_id,
         "SourcePolicyType": policy_source_to_str(&m.source_type),
+        "StatementId": m.statement_id.clone().unwrap_or_default(),
         "StartPosition": { "Line": m.statement_index + 1, "Column": 1 },
         "EndPosition": { "Line": m.statement_index + 1, "Column": 1 },
     })
+}
+
+/// awsim-specific extension: the single decisive step behind the
+/// decision, for the simulator's "why" trace. Not part of the real
+/// AWS IAM API shape, but our UI is the only consumer of this field.
+fn reason_to_xml(r: &DecisionReason) -> Value {
+    match r {
+        DecisionReason::ExplicitDeny {
+            source,
+            source_id,
+            statement_index,
+            statement_id,
+        } => json!({
+            "Kind": "ExplicitDeny",
+            "Source": policy_source_to_str(source),
+            "SourceId": source_id,
+            "StatementIndex": statement_index,
+            "StatementId": statement_id.clone().unwrap_or_default(),
+        }),
+        DecisionReason::Allowed {
+            source,
+            source_id,
+            statement_index,
+            statement_id,
+        } => json!({
+            "Kind": "Allowed",
+            "Source": policy_source_to_str(source),
+            "SourceId": source_id,
+            "StatementIndex": statement_index,
+            "StatementId": statement_id.clone().unwrap_or_default(),
+        }),
+        DecisionReason::ScpImplicitDeny { source_id } => json!({
+            "Kind": "ScpImplicitDeny",
+            "SourceId": source_id,
+        }),
+        DecisionReason::NoAllow => json!({ "Kind": "NoAllow" }),
+        DecisionReason::BoundaryNoAllow => json!({ "Kind": "BoundaryNoAllow" }),
+        DecisionReason::SessionNoAllow => json!({ "Kind": "SessionNoAllow" }),
+    }
 }
 
 fn policy_source_to_str(s: &PolicySource) -> &'static str {
