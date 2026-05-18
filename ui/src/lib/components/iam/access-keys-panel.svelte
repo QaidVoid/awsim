@@ -23,6 +23,7 @@
 	import Power from '@lucide/svelte/icons/power';
 	import Copy from '@lucide/svelte/icons/copy';
 	import Key from '@lucide/svelte/icons/key';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 
 	interface Props {
@@ -36,6 +37,9 @@
 	let creating = $state(false);
 	let revealOpen = $state(false);
 	let revealed = $state<IamAccessKeyWithSecret | null>(null);
+	let deleteTarget = $state<IamAccessKey | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	onMount(reload);
 
@@ -82,14 +86,25 @@
 		}
 	}
 
-	async function remove(k: IamAccessKey) {
-		if (!confirm(`Delete access key ${k.accessKeyId}?`)) return;
+	function remove(k: IamAccessKey) {
+		deleteTarget = k;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		const k = deleteTarget;
+		if (!k) return;
+		deleteBusy = true;
 		try {
 			await deleteAccessKey(userName, k.accessKeyId);
 			toast.success(`Deleted ${k.accessKeyId}`);
+			deleteOpen = false;
+			deleteTarget = null;
 			await reload();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -214,3 +229,12 @@
 		</DialogFooter>
 	</DialogContent>
 </Dialog>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete access key?"
+	description={`Delete access key ${deleteTarget?.accessKeyId ?? ''}.`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => (deleteOpen = false)}
+/>

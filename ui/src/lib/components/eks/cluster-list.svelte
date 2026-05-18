@@ -18,6 +18,7 @@
 		DialogFooter
 	} from '$lib/components/ui/dialog';
 	import { EmptyState } from '$lib/components/service';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import Plus from '@lucide/svelte/icons/plus';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
@@ -42,6 +43,9 @@
 		version: '1.31',
 		roleArn: 'arn:aws:iam::000000000000:role/eks-cluster'
 	});
+	let deleteTarget = $state<Cluster | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	function statusVariant(s: string): 'default' | 'secondary' | 'destructive' | 'outline' {
 		if (s === 'ACTIVE') return 'default';
@@ -75,14 +79,25 @@
 		}
 	}
 
-	async function handleDelete(c: Cluster) {
-		if (!confirm(`Delete cluster ${c.name}?`)) return;
+	function handleDelete(c: Cluster) {
+		deleteTarget = c;
+		deleteOpen = true;
+	}
+
+	async function confirmDelete() {
+		const c = deleteTarget;
+		if (!c) return;
+		deleteBusy = true;
 		try {
 			await deleteCluster(c.name);
 			toast.success(`Deleted ${c.name}`);
+			deleteOpen = false;
+			deleteTarget = null;
 			onReload();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Delete failed');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 </script>
@@ -191,3 +206,12 @@
 		</form>
 	</DialogContent>
 </Dialog>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete cluster?"
+	description={`Delete cluster ${deleteTarget?.name ?? ''}.`}
+	busy={deleteBusy}
+	onConfirm={confirmDelete}
+	onClose={() => (deleteOpen = false)}
+/>

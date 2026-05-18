@@ -7,6 +7,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import { describeAcls, describeUsers, createAcl, deleteAcl, type Acl, type User } from '$lib/api/memorydb';
 
@@ -23,6 +24,9 @@
 	let newName = $state('');
 	let pickedUsers = $state<Record<string, boolean>>({});
 	let creating = $state(false);
+	let deleteTarget = $state<Acl | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		refreshKey;
@@ -60,15 +64,26 @@
 		}
 	}
 
-	async function remove(a: Acl) {
-		if (!confirm(`Delete ACL "${a.name}"?`)) return;
+	function remove(a: Acl) {
+		deleteTarget = a;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		const a = deleteTarget;
+		if (!a) return;
+		deleteBusy = true;
 		try {
 			await deleteAcl(a.name);
 			toast.success('ACL deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete ACL');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 </script>
@@ -142,3 +157,12 @@
 		<Trash2Icon class="text-destructive" />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete ACL?"
+	description={`Delete ACL "${deleteTarget?.name ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => (deleteOpen = false)}
+/>

@@ -7,6 +7,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import UsersRoundIcon from '@lucide/svelte/icons/users-round';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import {
 		listGroups,
@@ -36,6 +37,14 @@
 	let newDisplay = $state('');
 	let creating = $state(false);
 	let memberPicks = $state<Record<string, string>>({});
+
+	let deleteTarget = $state<IdGroup | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
+
+	let removeMemberTarget = $state<GroupMembership | null>(null);
+	let removeMemberOpen = $state(false);
+	let removeMemberBusy = $state(false);
 
 	$effect(() => {
 		identityStoreId;
@@ -81,15 +90,26 @@
 		}
 	}
 
-	async function remove(g: IdGroup) {
-		if (!confirm(`Delete group "${g.displayName}"? Memberships are cascaded.`)) return;
+	function remove(g: IdGroup) {
+		deleteTarget = g;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		const g = deleteTarget;
+		if (!g) return;
+		deleteBusy = true;
 		try {
 			await deleteGroup(identityStoreId, g.groupId);
 			toast.success('Group deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -110,14 +130,25 @@
 		}
 	}
 
-	async function removeMember(m: GroupMembership) {
-		if (!confirm('Remove member?')) return;
+	function removeMember(m: GroupMembership) {
+		removeMemberTarget = m;
+		removeMemberOpen = true;
+	}
+
+	async function confirmRemoveMember() {
+		const m = removeMemberTarget;
+		if (!m) return;
+		removeMemberBusy = true;
 		try {
 			await deleteGroupMembership(identityStoreId, m.membershipId);
 			toast.success('Member removed.');
+			removeMemberOpen = false;
+			removeMemberTarget = null;
 			await load();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to remove member');
+		} finally {
+			removeMemberBusy = false;
 		}
 	}
 
@@ -206,3 +237,22 @@
 		<Trash2Icon class="text-destructive" />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete group?"
+	description={`Delete group "${deleteTarget?.displayName ?? ''}". Memberships are cascaded.`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => (deleteOpen = false)}
+/>
+
+<ConfirmDialog
+	bind:open={removeMemberOpen}
+	title="Remove member?"
+	description="Remove member from this group."
+	confirmLabel="Remove"
+	busy={removeMemberBusy}
+	onConfirm={confirmRemoveMember}
+	onClose={() => (removeMemberOpen = false)}
+/>

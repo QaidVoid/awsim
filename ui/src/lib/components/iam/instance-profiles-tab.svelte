@@ -20,6 +20,7 @@
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import X from '@lucide/svelte/icons/x';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 
 	let profiles = $state<IamInstanceProfile[]>([]);
@@ -34,6 +35,13 @@
 	let deleting = $state(false);
 	let rolePickerName = $state('');
 	let addingRole = $state(false);
+
+	let deleteTarget = $state<IamInstanceProfile | null>(null);
+	let deleteOpen = $state(false);
+
+	let removeRoleTarget = $state<{ roleName: string; profileName: string } | null>(null);
+	let removeRoleOpen = $state(false);
+	let removeRoleBusy = $state(false);
 
 	const filtered = $derived(
 		filter.trim()
@@ -95,13 +103,21 @@
 		}
 	}
 
-	async function handleDelete(p: IamInstanceProfile) {
-		if (!confirm(`Delete instance profile "${p.instanceProfileName}"?`)) return;
+	function handleDelete(p: IamInstanceProfile) {
+		deleteTarget = p;
+		deleteOpen = true;
+	}
+
+	async function confirmDelete() {
+		const p = deleteTarget;
+		if (!p) return;
 		deleting = true;
 		try {
 			await deleteInstanceProfile(p.instanceProfileName);
 			toast.success(`Deleted ${p.instanceProfileName}`);
 			selected = null;
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
@@ -127,17 +143,28 @@
 		}
 	}
 
-	async function removeRole(roleName: string) {
+	function removeRole(roleName: string) {
 		if (!selected) return;
-		if (!confirm(`Remove role "${roleName}" from ${selected.instanceProfileName}?`)) return;
+		removeRoleTarget = { roleName, profileName: selected.instanceProfileName };
+		removeRoleOpen = true;
+	}
+
+	async function confirmRemoveRole() {
+		const t = removeRoleTarget;
+		if (!selected || !t) return;
+		removeRoleBusy = true;
 		try {
-			await removeRoleFromInstanceProfile(selected.instanceProfileName, roleName);
-			toast.success(`Removed role ${roleName}`);
+			await removeRoleFromInstanceProfile(selected.instanceProfileName, t.roleName);
+			toast.success(`Removed role ${t.roleName}`);
+			removeRoleOpen = false;
+			removeRoleTarget = null;
 			await load();
 			const fresh = await listInstanceProfiles();
 			selected = fresh.find((ip) => ip.arn === selected!.arn) ?? selected!;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to remove role');
+		} finally {
+			removeRoleBusy = false;
 		}
 	}
 
@@ -291,3 +318,22 @@
 		</div>
 	</div>
 {/if}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete instance profile?"
+	description={`Delete instance profile "${deleteTarget?.instanceProfileName ?? ''}".`}
+	busy={deleting}
+	onConfirm={confirmDelete}
+	onClose={() => (deleteOpen = false)}
+/>
+
+<ConfirmDialog
+	bind:open={removeRoleOpen}
+	title="Remove role?"
+	description={`Remove role "${removeRoleTarget?.roleName ?? ''}" from ${removeRoleTarget?.profileName ?? ''}.`}
+	confirmLabel="Remove"
+	busy={removeRoleBusy}
+	onConfirm={confirmRemoveRole}
+	onClose={() => (removeRoleOpen = false)}
+/>

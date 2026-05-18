@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { DataTable, EmptyState } from '$lib/components/service';
@@ -25,6 +26,9 @@
 	let rows = $state<EventSourceMappingSummary[]>([]);
 	let loading = $state(false);
 	let createOpen = $state(false);
+	let deleteTarget = $state<EventSourceMappingSummary | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	onMount(load);
 
@@ -55,14 +59,25 @@
 		}
 	}
 
-	async function remove(row: EventSourceMappingSummary) {
-		if (!confirm(`Delete event source mapping ${row.uuid}?`)) return;
+	function remove(row: EventSourceMappingSummary) {
+		deleteTarget = row;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		const row = deleteTarget;
+		if (!row) return;
+		deleteBusy = true;
 		try {
 			await deleteEventSourceMapping(row.uuid);
 			toast.success('Mapping deleted');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -185,4 +200,13 @@
 	{functionName}
 	onOpenChange={(o) => (createOpen = o)}
 	onCreated={load}
+/>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete event source mapping?"
+	description={`Delete event source mapping ${deleteTarget?.uuid ?? ''}.`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => (deleteOpen = false)}
 />

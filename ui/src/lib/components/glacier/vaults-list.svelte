@@ -6,6 +6,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import SnowflakeIcon from '@lucide/svelte/icons/snowflake';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import { listVaults, createVault, deleteVault, type Vault } from '$lib/api/glacier';
 
@@ -21,6 +22,9 @@
 	let loading = $state(false);
 	let newName = $state('');
 	let creating = $state(false);
+	let deleteTarget = $state<Vault | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		refreshKey;
@@ -54,16 +58,27 @@
 		}
 	}
 
-	async function remove(v: Vault, ev: MouseEvent) {
+	function remove(v: Vault, ev: MouseEvent) {
 		ev.stopPropagation();
-		if (!confirm(`Delete vault "${v.vaultName}"? Archives must be removed first.`)) return;
+		deleteTarget = v;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		const v = deleteTarget;
+		if (!v) return;
+		deleteBusy = true;
 		try {
 			await deleteVault(v.vaultName);
 			toast.success('Vault deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete vault');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -127,3 +142,12 @@
 		<Trash2Icon class="text-destructive" />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete vault?"
+	description={`Delete vault "${deleteTarget?.vaultName ?? ''}". Archives must be removed first.`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => (deleteOpen = false)}
+/>

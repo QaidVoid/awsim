@@ -7,6 +7,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import MemoryStickIcon from '@lucide/svelte/icons/memory-stick';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import {
 		describeClusters,
@@ -32,6 +33,9 @@
 	let newAcl = $state('');
 	let newShards = $state('1');
 	let creating = $state(false);
+	let deleteTarget = $state<Cluster | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		refreshKey;
@@ -72,15 +76,26 @@
 		}
 	}
 
-	async function remove(c: Cluster) {
-		if (!confirm(`Delete cluster "${c.name}"?`)) return;
+	function remove(c: Cluster) {
+		deleteTarget = c;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		const c = deleteTarget;
+		if (!c) return;
+		deleteBusy = true;
 		try {
 			await deleteCluster(c.name);
 			toast.success('Cluster deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete cluster');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 </script>
@@ -159,3 +174,12 @@
 		<Trash2Icon class="text-destructive" />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete cluster?"
+	description={`Delete cluster "${deleteTarget?.name ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => (deleteOpen = false)}
+/>

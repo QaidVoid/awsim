@@ -11,6 +11,7 @@
 	import Edit3 from '@lucide/svelte/icons/edit-3';
 	import Save from '@lucide/svelte/icons/save';
 	import X from '@lucide/svelte/icons/x';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 
 	interface Props {
@@ -57,6 +58,14 @@
 	let newInlineName = $state('');
 	let savingInline = $state(false);
 
+	let detachTarget = $state<{ arn: string; name: string } | null>(null);
+	let detachOpen = $state(false);
+	let detachBusy = $state(false);
+
+	let deleteInlineTarget = $state<string | null>(null);
+	let deleteInlineOpen = $state(false);
+	let deleteInlineBusy = $state(false);
+
 	const availableManaged = $derived(
 		allManaged.filter((p) => !attached.some((a) => a.policyArn === p.arn))
 	);
@@ -84,14 +93,25 @@
 		}
 	}
 
-	async function handleDetach(arn: string, name: string) {
-		if (!confirm(`Detach managed policy "${name}"?`)) return;
+	function handleDetach(arn: string, name: string) {
+		detachTarget = { arn, name };
+		detachOpen = true;
+	}
+
+	async function confirmDetach() {
+		const t = detachTarget;
+		if (!t) return;
+		detachBusy = true;
 		try {
-			await onDetach(arn);
-			toast.success(`Detached ${name}`);
+			await onDetach(t.arn);
+			toast.success(`Detached ${t.name}`);
+			detachOpen = false;
+			detachTarget = null;
 			onMutated();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Detach failed');
+		} finally {
+			detachBusy = false;
 		}
 	}
 
@@ -164,15 +184,26 @@
 		}
 	}
 
-	async function handleDeleteInline(name: string) {
-		if (!confirm(`Delete inline policy "${name}"?`)) return;
+	function handleDeleteInline(name: string) {
+		deleteInlineTarget = name;
+		deleteInlineOpen = true;
+	}
+
+	async function confirmDeleteInline() {
+		const name = deleteInlineTarget;
+		if (!name) return;
+		deleteInlineBusy = true;
 		try {
 			await onDeleteInline(name);
 			toast.success(`Deleted ${name}`);
 			if (editingName === name) cancelEdit();
+			deleteInlineOpen = false;
+			deleteInlineTarget = null;
 			onMutated();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteInlineBusy = false;
 		}
 	}
 </script>
@@ -301,3 +332,22 @@
 		</section>
 	{/if}
 </div>
+
+<ConfirmDialog
+	bind:open={detachOpen}
+	title="Detach policy?"
+	description={`Detach managed policy "${detachTarget?.name ?? ''}".`}
+	confirmLabel="Detach"
+	busy={detachBusy}
+	onConfirm={confirmDetach}
+	onClose={() => (detachOpen = false)}
+/>
+
+<ConfirmDialog
+	bind:open={deleteInlineOpen}
+	title="Delete inline policy?"
+	description={`Delete inline policy "${deleteInlineTarget ?? ''}".`}
+	busy={deleteInlineBusy}
+	onConfirm={confirmDeleteInline}
+	onClose={() => (deleteInlineOpen = false)}
+/>

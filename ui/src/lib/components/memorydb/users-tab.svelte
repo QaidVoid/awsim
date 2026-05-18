@@ -7,6 +7,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import UserIcon from '@lucide/svelte/icons/user';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import { describeUsers, createUser, deleteUser, type User } from '$lib/api/memorydb';
 
@@ -22,6 +23,9 @@
 	let newName = $state('');
 	let newAccess = $state('on ~* +@all');
 	let creating = $state(false);
+	let deleteTarget = $state<User | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		refreshKey;
@@ -55,15 +59,26 @@
 		}
 	}
 
-	async function remove(u: User) {
-		if (!confirm(`Delete user "${u.name}"?`)) return;
+	function remove(u: User) {
+		deleteTarget = u;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		const u = deleteTarget;
+		if (!u) return;
+		deleteBusy = true;
 		try {
 			await deleteUser(u.name);
 			toast.success('User deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete user');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 </script>
@@ -125,3 +140,12 @@
 		<Trash2Icon class="text-destructive" />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete user?"
+	description={`Delete user "${deleteTarget?.name ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => (deleteOpen = false)}
+/>

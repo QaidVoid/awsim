@@ -22,6 +22,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 
 	interface Props {
@@ -38,6 +39,10 @@
 	let savingProvisioned = $state(false);
 	let newQualifier = $state('');
 	let newCount = $state(1);
+
+	let removeTarget = $state<string | null>(null);
+	let removeOpen = $state(false);
+	let removeBusy = $state(false);
 
 	async function reload() {
 		loading = true;
@@ -115,14 +120,25 @@
 		}
 	}
 
-	async function removeProvisioned(qualifier: string) {
-		if (!confirm(`Remove provisioned concurrency for ${qualifier}?`)) return;
+	function removeProvisioned(qualifier: string) {
+		removeTarget = qualifier;
+		removeOpen = true;
+	}
+
+	async function confirmRemoveProvisioned() {
+		const qualifier = removeTarget;
+		if (qualifier === null) return;
+		removeBusy = true;
 		try {
 			await deleteProvisionedConcurrencyConfig(functionName, qualifier);
 			toast.success(`Removed provisioned concurrency for ${qualifier}`);
+			removeOpen = false;
+			removeTarget = null;
 			await reload();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to remove');
+		} finally {
+			removeBusy = false;
 		}
 	}
 
@@ -255,3 +271,13 @@
 		{/if}
 	</section>
 </div>
+
+<ConfirmDialog
+	bind:open={removeOpen}
+	title="Remove provisioned concurrency?"
+	description={`Remove provisioned concurrency for ${removeTarget ?? ''}.`}
+	confirmLabel="Remove"
+	busy={removeBusy}
+	onConfirm={confirmRemoveProvisioned}
+	onClose={() => (removeOpen = false)}
+/>
