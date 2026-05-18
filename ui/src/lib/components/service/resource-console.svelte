@@ -11,6 +11,8 @@
 	 */
 	import type { Snippet } from 'svelte';
 	import ServicePage from './service-page.svelte';
+	import ErrorState from './error-state.svelte';
+	import ListSkeleton from './list-skeleton.svelte';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 
 	interface Props {
@@ -38,6 +40,19 @@
 		detailHeader?: Snippet;
 		/** Detail body (tabs, etc.), rendered when selected and not loading. */
 		children: Snippet;
+		/**
+		 * Page-level list gating. When the resource list itself errors /
+		 * is loading-empty / is empty, the whole two-pane is replaced by
+		 * an error, a skeleton, or the listEmpty CTA - matching the
+		 * sqs/sns/ecr/apigateway/appsync/route53 hand-rolled pattern.
+		 * All default off so existing adopters are unaffected.
+		 */
+		listError?: string | null;
+		onListRetry?: () => void;
+		listLoading?: boolean;
+		listIsEmpty?: boolean;
+		listSkeletonRows?: number;
+		listEmpty?: Snippet;
 		/** Forwarded to ServicePage's outer wrapper. */
 		class?: string;
 	}
@@ -55,11 +70,30 @@
 		empty,
 		detailHeader,
 		children,
+		listError = null,
+		onListRetry,
+		listLoading = false,
+		listIsEmpty = false,
+		listSkeletonRows = 6,
+		listEmpty,
 		class: className
 	}: Props = $props();
 </script>
 
 <ServicePage {title} {description} {actions} class={className}>
+	{#if listError}
+		<div class="px-6 py-4">
+			<ErrorState description={listError} onRetry={onListRetry} />
+		</div>
+	{:else if listLoading && listIsEmpty}
+		<div class="px-6 py-6">
+			<ListSkeleton rows={listSkeletonRows} />
+		</div>
+	{:else if listIsEmpty}
+		<div class="px-6 py-12">
+			{@render listEmpty?.()}
+		</div>
+	{:else}
 	<div
 		class="grid h-full min-h-0 divide-x divide-border"
 		style="grid-template-columns: {listWidth} minmax(0, 1fr)"
@@ -93,4 +127,5 @@
 			{/if}
 		</section>
 	</div>
+	{/if}
 </ServicePage>
