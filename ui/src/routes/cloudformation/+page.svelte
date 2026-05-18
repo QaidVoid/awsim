@@ -38,6 +38,7 @@
 	import Info from '@lucide/svelte/icons/info';
 	import Layers from '@lucide/svelte/icons/layers';
 	import { EmptyState } from '$lib/components/service';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 
 	let stacks = $state<StackSummary[]>([]);
@@ -57,6 +58,8 @@
 
 	let createOpen = $state(false);
 	let sheetOpen = $state(false);
+	let confirmOpen = $state(false);
+	let confirmBusy = $state(false);
 
 	async function loadStacks() {
 		stacksLoading = true;
@@ -101,18 +104,26 @@
 		loadDetail(s.stackName);
 	}
 
-	async function handleDelete() {
+	function handleDelete() {
 		if (!selectedName) return;
-		if (!confirm(`Delete stack "${selectedName}"?`)) return;
+		confirmOpen = true;
+	}
+
+	async function confirmDelete() {
+		if (!selectedName) return;
 		const name = selectedName;
+		confirmBusy = true;
 		try {
 			await deleteStack(name);
 			toast.success(`Delete initiated for ${name}`);
+			confirmOpen = false;
 			selectedName = null;
 			detail = null;
 			await loadStacks();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Delete failed');
+		} finally {
+			confirmBusy = false;
 		}
 	}
 
@@ -241,4 +252,13 @@
 	open={createOpen}
 	onOpenChange={(o) => (createOpen = o)}
 	onCreated={loadStacks}
+/>
+
+<ConfirmDialog
+	bind:open={confirmOpen}
+	title="Delete stack?"
+	description={`Delete stack "${selectedName ?? ''}" and its managed resources.`}
+	busy={confirmBusy}
+	onConfirm={confirmDelete}
+	onClose={() => (confirmOpen = false)}
 />

@@ -23,6 +23,7 @@
 		LogsTab,
 		CreateFunctionDialog
 	} from '$lib/components/lambda';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import Plus from '@lucide/svelte/icons/plus';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
@@ -54,6 +55,8 @@
 		})
 	);
 	let createOpen = $state(false);
+	let confirmOpen = $state(false);
+	let confirmBusy = $state(false);
 
 	onMount(loadList);
 
@@ -90,18 +93,26 @@
 		}
 	}
 
-	async function handleDelete() {
+	function handleDelete() {
+		if (!selectedName) return;
+		confirmOpen = true;
+	}
+
+	async function confirmDelete() {
 		if (!selectedName) return;
 		const name = selectedName;
-		if (!confirm(`Delete function "${name}"?`)) return;
+		confirmBusy = true;
 		try {
 			await deleteFunction(name);
 			toast.success(`Deleted ${name}`);
+			confirmOpen = false;
 			selectedName = null;
 			detail = null;
 			await loadList();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Delete failed');
+		} finally {
+			confirmBusy = false;
 		}
 	}
 
@@ -208,4 +219,13 @@
 	runtimes={RUNTIMES}
 	onOpenChange={(o) => (createOpen = o)}
 	onCreated={handleCreated}
+/>
+
+<ConfirmDialog
+	bind:open={confirmOpen}
+	title="Delete function?"
+	description={`Permanently delete "${selectedName ?? ''}".`}
+	busy={confirmBusy}
+	onConfirm={confirmDelete}
+	onClose={() => (confirmOpen = false)}
 />

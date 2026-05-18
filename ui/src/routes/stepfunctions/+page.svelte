@@ -20,6 +20,7 @@
 		ExecutionDetailSheet,
 		CreateStateMachineDialog
 	} from '$lib/components/stepfunctions';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 	import Plus from '@lucide/svelte/icons/plus';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
@@ -40,6 +41,8 @@
 	let createOpen = $state(false);
 	let detailExecution = $state<Execution | null>(null);
 	let detailOpen = $state(false);
+	let confirmOpen = $state(false);
+	let confirmBusy = $state(false);
 
 	onMount(loadList);
 
@@ -76,18 +79,26 @@
 		}
 	}
 
-	async function handleDelete() {
+	function handleDelete() {
+		if (!detail) return;
+		confirmOpen = true;
+	}
+
+	async function confirmDelete() {
 		if (!detail) return;
 		const name = detail.name;
-		if (!confirm(`Delete state machine "${name}"?`)) return;
+		confirmBusy = true;
 		try {
 			await deleteStateMachine(detail.arn);
 			toast.success(`Deleted ${name}`);
+			confirmOpen = false;
 			selectedArn = null;
 			detail = null;
 			await loadList();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Delete failed');
+		} finally {
+			confirmBusy = false;
 		}
 	}
 
@@ -176,4 +187,13 @@
 	execution={detailExecution}
 	open={detailOpen}
 	onOpenChange={(o) => (detailOpen = o)}
+/>
+
+<ConfirmDialog
+	bind:open={confirmOpen}
+	title="Delete state machine?"
+	description={`Permanently delete "${detail?.name ?? ''}".`}
+	busy={confirmBusy}
+	onConfirm={confirmDelete}
+	onClose={() => (confirmOpen = false)}
 />
