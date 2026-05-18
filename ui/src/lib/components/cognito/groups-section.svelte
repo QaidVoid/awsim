@@ -10,7 +10,7 @@
 	import GroupDetail from './group-detail.svelte';
 	import CreateGroupDialog from './create-group-dialog.svelte';
 	import EditGroupDialog from './edit-group-dialog.svelte';
-	import ConfirmDialog from './confirm-dialog.svelte';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 
 	interface Props {
 		poolId: string;

@@ -15,7 +15,7 @@
 	import InstanceDetailSheet from '$lib/components/rds/instance-detail-sheet.svelte';
 	import SnapshotsTab from '$lib/components/rds/snapshots-tab.svelte';
 	import CreateInstanceDialog from '$lib/components/rds/create-instance-dialog.svelte';
-	import ConfirmDialog from '$lib/components/rds/confirm-dialog.svelte';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import Plus from '@lucide/svelte/icons/plus';
 
 	let instances = $state<DBInstance[]>([]);

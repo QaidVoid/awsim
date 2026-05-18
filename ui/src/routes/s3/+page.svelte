@@ -27,7 +27,7 @@
 	import UploadZone from '$lib/components/s3/upload-zone.svelte';
 	import ObjectDetailSheet from '$lib/components/s3/object-detail-sheet.svelte';
 	import CreateBucketDialog from '$lib/components/s3/create-bucket-dialog.svelte';
-	import ConfirmDialog from '$lib/components/s3/confirm-dialog.svelte';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 

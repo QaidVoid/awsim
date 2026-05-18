@@ -10,7 +10,7 @@
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import ClientDetail from './client-detail.svelte';
 	import CreateClientDialog from './create-client-dialog.svelte';
-	import ConfirmDialog from './confirm-dialog.svelte';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 
 	interface Props {
 		poolId: string;

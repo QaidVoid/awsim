@@ -21,7 +21,7 @@
 	import UserDetail from './user-detail.svelte';
 	import CreateUserDialog from './create-user-dialog.svelte';
 	import SetPasswordDialog from './set-password-dialog.svelte';
-	import ConfirmDialog from './confirm-dialog.svelte';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import ImportUsersDialog from './import-users-dialog.svelte';
 
 	interface Props {

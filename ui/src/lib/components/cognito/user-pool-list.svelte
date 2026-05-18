@@ -17,7 +17,7 @@
 	import Plus from '@lucide/svelte/icons/plus';
 	import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
 	import CreatePoolDialog from './create-pool-dialog.svelte';
-	import ConfirmDialog from './confirm-dialog.svelte';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 
 	interface Props {
 		onSelect: (pool: UserPool) => void;

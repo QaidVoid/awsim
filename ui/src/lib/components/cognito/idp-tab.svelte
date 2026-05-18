@@ -15,7 +15,7 @@
 	import CreateIdpDialog from './create-idp-dialog.svelte';
 	import RegisterMockIdpDialog from './register-mock-idp-dialog.svelte';
 	import IdpDetail from './idp-detail.svelte';
-	import ConfirmDialog from './confirm-dialog.svelte';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 
 	interface Props {
 		poolId: string;
