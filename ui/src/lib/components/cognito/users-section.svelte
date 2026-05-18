@@ -15,8 +15,11 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
+	import { EmptyState, ListSkeleton } from '$lib/components/service';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
+	import Users from '@lucide/svelte/icons/users';
+	import SearchX from '@lucide/svelte/icons/search-x';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import UserDetail from './user-detail.svelte';
@@ -245,13 +248,30 @@
 
 	<div class="flex-1 overflow-y-auto px-6 py-4">
 		{#if loading && users.length === 0}
-			<p class="text-xs text-muted-foreground">Loading users...</p>
+			<ListSkeleton rows={6} />
 		{:else if users.length === 0 && filter.trim()}
-			<p class="text-xs text-muted-foreground">
-				No users match "{filter}". Filter searches by username prefix.
-			</p>
+			<EmptyState
+				icon={SearchX}
+				title={`No users match "${filter.trim()}"`}
+				description="Filtering matches by username prefix."
+			/>
 		{:else if users.length === 0}
-			<p class="text-xs text-muted-foreground">No users in this pool.</p>
+			<EmptyState
+				icon={Users}
+				title="No users yet"
+				description="Create a user directly or import a batch from CSV to populate this pool."
+			>
+				{#snippet action()}
+					<div class="flex gap-2">
+						<Button variant="outline" size="sm" onclick={() => (importOpen = true)}>
+							Import CSV
+						</Button>
+						<Button size="sm" onclick={() => (createUserOpen = true)}>
+							<Plus class="size-3.5" /> Create user
+						</Button>
+					</div>
+				{/snippet}
+			</EmptyState>
 		{:else}
 			<ul class="space-y-1.5">
 				{#each users as u (u.username)}

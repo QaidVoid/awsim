@@ -4,8 +4,10 @@
 	import { listAppClients, deleteAppClient, type CognitoAppClient } from '$lib/api/cognito';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
+	import { EmptyState, ListSkeleton } from '$lib/components/service';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
+	import KeyRound from '@lucide/svelte/icons/key-round';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import ClientDetail from './client-detail.svelte';
@@ -127,9 +129,19 @@
 
 	<div class="flex-1 overflow-y-auto px-6 py-4">
 		{#if loading && clients.length === 0}
-			<p class="text-xs text-muted-foreground">Loading clients...</p>
+			<ListSkeleton rows={4} />
 		{:else if clients.length === 0}
-			<p class="text-xs text-muted-foreground">No app clients.</p>
+			<EmptyState
+				icon={KeyRound}
+				title="No app clients yet"
+				description="An app client lets an application sign users in against this pool."
+			>
+				{#snippet action()}
+					<Button size="sm" onclick={() => (createOpen = true)}>
+						<Plus class="size-3.5" /> Create app client
+					</Button>
+				{/snippet}
+			</EmptyState>
 		{:else}
 			<ul class="space-y-1.5">
 				{#each clients as c (c.clientId)}

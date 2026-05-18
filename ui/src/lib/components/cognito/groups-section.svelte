@@ -4,8 +4,10 @@
 	import { listGroups, deleteGroup, type CognitoGroup } from '$lib/api/cognito';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
+	import { EmptyState, ListSkeleton } from '$lib/components/service';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
+	import UsersRound from '@lucide/svelte/icons/users-round';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import GroupDetail from './group-detail.svelte';
 	import CreateGroupDialog from './create-group-dialog.svelte';
@@ -84,9 +86,19 @@
 
 	<div class="flex-1 overflow-y-auto px-6 py-4">
 		{#if loading && groups.length === 0}
-			<p class="text-xs text-muted-foreground">Loading groups...</p>
+			<ListSkeleton rows={4} />
 		{:else if groups.length === 0}
-			<p class="text-xs text-muted-foreground">No groups.</p>
+			<EmptyState
+				icon={UsersRound}
+				title="No groups yet"
+				description="Groups assign an IAM role and precedence to a set of users."
+			>
+				{#snippet action()}
+					<Button size="sm" onclick={() => (createOpen = true)}>
+						<Plus class="size-3.5" /> Create group
+					</Button>
+				{/snippet}
+			</EmptyState>
 		{:else}
 			<ul class="space-y-1.5">
 				{#each groups as g (g.name)}
