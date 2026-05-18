@@ -145,7 +145,9 @@
 		<Button
 			variant="ghost"
 			size="icon"
-			href={route('/')}
+			href="https://github.com/QaidVoid/awsim/tree/main/docs"
+			target="_blank"
+			rel="noopener"
 			aria-label="Documentation"
 		>
 			<BookOpen class="size-4" />
