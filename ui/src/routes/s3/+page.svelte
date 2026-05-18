@@ -15,7 +15,7 @@
 		type S3CommonPrefix
 	} from '$lib/api/s3';
 	import { useTab } from '$lib/util/tab.svelte';
-	import { ServicePage } from '$lib/components/service';
+	import { ResourceConsole } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
@@ -239,9 +239,11 @@
 	}
 </script>
 
-<ServicePage
+<ResourceConsole
 	title="S3"
 	description="Simple Storage Service — buckets, objects, and policies."
+	hasSelection={!!selectedBucket}
+	emptyHint="Select a bucket to browse objects."
 >
 	{#snippet actions()}
 		<Badge variant="outline" class="font-mono">
@@ -253,88 +255,82 @@
 		</Button>
 	{/snippet}
 
-	<div class="grid h-full min-h-0 grid-cols-[280px_1fr] divide-x divide-border">
-		<aside class="min-h-0 overflow-hidden">
-			<BucketList
-				{buckets}
-				selectedName={selectedBucket?.name ?? null}
-				loading={bucketsLoading}
-				onSelect={openBucket}
-				bind:filter={bucketFilter}
-			/>
-		</aside>
+	{#snippet list()}
+		<BucketList
+			{buckets}
+			selectedName={selectedBucket?.name ?? null}
+			loading={bucketsLoading}
+			onSelect={openBucket}
+			bind:filter={bucketFilter}
+		/>
+	{/snippet}
 
-		<section class="flex min-h-0 flex-col">
-			{#if selectedBucket}
-				<div
-					class="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-background/40 px-4 py-2"
-				>
-					<div class="flex items-center gap-2">
-						<span class="text-xs font-medium text-muted-foreground">Bucket</span>
-						<span class="font-mono text-sm">{selectedBucket.name}</span>
-					</div>
-					<Button
-						variant="ghost"
-						size="sm"
-						onclick={() => (confirmBucketOpen = true)}
-					>
-						<Trash2 class="size-3.5 text-destructive" />
-						Delete
-					</Button>
+	{#snippet detailHeader()}
+		{#if selectedBucket}
+			<div
+				class="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-background/40 px-4 py-2"
+			>
+				<div class="flex items-center gap-2">
+					<span class="text-xs font-medium text-muted-foreground">Bucket</span>
+					<span class="font-mono text-sm">{selectedBucket.name}</span>
 				</div>
-
-				<Tabs bind:value={active} class="flex min-h-0 min-w-0 flex-1 flex-col gap-0">
-					<TabsList class="mx-4 mt-2 self-start">
-						<TabsTrigger value="objects">Objects</TabsTrigger>
-						<TabsTrigger value="properties">Properties</TabsTrigger>
-						<TabsTrigger value="policy">Policy</TabsTrigger>
-						<TabsTrigger value="cors">CORS</TabsTrigger>
-					</TabsList>
-
-					<div class="min-h-0 min-w-0 flex-1">
-						<TabsContent value="objects" class="m-0 h-full min-w-0">
-							<div class="flex h-full flex-col">
-								<div class="min-h-0 flex-1">
-									<ObjectBrowser
-										bucket={selectedBucket.name}
-										{prefix}
-										{objects}
-										{commonPrefixes}
-										loading={objectsLoading}
-										hasPrev={pageStack.length > 0}
-										hasMore={hasMore}
-										onNavigate={navigatePrefix}
-										onSelectObject={selectObject}
-										onDeleteObject={askDeleteObject}
-										onRefresh={refreshObjects}
-										onPrevPage={prevPage}
-										onNextPage={nextPage}
-									/>
-								</div>
-								<UploadZone {uploading} onFiles={uploadFiles} disabled={uploading} />
-							</div>
-						</TabsContent>
-						<TabsContent value="properties" class="m-0 h-full min-w-0">
-							<BucketPropertiesTab bucket={selectedBucket.name} />
-						</TabsContent>
-						<TabsContent value="policy" class="m-0 h-full min-w-0">
-							<BucketPolicyTab bucket={selectedBucket.name} />
-						</TabsContent>
-						<TabsContent value="cors" class="m-0 h-full min-w-0">
-							<BucketCorsTab bucket={selectedBucket.name} />
-						</TabsContent>
-					</div>
-				</Tabs>
-			{:else}
-				<div
-					class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground"
+				<Button
+					variant="ghost"
+					size="sm"
+					onclick={() => (confirmBucketOpen = true)}
 				>
-					Select a bucket to browse objects.
-				</div>
-			{/if}
-		</section>
-	</div>
-</ServicePage>
+					<Trash2 class="size-3.5 text-destructive" />
+					Delete
+				</Button>
+			</div>
+		{/if}
+	{/snippet}
+
+	{#if selectedBucket}
+		<Tabs bind:value={active} class="flex min-h-0 min-w-0 flex-1 flex-col gap-0">
+			<TabsList class="mx-4 mt-2 self-start">
+				<TabsTrigger value="objects">Objects</TabsTrigger>
+				<TabsTrigger value="properties">Properties</TabsTrigger>
+				<TabsTrigger value="policy">Policy</TabsTrigger>
+				<TabsTrigger value="cors">CORS</TabsTrigger>
+			</TabsList>
+
+			<div class="min-h-0 min-w-0 flex-1">
+				<TabsContent value="objects" class="m-0 h-full min-w-0">
+					<div class="flex h-full flex-col">
+						<div class="min-h-0 flex-1">
+							<ObjectBrowser
+								bucket={selectedBucket.name}
+								{prefix}
+								{objects}
+								{commonPrefixes}
+								loading={objectsLoading}
+								hasPrev={pageStack.length > 0}
+								hasMore={hasMore}
+								onNavigate={navigatePrefix}
+								onSelectObject={selectObject}
+								onDeleteObject={askDeleteObject}
+								onRefresh={refreshObjects}
+								onPrevPage={prevPage}
+								onNextPage={nextPage}
+							/>
+						</div>
+						<UploadZone {uploading} onFiles={uploadFiles} disabled={uploading} />
+					</div>
+				</TabsContent>
+				<TabsContent value="properties" class="m-0 h-full min-w-0">
+					<BucketPropertiesTab bucket={selectedBucket.name} />
+				</TabsContent>
+				<TabsContent value="policy" class="m-0 h-full min-w-0">
+					<BucketPolicyTab bucket={selectedBucket.name} />
+				</TabsContent>
+				<TabsContent value="cors" class="m-0 h-full min-w-0">
+					<BucketCorsTab bucket={selectedBucket.name} />
+				</TabsContent>
+			</div>
+		</Tabs>
+	{/if}
+</ResourceConsole>
 
 <CreateBucketDialog
 	bind:open={createOpen}
