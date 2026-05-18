@@ -7,7 +7,9 @@
 	import { EmptyState } from '$lib/components/service';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import ShieldCheck from '@lucide/svelte/icons/shield-check';
+	import Plus from '@lucide/svelte/icons/plus';
 	import { toast } from 'svelte-sonner';
+	import CreateScpDialog from './create-scp-dialog.svelte';
 
 	interface Props {
 		onSelect: (policy: Policy) => void;
@@ -17,6 +19,7 @@
 
 	let policies = $state<Policy[]>([]);
 	let loading = $state(true);
+	let createOpen = $state(false);
 
 	async function reload() {
 		loading = true;
@@ -38,10 +41,16 @@
 		<div class="text-xs text-muted-foreground">
 			{policies.length} SCP{policies.length === 1 ? '' : 's'}
 		</div>
-		<Button type="button" variant="outline" size="sm" onclick={reload} disabled={loading}>
-			<RefreshCw class={loading ? 'animate-spin' : ''} />
-			Refresh
-		</Button>
+		<div class="flex items-center gap-2">
+			<Button type="button" variant="outline" size="sm" onclick={reload} disabled={loading}>
+				<RefreshCw class={loading ? 'animate-spin' : ''} />
+				Refresh
+			</Button>
+			<Button type="button" size="sm" onclick={() => (createOpen = true)}>
+				<Plus />
+				Create SCP
+			</Button>
+		</div>
 	</header>
 
 	<div class="min-h-0 flex-1 overflow-auto">
@@ -56,8 +65,15 @@
 				<EmptyState
 					icon={ShieldCheck}
 					title="No service control policies"
-					description="No SCPs defined for this organization."
-				/>
+					description="SCPs cap what member accounts can do; AWSim enforces them in the IAM engine."
+				>
+					{#snippet action()}
+						<Button onclick={() => (createOpen = true)}>
+							<Plus />
+							Create your first SCP
+						</Button>
+					{/snippet}
+				</EmptyState>
 			</div>
 		{:else}
 			<table class="w-full text-sm">
@@ -92,3 +108,9 @@
 		{/if}
 	</div>
 </div>
+
+<CreateScpDialog
+	open={createOpen}
+	onOpenChange={(o) => (createOpen = o)}
+	onCreated={() => reload()}
+/>

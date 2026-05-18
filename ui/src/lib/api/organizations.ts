@@ -208,6 +208,27 @@ export async function listPolicies(
   };
 }
 
+export async function createPolicy(
+  name: string,
+  description: string,
+  content: string,
+  type: string = "SERVICE_CONTROL_POLICY",
+): Promise<Policy> {
+  const data = await orgRequest<{ Policy?: { PolicySummary?: RawPolicy } }>(
+    "CreatePolicy",
+    { Name: name, Description: description, Content: content, Type: type },
+  );
+  const s = data.Policy?.PolicySummary ?? {};
+  return {
+    id: s.Id ?? "",
+    arn: s.Arn ?? "",
+    name: s.Name ?? "",
+    description: s.Description,
+    type: s.Type ?? type,
+    awsManaged: !!s.AwsManaged,
+  };
+}
+
 export async function describePolicy(
   policyId: string,
 ): Promise<PolicyDocument | null> {
