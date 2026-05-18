@@ -15,6 +15,7 @@
 	import StopCircle from '@lucide/svelte/icons/stop-circle';
 	import Briefcase from '@lucide/svelte/icons/briefcase';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 
 	interface Props {
 		onSelect: (job: JobSummary) => void;
@@ -26,6 +27,10 @@
 
 	let jobs = $state<JobSummary[]>([]);
 	let loading = $state(true);
+
+	let terminateTarget = $state<JobSummary | null>(null);
+	let terminateOpen = $state(false);
+	let terminateBusy = $state(false);
 
 	function fmt(ms?: number): string {
 		if (!ms) return '—';
@@ -48,15 +53,26 @@
 		}
 	}
 
-	async function handleTerminate(j: JobSummary, e: Event) {
+	function handleTerminate(j: JobSummary, e: Event) {
 		e.stopPropagation();
-		if (!confirm(`Terminate job ${j.jobName}?`)) return;
+		terminateTarget = j;
+		terminateOpen = true;
+	}
+
+	async function confirmTerminate() {
+		const j = terminateTarget;
+		if (!j) return;
+		terminateBusy = true;
 		try {
 			await terminateJob(j.jobId, 'User terminated');
 			toast.success(`Terminated ${j.jobName}`);
+			terminateOpen = false;
+			terminateTarget = null;
 			await reload();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Terminate failed');
+		} finally {
+			terminateBusy = false;
 		}
 	}
 
@@ -140,3 +156,13 @@
 		{/if}
 	</div>
 </div>
+
+<ConfirmDialog
+	bind:open={terminateOpen}
+	title="Terminate job?"
+	description={`Terminate job "${terminateTarget?.jobName ?? ''}".`}
+	confirmLabel="Terminate"
+	busy={terminateBusy}
+	onConfirm={confirmTerminate}
+	onClose={() => (terminateOpen = false)}
+/>

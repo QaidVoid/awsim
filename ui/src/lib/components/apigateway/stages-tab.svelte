@@ -3,6 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import Copy from '@lucide/svelte/icons/copy';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -16,6 +17,10 @@
 	let stages = $state<Stage[]>([]);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
+
+	let deleteTarget = $state<Stage | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	async function load() {
 		loading = true;
@@ -43,14 +48,25 @@
 		}
 	}
 
-	async function removeStage(stage: Stage) {
-		if (!confirm(`Delete stage ${stage.stageName}?`)) return;
+	function removeStage(stage: Stage) {
+		deleteTarget = stage;
+		deleteOpen = true;
+	}
+
+	async function confirmRemoveStage() {
+		const stage = deleteTarget;
+		if (!stage) return;
+		deleteBusy = true;
 		try {
 			await deleteStage(restApiId, stage.stageName);
 			toast.success(`Stage ${stage.stageName} deleted`);
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -130,3 +146,12 @@
 		</ul>
 	{/if}
 </div>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete stage?"
+	description={`Permanently delete stage "${deleteTarget?.stageName ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmRemoveStage}
+	onClose={() => (deleteOpen = false)}
+/>

@@ -7,6 +7,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import {
 		describeScalableTargets,
 		deregisterScalableTarget,
@@ -28,6 +29,10 @@
 	let targets = $state<ScalableTarget[]>([]);
 	let policiesByTarget = $state<Record<string, ScalingPolicy[]>>({});
 	let loading = $state(false);
+
+	let deregisterTarget = $state<ScalableTarget | null>(null);
+	let deregisterOpen = $state(false);
+	let deregisterBusy = $state(false);
 
 	$effect(() => {
 		serviceNamespace;
@@ -54,13 +59,15 @@
 		}
 	}
 
-	async function deregister(t: ScalableTarget) {
-		if (
-			!confirm(
-				`Deregister scalable target ${t.resourceId} / ${t.scalableDimension}? Attached policies will also be removed.`
-			)
-		)
-			return;
+	function deregister(t: ScalableTarget) {
+		deregisterTarget = t;
+		deregisterOpen = true;
+	}
+
+	async function confirmDeregister() {
+		const t = deregisterTarget;
+		if (!t) return;
+		deregisterBusy = true;
 		try {
 			await deregisterScalableTarget({
 				serviceNamespace: t.serviceNamespace,
@@ -68,9 +75,13 @@
 				scalableDimension: t.scalableDimension
 			});
 			toast.success('Deregistered scalable target.');
+			deregisterOpen = false;
+			deregisterTarget = null;
 			await load();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to deregister');
+		} finally {
+			deregisterBusy = false;
 		}
 	}
 
@@ -145,3 +156,13 @@
 		<Trash2Icon class="text-destructive" />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deregisterOpen}
+	title="Deregister scalable target?"
+	description={`Deregister scalable target ${deregisterTarget?.resourceId ?? ''} / ${deregisterTarget?.scalableDimension ?? ''}. Attached policies will also be removed.`}
+	confirmLabel="Deregister"
+	busy={deregisterBusy}
+	onConfirm={confirmDeregister}
+	onClose={() => (deregisterOpen = false)}
+/>

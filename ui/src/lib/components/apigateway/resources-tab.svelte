@@ -24,6 +24,7 @@
 		DialogTitle,
 	} from '$lib/components/ui/dialog';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -55,6 +56,15 @@
 	let newIntegrationType = $state<'MOCK' | 'HTTP_PROXY' | 'AWS_PROXY' | 'AWS' | 'HTTP'>('MOCK');
 	let newIntegrationUri = $state('');
 	let savingMethod = $state(false);
+
+	let deleteResourceTarget = $state<Resource | null>(null);
+	let deleteResourceOpen = $state(false);
+	let deleteResourceBusy = $state(false);
+
+	let deleteMethodResource = $state<Resource | null>(null);
+	let deleteMethodHttp = $state<string | null>(null);
+	let deleteMethodOpen = $state(false);
+	let deleteMethodBusy = $state(false);
 
 	const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
 	const INTEGRATION_TYPES = ['MOCK', 'HTTP_PROXY', 'AWS_PROXY', 'AWS', 'HTTP'] as const;
@@ -124,14 +134,25 @@
 		}
 	}
 
-	async function removeResource(res: Resource) {
-		if (!confirm(`Delete resource ${res.path}?`)) return;
+	function removeResource(res: Resource) {
+		deleteResourceTarget = res;
+		deleteResourceOpen = true;
+	}
+
+	async function confirmRemoveResource() {
+		const res = deleteResourceTarget;
+		if (!res) return;
+		deleteResourceBusy = true;
 		try {
 			await deleteResource(restApiId, res.id);
 			toast.success(`Resource ${res.path} deleted`);
+			deleteResourceOpen = false;
+			deleteResourceTarget = null;
 			await load();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Delete failed');
+		} finally {
+			deleteResourceBusy = false;
 		}
 	}
 
@@ -166,15 +187,29 @@
 		}
 	}
 
-	async function removeMethod(res: Resource, http: string) {
-		if (!confirm(`Delete ${http} on ${res.path}?`)) return;
+	function removeMethod(res: Resource, http: string) {
+		deleteMethodResource = res;
+		deleteMethodHttp = http;
+		deleteMethodOpen = true;
+	}
+
+	async function confirmRemoveMethod() {
+		const res = deleteMethodResource;
+		const http = deleteMethodHttp;
+		if (!res || !http) return;
+		deleteMethodBusy = true;
 		try {
 			await deleteIntegration(restApiId, res.id, http).catch(() => undefined);
 			await deleteMethod(restApiId, res.id, http);
 			toast.success(`${http} deleted`);
+			deleteMethodOpen = false;
+			deleteMethodResource = null;
+			deleteMethodHttp = null;
 			await load();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Delete failed');
+		} finally {
+			deleteMethodBusy = false;
 		}
 	}
 
@@ -408,3 +443,21 @@
 		</form>
 	</DialogContent>
 </Dialog>
+
+<ConfirmDialog
+	bind:open={deleteResourceOpen}
+	title="Delete resource?"
+	description={`Permanently delete resource "${deleteResourceTarget?.path ?? ''}".`}
+	busy={deleteResourceBusy}
+	onConfirm={confirmRemoveResource}
+	onClose={() => (deleteResourceOpen = false)}
+/>
+
+<ConfirmDialog
+	bind:open={deleteMethodOpen}
+	title="Delete method?"
+	description={`Permanently delete ${deleteMethodHttp ?? ''} on "${deleteMethodResource?.path ?? ''}".`}
+	busy={deleteMethodBusy}
+	onConfirm={confirmRemoveMethod}
+	onClose={() => (deleteMethodOpen = false)}
+/>

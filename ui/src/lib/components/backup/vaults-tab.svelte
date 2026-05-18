@@ -8,6 +8,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { listVaults, createVault, deleteVault, type BackupVault } from '$lib/api/backup';
 
 	interface Props {
@@ -21,6 +22,10 @@
 	let loading = $state(false);
 	let newName = $state('');
 	let creating = $state(false);
+
+	let deleteTarget = $state<BackupVault | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		refreshKey;
@@ -54,15 +59,26 @@
 		}
 	}
 
-	async function remove(v: BackupVault) {
-		if (!confirm(`Delete vault "${v.name}"? Recovery points must be removed first.`)) return;
+	function remove(v: BackupVault) {
+		deleteTarget = v;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		const v = deleteTarget;
+		if (!v) return;
+		deleteBusy = true;
 		try {
 			await deleteVault(v.name);
 			toast.success('Vault deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete vault');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -130,3 +146,12 @@
 		<Trash2Icon class="text-destructive" />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete vault?"
+	description={`Permanently delete vault "${deleteTarget?.name ?? ''}". Recovery points must be removed first.`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => (deleteOpen = false)}
+/>

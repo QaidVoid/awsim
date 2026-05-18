@@ -17,6 +17,7 @@
 		DialogTitle,
 	} from '$lib/components/ui/dialog';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -38,6 +39,10 @@
 	let newAuthType = $state('custom');
 	let newAuthorizerUri = $state('');
 	let newIdentitySource = $state('method.request.header.Authorization');
+
+	let deleteTarget = $state<Authorizer | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	const TYPES = ['TOKEN', 'REQUEST', 'COGNITO_USER_POOLS'] as const;
 
@@ -88,14 +93,25 @@
 		}
 	}
 
-	async function remove(a: Authorizer) {
-		if (!confirm(`Delete authorizer ${a.name || a.id}?`)) return;
+	function remove(a: Authorizer) {
+		deleteTarget = a;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		const a = deleteTarget;
+		if (!a) return;
+		deleteBusy = true;
 		try {
 			await deleteAuthorizer(restApiId, a.id);
 			toast.success(`Authorizer ${a.name || a.id} deleted`);
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Delete failed');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 </script>
@@ -206,3 +222,12 @@
 		</form>
 	</DialogContent>
 </Dialog>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete authorizer?"
+	description={`Permanently delete authorizer "${deleteTarget?.name || deleteTarget?.id || ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => (deleteOpen = false)}
+/>

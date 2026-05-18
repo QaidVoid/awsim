@@ -9,6 +9,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import FileCogIcon from '@lucide/svelte/icons/file-cog';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import {
 		listProfiles,
 		createProfile,
@@ -32,6 +33,10 @@
 	let pubProfile = $state<string>('');
 	let pubContent = $state('{\n  "feature_x": true\n}');
 	let publishing = $state(false);
+
+	let deleteTarget = $state<ConfigProfile | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		appId;
@@ -65,14 +70,25 @@
 		}
 	}
 
-	async function remove(p: ConfigProfile) {
-		if (!confirm(`Delete profile "${p.name}"? Hosted versions are removed too.`)) return;
+	function remove(p: ConfigProfile) {
+		deleteTarget = p;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		const p = deleteTarget;
+		if (!p) return;
+		deleteBusy = true;
 		try {
 			await deleteProfile(appId, p.id);
 			toast.success('Profile deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -167,3 +183,12 @@
 		<Trash2Icon class="text-destructive" />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete profile?"
+	description={`Permanently delete profile "${deleteTarget?.name ?? ''}". Hosted versions are removed too.`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => (deleteOpen = false)}
+/>

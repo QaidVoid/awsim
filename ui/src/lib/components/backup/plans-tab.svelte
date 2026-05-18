@@ -7,6 +7,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import CalendarClockIcon from '@lucide/svelte/icons/calendar-clock';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { listPlans, createPlan, deletePlan, type BackupPlan } from '$lib/api/backup';
 
 	interface Props {
@@ -21,6 +22,10 @@
 	let newName = $state('');
 	let newVault = $state('');
 	let creating = $state(false);
+
+	let deleteTarget = $state<BackupPlan | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		refreshKey;
@@ -57,15 +62,26 @@
 		}
 	}
 
-	async function remove(p: BackupPlan) {
-		if (!confirm(`Delete plan "${p.planName}"?`)) return;
+	function remove(p: BackupPlan) {
+		deleteTarget = p;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		const p = deleteTarget;
+		if (!p) return;
+		deleteBusy = true;
 		try {
 			await deletePlan(p.planId);
 			toast.success('Plan deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete plan');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -135,3 +151,12 @@
 		<Trash2Icon class="text-destructive" />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete plan?"
+	description={`Permanently delete plan "${deleteTarget?.planName ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => (deleteOpen = false)}
+/>

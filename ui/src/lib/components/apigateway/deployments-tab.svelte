@@ -9,6 +9,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
@@ -26,6 +27,10 @@
 	let stageName = $state('');
 	let description = $state('');
 	let creating = $state(false);
+
+	let deployTarget = $state<Deployment | null>(null);
+	let deployOpen = $state(false);
+	let deployBusy = $state(false);
 
 	async function load() {
 		loading = true;
@@ -72,14 +77,25 @@
 		}
 	}
 
-	async function remove(d: Deployment) {
-		if (!confirm(`Delete deployment ${d.id}?`)) return;
+	function remove(d: Deployment) {
+		deployTarget = d;
+		deployOpen = true;
+	}
+
+	async function confirmRemove() {
+		const d = deployTarget;
+		if (!d) return;
+		deployBusy = true;
 		try {
 			await deleteDeployment(restApiId, d.id);
 			toast.success(`Deployment ${d.id} deleted`);
+			deployOpen = false;
+			deployTarget = null;
 			await load();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Delete failed');
+		} finally {
+			deployBusy = false;
 		}
 	}
 </script>
@@ -147,3 +163,12 @@
 		{/if}
 	</div>
 </div>
+
+<ConfirmDialog
+	bind:open={deployOpen}
+	title="Delete deployment?"
+	description={`Permanently delete deployment "${deployTarget?.id ?? ''}".`}
+	busy={deployBusy}
+	onConfirm={confirmRemove}
+	onClose={() => (deployOpen = false)}
+/>

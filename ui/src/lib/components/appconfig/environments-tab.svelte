@@ -8,6 +8,7 @@
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import {
 		listEnvironments,
 		createEnvironment,
@@ -26,6 +27,10 @@
 	let loading = $state(false);
 	let newName = $state('');
 	let creating = $state(false);
+
+	let deleteTarget = $state<Environment | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		appId;
@@ -59,14 +64,25 @@
 		}
 	}
 
-	async function remove(e: Environment) {
-		if (!confirm(`Delete environment "${e.name}"?`)) return;
+	function remove(e: Environment) {
+		deleteTarget = e;
+		deleteOpen = true;
+	}
+
+	async function confirmRemove() {
+		const e = deleteTarget;
+		if (!e) return;
+		deleteBusy = true;
 		try {
 			await deleteEnvironment(appId, e.id);
 			toast.success('Environment deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			await load();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Failed to delete');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 </script>
@@ -121,3 +137,12 @@
 		<Trash2Icon class="text-destructive" />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete environment?"
+	description={`Permanently delete environment "${deleteTarget?.name ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmRemove}
+	onClose={() => (deleteOpen = false)}
+/>

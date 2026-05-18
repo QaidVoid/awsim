@@ -10,6 +10,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import { toast } from 'svelte-sonner';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import {
 		describeScalingPolicies,
 		deleteScalingPolicy,
@@ -28,6 +29,10 @@
 
 	let policies = $state<ScalingPolicy[]>([]);
 	let loading = $state(false);
+
+	let deleteTarget = $state<ScalingPolicy | null>(null);
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		if (open && target) {
@@ -49,8 +54,15 @@
 		}
 	}
 
-	async function removePolicy(p: ScalingPolicy) {
-		if (!confirm(`Delete policy "${p.policyName}"?`)) return;
+	function removePolicy(p: ScalingPolicy) {
+		deleteTarget = p;
+		deleteOpen = true;
+	}
+
+	async function confirmRemovePolicy() {
+		const p = deleteTarget;
+		if (!p) return;
+		deleteBusy = true;
 		try {
 			await deleteScalingPolicy({
 				serviceNamespace: p.serviceNamespace,
@@ -59,10 +71,14 @@
 				policyName: p.policyName
 			});
 			toast.success('Policy deleted.');
+			deleteOpen = false;
+			deleteTarget = null;
 			if (target) await load(target);
 			onChanged?.();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete policy');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -137,3 +153,12 @@
 		</div>
 	</SheetContent>
 </Sheet>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete policy?"
+	description={`Permanently delete policy "${deleteTarget?.policyName ?? ''}".`}
+	busy={deleteBusy}
+	onConfirm={confirmRemovePolicy}
+	onClose={() => (deleteOpen = false)}
+/>
