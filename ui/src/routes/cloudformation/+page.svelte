@@ -18,7 +18,7 @@
 		type StackResource,
 		type StackEvent
 	} from '$lib/api/cloudformation';
-	import { ServicePage } from '$lib/components/service';
+	import { ResourceConsole } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import { Badge } from '$lib/components/ui/badge';
@@ -134,9 +134,12 @@
 	<title>AWSim · CloudFormation</title>
 </svelte:head>
 
-<ServicePage
+<ResourceConsole
 	title="CloudFormation"
 	description="Model and provision AWS resources from declarative templates."
+	listWidth="20rem"
+	hasSelection={!!selectedName}
+	loading={false}
 >
 	{#snippet actions()}
 		<Button type="button" variant="outline" size="sm" onclick={loadStacks} disabled={stacksLoading}>
@@ -149,74 +152,78 @@
 		</Button>
 	{/snippet}
 
-	<div class="grid h-full min-h-0 grid-cols-[20rem_minmax(0,1fr)]">
-		<aside class="flex min-h-0 flex-col border-r border-border">
-			<header class="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
-				<span class="text-xs text-muted-foreground">
-					{stacks.length} stack{stacks.length === 1 ? '' : 's'}
-				</span>
-			</header>
-			<StackList
-				{stacks}
-				loading={stacksLoading}
-				selected={selectedName}
-				onSelect={selectStack}
+	{#snippet list()}
+		<header class="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
+			<span class="text-xs text-muted-foreground">
+				{stacks.length} stack{stacks.length === 1 ? '' : 's'}
+			</span>
+		</header>
+		<StackList
+			{stacks}
+			loading={stacksLoading}
+			selected={selectedName}
+			onSelect={selectStack}
+		/>
+	{/snippet}
+
+	{#snippet empty()}
+		<div class="flex h-full items-center justify-center p-6">
+			<EmptyState
+				icon={Layers}
+				title="Select a stack"
+				description="Pick a stack on the left to view its resources, events, and template."
 			/>
-		</aside>
+		</div>
+	{/snippet}
 
-		<section class="flex min-h-0 flex-col">
-			{#if !selectedName}
-				<div class="flex h-full items-center justify-center p-6">
-					<EmptyState
-						icon={Layers}
-						title="Select a stack"
-						description="Pick a stack on the left to view its resources, events, and template."
-					/>
+	{#snippet detailHeader()}
+		{#if selectedName}
+			<header
+				class="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2"
+			>
+				<div class="flex items-center gap-2 truncate">
+					<span class="truncate font-mono text-sm">{selectedName}</span>
+					{#if detail}
+						<Badge variant="outline">{detail.stackStatus}</Badge>
+					{/if}
 				</div>
-			{:else}
-				<header
-					class="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2"
-				>
-					<div class="flex items-center gap-2 truncate">
-						<span class="truncate font-mono text-sm">{selectedName}</span>
-						{#if detail}
-							<Badge variant="outline">{detail.stackStatus}</Badge>
-						{/if}
-					</div>
-					<div class="flex shrink-0 items-center gap-1">
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							onclick={() => (sheetOpen = true)}
-							disabled={!detail}
-						>
-							<Info />
-							Details
-						</Button>
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							onclick={() => selectedName && loadDetail(selectedName)}
-							disabled={detailLoading}
-							aria-label="Refresh detail"
-						>
-							<RefreshCw class={detailLoading ? 'animate-spin' : ''} />
-						</Button>
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							onclick={handleDelete}
-							aria-label="Delete stack"
-						>
-							<Trash2 />
-						</Button>
-					</div>
-				</header>
+				<div class="flex shrink-0 items-center gap-1">
+					<Button
+						type="button"
+						variant="ghost"
+						size="sm"
+						onclick={() => (sheetOpen = true)}
+						disabled={!detail}
+					>
+						<Info />
+						Details
+					</Button>
+					<Button
+						type="button"
+						variant="ghost"
+						size="sm"
+						onclick={() => selectedName && loadDetail(selectedName)}
+						disabled={detailLoading}
+						aria-label="Refresh detail"
+					>
+						<RefreshCw class={detailLoading ? 'animate-spin' : ''} />
+					</Button>
+					<Button
+						type="button"
+						variant="ghost"
+						size="sm"
+						onclick={handleDelete}
+						aria-label="Delete stack"
+					>
+						<Trash2 />
+					</Button>
+				</div>
+			</header>
+		{/if}
+	{/snippet}
 
-				<Tabs bind:value={active} class="flex min-h-0 flex-1 flex-col">
+	{#if selectedName}
+			<Tabs bind:value={active} class="flex min-h-0 flex-1 flex-col">
 					<TabsList class="mx-4 mt-2 self-start">
 						<TabsTrigger value="resources">Resources</TabsTrigger>
 						<TabsTrigger value="events">Events</TabsTrigger>
@@ -242,10 +249,8 @@
 						</TabsContent>
 					</div>
 				</Tabs>
-			{/if}
-		</section>
-	</div>
-</ServicePage>
+	{/if}
+</ResourceConsole>
 
 <StackDetailSheet stack={detail} open={sheetOpen} onOpenChange={(o) => (sheetOpen = o)} />
 <CreateStackDialog

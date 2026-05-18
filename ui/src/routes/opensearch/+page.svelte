@@ -13,7 +13,7 @@
 		type IndexSummary,
 		type SearchHit,
 	} from '$lib/api/opensearch';
-	import { ServicePage } from '$lib/components/service';
+	import { ResourceConsole } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
@@ -254,14 +254,17 @@
 	</Button>
 {/snippet}
 
-<ServicePage
+<ResourceConsole
 	title="OpenSearch"
 	description="Elasticsearch-compatible REST API with disk-backed storage via redb."
 	actions={pageActions}
+	listWidth="280px"
+	hasSelection={!!selected}
+	loading={false}
 >
-	<div class="grid h-full min-h-0 grid-cols-[280px_minmax(0,1fr)] divide-x divide-border">
+	{#snippet list()}
 		<!-- Indices list -->
-		<aside class="min-h-0 overflow-y-auto">
+		<div class="h-full overflow-y-auto">
 			{#if indices.length === 0}
 				<div class="px-3 py-6 text-center text-xs text-muted-foreground">
 					{loading ? 'Loading…' : 'No indices yet. Create one above.'}
@@ -288,47 +291,52 @@
 					{/each}
 				</ul>
 			{/if}
-		</aside>
+		</div>
+	{/snippet}
 
-		<!-- Detail pane -->
-		<section class="flex min-h-0 min-w-0 flex-col">
-			{#if !selected}
-				<div class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
-					Select an index to inspect.
-				</div>
-			{:else}
-				<div
-					class="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-background/40 px-4 py-2"
-				>
-					<div class="flex items-center gap-2">
-						<span class="text-xs font-medium text-muted-foreground">Index</span>
-						<span class="font-mono text-sm">{selected.index}</span>
-						<Badge variant="outline">{total} total</Badge>
-					</div>
-					<div class="flex items-center gap-1">
-						<Button
-							variant="ghost"
-							size="sm"
-							onclick={() => {
-								putOpen = true;
-								putId = '';
-							}}
-						>
-							<Plus class="size-3.5" />
-							New doc
-						</Button>
-						<Button
-							variant="ghost"
-							size="sm"
-							onclick={() => handleDeleteIndex(selected!)}
-						>
-							<Trash2 class="size-3.5 text-destructive" />
-							Delete index
-						</Button>
-					</div>
-				</div>
+	{#snippet empty()}
+		<div class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+			Select an index to inspect.
+		</div>
+	{/snippet}
 
-				<Tabs bind:value={active} class="flex min-h-0 min-w-0 flex-1 flex-col gap-0">
+	{#snippet detailHeader()}
+		{#if selected}
+			<div
+				class="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-background/40 px-4 py-2"
+			>
+				<div class="flex items-center gap-2">
+					<span class="text-xs font-medium text-muted-foreground">Index</span>
+					<span class="font-mono text-sm">{selected.index}</span>
+					<Badge variant="outline">{total} total</Badge>
+				</div>
+				<div class="flex items-center gap-1">
+					<Button
+						variant="ghost"
+						size="sm"
+						onclick={() => {
+							putOpen = true;
+							putId = '';
+						}}
+					>
+						<Plus class="size-3.5" />
+						New doc
+					</Button>
+					<Button
+						variant="ghost"
+						size="sm"
+						onclick={() => handleDeleteIndex(selected!)}
+					>
+						<Trash2 class="size-3.5 text-destructive" />
+						Delete index
+					</Button>
+				</div>
+			</div>
+		{/if}
+	{/snippet}
+
+	{#if selected}
+			<Tabs bind:value={active} class="flex min-h-0 min-w-0 flex-1 flex-col gap-0">
 					<TabsList class="mx-4 mt-2 self-start">
 						<TabsTrigger value="browse">Browse</TabsTrigger>
 						<TabsTrigger value="query">Query DSL</TabsTrigger>
@@ -440,10 +448,8 @@
 						</TabsContent>
 					</div>
 				</Tabs>
-			{/if}
-		</section>
-	</div>
-</ServicePage>
+	{/if}
+</ResourceConsole>
 
 <Dialog bind:open={createOpen} onOpenChange={(v) => (createOpen = v)}>
 	<DialogContent class="sm:max-w-md">

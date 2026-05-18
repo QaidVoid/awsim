@@ -9,7 +9,7 @@
 		type StateMachineDetail,
 		type Execution
 	} from '$lib/api/stepfunctions';
-	import { ServicePage, EmptyState } from '$lib/components/service';
+	import { ResourceConsole, EmptyState } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
 	import {
@@ -112,9 +112,12 @@
 	);
 </script>
 
-<ServicePage
+<ResourceConsole
 	title="Step Functions"
 	description="Coordinate distributed workflows with state machines and executions."
+	listWidth="280px"
+	hasSelection={!!selectedArn}
+	loading={detailLoading || !detail}
 >
 	{#snippet actions()}
 		<Button variant="outline" size="sm" onclick={loadList} disabled={loadingList}>
@@ -127,55 +130,58 @@
 		</Button>
 	{/snippet}
 
-	<div
-		class="grid h-full min-h-0 grid-cols-[280px_1fr] divide-x divide-border overflow-hidden"
-	>
-		<aside class="min-h-0 overflow-hidden">
-			<StateMachineList
-				stateMachines={machines}
-				{selectedArn}
-				loading={loadingList}
-				onSelect={selectMachine}
-			/>
-		</aside>
+	{#snippet list()}
+		<StateMachineList
+			stateMachines={machines}
+			{selectedArn}
+			loading={loadingList}
+			onSelect={selectMachine}
+		/>
+	{/snippet}
 
-		<section class="flex min-h-0 flex-col overflow-hidden">
-			{#if !selectedArn}
-				<div class="flex flex-1 items-center justify-center p-6">
-					<EmptyState
-						icon={Workflow}
-						title="No state machine selected"
-						description="Pick one from the list to inspect the workflow and run executions."
-					/>
-				</div>
-			{:else if detailLoading || !detail}
-				<div class="flex flex-1 items-center justify-center text-muted-foreground">
-					Loading state machine...
-				</div>
-			{:else}
-				<StateMachineHeader
-					machine={detail}
-					onDelete={handleDelete}
-					onRefresh={() => selectedArn && loadDetail(selectedArn)}
-				/>
-				<Tabs bind:value={active} class="flex min-h-0 flex-1 flex-col">
-					<TabsList class="mx-4 mt-2 self-start">
-						<TabsTrigger value="definition">Definition</TabsTrigger>
-						<TabsTrigger value="executions">Executions</TabsTrigger>
-					</TabsList>
-					<div class="min-h-0 flex-1 overflow-hidden">
-						<TabsContent value="definition" class="m-0 h-full">
-							<DefinitionTab machine={detail} loading={detailLoading} />
-						</TabsContent>
-						<TabsContent value="executions" class="m-0 h-full">
-							<ExecutionsTab machine={selectedSummary} onSelect={openExecution} />
-						</TabsContent>
-					</div>
-				</Tabs>
-			{/if}
-		</section>
-	</div>
-</ServicePage>
+	{#snippet empty()}
+		<div class="flex flex-1 items-center justify-center p-6">
+			<EmptyState
+				icon={Workflow}
+				title="No state machine selected"
+				description="Pick one from the list to inspect the workflow and run executions."
+			/>
+		</div>
+	{/snippet}
+
+	{#snippet loadingContent()}
+		<div class="flex flex-1 items-center justify-center text-muted-foreground">
+			Loading state machine...
+		</div>
+	{/snippet}
+
+	{#snippet detailHeader()}
+		{#if selectedArn && detail}
+			<StateMachineHeader
+				machine={detail}
+				onDelete={handleDelete}
+				onRefresh={() => selectedArn && loadDetail(selectedArn)}
+			/>
+		{/if}
+	{/snippet}
+
+	{#if selectedArn && detail}
+		<Tabs bind:value={active} class="flex min-h-0 flex-1 flex-col">
+			<TabsList class="mx-4 mt-2 self-start">
+				<TabsTrigger value="definition">Definition</TabsTrigger>
+				<TabsTrigger value="executions">Executions</TabsTrigger>
+			</TabsList>
+			<div class="min-h-0 flex-1 overflow-hidden">
+				<TabsContent value="definition" class="m-0 h-full">
+					<DefinitionTab machine={detail} loading={detailLoading} />
+				</TabsContent>
+				<TabsContent value="executions" class="m-0 h-full">
+					<ExecutionsTab machine={selectedSummary} onSelect={openExecution} />
+				</TabsContent>
+			</div>
+		</Tabs>
+	{/if}
+</ResourceConsole>
 
 <CreateStateMachineDialog
 	open={createOpen}
