@@ -165,8 +165,8 @@
 		</div>
 		<p class="text-xs text-muted-foreground">
 			Caps the number of concurrent executions for this function. Real Lambda gates
-			invocations against this value; AWSim stores it round-trip but does not actually
-			throttle.
+			invocations against this value; AWSim stores and returns it for SDK code that reads
+			it, without enforcing the limit.
 		</p>
 		{#if loading && reserved === undefined}
 			<Skeleton class="h-9 w-64" />

@@ -71,7 +71,7 @@
 						Download ZIP
 					</Button>
 				{:else}
-					<span class="text-xs text-muted-foreground">Code not available</span>
+					<span class="text-xs text-muted-foreground">No downloadable artifact</span>
 				{/if}
 			</footer>
 		</section>

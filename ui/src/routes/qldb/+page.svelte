@@ -3,6 +3,6 @@
 	import LedgersList from '$lib/components/qldb/ledgers-list.svelte';
 </script>
 
-<ServicePage title="QLDB" description="Quantum Ledger Database — ledger metadata only.">
+<ServicePage title="QLDB" description="Quantum Ledger Database. Create, inspect, and manage ledgers.">
 	<LedgersList />
 </ServicePage>

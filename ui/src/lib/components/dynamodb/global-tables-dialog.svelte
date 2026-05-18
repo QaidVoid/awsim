@@ -124,9 +124,9 @@
 		<DialogHeader>
 			<DialogTitle>Global Tables</DialogTitle>
 			<DialogDescription>
-				Cross-region replica metadata. The underlying table must already exist in the request
-				region. AWSim doesn't actually replicate data — this is metadata only so tooling that
-				inspects global tables sees a consistent view.
+				Cross-region replica configuration. The base table must already exist in the request
+				region. AWSim records the replica topology so SDKs and tooling that inspect global
+				tables see a consistent view; data is not copied between regions.
 			</DialogDescription>
 		</DialogHeader>
 

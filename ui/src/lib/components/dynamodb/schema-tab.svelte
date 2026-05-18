@@ -304,7 +304,7 @@
 					<Label for="ddb-schema-billing-mode" class="text-sm">Billing mode</Label>
 					<p class="mt-0.5 text-xs text-muted-foreground">
 						<code>PAY_PER_REQUEST</code> bills per call; <code>PROVISIONED</code> uses
-						pre-allocated capacity (capacity values are stubbed in awsim).
+						pre-allocated capacity. AWSim stores the capacity settings without enforcing them.
 					</p>
 				</div>
 				<select
@@ -331,8 +331,8 @@
 				<div class="mb-2">
 					<Label class="text-sm">Provisioned throughput</Label>
 					<p class="mt-0.5 text-xs text-muted-foreground">
-						Capacity units. Honoured by SDK code that reads them; awsim doesn't actually
-						rate-limit. Only relevant when billing mode is <code>PROVISIONED</code>.
+						Capacity units. Stored and returned for SDK code that reads them; AWSim does
+						not enforce rate limits. Only relevant when billing mode is <code>PROVISIONED</code>.
 					</p>
 				</div>
 				<div class="flex items-end gap-2">
@@ -462,8 +462,8 @@
 					<div class="min-w-0">
 						<Label for="ddb-schema-sse" class="text-sm">Encryption (SSE)</Label>
 						<p class="mt-0.5 text-xs text-muted-foreground">
-							Off uses AWS-owned keys (the default — invisible in DescribeTable). On reports
-							customer-managed KMS encryption. awsim doesn't actually encrypt items; the
+							Off uses AWS-owned keys (the default, invisible in DescribeTable). On reports
+							customer-managed KMS encryption. AWSim does not encrypt stored items; the
 							setting round-trips through the API for SDK code that reads it.
 						</p>
 					</div>

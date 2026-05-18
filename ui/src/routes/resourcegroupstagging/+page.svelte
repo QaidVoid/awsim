@@ -5,7 +5,7 @@
 
 <ServicePage
 	title="Resource Groups Tagging"
-	description="Cross-service resource discovery by tag. Resources are tracked here only when tagged via this API; per-service tag propagation is not modelled."
+	description="Cross-service resource discovery by tag. Lists every resource tagged through the Resource Groups Tagging API."
 >
 	<ResourceTagList />
 </ServicePage>

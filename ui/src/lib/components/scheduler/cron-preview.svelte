@@ -24,10 +24,11 @@
 		<p class="text-muted-foreground">Enter an expression to preview.</p>
 	{:else if previews === null}
 		<p class="text-muted-foreground">
-			Preview not available for this expression. Supports
+			Live preview covers
 			<code>rate(N minutes|hours|days)</code> and basic
 			<code>cron(min hour dom month dow)</code> with
-			<code>*</code>, integers, and <code>*/N</code>.
+			<code>*</code>, integers, and <code>*/N</code>. This expression
+			uses syntax outside that subset; the schedule still runs.
 		</p>
 	{:else if previews.length === 0}
 		<p class="text-muted-foreground">No matches in the next year.</p>
