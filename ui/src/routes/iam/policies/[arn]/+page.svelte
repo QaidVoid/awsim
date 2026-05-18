@@ -16,6 +16,7 @@
 	} from '$lib/api/iam';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import PolicyEditor from '$lib/components/iam/policy-editor.svelte';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import FileBadge from '@lucide/svelte/icons/file-badge';
@@ -31,6 +32,8 @@
 	let policy = $state<IamPolicy | null>(null);
 	let loading = $state(true);
 	let active = $state<SectionId>('document');
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	$effect(() => {
 		if (typeof window === 'undefined') return;
@@ -99,14 +102,20 @@
 		}
 	}
 
-	async function handleDelete() {
-		if (!confirm(`Delete policy "${policy?.policyName ?? policyArn}"? This cannot be undone.`)) return;
+	function handleDelete() {
+		deleteOpen = true;
+	}
+
+	async function confirmDeletePolicy() {
+		deleteBusy = true;
 		try {
 			await deletePolicy(policyArn);
 			toast.success('Deleted policy');
 			goto(route('/iam'));
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 </script>
@@ -200,3 +209,12 @@
 		</main>
 	</div>
 </div>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete policy?"
+	description={`Permanently delete "${policy?.policyName ?? policyArn}". This cannot be undone.`}
+	busy={deleteBusy}
+	onConfirm={confirmDeletePolicy}
+	onClose={() => (deleteOpen = false)}
+/>

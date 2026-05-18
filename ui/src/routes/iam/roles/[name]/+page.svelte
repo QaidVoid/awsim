@@ -20,6 +20,7 @@
 	} from '$lib/api/iam';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import EntityPoliciesEditor from '$lib/components/iam/entity-policies-editor.svelte';
 	import PolicyEditor from '$lib/components/iam/policy-editor.svelte';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
@@ -40,6 +41,8 @@
 	let role = $state<IamRole | null>(null);
 	let loading = $state(true);
 	let active = $state<SectionId>(initialSection());
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	function initialSection(): SectionId {
 		const tab = page.url.searchParams.get('section');
@@ -100,14 +103,20 @@
 		}
 	}
 
-	async function handleDelete() {
-		if (!confirm(`Delete role "${roleName}"? This cannot be undone.`)) return;
+	function handleDelete() {
+		deleteOpen = true;
+	}
+
+	async function confirmDeleteRole() {
+		deleteBusy = true;
 		try {
 			await deleteRole(roleName);
 			toast.success(`Deleted ${roleName}`);
 			goto(route('/iam'));
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -219,3 +228,12 @@
 		</main>
 	</div>
 </div>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete role?"
+	description={`Permanently delete "${roleName}". This cannot be undone.`}
+	busy={deleteBusy}
+	onConfirm={confirmDeleteRole}
+	onClose={() => (deleteOpen = false)}
+/>

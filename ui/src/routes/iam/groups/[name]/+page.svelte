@@ -23,6 +23,7 @@
 	} from '$lib/api/iam';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import EntityPoliciesEditor from '$lib/components/iam/entity-policies-editor.svelte';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import UsersRound from '@lucide/svelte/icons/users-round';
@@ -43,6 +44,8 @@
 	let group = $state<IamGroup | null>(null);
 	let loading = $state(true);
 	let active = $state<SectionId>(initialSection());
+	let deleteOpen = $state(false);
+	let deleteBusy = $state(false);
 
 	function initialSection(): SectionId {
 		const tab = page.url.searchParams.get('section');
@@ -72,14 +75,20 @@
 
 	onMount(load);
 
-	async function handleDelete() {
-		if (!confirm(`Delete group "${groupName}"? This cannot be undone.`)) return;
+	function handleDelete() {
+		deleteOpen = true;
+	}
+
+	async function confirmDeleteGroup() {
+		deleteBusy = true;
 		try {
 			await deleteGroup(groupName);
 			toast.success(`Deleted ${groupName}`);
 			goto(route('/iam'));
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Delete failed');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 
@@ -88,6 +97,9 @@
 	let allUsers = $state<IamUser[]>([]);
 	let memberPickerName = $state('');
 	let addingMember = $state(false);
+	let removeMemberName = $state<string | null>(null);
+	let removeOpen = $state(false);
+	let removeBusy = $state(false);
 
 	const availableUsers = $derived(
 		allUsers.filter((u) => !members.some((m) => m.userName === u.userName))
@@ -114,15 +126,26 @@
 		}
 	}
 
-	async function removeMember(userName: string) {
-		if (!confirm(`Remove ${userName} from ${groupName}?`)) return;
+	function removeMember(userName: string) {
+		removeMemberName = userName;
+		removeOpen = true;
+	}
+
+	async function confirmRemoveMember() {
+		const userName = removeMemberName;
+		if (!userName) return;
+		removeBusy = true;
 		try {
 			await removeUserFromGroup(groupName, userName);
 			toast.success(`Removed ${userName}`);
+			removeOpen = false;
+			removeMemberName = null;
 			const detail = await getGroup(groupName);
 			members = detail.users;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Remove failed');
+		} finally {
+			removeBusy = false;
 		}
 	}
 
@@ -266,3 +289,22 @@
 		</main>
 	</div>
 </div>
+
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete group?"
+	description={`Permanently delete "${groupName}". This cannot be undone.`}
+	busy={deleteBusy}
+	onConfirm={confirmDeleteGroup}
+	onClose={() => (deleteOpen = false)}
+/>
+
+<ConfirmDialog
+	bind:open={removeOpen}
+	title="Remove member?"
+	description={`Remove ${removeMemberName ?? ''} from "${groupName}".`}
+	confirmLabel="Remove"
+	busy={removeBusy}
+	onConfirm={confirmRemoveMember}
+	onClose={() => (removeOpen = false)}
+/>
