@@ -1,7 +1,12 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { cn } from '$lib/utils';
-	import { CATEGORY_ORDER, servicesByCategory, type ServiceCategory } from '$lib/services-catalog';
+	import {
+		CATEGORY_ORDER,
+		servicesByCategory,
+		isBasicService,
+		type ServiceCategory
+	} from '$lib/services-catalog';
 	import { route, isActiveRoute } from '$lib/url';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import PanelLeftClose from '@lucide/svelte/icons/panel-left-close';
@@ -121,7 +126,9 @@
 												{/snippet}
 											</TooltipTrigger>
 											<TooltipContent side="right" class="font-mono text-xs">
-												{svc.name}
+												{svc.name}{#if isBasicService(svc.id)}
+													<span class="text-muted-foreground"> - read-only</span>
+												{/if}
 											</TooltipContent>
 										</Tooltip>
 									{:else}
@@ -139,6 +146,13 @@
 										>
 											<svc.icon class="size-4 shrink-0" />
 											<span class="truncate">{svc.name}</span>
+											{#if isBasicService(svc.id)}
+												<span
+													class="ml-auto size-1.5 shrink-0 rounded-full bg-muted-foreground/40"
+													title="Read-only / metadata in this UI"
+													aria-label="Read-only or metadata only in this UI"
+												></span>
+											{/if}
 										</a>
 									{/if}
 								</li>

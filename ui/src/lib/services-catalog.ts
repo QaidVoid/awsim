@@ -83,6 +83,25 @@ export interface Service {
   keywords?: string[];
 }
 
+/**
+ * Service ids that are read-only / metadata-oriented in this UI - you
+ * can inspect but not create/manage resources here. The sidebar shows
+ * a subtle marker so a nav entry sets the right expectation for the
+ * page behind it. Deliberately conservative: only ids with hard
+ * evidence of being read-mostly in the UI; extend as consoles change.
+ */
+const BASIC_TIER = new Set<string>([
+  "resourcegroupstagging",
+  "xray",
+  "secrets",
+  "kms",
+]);
+
+/** True when a service is read-only / metadata-only in this UI. */
+export function isBasicService(id: string): boolean {
+  return BASIC_TIER.has(id);
+}
+
 export const CATEGORY_ORDER: ServiceCategory[] = [
   "Compute",
   "Storage",
