@@ -16,10 +16,18 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { EmptyState, ListSkeleton } from '$lib/components/service';
+	import {
+		DropdownMenu,
+		DropdownMenuContent,
+		DropdownMenuItem,
+		DropdownMenuSeparator,
+		DropdownMenuTrigger
+	} from '$lib/components/ui/dropdown-menu';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Users from '@lucide/svelte/icons/users';
 	import SearchX from '@lucide/svelte/icons/search-x';
+	import MoreHorizontal from '@lucide/svelte/icons/more-horizontal';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import UserDetail from './user-detail.svelte';
@@ -301,34 +309,42 @@
 									<div class="text-xs text-muted-foreground">{u.createDate}</div>
 								</div>
 							</button>
-							<div class="flex shrink-0 flex-wrap gap-1">
-								<Button variant="ghost" size="xs" onclick={() => toggleEnabled(u)}>
-									{u.enabled ? 'Disable' : 'Enable'}
-								</Button>
-								{#if u.status === 'UNCONFIRMED'}
-									<Button variant="ghost" size="xs" onclick={() => confirmUser(u)}>
-										Confirm
-									</Button>
-								{/if}
-								<Button variant="ghost" size="xs" onclick={() => resetPassword(u)}>
-									Reset PW
-								</Button>
-								<Button variant="ghost" size="xs" onclick={() => openSetPassword(u.username)}>
-									Set PW
-								</Button>
+							<div class="flex shrink-0 items-center gap-1">
 								{#if onSignIn}
-									<Button variant="ghost" size="xs" onclick={() => onSignIn?.(u.username)}>
+									<Button variant="outline" size="xs" onclick={() => onSignIn?.(u.username)}>
 										Sign in
 									</Button>
 								{/if}
-								<Button
-									variant="ghost"
-									size="xs"
-									class="text-destructive hover:text-destructive"
-									onclick={() => openDelete(u.username)}
-								>
-									Delete
-								</Button>
+								<DropdownMenu>
+									<DropdownMenuTrigger>
+										<Button variant="ghost" size="icon-sm" aria-label="User actions">
+											<MoreHorizontal class="size-4" />
+										</Button>
+									</DropdownMenuTrigger>
+									<DropdownMenuContent align="end">
+										<DropdownMenuItem onclick={() => toggleEnabled(u)}>
+											{u.enabled ? 'Disable user' : 'Enable user'}
+										</DropdownMenuItem>
+										{#if u.status === 'UNCONFIRMED'}
+											<DropdownMenuItem onclick={() => confirmUser(u)}>
+												Confirm sign-up
+											</DropdownMenuItem>
+										{/if}
+										<DropdownMenuItem onclick={() => resetPassword(u)}>
+											Reset password
+										</DropdownMenuItem>
+										<DropdownMenuItem onclick={() => openSetPassword(u.username)}>
+											Set password...
+										</DropdownMenuItem>
+										<DropdownMenuSeparator />
+										<DropdownMenuItem
+											class="text-destructive focus:text-destructive"
+											onclick={() => openDelete(u.username)}
+										>
+											Delete user
+										</DropdownMenuItem>
+									</DropdownMenuContent>
+								</DropdownMenu>
 							</div>
 						</div>
 						{#if expandedUser === u.username}
