@@ -28,6 +28,8 @@
 		hasSelection: boolean;
 		/** Whether the selected resource's detail is still loading. */
 		loading?: boolean;
+		/** Optional custom loading content; overrides the default spinner. */
+		loadingContent?: Snippet;
 		/** Text shown in the detail pane when nothing is selected. */
 		emptyHint?: string;
 		/** Optional custom empty state; overrides emptyHint when given. */
@@ -48,6 +50,7 @@
 		listWidth = '280px',
 		hasSelection,
 		loading = false,
+		loadingContent,
 		emptyHint = 'Select an item.',
 		empty,
 		detailHeader,
@@ -77,9 +80,13 @@
 					</div>
 				{/if}
 			{:else if loading}
-				<div class="flex h-full items-center justify-center p-6 text-muted-foreground">
-					<Loader2 class="size-4 animate-spin" />
-				</div>
+				{#if loadingContent}
+					{@render loadingContent()}
+				{:else}
+					<div class="flex h-full items-center justify-center p-6 text-muted-foreground">
+						<Loader2 class="size-4 animate-spin" />
+					</div>
+				{/if}
 			{:else}
 				{#if detailHeader}{@render detailHeader()}{/if}
 				{@render children()}
