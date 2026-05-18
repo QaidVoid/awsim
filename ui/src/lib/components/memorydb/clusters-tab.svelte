@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Badge } from '$lib/components/ui/badge';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
@@ -117,15 +118,16 @@
 		<div class="grid grid-cols-2 gap-2">
 			<Input bind:value={newName} placeholder="cluster name" class="h-8 text-xs" />
 			<Input bind:value={newNode} placeholder="db.t4g.small" class="h-8 font-mono text-xs" />
-			<select
-				bind:value={newAcl}
-				class="h-8 rounded-md border border-border bg-background px-2 text-xs"
-			>
-				<option value="">Pick ACL…</option>
-				{#each acls as a (a.name)}
-					<option value={a.name}>{a.name}</option>
-				{/each}
-			</select>
+			<Select type="single" bind:value={newAcl}>
+				<SelectTrigger size="sm" class="w-full text-xs">
+					{newAcl || 'Pick ACL…'}
+				</SelectTrigger>
+				<SelectContent>
+					{#each acls as a (a.name)}
+						<SelectItem value={a.name} label={a.name}>{a.name}</SelectItem>
+					{/each}
+				</SelectContent>
+			</Select>
 			<Input bind:value={newShards} placeholder="shards (1)" class="h-8 text-xs" type="number" min="1" />
 		</div>
 		<Button size="sm" onclick={create} disabled={creating}>

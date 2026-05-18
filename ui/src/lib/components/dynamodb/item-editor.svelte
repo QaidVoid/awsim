@@ -20,6 +20,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import Plus from '@lucide/svelte/icons/plus';
 	import X from '@lucide/svelte/icons/x';
@@ -41,6 +42,14 @@
 	}: Props = $props();
 
 	type FieldType = 'S' | 'N' | 'BOOL' | 'NULL' | 'JSON';
+
+	const FIELD_TYPE_LABELS: Record<FieldType, string> = {
+		S: 'String',
+		N: 'Number',
+		BOOL: 'Boolean',
+		NULL: 'Null',
+		JSON: 'JSON'
+	};
 
 	const JSON_PLACEHOLDER = '{"L": [{"S": "a"}]}';
 
@@ -192,17 +201,26 @@
 							class="h-8 flex-1 font-mono text-xs"
 							aria-label="Attribute name"
 						/>
-						<select
-							bind:value={f.type}
-							aria-label="Attribute type"
-							class="h-8 rounded-md border border-border bg-background px-2 text-xs"
+						<Select
+							type="single"
+							value={f.type}
+							onValueChange={(v) => (f.type = v as FieldType)}
 						>
-							<option value="S">String</option>
-							<option value="N">Number</option>
-							<option value="BOOL">Boolean</option>
-							<option value="NULL">Null</option>
-							<option value="JSON">JSON</option>
-						</select>
+							<SelectTrigger
+								aria-label="Attribute type"
+								size="sm"
+								class="w-28 text-xs"
+							>
+								{FIELD_TYPE_LABELS[f.type]}
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="S" label="String">String</SelectItem>
+								<SelectItem value="N" label="Number">Number</SelectItem>
+								<SelectItem value="BOOL" label="Boolean">Boolean</SelectItem>
+								<SelectItem value="NULL" label="Null">Null</SelectItem>
+								<SelectItem value="JSON" label="JSON">JSON</SelectItem>
+							</SelectContent>
+						</Select>
 						{#if f.isKey}
 							<Badge variant="outline">key</Badge>
 						{:else}
@@ -217,14 +235,19 @@
 						{/if}
 					</div>
 					{#if f.type === 'BOOL'}
-						<select
-							bind:value={f.value}
-							aria-label="Boolean value"
-							class="h-8 rounded-md border border-border bg-background px-2 text-xs"
-						>
-							<option value="true">true</option>
-							<option value="false">false</option>
-						</select>
+						<Select type="single" bind:value={f.value}>
+							<SelectTrigger
+								aria-label="Boolean value"
+								size="sm"
+								class="w-28 text-xs"
+							>
+								{f.value || 'true'}
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="true" label="true">true</SelectItem>
+								<SelectItem value="false" label="false">false</SelectItem>
+							</SelectContent>
+						</Select>
 					{:else if f.type === 'NULL'}
 						<span class="text-[11px] text-muted-foreground">null</span>
 					{:else if f.type === 'JSON'}

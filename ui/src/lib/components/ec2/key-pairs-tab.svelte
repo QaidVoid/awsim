@@ -3,6 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import {
 		Dialog,
@@ -31,7 +32,12 @@
 
 	let createOpen = $state(false);
 	let formName = $state('');
-	let formType = $state<'rsa' | 'ed25519'>('rsa');
+	type KeyType = 'rsa' | 'ed25519';
+	const KEY_TYPE_LABELS: Record<KeyType, string> = {
+		rsa: 'RSA',
+		ed25519: 'ED25519'
+	};
+	let formType = $state<KeyType>('rsa');
 	let creating = $state(false);
 
 	let materialOpen = $state(false);
@@ -169,14 +175,19 @@
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="kp-type">Type</Label>
-				<select
-					id="kp-type"
-					bind:value={formType}
-					class="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
+				<Select
+					type="single"
+					value={formType}
+					onValueChange={(v) => (formType = v as KeyType)}
 				>
-					<option value="rsa">RSA</option>
-					<option value="ed25519">ED25519</option>
-				</select>
+					<SelectTrigger id="kp-type" class="w-full">
+						{KEY_TYPE_LABELS[formType]}
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="rsa" label="RSA">RSA</SelectItem>
+						<SelectItem value="ed25519" label="ED25519">ED25519</SelectItem>
+					</SelectContent>
+				</Select>
 			</div>
 			<DialogFooter>
 				<Button type="button" variant="ghost" onclick={() => (createOpen = false)}>Cancel</Button>

@@ -5,6 +5,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Badge } from '$lib/components/ui/badge';
 	import Lock from '@lucide/svelte/icons/lock';
@@ -79,18 +80,16 @@
 		<div class="grid gap-3 md:grid-cols-2">
 			<div class="flex flex-col gap-1.5">
 				<Label for="kms-key" class="text-xs">Key</Label>
-				<select
-					id="kms-key"
-					bind:value={keyId}
-					class="h-9 rounded-md border border-input bg-background px-2.5 text-sm shadow-xs"
-				>
-					{#if keys.length === 0}
-						<option value="">No keys found</option>
-					{/if}
-					{#each keys as k (k.keyId)}
-						<option value={k.keyId}>{k.keyId}</option>
-					{/each}
-				</select>
+				<Select type="single" bind:value={keyId}>
+					<SelectTrigger id="kms-key" class="w-full">
+						{keyId || 'No keys found'}
+					</SelectTrigger>
+					<SelectContent>
+						{#each keys as k (k.keyId)}
+							<SelectItem value={k.keyId} label={k.keyId}>{k.keyId}</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="kms-plaintext" class="text-xs">Plaintext</Label>

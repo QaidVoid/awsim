@@ -2,6 +2,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Badge } from '$lib/components/ui/badge';
 	import { EmptyState } from '$lib/components/service';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
@@ -80,14 +81,21 @@
 	<div class="flex flex-wrap items-end gap-3 rounded-md border border-border bg-card/40 p-3">
 		<div class="flex flex-col gap-1">
 			<Label for="kin-iter-type">Iterator type</Label>
-			<select
-				id="kin-iter-type"
-				bind:value={iteratorType}
-				class="border-input dark:bg-input/30 h-9 rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3"
+			<Select
+				type="single"
+				value={iteratorType}
+				onValueChange={(v) => (iteratorType = v as ShardIteratorType)}
 			>
-				<option value="TRIM_HORIZON">TRIM_HORIZON</option>
-				<option value="LATEST">LATEST</option>
-			</select>
+				<SelectTrigger id="kin-iter-type" class="w-[180px]">
+					{iteratorType}
+				</SelectTrigger>
+				<SelectContent>
+					<SelectItem value="TRIM_HORIZON" label="TRIM_HORIZON"
+						>TRIM_HORIZON</SelectItem
+					>
+					<SelectItem value="LATEST" label="LATEST">LATEST</SelectItem>
+				</SelectContent>
+			</Select>
 		</div>
 		<div class="flex flex-col gap-1">
 			<Label for="kin-limit">Limit</Label>

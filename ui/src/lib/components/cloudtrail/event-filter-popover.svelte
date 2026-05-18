@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import Filter from '@lucide/svelte/icons/filter';
 	import type { LookupAttributeKey } from '$lib/api/cloudtrail';
 
@@ -69,15 +70,20 @@
 	<PopoverContent class="w-72 space-y-2 p-3">
 		<div class="space-y-1.5">
 			<Label for="ct-filter-key" class="text-xs">Attribute</Label>
-			<select
-				id="ct-filter-key"
-				bind:value={key}
-				class="h-8 w-full rounded-md border border-input bg-transparent px-2 text-xs"
+			<Select
+				type="single"
+				value={key}
+				onValueChange={(v) => (key = v as LookupAttributeKey)}
 			>
-				{#each KEYS as k (k)}
-					<option value={k}>{k}</option>
-				{/each}
-			</select>
+				<SelectTrigger id="ct-filter-key" size="sm" class="w-full text-xs">
+					{key}
+				</SelectTrigger>
+				<SelectContent>
+					{#each KEYS as k (k)}
+						<SelectItem value={k} label={k}>{k}</SelectItem>
+					{/each}
+				</SelectContent>
+			</Select>
 		</div>
 		<div class="space-y-1.5">
 			<Label for="ct-filter-value" class="text-xs">Value</Label>

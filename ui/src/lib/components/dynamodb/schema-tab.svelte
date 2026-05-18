@@ -18,6 +18,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import Plus from '@lucide/svelte/icons/plus';
 	import X from '@lucide/svelte/icons/x';
 	import Save from '@lucide/svelte/icons/save';
@@ -307,21 +308,23 @@
 						pre-allocated capacity. AWSim stores the capacity settings without enforcing them.
 					</p>
 				</div>
-				<select
-					id="ddb-schema-billing-mode"
+				<Select
+					type="single"
 					value={detail.billingMode}
-					onchange={(e) =>
-						changeBillingMode(
-							(e.currentTarget as HTMLSelectElement).value as
-								| 'PAY_PER_REQUEST'
-								| 'PROVISIONED'
-						)}
+					onValueChange={(v) =>
+						changeBillingMode(v as 'PAY_PER_REQUEST' | 'PROVISIONED')}
 					disabled={savingBillingMode}
-					class="h-9 rounded-md border border-border bg-background px-2 text-xs disabled:opacity-50"
 				>
-					<option value="PAY_PER_REQUEST">PAY_PER_REQUEST</option>
-					<option value="PROVISIONED">PROVISIONED</option>
-				</select>
+					<SelectTrigger id="ddb-schema-billing-mode" class="w-[180px] text-xs">
+						{detail.billingMode}
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="PAY_PER_REQUEST" label="PAY_PER_REQUEST"
+							>PAY_PER_REQUEST</SelectItem
+						>
+						<SelectItem value="PROVISIONED" label="PROVISIONED">PROVISIONED</SelectItem>
+					</SelectContent>
+				</Select>
 			</div>
 
 			<!-- Provisioned throughput. AWS only honours these in PROVISIONED

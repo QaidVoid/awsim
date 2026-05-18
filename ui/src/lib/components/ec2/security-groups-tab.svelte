@@ -8,6 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
 		Dialog,
@@ -43,6 +44,11 @@
 	let deleteTarget = $state<SecurityGroup | null>(null);
 	let deleteOpen = $state(false);
 	let deleteBusy = $state(false);
+
+	let vpcLabel = $derived.by(() => {
+		const v = vpcs.find((x) => x.vpcId === formVpcId);
+		return v ? `${v.vpcId} (${v.cidrBlock})` : 'Select a VPC';
+	});
 
 	async function handleCreate(e: Event) {
 		e.preventDefault();
@@ -175,17 +181,20 @@
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="sg-vpc">VPC</Label>
-				<select
-					id="sg-vpc"
-					bind:value={formVpcId}
-					required
-					class="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-				>
-					<option value="" disabled>Select a VPC</option>
-					{#each vpcs as vpc (vpc.vpcId)}
-						<option value={vpc.vpcId}>{vpc.vpcId} ({vpc.cidrBlock})</option>
-					{/each}
-				</select>
+				<Select type="single" bind:value={formVpcId} required>
+					<SelectTrigger id="sg-vpc" name="sg-vpc" class="w-full">
+						{formVpcId ? vpcLabel : 'Select a VPC'}
+					</SelectTrigger>
+					<SelectContent>
+						{#each vpcs as vpc (vpc.vpcId)}
+							<SelectItem
+								value={vpc.vpcId}
+								label={`${vpc.vpcId} (${vpc.cidrBlock})`}
+								>{vpc.vpcId} ({vpc.cidrBlock})</SelectItem
+							>
+						{/each}
+					</SelectContent>
+				</Select>
 			</div>
 			<DialogFooter>
 				<Button type="button" variant="ghost" onclick={() => (createOpen = false)}>Cancel</Button>

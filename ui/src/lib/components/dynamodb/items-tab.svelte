@@ -16,6 +16,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { EmptyState } from '$lib/components/service';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -32,13 +33,23 @@
 
 	let { detail, onEdit }: Props = $props();
 
+	type SkOp = 'EQ' | 'LT' | 'LE' | 'GT' | 'GE' | 'BEGINS_WITH';
+	const SK_OP_LABELS: Record<SkOp, string> = {
+		EQ: '=',
+		LT: '<',
+		LE: '<=',
+		GT: '>',
+		GE: '>=',
+		BEGINS_WITH: 'begins_with'
+	};
+
 	let mode = $state<'scan' | 'query'>('scan');
 	let selectedIndexName = $state<string>('');
 	let pkValue = $state('');
 	let pkType = $state<ScalarType>('S');
 	let skValue = $state('');
 	let skType = $state<ScalarType>('S');
-	let skOp = $state<'EQ' | 'LT' | 'LE' | 'GT' | 'GE' | 'BEGINS_WITH'>('EQ');
+	let skOp = $state<SkOp>('EQ');
 	let limit = $state(50);
 
 	let items = $state<Item[]>([]);
@@ -273,16 +284,23 @@
 			{#if detail.globalSecondaryIndexes.length > 0}
 				<div class="mb-2 flex items-center gap-2">
 					<Label class="text-[11px] text-muted-foreground">Index</Label>
-					<select
-						bind:value={selectedIndexName}
-						aria-label="Index to query"
-						class="h-7 rounded-md border border-border bg-background px-1.5 text-xs"
-					>
-						<option value="">Table (default)</option>
-						{#each detail.globalSecondaryIndexes as gsi}
-							<option value={gsi.indexName}>{gsi.indexName}</option>
-						{/each}
-					</select>
+					<Select type="single" bind:value={selectedIndexName}>
+						<SelectTrigger
+							aria-label="Index to query"
+							size="sm"
+							class="h-7 w-[180px] text-xs"
+						>
+							{selectedIndexName || 'Table (default)'}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="" label="Table (default)">Table (default)</SelectItem>
+							{#each detail.globalSecondaryIndexes as gsi (gsi.indexName)}
+								<SelectItem value={gsi.indexName} label={gsi.indexName}
+									>{gsi.indexName}</SelectItem
+								>
+							{/each}
+						</SelectContent>
+					</Select>
 				</div>
 			{/if}
 			<div class="grid grid-cols-[1fr_1fr_auto] gap-2">
@@ -297,15 +315,24 @@
 							placeholder="value"
 							class="h-8 text-xs"
 						/>
-						<select
-							bind:value={pkType}
-							aria-label="Partition key type"
-							class="h-8 rounded-md border border-border bg-background px-1.5 text-xs"
+						<Select
+							type="single"
+							value={pkType}
+							onValueChange={(v) => (pkType = v as ScalarType)}
 						>
-							<option value="S">S</option>
-							<option value="N">N</option>
-							<option value="B">B</option>
-						</select>
+							<SelectTrigger
+								aria-label="Partition key type"
+								size="sm"
+								class="w-16 text-xs"
+							>
+								{pkType}
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="S" label="S">S</SelectItem>
+								<SelectItem value="N" label="N">N</SelectItem>
+								<SelectItem value="B" label="B">B</SelectItem>
+							</SelectContent>
+						</Select>
 					</div>
 				</div>
 
@@ -313,33 +340,53 @@
 					<div class="flex flex-col gap-1">
 						<Label for="dq-sk-value" class="text-[11px]">{querySkName}</Label>
 						<div class="flex gap-1">
-							<select
-								bind:value={skOp}
-								aria-label="Sort operator"
-								class="h-8 rounded-md border border-border bg-background px-1.5 text-xs"
+							<Select
+								type="single"
+								value={skOp}
+								onValueChange={(v) => (skOp = v as SkOp)}
 							>
-								<option value="EQ">=</option>
-								<option value="LT">&lt;</option>
-								<option value="LE">&lt;=</option>
-								<option value="GT">&gt;</option>
-								<option value="GE">&gt;=</option>
-								<option value="BEGINS_WITH">begins_with</option>
-							</select>
+								<SelectTrigger
+									aria-label="Sort operator"
+									size="sm"
+									class="w-32 text-xs"
+								>
+									{SK_OP_LABELS[skOp]}
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="EQ" label="=">=</SelectItem>
+									<SelectItem value="LT" label="<">&lt;</SelectItem>
+									<SelectItem value="LE" label="<=">&lt;=</SelectItem>
+									<SelectItem value="GT" label=">">&gt;</SelectItem>
+									<SelectItem value="GE" label=">=">&gt;=</SelectItem>
+									<SelectItem value="BEGINS_WITH" label="begins_with"
+										>begins_with</SelectItem
+									>
+								</SelectContent>
+							</Select>
 							<Input
 								id="dq-sk-value"
 								bind:value={skValue}
 								placeholder="value"
 								class="h-8 text-xs"
 							/>
-							<select
-								bind:value={skType}
-								aria-label="Sort key type"
-								class="h-8 rounded-md border border-border bg-background px-1.5 text-xs"
+							<Select
+								type="single"
+								value={skType}
+								onValueChange={(v) => (skType = v as ScalarType)}
 							>
-								<option value="S">S</option>
-								<option value="N">N</option>
-								<option value="B">B</option>
-							</select>
+								<SelectTrigger
+									aria-label="Sort key type"
+									size="sm"
+									class="w-16 text-xs"
+								>
+									{skType}
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="S" label="S">S</SelectItem>
+									<SelectItem value="N" label="N">N</SelectItem>
+									<SelectItem value="B" label="B">B</SelectItem>
+								</SelectContent>
+							</Select>
 						</div>
 					</div>
 				{:else}

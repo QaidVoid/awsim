@@ -4,6 +4,7 @@
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import TableIcon from '@lucide/svelte/icons/table';
 	import { toast } from 'svelte-sonner';
@@ -78,18 +79,24 @@
 
 <div class="flex flex-col gap-3 p-4">
 	<div class="flex flex-wrap items-center gap-2">
-		<select
+		<Select
+			type="single"
 			bind:value={database}
-			onchange={loadTables}
-			aria-label="Select database"
-			class="h-8 rounded-md border border-input bg-background px-2 text-xs"
+			onValueChange={() => loadTables()}
 		>
-			{#each databases as db (db.name)}
-				<option value={db.name}>{db.name}</option>
-			{:else}
-				<option value="">No databases</option>
-			{/each}
-		</select>
+			<SelectTrigger
+				aria-label="Select database"
+				size="sm"
+				class="w-[180px] text-xs"
+			>
+				{database || 'No databases'}
+			</SelectTrigger>
+			<SelectContent>
+				{#each databases as db (db.name)}
+					<SelectItem value={db.name} label={db.name}>{db.name}</SelectItem>
+				{/each}
+			</SelectContent>
+		</Select>
 		<div class="text-xs text-muted-foreground">
 			{tables.length} table{tables.length === 1 ? '' : 's'}
 		</div>

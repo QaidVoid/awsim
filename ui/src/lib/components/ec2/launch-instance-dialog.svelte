@@ -8,6 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import {
 		Dialog,
 		DialogContent,
@@ -38,6 +39,15 @@
 	let subnetId = $state('');
 	let securityGroupId = $state('');
 	let launching = $state(false);
+
+	let subnetLabel = $derived.by(() => {
+		const s = subnets.find((x) => x.subnetId === subnetId);
+		return s ? `${s.subnetId} (${s.availabilityZone})` : '— Default —';
+	});
+	let securityGroupLabel = $derived.by(() => {
+		const g = groups.find((x) => x.groupId === securityGroupId);
+		return g ? `${g.groupName} (${g.groupId})` : '— Default —';
+	});
 
 	function reset() {
 		name = '';
@@ -101,42 +111,53 @@
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="li-key">Key pair</Label>
-				<select
-					id="li-key"
-					bind:value={keyName}
-					class="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
-				>
-					<option value="">— None —</option>
-					{#each keys as k (k.keyName)}
-						<option value={k.keyName}>{k.keyName}</option>
-					{/each}
-				</select>
+				<Select type="single" bind:value={keyName}>
+					<SelectTrigger id="li-key" class="w-full">
+						{keyName || '— None —'}
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="" label="— None —">— None —</SelectItem>
+						{#each keys as k (k.keyName)}
+							<SelectItem value={k.keyName} label={k.keyName}>{k.keyName}</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="li-subnet">Subnet</Label>
-				<select
-					id="li-subnet"
-					bind:value={subnetId}
-					class="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
-				>
-					<option value="">— Default —</option>
-					{#each subnets as s (s.subnetId)}
-						<option value={s.subnetId}>{s.subnetId} ({s.availabilityZone})</option>
-					{/each}
-				</select>
+				<Select type="single" bind:value={subnetId}>
+					<SelectTrigger id="li-subnet" class="w-full">
+						{subnetLabel}
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="" label="— Default —">— Default —</SelectItem>
+						{#each subnets as s (s.subnetId)}
+							<SelectItem
+								value={s.subnetId}
+								label={`${s.subnetId} (${s.availabilityZone})`}
+								>{s.subnetId} ({s.availabilityZone})</SelectItem
+							>
+						{/each}
+					</SelectContent>
+				</Select>
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="li-sg">Security group</Label>
-				<select
-					id="li-sg"
-					bind:value={securityGroupId}
-					class="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs"
-				>
-					<option value="">— Default —</option>
-					{#each groups as g (g.groupId)}
-						<option value={g.groupId}>{g.groupName} ({g.groupId})</option>
-					{/each}
-				</select>
+				<Select type="single" bind:value={securityGroupId}>
+					<SelectTrigger id="li-sg" class="w-full">
+						{securityGroupLabel}
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="" label="— Default —">— Default —</SelectItem>
+						{#each groups as g (g.groupId)}
+							<SelectItem
+								value={g.groupId}
+								label={`${g.groupName} (${g.groupId})`}
+								>{g.groupName} ({g.groupId})</SelectItem
+							>
+						{/each}
+					</SelectContent>
+				</Select>
 			</div>
 			<DialogFooter class="col-span-2">
 				<Button type="button" variant="ghost" onclick={() => onOpenChange(false)}>Cancel</Button>

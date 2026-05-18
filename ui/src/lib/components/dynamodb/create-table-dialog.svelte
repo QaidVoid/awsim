@@ -13,6 +13,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { Switch } from '$lib/components/ui/switch';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 
 	interface Props {
@@ -22,6 +23,12 @@
 	}
 
 	let { open = $bindable(false), onClose, onCreated }: Props = $props();
+
+	const SCALAR_TYPE_LABELS: Record<ScalarType, string> = {
+		S: 'String',
+		N: 'Number',
+		B: 'Binary'
+	};
 
 	let name = $state('');
 	let pkName = $state('');
@@ -95,30 +102,40 @@
 				<Label for="ddb-pk">Partition key</Label>
 				<div class="flex gap-2">
 					<Input id="ddb-pk" bind:value={pkName} placeholder="id" class="flex-1" />
-					<select
-						bind:value={pkType}
-						aria-label="Partition key type"
-						class="h-9 rounded-md border border-border bg-background px-2 text-sm"
+					<Select
+						type="single"
+						value={pkType}
+						onValueChange={(v) => (pkType = v as ScalarType)}
 					>
-						<option value="S">String</option>
-						<option value="N">Number</option>
-						<option value="B">Binary</option>
-					</select>
+						<SelectTrigger aria-label="Partition key type" class="w-32">
+							{SCALAR_TYPE_LABELS[pkType]}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="S" label="String">String</SelectItem>
+							<SelectItem value="N" label="Number">Number</SelectItem>
+							<SelectItem value="B" label="Binary">Binary</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="ddb-sk">Sort key (optional)</Label>
 				<div class="flex gap-2">
 					<Input id="ddb-sk" bind:value={skName} placeholder="leave blank if none" class="flex-1" />
-					<select
-						bind:value={skType}
-						aria-label="Sort key type"
-						class="h-9 rounded-md border border-border bg-background px-2 text-sm"
+					<Select
+						type="single"
+						value={skType}
+						onValueChange={(v) => (skType = v as ScalarType)}
 					>
-						<option value="S">String</option>
-						<option value="N">Number</option>
-						<option value="B">Binary</option>
-					</select>
+						<SelectTrigger aria-label="Sort key type" class="w-32">
+							{SCALAR_TYPE_LABELS[skType]}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="S" label="String">String</SelectItem>
+							<SelectItem value="N" label="Number">Number</SelectItem>
+							<SelectItem value="B" label="Binary">Binary</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 			</div>
 			<div class="flex items-start justify-between gap-4 rounded-md border border-border p-3">
