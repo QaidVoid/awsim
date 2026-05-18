@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { requestCertificate } from '$lib/api/acm';
 	import { toast } from 'svelte-sonner';
 
@@ -78,14 +79,19 @@
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="cert-validation" class="text-xs">Validation method</Label>
-				<select
-					id="cert-validation"
-					bind:value={validation}
-					class="h-9 rounded-md border border-input bg-background px-2.5 text-sm shadow-xs"
+				<Select
+					type="single"
+					value={validation}
+					onValueChange={(v) => (validation = v as 'DNS' | 'EMAIL')}
 				>
-					<option value="DNS">DNS</option>
-					<option value="EMAIL">EMAIL</option>
-				</select>
+					<SelectTrigger id="cert-validation" class="w-full">
+						{validation}
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="DNS" label="DNS">DNS</SelectItem>
+						<SelectItem value="EMAIL" label="EMAIL">EMAIL</SelectItem>
+					</SelectContent>
+				</Select>
 			</div>
 		</div>
 		<DialogFooter>

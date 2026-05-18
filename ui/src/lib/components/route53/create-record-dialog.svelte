@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { toast } from 'svelte-sonner';
 	import { changeResourceRecordSets } from '$lib/api/route53';
@@ -107,15 +108,16 @@
 			<div class="grid grid-cols-2 gap-3">
 				<div class="flex flex-col gap-1">
 					<Label for="r53-record-type">Type</Label>
-					<select
-						id="r53-record-type"
-						bind:value={type}
-						class="border-input dark:bg-input/30 h-9 rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3"
-					>
-						{#each TYPES as t (t)}
-							<option value={t}>{t}</option>
-						{/each}
-					</select>
+					<Select type="single" bind:value={type}>
+						<SelectTrigger id="r53-record-type" class="w-full">
+							{type}
+						</SelectTrigger>
+						<SelectContent>
+							{#each TYPES as t (t)}
+								<SelectItem value={t} label={t}>{t}</SelectItem>
+							{/each}
+						</SelectContent>
+					</Select>
 				</div>
 				<div class="flex flex-col gap-1">
 					<Label for="r53-record-ttl">TTL</Label>

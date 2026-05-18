@@ -3,6 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import EarIcon from '@lucide/svelte/icons/ear';
 	import { toast } from 'svelte-sonner';
@@ -17,6 +18,10 @@
 	let selectedLbArn = $state<string>('');
 	let listeners = $state<Listener[]>([]);
 	let loading = $state(false);
+
+	let selectedLbName = $derived(
+		loadBalancers.find((lb) => lb.arn === selectedLbArn)?.name ?? ''
+	);
 
 	$effect(() => {
 		if (!selectedLbArn && loadBalancers.length > 0) {
@@ -53,15 +58,16 @@
 		<div class="flex flex-wrap items-end gap-3">
 			<div class="flex flex-col gap-1">
 				<Label for="elb-listener-lb">Load balancer</Label>
-				<select
-					id="elb-listener-lb"
-					bind:value={selectedLbArn}
-					class="border-input dark:bg-input/30 h-9 min-w-[260px] rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3"
-				>
-					{#each loadBalancers as lb (lb.arn)}
-						<option value={lb.arn}>{lb.name}</option>
-					{/each}
-				</select>
+				<Select type="single" bind:value={selectedLbArn}>
+					<SelectTrigger id="elb-listener-lb" class="min-w-[260px]">
+						{selectedLbName}
+					</SelectTrigger>
+					<SelectContent>
+						{#each loadBalancers as lb (lb.arn)}
+							<SelectItem value={lb.arn} label={lb.name}>{lb.name}</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
 			</div>
 			<Button variant="ghost" size="sm" onclick={load} disabled={loading || !selectedLbArn}>
 				<RefreshCwIcon class={loading ? 'animate-spin' : ''} />

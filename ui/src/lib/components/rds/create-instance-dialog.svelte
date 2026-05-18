@@ -12,6 +12,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 
 	interface Props {
@@ -30,6 +31,13 @@
 	let masterUserPassword = $state('changeme123');
 	let saving = $state(false);
 	let error = $state<string | null>(null);
+
+	const ENGINE_LABELS: Record<string, string> = {
+		postgres: 'PostgreSQL',
+		mysql: 'MySQL',
+		mariadb: 'MariaDB'
+	};
+	let engineLabel = $derived(ENGINE_LABELS[engine] ?? engine);
 
 	$effect(() => {
 		if (!open) {
@@ -94,28 +102,32 @@
 			<div class="grid grid-cols-2 gap-3">
 				<div class="flex flex-col gap-1.5">
 					<Label for="rds-engine">Engine</Label>
-					<select
-						id="rds-engine"
-						bind:value={engine}
-						class="h-9 rounded-md border border-border bg-background px-2 text-sm"
-					>
-						<option value="postgres">PostgreSQL</option>
-						<option value="mysql">MySQL</option>
-						<option value="mariadb">MariaDB</option>
-					</select>
+					<Select type="single" bind:value={engine}>
+						<SelectTrigger id="rds-engine" class="w-full">
+							{engineLabel}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="postgres" label="PostgreSQL">PostgreSQL</SelectItem>
+							<SelectItem value="mysql" label="MySQL">MySQL</SelectItem>
+							<SelectItem value="mariadb" label="MariaDB">MariaDB</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 				<div class="flex flex-col gap-1.5">
 					<Label for="rds-class">Instance class</Label>
-					<select
-						id="rds-class"
-						bind:value={instanceClass}
-						class="h-9 rounded-md border border-border bg-background px-2 text-sm"
-					>
-						<option value="db.t3.micro">db.t3.micro</option>
-						<option value="db.t3.small">db.t3.small</option>
-						<option value="db.t3.medium">db.t3.medium</option>
-						<option value="db.m5.large">db.m5.large</option>
-					</select>
+					<Select type="single" bind:value={instanceClass}>
+						<SelectTrigger id="rds-class" class="w-full">
+							{instanceClass}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="db.t3.micro" label="db.t3.micro">db.t3.micro</SelectItem>
+							<SelectItem value="db.t3.small" label="db.t3.small">db.t3.small</SelectItem>
+							<SelectItem value="db.t3.medium" label="db.t3.medium"
+								>db.t3.medium</SelectItem
+							>
+							<SelectItem value="db.m5.large" label="db.m5.large">db.m5.large</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 			</div>
 			<div class="grid grid-cols-2 gap-3">

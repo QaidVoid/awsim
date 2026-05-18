@@ -9,6 +9,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Badge } from '$lib/components/ui/badge';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -206,15 +207,18 @@
 			{#if users.length > 0}
 				<div class="space-y-2 rounded-md border border-border p-3">
 					<div class="text-xs font-semibold">Import SSH public key</div>
-					<select
-						bind:value={keyForUser}
-						class="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
-					>
-						<option value="">Pick user…</option>
-						{#each users as u (u.userName)}
-							<option value={u.userName}>{u.userName}</option>
-						{/each}
-					</select>
+					<Select type="single" bind:value={keyForUser}>
+						<SelectTrigger size="sm" class="w-full text-xs">
+							{keyForUser ? keyForUser : 'Pick user...'}
+						</SelectTrigger>
+						<SelectContent>
+							{#each users as u (u.userName)}
+								<SelectItem value={u.userName} label={u.userName}
+									>{u.userName}</SelectItem
+								>
+							{/each}
+						</SelectContent>
+					</Select>
 					<Textarea
 						bind:value={keyBody}
 						rows={4}

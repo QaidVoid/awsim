@@ -2,6 +2,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -123,13 +124,19 @@
 		<div class="text-xs font-semibold">Create ledger</div>
 		<div class="grid grid-cols-3 gap-2">
 			<Input bind:value={newName} placeholder="ledger name" class="h-8 text-xs col-span-2" />
-			<select
-				bind:value={newMode}
-				class="h-8 rounded-md border border-border bg-background px-2 text-xs"
+			<Select
+				type="single"
+				value={newMode}
+				onValueChange={(v) => (newMode = v as 'STANDARD' | 'ALLOW_ALL')}
 			>
-				<option value="STANDARD">STANDARD</option>
-				<option value="ALLOW_ALL">ALLOW_ALL</option>
-			</select>
+				<SelectTrigger size="sm" class="w-full text-xs">
+					{newMode}
+				</SelectTrigger>
+				<SelectContent>
+					<SelectItem value="STANDARD" label="STANDARD">STANDARD</SelectItem>
+					<SelectItem value="ALLOW_ALL" label="ALLOW_ALL">ALLOW_ALL</SelectItem>
+				</SelectContent>
+			</Select>
 		</div>
 		<label class="flex items-center gap-2 text-[11px]">
 			<input

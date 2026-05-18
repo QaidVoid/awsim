@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { toast } from 'svelte-sonner';
 	import { createTargetGroup } from '$lib/api/elb';
 
@@ -79,17 +80,23 @@
 			<div class="grid grid-cols-3 gap-3">
 				<div class="flex flex-col gap-1">
 					<Label for="tg-create-protocol">Protocol</Label>
-					<select
-						id="tg-create-protocol"
-						bind:value={protocol}
-						class="border-input dark:bg-input/30 h-9 rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3"
+					<Select
+						type="single"
+						value={protocol}
+						onValueChange={(v) =>
+							(protocol = v as 'HTTP' | 'HTTPS' | 'TCP' | 'TLS' | 'UDP')}
 					>
-						<option value="HTTP">HTTP</option>
-						<option value="HTTPS">HTTPS</option>
-						<option value="TCP">TCP</option>
-						<option value="TLS">TLS</option>
-						<option value="UDP">UDP</option>
-					</select>
+						<SelectTrigger id="tg-create-protocol" class="w-full">
+							{protocol}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="HTTP" label="HTTP">HTTP</SelectItem>
+							<SelectItem value="HTTPS" label="HTTPS">HTTPS</SelectItem>
+							<SelectItem value="TCP" label="TCP">TCP</SelectItem>
+							<SelectItem value="TLS" label="TLS">TLS</SelectItem>
+							<SelectItem value="UDP" label="UDP">UDP</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 				<div class="flex flex-col gap-1">
 					<Label for="tg-create-port">Port</Label>
@@ -103,16 +110,22 @@
 				</div>
 				<div class="flex flex-col gap-1">
 					<Label for="tg-create-type">Target type</Label>
-					<select
-						id="tg-create-type"
-						bind:value={targetType}
-						class="border-input dark:bg-input/30 h-9 rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3"
+					<Select
+						type="single"
+						value={targetType}
+						onValueChange={(v) =>
+							(targetType = v as 'instance' | 'ip' | 'lambda' | 'alb')}
 					>
-						<option value="instance">instance</option>
-						<option value="ip">ip</option>
-						<option value="lambda">lambda</option>
-						<option value="alb">alb</option>
-					</select>
+						<SelectTrigger id="tg-create-type" class="w-full">
+							{targetType}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="instance" label="instance">instance</SelectItem>
+							<SelectItem value="ip" label="ip">ip</SelectItem>
+							<SelectItem value="lambda" label="lambda">lambda</SelectItem>
+							<SelectItem value="alb" label="alb">alb</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 			</div>
 			<div class="flex flex-col gap-1">

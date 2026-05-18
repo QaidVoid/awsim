@@ -11,6 +11,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EyeIcon from '@lucide/svelte/icons/eye';
@@ -141,15 +142,22 @@
 
 				<div class="flex flex-col gap-1">
 					<Label for="ssm-type">Type</Label>
-					<select
-						id="ssm-type"
-						bind:value={type}
-						class="border-input bg-background h-9 rounded-md border px-2 text-sm"
+					<Select
+						type="single"
+						value={type}
+						onValueChange={(v) => (type = v as ParameterType)}
 					>
-						<option value="String">String</option>
-						<option value="StringList">StringList</option>
-						<option value="SecureString">SecureString</option>
-					</select>
+						<SelectTrigger id="ssm-type" class="w-full">
+							{type}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="String" label="String">String</SelectItem>
+							<SelectItem value="StringList" label="StringList">StringList</SelectItem>
+							<SelectItem value="SecureString" label="SecureString"
+								>SecureString</SelectItem
+							>
+						</SelectContent>
+					</Select>
 					{#if type === 'StringList'}
 						<p class="text-[11px] text-muted-foreground">
 							Provide values as a comma-separated list.

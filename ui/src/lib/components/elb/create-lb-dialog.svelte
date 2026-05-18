@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { toast } from 'svelte-sonner';
 	import { createLoadBalancer } from '$lib/api/elb';
 
@@ -79,26 +80,38 @@
 			<div class="grid grid-cols-2 gap-3">
 				<div class="flex flex-col gap-1">
 					<Label for="lb-create-type">Type</Label>
-					<select
-						id="lb-create-type"
-						bind:value={type}
-						class="border-input dark:bg-input/30 h-9 rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3"
+					<Select
+						type="single"
+						value={type}
+						onValueChange={(v) => (type = v as 'application' | 'network' | 'gateway')}
 					>
-						<option value="application">application</option>
-						<option value="network">network</option>
-						<option value="gateway">gateway</option>
-					</select>
+						<SelectTrigger id="lb-create-type" class="w-full">
+							{type}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="application" label="application">application</SelectItem>
+							<SelectItem value="network" label="network">network</SelectItem>
+							<SelectItem value="gateway" label="gateway">gateway</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 				<div class="flex flex-col gap-1">
 					<Label for="lb-create-scheme">Scheme</Label>
-					<select
-						id="lb-create-scheme"
-						bind:value={scheme}
-						class="border-input dark:bg-input/30 h-9 rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3"
+					<Select
+						type="single"
+						value={scheme}
+						onValueChange={(v) => (scheme = v as 'internet-facing' | 'internal')}
 					>
-						<option value="internet-facing">internet-facing</option>
-						<option value="internal">internal</option>
-					</select>
+						<SelectTrigger id="lb-create-scheme" class="w-full">
+							{scheme}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="internet-facing" label="internet-facing"
+								>internet-facing</SelectItem
+							>
+							<SelectItem value="internal" label="internal">internal</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 			</div>
 			<div class="flex flex-col gap-1">

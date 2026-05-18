@@ -3,6 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 	import { toast } from 'svelte-sonner';
@@ -26,6 +27,14 @@
 	let rules = $state<Rule[]>([]);
 	let loadingListeners = $state(false);
 	let loadingRules = $state(false);
+
+	let selectedLbName = $derived(
+		loadBalancers.find((lb) => lb.arn === selectedLbArn)?.name ?? ''
+	);
+	let selectedListenerLabel = $derived.by(() => {
+		const l = listeners.find((x) => x.arn === selectedListenerArn);
+		return l ? `${l.protocol}:${l.port}` : '';
+	});
 
 	$effect(() => {
 		if (!selectedLbArn && loadBalancers.length > 0) {
@@ -80,30 +89,35 @@
 		<div class="flex flex-wrap items-end gap-3">
 			<div class="flex flex-col gap-1">
 				<Label for="elb-rules-lb">Load balancer</Label>
-				<select
-					id="elb-rules-lb"
-					bind:value={selectedLbArn}
-					class="border-input dark:bg-input/30 h-9 min-w-[260px] rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3"
-				>
-					{#each loadBalancers as lb (lb.arn)}
-						<option value={lb.arn}>{lb.name}</option>
-					{/each}
-				</select>
+				<Select type="single" bind:value={selectedLbArn}>
+					<SelectTrigger id="elb-rules-lb" class="min-w-[260px]">
+						{selectedLbName}
+					</SelectTrigger>
+					<SelectContent>
+						{#each loadBalancers as lb (lb.arn)}
+							<SelectItem value={lb.arn} label={lb.name}>{lb.name}</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
 			</div>
 			<div class="flex flex-col gap-1">
 				<Label for="elb-rules-listener">Listener</Label>
-				<select
-					id="elb-rules-listener"
+				<Select
+					type="single"
 					bind:value={selectedListenerArn}
 					disabled={loadingListeners || listeners.length === 0}
-					class="border-input dark:bg-input/30 h-9 min-w-[260px] rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3 disabled:opacity-50"
 				>
-					{#each listeners as l (l.arn)}
-						<option value={l.arn}>{l.protocol}:{l.port}</option>
-					{:else}
-						<option value="">No listeners</option>
-					{/each}
-				</select>
+					<SelectTrigger id="elb-rules-listener" class="min-w-[260px]">
+						{selectedListenerArn ? selectedListenerLabel : 'No listeners'}
+					</SelectTrigger>
+					<SelectContent>
+						{#each listeners as l (l.arn)}
+							<SelectItem value={l.arn} label={`${l.protocol}:${l.port}`}
+								>{l.protocol}:{l.port}</SelectItem
+							>
+						{/each}
+					</SelectContent>
+				</Select>
 			</div>
 			<Button
 				variant="ghost"

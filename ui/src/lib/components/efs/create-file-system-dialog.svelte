@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { toast } from 'svelte-sonner';
 	import { createFileSystem } from '$lib/api/efs';
 
@@ -80,26 +81,32 @@
 			<div class="grid grid-cols-2 gap-3">
 				<div class="space-y-1.5">
 					<Label for="efs-perf">Performance mode</Label>
-					<select
-						id="efs-perf"
-						bind:value={performanceMode}
-						class="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
-					>
-						<option value="generalPurpose">generalPurpose</option>
-						<option value="maxIO">maxIO</option>
-					</select>
+					<Select type="single" bind:value={performanceMode}>
+						<SelectTrigger id="efs-perf" class="w-full">
+							{performanceMode}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="generalPurpose" label="generalPurpose"
+								>generalPurpose</SelectItem
+							>
+							<SelectItem value="maxIO" label="maxIO">maxIO</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 				<div class="space-y-1.5">
 					<Label for="efs-tput">Throughput mode</Label>
-					<select
-						id="efs-tput"
-						bind:value={throughputMode}
-						class="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
-					>
-						<option value="bursting">bursting</option>
-						<option value="provisioned">provisioned</option>
-						<option value="elastic">elastic</option>
-					</select>
+					<Select type="single" bind:value={throughputMode}>
+						<SelectTrigger id="efs-tput" class="w-full">
+							{throughputMode}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="bursting" label="bursting">bursting</SelectItem>
+							<SelectItem value="provisioned" label="provisioned"
+								>provisioned</SelectItem
+							>
+							<SelectItem value="elastic" label="elastic">elastic</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 			</div>
 			<label class="flex items-center gap-2 text-sm">

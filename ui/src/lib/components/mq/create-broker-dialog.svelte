@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { toast } from 'svelte-sonner';
 	import { createBroker } from '$lib/api/mq';
 
@@ -79,14 +80,19 @@
 			<div class="grid grid-cols-2 gap-3">
 				<div class="space-y-1.5">
 					<Label for="mq-engine">Engine</Label>
-					<select
-						id="mq-engine"
-						bind:value={engineType}
-						class="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
+					<Select
+						type="single"
+						value={engineType}
+						onValueChange={(v) => (engineType = v as 'RABBITMQ' | 'ACTIVEMQ')}
 					>
-						<option value="RABBITMQ">RABBITMQ</option>
-						<option value="ACTIVEMQ">ACTIVEMQ</option>
-					</select>
+						<SelectTrigger id="mq-engine" class="w-full">
+							{engineType}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="RABBITMQ" label="RABBITMQ">RABBITMQ</SelectItem>
+							<SelectItem value="ACTIVEMQ" label="ACTIVEMQ">ACTIVEMQ</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 				<div class="space-y-1.5">
 					<Label for="mq-ver">Engine version</Label>
@@ -101,15 +107,23 @@
 				</div>
 				<div class="space-y-1.5">
 					<Label for="mq-dep">Deployment mode</Label>
-					<select
-						id="mq-dep"
-						bind:value={deploymentMode}
-						class="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
-					>
-						<option value="SINGLE_INSTANCE">SINGLE_INSTANCE</option>
-						<option value="ACTIVE_STANDBY_MULTI_AZ">ACTIVE_STANDBY_MULTI_AZ</option>
-						<option value="CLUSTER_MULTI_AZ">CLUSTER_MULTI_AZ</option>
-					</select>
+					<Select type="single" bind:value={deploymentMode}>
+						<SelectTrigger id="mq-dep" class="w-full">
+							{deploymentMode}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="SINGLE_INSTANCE" label="SINGLE_INSTANCE"
+								>SINGLE_INSTANCE</SelectItem
+							>
+							<SelectItem
+								value="ACTIVE_STANDBY_MULTI_AZ"
+								label="ACTIVE_STANDBY_MULTI_AZ">ACTIVE_STANDBY_MULTI_AZ</SelectItem
+							>
+							<SelectItem value="CLUSTER_MULTI_AZ" label="CLUSTER_MULTI_AZ"
+								>CLUSTER_MULTI_AZ</SelectItem
+							>
+						</SelectContent>
+					</Select>
 				</div>
 			</div>
 
