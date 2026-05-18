@@ -252,6 +252,7 @@
 						queueUrl={selectedQueue.url}
 						isFifo={selectedAttrs.isFifo}
 						onSent={() => refreshAttrs(selectedQueue!.url)}
+						onViewMessages={() => (active = 'messages')}
 					/>
 				</TabsContent>
 				<TabsContent value="attributes" class="m-0">
