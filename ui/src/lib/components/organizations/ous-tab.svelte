@@ -12,11 +12,14 @@
 	import { EmptyState } from '$lib/components/service';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Network from '@lucide/svelte/icons/network';
+	import Plus from '@lucide/svelte/icons/plus';
 	import { toast } from 'svelte-sonner';
+	import CreateOuDialog from './create-ou-dialog.svelte';
 
 	let ous = $state<OrganizationalUnit[]>([]);
 	let roots = $state<Root[]>([]);
 	let loading = $state(true);
+	let createOpen = $state(false);
 
 	async function reload() {
 		loading = true;
@@ -53,10 +56,16 @@
 		<div class="text-xs text-muted-foreground">
 			{ous.length} OU{ous.length === 1 ? '' : 's'}
 		</div>
-		<Button type="button" variant="outline" size="sm" onclick={reload} disabled={loading}>
-			<RefreshCw class={loading ? 'animate-spin' : ''} />
-			Refresh
-		</Button>
+		<div class="flex items-center gap-2">
+			<Button type="button" variant="outline" size="sm" onclick={reload} disabled={loading}>
+				<RefreshCw class={loading ? 'animate-spin' : ''} />
+				Refresh
+			</Button>
+			<Button type="button" size="sm" onclick={() => (createOpen = true)}>
+				<Plus />
+				Create OU
+			</Button>
+		</div>
 	</header>
 
 	<div class="min-h-0 flex-1 overflow-auto">
@@ -72,7 +81,14 @@
 					icon={Network}
 					title="No organizational units"
 					description="Create an OU under a root to start grouping accounts."
-				/>
+				>
+					{#snippet action()}
+						<Button onclick={() => (createOpen = true)}>
+							<Plus />
+							Create your first OU
+						</Button>
+					{/snippet}
+				</EmptyState>
 			</div>
 		{:else}
 			<table class="w-full text-sm">
@@ -102,3 +118,9 @@
 		{/if}
 	</div>
 </div>
+
+<CreateOuDialog
+	open={createOpen}
+	onOpenChange={(o) => (createOpen = o)}
+	onCreated={reload}
+/>

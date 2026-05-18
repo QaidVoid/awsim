@@ -229,6 +229,34 @@ export async function createPolicy(
   };
 }
 
+export async function createOrganizationalUnit(
+  parentId: string,
+  name: string,
+): Promise<OrganizationalUnit> {
+  const data = await orgRequest<{ OrganizationalUnit?: RawOu }>(
+    "CreateOrganizationalUnit",
+    { ParentId: parentId, Name: name },
+  );
+  const o = data.OrganizationalUnit ?? {};
+  return {
+    id: o.Id ?? "",
+    arn: o.Arn ?? "",
+    name: o.Name ?? name,
+    parentId,
+  };
+}
+
+export async function createAccount(
+  accountName: string,
+  email: string,
+): Promise<{ id?: string; state?: string }> {
+  const data = await orgRequest<{
+    CreateAccountStatus?: { Id?: string; AccountId?: string; State?: string };
+  }>("CreateAccount", { AccountName: accountName, Email: email });
+  const s = data.CreateAccountStatus ?? {};
+  return { id: s.AccountId ?? s.Id, state: s.State };
+}
+
 export async function describePolicy(
   policyId: string,
 ): Promise<PolicyDocument | null> {

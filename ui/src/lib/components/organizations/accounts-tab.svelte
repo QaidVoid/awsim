@@ -11,7 +11,9 @@
 	import { EmptyState } from '$lib/components/service';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Users from '@lucide/svelte/icons/users';
+	import Plus from '@lucide/svelte/icons/plus';
 	import { toast } from 'svelte-sonner';
+	import CreateAccountDialog from './create-account-dialog.svelte';
 
 	interface Props {
 		onSelect: (account: Account) => void;
@@ -21,6 +23,7 @@
 
 	let accounts = $state<Account[]>([]);
 	let loading = $state(true);
+	let createOpen = $state(false);
 
 	async function reload() {
 		loading = true;
@@ -42,10 +45,16 @@
 		<div class="text-xs text-muted-foreground">
 			{accounts.length} account{accounts.length === 1 ? '' : 's'}
 		</div>
-		<Button type="button" variant="outline" size="sm" onclick={reload} disabled={loading}>
-			<RefreshCw class={loading ? 'animate-spin' : ''} />
-			Refresh
-		</Button>
+		<div class="flex items-center gap-2">
+			<Button type="button" variant="outline" size="sm" onclick={reload} disabled={loading}>
+				<RefreshCw class={loading ? 'animate-spin' : ''} />
+				Refresh
+			</Button>
+			<Button type="button" size="sm" onclick={() => (createOpen = true)}>
+				<Plus />
+				Create account
+			</Button>
+		</div>
 	</header>
 
 	<div class="min-h-0 flex-1 overflow-auto">
@@ -57,7 +66,18 @@
 			</div>
 		{:else if accounts.length === 0}
 			<div class="p-6">
-				<EmptyState icon={Users} title="No accounts" description="No accounts in the organization." />
+				<EmptyState
+					icon={Users}
+					title="No accounts"
+					description="Member accounts belong to the organization and can be grouped into OUs."
+				>
+					{#snippet action()}
+						<Button onclick={() => (createOpen = true)}>
+							<Plus />
+							Create your first account
+						</Button>
+					{/snippet}
+				</EmptyState>
 			</div>
 		{:else}
 			<table class="w-full text-sm">
@@ -88,3 +108,9 @@
 		{/if}
 	</div>
 </div>
+
+<CreateAccountDialog
+	open={createOpen}
+	onOpenChange={(o) => (createOpen = o)}
+	onCreated={reload}
+/>
