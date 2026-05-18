@@ -2172,6 +2172,12 @@ fn build_bedrock_backend_from_config(
     Ok(Some(backends))
 }
 
+// Wires every service crate into the gateway at startup. The arg list
+// grows by one each time a new cross-cutting subsystem is added
+// (persistence dir, blob cap, WAL checkpoint, bedrock proxy); bundling
+// them into a config struct adds indirection without removing any of
+// the coupling, so the lint is suppressed deliberately here.
+#[allow(clippy::too_many_arguments)]
 fn register_services(
     state: &mut AppState,
     default_account_id: &str,
@@ -2236,7 +2242,10 @@ fn register_services(
         Some(0) => info!("DynamoDB WAL checkpointer disabled"),
         secs => {
             let interval = secs.unwrap_or(60);
-            info!(interval_secs = interval, "DynamoDB WAL checkpointer enabled");
+            info!(
+                interval_secs = interval,
+                "DynamoDB WAL checkpointer enabled"
+            );
             dynamodb.spawn_wal_checkpointer(interval);
         }
     }
