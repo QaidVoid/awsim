@@ -797,6 +797,7 @@ export type EvalDecision = "allowed" | "explicitDeny" | "implicitDeny";
 export interface MatchedStatement {
   sourcePolicyId: string;
   sourcePolicyType: string;
+  statementId?: string;
   startPosition?: { line: number; column: number };
 }
 
@@ -804,10 +805,28 @@ export interface MissingContextValue {
   key: string;
 }
 
+/** awsim extension: the single decisive step behind the decision. */
+export type EvalReasonKind =
+  | "ExplicitDeny"
+  | "Allowed"
+  | "ScpImplicitDeny"
+  | "NoAllow"
+  | "BoundaryNoAllow"
+  | "SessionNoAllow";
+
+export interface EvalDecisionReason {
+  kind: EvalReasonKind;
+  source?: string;
+  sourceId?: string;
+  statementIndex?: number;
+  statementId?: string;
+}
+
 export interface EvaluationResult {
   evalActionName: string;
   evalResourceName?: string;
   evalDecision: EvalDecision;
+  reason?: EvalDecisionReason;
   matchedStatements: MatchedStatement[];
   missingContextValues: string[];
 }
@@ -887,6 +906,7 @@ function parseSimulationResult(xml: string): SimulationResult {
         matched.push({
           sourcePolicyId: text(sm, "SourcePolicyId"),
           sourcePolicyType: text(sm, "SourcePolicyType"),
+          statementId: text(sm, "StatementId") || undefined,
         });
       }
     }
@@ -901,10 +921,25 @@ function parseSimulationResult(xml: string): SimulationResult {
       }
     }
 
+    let reason: EvalDecisionReason | undefined;
+    const reasonEl = member.getElementsByTagName("EvalDecisionReason")[0];
+    const kind = text(reasonEl ?? null, "Kind");
+    if (kind) {
+      const idxRaw = text(reasonEl ?? null, "StatementIndex");
+      reason = {
+        kind: kind as EvalReasonKind,
+        source: text(reasonEl ?? null, "Source") || undefined,
+        sourceId: text(reasonEl ?? null, "SourceId") || undefined,
+        statementIndex: idxRaw ? Number(idxRaw) : undefined,
+        statementId: text(reasonEl ?? null, "StatementId") || undefined,
+      };
+    }
+
     results.push({
       evalActionName: text(member, "EvalActionName"),
       evalResourceName: text(member, "EvalResourceName") || undefined,
       evalDecision: decision,
+      reason,
       matchedStatements: matched,
       missingContextValues: missing,
     });

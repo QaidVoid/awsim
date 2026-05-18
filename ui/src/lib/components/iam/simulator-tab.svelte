@@ -7,7 +7,8 @@
 		simulateCustomPolicy,
 		ACTION_SUGGESTIONS,
 		type SimulationResult,
-		type ContextEntry
+		type ContextEntry,
+		type EvalDecisionReason
 	} from '$lib/api/iam';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -215,6 +216,62 @@
 		return 'IMPLICITLY DENIED';
 	}
 
+	// IAM evaluation pipeline, in the order the engine applies it. The
+	// decision trace highlights the step that decided the request.
+	const PIPELINE = [
+		'Explicit Deny',
+		'SCP allow-list',
+		'Identity / resource grant',
+		'Permissions boundary',
+		'Session policy',
+		'Decision'
+	];
+
+	function decisiveStep(r?: EvalDecisionReason): number {
+		switch (r?.kind) {
+			case 'ExplicitDeny':
+				return 0;
+			case 'ScpImplicitDeny':
+				return 1;
+			case 'NoAllow':
+				return 2;
+			case 'BoundaryNoAllow':
+				return 3;
+			case 'SessionNoAllow':
+				return 4;
+			case 'Allowed':
+				return 5;
+			default:
+				return -1;
+		}
+	}
+
+	function stmtRef(r: EvalDecisionReason): string {
+		if (r.statementId) return ` (Sid: ${r.statementId})`;
+		if (r.statementIndex !== undefined) return ` (statement #${r.statementIndex + 1})`;
+		return '';
+	}
+
+	function reasonSentence(r?: EvalDecisionReason): string {
+		if (!r) return '';
+		switch (r.kind) {
+			case 'ExplicitDeny':
+				return `Explicit Deny in ${r.source ?? 'a policy'} "${r.sourceId ?? '?'}"${stmtRef(r)}.`;
+			case 'Allowed':
+				return `Allowed by ${r.source ?? 'a policy'} "${r.sourceId ?? '?'}"${stmtRef(r)}.`;
+			case 'ScpImplicitDeny':
+				return `Service Control Policy "${r.sourceId ?? '?'}" has no Allow for this action - SCPs are allow-lists, so this is an implicit deny.`;
+			case 'NoAllow':
+				return 'No identity-based policy Allow matches this request (implicit deny).';
+			case 'BoundaryNoAllow':
+				return 'The permissions boundary has no matching Allow; it caps the maximum permissions, so the request is implicitly denied.';
+			case 'SessionNoAllow':
+				return 'The session policy has no matching Allow (implicit deny).';
+			default:
+				return '';
+		}
+	}
+
 	onMount(loadPrincipals);
 </script>
 
@@ -260,6 +317,37 @@
 					{/if}
 				</div>
 			</div>
+			{#if r.reason}
+				{@const ds = decisiveStep(r.reason)}
+				<div class="rounded-md border border-border/60 bg-muted/20 p-3 text-xs">
+					<div class="mb-2 flex items-start gap-2">
+						<span
+							class="shrink-0 font-semibold uppercase tracking-wide text-muted-foreground"
+						>
+							Why
+						</span>
+						<span>{reasonSentence(r.reason)}</span>
+					</div>
+					<div class="flex flex-wrap items-center gap-1">
+						{#each PIPELINE as step, i (step)}
+							<span
+								class="rounded px-1.5 py-0.5 font-mono text-[10px] {i === ds
+									? allowed
+										? 'bg-emerald-500/15 font-semibold text-emerald-500'
+										: 'bg-destructive/15 font-semibold text-destructive'
+									: i < ds
+										? 'text-muted-foreground'
+										: 'text-muted-foreground/40'}"
+							>
+								{step}
+							</span>
+							{#if i < PIPELINE.length - 1}
+								<span class="text-muted-foreground/30">/</span>
+							{/if}
+						{/each}
+					</div>
+				</div>
+			{/if}
 			{#if r.matchedStatements.length || r.missingContextValues.length}
 				<div class="grid grid-cols-2 gap-2 text-xs">
 					{#if r.matchedStatements.length}
@@ -271,7 +359,9 @@
 								{#each r.matchedStatements as s, i (s.sourcePolicyId + i)}
 									<li class="font-mono">
 										<span class="text-muted-foreground">{s.sourcePolicyType}:</span>
-										{s.sourcePolicyId}
+										{s.sourcePolicyId}{#if s.statementId}
+											<span class="text-muted-foreground">(Sid {s.statementId})</span>
+										{/if}
 									</li>
 								{/each}
 							</ul>
