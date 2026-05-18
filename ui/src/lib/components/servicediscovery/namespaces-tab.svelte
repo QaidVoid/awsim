@@ -9,6 +9,7 @@
 	import MapPinIcon from '@lucide/svelte/icons/map-pin';
 	import { toast } from 'svelte-sonner';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import {
 		listNamespaces,
 		createHttpNamespace,
@@ -109,14 +110,20 @@
 
 	<div class="flex flex-wrap items-center gap-2">
 		<Input bind:value={newName} placeholder="namespace name" class="h-8 max-w-[220px]" />
-		<select
-			bind:value={newType}
-			class="h-8 rounded-md border border-border bg-background px-2 text-xs"
+		<Select
+			type="single"
+			value={newType}
+			onValueChange={(v) => (newType = v as 'HTTP' | 'DNS_PRIVATE' | 'DNS_PUBLIC')}
 		>
-			<option value="HTTP">HTTP</option>
-			<option value="DNS_PRIVATE">DNS_PRIVATE</option>
-			<option value="DNS_PUBLIC">DNS_PUBLIC</option>
-		</select>
+			<SelectTrigger size="sm" class="w-[160px] text-xs">
+				{newType}
+			</SelectTrigger>
+			<SelectContent>
+				<SelectItem value="HTTP" label="HTTP">HTTP</SelectItem>
+				<SelectItem value="DNS_PRIVATE" label="DNS_PRIVATE">DNS_PRIVATE</SelectItem>
+				<SelectItem value="DNS_PUBLIC" label="DNS_PUBLIC">DNS_PUBLIC</SelectItem>
+			</SelectContent>
+		</Select>
 		<Button size="sm" onclick={create} disabled={creating}>
 			<PlusIcon />
 			{creating ? 'Creating…' : 'Create namespace'}

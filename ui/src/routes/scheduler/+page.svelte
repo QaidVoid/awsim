@@ -4,6 +4,7 @@
 	import { ServicePage } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Tabs, TabsList, TabsTrigger, TabsContent } from '$lib/components/ui/tabs';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SchedulesTab from '$lib/components/scheduler/schedules-tab.svelte';
 	import ScheduleGroupsTab from '$lib/components/scheduler/schedule-groups-tab.svelte';
@@ -72,16 +73,17 @@
 					<label for="sched-group-filter" class="text-xs text-muted-foreground">
 						Group
 					</label>
-					<select
-						id="sched-group-filter"
-						bind:value={selectedGroup}
-						class="h-7 rounded-md border border-border bg-background px-2 text-xs"
-					>
-						<option value="ALL">All groups</option>
-						{#each groups as g (g.arn)}
-							<option value={g.name}>{g.name}</option>
-						{/each}
-					</select>
+					<Select type="single" bind:value={selectedGroup}>
+						<SelectTrigger id="sched-group-filter" size="sm" class="h-7 w-[160px] text-xs">
+							{selectedGroup === 'ALL' ? 'All groups' : selectedGroup}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="ALL" label="All groups">All groups</SelectItem>
+							{#each groups as g (g.arn)}
+								<SelectItem value={g.name} label={g.name}>{g.name}</SelectItem>
+							{/each}
+						</SelectContent>
+					</Select>
 				</div>
 				<SchedulesTab
 					groupName={selectedGroup}

@@ -10,6 +10,7 @@
 	import FileCogIcon from '@lucide/svelte/icons/file-cog';
 	import { toast } from 'svelte-sonner';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import {
 		listProfiles,
 		createProfile,
@@ -37,6 +38,8 @@
 	let deleteTarget = $state<ConfigProfile | null>(null);
 	let deleteOpen = $state(false);
 	let deleteBusy = $state(false);
+
+	let pubProfileLabel = $derived(rows.find((r) => r.id === pubProfile)?.name ?? '');
 
 	$effect(() => {
 		appId;
@@ -156,15 +159,16 @@
 		<div class="space-y-2 rounded-md border border-border p-3">
 			<div class="text-xs font-semibold">Publish hosted configuration version</div>
 			<div class="flex items-center gap-2">
-				<select
-					bind:value={pubProfile}
-					class="h-8 flex-1 rounded-md border border-border bg-background px-2 text-xs"
-				>
-					<option value="">Pick profile…</option>
-					{#each rows as p (p.id)}
-						<option value={p.id}>{p.name}</option>
-					{/each}
-				</select>
+				<Select type="single" bind:value={pubProfile}>
+					<SelectTrigger size="sm" class="w-[200px] text-xs">
+						{pubProfile ? pubProfileLabel : 'Pick profile…'}
+					</SelectTrigger>
+					<SelectContent>
+						{#each rows as p (p.id)}
+							<SelectItem value={p.id} label={p.name}>{p.name}</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
 				<Button size="sm" onclick={publishVersion} disabled={publishing}>
 					{publishing ? 'Publishing…' : 'Publish version'}
 				</Button>

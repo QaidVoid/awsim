@@ -19,6 +19,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { Switch } from '$lib/components/ui/switch';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
 	import SaveIcon from '@lucide/svelte/icons/save';
@@ -366,17 +367,21 @@
 				<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 					<div>
 						<Label for="default-backend">Default backend</Label>
-						<select
-							id="default-backend"
+						<Select
+							type="single"
 							bind:value={defaultBackend}
-							class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
 							disabled={backendNames.length === 0}
 						>
-							<option value="">(none)</option>
-							{#each backendNames as n (n)}
-								<option value={n}>{n}</option>
-							{/each}
-						</select>
+							<SelectTrigger id="default-backend" class="w-full">
+								{defaultBackend ? defaultBackend : '(none)'}
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="" label="(none)">(none)</SelectItem>
+								{#each backendNames as n (n)}
+									<SelectItem value={n} label={n}>{n}</SelectItem>
+								{/each}
+							</SelectContent>
+						</Select>
 						<p class="mt-1 text-xs text-muted-foreground">
 							Bare-tag mappings route here when no backend is pinned on the entry.
 						</p>
@@ -414,14 +419,24 @@
 								</div>
 								<div class="col-span-6 sm:col-span-2">
 									<Label class="text-xs">Auth</Label>
-									<select
-										bind:value={row.keyMode}
-										class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+									<Select
+										type="single"
+										value={row.keyMode}
+										onValueChange={(v) => (row.keyMode = v as BackendRow['keyMode'])}
 									>
-										<option value="none">None</option>
-										<option value="inline">Inline key</option>
-										<option value="env">Env var</option>
-									</select>
+										<SelectTrigger class="w-full">
+											{row.keyMode === 'inline'
+												? 'Inline key'
+												: row.keyMode === 'env'
+													? 'Env var'
+													: 'None'}
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value="none" label="None">None</SelectItem>
+											<SelectItem value="inline" label="Inline key">Inline key</SelectItem>
+											<SelectItem value="env" label="Env var">Env var</SelectItem>
+										</SelectContent>
+									</Select>
 								</div>
 								<div class="col-span-12 sm:col-span-2 flex justify-end">
 									<Button variant="ghost" size="icon" onclick={() => removeBackend(i)} aria-label="Remove">
@@ -478,15 +493,17 @@
 								</div>
 								<div class="col-span-6 sm:col-span-3">
 									<Label class="text-xs">Backend</Label>
-									<select
-										bind:value={row.backend}
-										class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-									>
-										<option value="">(default)</option>
-										{#each backendNames as n (n)}
-											<option value={n}>{n}</option>
-										{/each}
-									</select>
+									<Select type="single" bind:value={row.backend}>
+										<SelectTrigger class="w-full">
+											{row.backend ? row.backend : '(default)'}
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value="" label="(default)">(default)</SelectItem>
+											{#each backendNames as n (n)}
+												<SelectItem value={n} label={n}>{n}</SelectItem>
+											{/each}
+										</SelectContent>
+									</Select>
 								</div>
 								<div class="col-span-6 sm:col-span-3">
 									<Label class="text-xs">Tag</Label>
@@ -523,15 +540,17 @@
 								</div>
 								<div class="col-span-6 sm:col-span-3">
 									<Label class="text-xs">Backend</Label>
-									<select
-										bind:value={row.backend}
-										class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-									>
-										<option value="">(default)</option>
-										{#each backendNames as n (n)}
-											<option value={n}>{n}</option>
-										{/each}
-									</select>
+									<Select type="single" bind:value={row.backend}>
+										<SelectTrigger class="w-full">
+											{row.backend ? row.backend : '(default)'}
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value="" label="(default)">(default)</SelectItem>
+											{#each backendNames as n (n)}
+												<SelectItem value={n} label={n}>{n}</SelectItem>
+											{/each}
+										</SelectContent>
+									</Select>
 								</div>
 								<div class="col-span-6 sm:col-span-3">
 									<Label class="text-xs">Tag</Label>

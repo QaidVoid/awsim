@@ -21,6 +21,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import Users from '@lucide/svelte/icons/users';
 	import Database from '@lucide/svelte/icons/database';
@@ -69,6 +70,11 @@
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to load pools');
 		}
+	});
+
+	const cogPoolLabel = $derived.by(() => {
+		const p = pools.find((x) => x.id === cogPoolId);
+		return p ? `${p.name} — ${p.id}` : '';
 	});
 
 	async function runCognito() {
@@ -248,19 +254,18 @@
 			<div class="space-y-2">
 				<div class="space-y-1.5">
 					<Label for="cog-pool">Pool</Label>
-					<select
-						id="cog-pool"
-						bind:value={cogPoolId}
-						class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
-					>
-						{#if pools.length === 0}
-							<option value="" disabled>(no pools — create one first)</option>
-						{:else}
+					<Select type="single" bind:value={cogPoolId} disabled={pools.length === 0}>
+						<SelectTrigger id="cog-pool" class="w-full">
+							{cogPoolId ? cogPoolLabel : '(no pools — create one first)'}
+						</SelectTrigger>
+						<SelectContent>
 							{#each pools as p (p.id)}
-								<option value={p.id}>{p.name} — {p.id}</option>
+								<SelectItem value={p.id} label={`${p.name} — ${p.id}`}>
+									{p.name} — {p.id}
+								</SelectItem>
 							{/each}
-						{/if}
-					</select>
+						</SelectContent>
+					</Select>
 				</div>
 				<div class="space-y-1.5">
 					<Label for="cog-count">Count</Label>

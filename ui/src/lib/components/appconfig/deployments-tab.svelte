@@ -7,6 +7,7 @@
 	import PlayIcon from '@lucide/svelte/icons/play';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import { toast } from 'svelte-sonner';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import {
 		listEnvironments,
 		listProfiles,
@@ -83,6 +84,10 @@
 		}
 	}
 
+	let selEnvLabel = $derived(envs.find((e) => e.id === selEnv)?.name ?? '');
+	let selProfileLabel = $derived(profiles.find((p) => p.id === selProfile)?.name ?? '');
+	let selStrategyLabel = $derived(strategies.find((s) => s.id === selStrategy)?.name ?? '');
+
 	function stateColor(s: string): string {
 		if (s === 'COMPLETE') return 'text-green-500';
 		if (s === 'ROLLED_BACK' || s === 'BAKING') return 'text-amber-500';
@@ -106,32 +111,36 @@
 	<div class="space-y-2 rounded-md border border-border p-3">
 		<div class="text-xs font-semibold">Start deployment</div>
 		<div class="grid grid-cols-2 gap-2">
-			<select
-				bind:value={selEnv}
-				class="h-8 rounded-md border border-border bg-background px-2 text-xs"
-			>
-				<option value="">Pick env…</option>
-				{#each envs as e (e.id)}
-					<option value={e.id}>{e.name}</option>
-				{/each}
-			</select>
-			<select
-				bind:value={selProfile}
-				class="h-8 rounded-md border border-border bg-background px-2 text-xs"
-			>
-				<option value="">Pick profile…</option>
-				{#each profiles as p (p.id)}
-					<option value={p.id}>{p.name}</option>
-				{/each}
-			</select>
-			<select
-				bind:value={selStrategy}
-				class="h-8 rounded-md border border-border bg-background px-2 text-xs"
-			>
-				{#each strategies as s (s.id)}
-					<option value={s.id}>{s.name}</option>
-				{/each}
-			</select>
+			<Select type="single" bind:value={selEnv}>
+				<SelectTrigger size="sm" class="w-full text-xs">
+					{selEnv ? selEnvLabel : 'Pick env…'}
+				</SelectTrigger>
+				<SelectContent>
+					{#each envs as e (e.id)}
+						<SelectItem value={e.id} label={e.name}>{e.name}</SelectItem>
+					{/each}
+				</SelectContent>
+			</Select>
+			<Select type="single" bind:value={selProfile}>
+				<SelectTrigger size="sm" class="w-full text-xs">
+					{selProfile ? selProfileLabel : 'Pick profile…'}
+				</SelectTrigger>
+				<SelectContent>
+					{#each profiles as p (p.id)}
+						<SelectItem value={p.id} label={p.name}>{p.name}</SelectItem>
+					{/each}
+				</SelectContent>
+			</Select>
+			<Select type="single" bind:value={selStrategy}>
+				<SelectTrigger size="sm" class="w-full text-xs">
+					{selStrategyLabel}
+				</SelectTrigger>
+				<SelectContent>
+					{#each strategies as s (s.id)}
+						<SelectItem value={s.id} label={s.name}>{s.name}</SelectItem>
+					{/each}
+				</SelectContent>
+			</Select>
 			<Input bind:value={configVersion} placeholder="version (e.g. 1)" class="h-8 text-xs" />
 		</div>
 		<Button size="sm" onclick={start} disabled={starting}>

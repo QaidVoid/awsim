@@ -16,6 +16,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Separator } from '$lib/components/ui/separator';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import PlayIcon from '@lucide/svelte/icons/play';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
@@ -188,17 +189,23 @@
 				Request
 			</h2>
 			<div class="flex items-center gap-2">
-				<select
-					bind:value={method}
-					class="h-9 rounded border border-border bg-background px-2 font-mono text-xs"
+				<Select
+					type="single"
+					value={method}
+					onValueChange={(v) => (method = v as RequestTemplate['method'])}
 				>
-					<option>GET</option>
-					<option>POST</option>
-					<option>PUT</option>
-					<option>DELETE</option>
-					<option>HEAD</option>
-					<option>PATCH</option>
-				</select>
+					<SelectTrigger class="w-[110px] font-mono text-xs">
+						{method}
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="GET" label="GET">GET</SelectItem>
+						<SelectItem value="POST" label="POST">POST</SelectItem>
+						<SelectItem value="PUT" label="PUT">PUT</SelectItem>
+						<SelectItem value="DELETE" label="DELETE">DELETE</SelectItem>
+						<SelectItem value="HEAD" label="HEAD">HEAD</SelectItem>
+						<SelectItem value="PATCH" label="PATCH">PATCH</SelectItem>
+					</SelectContent>
+				</Select>
 				<Input
 					bind:value={path}
 					placeholder="/"

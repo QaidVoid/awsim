@@ -9,6 +9,7 @@
 	import NetworkIcon from '@lucide/svelte/icons/network';
 	import { toast } from 'svelte-sonner';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import {
 		listNamespaces,
 		listServices,
@@ -72,6 +73,8 @@
 		}
 	}
 
+	let selectedNsLabel = $derived(namespaces.find((n) => n.id === selectedNs)?.name ?? '');
+
 	function remove(s: SDService) {
 		deleteTarget = s;
 		deleteOpen = true;
@@ -99,15 +102,16 @@
 	<div class="flex items-center justify-between">
 		<div class="flex items-center gap-2">
 			<label for="sd-ns" class="text-xs text-muted-foreground">Namespace</label>
-			<select
-				id="sd-ns"
-				bind:value={selectedNs}
-				class="h-7 rounded-md border border-border bg-background px-2 text-xs"
-			>
-				{#each namespaces as n (n.id)}
-					<option value={n.id}>{n.name}</option>
-				{/each}
-			</select>
+			<Select type="single" bind:value={selectedNs}>
+				<SelectTrigger id="sd-ns" size="sm" class="h-7 w-[160px] text-xs">
+					{selectedNsLabel}
+				</SelectTrigger>
+				<SelectContent>
+					{#each namespaces as n (n.id)}
+						<SelectItem value={n.id} label={n.name}>{n.name}</SelectItem>
+					{/each}
+				</SelectContent>
+			</Select>
 		</div>
 		<Button variant="ghost" size="xs" onclick={load} disabled={loading}>
 			<RefreshCwIcon class={loading ? 'animate-spin' : ''} />

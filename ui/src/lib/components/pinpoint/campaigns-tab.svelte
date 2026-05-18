@@ -9,6 +9,7 @@
 	import MegaphoneIcon from '@lucide/svelte/icons/megaphone';
 	import { toast } from 'svelte-sonner';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import {
 		listSegments,
 		listCampaigns,
@@ -72,6 +73,8 @@
 		}
 	}
 
+	let newSegmentLabel = $derived(segments.find((s) => s.id === newSegment)?.name ?? '');
+
 	function remove(c: Campaign) {
 		deleteTarget = c;
 		deleteOpen = true;
@@ -108,15 +111,16 @@
 
 	<div class="flex flex-wrap items-center gap-2">
 		<Input bind:value={newName} placeholder="campaign name" class="h-8 max-w-[200px] text-xs" />
-		<select
-			bind:value={newSegment}
-			class="h-8 rounded-md border border-border bg-background px-2 text-xs"
-		>
-			<option value="">Pick segment…</option>
-			{#each segments as s (s.id)}
-				<option value={s.id}>{s.name}</option>
-			{/each}
-		</select>
+		<Select type="single" bind:value={newSegment}>
+			<SelectTrigger size="sm" class="w-[200px] text-xs">
+				{newSegment ? newSegmentLabel : 'Pick segment…'}
+			</SelectTrigger>
+			<SelectContent>
+				{#each segments as s (s.id)}
+					<SelectItem value={s.id} label={s.name}>{s.name}</SelectItem>
+				{/each}
+			</SelectContent>
+		</Select>
 		<Button size="sm" onclick={create} disabled={creating || segments.length === 0}>
 			<PlusIcon />
 			{creating ? 'Creating…' : 'Create campaign'}

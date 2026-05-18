@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { toast } from 'svelte-sonner';
 	import {
 		registerScalableTarget,
@@ -85,15 +86,16 @@
 		<div class="space-y-3">
 			<div class="space-y-1.5">
 				<Label for="aas-ns">Service namespace</Label>
-				<select
-					id="aas-ns"
-					bind:value={serviceNamespace}
-					class="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
-				>
-					{#each SERVICE_NAMESPACES as ns (ns)}
-						<option value={ns}>{ns}</option>
-					{/each}
-				</select>
+				<Select type="single" bind:value={serviceNamespace}>
+					<SelectTrigger id="aas-ns" class="w-full">
+						{serviceNamespace}
+					</SelectTrigger>
+					<SelectContent>
+						{#each SERVICE_NAMESPACES as ns (ns)}
+							<SelectItem value={ns} label={ns}>{ns}</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
 			</div>
 			<div class="space-y-1.5">
 				<Label for="aas-rid">Resource ID</Label>

@@ -5,6 +5,7 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import { toast } from 'svelte-sonner';
 	import { updateEndpoint } from '$lib/api/pinpoint';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { EmptyState } from '$lib/components/service';
 	import SmartphoneIcon from '@lucide/svelte/icons/smartphone';
 
@@ -46,15 +47,21 @@
 		<div class="text-xs font-semibold">Upsert endpoint</div>
 		<div class="grid grid-cols-3 gap-2">
 			<Input bind:value={newId} placeholder="endpoint ID" class="h-8 text-xs col-span-2 font-mono" />
-			<select
-				bind:value={newChannel}
-				class="h-8 rounded-md border border-border bg-background px-2 text-xs"
+			<Select
+				type="single"
+				value={newChannel}
+				onValueChange={(v) => (newChannel = v as 'EMAIL' | 'SMS' | 'PUSH' | 'CUSTOM')}
 			>
-				<option value="EMAIL">EMAIL</option>
-				<option value="SMS">SMS</option>
-				<option value="PUSH">PUSH</option>
-				<option value="CUSTOM">CUSTOM</option>
-			</select>
+				<SelectTrigger size="sm" class="w-full text-xs">
+					{newChannel}
+				</SelectTrigger>
+				<SelectContent>
+					<SelectItem value="EMAIL" label="EMAIL">EMAIL</SelectItem>
+					<SelectItem value="SMS" label="SMS">SMS</SelectItem>
+					<SelectItem value="PUSH" label="PUSH">PUSH</SelectItem>
+					<SelectItem value="CUSTOM" label="CUSTOM">CUSTOM</SelectItem>
+				</SelectContent>
+			</Select>
 		</div>
 		<Input
 			bind:value={newAddress}

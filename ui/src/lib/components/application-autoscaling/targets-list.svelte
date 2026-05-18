@@ -8,6 +8,7 @@
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import { toast } from 'svelte-sonner';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import {
 		describeScalableTargets,
 		deregisterScalableTarget,
@@ -94,15 +95,16 @@
 	<div class="flex items-center justify-between">
 		<div class="flex items-center gap-2">
 			<label for="aas-ns" class="text-xs text-muted-foreground">Namespace</label>
-			<select
-				id="aas-ns"
-				bind:value={serviceNamespace}
-				class="h-7 rounded-md border border-border bg-background px-2 text-xs"
-			>
-				{#each SERVICE_NAMESPACES as ns (ns)}
-					<option value={ns}>{ns}</option>
-				{/each}
-			</select>
+			<Select type="single" bind:value={serviceNamespace}>
+				<SelectTrigger id="aas-ns" size="sm" class="h-7 w-[160px] text-xs">
+					{serviceNamespace}
+				</SelectTrigger>
+				<SelectContent>
+					{#each SERVICE_NAMESPACES as ns (ns)}
+						<SelectItem value={ns} label={ns}>{ns}</SelectItem>
+					{/each}
+				</SelectContent>
+			</Select>
 		</div>
 		<div class="flex items-center gap-2">
 			<Button variant="ghost" size="xs" onclick={load} disabled={loading}>
