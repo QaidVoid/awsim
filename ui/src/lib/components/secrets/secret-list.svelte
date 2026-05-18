@@ -7,13 +7,16 @@
 	import { Input } from '$lib/components/ui/input';
 	import KeyRound from '@lucide/svelte/icons/key-round';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+	import Plus from '@lucide/svelte/icons/plus';
 	import SecretDetailSheet from './secret-detail-sheet.svelte';
+	import CreateSecretDialog from './create-secret-dialog.svelte';
 
 	let secrets = $state<Secret[]>([]);
 	let loading = $state(false);
 	let filter = $state('');
 	let selected = $state<Secret | null>(null);
 	let detailOpen = $state(false);
+	let createOpen = $state(false);
 
 	const filtered = $derived(
 		filter.trim()
@@ -35,6 +38,13 @@
 		detailOpen = true;
 	}
 
+	// After create: reload and open the new secret so you land on it.
+	async function handleCreated(arn: string) {
+		await load();
+		const s = secrets.find((x) => x.arn === arn);
+		if (s) open(s);
+	}
+
 	onMount(load);
 </script>
 
@@ -50,6 +60,10 @@
 		<Badge variant="secondary">{filtered.length} of {secrets.length}</Badge>
 		<Button variant="ghost" size="icon-sm" onclick={load} disabled={loading} title="Refresh">
 			<RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
+		</Button>
+		<Button size="sm" onclick={() => (createOpen = true)}>
+			<Plus class="size-3.5" />
+			Create secret
 		</Button>
 	</div>
 	<div class="min-h-0 flex-1 overflow-hidden">
@@ -69,7 +83,14 @@
 					icon={KeyRound}
 					title="No secrets stored"
 					description="Secrets Manager securely stores and rotates database credentials, API keys, and other sensitive values for retrieval at runtime."
-				/>
+				>
+					{#snippet action()}
+						<Button onclick={() => (createOpen = true)}>
+							<Plus class="size-3.5" />
+							Create your first secret
+						</Button>
+					{/snippet}
+				</EmptyState>
 			{/snippet}
 		</DataTable>
 	</div>
@@ -82,4 +103,11 @@
 		detailOpen = v;
 		if (!v) selected = null;
 	}}
+	onChanged={load}
+/>
+
+<CreateSecretDialog
+	open={createOpen}
+	onOpenChange={(o) => (createOpen = o)}
+	onCreated={handleCreated}
 />

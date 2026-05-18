@@ -93,7 +93,6 @@ export interface Service {
 const BASIC_TIER = new Set<string>([
   "resourcegroupstagging",
   "xray",
-  "secrets",
   "kms",
 ]);
 

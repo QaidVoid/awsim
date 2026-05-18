@@ -4,10 +4,13 @@
 		getSecretValue,
 		listSecretVersions,
 		putSecretValue,
+		deleteSecret,
 		type Secret,
 		type SecretDetail,
 		type SecretVersion
 	} from '$lib/api/secrets';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import {
 		Sheet,
 		SheetContent,
@@ -28,9 +31,32 @@
 		secret: Secret | null;
 		open: boolean;
 		onOpenChange: (open: boolean) => void;
+		/** Notify the list to reload (after a delete). */
+		onChanged?: () => void;
 	}
 
-	let { secret, open = $bindable(), onOpenChange }: Props = $props();
+	let { secret, open = $bindable(), onOpenChange, onChanged }: Props = $props();
+
+	let confirmDelete = $state(false);
+	let deleting = $state(false);
+
+	async function doDelete() {
+		if (!secret) return;
+		deleting = true;
+		try {
+			// Force-delete: a dev tool wants it gone now, not staged for
+			// recovery.
+			await deleteSecret(secret.arn, true);
+			toast.success('Secret deleted');
+			confirmDelete = false;
+			onOpenChange(false);
+			onChanged?.();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to delete secret');
+		} finally {
+			deleting = false;
+		}
+	}
 
 	let detail = $state<SecretDetail | null>(null);
 	let versions = $state<SecretVersion[]>([]);
@@ -102,8 +128,23 @@
 <Sheet bind:open onOpenChange={(v) => onOpenChange(v)}>
 	<SheetContent side="right" class="w-full max-w-2xl overflow-y-auto sm:max-w-2xl">
 		<SheetHeader>
-			<SheetTitle>{secret?.name ?? ''}</SheetTitle>
-			<SheetDescription class="truncate font-mono text-xs">{secret?.arn ?? ''}</SheetDescription>
+			<div class="flex items-start justify-between gap-3">
+				<div class="min-w-0">
+					<SheetTitle>{secret?.name ?? ''}</SheetTitle>
+					<SheetDescription class="truncate font-mono text-xs">
+						{secret?.arn ?? ''}
+					</SheetDescription>
+				</div>
+				<Button
+					variant="ghost"
+					size="sm"
+					class="shrink-0 text-destructive hover:bg-destructive/10"
+					onclick={() => (confirmDelete = true)}
+				>
+					<Trash2 class="size-3.5" />
+					Delete
+				</Button>
+			</div>
 		</SheetHeader>
 		<div class="px-6 pb-6">
 			<Tabs bind:value={active} class="mt-2">
@@ -208,3 +249,12 @@
 		</div>
 	</SheetContent>
 </Sheet>
+
+<ConfirmDialog
+	bind:open={confirmDelete}
+	title="Delete secret?"
+	description={`Permanently delete "${secret?.name ?? ''}" and all its versions.`}
+	busy={deleting}
+	onConfirm={doDelete}
+	onClose={() => (confirmDelete = false)}
+/>
