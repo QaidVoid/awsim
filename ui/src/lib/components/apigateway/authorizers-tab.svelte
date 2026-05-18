@@ -8,6 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import {
 		Dialog,
 		DialogContent,
@@ -186,15 +187,20 @@
 			<div class="grid grid-cols-2 gap-3">
 				<div class="space-y-1">
 					<Label for="auth-type">Type</Label>
-					<select
-						id="auth-type"
-						bind:value={newType}
-						class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+					<Select
+						type="single"
+						value={newType}
+						onValueChange={(v) => (newType = v as 'TOKEN' | 'REQUEST' | 'COGNITO_USER_POOLS')}
 					>
-						{#each TYPES as t (t)}
-							<option value={t}>{t}</option>
-						{/each}
-					</select>
+						<SelectTrigger id="auth-type" class="w-full">
+							{newType}
+						</SelectTrigger>
+						<SelectContent>
+							{#each TYPES as t (t)}
+								<SelectItem value={t} label={t}>{t}</SelectItem>
+							{/each}
+						</SelectContent>
+					</Select>
 				</div>
 				<div class="space-y-1">
 					<Label for="auth-authtype">authType</Label>

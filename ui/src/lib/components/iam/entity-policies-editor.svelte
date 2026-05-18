@@ -4,6 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Badge } from '$lib/components/ui/badge';
 	import PolicyEditor from './policy-editor.svelte';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -68,6 +69,10 @@
 
 	const availableManaged = $derived(
 		allManaged.filter((p) => !attached.some((a) => a.policyArn === p.arn))
+	);
+
+	const pickerLabel = $derived(
+		availableManaged.find((p) => p.arn === pickerArn)?.policyName ?? ''
 	);
 
 	onMount(async () => {
@@ -242,20 +247,24 @@
 			</ul>
 		{/if}
 		<div class="mt-2 flex gap-2">
-			<select
+			<Select
+				type="single"
 				bind:value={pickerArn}
-				class="h-8 flex-1 rounded-md border border-border bg-background px-2 text-xs disabled:opacity-50"
 				disabled={availableManaged.length === 0}
 			>
-				<option value="">
-					{availableManaged.length === 0
-						? '(no other managed policies)'
-						: 'Select a managed policy to attach…'}
-				</option>
-				{#each availableManaged as p (p.arn)}
-					<option value={p.arn}>{p.policyName}</option>
-				{/each}
-			</select>
+				<SelectTrigger size="sm" class="flex-1 text-xs">
+					{pickerArn
+						? pickerLabel
+						: availableManaged.length === 0
+							? '(no other managed policies)'
+							: 'Select a managed policy to attach...'}
+				</SelectTrigger>
+				<SelectContent>
+					{#each availableManaged as p (p.arn)}
+						<SelectItem value={p.arn} label={p.policyName}>{p.policyName}</SelectItem>
+					{/each}
+				</SelectContent>
+			</Select>
 			<Button size="sm" onclick={handleAttach} disabled={!pickerArn || attaching}>
 				<Plus class="size-3.5" />
 				<span class="ml-1">Attach</span>

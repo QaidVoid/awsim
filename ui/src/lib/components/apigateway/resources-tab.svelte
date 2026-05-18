@@ -15,6 +15,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import {
 		Dialog,
 		DialogContent,
@@ -401,27 +402,39 @@
 			<div class="grid grid-cols-2 gap-3">
 				<div class="space-y-1">
 					<Label for="mm-http">HTTP method</Label>
-					<select
-						id="mm-http"
-						bind:value={newMethodHttp}
-						class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+					<Select
+						type="single"
+						value={newMethodHttp}
+						onValueChange={(v) =>
+							(newMethodHttp = v as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH')}
 					>
-						{#each HTTP_METHODS as m (m)}
-							<option value={m}>{m}</option>
-						{/each}
-					</select>
+						<SelectTrigger id="mm-http" class="w-full">
+							{newMethodHttp}
+						</SelectTrigger>
+						<SelectContent>
+							{#each HTTP_METHODS as m (m)}
+								<SelectItem value={m} label={m}>{m}</SelectItem>
+							{/each}
+						</SelectContent>
+					</Select>
 				</div>
 				<div class="space-y-1">
 					<Label for="mm-int">Integration type</Label>
-					<select
-						id="mm-int"
-						bind:value={newIntegrationType}
-						class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+					<Select
+						type="single"
+						value={newIntegrationType}
+						onValueChange={(v) =>
+							(newIntegrationType = v as 'MOCK' | 'HTTP_PROXY' | 'AWS_PROXY' | 'AWS' | 'HTTP')}
 					>
-						{#each INTEGRATION_TYPES as t (t)}
-							<option value={t}>{t}</option>
-						{/each}
-					</select>
+						<SelectTrigger id="mm-int" class="w-full">
+							{newIntegrationType}
+						</SelectTrigger>
+						<SelectContent>
+							{#each INTEGRATION_TYPES as t (t)}
+								<SelectItem value={t} label={t}>{t}</SelectItem>
+							{/each}
+						</SelectContent>
+					</Select>
 				</div>
 			</div>
 			{#if newIntegrationType !== 'MOCK'}

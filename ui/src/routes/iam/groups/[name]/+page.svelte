@@ -23,6 +23,7 @@
 	} from '$lib/api/iam';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { DetailPage, DetailNavItem } from '$lib/components/service';
 	import EntityPoliciesEditor from '$lib/components/iam/entity-policies-editor.svelte';
@@ -241,18 +242,24 @@
 						</ul>
 					{/if}
 					<div class="mt-2 flex gap-2">
-						<select
+						<Select
+							type="single"
 							bind:value={memberPickerName}
-							class="h-8 flex-1 rounded-md border border-border bg-background px-2 text-xs disabled:opacity-50"
 							disabled={availableUsers.length === 0}
 						>
-							<option value="">
-								{availableUsers.length === 0 ? '(no other users)' : 'Select a user to add…'}
-							</option>
-							{#each availableUsers as u (u.userName)}
-								<option value={u.userName}>{u.userName}</option>
-							{/each}
-						</select>
+							<SelectTrigger size="sm" class="flex-1 text-xs">
+								{memberPickerName
+									? memberPickerName
+									: availableUsers.length === 0
+										? '(no other users)'
+										: 'Select a user to add...'}
+							</SelectTrigger>
+							<SelectContent>
+								{#each availableUsers as u (u.userName)}
+									<SelectItem value={u.userName} label={u.userName}>{u.userName}</SelectItem>
+								{/each}
+							</SelectContent>
+						</Select>
 						<Button size="sm" onclick={addMember} disabled={!memberPickerName || addingMember}>
 							<Plus class="size-3.5" />
 							<span class="ml-1">Add</span>

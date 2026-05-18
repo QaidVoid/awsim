@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { toast } from 'svelte-sonner';
 	import { createEventSourceMapping } from '$lib/api/lambda';
@@ -116,15 +117,16 @@
 			{#if isStreamSource(sourceArn)}
 				<div class="space-y-1.5">
 					<Label for="esm-start">Starting position</Label>
-					<select
-						id="esm-start"
-						bind:value={startingPosition}
-						class="h-9 w-full rounded-md border border-border bg-background px-3 text-sm"
-					>
-						<option value="TRIM_HORIZON">TRIM_HORIZON</option>
-						<option value="LATEST">LATEST</option>
-						<option value="AT_TIMESTAMP">AT_TIMESTAMP</option>
-					</select>
+					<Select type="single" bind:value={startingPosition}>
+						<SelectTrigger id="esm-start" class="w-full">
+							{startingPosition}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="TRIM_HORIZON" label="TRIM_HORIZON">TRIM_HORIZON</SelectItem>
+							<SelectItem value="LATEST" label="LATEST">LATEST</SelectItem>
+							<SelectItem value="AT_TIMESTAMP" label="AT_TIMESTAMP">AT_TIMESTAMP</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 			{/if}
 

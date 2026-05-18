@@ -11,6 +11,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { toast } from 'svelte-sonner';
 	import Plus from '@lucide/svelte/icons/plus';
 
@@ -88,15 +89,16 @@
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="cf-runtime">Runtime</Label>
-				<select
-					id="cf-runtime"
-					bind:value={runtime}
-					class="h-9 rounded-md border border-border bg-background px-2.5 text-sm focus:border-ring focus:ring-1 focus:ring-ring focus:outline-none"
-				>
-					{#each runtimes as rt (rt)}
-						<option value={rt}>{rt}</option>
-					{/each}
-				</select>
+				<Select type="single" bind:value={runtime}>
+					<SelectTrigger id="cf-runtime" class="w-full">
+						{runtime}
+					</SelectTrigger>
+					<SelectContent>
+						{#each runtimes as rt (rt)}
+							<SelectItem value={rt} label={rt}>{rt}</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="cf-handler">Handler</Label>

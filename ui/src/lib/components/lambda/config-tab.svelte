@@ -7,6 +7,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { toast } from 'svelte-sonner';
 	import Save from '@lucide/svelte/icons/save';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -87,15 +88,16 @@
 		<div class="grid grid-cols-1 gap-4 px-4 py-3 sm:grid-cols-2">
 			<div class="flex flex-col gap-1.5">
 				<Label for="cfg-runtime">Runtime</Label>
-				<select
-					id="cfg-runtime"
-					bind:value={runtime}
-					class="h-9 rounded-md border border-border bg-background px-2.5 text-sm focus:border-ring focus:ring-1 focus:ring-ring focus:outline-none"
-				>
-					{#each runtimes as rt (rt)}
-						<option value={rt}>{rt}</option>
-					{/each}
-				</select>
+				<Select type="single" bind:value={runtime}>
+					<SelectTrigger id="cfg-runtime" class="w-full">
+						{runtime}
+					</SelectTrigger>
+					<SelectContent>
+						{#each runtimes as rt (rt)}
+							<SelectItem value={rt} label={rt}>{rt}</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="cfg-handler">Handler</Label>

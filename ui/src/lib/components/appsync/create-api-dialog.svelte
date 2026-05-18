@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { toast } from 'svelte-sonner';
 	import { createGraphqlApi } from '$lib/api/appsync';
 
@@ -69,15 +70,20 @@
 			</div>
 			<div class="flex flex-col gap-1">
 				<Label for="appsync-create-auth">Authentication</Label>
-				<select
-					id="appsync-create-auth"
-					bind:value={authType}
-					class="h-9 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+				<Select
+					type="single"
+					value={authType}
+					onValueChange={(v) => (authType = v as AuthType)}
 				>
-					{#each AUTH_TYPES as t (t)}
-						<option value={t}>{t}</option>
-					{/each}
-				</select>
+					<SelectTrigger id="appsync-create-auth" class="w-full">
+						{authType}
+					</SelectTrigger>
+					<SelectContent>
+						{#each AUTH_TYPES as t (t)}
+							<SelectItem value={t} label={t}>{t}</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
 			</div>
 		</div>
 		<DialogFooter>

@@ -14,6 +14,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import EntityDetailSheet from './entity-detail-sheet.svelte';
 	import Server from '@lucide/svelte/icons/server';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
@@ -263,18 +264,24 @@
 			{/if}
 			{#if selected.roles.length === 0}
 				<div class="mt-2 flex gap-2">
-					<select
+					<Select
+						type="single"
 						bind:value={rolePickerName}
-						class="h-8 flex-1 rounded-md border border-border bg-background px-2 text-xs disabled:opacity-50"
 						disabled={availableRoles.length === 0}
 					>
-						<option value="">
-							{availableRoles.length === 0 ? '(no roles available)' : 'Select a role…'}
-						</option>
-						{#each availableRoles as r (r.roleName)}
-							<option value={r.roleName}>{r.roleName}</option>
-						{/each}
-					</select>
+						<SelectTrigger size="sm" class="flex-1 text-xs">
+							{rolePickerName
+								? rolePickerName
+								: availableRoles.length === 0
+									? '(no roles available)'
+									: 'Select a role...'}
+						</SelectTrigger>
+						<SelectContent>
+							{#each availableRoles as r (r.roleName)}
+								<SelectItem value={r.roleName} label={r.roleName}>{r.roleName}</SelectItem>
+							{/each}
+						</SelectContent>
+					</Select>
 					<Button size="sm" onclick={addRole} disabled={!rolePickerName || addingRole}>
 						<Plus class="size-3.5" />
 						<span class="ml-1">Attach</span>

@@ -12,6 +12,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import PolicyEditor from './policy-editor.svelte';
@@ -33,6 +34,11 @@
 	let contextEntries = $state<ContextEntry[]>([]);
 	let principalLoading = $state(false);
 	let principalResult = $state<SimulationResult | null>(null);
+
+	const principalLabel = $derived.by(() => {
+		const p = principals.find((x) => x.value === principalArn);
+		return p ? `[${p.kind}] ${p.label}` : '';
+	});
 
 	// Custom simulator state
 	let customPolicy = $state(
@@ -300,18 +306,18 @@
 			<div class="grid gap-3 md:grid-cols-2">
 				<div class="flex flex-col gap-1.5">
 					<Label for="sim-principal" class="text-xs">Principal (user / role)</Label>
-					<select
-						id="sim-principal"
-						bind:value={principalArn}
-						class="h-9 rounded-md border border-input bg-background px-2.5 text-sm shadow-xs"
-					>
-						{#if principals.length === 0}
-							<option value="">No users or roles found</option>
-						{/if}
-						{#each principals as p (p.value)}
-							<option value={p.value}>[{p.kind}] {p.label}</option>
-						{/each}
-					</select>
+					<Select type="single" bind:value={principalArn}>
+						<SelectTrigger id="sim-principal" class="w-full">
+							{principalArn ? principalLabel : 'No users or roles found'}
+						</SelectTrigger>
+						<SelectContent>
+							{#each principals as p (p.value)}
+								<SelectItem value={p.value} label={`[${p.kind}] ${p.label}`}>
+									[{p.kind}] {p.label}
+								</SelectItem>
+							{/each}
+						</SelectContent>
+					</Select>
 				</div>
 				<div class="flex flex-col gap-1.5">
 					<Label for="sim-resource" class="text-xs">Resource ARN (optional)</Label>
@@ -392,17 +398,19 @@
 							bind:value={entry.values[0]}
 							class="col-span-5 h-8 font-mono text-xs"
 						/>
-						<select
-							bind:value={entry.type}
-							class="col-span-2 h-8 rounded-md border border-input bg-background px-2 text-xs"
-						>
-							<option value="string">string</option>
-							<option value="stringList">stringList</option>
-							<option value="numeric">numeric</option>
-							<option value="boolean">boolean</option>
-							<option value="ip">ip</option>
-							<option value="date">date</option>
-						</select>
+						<Select type="single" bind:value={entry.type}>
+							<SelectTrigger size="sm" class="col-span-2 w-full text-xs">
+								{entry.type}
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="string" label="string">string</SelectItem>
+								<SelectItem value="stringList" label="stringList">stringList</SelectItem>
+								<SelectItem value="numeric" label="numeric">numeric</SelectItem>
+								<SelectItem value="boolean" label="boolean">boolean</SelectItem>
+								<SelectItem value="ip" label="ip">ip</SelectItem>
+								<SelectItem value="date" label="date">date</SelectItem>
+							</SelectContent>
+						</Select>
 						<Button
 							type="button"
 							variant="ghost"

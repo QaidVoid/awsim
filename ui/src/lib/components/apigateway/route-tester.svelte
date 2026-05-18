@@ -3,6 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { toast } from 'svelte-sonner';
 	import Copy from '@lucide/svelte/icons/copy';
@@ -91,30 +92,35 @@
 	<div class="grid grid-cols-[110px_140px_1fr] gap-2">
 		<div class="flex flex-col gap-1">
 			<Label for="rt-method">Method</Label>
-			<select
-				id="rt-method"
-				bind:value={method}
-				class="h-8 rounded-md border border-border bg-background px-2 text-xs focus:border-ring focus:ring-1 focus:ring-ring focus:outline-none"
+			<Select
+				type="single"
+				value={method}
+				onValueChange={(v) => (method = v as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH')}
 			>
-				<option value="GET">GET</option>
-				<option value="POST">POST</option>
-				<option value="PUT">PUT</option>
-				<option value="PATCH">PATCH</option>
-				<option value="DELETE">DELETE</option>
-			</select>
+				<SelectTrigger id="rt-method" size="sm" class="w-full text-xs">
+					{method}
+				</SelectTrigger>
+				<SelectContent>
+					<SelectItem value="GET" label="GET">GET</SelectItem>
+					<SelectItem value="POST" label="POST">POST</SelectItem>
+					<SelectItem value="PUT" label="PUT">PUT</SelectItem>
+					<SelectItem value="PATCH" label="PATCH">PATCH</SelectItem>
+					<SelectItem value="DELETE" label="DELETE">DELETE</SelectItem>
+				</SelectContent>
+			</Select>
 		</div>
 		<div class="flex flex-col gap-1">
 			<Label for="rt-stage">Stage</Label>
-			<select
-				id="rt-stage"
-				bind:value={stage}
-				class="h-8 rounded-md border border-border bg-background px-2 text-xs focus:border-ring focus:ring-1 focus:ring-ring focus:outline-none"
-			>
-				<option value="">— pick —</option>
-				{#each stages as s (s.stageName)}
-					<option value={s.stageName}>{s.stageName}</option>
-				{/each}
-			</select>
+			<Select type="single" bind:value={stage}>
+				<SelectTrigger id="rt-stage" size="sm" class="w-full text-xs">
+					{stage ? stage : '- pick -'}
+				</SelectTrigger>
+				<SelectContent>
+					{#each stages as s (s.stageName)}
+						<SelectItem value={s.stageName} label={s.stageName}>{s.stageName}</SelectItem>
+					{/each}
+				</SelectContent>
+			</Select>
 		</div>
 		<div class="flex flex-col gap-1">
 			<Label for="rt-path">Path</Label>

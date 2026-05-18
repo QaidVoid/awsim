@@ -11,6 +11,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { toast } from 'svelte-sonner';
 	import Plus from '@lucide/svelte/icons/plus';
 
@@ -42,6 +43,8 @@
 	let type = $state<'STANDARD' | 'EXPRESS'>('STANDARD');
 	let definition = $state(DEFAULT_DEF);
 	let creating = $state(false);
+
+	const typeLabel = $derived(type === 'EXPRESS' ? 'Express' : 'Standard');
 
 	async function submit(e: Event) {
 		e.preventDefault();
@@ -81,14 +84,19 @@
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="sm-type">Type</Label>
-				<select
-					id="sm-type"
-					bind:value={type}
-					class="h-9 rounded-md border border-border bg-background px-2.5 text-sm focus:border-ring focus:ring-1 focus:ring-ring focus:outline-none"
+				<Select
+					type="single"
+					value={type}
+					onValueChange={(v) => (type = v as 'STANDARD' | 'EXPRESS')}
 				>
-					<option value="STANDARD">Standard</option>
-					<option value="EXPRESS">Express</option>
-				</select>
+					<SelectTrigger id="sm-type" class="w-full">
+						{typeLabel}
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="STANDARD" label="Standard">Standard</SelectItem>
+						<SelectItem value="EXPRESS" label="Express">Express</SelectItem>
+					</SelectContent>
+				</Select>
 			</div>
 			<div class="col-span-2 flex flex-col gap-1.5">
 				<Label for="sm-def">ASL definition</Label>
