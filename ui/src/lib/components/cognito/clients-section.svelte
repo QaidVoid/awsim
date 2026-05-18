@@ -4,10 +4,12 @@
 	import { listAppClients, deleteAppClient, type CognitoAppClient } from '$lib/api/cognito';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import { EmptyState, ListSkeleton } from '$lib/components/service';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
 	import KeyRound from '@lucide/svelte/icons/key-round';
+	import SearchX from '@lucide/svelte/icons/search-x';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import ClientDetail from './client-detail.svelte';
@@ -27,8 +29,19 @@
 	let nextToken = $state<string | undefined>(undefined);
 	let pageIndex = $derived(pageStack.length);
 
+	let filter = $state('');
 	let expanded = $state<string | null>(null);
 	let createOpen = $state(false);
+
+	const filtered = $derived.by(() => {
+		const q = filter.trim().toLowerCase();
+		if (!q) return clients;
+		return clients.filter(
+			(c) =>
+				c.clientName.toLowerCase().includes(q) ||
+				c.clientId.toLowerCase().includes(q)
+		);
+	});
 	let deleteId = $state<string | null>(null);
 	let deleteName = $state<string | null>(null);
 	let deleteOpen = $state(false);
@@ -99,8 +112,19 @@
 	<div
 		class="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-border bg-background px-6 py-3"
 	>
-		<Badge variant="secondary">Page {pageIndex + 1}{nextToken ? '+' : ''}</Badge>
+		<Input
+			type="search"
+			placeholder="Filter clients..."
+			bind:value={filter}
+			class="h-8 max-w-xs"
+		/>
 		<div class="flex-1"></div>
+		<Badge variant="secondary">
+			{#if filter.trim()}{filtered.length} of {/if}{clients.length} client{clients.length === 1
+				? ''
+				: 's'}
+		</Badge>
+		<Badge variant="outline">Page {pageIndex + 1}{nextToken ? '+' : ''}</Badge>
 		<Button
 			variant="ghost"
 			size="icon-sm"
@@ -142,9 +166,15 @@
 					</Button>
 				{/snippet}
 			</EmptyState>
+		{:else if filtered.length === 0}
+			<EmptyState
+				icon={SearchX}
+				title={`No clients match "${filter.trim()}"`}
+				description="Filtering matches the loaded page by client name or ID."
+			/>
 		{:else}
 			<ul class="space-y-1.5">
-				{#each clients as c (c.clientId)}
+				{#each filtered as c (c.clientId)}
 					<li class="rounded border border-border/60">
 						<div class="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
 							<button

@@ -4,10 +4,12 @@
 	import { listGroups, deleteGroup, type CognitoGroup } from '$lib/api/cognito';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import { EmptyState, ListSkeleton } from '$lib/components/service';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
 	import UsersRound from '@lucide/svelte/icons/users-round';
+	import SearchX from '@lucide/svelte/icons/search-x';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 	import GroupDetail from './group-detail.svelte';
 	import CreateGroupDialog from './create-group-dialog.svelte';
@@ -22,7 +24,18 @@
 
 	let groups = $state<CognitoGroup[]>([]);
 	let loading = $state(false);
+	let filter = $state('');
 	let expanded = $state<string | null>(null);
+
+	const filtered = $derived.by(() => {
+		const q = filter.trim().toLowerCase();
+		if (!q) return groups;
+		return groups.filter(
+			(g) =>
+				g.name.toLowerCase().includes(q) ||
+				(g.description ?? '').toLowerCase().includes(q)
+		);
+	});
 	let createOpen = $state(false);
 	let editTarget = $state<CognitoGroup | null>(null);
 	let editOpen = $state(false);
@@ -74,8 +87,16 @@
 	<div
 		class="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-border bg-background px-6 py-3"
 	>
-		<Badge variant="secondary">{groups.length} groups</Badge>
+		<Input
+			type="search"
+			placeholder="Filter groups..."
+			bind:value={filter}
+			class="h-8 max-w-xs"
+		/>
 		<div class="flex-1"></div>
+		<Badge variant="secondary">
+			{#if filter.trim()}{filtered.length} of {/if}{groups.length} group{groups.length === 1 ? '' : 's'}
+		</Badge>
 		<Button variant="ghost" size="icon-sm" onclick={load} disabled={loading} title="Refresh">
 			<RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
 		</Button>
@@ -99,9 +120,15 @@
 					</Button>
 				{/snippet}
 			</EmptyState>
+		{:else if filtered.length === 0}
+			<EmptyState
+				icon={SearchX}
+				title={`No groups match "${filter.trim()}"`}
+				description="Filtering matches by group name or description."
+			/>
 		{:else}
 			<ul class="space-y-1.5">
-				{#each groups as g (g.name)}
+				{#each filtered as g (g.name)}
 					<li class="rounded border border-border/60">
 						<div class="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
 							<button
