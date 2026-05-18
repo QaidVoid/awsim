@@ -5,6 +5,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
@@ -51,6 +52,8 @@
 		if (m === 'TEXT' || m === 'EMBEDDING') return 'secondary';
 		return 'outline';
 	}
+
+	let providerLabel = $derived(provider === 'all' ? 'All providers' : provider);
 </script>
 
 {#snippet providerCell(row: FoundationModel)}
@@ -86,16 +89,17 @@
 				class="h-8 pl-7 text-xs"
 			/>
 		</div>
-		<select
-			bind:value={provider}
-			aria-label="Filter by provider"
-			class="h-8 rounded-md border border-input bg-background px-2 text-xs"
-		>
-			<option value="all">All providers</option>
-			{#each providers as p (p)}
-				<option value={p}>{p}</option>
-			{/each}
-		</select>
+		<Select type="single" bind:value={provider}>
+			<SelectTrigger aria-label="Filter by provider" size="sm" class="w-[160px] text-xs">
+				{providerLabel}
+			</SelectTrigger>
+			<SelectContent>
+				<SelectItem value="all" label="All providers">All providers</SelectItem>
+				{#each providers as p (p)}
+					<SelectItem value={p} label={p}>{p}</SelectItem>
+				{/each}
+			</SelectContent>
+		</Select>
 		<Button variant="outline" size="sm" onclick={load} disabled={loading}>
 			<RefreshCwIcon class={loading ? 'animate-spin' : ''} />
 			Refresh

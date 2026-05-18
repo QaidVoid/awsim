@@ -3,6 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import {
 		Dialog,
@@ -154,14 +155,19 @@
 			</div>
 			<div class="flex flex-col gap-1">
 				<Label for="ses-supp-reason">Reason</Label>
-				<select
-					id="ses-supp-reason"
-					bind:value={newReason}
-					class="border-input bg-background h-9 rounded-md border px-2 text-sm"
+				<Select
+					type="single"
+					value={newReason}
+					onValueChange={(v) => (newReason = v as SuppressionReason)}
 				>
-					<option value="BOUNCE">BOUNCE</option>
-					<option value="COMPLAINT">COMPLAINT</option>
-				</select>
+					<SelectTrigger id="ses-supp-reason" class="w-full text-sm">
+						{newReason}
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="BOUNCE" label="BOUNCE">BOUNCE</SelectItem>
+						<SelectItem value="COMPLAINT" label="COMPLAINT">COMPLAINT</SelectItem>
+					</SelectContent>
+				</Select>
 			</div>
 		</div>
 		<DialogFooter>

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Badge } from '$lib/components/ui/badge';
 	import { DataTable, EmptyState } from '$lib/components/service';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
@@ -215,15 +216,22 @@
 		</div>
 		{#if users.length > 0}
 			<div class="flex items-center gap-1">
-				<select
-					bind:value={memberPicks[row.groupId]}
-					class="h-6 rounded border border-border bg-background px-1 text-[10px]"
+				<Select
+					type="single"
+					value={memberPicks[row.groupId] ?? ''}
+					onValueChange={(v) => (memberPicks[row.groupId] = v)}
 				>
-					<option value="">add user…</option>
-					{#each users as u (u.userId)}
-						<option value={u.userId}>{u.userName}</option>
-					{/each}
-				</select>
+					<SelectTrigger size="sm" class="h-6 w-[160px] text-[10px]">
+						{memberPicks[row.groupId]
+							? userName(memberPicks[row.groupId])
+							: 'add user…'}
+					</SelectTrigger>
+					<SelectContent>
+						{#each users as u (u.userId)}
+							<SelectItem value={u.userId} label={u.userName}>{u.userName}</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
 				<Button variant="outline" size="xs" onclick={() => addMember(row)}>
 					<PlusIcon class="size-3" />
 				</Button>

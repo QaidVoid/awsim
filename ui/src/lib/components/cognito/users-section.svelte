@@ -14,6 +14,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
@@ -189,15 +190,20 @@
 			bind:value={filter}
 			class="h-8 max-w-xs"
 		/>
-		<select
-			bind:value={pageSize}
-			aria-label="Page size"
-			class="h-8 rounded-md border border-border bg-background px-2 text-xs"
+		<Select
+			type="single"
+			value={String(pageSize)}
+			onValueChange={(v) => (pageSize = Number(v))}
 		>
-			{#each PAGE_SIZE_OPTIONS as n (n)}
-				<option value={n}>{n} / page</option>
-			{/each}
-		</select>
+			<SelectTrigger aria-label="Page size" size="sm" class="w-[110px] text-xs">
+				{pageSize} / page
+			</SelectTrigger>
+			<SelectContent>
+				{#each PAGE_SIZE_OPTIONS as n (n)}
+					<SelectItem value={String(n)} label={`${n} / page`}>{n} / page</SelectItem>
+				{/each}
+			</SelectContent>
+		</Select>
 		<div class="flex-1"></div>
 		<Badge variant="secondary">
 			Page {pageIndex + 1}{nextToken ? '+' : ''}

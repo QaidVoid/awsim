@@ -12,6 +12,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import KvEditor from './kv-editor.svelte';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 
@@ -125,15 +126,20 @@
 				</div>
 				<div class="space-y-1.5">
 					<Label for="idp-type">Type</Label>
-					<select
-						id="idp-type"
-						bind:value={type}
-						class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+					<Select
+						type="single"
+						value={type}
+						onValueChange={(v) => (type = v as IdpType)}
 					>
-						{#each TYPES as t (t)}
-							<option value={t}>{t}</option>
-						{/each}
-					</select>
+						<SelectTrigger id="idp-type" class="w-full text-sm">
+							{type}
+						</SelectTrigger>
+						<SelectContent>
+							{#each TYPES as t (t)}
+								<SelectItem value={t} label={t}>{t}</SelectItem>
+							{/each}
+						</SelectContent>
+					</Select>
 				</div>
 			</div>
 

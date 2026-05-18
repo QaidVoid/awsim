@@ -5,6 +5,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import Volume2Icon from '@lucide/svelte/icons/volume-2';
@@ -49,6 +50,9 @@
 		if (g === 'Female' || g === 'Male') return 'secondary';
 		return 'outline';
 	}
+
+	let languageLabel = $derived(language === 'all' ? 'All languages' : language);
+	let genderLabel = $derived(gender === 'all' ? 'All genders' : gender);
 </script>
 
 {#snippet languageCell(row: Voice)}
@@ -87,25 +91,27 @@
 				class="h-8 pl-7 text-xs"
 			/>
 		</div>
-		<select
-			bind:value={language}
-			aria-label="Filter by language"
-			class="h-8 rounded-md border border-input bg-background px-2 text-xs"
-		>
-			<option value="all">All languages</option>
-			{#each languages as l (l)}
-				<option value={l}>{l}</option>
-			{/each}
-		</select>
-		<select
-			bind:value={gender}
-			aria-label="Filter by gender"
-			class="h-8 rounded-md border border-input bg-background px-2 text-xs"
-		>
-			<option value="all">All genders</option>
-			<option value="Female">Female</option>
-			<option value="Male">Male</option>
-		</select>
+		<Select type="single" bind:value={language}>
+			<SelectTrigger aria-label="Filter by language" size="sm" class="w-[160px] text-xs">
+				{languageLabel}
+			</SelectTrigger>
+			<SelectContent>
+				<SelectItem value="all" label="All languages">All languages</SelectItem>
+				{#each languages as l (l)}
+					<SelectItem value={l} label={l}>{l}</SelectItem>
+				{/each}
+			</SelectContent>
+		</Select>
+		<Select type="single" bind:value={gender}>
+			<SelectTrigger aria-label="Filter by gender" size="sm" class="w-[160px] text-xs">
+				{genderLabel}
+			</SelectTrigger>
+			<SelectContent>
+				<SelectItem value="all" label="All genders">All genders</SelectItem>
+				<SelectItem value="Female" label="Female">Female</SelectItem>
+				<SelectItem value="Male" label="Male">Male</SelectItem>
+			</SelectContent>
+		</Select>
 		<Button variant="outline" size="sm" onclick={load} disabled={loading}>
 			<RefreshCwIcon class={loading ? 'animate-spin' : ''} />
 			Refresh

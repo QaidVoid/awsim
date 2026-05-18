@@ -11,6 +11,7 @@
 	} from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import Upload from '@lucide/svelte/icons/upload';
 
@@ -190,15 +191,16 @@
 				<div class="grid gap-2 sm:grid-cols-2">
 					<div class="space-y-1.5">
 						<Label for="csv-username">Username column</Label>
-						<select
-							id="csv-username"
-							bind:value={usernameColumn}
-							class="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
-						>
-							{#each columns as c (c)}
-								<option value={c}>{c}</option>
-							{/each}
-						</select>
+						<Select type="single" bind:value={usernameColumn}>
+							<SelectTrigger id="csv-username" class="w-full text-sm">
+								{usernameColumn}
+							</SelectTrigger>
+							<SelectContent>
+								{#each columns as c (c)}
+									<SelectItem value={c} label={c}>{c}</SelectItem>
+								{/each}
+							</SelectContent>
+						</Select>
 					</div>
 					<div class="flex items-end">
 						<label class="flex items-center gap-2 text-xs text-muted-foreground">

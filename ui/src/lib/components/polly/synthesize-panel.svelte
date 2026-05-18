@@ -4,6 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Badge } from '$lib/components/ui/badge';
 	import PlayIcon from '@lucide/svelte/icons/play';
 	import DownloadIcon from '@lucide/svelte/icons/download';
@@ -64,6 +65,11 @@
 		a.download = `polly-${voiceId}.${ext}`;
 		a.click();
 	}
+
+	let voiceLabel = $derived.by(() => {
+		const v = voices.find((x) => x.id === voiceId);
+		return v ? `${v.name} — ${v.languageCode} (${v.gender})` : '';
+	});
 </script>
 
 <div class="flex flex-col gap-4 p-4">
@@ -75,32 +81,39 @@
 	<div class="flex flex-wrap items-end gap-3">
 		<div class="flex min-w-48 flex-col gap-1">
 			<Label for="polly-voice">Voice</Label>
-			<select
-				id="polly-voice"
-				bind:value={voiceId}
-				class="h-9 rounded-md border border-input bg-background px-2 text-xs"
-			>
-				{#each voices as v (`${v.id}-${v.languageCode}`)}
-					<option value={v.id}>
-						{v.name} — {v.languageCode} ({v.gender})
-					</option>
-				{:else}
-					<option value="">No voices available</option>
-				{/each}
-			</select>
+			<Select type="single" bind:value={voiceId} disabled={voices.length === 0}>
+				<SelectTrigger id="polly-voice" class="w-full text-xs">
+					{voiceId ? voiceLabel : 'No voices available'}
+				</SelectTrigger>
+				<SelectContent>
+					{#each voices as v (`${v.id}-${v.languageCode}`)}
+						<SelectItem
+							value={v.id}
+							label={`${v.name} — ${v.languageCode} (${v.gender})`}
+						>
+							{v.name} — {v.languageCode} ({v.gender})
+						</SelectItem>
+					{/each}
+				</SelectContent>
+			</Select>
 		</div>
 
 		<div class="flex flex-col gap-1">
 			<Label for="polly-format">Format</Label>
-			<select
-				id="polly-format"
-				bind:value={format}
-				class="h-9 rounded-md border border-input bg-background px-2 text-xs"
+			<Select
+				type="single"
+				value={format}
+				onValueChange={(v) => (format = v as Format)}
 			>
-				<option value="mp3">mp3</option>
-				<option value="ogg_vorbis">ogg_vorbis</option>
-				<option value="pcm">pcm</option>
-			</select>
+				<SelectTrigger id="polly-format" class="w-[140px] text-xs">
+					{format}
+				</SelectTrigger>
+				<SelectContent>
+					<SelectItem value="mp3" label="mp3">mp3</SelectItem>
+					<SelectItem value="ogg_vorbis" label="ogg_vorbis">ogg_vorbis</SelectItem>
+					<SelectItem value="pcm" label="pcm">pcm</SelectItem>
+				</SelectContent>
+			</Select>
 		</div>
 
 		<Button onclick={synth} disabled={busy || !text.trim() || !voiceId}>

@@ -3,6 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { EmptyState, ListSkeleton } from '$lib/components/service';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
@@ -99,15 +100,16 @@
 		<div class="grid grid-cols-1 gap-3 sm:grid-cols-[140px_1fr_auto] sm:items-end">
 			<div class="flex flex-col gap-1">
 				<Label for="sns-sub-protocol">Protocol</Label>
-				<select
-					id="sns-sub-protocol"
-					bind:value={protocol}
-					class="border-input dark:bg-input/30 h-9 rounded-md border bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:ring-3"
-				>
-					{#each PROTOCOLS as p (p)}
-						<option value={p}>{p}</option>
-					{/each}
-				</select>
+				<Select type="single" bind:value={protocol}>
+					<SelectTrigger id="sns-sub-protocol" class="w-full text-sm">
+						{protocol}
+					</SelectTrigger>
+					<SelectContent>
+						{#each PROTOCOLS as p (p)}
+							<SelectItem value={p} label={p}>{p}</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
 			</div>
 			<div class="flex flex-col gap-1">
 				<Label for="sns-sub-endpoint">Endpoint</Label>

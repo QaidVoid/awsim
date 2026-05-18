@@ -11,6 +11,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import SendIcon from '@lucide/svelte/icons/send';
 	import { toast } from 'svelte-sonner';
@@ -114,15 +115,16 @@
 			<div class="flex flex-col gap-1">
 				<Label for="ses-from">From</Label>
 				{#if identities.length > 0}
-					<select
-						id="ses-from"
-						bind:value={from}
-						class="border-input bg-background h-9 rounded-md border px-2 font-mono text-xs"
-					>
-						{#each identities as i (i.name)}
-							<option value={i.name}>{i.name}</option>
-						{/each}
-					</select>
+					<Select type="single" bind:value={from}>
+						<SelectTrigger id="ses-from" class="w-full font-mono text-xs">
+							{from}
+						</SelectTrigger>
+						<SelectContent>
+							{#each identities as i (i.name)}
+								<SelectItem value={i.name} label={i.name}>{i.name}</SelectItem>
+							{/each}
+						</SelectContent>
+					</Select>
 				{:else}
 					<Input
 						id="ses-from"

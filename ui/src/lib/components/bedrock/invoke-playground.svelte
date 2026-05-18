@@ -8,6 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Badge } from '$lib/components/ui/badge';
 	import { EmptyState } from '$lib/components/service';
 	import SendIcon from '@lucide/svelte/icons/send';
@@ -149,23 +150,29 @@
 	function clearChat() {
 		turns = [];
 	}
+
+	let modelLabel = $derived.by(() => {
+		const m = textModels.find((x) => x.modelId === modelId);
+		return m ? `${m.providerName} — ${m.modelName}` : '';
+	});
 </script>
 
 <div class="flex h-full min-h-0 flex-col gap-3 p-4">
 	<div class="flex flex-wrap items-end gap-3">
 		<div class="flex min-w-64 flex-1 flex-col gap-1">
 			<Label for="bedrock-model-select">Model</Label>
-			<select
-				id="bedrock-model-select"
-				bind:value={modelId}
-				class="h-9 rounded-md border border-input bg-background px-2 text-xs"
-			>
-				{#each textModels as m (m.modelId)}
-					<option value={m.modelId}>{m.providerName} — {m.modelName}</option>
-				{:else}
-					<option value="">No text-to-text models</option>
-				{/each}
-			</select>
+			<Select type="single" bind:value={modelId} disabled={textModels.length === 0}>
+				<SelectTrigger id="bedrock-model-select" class="w-full text-xs">
+					{modelId ? modelLabel : 'No text-to-text models'}
+				</SelectTrigger>
+				<SelectContent>
+					{#each textModels as m (m.modelId)}
+						<SelectItem value={m.modelId} label={`${m.providerName} — ${m.modelName}`}>
+							{m.providerName} — {m.modelName}
+						</SelectItem>
+					{/each}
+				</SelectContent>
+			</Select>
 		</div>
 		<Button variant="outline" size="sm" onclick={clearChat} disabled={turns.length === 0}>
 			<Trash2Icon />

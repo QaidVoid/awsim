@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 
 	interface Props {
@@ -91,6 +92,12 @@
 		css = original.css;
 		imageUrl = original.imageUrl;
 	}
+
+	const scopeLabel = $derived.by(() => {
+		if (scope === POOL_DEFAULT) return 'Pool default (all clients)';
+		const c = clients.find((x) => x.clientId === scope);
+		return c ? `${c.clientName} — ${c.clientId}` : scope;
+	});
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
@@ -98,16 +105,21 @@
 		class="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-border bg-background px-6 py-3"
 	>
 		<Label for="scope-select" class="text-xs">Scope</Label>
-		<select
-			id="scope-select"
-			bind:value={scope}
-			class="h-8 rounded-md border border-border bg-background px-2 text-xs"
-		>
-			<option value={POOL_DEFAULT}>Pool default (all clients)</option>
-			{#each clients as c (c.clientId)}
-				<option value={c.clientId}>{c.clientName} — {c.clientId}</option>
-			{/each}
-		</select>
+		<Select type="single" bind:value={scope}>
+			<SelectTrigger id="scope-select" size="sm" class="w-[260px] text-xs">
+				{scopeLabel}
+			</SelectTrigger>
+			<SelectContent>
+				<SelectItem value={POOL_DEFAULT} label="Pool default (all clients)">
+					Pool default (all clients)
+				</SelectItem>
+				{#each clients as c (c.clientId)}
+					<SelectItem value={c.clientId} label={`${c.clientName} — ${c.clientId}`}>
+						{c.clientName} — {c.clientId}
+					</SelectItem>
+				{/each}
+			</SelectContent>
+		</Select>
 		<div class="flex-1"></div>
 		<Button variant="ghost" size="sm" onclick={reset} disabled={saving || !dirty}>
 			Discard
