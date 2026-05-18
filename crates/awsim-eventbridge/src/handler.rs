@@ -73,6 +73,7 @@ impl ServiceHandler for EventBridgeService {
 
             // Events
             "PutEvents" => events::put_events(&state, &input, ctx),
+            "TestEventPattern" => events::test_event_pattern(&input),
 
             // Tags
             "TagResource" => tags::tag_resource(&state, &input, ctx),

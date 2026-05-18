@@ -128,6 +128,35 @@ pub fn put_events(
     }))
 }
 
+/// TestEventPattern - evaluate an EventPattern against an Event using
+/// the exact same matcher PutEvents routes with, so the UI's "which
+/// rules would match" preview can never disagree with real delivery.
+pub fn test_event_pattern(input: &Value) -> Result<Value, AwsError> {
+    let pattern_str = input
+        .get("EventPattern")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameterValue", "EventPattern is required")
+        })?;
+    let event_str = input
+        .get("Event")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterValue", "Event is required"))?;
+    let pattern: Value = serde_json::from_str(pattern_str).map_err(|e| {
+        AwsError::bad_request(
+            "InvalidEventPatternException",
+            format!("Event pattern is not valid JSON: {e}"),
+        )
+    })?;
+    let event: Value = serde_json::from_str(event_str).map_err(|e| {
+        AwsError::bad_request(
+            "InvalidParameterValue",
+            format!("Event is not valid JSON: {e}"),
+        )
+    })?;
+    Ok(json!({ "Result": pattern_matches(&pattern, &event) }))
+}
+
 // ---------------------------------------------------------------------------
 // Pattern matching helpers
 // ---------------------------------------------------------------------------
