@@ -47,7 +47,7 @@
 				<EmptyState
 					icon={LayersIcon}
 					title="No subnets"
-					description="Subnets are created automatically with the default VPC, or via the AWS CLI."
+					description="Subnets partition a VPC into address ranges where instances launch. The default VPC provisions subnets automatically once it exists."
 				/>
 			{/snippet}
 		</DataTable>

@@ -54,7 +54,7 @@
 				<EmptyState
 					icon={Cpu}
 					title="No compute environments"
-					description="Create one with the AWS CLI to get started."
+					description="Compute environments supply the capacity that Batch jobs run on. None have been provisioned yet."
 				/>
 			</div>
 		{:else}

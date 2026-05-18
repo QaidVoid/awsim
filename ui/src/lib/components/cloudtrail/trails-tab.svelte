@@ -162,8 +162,14 @@
 				<EmptyState
 					icon={Radar}
 					title="No trails"
-					description="Create one with the form above or via the AWS CLI."
-				/>
+					description="Trails capture account activity as CloudTrail event logs."
+				>
+					{#snippet action()}
+						<Button size="sm" onclick={() => (creating = true)}>
+							<Plus class="size-3.5" /> Create trail
+						</Button>
+					{/snippet}
+				</EmptyState>
 			</div>
 		{:else}
 			<table class="w-full text-sm">

@@ -76,7 +76,7 @@
 
 	<EmptyState
 		icon={SmartphoneIcon}
-		title="Endpoint listing is by id"
-		description="Pinpoint doesn't expose ListEndpoints — fetch one via the AWS CLI (aws pinpoint get-endpoint --application-id ... --endpoint-id ...). The form above upserts (PUT)."
+		title="Endpoints are addressed by id"
+		description="Pinpoint has no list-endpoints operation; endpoints are created and updated individually by id using the upsert form above."
 	/>
 </div>

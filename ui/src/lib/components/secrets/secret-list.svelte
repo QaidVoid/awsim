@@ -68,7 +68,7 @@
 				<EmptyState
 					icon={KeyRound}
 					title="No secrets stored"
-					description={`Create one with: aws secretsmanager create-secret --name my/secret --secret-string '{"k":"v"}'`}
+					description="Secrets Manager securely stores and rotates database credentials, API keys, and other sensitive values for retrieval at runtime."
 				/>
 			{/snippet}
 		</DataTable>

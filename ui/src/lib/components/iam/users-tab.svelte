@@ -74,8 +74,15 @@
 				<EmptyState
 					icon={Users}
 					title="No IAM users"
-					description="Create a user with the AWS CLI: aws iam create-user --user-name my-user"
-				/>
+					description="IAM users are identities with long-term credentials for people or applications that need access to this account."
+				>
+					{#snippet action()}
+						<Button size="sm" onclick={() => (createOpen = true)}>
+							<Plus class="size-3.5" />
+							Create user
+						</Button>
+					{/snippet}
+				</EmptyState>
 			{/snippet}
 		</DataTable>
 	</div>

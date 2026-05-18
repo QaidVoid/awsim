@@ -53,7 +53,7 @@
 		<EmptyState
 			icon={RouteIcon}
 			title="No event buses"
-			description="EventBridge always provides a `default` bus. Create custom buses via the AWS CLI."
+			description="Event buses route events from sources to rule targets. A built-in default bus is always available even when no custom buses exist."
 		/>
 	{:else}
 		<ul class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">

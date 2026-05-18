@@ -206,8 +206,15 @@
 				<EmptyState
 					icon={Server}
 					title="No instance profiles"
-					description="Create one with: aws iam create-instance-profile --instance-profile-name my-profile"
-				/>
+					description="An instance profile is a container for an IAM role that lets EC2 instances assume that role and obtain temporary credentials."
+				>
+					{#snippet action()}
+						<Button size="sm" onclick={() => (createOpen = true)}>
+							<Plus class="size-3.5" />
+							Create instance profile
+						</Button>
+					{/snippet}
+				</EmptyState>
 			{/snippet}
 		</DataTable>
 	</div>

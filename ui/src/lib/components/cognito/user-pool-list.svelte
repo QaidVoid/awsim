@@ -157,8 +157,15 @@
 				<EmptyState
 					icon={Users}
 					title="No user pools"
-					description="Click + Pool above, or run: aws cognito-idp create-user-pool --pool-name MyPool"
-				/>
+					description="A Cognito user pool is a managed user directory that handles sign-up, sign-in, and access tokens for your applications."
+				>
+					{#snippet action()}
+						<Button size="sm" onclick={() => (createOpen = true)}>
+							<Plus class="size-3.5" />
+							Create pool
+						</Button>
+					{/snippet}
+				</EmptyState>
 			{/snippet}
 		</DataTable>
 	</div>

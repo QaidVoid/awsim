@@ -69,7 +69,7 @@
 				<EmptyState
 					icon={LayoutDashboard}
 					title="No dashboards"
-					description="Create a dashboard via the AWS CLI to see it here."
+					description="Dashboards collect metric widgets into a single view for monitoring. None have been created yet."
 				/>
 			</div>
 		{:else}

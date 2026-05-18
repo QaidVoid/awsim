@@ -60,7 +60,7 @@
 				<EmptyState
 					icon={KeyIcon}
 					title="No KMS keys"
-					description="Create one with: aws kms create-key --description 'My key'"
+					description="KMS keys are managed cryptographic keys used to encrypt and decrypt data and to sign and verify messages across your services."
 				/>
 			{/snippet}
 		</DataTable>

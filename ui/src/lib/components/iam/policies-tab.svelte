@@ -79,8 +79,15 @@
 				<EmptyState
 					icon={FileBadge}
 					title="No customer-managed policies"
-					description="Create one with: aws iam create-policy --policy-name MyPolicy --policy-document file://p.json"
-				/>
+					description="Managed policies are reusable permission documents you can attach to users, groups, and roles to grant access."
+				>
+					{#snippet action()}
+						<Button size="sm" onclick={() => (createOpen = true)}>
+							<Plus class="size-3.5" />
+							Create policy
+						</Button>
+					{/snippet}
+				</EmptyState>
 			{/snippet}
 		</DataTable>
 	</div>

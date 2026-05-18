@@ -147,8 +147,14 @@
 				<EmptyState
 					icon={ScrollText}
 					title="No log groups"
-					description="Create one above or via the AWS CLI."
-				/>
+					description="Log groups collect and retain log streams for your services."
+				>
+					{#snippet action()}
+						<Button size="sm" onclick={() => (creating = true)}>
+							<Plus class="size-3.5" /> New log group
+						</Button>
+					{/snippet}
+				</EmptyState>
 			</div>
 		{:else}
 			<ul>

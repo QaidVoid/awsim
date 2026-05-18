@@ -50,7 +50,7 @@
 				<EmptyState
 					icon={FileText}
 					title="No job definitions"
-					description="Register a job definition with the AWS CLI."
+					description="Job definitions are reusable templates that describe how a Batch job runs. None have been registered yet."
 				/>
 			</div>
 		{:else}

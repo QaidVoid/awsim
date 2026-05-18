@@ -104,7 +104,7 @@
 				<EmptyState
 					icon={KeyRoundIcon}
 					title="No permission sets"
-					description="Create a permission set via the AWS CLI to grant access to accounts."
+					description="Permission sets define the access this Identity Center instance grants to accounts."
 				/>
 			{:else}
 				{#each permissionSets as ps (ps.permissionSetArn)}

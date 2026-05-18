@@ -40,7 +40,7 @@
 		<EmptyState
 			icon={ArchiveIcon}
 			title="No archives"
-			description="Archive events from a bus to enable replay. Create archives via the AWS CLI."
+			description="Archives capture events from a bus so they can be replayed later. None have been configured yet."
 		/>
 	{:else}
 		<div class="overflow-hidden rounded-md border border-border">
