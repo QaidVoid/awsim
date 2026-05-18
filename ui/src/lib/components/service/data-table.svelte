@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { cn } from '$lib/utils';
 	import { Skeleton } from '$lib/components/ui/skeleton';
+	import ErrorState from './error-state.svelte';
 
 	interface Column<Row> {
 		key: string;
@@ -20,6 +21,10 @@
 		onRowClick?: (row: T) => void;
 		dense?: boolean;
 		loading?: boolean;
+		/** When set (and not loading), an ErrorState replaces the rows. */
+		error?: string | null;
+		/** Retry handler surfaced by the error state. */
+		onRetry?: () => void;
 		class?: string;
 	}
 
@@ -31,6 +36,8 @@
 		onRowClick,
 		dense = false,
 		loading = false,
+		error = null,
+		onRetry,
 		class: className
 	}: Props = $props();
 </script>
@@ -98,6 +105,12 @@
 								{/each}
 							</tr>
 						{/each}
+					{:else if error}
+						<tr>
+							<td colspan={columns.length} class="px-4 py-8">
+								<ErrorState description={error} {onRetry} />
+							</td>
+						</tr>
 					{:else}
 						<tr>
 							<td colspan={columns.length} class="px-4 py-12 text-center text-muted-foreground">

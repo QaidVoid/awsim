@@ -4,4 +4,6 @@ export { default as DetailPage } from "./detail-page.svelte";
 export { default as DetailNavItem } from "./detail-nav-item.svelte";
 export { default as DataTable } from "./data-table.svelte";
 export { default as EmptyState } from "./empty-state.svelte";
+export { default as LoadingState } from "./loading-state.svelte";
+export { default as ErrorState } from "./error-state.svelte";
 export { default as ListSkeleton } from "./list-skeleton.svelte";
