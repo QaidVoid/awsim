@@ -184,6 +184,22 @@ export async function putEvents(
   return { failedEntryCount: data.FailedEntryCount ?? 0 };
 }
 
+/**
+ * TestEventPattern - does `event` (a JSON string in the canonical
+ * EventBridge envelope shape) match `eventPattern` (a rule's pattern
+ * JSON string)? Uses the same matcher PutEvents routes with.
+ */
+export async function testEventPattern(
+  eventPattern: string,
+  event: string,
+): Promise<boolean> {
+  const data = await request<{ Result?: boolean }>("TestEventPattern", {
+    EventPattern: eventPattern,
+    Event: event,
+  });
+  return !!data.Result;
+}
+
 export async function listArchives(
   eventSourceArn?: string,
 ): Promise<Archive[]> {
