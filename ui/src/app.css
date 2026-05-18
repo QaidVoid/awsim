@@ -60,38 +60,42 @@
 }
 
 .dark {
-  /* Dark mode — primary palette per design brief. */
-  --background: oklch(0.13 0.01 270);
-  --foreground: oklch(0.95 0.005 270);
-  --card: oklch(0.18 0.01 270);
-  --card-foreground: oklch(0.95 0.005 270);
-  --popover: oklch(0.16 0.01 270);
-  --popover-foreground: oklch(0.95 0.005 270);
-  --primary: oklch(0.7 0.18 35);
-  --primary-foreground: oklch(0.13 0.01 270);
-  --secondary: oklch(0.22 0.01 270);
-  --secondary-foreground: oklch(0.95 0.005 270);
-  --muted: oklch(0.22 0.01 270);
-  --muted-foreground: oklch(0.65 0.01 270);
-  --accent: oklch(0.7 0.18 35);
-  --accent-foreground: oklch(0.13 0.01 270);
+  /* Dark mode — primary palette per design brief.
+     Elevated pass: deeper neutral charcoal with a clear surface
+     hierarchy (bg < sidebar < popover < card), crisper borders so
+     panels read as designed, brighter secondary text, and a slightly
+     warmer/more vivid AWS-amber accent. Neutrals hue 265, accent 40. */
+  --background: oklch(0.135 0.008 265);
+  --foreground: oklch(0.96 0.004 265);
+  --card: oklch(0.188 0.009 265);
+  --card-foreground: oklch(0.96 0.004 265);
+  --popover: oklch(0.172 0.009 265);
+  --popover-foreground: oklch(0.96 0.004 265);
+  --primary: oklch(0.72 0.19 40);
+  --primary-foreground: oklch(0.135 0.008 265);
+  --secondary: oklch(0.235 0.009 265);
+  --secondary-foreground: oklch(0.96 0.004 265);
+  --muted: oklch(0.235 0.009 265);
+  --muted-foreground: oklch(0.7 0.012 265);
+  --accent: oklch(0.72 0.19 40);
+  --accent-foreground: oklch(0.135 0.008 265);
   --destructive: oklch(0.65 0.22 25);
-  --border: oklch(0.25 0.01 270);
-  --input: oklch(0.25 0.01 270);
-  --ring: oklch(0.7 0.18 35 / 50%);
-  --chart-1: oklch(0.7 0.18 35);
+  --border: oklch(0.29 0.009 265);
+  --input: oklch(0.29 0.009 265);
+  --ring: oklch(0.72 0.19 40 / 55%);
+  --chart-1: oklch(0.72 0.19 40);
   --chart-2: oklch(0.65 0.15 200);
   --chart-3: oklch(0.7 0.18 280);
   --chart-4: oklch(0.7 0.15 145);
   --chart-5: oklch(0.7 0.2 350);
-  --sidebar: oklch(0.15 0.01 270);
-  --sidebar-foreground: oklch(0.95 0.005 270);
-  --sidebar-primary: oklch(0.7 0.18 35);
-  --sidebar-primary-foreground: oklch(0.13 0.01 270);
-  --sidebar-accent: oklch(0.22 0.01 270);
-  --sidebar-accent-foreground: oklch(0.95 0.005 270);
-  --sidebar-border: oklch(0.22 0.01 270);
-  --sidebar-ring: oklch(0.7 0.18 35 / 50%);
+  --sidebar: oklch(0.158 0.009 265);
+  --sidebar-foreground: oklch(0.96 0.004 265);
+  --sidebar-primary: oklch(0.72 0.19 40);
+  --sidebar-primary-foreground: oklch(0.135 0.008 265);
+  --sidebar-accent: oklch(0.245 0.009 265);
+  --sidebar-accent-foreground: oklch(0.96 0.004 265);
+  --sidebar-border: oklch(0.265 0.009 265);
+  --sidebar-ring: oklch(0.72 0.19 40 / 55%);
 }
 
 /*
@@ -258,9 +262,18 @@
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "cv11", "ss01", "ss03";
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     transition:
       background-color 150ms ease,
       color 150ms ease;
+  }
+
+  /* Branded text selection — warm accent instead of browser blue. */
+  ::selection {
+    background: oklch(0.72 0.19 40 / 30%);
+    color: var(--foreground);
   }
 
   /* Tighter tracking on headings, mono for IDs/ARNs */
@@ -269,6 +282,7 @@
   h3,
   h4 {
     @apply tracking-tight;
+    text-wrap: balance;
   }
 
   code,
