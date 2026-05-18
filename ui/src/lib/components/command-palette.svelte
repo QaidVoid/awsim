@@ -16,6 +16,7 @@
 	import { THEMES, theme, type Theme } from '$lib/theme.svelte';
 	import { dashboardState } from '$lib/dashboard-state.svelte';
 	import { inspectState } from '$lib/inspect-state.svelte';
+	import { fetchRecentRequestIds } from '$lib/api/requests';
 	import { toast } from 'svelte-sonner';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Palette from '@lucide/svelte/icons/palette';
@@ -62,10 +63,7 @@
 			return;
 		}
 		try {
-			const res = await fetch('/_awsim/requests');
-			if (!res.ok) throw new Error(String(res.status));
-			const body = (await res.json()) as { ids: string[] };
-			const id = body.ids?.[0];
+			const id = (await fetchRecentRequestIds())[0];
 			if (!id) {
 				toast.info('No recent requests to inspect — hit any endpoint first.');
 				return;

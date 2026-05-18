@@ -9,6 +9,7 @@
 	 * SDK call (auth, IAM enforcement, chaos rules, billing meter).
 	 */
 	import { ServicePage } from '$lib/components/service';
+	import { fetchRecentRequestIds } from '$lib/api/requests';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
@@ -97,11 +98,7 @@
 			// in the playground generates serial requests.
 			let newId: string | null = null;
 			try {
-				const r = await fetch('/_awsim/requests');
-				if (r.ok) {
-					const ids = ((await r.json()) as { ids?: string[] }).ids ?? [];
-					newId = ids[0] ?? null;
-				}
+				newId = (await fetchRecentRequestIds())[0] ?? null;
 			} catch {
 				// Best-effort — Inspect button just stays hidden.
 			}

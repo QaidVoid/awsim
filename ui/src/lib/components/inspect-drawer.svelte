@@ -22,6 +22,7 @@
 	import { decodeBody, toCurl } from '$lib/body-decode';
 	import { bytesHuman, relativeTime } from '$lib/format';
 	import type { RequestDetail, RequestEvent, CapturedHeader } from '$lib/events';
+	import { fetchRequestDetail, replayRequest } from '$lib/api/requests';
 	import { inspectState } from '$lib/inspect-state.svelte';
 
 	let detail = $state<RequestDetail | null>(null);
@@ -51,16 +52,15 @@
 		detail = null;
 		activeTab = 'request';
 		try {
-			const res = await fetch(`/_awsim/requests/${id}`);
-			if (res.status === 404) {
-				loadError = 'This request has rolled out of the in-memory ring buffer.';
+			const r = await fetchRequestDetail(id);
+			if (!r.ok) {
+				loadError =
+					r.status === 404
+						? 'This request has rolled out of the in-memory ring buffer.'
+						: `Failed to load request (${r.status})`;
 				return;
 			}
-			if (!res.ok) {
-				loadError = `Failed to load request (${res.status})`;
-				return;
-			}
-			detail = (await res.json()) as RequestDetail;
+			detail = r.detail;
 		} catch (err) {
 			loadError = err instanceof Error ? err.message : 'Failed to load request';
 		} finally {
@@ -103,10 +103,9 @@
 		if (!detail || replaying) return;
 		replaying = true;
 		try {
-			const res = await fetch(`/_awsim/requests/${detail.id}/replay`, { method: 'POST' });
-			const body = (await res.json()) as { new_id?: string; status_code?: number; error?: string; message?: string };
-			if (!res.ok || !body.new_id) {
-				toast.error(body.message ?? body.error ?? `Replay failed (${res.status})`);
+			const { ok, status, body } = await replayRequest(detail.id);
+			if (!ok || !body.new_id) {
+				toast.error(body.message ?? body.error ?? `Replay failed (${status})`);
 				return;
 			}
 			toast.success(`Replayed → ${body.status_code}`);
@@ -137,18 +136,10 @@
 		const originalId = detail.id;
 		try {
 			for (let i = 0; i < total; i++) {
-				const res = await fetch(`/_awsim/requests/${originalId}/replay`, {
-					method: 'POST'
-				});
-				const body = (await res.json()) as {
-					new_id?: string;
-					status_code?: number;
-					error?: string;
-					message?: string;
-				};
-				if (!res.ok || !body.new_id || body.status_code === undefined) {
+				const { ok, status, body } = await replayRequest(originalId);
+				if (!ok || !body.new_id || body.status_code === undefined) {
 					toast.error(
-						body.message ?? body.error ?? `Replay ${i + 1}/${total} failed (${res.status})`
+						body.message ?? body.error ?? `Replay ${i + 1}/${total} failed (${status})`
 					);
 					break;
 				}

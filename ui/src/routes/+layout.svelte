@@ -13,6 +13,7 @@
 	import LeaderHint from '$lib/components/leader-hint.svelte';
 	import InspectDrawer from '$lib/components/inspect-drawer.svelte';
 	import { fetchConfig } from '$lib/api';
+	import { fetchRecentRequestIds } from '$lib/api/requests';
 	import { route } from '$lib/url';
 	import { recent } from '$lib/recent.svelte';
 	import { shortcuts } from '$lib/shortcuts.svelte';
@@ -113,10 +114,7 @@
 			return;
 		}
 		try {
-			const res = await fetch('/_awsim/requests');
-			if (!res.ok) throw new Error(String(res.status));
-			const body = (await res.json()) as { ids: string[] };
-			const id = body.ids?.[0];
+			const id = (await fetchRecentRequestIds())[0];
 			if (!id) {
 				toast.info('No recent requests to inspect — hit any endpoint first.');
 				return;
