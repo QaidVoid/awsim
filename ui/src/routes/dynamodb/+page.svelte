@@ -14,7 +14,7 @@
 		type TableDetail,
 		type Item
 	} from '$lib/api/dynamodb';
-	import { ServicePage } from '$lib/components/service';
+	import { ResourceConsole } from '$lib/components/service';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
@@ -32,7 +32,6 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Eraser from '@lucide/svelte/icons/eraser';
 	import Globe from '@lucide/svelte/icons/globe';
-	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import ShieldCheck from '@lucide/svelte/icons/shield-check';
 
 	let tables = $state<TableSummary[]>([]);
@@ -203,7 +202,13 @@
 	}
 </script>
 
-<ServicePage title="DynamoDB" description="Managed NoSQL — tables, items, queries, PartiQL.">
+<ResourceConsole
+	title="DynamoDB"
+	description="Managed NoSQL — tables, items, queries, PartiQL."
+	hasSelection={!!selected}
+	loading={detailLoading || !detail}
+	emptyHint="Select a table to inspect."
+>
 	{#snippet actions()}
 		<Badge variant="outline" class="font-mono">
 			{tables.length} table{tables.length === 1 ? '' : 's'}
@@ -218,108 +223,98 @@
 		</Button>
 	{/snippet}
 
-	<div class="grid h-full min-h-0 grid-cols-[280px_minmax(0,1fr)] divide-x divide-border">
-		<aside class="min-h-0 overflow-hidden">
-			<TableList
-				{tables}
-				selectedName={selected?.name ?? null}
-				loading={tablesLoading}
-				onSelect={selectTable}
-				{protectedNames}
-				bind:filter
-			/>
-		</aside>
+	{#snippet list()}
+		<TableList
+			{tables}
+			selectedName={selected?.name ?? null}
+			loading={tablesLoading}
+			onSelect={selectTable}
+			{protectedNames}
+			bind:filter
+		/>
+	{/snippet}
 
-		<section class="flex min-h-0 min-w-0 flex-col">
-			{#if !selected}
-				<div
-					class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground"
-				>
-					Select a table to inspect.
-				</div>
-			{:else if detailLoading || !detail}
-				<div class="flex h-full items-center justify-center p-6 text-muted-foreground">
-					<Loader2 class="size-4 animate-spin" />
-				</div>
-			{:else}
-				<div
-					class="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-background/40 px-4 py-2"
-				>
-					<div class="flex items-center gap-2">
-						<span class="text-xs font-medium text-muted-foreground">Table</span>
-						<span class="font-mono text-sm">{selected.name}</span>
-						<Badge variant={detail.status === 'ACTIVE' ? 'secondary' : 'outline'}>
-							{detail.status || 'UNKNOWN'}
-						</Badge>
-						{#if detail.deletionProtectionEnabled}
-							<Badge
-								variant="outline"
-								class="gap-1 text-amber-500"
-								title="Deletion protection is on. Toggle off in the Schema tab, or use Delete to disable + delete in one step."
-							>
-								<ShieldCheck class="size-3" />
-								Protected
-							</Badge>
-						{/if}
-					</div>
-					<div class="flex items-center gap-1">
-						<Button variant="ghost" size="sm" onclick={() => (truncateOpen = true)}>
-							<Eraser class="size-3.5" />
-							Truncate
-						</Button>
-						<Button
-							variant="ghost"
-							size="sm"
-							onclick={() => (confirmOpen = true)}
-							disabled={detail.deletionProtectionEnabled}
-							title={detail.deletionProtectionEnabled
-								? 'Deletion protection is on. Disable it in the Schema tab to delete this table.'
-								: undefined}
+	{#snippet detailHeader()}
+		{#if selected && detail}
+			<div
+				class="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-background/40 px-4 py-2"
+			>
+				<div class="flex items-center gap-2">
+					<span class="text-xs font-medium text-muted-foreground">Table</span>
+					<span class="font-mono text-sm">{selected.name}</span>
+					<Badge variant={detail.status === 'ACTIVE' ? 'secondary' : 'outline'}>
+						{detail.status || 'UNKNOWN'}
+					</Badge>
+					{#if detail.deletionProtectionEnabled}
+						<Badge
+							variant="outline"
+							class="gap-1 text-amber-500"
+							title="Deletion protection is on. Toggle off in the Schema tab, or use Delete to disable + delete in one step."
 						>
-							<Trash2 class="size-3.5 text-destructive" />
-							Delete
-						</Button>
-					</div>
+							<ShieldCheck class="size-3" />
+							Protected
+						</Badge>
+					{/if}
 				</div>
+				<div class="flex items-center gap-1">
+					<Button variant="ghost" size="sm" onclick={() => (truncateOpen = true)}>
+						<Eraser class="size-3.5" />
+						Truncate
+					</Button>
+					<Button
+						variant="ghost"
+						size="sm"
+						onclick={() => (confirmOpen = true)}
+						disabled={detail.deletionProtectionEnabled}
+						title={detail.deletionProtectionEnabled
+							? 'Deletion protection is on. Disable it in the Schema tab to delete this table.'
+							: undefined}
+					>
+						<Trash2 class="size-3.5 text-destructive" />
+						Delete
+					</Button>
+				</div>
+			</div>
+		{/if}
+	{/snippet}
 
-				<Tabs bind:value={active} class="flex min-h-0 min-w-0 flex-1 flex-col gap-0">
-					<TabsList class="mx-4 mt-2 self-start">
-						<TabsTrigger value="items">Items</TabsTrigger>
-						<TabsTrigger value="partiql">PartiQL</TabsTrigger>
-						<TabsTrigger value="indexes">Indexes</TabsTrigger>
-						<TabsTrigger value="schema">Schema</TabsTrigger>
-						<TabsTrigger value="backups">Backups</TabsTrigger>
-					</TabsList>
+	{#if selected && detail}
+		<Tabs bind:value={active} class="flex min-h-0 min-w-0 flex-1 flex-col gap-0">
+			<TabsList class="mx-4 mt-2 self-start">
+				<TabsTrigger value="items">Items</TabsTrigger>
+				<TabsTrigger value="partiql">PartiQL</TabsTrigger>
+				<TabsTrigger value="indexes">Indexes</TabsTrigger>
+				<TabsTrigger value="schema">Schema</TabsTrigger>
+				<TabsTrigger value="backups">Backups</TabsTrigger>
+			</TabsList>
 
-					<div class="min-h-0 min-w-0 flex-1">
-						<TabsContent value="items" class="m-0 h-full min-w-0">
-							<ItemsTab {detail} onEdit={openEditor} />
-						</TabsContent>
-						<TabsContent value="partiql" class="m-0 h-full min-w-0">
-							<PartiqlTab tableName={selected.name} />
-						</TabsContent>
-						<TabsContent value="indexes" class="m-0 h-full min-w-0">
-							<IndexesTab {detail} />
-						</TabsContent>
-						<TabsContent value="schema" class="m-0 h-full min-w-0">
-							<SchemaTab {detail} onUpdated={refreshDetail} />
-						</TabsContent>
-						<TabsContent value="backups" class="m-0 h-full min-w-0">
-							<BackupsTab
-								{detail}
-								onRestored={async (name) => {
-									await loadTables();
-									const t = tables.find((x) => x.name === name);
-									if (t) await selectTable(t);
-								}}
-							/>
-						</TabsContent>
-					</div>
-				</Tabs>
-			{/if}
-		</section>
-	</div>
-</ServicePage>
+			<div class="min-h-0 min-w-0 flex-1">
+				<TabsContent value="items" class="m-0 h-full min-w-0">
+					<ItemsTab {detail} onEdit={openEditor} />
+				</TabsContent>
+				<TabsContent value="partiql" class="m-0 h-full min-w-0">
+					<PartiqlTab tableName={selected.name} />
+				</TabsContent>
+				<TabsContent value="indexes" class="m-0 h-full min-w-0">
+					<IndexesTab {detail} />
+				</TabsContent>
+				<TabsContent value="schema" class="m-0 h-full min-w-0">
+					<SchemaTab {detail} onUpdated={refreshDetail} />
+				</TabsContent>
+				<TabsContent value="backups" class="m-0 h-full min-w-0">
+					<BackupsTab
+						{detail}
+						onRestored={async (name) => {
+							await loadTables();
+							const t = tables.find((x) => x.name === name);
+							if (t) await selectTable(t);
+						}}
+					/>
+				</TabsContent>
+			</div>
+		</Tabs>
+	{/if}
+</ResourceConsole>
 
 <CreateTableDialog
 	bind:open={createOpen}
