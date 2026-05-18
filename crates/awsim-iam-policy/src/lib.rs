@@ -9,6 +9,7 @@ pub use document::{
 };
 pub use error::ParseError;
 pub use eval::{
-    AuthzRequest, ContextValue, Decision, EvalContext, EvaluationDetails, MatchedStatement,
-    PolicyAttribution, PolicyAttributions, PolicySource, evaluate, evaluate_detailed,
+    AuthzRequest, ContextValue, Decision, DecisionReason, EvalContext, EvaluationDetails,
+    MatchedStatement, PolicyAttribution, PolicyAttributions, PolicySource, evaluate,
+    evaluate_detailed, explain,
 };

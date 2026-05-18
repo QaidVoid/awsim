@@ -1,6 +1,6 @@
 use awsim_iam_policy::{
-    AuthzRequest, ContextValue, Decision, EvalContext, PolicyAttribution, PolicyAttributions,
-    PolicyDocument, PolicySource, evaluate, evaluate_detailed, parse,
+    AuthzRequest, ContextValue, Decision, DecisionReason, EvalContext, PolicyAttribution,
+    PolicyAttributions, PolicyDocument, PolicySource, evaluate, evaluate_detailed, explain, parse,
 };
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -1967,4 +1967,81 @@ fn evaluate_detailed_resource_policy_attribution() {
         details.matched_statements[0].source_type,
         PolicySource::Resource
     );
+}
+
+// `explain` must never contradict `evaluate`: the reason's implied
+// decision has to equal the decision across the whole pipeline.
+
+fn reason_decision(r: &DecisionReason) -> Decision {
+    match r {
+        DecisionReason::ExplicitDeny { .. } => Decision::ExplicitDeny,
+        DecisionReason::Allowed { .. } => Decision::Allow,
+        DecisionReason::ScpImplicitDeny { .. }
+        | DecisionReason::NoAllow
+        | DecisionReason::BoundaryNoAllow
+        | DecisionReason::SessionNoAllow => Decision::ImplicitDeny,
+    }
+}
+
+#[test]
+fn explain_agrees_with_evaluate_across_pipeline() {
+    let ctx = HashMap::new();
+    let r = r_basic(&ctx);
+
+    let deny_s3 =
+        parse(r#"{"Statement":[{"Effect":"Deny","Action":"s3:*","Resource":"*"}]}"#).unwrap();
+    let scp_no_s3 =
+        parse(r#"{"Statement":[{"Effect":"Allow","Action":"ec2:*","Resource":"*"}]}"#).unwrap();
+    let boundary_no_s3 =
+        parse(r#"{"Statement":[{"Effect":"Allow","Action":"sqs:*","Resource":"*"}]}"#).unwrap();
+    let admin_pol = admin();
+
+    // (label, identity, boundary, scps) tuples covering each branch.
+    let id_admin = vec![admin_pol.clone()];
+    let id_admin_deny = vec![admin_pol.clone(), deny_s3.clone()];
+    let id_empty: Vec<PolicyDocument> = vec![];
+    let scps_ok = vec![admin_pol.clone()];
+    let scps_block = vec![scp_no_s3.clone()];
+
+    type Case<'a> = (
+        &'a str,
+        &'a [PolicyDocument],
+        Option<&'a PolicyDocument>,
+        &'a [PolicyDocument],
+    );
+    let cases: Vec<Case> = vec![
+        ("allow", &id_admin, None, &[]),
+        ("explicit-deny", &id_admin_deny, None, &[]),
+        ("no-allow", &id_empty, None, &[]),
+        ("scp-implicit-deny", &id_admin, None, &scps_block),
+        ("scp-allowed", &id_admin, None, &scps_ok),
+        ("boundary-blocks", &id_admin, Some(&boundary_no_s3), &[]),
+    ];
+
+    for (label, identity, boundary, scps) in cases {
+        let ec = EvalContext {
+            identity_policies: identity,
+            permissions_boundary: boundary,
+            scps,
+            ..Default::default()
+        };
+        let pa = PolicyAttributions::default();
+        let decision = evaluate(&r, &ec);
+        let reason = explain(&r, &ec, &pa);
+        let details = evaluate_detailed(&r, &ec, &pa);
+        assert_eq!(
+            reason_decision(&reason),
+            decision,
+            "explain disagreed with evaluate for case `{label}`: {reason:?} vs {decision:?}"
+        );
+        assert_eq!(
+            details.decision, decision,
+            "evaluate_detailed.decision drifted for `{label}`"
+        );
+        assert_eq!(
+            reason_decision(&details.reason),
+            decision,
+            "evaluate_detailed.reason drifted for `{label}`"
+        );
+    }
 }

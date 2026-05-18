@@ -55,6 +55,40 @@ pub enum Decision {
     ImplicitDeny,
 }
 
+/// The single decisive step in policy evaluation, in AWS precedence
+/// order. Produced by [`explain`] for the simulator's decision trace -
+/// it always agrees with the [`Decision`] [`evaluate`] returns
+/// (an explicit-deny / no-allow / boundary / session reason maps to a
+/// deny; `Allowed` maps to allow).
+#[derive(Debug, Clone)]
+pub enum DecisionReason {
+    /// An explicit `Deny` statement matched (highest precedence).
+    ExplicitDeny {
+        source: PolicySource,
+        source_id: String,
+        statement_index: usize,
+        statement_id: Option<String>,
+    },
+    /// An SCP in the chain contained no matching `Allow`; SCPs are
+    /// allow-lists, so the absence is an implicit deny.
+    ScpImplicitDeny { source_id: String },
+    /// No identity (or, with a resource policy in play, no sufficient
+    /// identity/resource) `Allow` matched the request.
+    NoAllow,
+    /// Granted by identity/resource, but the permissions boundary has
+    /// no matching `Allow` (boundaries cap the maximum permissions).
+    BoundaryNoAllow,
+    /// Granted, but the session policy has no matching `Allow`.
+    SessionNoAllow,
+    /// An `Allow` statement granted the request.
+    Allowed {
+        source: PolicySource,
+        source_id: String,
+        statement_index: usize,
+        statement_id: Option<String>,
+    },
+}
+
 #[derive(Default)]
 pub struct EvalContext<'a> {
     pub identity_policies: &'a [PolicyDocument],
@@ -118,6 +152,8 @@ pub struct MatchedStatement {
 #[derive(Debug, Clone)]
 pub struct EvaluationDetails {
     pub decision: Decision,
+    /// The decisive step behind `decision`, for the simulator trace.
+    pub reason: DecisionReason,
     pub matched_statements: Vec<MatchedStatement>,
     pub missing_context_values: Vec<String>,
 }
@@ -131,6 +167,7 @@ pub fn evaluate_detailed(
     attrs: &PolicyAttributions,
 ) -> EvaluationDetails {
     let decision = evaluate(req, ctx);
+    let reason = explain(req, ctx, attrs);
 
     let mut matched: Vec<MatchedStatement> = Vec::new();
     collect_matches(
@@ -184,8 +221,248 @@ pub fn evaluate_detailed(
 
     EvaluationDetails {
         decision,
+        reason,
         matched_statements: matched,
         missing_context_values,
+    }
+}
+
+/// First statement (in policy then statement order) of `effect` that
+/// matches `req`, with its provenance. Used by [`explain`] to name
+/// the decisive statement.
+fn find_stmt(
+    policies: &[PolicyDocument],
+    attributions: &[PolicyAttribution],
+    req: &AuthzRequest,
+    resource_policy: bool,
+    effect: Effect,
+    fallback: PolicySource,
+) -> Option<(PolicySource, String, usize, Option<String>)> {
+    for (i, p) in policies.iter().enumerate() {
+        for (j, s) in p.statements.iter().enumerate() {
+            if s.effect == effect && stmt_matches(s, req, resource_policy) {
+                let a = attributions.get(i);
+                return Some((
+                    a.map(|a| a.source_type.clone())
+                        .unwrap_or_else(|| fallback.clone()),
+                    a.map(|a| a.source_id.clone())
+                        .unwrap_or_else(|| format!("policy-{i}")),
+                    j,
+                    s.sid.clone(),
+                ));
+            }
+        }
+    }
+    None
+}
+
+fn find_stmt_one(
+    policy: Option<&PolicyDocument>,
+    attribution: Option<&PolicyAttribution>,
+    req: &AuthzRequest,
+    resource_policy: bool,
+    effect: Effect,
+    fallback: PolicySource,
+) -> Option<(PolicySource, String, usize, Option<String>)> {
+    let p = policy?;
+    for (j, s) in p.statements.iter().enumerate() {
+        if s.effect == effect && stmt_matches(s, req, resource_policy) {
+            return Some((
+                attribution
+                    .map(|a| a.source_type.clone())
+                    .unwrap_or_else(|| fallback.clone()),
+                attribution
+                    .map(|a| a.source_id.clone())
+                    .unwrap_or_else(|| "policy".to_string()),
+                j,
+                s.sid.clone(),
+            ));
+        }
+    }
+    None
+}
+
+/// Re-walk [`evaluate`]'s exact ordered pipeline and report the single
+/// decisive step (with provenance) for the simulator's decision
+/// trace. Kept structurally lockstep with `evaluate` so the reason
+/// can never contradict the decision; a regression test asserts the
+/// two agree.
+pub fn explain(
+    req: &AuthzRequest,
+    ctx: &EvalContext,
+    attrs: &PolicyAttributions,
+) -> DecisionReason {
+    // 1-5: explicit Deny, in the same source order as `evaluate`.
+    if let Some((source, source_id, statement_index, statement_id)) = find_stmt(
+        ctx.identity_policies,
+        attrs.identity,
+        req,
+        false,
+        Effect::Deny,
+        PolicySource::Identity,
+    ) {
+        return DecisionReason::ExplicitDeny {
+            source,
+            source_id,
+            statement_index,
+            statement_id,
+        };
+    }
+    if let Some((source, source_id, statement_index, statement_id)) = find_stmt_one(
+        ctx.permissions_boundary,
+        attrs.permissions_boundary,
+        req,
+        false,
+        Effect::Deny,
+        PolicySource::PermissionsBoundary,
+    ) {
+        return DecisionReason::ExplicitDeny {
+            source,
+            source_id,
+            statement_index,
+            statement_id,
+        };
+    }
+    if let Some((source, source_id, statement_index, statement_id)) = find_stmt_one(
+        ctx.session_policy,
+        attrs.session,
+        req,
+        false,
+        Effect::Deny,
+        PolicySource::Session,
+    ) {
+        return DecisionReason::ExplicitDeny {
+            source,
+            source_id,
+            statement_index,
+            statement_id,
+        };
+    }
+    if let Some((source, source_id, statement_index, statement_id)) = find_stmt(
+        ctx.scps,
+        attrs.scps,
+        req,
+        false,
+        Effect::Deny,
+        PolicySource::Scp,
+    ) {
+        return DecisionReason::ExplicitDeny {
+            source,
+            source_id,
+            statement_index,
+            statement_id,
+        };
+    }
+    if let Some((source, source_id, statement_index, statement_id)) = find_stmt_one(
+        ctx.resource_policy,
+        attrs.resource,
+        req,
+        true,
+        Effect::Deny,
+        PolicySource::Resource,
+    ) {
+        return DecisionReason::ExplicitDeny {
+            source,
+            source_id,
+            statement_index,
+            statement_id,
+        };
+    }
+
+    // 6: SCPs are allow-lists - any SCP without a matching Allow denies.
+    if !ctx.scps.is_empty() {
+        for (i, p) in ctx.scps.iter().enumerate() {
+            if !any_allow(p, req, false) {
+                let source_id = attrs
+                    .scps
+                    .get(i)
+                    .map(|a| a.source_id.clone())
+                    .unwrap_or_else(|| format!("SCP #{}", i + 1));
+                return DecisionReason::ScpImplicitDeny { source_id };
+            }
+        }
+    }
+
+    // 7: identity / resource grant logic (mirrors `evaluate`).
+    let identity_allows = ctx
+        .identity_policies
+        .iter()
+        .any(|p| any_allow(p, req, false));
+    let resource_allows = ctx
+        .resource_policy
+        .map(|p| any_allow(p, req, true))
+        .unwrap_or(false);
+    let resource_acct = resource_account(req.resource_arn);
+    let same_account = match resource_acct {
+        Some(ref a) => a == req.principal_account,
+        None => true,
+    };
+    let allowed_by_grant = if ctx.resource_policy.is_some() {
+        if same_account {
+            identity_allows || resource_allows
+        } else {
+            identity_allows && resource_allows
+        }
+    } else {
+        identity_allows
+    };
+    if !allowed_by_grant {
+        return DecisionReason::NoAllow;
+    }
+
+    // 8: permissions boundary cap.
+    if let Some(b) = ctx.permissions_boundary
+        && !any_allow(b, req, false)
+        && !(ctx.resource_policy.is_some() && resource_allows)
+    {
+        return DecisionReason::BoundaryNoAllow;
+    }
+
+    // 9: session policy cap.
+    if let Some(s) = ctx.session_policy
+        && !any_allow(s, req, false)
+        && !(ctx.resource_policy.is_some() && resource_allows)
+    {
+        return DecisionReason::SessionNoAllow;
+    }
+
+    // 10: allowed - attribute the granting Allow (identity first,
+    // then resource policy), matching the grant logic above.
+    if let Some((source, source_id, statement_index, statement_id)) = find_stmt(
+        ctx.identity_policies,
+        attrs.identity,
+        req,
+        false,
+        Effect::Allow,
+        PolicySource::Identity,
+    ) {
+        return DecisionReason::Allowed {
+            source,
+            source_id,
+            statement_index,
+            statement_id,
+        };
+    }
+    if let Some((source, source_id, statement_index, statement_id)) = find_stmt_one(
+        ctx.resource_policy,
+        attrs.resource,
+        req,
+        true,
+        Effect::Allow,
+        PolicySource::Resource,
+    ) {
+        return DecisionReason::Allowed {
+            source,
+            source_id,
+            statement_index,
+            statement_id,
+        };
+    }
+    DecisionReason::Allowed {
+        source: PolicySource::Identity,
+        source_id: "policy".to_string(),
+        statement_index: 0,
+        statement_id: None,
     }
 }
 
