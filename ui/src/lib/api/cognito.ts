@@ -1446,3 +1446,118 @@ export async function getIdentityPoolRoles(
 export async function deleteIdentityPool(poolId: string): Promise<void> {
   await identityRequest("DeleteIdentityPool", { IdentityPoolId: poolId });
 }
+
+// ---- Authentication ----
+
+/** Tokens issued by a successful sign-in or refresh exchange. */
+export interface AuthTokens {
+  accessToken: string;
+  idToken: string;
+  /** Only returned on the initial sign-in, not on refresh. */
+  refreshToken?: string;
+  /** Access-token lifetime in seconds. */
+  expiresIn?: number;
+  tokenType?: string;
+}
+
+/** An interactive challenge the caller must answer to finish signing in. */
+export interface AuthChallenge {
+  challengeName: string;
+  session: string;
+  parameters: Record<string, string>;
+}
+
+/**
+ * Result of an auth step: either final tokens or a challenge to answer
+ * (e.g. NEW_PASSWORD_REQUIRED, SOFTWARE_TOKEN_MFA).
+ */
+export type AuthOutcome =
+  | { kind: "tokens"; tokens: AuthTokens }
+  | { kind: "challenge"; challenge: AuthChallenge };
+
+interface RawAuthResponse {
+  AuthenticationResult?: {
+    AccessToken?: string;
+    IdToken?: string;
+    RefreshToken?: string;
+    ExpiresIn?: number;
+    TokenType?: string;
+  };
+  ChallengeName?: string;
+  Session?: string;
+  ChallengeParameters?: Record<string, string>;
+}
+
+function parseAuthResponse(data: RawAuthResponse): AuthOutcome {
+  if (data.AuthenticationResult) {
+    const r = data.AuthenticationResult;
+    return {
+      kind: "tokens",
+      tokens: {
+        accessToken: r.AccessToken ?? "",
+        idToken: r.IdToken ?? "",
+        refreshToken: r.RefreshToken,
+        expiresIn: r.ExpiresIn,
+        tokenType: r.TokenType,
+      },
+    };
+  }
+  return {
+    kind: "challenge",
+    challenge: {
+      challengeName: data.ChallengeName ?? "",
+      session: data.Session ?? "",
+      parameters: data.ChallengeParameters ?? {},
+    },
+  };
+}
+
+export async function adminInitiateAuth(input: {
+  poolId: string;
+  clientId: string;
+  username: string;
+  password: string;
+}): Promise<AuthOutcome> {
+  const data = (await idpRequest("AdminInitiateAuth", {
+    UserPoolId: input.poolId,
+    ClientId: input.clientId,
+    AuthFlow: "ADMIN_USER_PASSWORD_AUTH",
+    AuthParameters: { USERNAME: input.username, PASSWORD: input.password },
+  })) as RawAuthResponse;
+  return parseAuthResponse(data);
+}
+
+export async function adminRespondToAuthChallenge(input: {
+  poolId: string;
+  clientId: string;
+  challengeName: string;
+  session: string;
+  responses: Record<string, string>;
+}): Promise<AuthOutcome> {
+  const data = (await idpRequest("AdminRespondToAuthChallenge", {
+    UserPoolId: input.poolId,
+    ClientId: input.clientId,
+    ChallengeName: input.challengeName,
+    Session: input.session,
+    ChallengeResponses: input.responses,
+  })) as RawAuthResponse;
+  return parseAuthResponse(data);
+}
+
+export async function adminRefreshTokens(input: {
+  poolId: string;
+  clientId: string;
+  refreshToken: string;
+}): Promise<AuthTokens> {
+  const data = (await idpRequest("AdminInitiateAuth", {
+    UserPoolId: input.poolId,
+    ClientId: input.clientId,
+    AuthFlow: "REFRESH_TOKEN_AUTH",
+    AuthParameters: { REFRESH_TOKEN: input.refreshToken },
+  })) as RawAuthResponse;
+  const out = parseAuthResponse(data);
+  if (out.kind !== "tokens") {
+    throw new Error("Refresh did not return tokens");
+  }
+  return out.tokens;
+}
