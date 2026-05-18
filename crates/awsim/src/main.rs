@@ -2522,20 +2522,14 @@ fn register_services(
     let servicediscovery = Arc::new(awsim_servicediscovery::ServiceDiscoveryService::new());
     state.register(servicediscovery, vec![]);
 
-    let appconfig = awsim_appconfig::AppConfigService::new();
-    let appconfig_store = appconfig.store();
+    // Control plane + AppConfigData data plane both sign as `appconfig`;
+    // register them as one facade so neither clobbers the other.
+    let appconfig = awsim_appconfig::AppConfig::new();
     let appconfig_routes = {
         use awsim_core::ServiceHandler;
         appconfig.routes()
     };
     state.register(Arc::new(appconfig), appconfig_routes);
-
-    let appconfigdata = awsim_appconfig::AppConfigDataService::new(appconfig_store);
-    let appconfigdata_routes = {
-        use awsim_core::ServiceHandler;
-        appconfigdata.routes()
-    };
-    state.register(Arc::new(appconfigdata), appconfigdata_routes);
 
     let glacier = awsim_glacier::GlacierService::new();
     let glacier_routes = {

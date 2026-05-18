@@ -349,6 +349,76 @@ fn empty_snapshot() -> state::AppConfigSnapshot {
     }
 }
 
+/// Single registration point for AppConfig.
+///
+/// The control plane (`AppConfigService`) and the AppConfigData data
+/// plane both sign as `appconfig`. The gateway keys handlers and routes
+/// by signing name, so registering them separately makes the second
+/// clobber the first (the data plane was shadowing the control plane,
+/// so `GET /applications` returned "Unknown operation"). This facade
+/// owns both - sharing one store - and dispatches by operation.
+pub struct AppConfig {
+    control: AppConfigService,
+    data: AppConfigDataService,
+}
+
+impl AppConfig {
+    pub fn new() -> Self {
+        let control = AppConfigService::new();
+        let data = AppConfigDataService::new(control.store());
+        Self { control, data }
+    }
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl ServiceHandler for AppConfig {
+    fn service_name(&self) -> &str {
+        "appconfig"
+    }
+
+    fn signing_name(&self) -> &str {
+        "appconfig"
+    }
+
+    fn protocol(&self) -> Protocol {
+        Protocol::RestJson1
+    }
+
+    fn routes(&self) -> Vec<RouteDefinition> {
+        let mut routes = self.control.routes();
+        routes.extend(self.data.routes());
+        routes
+    }
+
+    async fn handle(
+        &self,
+        operation: &str,
+        input: Value,
+        ctx: &RequestContext,
+    ) -> Result<Value, AwsError> {
+        match operation {
+            "StartConfigurationSession" | "GetLatestConfiguration" => {
+                self.data.handle(operation, input, ctx).await
+            }
+            _ => self.control.handle(operation, input, ctx).await,
+        }
+    }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        self.control.snapshot()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        self.control.restore(data)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
