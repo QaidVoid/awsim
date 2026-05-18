@@ -49,11 +49,15 @@
 		}
 	});
 
-	async function load() {
+	async function load(silent = false) {
 		if (!execution) return;
-		loading = true;
-		detail = null;
-		events = [];
+		// Silent = a poll tick: refresh in place, no spinner flash and
+		// no error-toast spam while the execution is still running.
+		if (!silent) {
+			loading = true;
+			detail = null;
+			events = [];
+		}
 		try {
 			const [d, h] = await Promise.all([
 				describeExecution(execution.arn),
@@ -62,11 +66,20 @@
 			detail = d;
 			events = h.events;
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Failed to load execution');
+			if (!silent)
+				toast.error(err instanceof Error ? err.message : 'Failed to load execution');
 		} finally {
-			loading = false;
+			if (!silent) loading = false;
 		}
 	}
+
+	// Watch it run: while the execution is RUNNING and the sheet is
+	// open, poll until it reaches a terminal state.
+	$effect(() => {
+		if (!open || detail?.status !== 'RUNNING') return;
+		const t = setInterval(() => void load(true), 1500);
+		return () => clearInterval(t);
+	});
 
 	function handleStop() {
 		if (!execution) return;
@@ -141,7 +154,7 @@
 			</SheetHeader>
 
 			<div class="flex items-center justify-end gap-2 px-4 pt-2">
-				<Button type="button" variant="outline" size="sm" onclick={load} disabled={loading}>
+				<Button type="button" variant="outline" size="sm" onclick={() => load()} disabled={loading}>
 					<RefreshCw />
 					Refresh
 				</Button>

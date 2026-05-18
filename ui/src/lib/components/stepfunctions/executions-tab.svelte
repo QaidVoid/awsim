@@ -69,12 +69,26 @@
 		if (!machine) return;
 		starting = true;
 		try {
-			await startExecution(machine.arn, execInput || '{}', execName.trim() || undefined);
+			const r = await startExecution(
+				machine.arn,
+				execInput || '{}',
+				execName.trim() || undefined
+			);
 			toast.success('Execution started');
+			const name = execName.trim();
 			startOpen = false;
 			execName = '';
 			execInput = '{}';
 			await load();
+			// Open the just-started execution so you watch it run
+			// instead of hunting for it in the list.
+			onSelect({
+				arn: r.executionArn,
+				name,
+				stateMachineArn: machine.arn,
+				status: 'RUNNING',
+				startDate: r.startDate
+			});
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : 'Failed to start');
 		} finally {
