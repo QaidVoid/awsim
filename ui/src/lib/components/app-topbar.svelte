@@ -35,8 +35,8 @@
 
 <header
 	class={cn(
-		'h-[60px] shrink-0 border-b border-border',
-		'bg-gradient-to-b from-card to-background',
+		'h-14 shrink-0 border-b border-border',
+		'bg-gradient-to-b from-card/70 to-background',
 		'flex items-center gap-2 px-3 sm:px-4'
 	)}
 >
@@ -60,7 +60,7 @@
 		class="flex items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 	>
 		<div
-			class="flex size-7 items-center justify-center rounded-md bg-gradient-to-br from-primary to-primary/60 shadow-sm shadow-primary/20"
+			class="flex size-7 items-center justify-center rounded-md bg-gradient-to-br from-primary to-primary/70 shadow-sm shadow-primary/30 ring-1 ring-inset ring-white/10"
 		>
 			<span class="font-mono text-sm font-bold text-primary-foreground">A</span>
 		</div>
@@ -88,9 +88,9 @@
 			type="button"
 			onclick={onOpenPalette}
 			class={cn(
-				'group flex h-9 w-full items-center gap-2 rounded-md border border-border bg-background/60 px-3 text-sm',
+				'group flex h-9 w-full items-center gap-2 rounded-md border border-border bg-muted/40 px-3 text-sm',
 				'text-muted-foreground transition-all duration-100',
-				'hover:border-border/80 hover:bg-background hover:text-foreground',
+				'hover:border-ring/40 hover:bg-muted/60 hover:text-foreground',
 				'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
 			)}
 			aria-label="Open command palette"

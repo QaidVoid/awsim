@@ -51,7 +51,7 @@
 				'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
 				'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
 				page.url?.pathname === route('/')
-					? 'bg-sidebar-accent text-foreground'
+					? 'bg-primary/10 font-medium text-primary'
 					: 'text-muted-foreground'
 			)}
 			aria-label="Dashboard"
@@ -111,7 +111,7 @@
 															'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
 															'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
 															active
-																? 'bg-sidebar-accent text-foreground before:absolute before:left-0 before:top-1.5 before:h-5 before:w-0.5 before:rounded-r before:bg-primary'
+																? 'bg-primary/10 text-primary before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-r-full before:bg-primary'
 																: 'text-muted-foreground'
 														)}
 														aria-label={svc.name}
@@ -133,7 +133,7 @@
 												'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
 												'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
 												active
-													? 'bg-sidebar-accent text-foreground before:absolute before:left-0 before:top-1.5 before:h-5 before:w-0.5 before:rounded-r before:bg-primary'
+													? 'bg-primary/10 font-medium text-primary before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-r-full before:bg-primary'
 													: 'text-muted-foreground'
 											)}
 										>
