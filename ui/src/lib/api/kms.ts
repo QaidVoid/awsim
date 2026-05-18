@@ -129,6 +129,21 @@ export async function listAliases(): Promise<Alias[]> {
   }));
 }
 
+export async function createAlias(
+  aliasName: string,
+  targetKeyId: string,
+): Promise<void> {
+  const name = aliasName.startsWith("alias/") ? aliasName : `alias/${aliasName}`;
+  await kmsRequest("CreateAlias", {
+    AliasName: name,
+    TargetKeyId: targetKeyId,
+  });
+}
+
+export async function deleteAlias(aliasName: string): Promise<void> {
+  await kmsRequest("DeleteAlias", { AliasName: aliasName });
+}
+
 export async function getKeyPolicy(
   keyId: string,
   policyName = "default",
