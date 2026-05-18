@@ -194,7 +194,7 @@
 			</TabsList>
 			<div class="min-h-0 flex-1 overflow-y-auto">
 				<TabsContent value="invoke" class="m-0">
-					<InvokeTab functionName={selectedName} />
+					<InvokeTab functionName={selectedName} onViewLogs={() => (active = 'logs')} />
 				</TabsContent>
 				<TabsContent value="config" class="m-0">
 					<ConfigTab
