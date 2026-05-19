@@ -184,6 +184,50 @@ fn parse_user_attributes(input: &Value, key: &str) -> HashMap<String, String> {
     attrs
 }
 
+/// Whether the app client `client_id` restricts attribute reads.
+/// Returns the configured `ReadAttributes` set only when it is
+/// non-empty. `None` means the AWS default (every attribute readable):
+/// either no custom set was configured, or the token carried no
+/// resolvable client (older / hand-rolled tokens). This is the
+/// access-token GetUser path only; `AdminGetUser` never calls it and
+/// so is unrestricted, matching real Cognito.
+fn client_read_set(pool: &UserPool, client_id: &str) -> Option<Vec<String>> {
+    pool.clients
+        .get(client_id)
+        .map(|c| c.read_attributes.clone())
+        .filter(|s| !s.is_empty())
+}
+
+/// Enforce the app client's `WriteAttributes` on the access-token
+/// write paths (`UpdateUserAttributes` / `DeleteUserAttributes`).
+/// With a custom (non-empty) set, every attribute the caller writes or
+/// deletes must be a member, else Cognito returns
+/// `NotAuthorizedException`. An empty set is the AWS default (all
+/// mutable attributes) and an unresolvable client is unrestricted -
+/// neither adds a constraint. `Admin*` APIs don't call this, so they
+/// bypass it as in real Cognito.
+fn enforce_write_attributes<'a>(
+    pool: &UserPool,
+    client_id: &str,
+    names: impl IntoIterator<Item = &'a str>,
+) -> Result<(), AwsError> {
+    let Some(client) = pool.clients.get(client_id) else {
+        return Ok(());
+    };
+    if client.write_attributes.is_empty() {
+        return Ok(());
+    }
+    for name in names {
+        if !client.write_attributes.iter().any(|w| w == name) {
+            return Err(AwsError::bad_request(
+                "NotAuthorizedException",
+                "A client attempted to write unauthorized attribute",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Validate a Username + caller-provided attributes against a pool's
 /// `UsernameAttributes` / `AliasAttributes` config and return the
 /// effective attribute map.
@@ -883,14 +927,23 @@ pub fn get_user(
         ));
     }
 
-    let username = crate::jwt::extract_username_from_access_token(access_token)
+    let claims = crate::jwt::verify_access_token(access_token)
         .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+    let username = claims.username;
 
     for pool_entry in state.user_pools.iter() {
         if let Some(user) = pool_entry.users.get(&username) {
+            // Filter to the app client's ReadAttributes (empty/missing
+            // = AWS default, every attribute readable).
+            let read_set = client_read_set(&pool_entry, &claims.client_id);
             let attributes: Vec<Value> = user
                 .attributes
                 .iter()
+                .filter(|(k, _)| {
+                    read_set
+                        .as_ref()
+                        .is_none_or(|set| set.iter().any(|a| a == *k))
+                })
                 .map(|(k, v)| json!({"Name": k, "Value": v}))
                 .collect();
 
@@ -1490,13 +1543,21 @@ pub fn update_user_attributes(
         ));
     }
 
-    let username = crate::jwt::extract_username_from_access_token(access_token)
+    let claims = crate::jwt::verify_access_token(access_token)
         .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+    let username = claims.username;
 
     let new_attrs = parse_user_attributes(input, "UserAttributes");
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if pool_entry.users.contains_key(&username) {
+            // Enforce the app client's WriteAttributes before any
+            // mutation (access-token path; Admin* bypasses).
+            enforce_write_attributes(
+                &pool_entry,
+                &claims.client_id,
+                new_attrs.keys().map(String::as_str),
+            )?;
             let username_attrs = pool_entry.username_attributes.clone();
             let schema = pool_entry.schema.clone();
             let user = pool_entry.users.get_mut(&username).expect("just checked");
@@ -1533,8 +1594,9 @@ pub fn delete_user_attributes(
         ));
     }
 
-    let username = crate::jwt::extract_username_from_access_token(access_token)
+    let claims = crate::jwt::verify_access_token(access_token)
         .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+    let username = claims.username;
 
     let attr_names: Vec<String> = input["UserAttributeNames"]
         .as_array()
@@ -1547,6 +1609,13 @@ pub fn delete_user_attributes(
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if pool_entry.users.contains_key(&username) {
+            // Deleting an attribute is a write - same WriteAttributes
+            // gate (access-token path; Admin* bypasses).
+            enforce_write_attributes(
+                &pool_entry,
+                &claims.client_id,
+                attr_names.iter().map(String::as_str),
+            )?;
             let schema = pool_entry.schema.clone();
             validate_deletable_names(&schema, &attr_names)?;
             let user = pool_entry.users.get_mut(&username).expect("just checked");
@@ -2405,5 +2474,160 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "UserNotFoundException");
+    }
+
+    // -----------------------------------------------------------------
+    // App-client Read/WriteAttributes enforcement on the access-token
+    // user APIs (config lives on the client; enforced here at runtime).
+    // -----------------------------------------------------------------
+
+    fn token_for(pool_id: &str) -> String {
+        crate::jwt::access_token(
+            "sub-u1",
+            "us-east-1",
+            pool_id,
+            "c1",
+            "u1",
+            &[],
+            &[],
+            None,
+            3600,
+        )
+    }
+
+    fn set_client_attrs(state: &CognitoState, pool_id: &str, read: &[&str], write: &[&str]) {
+        state.user_pools.alter(pool_id, |_, mut pool| {
+            if let Some(c) = pool.clients.get_mut("c1") {
+                c.read_attributes = read.iter().map(|s| s.to_string()).collect();
+                c.write_attributes = write.iter().map(|s| s.to_string()).collect();
+            }
+            pool
+        });
+    }
+
+    fn make_u1(state: &CognitoState, pool_id: &str) {
+        admin_create_user(
+            state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "TemporaryPassword": "Temp@1234",
+                "UserAttributes": [
+                    { "Name": "email", "Value": "u1@example.com" },
+                    { "Name": "custom:plan", "Value": "enterprise" }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    fn attr_names(v: &Value) -> std::collections::HashSet<String> {
+        v["UserAttributes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["Name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn get_user_filters_to_client_read_attributes() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        let token = token_for(&pool_id);
+
+        // Empty ReadAttributes = AWS default: every attribute returned.
+        let all = get_user(&state, &json!({ "AccessToken": token }), &ctx()).unwrap();
+        let names = attr_names(&all);
+        assert!(names.contains("email"));
+        assert!(names.contains("custom:plan"));
+
+        // A custom set restricts the response to exactly that set.
+        set_client_attrs(&state, &pool_id, &["email"], &[]);
+        let filtered = get_user(&state, &json!({ "AccessToken": token }), &ctx()).unwrap();
+        let names = attr_names(&filtered);
+        assert!(names.contains("email"));
+        assert!(
+            !names.contains("custom:plan"),
+            "custom:plan must be filtered out, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn update_user_attributes_enforces_write_set() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        let token = token_for(&pool_id);
+
+        // Empty WriteAttributes = AWS default: any mutable attr writes.
+        update_user_attributes(
+            &state,
+            &json!({ "AccessToken": token, "UserAttributes": [{ "Name": "email", "Value": "new@example.com" }] }),
+            &ctx(),
+        )
+        .unwrap();
+
+        // Restrict writes to custom:plan only.
+        set_client_attrs(&state, &pool_id, &[], &["custom:plan"]);
+        update_user_attributes(
+            &state,
+            &json!({ "AccessToken": token, "UserAttributes": [{ "Name": "custom:plan", "Value": "pro" }] }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = update_user_attributes(
+            &state,
+            &json!({ "AccessToken": token, "UserAttributes": [{ "Name": "email", "Value": "x@example.com" }] }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+    }
+
+    #[test]
+    fn delete_user_attributes_enforces_write_set() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        let token = token_for(&pool_id);
+
+        set_client_attrs(&state, &pool_id, &[], &["email"]);
+        // Deleting custom:plan is a write outside the set -> rejected.
+        let err = delete_user_attributes(
+            &state,
+            &json!({ "AccessToken": token, "UserAttributeNames": ["custom:plan"] }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+
+        // Allowed once the set includes it.
+        set_client_attrs(&state, &pool_id, &[], &["custom:plan"]);
+        delete_user_attributes(
+            &state,
+            &json!({ "AccessToken": token, "UserAttributeNames": ["custom:plan"] }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn admin_update_bypasses_client_write_set() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        // Client forbids writing email...
+        set_client_attrs(&state, &pool_id, &[], &["custom:plan"]);
+        // ...but Admin* APIs use AWS creds, not the client, so this
+        // still succeeds (matches real Cognito).
+        admin_update_user_attributes(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "UserAttributes": [{ "Name": "email", "Value": "admin-set@example.com" }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
     }
 }

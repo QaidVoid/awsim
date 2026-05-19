@@ -240,6 +240,11 @@ pub fn refresh_token(sub: &str) -> String {
 pub struct AccessClaims {
     pub username: String,
     pub sub: String,
+    /// The app client the token was issued for. Used to enforce that
+    /// client's `ReadAttributes` / `WriteAttributes` on the
+    /// access-token user APIs. Empty if the token carried no
+    /// `client_id` (older tokens / hand-rolled test tokens).
+    pub client_id: String,
 }
 
 /// Verify an access token's RS256 signature, expiry, and `token_use=access`,
@@ -262,7 +267,17 @@ pub fn verify_access_token(token: &str) -> Option<AccessClaims> {
         .and_then(|v| v.as_str())
         .map(String::from)
         .unwrap_or_default();
-    Some(AccessClaims { username, sub })
+    let client_id = data
+        .claims
+        .get("client_id")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_default();
+    Some(AccessClaims {
+        username,
+        sub,
+        client_id,
+    })
 }
 
 /// Convenience: verify the access token and return its `username` claim.
