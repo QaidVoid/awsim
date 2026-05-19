@@ -44,6 +44,12 @@ fn sign(payload: &Value) -> String {
 ///   `birthdate`, `zoneinfo`, `locale`, `updated_at`
 ///
 /// The `nonce` parameter (if Some) is included in the token.
+///
+/// `read_attributes` is the app client's Cognito `ReadAttributes`.
+/// An empty slice is the AWS default (every attribute claim included);
+/// a custom set restricts the token's user-attribute claims to exactly
+/// that set. Identity/protocol claims (`sub`, `aud`, `cognito:*`, etc.)
+/// come from dedicated parameters and are never filtered.
 // SAFETY: each parameter is an independent JWT claim sourced from distinct callers; bundling
 // would require a builder layer that would not improve clarity at the call sites.
 #[allow(clippy::too_many_arguments)]
@@ -54,6 +60,7 @@ pub fn id_token(
     client_id: &str,
     username: &str,
     attributes: &HashMap<String, String>,
+    read_attributes: &[String],
     scopes: &[String],
     nonce: Option<&str>,
     groups: &[GroupRolePair],
@@ -61,6 +68,21 @@ pub fn id_token(
     expires_in: u64,
 ) -> String {
     let now = now_epoch();
+
+    // Cognito gates ID-token attribute claims by the app client's
+    // ReadAttributes. Empty = AWS default (all readable); a custom
+    // set restricts the token to exactly those attributes.
+    let filtered_attrs;
+    let attributes: &HashMap<String, String> = if read_attributes.is_empty() {
+        attributes
+    } else {
+        filtered_attrs = attributes
+            .iter()
+            .filter(|(k, _)| read_attributes.iter().any(|a| a == *k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<HashMap<String, String>>();
+        &filtered_attrs
+    };
     let scope_str = scopes.join(" ");
     let issuer = issuer_override
         .map(|s| s.to_string())
@@ -339,11 +361,77 @@ mod tests {
             "alice",
             &Default::default(),
             &[],
+            &[],
             None,
             &[],
             None,
             3600,
         );
         assert!(verify_access_token(&id).is_none());
+    }
+
+    fn decode_claims(token: &str) -> serde_json::Value {
+        let payload = token.split('.').nth(1).expect("jwt has a payload segment");
+        let bytes = URL_SAFE_NO_PAD
+            .decode(payload)
+            .expect("payload is base64url");
+        serde_json::from_slice(&bytes).expect("payload is JSON")
+    }
+
+    #[test]
+    fn id_token_filters_attributes_by_read_set() {
+        let mut attrs = HashMap::new();
+        attrs.insert("email".to_string(), "e@x.com".to_string());
+        attrs.insert("name".to_string(), "Al".to_string());
+        attrs.insert("custom:plan".to_string(), "pro".to_string());
+        let scopes = vec!["openid".to_string(), "email".to_string()];
+
+        // Empty ReadAttributes = AWS default: every attribute claim.
+        let tok = id_token(
+            "s",
+            "us-east-1",
+            "p",
+            "c",
+            "alice",
+            &attrs,
+            &[],
+            &scopes,
+            None,
+            &[],
+            None,
+            3600,
+        );
+        let c = decode_claims(&tok);
+        assert_eq!(c["email"], "e@x.com");
+        assert_eq!(c["custom:plan"], "pro");
+        assert_eq!(c["name"], "Al");
+
+        // A custom set restricts the token to exactly those attributes;
+        // identity/protocol claims are always present.
+        let read = vec!["email".to_string()];
+        let tok = id_token(
+            "s",
+            "us-east-1",
+            "p",
+            "c",
+            "alice",
+            &attrs,
+            &read,
+            &scopes,
+            None,
+            &[],
+            None,
+            3600,
+        );
+        let c = decode_claims(&tok);
+        assert_eq!(c["email"], "e@x.com");
+        assert!(
+            c.get("custom:plan").is_none(),
+            "custom:plan must be filtered"
+        );
+        assert!(c.get("name").is_none(), "name must be filtered");
+        assert_eq!(c["sub"], "s");
+        assert_eq!(c["aud"], "c");
+        assert_eq!(c["token_use"], "id");
     }
 }

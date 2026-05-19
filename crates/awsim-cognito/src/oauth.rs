@@ -1179,6 +1179,10 @@ async fn authorize_post(
         .get(&client_id)
         .map(|c| (c.access_token_validity, c.id_token_validity))
         .unwrap_or((3600, 3600));
+    // Resolve the client's ReadAttributes before dropping pool_ref so
+    // the ID token below only carries attributes the client may read.
+    let read_attrs =
+        crate::operations::users::client_read_set(&pool_ref, &client_id).unwrap_or_default();
 
     drop(pool_ref);
 
@@ -1235,6 +1239,7 @@ async fn authorize_post(
                 &client_id,
                 &user.username,
                 &attributes,
+                &read_attrs,
                 &effective_scopes,
                 nonce.as_deref(),
                 &group_pairs,
@@ -1626,6 +1631,12 @@ async fn token(
                         .map(|c| (c.access_token_validity, c.id_token_validity))
                 })
                 .unwrap_or((3600, 3600));
+            let read_attrs = oauth_state
+                .cognito
+                .user_pools
+                .get(&pool_id)
+                .and_then(|p| crate::operations::users::client_read_set(&p, &effective_client_id))
+                .unwrap_or_default();
 
             let access_tok = jwt::access_token(
                 &sub,
@@ -1645,6 +1656,7 @@ async fn token(
                 &effective_client_id,
                 &username,
                 &attributes,
+                &read_attrs,
                 &scopes,
                 nonce.as_deref(),
                 &group_pairs,
@@ -1870,6 +1882,8 @@ async fn token(
                 &effective_client_id,
                 &username,
                 &attributes,
+                &crate::operations::users::client_read_set(&pool, &effective_client_id)
+                    .unwrap_or_default(),
                 &scopes,
                 None,
                 &group_pairs,

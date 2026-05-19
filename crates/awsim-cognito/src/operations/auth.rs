@@ -57,6 +57,7 @@ fn group_role_pairs(pool: &UserPool, user_groups: &[String]) -> Vec<GroupRolePai
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_auth_result_pub(
     user_sub: &str,
     username: &str,
@@ -64,11 +65,20 @@ pub fn build_auth_result_pub(
     pool_id: &str,
     client_id: &str,
     attributes: &std::collections::HashMap<String, String>,
+    read_attributes: &[String],
     groups: &[GroupRolePair],
 ) -> Value {
     let validity = TokenValidity::defaults();
     build_auth_result_with_validity(
-        user_sub, username, region, pool_id, client_id, attributes, groups, &validity,
+        user_sub,
+        username,
+        region,
+        pool_id,
+        client_id,
+        attributes,
+        read_attributes,
+        groups,
+        &validity,
     )
 }
 
@@ -80,11 +90,21 @@ fn build_auth_result_with_validity(
     pool_id: &str,
     client_id: &str,
     attributes: &std::collections::HashMap<String, String>,
+    read_attributes: &[String],
     groups: &[GroupRolePair],
     validity: &TokenValidity,
 ) -> Value {
     build_auth_result_inner(
-        user_sub, username, region, pool_id, client_id, attributes, groups, validity, true,
+        user_sub,
+        username,
+        region,
+        pool_id,
+        client_id,
+        attributes,
+        read_attributes,
+        groups,
+        validity,
+        true,
     )
 }
 
@@ -96,6 +116,7 @@ fn build_auth_result_inner(
     pool_id: &str,
     client_id: &str,
     attributes: &std::collections::HashMap<String, String>,
+    read_attributes: &[String],
     groups: &[GroupRolePair],
     validity: &TokenValidity,
     include_refresh: bool,
@@ -112,6 +133,7 @@ fn build_auth_result_inner(
         client_id,
         username,
         attributes,
+        read_attributes,
         &default_scopes,
         None,
         groups,
@@ -157,11 +179,20 @@ fn build_auth_result_validity(
     pool_id: &str,
     client_id: &str,
     attributes: &std::collections::HashMap<String, String>,
+    read_attributes: &[String],
     groups: &[GroupRolePair],
     validity: &TokenValidity,
 ) -> Value {
     build_auth_result_with_validity(
-        user_sub, username, region, pool_id, client_id, attributes, groups, validity,
+        user_sub,
+        username,
+        region,
+        pool_id,
+        client_id,
+        attributes,
+        read_attributes,
+        groups,
+        validity,
     )
 }
 
@@ -418,6 +449,7 @@ pub fn initiate_auth(
                 &pool_id,
                 client_id,
                 &user.attributes,
+                &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
                 &pairs,
                 &validity,
             );
@@ -473,6 +505,7 @@ pub fn initiate_auth(
                 &pool_id,
                 client_id,
                 &user.attributes,
+                &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
                 &pairs,
                 &validity,
                 false,
@@ -723,6 +756,7 @@ pub fn admin_initiate_auth(
                 pool_id,
                 client_id,
                 &user.attributes,
+                &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
                 &pairs,
                 &validity,
             );
@@ -840,6 +874,7 @@ pub fn respond_to_auth_challenge(
                 &pool_id,
                 client_id,
                 &user_attributes,
+                &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
                 &pairs,
                 &validity,
             );
@@ -910,6 +945,7 @@ pub fn respond_to_auth_challenge(
                 &session_meta.pool_id,
                 client_id,
                 &user.attributes,
+                &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
                 &pairs,
                 &validity,
             );
@@ -1017,6 +1053,7 @@ pub fn admin_respond_to_auth_challenge(
                 pool_id,
                 client_id,
                 &user_attributes,
+                &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
                 &pairs,
                 &validity,
             );
@@ -1052,6 +1089,8 @@ pub fn admin_respond_to_auth_challenge(
                     &session.1.pool_id,
                     client_id,
                     &user.attributes,
+                    &crate::operations::users::client_read_set(&pool, client_id)
+                        .unwrap_or_default(),
                     &pairs,
                     &validity,
                 );
@@ -1124,6 +1163,7 @@ pub fn get_tokens_from_refresh_token(
         &pool_id,
         client_id,
         &user.attributes,
+        &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
         &pairs,
     ))
 }
@@ -1397,6 +1437,7 @@ fn verify_srp_password(
         pool_id,
         client_id,
         &user.attributes,
+        &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
         &pairs,
         &validity,
     );
@@ -1596,6 +1637,7 @@ fn verify_custom_auth_response(
         pool_id,
         client_id,
         &user.attributes,
+        &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
         &pairs,
         &validity,
     );

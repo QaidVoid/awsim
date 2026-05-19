@@ -188,10 +188,10 @@ fn parse_user_attributes(input: &Value, key: &str) -> HashMap<String, String> {
 /// Returns the configured `ReadAttributes` set only when it is
 /// non-empty. `None` means the AWS default (every attribute readable):
 /// either no custom set was configured, or the token carried no
-/// resolvable client (older / hand-rolled tokens). This is the
-/// access-token GetUser path only; `AdminGetUser` never calls it and
-/// so is unrestricted, matching real Cognito.
-fn client_read_set(pool: &UserPool, client_id: &str) -> Option<Vec<String>> {
+/// resolvable client (older / hand-rolled tokens). Used by the
+/// access-token `GetUser` path and ID-token minting; `AdminGetUser`
+/// never calls it and so is unrestricted, matching real Cognito.
+pub(crate) fn client_read_set(pool: &UserPool, client_id: &str) -> Option<Vec<String>> {
     pool.clients
         .get(client_id)
         .map(|c| c.read_attributes.clone())
