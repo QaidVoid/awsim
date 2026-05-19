@@ -2073,6 +2073,8 @@ mod tests {
                     access_token_validity: 3600,
                     id_token_validity: 3600,
                     refresh_token_validity: 30,
+                    read_attributes: Vec::new(),
+                    write_attributes: Vec::new(),
                 },
             );
             pool

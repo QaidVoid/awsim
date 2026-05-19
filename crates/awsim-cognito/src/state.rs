@@ -336,6 +336,18 @@ pub struct UserPoolClient {
     pub id_token_validity: u64,      // seconds
     pub refresh_token_validity: u64, // seconds
     pub additional_client_secrets: Vec<ClientSecretDescriptor>,
+    /// Cognito `ReadAttributes`: schema attribute names this client may
+    /// read via the user's access token. Empty selects the AWS default
+    /// (all attributes readable); only echoed back when a custom set
+    /// was specified.
+    #[serde(default)]
+    pub read_attributes: Vec<String>,
+    /// Cognito `WriteAttributes`: schema attribute names this client may
+    /// write via the user's access token. Empty selects the AWS default
+    /// (all mutable attributes writable). Immutable attributes (e.g.
+    /// `sub`) cannot appear here.
+    #[serde(default)]
+    pub write_attributes: Vec<String>,
 }
 
 /// Device info tracked per user.

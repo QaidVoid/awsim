@@ -119,6 +119,8 @@ mod tests {
             id_token_validity: 3600,
             refresh_token_validity: 30 * 24 * 3600,
             additional_client_secrets: Vec::new(),
+            read_attributes: Vec::new(),
+            write_attributes: Vec::new(),
         }
     }
 

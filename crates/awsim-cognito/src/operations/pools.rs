@@ -67,13 +67,52 @@ fn client_to_value(client: &UserPoolClient, include_secret: bool) -> Value {
         "CreationDate": client.created_date,
         "LastModifiedDate": client.created_date
     });
+    // SAFETY: obj was created by json!() macro above, which always produces an object.
+    let map = obj
+        .as_object_mut()
+        .expect("json!() macro always produces an object");
     if include_secret {
-        // SAFETY: obj was created by json!() macro above, which always produces an object.
-        obj.as_object_mut()
-            .expect("json!() macro always produces an object")
-            .insert("ClientSecret".into(), json!(client.client_secret));
+        map.insert("ClientSecret".into(), json!(client.client_secret));
+    }
+    // Cognito only echoes Read/WriteAttributes when a custom set was
+    // configured; an empty list means "the default set" and is omitted.
+    if !client.read_attributes.is_empty() {
+        map.insert("ReadAttributes".into(), json!(client.read_attributes));
+    }
+    if !client.write_attributes.is_empty() {
+        map.insert("WriteAttributes".into(), json!(client.write_attributes));
     }
     obj
+}
+
+/// Validate a client's `ReadAttributes` / `WriteAttributes` against the
+/// pool schema. Every referenced name must be a declared attribute, and
+/// write targets must be mutable (Cognito rejects immutable attributes
+/// such as `sub` for write). Empty lists are valid - they select the
+/// AWS default set.
+fn validate_client_attributes(
+    pool: &UserPool,
+    read: &[String],
+    write: &[String],
+) -> Result<(), AwsError> {
+    let lookup = |name: &String| pool.schema.iter().find(|a| &a.name == name);
+    for name in read.iter().chain(write.iter()) {
+        if lookup(name).is_none() {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!("Attribute {name} does not exist in the user pool schema."),
+            ));
+        }
+    }
+    for name in write {
+        if lookup(name).is_some_and(|a| !a.mutable) {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!("Write attributes cannot include non-mutable attribute {name}."),
+            ));
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +417,24 @@ pub fn create_user_pool_client(
         })
         .unwrap_or_default();
 
+    let read_attributes: Vec<String> = input["ReadAttributes"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let write_attributes: Vec<String> = input["WriteAttributes"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let access_token_validity = input["AccessTokenValidity"].as_u64().unwrap_or(3600);
     let id_token_validity = input["IdTokenValidity"].as_u64().unwrap_or(3600);
     let refresh_token_validity = input["RefreshTokenValidity"].as_u64().unwrap_or(2_592_000);
@@ -388,6 +445,8 @@ pub fn create_user_pool_client(
             format!("User pool not found: {pool_id}"),
         )
     })?;
+
+    validate_client_attributes(&pool, &read_attributes, &write_attributes)?;
 
     let client_id = Uuid::new_v4().to_string().replace('-', "")[..26].to_string();
     let now = now_epoch();
@@ -408,22 +467,16 @@ pub fn create_user_pool_client(
         id_token_validity,
         refresh_token_validity,
         additional_client_secrets: Vec::new(),
+        read_attributes,
+        write_attributes,
     };
 
+    let response = client_to_value(&client, true);
     pool.clients.insert(client_id.clone(), client);
 
     info!(pool_id = %pool_id, client_id = %client_id, "Cognito: created user pool client");
 
-    Ok(json!({
-        "UserPoolClient": {
-            "UserPoolId": pool_id,
-            "ClientName": client_name,
-            "ClientId": client_id,
-            "ClientSecret": client_secret,
-            "CreationDate": now,
-            "LastModifiedDate": now
-        }
-    }))
+    Ok(json!({ "UserPoolClient": response }))
 }
 
 // ---------------------------------------------------------------------------
@@ -554,6 +607,27 @@ pub fn update_user_pool_client(
         )
     })?;
 
+    // Parse + validate Read/WriteAttributes before taking the mutable
+    // client borrow (validation needs `&pool.schema`). Each list is
+    // validated independently; an absent key leaves it unchanged.
+    let read_update: Option<Vec<String>> = input["ReadAttributes"].as_array().map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    });
+    let write_update: Option<Vec<String>> = input["WriteAttributes"].as_array().map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    });
+    if read_update.is_some() || write_update.is_some() {
+        validate_client_attributes(
+            &pool,
+            read_update.as_deref().unwrap_or(&[]),
+            write_update.as_deref().unwrap_or(&[]),
+        )?;
+    }
+
     let client = pool.clients.get_mut(client_id).ok_or_else(|| {
         AwsError::not_found(
             "ResourceNotFoundException",
@@ -615,6 +689,13 @@ pub fn update_user_pool_client(
     }
     if let Some(v) = input["RefreshTokenValidity"].as_u64() {
         client.refresh_token_validity = v;
+    }
+
+    if let Some(read) = read_update {
+        client.read_attributes = read;
+    }
+    if let Some(write) = write_update {
+        client.write_attributes = write;
     }
 
     let client_value = client_to_value(client, false);
