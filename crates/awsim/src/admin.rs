@@ -66,6 +66,10 @@ pub async fn config(State(state): State<AppState>) -> Json<Value> {
         "region": state.default_region,
         "accountId": state.default_account_id,
         "services": state.services.len(),
+        // Live authz-engine state (single source of truth). The
+        // dashboard reads `iamEnforcement`; without this it always
+        // rendered "off" since the field was never sent.
+        "iamEnforcement": state.authz.enabled(),
     }))
 }
 
