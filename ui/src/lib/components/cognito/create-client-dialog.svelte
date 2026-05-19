@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-	import { createAppClient } from '$lib/api/cognito';
+	import { createAppClient, type SchemaAttribute } from '$lib/api/cognito';
+	import AttributePermissions, {
+		defaultClientPerms
+	} from './attribute-permissions.svelte';
 	import {
 		Dialog,
 		DialogContent,
@@ -17,16 +20,21 @@
 	interface Props {
 		open: boolean;
 		poolId: string;
+		schema: SchemaAttribute[];
 		onClose: () => void;
 		onCreated: (clientId: string) => void;
 	}
 
-	let { open = $bindable(false), poolId, onClose, onCreated }: Props = $props();
+	let { open = $bindable(false), poolId, schema, onClose, onCreated }: Props =
+		$props();
 
 	let clientName = $state('');
 	let generateSecret = $state(false);
 	let saving = $state(false);
 	let error = $state<string | null>(null);
+	let customPerms = $state(false);
+	let readAttrs = $state<string[]>([]);
+	let writeAttrs = $state<string[]>([]);
 
 	$effect(() => {
 		if (!open) {
@@ -34,6 +42,19 @@
 			generateSecret = false;
 			saving = false;
 			error = null;
+			customPerms = false;
+			readAttrs = [];
+			writeAttrs = [];
+		}
+	});
+
+	// Seed the matrix with the AWS defaults the first time the user opts
+	// into custom permissions, so they start from "everything granted".
+	$effect(() => {
+		if (customPerms && readAttrs.length === 0 && writeAttrs.length === 0) {
+			const d = defaultClientPerms(schema);
+			readAttrs = d.read;
+			writeAttrs = d.write;
 		}
 	});
 
@@ -49,7 +70,9 @@
 				poolId,
 				clientName: clientName.trim(),
 				generateSecret,
-				explicitAuthFlows: ['ALLOW_USER_PASSWORD_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH']
+				explicitAuthFlows: ['ALLOW_USER_PASSWORD_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH'],
+				readAttributes: customPerms ? readAttrs : undefined,
+				writeAttributes: customPerms ? writeAttrs : undefined
 			});
 			toast.success(`Created ${clientName.trim()}`);
 			onCreated(c.clientId);
@@ -85,6 +108,19 @@
 				<input type="checkbox" bind:checked={generateSecret} class="size-3.5" />
 				Generate client secret (confidential client)
 			</label>
+			<div class="space-y-1.5">
+				<label class="flex items-center gap-2 text-xs">
+					<input type="checkbox" bind:checked={customPerms} class="size-3.5" />
+					Set custom attribute read/write permissions
+				</label>
+				{#if customPerms}
+					<p class="text-xs text-muted-foreground">
+						Defaults to all attributes granted. Uncheck rows to restrict. You can
+						also change this later on the client.
+					</p>
+					<AttributePermissions {schema} bind:read={readAttrs} bind:write={writeAttrs} />
+				{/if}
+			</div>
 			{#if error}
 				<p class="text-xs text-destructive">{error}</p>
 			{/if}

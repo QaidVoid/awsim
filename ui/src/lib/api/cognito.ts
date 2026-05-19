@@ -159,6 +159,12 @@ export interface CognitoAppClientDetail extends CognitoAppClient {
   refreshTokenValidity?: number;
   accessTokenValidity?: number;
   idTokenValidity?: number;
+  /** Schema attribute names this client may read. Empty = AWS default
+   * (all attributes readable). */
+  readAttributes: string[];
+  /** Schema attribute names this client may write. Empty = AWS default
+   * (all mutable attributes writable). */
+  writeAttributes: string[];
 }
 
 export interface CognitoDomain {
@@ -175,6 +181,8 @@ export interface AppClientUpdateInput {
   allowedOAuthFlowsUserPoolClient?: boolean;
   supportedIdentityProviders?: string[];
   explicitAuthFlows?: string[];
+  readAttributes?: string[];
+  writeAttributes?: string[];
 }
 
 export interface IdentityPool {
@@ -863,6 +871,8 @@ export async function describeAppClient(
       RefreshTokenValidity?: number;
       AccessTokenValidity?: number;
       IdTokenValidity?: number;
+      ReadAttributes?: string[];
+      WriteAttributes?: string[];
     };
   };
   const c =
@@ -881,6 +891,8 @@ export async function describeAppClient(
     refreshTokenValidity: c.RefreshTokenValidity,
     accessTokenValidity: c.AccessTokenValidity,
     idTokenValidity: c.IdTokenValidity,
+    readAttributes: c.ReadAttributes ?? [],
+    writeAttributes: c.WriteAttributes ?? [],
   };
 }
 
@@ -895,6 +907,8 @@ export async function createAppClient(input: {
   allowedOAuthScopes?: string[];
   allowedOAuthFlowsUserPoolClient?: boolean;
   supportedIdentityProviders?: string[];
+  readAttributes?: string[];
+  writeAttributes?: string[];
 }): Promise<CognitoAppClientDetail> {
   const body: Record<string, unknown> = {
     UserPoolId: input.poolId,
@@ -913,6 +927,9 @@ export async function createAppClient(input: {
     body.AllowedOAuthFlowsUserPoolClient = input.allowedOAuthFlowsUserPoolClient;
   if (input.supportedIdentityProviders?.length)
     body.SupportedIdentityProviders = input.supportedIdentityProviders;
+  if (input.readAttributes?.length) body.ReadAttributes = input.readAttributes;
+  if (input.writeAttributes?.length)
+    body.WriteAttributes = input.writeAttributes;
   const data = (await idpRequest("CreateUserPoolClient", body)) as {
     UserPoolClient?: {
       ClientId?: string;
@@ -932,6 +949,8 @@ export async function createAppClient(input: {
     allowedOAuthScopes: input.allowedOAuthScopes ?? [],
     allowedOAuthFlowsUserPoolClient: input.allowedOAuthFlowsUserPoolClient,
     supportedIdentityProviders: input.supportedIdentityProviders ?? [],
+    readAttributes: input.readAttributes ?? [],
+    writeAttributes: input.writeAttributes ?? [],
   };
 }
 
@@ -958,6 +977,8 @@ export async function updateAppClient(input: {
     body.SupportedIdentityProviders = p.supportedIdentityProviders;
   if (p.explicitAuthFlows !== undefined)
     body.ExplicitAuthFlows = p.explicitAuthFlows;
+  if (p.readAttributes !== undefined) body.ReadAttributes = p.readAttributes;
+  if (p.writeAttributes !== undefined) body.WriteAttributes = p.writeAttributes;
   await idpRequest("UpdateUserPoolClient", body);
 }
 

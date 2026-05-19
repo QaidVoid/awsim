@@ -4,8 +4,12 @@
 	import {
 		describeAppClient,
 		updateAppClient,
-		type CognitoAppClientDetail
+		type CognitoAppClientDetail,
+		type SchemaAttribute
 	} from '$lib/api/cognito';
+	import AttributePermissions, {
+		defaultClientPerms
+	} from './attribute-permissions.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -18,9 +22,10 @@
 	interface Props {
 		poolId: string;
 		clientId: string;
+		schema: SchemaAttribute[];
 	}
 
-	let { poolId, clientId }: Props = $props();
+	let { poolId, clientId, schema }: Props = $props();
 
 	const SCOPES = ['openid', 'email', 'phone', 'profile', 'aws.cognito.signin.user.admin'];
 	const FLOWS = ['code', 'implicit', 'client_credentials'];
@@ -43,6 +48,12 @@
 	let oauthScopes = $state<string[]>([]);
 	let oauthEnabled = $state(false);
 	let authFlows = $state<string[]>([]);
+	// When off, the client uses the AWS default attribute access (all
+	// readable, all mutable attrs writable) and the patch sends empty
+	// lists to clear any prior custom set.
+	let customPerms = $state(false);
+	let readAttrs = $state<string[]>([]);
+	let writeAttrs = $state<string[]>([]);
 
 	onMount(load);
 
@@ -57,6 +68,14 @@
 			oauthScopes = [...d.allowedOAuthScopes];
 			oauthEnabled = d.allowedOAuthFlowsUserPoolClient ?? false;
 			authFlows = [...d.explicitAuthFlows];
+			// A non-empty list means the client has a custom set. Seed
+			// each column independently from defaults when it is empty
+			// (empty = "AWS default for that direction") so the matrix
+			// always reflects effective access rather than a blank column.
+			const defaults = defaultClientPerms(schema);
+			customPerms = d.readAttributes.length > 0 || d.writeAttributes.length > 0;
+			readAttrs = d.readAttributes.length > 0 ? [...d.readAttributes] : defaults.read;
+			writeAttrs = d.writeAttributes.length > 0 ? [...d.writeAttributes] : defaults.write;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to load client');
 		} finally {
@@ -87,7 +106,9 @@
 					allowedOAuthFlows: oauthFlows,
 					allowedOAuthScopes: oauthScopes,
 					allowedOAuthFlowsUserPoolClient: oauthEnabled,
-					explicitAuthFlows: authFlows
+					explicitAuthFlows: authFlows,
+					readAttributes: customPerms ? readAttrs : [],
+					writeAttributes: customPerms ? writeAttrs : []
 				}
 			});
 			toast.success('Client updated');
@@ -231,6 +252,25 @@
 					</button>
 				{/each}
 			</div>
+		</div>
+
+		<div class="space-y-1.5">
+			<label class="flex items-center gap-2 text-xs">
+				<input type="checkbox" bind:checked={customPerms} class="size-3.5" />
+				Set custom attribute read/write permissions
+			</label>
+			{#if customPerms}
+				<p class="text-xs text-muted-foreground">
+					Controls which user attributes this client can read and write via an
+					access token. Immutable attributes cannot be granted write.
+				</p>
+				<AttributePermissions {schema} bind:read={readAttrs} bind:write={writeAttrs} />
+			{:else}
+				<p class="text-xs text-muted-foreground">
+					Using the AWS default: all attributes readable, all mutable attributes
+					writable. Enable to restrict per attribute.
+				</p>
+			{/if}
 		</div>
 
 		{#if detail.refreshTokenValidity || detail.accessTokenValidity || detail.idTokenValidity}

@@ -1,7 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
-	import { listAppClients, deleteAppClient, type CognitoAppClient } from '$lib/api/cognito';
+	import {
+		listAppClients,
+		deleteAppClient,
+		type CognitoAppClient,
+		type SchemaAttribute,
+		type UserPoolDetail
+	} from '$lib/api/cognito';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -18,9 +24,12 @@
 
 	interface Props {
 		poolId: string;
+		pool: UserPoolDetail | null;
 	}
 
-	let { poolId }: Props = $props();
+	let { poolId, pool }: Props = $props();
+
+	let schema = $derived<SchemaAttribute[]>(pool?.schemaAttributes ?? []);
 
 	let clients = $state<CognitoAppClient[]>([]);
 	let loading = $state(false);
@@ -208,7 +217,7 @@
 						{#if expanded === c.clientId}
 							<div class="border-t border-border/60 px-3 py-3">
 								{#key c.clientId}
-									<ClientDetail {poolId} clientId={c.clientId} />
+									<ClientDetail {poolId} clientId={c.clientId} {schema} />
 								{/key}
 							</div>
 						{/if}
@@ -222,6 +231,7 @@
 <CreateClientDialog
 	bind:open={createOpen}
 	{poolId}
+	{schema}
 	onClose={() => (createOpen = false)}
 	onCreated={(id) => {
 		void fetchPage(currentToken);

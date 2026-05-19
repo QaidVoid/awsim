@@ -120,7 +120,7 @@
 					{:else if active === 'groups'}
 						<GroupsSection {poolId} />
 					{:else if active === 'clients'}
-						<ClientsSection {poolId} />
+						<ClientsSection {poolId} {pool} />
 					{:else if active === 'authenticate'}
 						<AuthenticateSection {poolId} {prefillUser} />
 					{:else if active === 'attributes'}
