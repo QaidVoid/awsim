@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 
 use crate::aliases::{AliasKind, AliasSpec, AliasTarget, alias_view};
 use crate::health::HealthRegistry;
+use crate::metrics::{MetricsRegistry, RecentInvocations};
 use crate::model_map::{ModelEntry, ModelMap};
 
 const DEFAULT_BACKEND_NAME: &str = "default";
@@ -88,6 +89,13 @@ struct BackendsInner {
     /// backend is currently marked `Down`. Absent in tests and
     /// in the CLI single-backend setup that has no poller.
     health: Option<HealthRegistry>,
+    /// Optional handle to the metrics registry. When set, the
+    /// runtime layer records per-(bedrock_id, backend) counters
+    /// and latency histograms.
+    metrics: Option<MetricsRegistry>,
+    /// Optional handle to the recent-invocations ring. When set,
+    /// the runtime layer pushes one record per outer-call.
+    recent: Option<RecentInvocations>,
 }
 
 impl BedrockBackends {
@@ -103,6 +111,8 @@ impl BedrockBackends {
             model_map,
             aliases: HashMap::new(),
             health: None,
+            metrics: None,
+            recent: None,
         }))
     }
 
@@ -119,6 +129,8 @@ impl BedrockBackends {
             model_map,
             aliases: HashMap::new(),
             health: None,
+            metrics: None,
+            recent: None,
         }))
     }
 
@@ -136,6 +148,8 @@ impl BedrockBackends {
             model_map,
             aliases,
             health: None,
+            metrics: None,
+            recent: None,
         }))
     }
 
@@ -153,8 +167,39 @@ impl BedrockBackends {
             model_map: self.0.model_map.clone(),
             aliases: self.0.aliases.clone(),
             health: Some(health),
+            metrics: self.0.metrics.clone(),
+            recent: self.0.recent.clone(),
         };
         Self(Arc::new(inner))
+    }
+
+    /// Attach the process-lifetime metrics + recent-invocations
+    /// handles. Like `with_health`, both survive every hot-swap so
+    /// the UI's counter chips and Activity tab keep their history
+    /// across config reloads.
+    #[must_use]
+    pub fn with_metrics(self, metrics: MetricsRegistry, recent: RecentInvocations) -> Self {
+        let inner = BackendsInner {
+            backends: self.0.backends.clone(),
+            default_name: self.0.default_name.clone(),
+            model_map: self.0.model_map.clone(),
+            aliases: self.0.aliases.clone(),
+            health: self.0.health.clone(),
+            metrics: Some(metrics),
+            recent: Some(recent),
+        };
+        Self(Arc::new(inner))
+    }
+
+    /// Borrow the metrics registry, if any. Used by the runtime
+    /// layer to record per-attempt outcomes.
+    pub fn metrics(&self) -> Option<&MetricsRegistry> {
+        self.0.metrics.as_ref()
+    }
+
+    /// Borrow the recent-invocations ring, if any.
+    pub fn recent(&self) -> Option<&RecentInvocations> {
+        self.0.recent.as_ref()
     }
 
     pub fn model_map(&self) -> &ModelMap {

@@ -21,6 +21,9 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::backend::{BedrockBackends, ResolvedTarget};
+use crate::metrics::{AttemptRecord, InvocationRecord, OpKind, Outcome};
+use chrono::Utc;
+use std::time::Instant;
 
 /// Translate an upstream HTTP status + body into a
 /// Bedrock-shape `AwsError` so SDK retry / error-handling logic
@@ -126,11 +129,34 @@ async fn call_chat(
             format!("No backend mapping for Bedrock model {bedrock_id}"),
         ));
     }
+    let started = Instant::now();
+    let mut attempts: Vec<AttemptRecord> = Vec::with_capacity(candidates.len());
     let mut last_err: Option<AwsError> = None;
     let total = candidates.len();
     for (i, target) in candidates.iter().enumerate() {
-        match try_chat_once(target, &build).await {
-            Attempt::Ok(resp) => return Ok(resp),
+        let attempt_start = Instant::now();
+        let attempt = try_chat_once(target, &build).await;
+        let latency_ms = attempt_start.elapsed().as_millis() as u64;
+        let (outcome, err) = classify_for_metrics(&attempt);
+        attempts.push(AttemptRecord {
+            backend: target.name().to_string(),
+            tag: target.tag.to_string(),
+            outcome,
+            latency_ms,
+            error: err,
+        });
+        match attempt {
+            Attempt::Ok(resp) => {
+                record_invocation(
+                    backends,
+                    bedrock_id,
+                    OpKind::Chat,
+                    attempts,
+                    Outcome::Success,
+                    started.elapsed().as_millis() as u64,
+                );
+                return Ok(resp);
+            }
             Attempt::Retriable(e) => {
                 if i + 1 < total {
                     debug!(
@@ -142,9 +168,27 @@ async fn call_chat(
                 }
                 last_err = Some(e);
             }
-            Attempt::Fatal(e) => return Err(e),
+            Attempt::Fatal(e) => {
+                record_invocation(
+                    backends,
+                    bedrock_id,
+                    OpKind::Chat,
+                    attempts,
+                    Outcome::FatalError,
+                    started.elapsed().as_millis() as u64,
+                );
+                return Err(e);
+            }
         }
     }
+    record_invocation(
+        backends,
+        bedrock_id,
+        OpKind::Chat,
+        attempts,
+        Outcome::RetriableError,
+        started.elapsed().as_millis() as u64,
+    );
     Err(last_err.unwrap_or_else(|| AwsError::internal("Bedrock backend chat: no attempts ran")))
 }
 
@@ -157,6 +201,50 @@ enum Attempt<T> {
     Ok(T),
     Retriable(AwsError),
     Fatal(AwsError),
+}
+
+/// Classify an attempt into the metrics outcome enum + a trimmed
+/// error message (or `None` on success).
+fn classify_for_metrics<T>(attempt: &Attempt<T>) -> (Outcome, Option<String>) {
+    match attempt {
+        Attempt::Ok(_) => (Outcome::Success, None),
+        Attempt::Retriable(e) => (Outcome::RetriableError, Some(e.message.clone())),
+        Attempt::Fatal(e) => (Outcome::FatalError, Some(e.message.clone())),
+    }
+}
+
+/// Push one outer-call record to the ring + bump the per-mapping
+/// counters. No-ops cleanly when the registries are absent (CLI
+/// single-backend or tests).
+fn record_invocation(
+    backends: &BedrockBackends,
+    bedrock_id: &str,
+    op: OpKind,
+    attempts: Vec<AttemptRecord>,
+    outcome: Outcome,
+    total_latency_ms: u64,
+) {
+    if let Some(m) = backends.metrics() {
+        for a in &attempts {
+            m.record(
+                bedrock_id,
+                &a.backend,
+                a.outcome,
+                a.latency_ms,
+                a.error.as_deref(),
+            );
+        }
+    }
+    if let Some(r) = backends.recent() {
+        r.push(InvocationRecord {
+            at: Utc::now(),
+            bedrock_id: bedrock_id.to_string(),
+            op,
+            attempts,
+            outcome,
+            total_latency_ms,
+        });
+    }
 }
 
 async fn try_chat_once(
@@ -330,11 +418,34 @@ pub(crate) async fn call_chat_stream(
     // we discover the upstream failed. Once Phase 6 / real
     // eventstream framing pipes bytes through incrementally, retry
     // becomes safe only up to the first forwarded byte.
+    let started = Instant::now();
+    let mut attempts: Vec<AttemptRecord> = Vec::with_capacity(candidates.len());
     let mut last_err: Option<AwsError> = None;
     let total = candidates.len();
     for (i, target) in candidates.iter().enumerate() {
-        match try_chat_stream_once(target, &build).await {
-            Attempt::Ok(acc) => return Ok(acc),
+        let attempt_start = Instant::now();
+        let attempt = try_chat_stream_once(target, &build).await;
+        let latency_ms = attempt_start.elapsed().as_millis() as u64;
+        let (outcome, err) = classify_for_metrics(&attempt);
+        attempts.push(AttemptRecord {
+            backend: target.name().to_string(),
+            tag: target.tag.to_string(),
+            outcome,
+            latency_ms,
+            error: err,
+        });
+        match attempt {
+            Attempt::Ok(acc) => {
+                record_invocation(
+                    backends,
+                    bedrock_id,
+                    OpKind::ChatStream,
+                    attempts,
+                    Outcome::Success,
+                    started.elapsed().as_millis() as u64,
+                );
+                return Ok(acc);
+            }
             Attempt::Retriable(e) => {
                 if i + 1 < total {
                     debug!(
@@ -346,9 +457,27 @@ pub(crate) async fn call_chat_stream(
                 }
                 last_err = Some(e);
             }
-            Attempt::Fatal(e) => return Err(e),
+            Attempt::Fatal(e) => {
+                record_invocation(
+                    backends,
+                    bedrock_id,
+                    OpKind::ChatStream,
+                    attempts,
+                    Outcome::FatalError,
+                    started.elapsed().as_millis() as u64,
+                );
+                return Err(e);
+            }
         }
     }
+    record_invocation(
+        backends,
+        bedrock_id,
+        OpKind::ChatStream,
+        attempts,
+        Outcome::RetriableError,
+        started.elapsed().as_millis() as u64,
+    );
     Err(last_err
         .unwrap_or_else(|| AwsError::internal("Bedrock backend chat stream: no attempts ran")))
 }
@@ -542,11 +671,34 @@ async fn call_embed(
             format!("No backend mapping for Bedrock embedding model {bedrock_id}"),
         ));
     }
+    let started = Instant::now();
+    let mut attempts: Vec<AttemptRecord> = Vec::with_capacity(candidates.len());
     let mut last_err: Option<AwsError> = None;
     let total = candidates.len();
     for (i, target) in candidates.iter().enumerate() {
-        match try_embed_once(target, &build).await {
-            Attempt::Ok(resp) => return Ok(resp),
+        let attempt_start = Instant::now();
+        let attempt = try_embed_once(target, &build).await;
+        let latency_ms = attempt_start.elapsed().as_millis() as u64;
+        let (outcome, err) = classify_for_metrics(&attempt);
+        attempts.push(AttemptRecord {
+            backend: target.name().to_string(),
+            tag: target.tag.to_string(),
+            outcome,
+            latency_ms,
+            error: err,
+        });
+        match attempt {
+            Attempt::Ok(resp) => {
+                record_invocation(
+                    backends,
+                    bedrock_id,
+                    OpKind::Embed,
+                    attempts,
+                    Outcome::Success,
+                    started.elapsed().as_millis() as u64,
+                );
+                return Ok(resp);
+            }
             Attempt::Retriable(e) => {
                 if i + 1 < total {
                     debug!(
@@ -558,9 +710,27 @@ async fn call_embed(
                 }
                 last_err = Some(e);
             }
-            Attempt::Fatal(e) => return Err(e),
+            Attempt::Fatal(e) => {
+                record_invocation(
+                    backends,
+                    bedrock_id,
+                    OpKind::Embed,
+                    attempts,
+                    Outcome::FatalError,
+                    started.elapsed().as_millis() as u64,
+                );
+                return Err(e);
+            }
         }
     }
+    record_invocation(
+        backends,
+        bedrock_id,
+        OpKind::Embed,
+        attempts,
+        Outcome::RetriableError,
+        started.elapsed().as_millis() as u64,
+    );
     Err(last_err.unwrap_or_else(|| AwsError::internal("Bedrock backend embed: no attempts ran")))
 }
 
