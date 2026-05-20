@@ -17,6 +17,7 @@
 	import { useTab } from '$lib/util/tab.svelte';
 	import { route } from '$lib/url';
 	import { getGatewayCatalog, type CatalogProvider, type ProviderCatalog } from '$lib/api/gateway';
+	import CredentialsTab from '$lib/components/gateway/credentials-tab.svelte';
 	import type { Component } from 'svelte';
 	import { toast } from 'svelte-sonner';
 
@@ -243,13 +244,7 @@
 			</TabsContent>
 
 			<TabsContent value="credentials" class="m-0">
-				<div class="p-4">
-					<EmptyState
-						icon={KeyRound}
-						title="Coming in Phase 1"
-						description="Reusable API-key credentials referenced by multiple backends. Today, credentials live inline on each backend; Settings is still the place to edit them."
-					/>
-				</div>
+				<CredentialsTab />
 			</TabsContent>
 
 			<TabsContent value="models" class="m-0">

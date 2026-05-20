@@ -10,6 +10,22 @@
 
 export interface BedrockBackendSpec {
   endpoint: string;
+  /**
+   * Reference into the top-level `credentials` map. When set, the
+   * legacy `api_key` / `api_key_env` fields on this backend must be
+   * absent; the resolved credential's key is used at request time.
+   */
+  credential?: string | null;
+  api_key?: string | null;
+  api_key_env?: string | null;
+}
+
+/**
+ * Reusable API-key credential. Same `(api_key | api_key_env)` shape
+ * as the legacy per-backend fields, just lifted into a named table
+ * so multiple backends can share one secret.
+ */
+export interface CredentialSpec {
   api_key?: string | null;
   api_key_env?: string | null;
 }
@@ -18,6 +34,7 @@ export type ModelMapEntry = string | { backend: string; tag: string };
 
 export interface BedrockSpec {
   default_backend?: string | null;
+  credentials?: Record<string, CredentialSpec>;
   backends: Record<string, BedrockBackendSpec>;
   invoke: Record<string, ModelMapEntry>;
   embed: Record<string, ModelMapEntry>;
