@@ -347,9 +347,9 @@
 				<p class="font-semibold">Models &amp; Aliases</p>
 				<p class="text-muted-foreground">
 					Map a Bedrock model id to an ordered list of backend targets. The first target whose
-					backend exists wins at runtime; remaining targets cover the case where a backend was
-					removed without cleaning up the mapping. Automatic fallback on errors/timeouts and
-					per-target overrides arrive in Phases 4-5.
+					backend is healthy wins at runtime; if it returns a retriable error (5xx / 408 / 429 /
+					timeout) the gateway rolls forward to the next target automatically. Per-target
+					overrides for timeout, max tokens, and temperature live on the editor.
 				</p>
 			</div>
 		</div>
@@ -361,8 +361,12 @@
 			<p class="text-sm text-muted-foreground">
 				{rows.length} total
 				{#if rows.length > 0}
-					· {rows.filter((r) => r.source === 'alias').length} alias{rows.filter((r) => r.source === 'alias').length === 1 ? '' : 'es'}
-					· {rows.filter((r) => r.source === 'legacy').length} legacy
+					· {rows.filter((r) => r.kind === 'chat').length} chat
+					· {rows.filter((r) => r.kind === 'embed').length} embed
+					{@const withFallback = rows.filter((r) => r.targets.length > 1).length}
+					{#if withFallback > 0}
+						· {withFallback} with fallback
+					{/if}
 				{/if}
 			</p>
 		</div>
@@ -419,7 +423,6 @@
 					<TableRow>
 						<TableHead>Bedrock id</TableHead>
 						<TableHead>Kind</TableHead>
-						<TableHead>Source</TableHead>
 						<TableHead>Targets</TableHead>
 						<TableHead>Activity</TableHead>
 						<TableHead class="text-right">Actions</TableHead>
@@ -434,12 +437,10 @@
 								<Badge variant={row.kind === 'embed' ? 'outline' : 'secondary'} class="text-[10px] uppercase">
 									{row.kind}
 								</Badge>
-							</TableCell>
-							<TableCell>
-								{#if row.source === 'alias'}
-									<Badge variant="default" class="text-[10px] uppercase">alias</Badge>
-								{:else}
-									<Badge variant="outline" class="text-[10px] uppercase">legacy</Badge>
+								{#if row.targets.length > 1}
+									<Badge variant="default" class="ml-1 text-[10px] uppercase" title="Has fallback targets">
+										+{row.targets.length - 1}
+									</Badge>
 								{/if}
 							</TableCell>
 							<TableCell>
@@ -529,7 +530,7 @@
 								{@const res = testerResult[tk]}
 								{@const running = testerRunning[tk] ?? false}
 								<TableRow>
-									<TableCell colspan={6} class="bg-muted/30">
+									<TableCell colspan={5} class="bg-muted/30">
 										<div class="flex flex-col gap-2 py-2">
 											<div class="flex items-start gap-2">
 												<ChevronRightIcon class="mt-2 h-4 w-4 shrink-0 text-muted-foreground" />
