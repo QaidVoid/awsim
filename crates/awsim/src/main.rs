@@ -2105,6 +2105,7 @@ fn build_runtime_config_seed(cli: &Cli) -> Result<runtime_config::RuntimeConfig>
             "default".to_string(),
             awsim_bedrock::BackendSpec {
                 endpoint: endpoint.to_string(),
+                provider: None,
                 credential: None,
                 api_key: cli.bedrock_api_key.clone(),
                 api_key_env: None,

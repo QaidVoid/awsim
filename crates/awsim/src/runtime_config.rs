@@ -381,6 +381,7 @@ mod tests {
             "ollama".to_string(),
             BackendSpec {
                 endpoint: "http://localhost".into(),
+                provider: None,
                 credential: None,
                 api_key: None,
                 api_key_env: None,

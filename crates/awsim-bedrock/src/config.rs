@@ -66,6 +66,13 @@ pub struct BedrockSpec {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct BackendSpec {
     pub endpoint: String,
+    /// Catalog key (e.g. "ollama", "openai", "groq", "custom") this
+    /// backend was wired from. Pure metadata — the runtime never
+    /// branches on it; the UI uses it to render the right logo,
+    /// notes, and curated model list. Absent on backends configured
+    /// via the legacy CLI flags or hand-edited TOML.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     /// Reference into the top-level `[credentials.*]` table. When set,
     /// the resolved credential's `api_key` is used. Mutually exclusive
     /// with the legacy inline `api_key` / `api_key_env` fields on this
@@ -509,6 +516,29 @@ credential = "x"
             err,
             BedrockConfigError::CredentialKeyConflict { ref credential } if credential == "x"
         ));
+    }
+
+    #[test]
+    fn provider_field_round_trips_through_spec() {
+        // Spec carries `provider` as opaque UI metadata; the resolver
+        // never branches on it. Just verify it survives the loader so
+        // the runtime-config GET surfaces what the user picked in the
+        // wizard.
+        let toml_src = r#"
+[backends.openai]
+endpoint = "https://api.openai.com/v1"
+provider = "openai"
+api_key = "sk-test"
+"#;
+        let spec: BedrockSpec = toml::from_str(toml_src).unwrap();
+        assert_eq!(
+            spec.backends
+                .get("openai")
+                .and_then(|b| b.provider.as_deref()),
+            Some("openai")
+        );
+        let bs = build_from_spec(spec, empty_env).unwrap();
+        assert_eq!(bs.get_backend("openai").unwrap().api_key(), Some("sk-test"));
     }
 
     #[test]
