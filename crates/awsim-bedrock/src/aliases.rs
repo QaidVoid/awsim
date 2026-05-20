@@ -50,13 +50,31 @@ pub enum AliasStrategy {
     First,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 pub struct AliasTarget {
     /// Name of an entry in `[backends.<name>]`.
     pub backend: String,
     /// Backend-side model tag passed in the upstream chat /
     /// embeddings request.
     pub tag: String,
+    /// Per-request upstream timeout. When set, overrides the
+    /// backend's default reqwest timeout for this target only.
+    /// Useful when fan-out covers a fast hosted backend (tight
+    /// timeout) plus a slow local fallback (looser timeout).
+    /// Embed targets also honour this; chat targets honour all
+    /// three overrides below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// Cap the upstream's `max_tokens` (chat-only). Lets a small
+    /// model in the fallback chain stay within its context budget
+    /// even when the primary alias caller asked for more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    /// Pin the upstream's `temperature` (chat-only). Useful when
+    /// the alias targets two backends that disagree on default
+    /// sampling (e.g. Groq runs hot, local Ollama wants cooler).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
 }
 
 /// JSON view of one alias for the admin endpoint. Sorted target
@@ -65,7 +83,15 @@ pub(crate) fn alias_view(id: &str, alias: &AliasSpec) -> Value {
     let targets: Vec<Value> = alias
         .targets
         .iter()
-        .map(|t| json!({ "backend": t.backend, "tag": t.tag }))
+        .map(|t| {
+            json!({
+                "backend": t.backend,
+                "tag": t.tag,
+                "timeoutMs": t.timeout_ms,
+                "maxTokens": t.max_tokens,
+                "temperature": t.temperature,
+            })
+        })
         .collect();
     json!({
         "id": id,

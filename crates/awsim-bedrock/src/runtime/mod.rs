@@ -20,7 +20,7 @@ use futures::stream::{self, BoxStream};
 use serde_json::Value;
 use tracing::debug;
 
-use crate::backend::BedrockBackends;
+use crate::backend::{BedrockBackends, ResolvedTarget};
 
 /// Translate an upstream HTTP status + body into a
 /// Bedrock-shape `AwsError` so SDK retry / error-handling logic
@@ -128,13 +128,13 @@ async fn call_chat(
     }
     let mut last_err: Option<AwsError> = None;
     let total = candidates.len();
-    for (i, (backend, model_tag)) in candidates.iter().enumerate() {
-        match try_chat_once(backend, model_tag, &build).await {
+    for (i, target) in candidates.iter().enumerate() {
+        match try_chat_once(target, &build).await {
             Attempt::Ok(resp) => return Ok(resp),
             Attempt::Retriable(e) => {
                 if i + 1 < total {
                     debug!(
-                        backend = backend.name(),
+                        backend = target.name(),
                         attempt = i + 1,
                         of = total,
                         "chat call hit retriable error; trying next alias target"
@@ -160,16 +160,17 @@ enum Attempt<T> {
 }
 
 async fn try_chat_once(
-    backend: &crate::backend::BedrockBackend,
-    model_tag: &str,
+    target: &ResolvedTarget<'_>,
     build: &impl Fn(&str) -> Result<openai::ChatRequest, AwsError>,
 ) -> Attempt<openai::ChatResponse> {
-    let mut req = match build(model_tag) {
+    let mut req = match build(target.tag) {
         Ok(r) => r,
         Err(e) => return Attempt::Fatal(e),
     };
+    apply_chat_overrides(&mut req, target);
+    let backend = target.backend;
     let url = format!("{}/chat/completions", backend.endpoint());
-    let (status, body_text) = match post_chat(backend, &url, &req).await {
+    let (status, body_text) = match post_chat(backend, &url, &req, target.timeout()).await {
         Ok(pair) => pair,
         Err(e) => return Attempt::Retriable(e),
     };
@@ -186,7 +187,7 @@ async fn try_chat_once(
         && flatten_request_content(&mut req)
     {
         debug!("Bedrock backend rejected multimodal content array, retrying with flattened text");
-        match post_chat(backend, &url, &req).await {
+        match post_chat(backend, &url, &req, target.timeout()).await {
             Ok((status2, body2)) if status2.is_success() => {
                 return match serde_json::from_str::<openai::ChatResponse>(&body2) {
                     Ok(v) => Attempt::Ok(v),
@@ -200,6 +201,18 @@ async fn try_chat_once(
         }
     }
     classify_response(status, &body_text)
+}
+
+/// Pin the request's max_tokens / temperature to whatever overrides
+/// the alias target declared, leaving the translator-built default
+/// in place when an override is absent.
+fn apply_chat_overrides(req: &mut openai::ChatRequest, target: &ResolvedTarget<'_>) {
+    if let Some(mt) = target.max_tokens {
+        req.max_tokens = Some(mt);
+    }
+    if let Some(t) = target.temperature {
+        req.temperature = Some(t);
+    }
 }
 
 /// Map an upstream non-2xx response to an `Attempt`, deciding
@@ -227,10 +240,14 @@ async fn post_chat(
     backend: &crate::backend::BedrockBackend,
     url: &str,
     req: &openai::ChatRequest,
+    timeout_override: Option<std::time::Duration>,
 ) -> Result<(reqwest::StatusCode, String), AwsError> {
     let mut http_req = backend.client().post(url).json(req);
     if let Some(key) = backend.api_key() {
         http_req = http_req.bearer_auth(key);
+    }
+    if let Some(t) = timeout_override {
+        http_req = http_req.timeout(t);
     }
     let resp = http_req
         .send()
@@ -315,13 +332,13 @@ pub(crate) async fn call_chat_stream(
     // becomes safe only up to the first forwarded byte.
     let mut last_err: Option<AwsError> = None;
     let total = candidates.len();
-    for (i, (backend, model_tag)) in candidates.iter().enumerate() {
-        match try_chat_stream_once(backend, model_tag, &build).await {
+    for (i, target) in candidates.iter().enumerate() {
+        match try_chat_stream_once(target, &build).await {
             Attempt::Ok(acc) => return Ok(acc),
             Attempt::Retriable(e) => {
                 if i + 1 < total {
                     debug!(
-                        backend = backend.name(),
+                        backend = target.name(),
                         attempt = i + 1,
                         of = total,
                         "chat stream hit retriable error; trying next alias target"
@@ -337,21 +354,22 @@ pub(crate) async fn call_chat_stream(
 }
 
 async fn try_chat_stream_once(
-    backend: &crate::backend::BedrockBackend,
-    model_tag: &str,
+    target: &ResolvedTarget<'_>,
     build: &impl Fn(&str) -> Result<openai::ChatRequest, AwsError>,
 ) -> Attempt<AccumulatedStream> {
-    let mut req = match build(model_tag) {
+    let mut req = match build(target.tag) {
         Ok(r) => r,
         Err(e) => return Attempt::Fatal(e),
     };
+    apply_chat_overrides(&mut req, target);
     req.stream = Some(true);
     req.stream_options = Some(openai::StreamOptions {
         include_usage: true,
     });
 
+    let backend = target.backend;
     let url = format!("{}/chat/completions", backend.endpoint());
-    let (status, raw) = match post_chat(backend, &url, &req).await {
+    let (status, raw) = match post_chat(backend, &url, &req, target.timeout()).await {
         Ok(pair) => pair,
         Err(e) => return Attempt::Retriable(e),
     };
@@ -365,7 +383,7 @@ async fn try_chat_stream_once(
         debug!(
             "Bedrock backend rejected multimodal content array, retrying stream with flattened text"
         );
-        match post_chat(backend, &url, &req).await {
+        match post_chat(backend, &url, &req, target.timeout()).await {
             Ok((status2, raw2)) if status2.is_success() => {
                 return Attempt::Ok(accumulate_sse(&raw2));
             }
@@ -526,13 +544,13 @@ async fn call_embed(
     }
     let mut last_err: Option<AwsError> = None;
     let total = candidates.len();
-    for (i, (backend, model_tag)) in candidates.iter().enumerate() {
-        match try_embed_once(backend, model_tag, &build).await {
+    for (i, target) in candidates.iter().enumerate() {
+        match try_embed_once(target, &build).await {
             Attempt::Ok(resp) => return Ok(resp),
             Attempt::Retriable(e) => {
                 if i + 1 < total {
                     debug!(
-                        backend = backend.name(),
+                        backend = target.name(),
                         attempt = i + 1,
                         of = total,
                         "embed call hit retriable error; trying next alias target"
@@ -547,18 +565,25 @@ async fn call_embed(
 }
 
 async fn try_embed_once(
-    backend: &crate::backend::BedrockBackend,
-    model_tag: &str,
+    target: &ResolvedTarget<'_>,
     build: &impl Fn(&str) -> Result<openai::EmbeddingsRequest, AwsError>,
 ) -> Attempt<openai::EmbeddingsResponse> {
-    let req = match build(model_tag) {
+    let req = match build(target.tag) {
         Ok(r) => r,
         Err(e) => return Attempt::Fatal(e),
     };
+    // Embed targets honour timeout overrides only; the
+    // OpenAI EmbeddingsRequest shape has no max_tokens /
+    // temperature knobs, so the chat-only overrides are a
+    // no-op here even when they're declared on the alias.
+    let backend = target.backend;
     let url = format!("{}/embeddings", backend.endpoint());
     let mut http_req = backend.client().post(&url).json(&req);
     if let Some(key) = backend.api_key() {
         http_req = http_req.bearer_auth(key);
+    }
+    if let Some(t) = target.timeout() {
+        http_req = http_req.timeout(t);
     }
     let resp = match http_req.send().await {
         Ok(r) => r,

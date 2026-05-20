@@ -668,10 +668,16 @@ targets = [
                     crate::aliases::AliasTarget {
                         backend: "groq".into(),
                         tag: "llama-3.3-70b-versatile".into(),
+                        timeout_ms: None,
+                        max_tokens: None,
+                        temperature: None,
                     },
                     crate::aliases::AliasTarget {
                         backend: "ollama".into(),
                         tag: "llama3.1:8b".into(),
+                        timeout_ms: None,
+                        max_tokens: None,
+                        temperature: None,
                     },
                 ],
             },
@@ -729,6 +735,39 @@ targets = []
 "#;
         let err = expect_err(load_from_str(toml_src, "test".into(), empty_env));
         assert!(matches!(err, BedrockConfigError::AliasNoTargets { ref id } if id == "x"));
+    }
+
+    #[test]
+    fn alias_target_overrides_round_trip() {
+        // Inline overrides should make it through the loader so
+        // the runtime layer can apply them at request-build time.
+        let toml_src = r#"
+[backends.ollama]
+endpoint = "http://localhost:11434/v1"
+
+[backends.groq]
+endpoint = "https://api.groq.com/openai/v1"
+
+[aliases."anthropic.claude-3-5-sonnet-20241022-v2:0"]
+kind = "chat"
+targets = [
+  { backend = "groq",   tag = "llama-3.3-70b-versatile", timeout_ms = 8000, max_tokens = 1024, temperature = 0.7 },
+  { backend = "ollama", tag = "llama3.1:8b", timeout_ms = 60000 },
+]
+"#;
+        let spec: BedrockSpec = toml::from_str(toml_src).unwrap();
+        let alias = spec
+            .aliases
+            .get("anthropic.claude-3-5-sonnet-20241022-v2:0")
+            .unwrap();
+        assert_eq!(alias.targets[0].timeout_ms, Some(8000));
+        assert_eq!(alias.targets[0].max_tokens, Some(1024));
+        assert_eq!(alias.targets[0].temperature, Some(0.7));
+        assert_eq!(alias.targets[1].timeout_ms, Some(60000));
+        assert_eq!(alias.targets[1].max_tokens, None);
+        assert_eq!(alias.targets[1].temperature, None);
+        // build still validates fine
+        let _ = build_from_spec(spec, empty_env).unwrap();
     }
 
     #[test]

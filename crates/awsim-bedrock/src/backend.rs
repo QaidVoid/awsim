@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use crate::aliases::{AliasKind, AliasSpec, alias_view};
+use crate::aliases::{AliasKind, AliasSpec, AliasTarget, alias_view};
 use crate::health::HealthRegistry;
 use crate::model_map::{ModelEntry, ModelMap};
 
@@ -232,13 +232,13 @@ impl BedrockBackends {
             .unwrap_or(false)
     }
 
-    /// Return every candidate `(backend, tag)` pair an invoke call
-    /// could be routed to, in declaration order. Multi-target aliases
-    /// surface all their resolvable + non-down targets; a single
-    /// legacy entry surfaces as a 1-element vec. Used by the runtime
-    /// to drive error-fallback: try the first, on a retriable upstream
-    /// failure roll forward to the next.
-    pub fn resolve_invoke_all(&self, bedrock_id: &str) -> Vec<(&BedrockBackend, &str)> {
+    /// Return every candidate the runtime could try for this invoke
+    /// id, in declaration order. Multi-target aliases surface all
+    /// their resolvable + non-down targets (with per-target
+    /// overrides attached); a single legacy entry surfaces as a
+    /// 1-element vec with no overrides. Used by the runtime to
+    /// drive error-fallback + per-target request shaping.
+    pub fn resolve_invoke_all(&self, bedrock_id: &str) -> Vec<ResolvedTarget<'_>> {
         if let Some(alias) = self.0.aliases.get(bedrock_id)
             && alias.kind == AliasKind::Chat
         {
@@ -248,14 +248,18 @@ impl BedrockBackends {
             }
         }
         match self.0.model_map.lookup(bedrock_id, false) {
-            Some(entry) => self.resolve_entry(entry).into_iter().collect(),
+            Some(entry) => self
+                .resolve_entry(entry)
+                .map(ResolvedTarget::from_legacy)
+                .into_iter()
+                .collect(),
             None => Vec::new(),
         }
     }
 
     /// Same as `resolve_invoke_all` for the embed-side alias /
     /// legacy table.
-    pub fn resolve_embed_all(&self, bedrock_id: &str) -> Vec<(&BedrockBackend, &str)> {
+    pub fn resolve_embed_all(&self, bedrock_id: &str) -> Vec<ResolvedTarget<'_>> {
         if let Some(alias) = self.0.aliases.get(bedrock_id)
             && alias.kind == AliasKind::Embed
         {
@@ -265,12 +269,16 @@ impl BedrockBackends {
             }
         }
         match self.0.model_map.lookup(bedrock_id, true) {
-            Some(entry) => self.resolve_entry(entry).into_iter().collect(),
+            Some(entry) => self
+                .resolve_entry(entry)
+                .map(ResolvedTarget::from_legacy)
+                .into_iter()
+                .collect(),
             None => Vec::new(),
         }
     }
 
-    fn alias_candidates<'a>(&'a self, alias: &'a AliasSpec) -> Vec<(&'a BedrockBackend, &'a str)> {
+    fn alias_candidates<'a>(&'a self, alias: &'a AliasSpec) -> Vec<ResolvedTarget<'a>> {
         let mut out = Vec::with_capacity(alias.targets.len());
         for target in &alias.targets {
             let Some(backend) = self.0.backends.get(&target.backend) else {
@@ -279,7 +287,7 @@ impl BedrockBackends {
             if self.is_down(&target.backend) {
                 continue;
             }
-            out.push((backend, target.tag.as_str()));
+            out.push(ResolvedTarget::from_alias(backend, target));
         }
         out
     }
@@ -350,6 +358,49 @@ fn entry_view(id: &str, entry: &ModelEntry) -> Value {
         "tag": entry.tag(),
         "backend": entry.backend(),
     })
+}
+
+/// One resolver hit: the backend handle, the backend-side model
+/// tag, and any per-target request-shaping overrides declared on
+/// the alias target. Legacy single-target lookups surface with
+/// all overrides set to `None`.
+#[derive(Clone, Copy)]
+pub struct ResolvedTarget<'a> {
+    pub backend: &'a BedrockBackend,
+    pub tag: &'a str,
+    pub timeout_ms: Option<u64>,
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
+}
+
+impl<'a> ResolvedTarget<'a> {
+    fn from_legacy((backend, tag): (&'a BedrockBackend, &'a str)) -> Self {
+        Self {
+            backend,
+            tag,
+            timeout_ms: None,
+            max_tokens: None,
+            temperature: None,
+        }
+    }
+
+    fn from_alias(backend: &'a BedrockBackend, target: &'a AliasTarget) -> Self {
+        Self {
+            backend,
+            tag: target.tag.as_str(),
+            timeout_ms: target.timeout_ms,
+            max_tokens: target.max_tokens,
+            temperature: target.temperature,
+        }
+    }
+
+    pub fn name(&self) -> &'a str {
+        self.backend.name()
+    }
+
+    pub fn timeout(&self) -> Option<std::time::Duration> {
+        self.timeout_ms.map(std::time::Duration::from_millis)
+    }
 }
 
 /// Convenience for the common single-endpoint setup driven by
