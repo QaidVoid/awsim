@@ -21,6 +21,7 @@ pub use metrics::{
     AttemptRecord, InvocationRecord, MetricsRegistry, OpKind, Outcome, RecentInvocations,
 };
 pub use model_map::{ModelEntry, ModelMap, ModelMapError};
+pub use runtime::converse as run_converse;
 
 use std::sync::Arc;
 

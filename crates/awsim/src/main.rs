@@ -1387,6 +1387,13 @@ async fn async_main() -> Result<()> {
         )
         .with_state(bedrock_recent.clone());
 
+    let gateway_test_prompt_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/gateway/test-prompt",
+            axum::routing::post(admin::gateway_test_prompt),
+        )
+        .with_state(Arc::clone(&bedrock_swap));
+
     let runtime_config_router: axum::Router<()> = axum::Router::new()
         .route(
             "/_awsim/runtime-config",
@@ -1448,6 +1455,7 @@ async fn async_main() -> Result<()> {
         .merge(gateway_health_check_router)
         .merge(gateway_metrics_router)
         .merge(gateway_recent_router)
+        .merge(gateway_test_prompt_router)
         .merge(runtime_config_router)
         .merge(seed_router)
         .merge(tls_admin_router)

@@ -854,6 +854,83 @@ pub async fn gateway_catalog() -> Json<&'static awsim_bedrock::ProviderCatalog> 
     Json(awsim_bedrock::catalog())
 }
 
+/// POST /_awsim/gateway/test-prompt — fire one Converse call
+/// through the live gateway as if it came from the SDK, then
+/// hand the response (or error) back so the UI can show a
+/// per-row sanity test without leaving the Models & Aliases tab.
+/// Body shape: `{ bedrockId, prompt }`. The runtime path is the
+/// same one real callers use, so alias fallback, per-target
+/// overrides, and health Down-skip all behave identically.
+pub async fn gateway_test_prompt(
+    State(swap): State<awsim_bedrock::BedrockBackendsSwap>,
+    Json(body): Json<Value>,
+) -> Response {
+    let bedrock_id = body
+        .get("bedrockId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let prompt = body
+        .get("prompt")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if bedrock_id.is_empty() || prompt.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "InvalidPayload",
+                "message": "bedrockId and prompt are both required.",
+            })),
+        )
+            .into_response();
+    }
+    let input = json!({
+        "modelId": bedrock_id,
+        "messages": [{
+            "role": "user",
+            "content": [{ "text": prompt }],
+        }],
+    });
+    let started = std::time::Instant::now();
+    let guard = swap.load();
+    let snapshot = guard.as_ref().as_ref();
+    let result = awsim_bedrock::run_converse(snapshot, &input).await;
+    let latency_ms = started.elapsed().as_millis() as u64;
+    match result {
+        Ok(v) => {
+            let text = v["output"]["message"]["content"]
+                .as_array()
+                .and_then(|parts| {
+                    parts
+                        .iter()
+                        .find_map(|p| p.get("text").and_then(Value::as_str))
+                })
+                .map(|s| {
+                    let chars: String = s.chars().take(2000).collect();
+                    if s.chars().count() > 2000 {
+                        format!("{chars}...")
+                    } else {
+                        chars
+                    }
+                });
+            Json(json!({
+                "latencyMs": latency_ms,
+                "response": text,
+                "error": null,
+                "raw": v,
+            }))
+            .into_response()
+        }
+        Err(e) => Json(json!({
+            "latencyMs": latency_ms,
+            "response": null,
+            "error": e.message,
+        }))
+        .into_response(),
+    }
+}
+
 /// GET /_awsim/gateway/metrics — per-mapping counters + latency
 /// histogram (p50/p95). Resets on restart; cheap to read.
 /// Drives the call/p50/p95 chips on the Models & Aliases tab.
