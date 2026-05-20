@@ -82,15 +82,18 @@
 	let kind = $state<AliasKind>('chat');
 	let targets = $state<TargetRow[]>([]);
 	let submitting = $state(false);
-	let lastOpenKey = $state('');
+	// Re-seed every closed -> open transition. Without this, stale
+	// text from a previous Cancel persists when the user reopens
+	// with the same mode/initial (since `mode` + `initial?.id`
+	// don't change in that case).
+	let wasOpen = $state(false);
 	let rowKeyCounter = 1;
 
 	$effect(() => {
-		const key = `${open}|${mode}|${initial?.id ?? ''}`;
-		if (key !== lastOpenKey && open) {
-			lastOpenKey = key;
+		if (open && !wasOpen) {
 			seed();
 		}
+		wasOpen = open;
 	});
 
 	function seed() {

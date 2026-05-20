@@ -94,17 +94,17 @@
 	let apiKeyEnv = $state('');
 	let submitting = $state(false);
 
-	// Track the most recent (open, mode, initial.name) so we re-seed
-	// the form when the parent reopens the dialog. We can't rely on
-	// `onMount` because the same instance is reused across opens.
-	let lastOpenKey = $state('');
+	// Re-seed the form every time the dialog transitions from
+	// closed to open. The same instance is reused across opens, so
+	// without this hook, stale text from a previous Cancel sticks
+	// around when the user reopens with the same mode/initial.
+	let wasOpen = $state(false);
 
 	$effect(() => {
-		const key = `${open}|${mode}|${initial?.name ?? ''}`;
-		if (key !== lastOpenKey && open) {
-			lastOpenKey = key;
+		if (open && !wasOpen) {
 			seedForm();
 		}
+		wasOpen = open;
 	});
 
 	function seedForm() {
