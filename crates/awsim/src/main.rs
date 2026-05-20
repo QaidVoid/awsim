@@ -2127,6 +2127,7 @@ fn build_runtime_config_seed(cli: &Cli) -> Result<runtime_config::RuntimeConfig>
             default_backend: Some("default".into()),
             credentials: Default::default(),
             backends,
+            aliases: Default::default(),
             invoke,
             embed,
         }

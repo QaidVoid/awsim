@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+use crate::aliases::{AliasKind, AliasSpec, alias_view};
 use crate::model_map::{ModelEntry, ModelMap};
 
 const DEFAULT_BACKEND_NAME: &str = "default";
@@ -78,6 +79,9 @@ struct BackendsInner {
     backends: HashMap<String, BedrockBackend>,
     default_name: Option<String>,
     model_map: ModelMap,
+    /// Multi-target alias groups, checked before the legacy
+    /// `model_map`. Empty in the legacy single-backend setup.
+    aliases: HashMap<String, AliasSpec>,
 }
 
 impl BedrockBackends {
@@ -91,6 +95,7 @@ impl BedrockBackends {
             backends,
             default_name: Some(name),
             model_map,
+            aliases: HashMap::new(),
         }))
     }
 
@@ -105,6 +110,23 @@ impl BedrockBackends {
             backends,
             default_name,
             model_map,
+            aliases: HashMap::new(),
+        }))
+    }
+
+    /// Construct a registry with explicit alias groups. Used by
+    /// `build_from_spec` once Phase 3 adds the `[aliases]` section.
+    pub fn new_with_aliases(
+        backends: HashMap<String, BedrockBackend>,
+        default_name: Option<String>,
+        model_map: ModelMap,
+        aliases: HashMap<String, AliasSpec>,
+    ) -> Self {
+        Self(Arc::new(BackendsInner {
+            backends,
+            default_name,
+            model_map,
+            aliases,
         }))
     }
 
@@ -128,7 +150,18 @@ impl BedrockBackends {
 
     /// Resolve a Bedrock invoke id. Returns the backend handle plus
     /// the backend-side model tag, or `None` if there's no mapping.
+    ///
+    /// Aliases take precedence over the legacy `[invoke]` table:
+    /// when an alias is declared for this id, the resolver walks
+    /// its `targets` in declaration order under the `First`
+    /// strategy and returns the first one whose backend exists.
+    /// That gives users a static fallback (skip targets whose
+    /// backend was removed) without requiring runtime error
+    /// fallback, which lands in Phase 4.
     pub fn resolve_invoke(&self, bedrock_id: &str) -> Option<(&BedrockBackend, &str)> {
+        if let Some(hit) = self.resolve_alias(bedrock_id, AliasKind::Chat) {
+            return Some(hit);
+        }
         let entry = self.0.model_map.lookup(bedrock_id, false)?;
         self.resolve_entry(entry)
     }
@@ -136,8 +169,28 @@ impl BedrockBackends {
     /// Resolve a Bedrock embedding id. Same as `resolve_invoke` but
     /// hits the embed-only mappings first.
     pub fn resolve_embed(&self, bedrock_id: &str) -> Option<(&BedrockBackend, &str)> {
+        if let Some(hit) = self.resolve_alias(bedrock_id, AliasKind::Embed) {
+            return Some(hit);
+        }
         let entry = self.0.model_map.lookup(bedrock_id, true)?;
         self.resolve_entry(entry)
+    }
+
+    fn resolve_alias(
+        &self,
+        bedrock_id: &str,
+        wanted_kind: AliasKind,
+    ) -> Option<(&BedrockBackend, &str)> {
+        let alias = self.0.aliases.get(bedrock_id)?;
+        if alias.kind != wanted_kind {
+            return None;
+        }
+        for target in &alias.targets {
+            if let Some(backend) = self.0.backends.get(&target.backend) {
+                return Some((backend, target.tag.as_str()));
+            }
+        }
+        None
     }
 
     fn resolve_entry<'a>(&'a self, entry: &'a ModelEntry) -> Option<(&'a BedrockBackend, &'a str)> {
@@ -182,11 +235,20 @@ impl BedrockBackends {
             .collect();
         embed.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
 
+        let mut aliases: Vec<Value> = self
+            .0
+            .aliases
+            .iter()
+            .map(|(id, a)| alias_view(id, a))
+            .collect();
+        aliases.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+
         json!({
             "defaultBackend": self.0.default_name,
             "backends": backends,
             "invoke": invoke,
             "embed": embed,
+            "aliases": aliases,
         })
     }
 }

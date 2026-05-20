@@ -34,6 +34,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::aliases::AliasSpec;
 use crate::backend::{BedrockBackend, BedrockBackends};
 use crate::model_map::{ModelEntry, ModelMap};
 
@@ -57,6 +58,13 @@ pub struct BedrockSpec {
     pub credentials: HashMap<String, CredentialSpec>,
     #[serde(default)]
     pub backends: HashMap<String, BackendSpec>,
+    /// Multi-target alias groups keyed by Bedrock id. The resolver
+    /// checks these before falling through to the legacy
+    /// `[invoke]` / `[embed]` tables, so a user can layer a
+    /// primary + fallback ordering on top of a stable Bedrock id
+    /// without rewriting the existing single-target mappings.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub aliases: HashMap<String, AliasSpec>,
     #[serde(default)]
     pub invoke: HashMap<String, ModelEntry>,
     #[serde(default)]
@@ -145,6 +153,16 @@ pub enum BedrockConfigError {
         id: String,
         backend: String,
     },
+    #[error("bedrock config [aliases.{id}] has no targets; declare at least one backend + tag")]
+    AliasNoTargets { id: String },
+    #[error(
+        "bedrock config [aliases.{id}] target {index} routes to backend '{backend}' but it has no [backends.{backend}] section"
+    )]
+    AliasUnknownBackend {
+        id: String,
+        index: usize,
+        backend: String,
+    },
     #[error("bedrock config has no [backends.*] sections — at least one backend is required")]
     NoBackends,
 }
@@ -209,6 +227,7 @@ pub fn build_from_spec(
 
     validate_entries("invoke", &spec.invoke, &built)?;
     validate_entries("embed", &spec.embed, &built)?;
+    validate_aliases(&spec.aliases, &built)?;
 
     let mut model_map = ModelMap::defaults();
     for (k, v) in spec.invoke {
@@ -218,7 +237,12 @@ pub fn build_from_spec(
         model_map.embed.insert(k, v);
     }
 
-    Ok(BedrockBackends::new(built, spec.default_backend, model_map))
+    Ok(BedrockBackends::new_with_aliases(
+        built,
+        spec.default_backend,
+        model_map,
+        spec.aliases,
+    ))
 }
 
 fn resolve_credentials(
@@ -299,6 +323,27 @@ fn validate_entries(
                 id: id.clone(),
                 backend: name.to_string(),
             });
+        }
+    }
+    Ok(())
+}
+
+fn validate_aliases(
+    aliases: &HashMap<String, AliasSpec>,
+    backends: &HashMap<String, BedrockBackend>,
+) -> Result<(), BedrockConfigError> {
+    for (id, alias) in aliases {
+        if alias.targets.is_empty() {
+            return Err(BedrockConfigError::AliasNoTargets { id: id.clone() });
+        }
+        for (index, target) in alias.targets.iter().enumerate() {
+            if !backends.contains_key(&target.backend) {
+                return Err(BedrockConfigError::AliasUnknownBackend {
+                    id: id.clone(),
+                    index,
+                    backend: target.backend.clone(),
+                });
+            }
         }
     }
     Ok(())
@@ -556,6 +601,154 @@ credential = "x"
             err,
             BedrockConfigError::CredentialMissingEnvVar { ref credential, ref var }
                 if credential == "x" && var == "MISSING"
+        ));
+    }
+
+    #[test]
+    fn alias_first_target_wins_when_resolvable() {
+        let toml_src = r#"
+[backends.ollama]
+endpoint = "http://localhost:11434/v1"
+
+[backends.groq]
+endpoint = "https://api.groq.com/openai/v1"
+
+[aliases."anthropic.claude-3-5-sonnet-20241022-v2:0"]
+kind = "chat"
+targets = [
+  { backend = "groq", tag = "llama-3.3-70b-versatile" },
+  { backend = "ollama", tag = "llama3.1:8b" },
+]
+"#;
+        let bs = load_from_str(toml_src, "test".into(), empty_env).unwrap();
+        let (backend, tag) = bs
+            .resolve_invoke("anthropic.claude-3-5-sonnet-20241022-v2:0")
+            .unwrap();
+        assert_eq!(backend.name(), "groq");
+        assert_eq!(tag, "llama-3.3-70b-versatile");
+    }
+
+    #[test]
+    fn alias_falls_through_when_primary_backend_unconfigured() {
+        // The "groq" target points at a backend the registry was
+        // never asked to build, so the resolver must skip it and
+        // take the next target ("ollama") under the First strategy.
+        // Mirrors the case where a user removes a backend without
+        // cleaning up the alias.
+        let toml_src = r#"
+[backends.ollama]
+endpoint = "http://localhost:11434/v1"
+
+[aliases."anthropic.claude-3-5-sonnet-20241022-v2:0"]
+kind = "chat"
+targets = [
+  { backend = "groq", tag = "llama-3.3-70b-versatile" },
+  { backend = "ollama", tag = "llama3.1:8b" },
+]
+"#;
+        // The loader would reject the unknown target at validate
+        // time, so we bypass it: build the registry by hand to
+        // simulate a registry that was constructed before the user
+        // removed `groq` from `[backends.*]`.
+        let backends = {
+            let mut m = HashMap::new();
+            m.insert(
+                "ollama".to_string(),
+                BedrockBackend::new("ollama".into(), "http://localhost:11434/v1".into(), None),
+            );
+            m
+        };
+        let mut aliases = HashMap::new();
+        aliases.insert(
+            "anthropic.claude-3-5-sonnet-20241022-v2:0".to_string(),
+            AliasSpec {
+                kind: crate::aliases::AliasKind::Chat,
+                strategy: crate::aliases::AliasStrategy::First,
+                targets: vec![
+                    crate::aliases::AliasTarget {
+                        backend: "groq".into(),
+                        tag: "llama-3.3-70b-versatile".into(),
+                    },
+                    crate::aliases::AliasTarget {
+                        backend: "ollama".into(),
+                        tag: "llama3.1:8b".into(),
+                    },
+                ],
+            },
+        );
+        let bs = BedrockBackends::new_with_aliases(
+            backends,
+            Some("ollama".into()),
+            ModelMap::defaults(),
+            aliases,
+        );
+        let (backend, tag) = bs
+            .resolve_invoke("anthropic.claude-3-5-sonnet-20241022-v2:0")
+            .unwrap();
+        assert_eq!(backend.name(), "ollama");
+        assert_eq!(tag, "llama3.1:8b");
+        // Suppress unused warning from toml_src above; this test
+        // documents the intended TOML shape even though we build
+        // the registry manually.
+        let _ = toml_src;
+    }
+
+    #[test]
+    fn alias_kind_must_match_call_side() {
+        // An alias declared as "chat" should NOT be consulted on
+        // an embed call, even if the bedrock_id technically appears
+        // in a default embed map. Keeps chat-mapped ids from
+        // accidentally hijacking embedding requests. With a default
+        // backend set, the embed call falls through to the built-in
+        // titan-embed → nomic-embed-text mapping rather than picking
+        // up the alias's WRONG tag.
+        let toml_src = r#"
+default_backend = "ollama"
+
+[backends.ollama]
+endpoint = "http://localhost:11434/v1"
+
+[aliases."amazon.titan-embed-text-v2:0"]
+kind = "chat"
+targets = [{ backend = "ollama", tag = "WRONG" }]
+"#;
+        let bs = load_from_str(toml_src, "test".into(), empty_env).unwrap();
+        let (_backend, tag) = bs.resolve_embed("amazon.titan-embed-text-v2:0").unwrap();
+        assert_eq!(tag, "nomic-embed-text"); // built-in default
+    }
+
+    #[test]
+    fn alias_with_empty_targets_is_error() {
+        let toml_src = r#"
+[backends.ollama]
+endpoint = "http://o"
+
+[aliases."x"]
+kind = "chat"
+targets = []
+"#;
+        let err = expect_err(load_from_str(toml_src, "test".into(), empty_env));
+        assert!(matches!(err, BedrockConfigError::AliasNoTargets { ref id } if id == "x"));
+    }
+
+    #[test]
+    fn alias_with_unknown_backend_is_error() {
+        let toml_src = r#"
+[backends.ollama]
+endpoint = "http://o"
+
+[aliases."x"]
+kind = "chat"
+targets = [
+  { backend = "ollama", tag = "ok" },
+  { backend = "ghost", tag = "bad" },
+]
+"#;
+        let err = expect_err(load_from_str(toml_src, "test".into(), empty_env));
+        assert!(matches!(
+            err,
+            BedrockConfigError::AliasUnknownBackend { ref id, index: 1, ref backend }
+                if id == "x" && backend == "ghost"
         ));
     }
 }

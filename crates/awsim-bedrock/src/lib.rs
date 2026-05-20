@@ -1,3 +1,4 @@
+mod aliases;
 mod backend;
 mod catalog;
 mod config;
@@ -7,6 +8,7 @@ mod models;
 mod runtime;
 mod state;
 
+pub use aliases::{AliasKind, AliasSpec, AliasStrategy, AliasTarget};
 pub use backend::{BedrockBackend, BedrockBackends, single_default};
 pub use catalog::{AuthKind, CatalogModel, Provider, ProviderCatalog, ProviderKind, catalog};
 pub use config::{
