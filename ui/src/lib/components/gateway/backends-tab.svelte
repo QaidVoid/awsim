@@ -3,7 +3,7 @@
 	// the bundled catalog. Each action (add/edit/remove/default)
 	// commits immediately via PUT /_awsim/runtime-config so the
 	// in-progress state never drifts from what the server enforces.
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import {
 		getRuntimeConfig,
 		putRuntimeConfig,
@@ -12,7 +12,14 @@
 		type RuntimeConfig,
 		type RuntimeConfigEnvelope,
 	} from '$lib/api/runtime-config';
-	import { getGatewayCatalog, type CatalogProvider, type ProviderCatalog } from '$lib/api/gateway';
+	import {
+		getGatewayCatalog,
+		getGatewayHealth,
+		type BackendHealth,
+		type BackendStatus,
+		type CatalogProvider,
+		type ProviderCatalog,
+	} from '$lib/api/gateway';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -63,6 +70,8 @@
 	let catalog = $state<ProviderCatalog | null>(null);
 	let loading = $state(true);
 	let savingAction = $state(false);
+	let healthByBackend = $state<Record<string, BackendHealth>>({});
+	let healthTimer: ReturnType<typeof setInterval> | null = null;
 
 	let wizardOpen = $state(false);
 	let wizardMode = $state<'add' | 'edit'>('add');
@@ -82,7 +91,24 @@
 		} finally {
 			loading = false;
 		}
+		void refreshHealth();
+		healthTimer = setInterval(refreshHealth, 5000);
 	});
+
+	onDestroy(() => {
+		if (healthTimer !== null) clearInterval(healthTimer);
+	});
+
+	async function refreshHealth() {
+		try {
+			const res = await getGatewayHealth();
+			const next: Record<string, BackendHealth> = {};
+			for (const b of res.backends) next[b.backend] = b;
+			healthByBackend = next;
+		} catch {
+			// Silent: health poll failure shouldn't spam the user.
+		}
+	}
 
 	async function reload() {
 		loading = true;
@@ -254,6 +280,34 @@
 		if (kind === 'hosted') return 'secondary';
 		return 'outline';
 	}
+
+	function statusDotClass(status: BackendStatus | undefined): string {
+		switch (status) {
+			case 'healthy':
+				return 'bg-emerald-500';
+			case 'degraded':
+				return 'bg-amber-500';
+			case 'down':
+				return 'bg-rose-500';
+			case 'unknown':
+			default:
+				return 'bg-muted-foreground/40';
+		}
+	}
+
+	function statusLabel(status: BackendStatus | undefined): string {
+		switch (status) {
+			case 'healthy':
+				return 'Healthy';
+			case 'degraded':
+				return 'Degraded';
+			case 'down':
+				return 'Down';
+			case 'unknown':
+			default:
+				return 'No probe yet';
+		}
+	}
 </script>
 
 <div class="space-y-4 p-4">
@@ -308,6 +362,7 @@
 						{@const Icon = iconFor(prov?.icon ?? 'settings')}
 						{@const isDefault = b.name === defaultBackend}
 						{@const auth = authSummary(b.spec)}
+						{@const h = healthByBackend[b.name]}
 						<TableRow>
 							<TableCell>
 								<Button
@@ -327,6 +382,13 @@
 							</TableCell>
 							<TableCell>
 								<div class="flex items-center gap-2">
+									<span
+										class={'inline-block h-2 w-2 rounded-full ' + statusDotClass(h?.status)}
+										title={statusLabel(h?.status) +
+											(h?.lastLatencyMs !== undefined && h?.lastLatencyMs !== null
+												? ` · ${h.lastLatencyMs}ms`
+												: '')}
+									></span>
 									<Icon class="h-4 w-4 text-muted-foreground" />
 									<span class="font-mono text-sm">{b.name}</span>
 									{#if isDefault}

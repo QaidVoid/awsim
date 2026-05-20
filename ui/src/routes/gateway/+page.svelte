@@ -15,6 +15,7 @@
 	import BackendsTab from '$lib/components/gateway/backends-tab.svelte';
 	import CredentialsTab from '$lib/components/gateway/credentials-tab.svelte';
 	import ModelsAliasesTab from '$lib/components/gateway/models-aliases-tab.svelte';
+	import HealthTab from '$lib/components/gateway/health-tab.svelte';
 
 	import Network from '@lucide/svelte/icons/network';
 	import KeyRound from '@lucide/svelte/icons/key-round';
@@ -86,13 +87,7 @@
 			</TabsContent>
 
 			<TabsContent value="health" class="m-0">
-				<div class="p-4">
-					<EmptyState
-						icon={Activity}
-						title="Coming in Phase 4"
-						description="Background pings every ~30s mark each backend Healthy / Degraded / Down. Use the existing one-shot Check on the Bedrock proxy page in the meantime."
-					/>
-				</div>
+				<HealthTab />
 			</TabsContent>
 
 			<TabsContent value="playground" class="m-0">

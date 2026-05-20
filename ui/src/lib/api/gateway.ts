@@ -41,3 +41,55 @@ export async function getGatewayCatalog(): Promise<ProviderCatalog> {
   }
   return (await res.json()) as ProviderCatalog;
 }
+
+export type BackendStatus = "healthy" | "degraded" | "down" | "unknown";
+
+export interface CheckRecord {
+  at: string;
+  latency_ms: number | null;
+  error: string | null;
+}
+
+export interface BackendHealth {
+  backend: string;
+  status: BackendStatus;
+  lastCheckedAt: string | null;
+  lastLatencyMs: number | null;
+  lastError: string | null;
+  consecutiveFailures: number;
+  consecutiveSuccesses: number;
+  history: CheckRecord[];
+}
+
+export interface GatewayHealthResponse {
+  backends: BackendHealth[];
+}
+
+export async function getGatewayHealth(): Promise<GatewayHealthResponse> {
+  const res = await fetch("/_awsim/gateway/health");
+  if (!res.ok) throw new Error(`gateway/health failed (HTTP ${res.status})`);
+  return (await res.json()) as GatewayHealthResponse;
+}
+
+export interface RecheckResult {
+  result: CheckRecord;
+  backend: BackendHealth;
+}
+
+export async function recheckGatewayBackend(name: string): Promise<RecheckResult> {
+  const res = await fetch(
+    `/_awsim/gateway/health/${encodeURIComponent(name)}/check`,
+    { method: "POST" },
+  );
+  if (!res.ok) {
+    let msg = `gateway/health/${name}/check failed (HTTP ${res.status})`;
+    try {
+      const err = (await res.json()) as { message?: string };
+      if (err.message) msg = err.message;
+    } catch {
+      /* fall through */
+    }
+    throw new Error(msg);
+  }
+  return (await res.json()) as RecheckResult;
+}
