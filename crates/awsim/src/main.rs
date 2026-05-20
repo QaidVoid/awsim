@@ -1313,6 +1313,11 @@ async fn async_main() -> Result<()> {
         axum::routing::get(admin::bedrock_defaults),
     );
 
+    let gateway_catalog_router: axum::Router<()> = axum::Router::new().route(
+        "/_awsim/gateway/catalog",
+        axum::routing::get(admin::gateway_catalog),
+    );
+
     let runtime_config_router: axum::Router<()> = axum::Router::new()
         .route(
             "/_awsim/runtime-config",
@@ -1369,6 +1374,7 @@ async fn async_main() -> Result<()> {
         .merge(debug_router)
         .merge(bedrock_admin_router)
         .merge(bedrock_defaults_router)
+        .merge(gateway_catalog_router)
         .merge(runtime_config_router)
         .merge(seed_router)
         .merge(tls_admin_router)

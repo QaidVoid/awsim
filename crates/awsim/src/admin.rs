@@ -845,6 +845,15 @@ pub async fn runtime_config_put(
     }
 }
 
+/// GET /_awsim/gateway/catalog — return the bundled LLM provider
+/// catalog (providers + their well-known models) used by the Model
+/// Gateway UI to power the "Add backend" provider picker and the
+/// model dropdown in mapping rows. Static data; safe to cache
+/// client-side.
+pub async fn gateway_catalog() -> Json<&'static awsim_bedrock::ProviderCatalog> {
+    Json(awsim_bedrock::catalog())
+}
+
 /// GET /_awsim/bedrock/defaults — return the built-in Bedrock model
 /// map (the mappings that ship out of the box). The Settings page
 /// shows these as read-only context so users can see what they'd
