@@ -136,7 +136,8 @@
 				</p>
 				<p class="text-muted-foreground">
 					Each Bedrock model id is mapped to a backend-side model tag below.
-					Edit backends and mappings on the <a class="underline" href={route('/settings')}>Settings page</a>.
+					Manage backends, credentials, and mappings on the
+					<a class="underline" href={route('/gateway')}>Model Gateway page</a>.
 				</p>
 			</div>
 		</div>
@@ -150,9 +151,9 @@
 			</p>
 		</div>
 		<div class="flex gap-2">
-			<Button variant="outline" size="sm" href={route('/settings')}>
+			<Button variant="outline" size="sm" href={route('/gateway') + '?tab=providers'}>
 				<SettingsIcon class="h-4 w-4" />
-				<span class="ml-2">Edit</span>
+				<span class="ml-2">Open Model Gateway</span>
 			</Button>
 			<Button variant="ghost" size="sm" onclick={load} disabled={loading}>
 				<RefreshCwIcon class={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />

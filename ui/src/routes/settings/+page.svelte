@@ -30,6 +30,8 @@
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+	import NetworkIcon from '@lucide/svelte/icons/network';
+	import { route } from '$lib/url';
 	import { toast } from 'svelte-sonner';
 
 	// UI-shape rows. We expand the wire `Record<string, …>` into arrays
@@ -364,6 +366,19 @@
 			</header>
 
 			<div class="space-y-6 p-4">
+				<Alert>
+					<NetworkIcon class="h-4 w-4" />
+					<AlertTitle>Moving to Model Gateway</AlertTitle>
+					<AlertDescription>
+						These controls are migrating to the new
+						<a class="underline" href={route('/gateway')}>Model Gateway</a> page,
+						which gains a provider catalog, reusable credentials, alias groups
+						with automatic fallback, background health pings, and per-mapping
+						overrides. Edits here still work for now; this section will be
+						removed once the new UI reaches parity.
+					</AlertDescription>
+				</Alert>
+
 				<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 					<div>
 						<Label for="default-backend">Default backend</Label>
