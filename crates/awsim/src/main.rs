@@ -428,11 +428,18 @@ async fn async_main() -> Result<()> {
         "Runtime config store initialised"
     );
 
+    // Process-lifetime health registry. Survives across every
+    // BedrockBackends hot-swap so statuses don't reset on config
+    // reload. Read by the alias resolver (skip Down targets) and
+    // by the gateway Health tab.
+    let bedrock_health = awsim_bedrock::HealthRegistry::new();
+
     // Hot-swappable Bedrock backends handle. Built once from the
     // initial runtime config and swapped in-place whenever the
     // runtime config changes — request-path readers see the new
     // value without restarting the service.
-    let initial_bedrock = build_bedrock_backend_from_config(&runtime_config_store.current())?;
+    let initial_bedrock =
+        build_bedrock_backend_from_config(&runtime_config_store.current(), &bedrock_health)?;
     let bedrock_swap = awsim_bedrock::backends_swap(initial_bedrock);
 
     // Reload hook: rebuild backends from the new config and swap.
@@ -441,15 +448,36 @@ async fn async_main() -> Result<()> {
     // wedging the runtime on a transient env-var read.
     {
         let swap = Arc::clone(&bedrock_swap);
+        let health_for_reload = bedrock_health.clone();
         runtime_config_store.on_change(Box::new(
-            move |cfg| match build_bedrock_backend_from_config(cfg) {
+            move |cfg| match build_bedrock_backend_from_config(cfg, &health_for_reload) {
                 Ok(next) => {
                     swap.store(Arc::new(next));
                     info!("Bedrock backends hot-reloaded");
                 }
-                Err(e) => warn!(error = %e, "Bedrock hot-reload failed; keeping previous registry"),
+                Err(e) => {
+                    warn!(error = %e, "Bedrock hot-reload failed; keeping previous registry")
+                }
             },
         ));
+    }
+
+    // Background health poller. One tokio task pings each
+    // configured backend's /models every 30s and records the
+    // outcome in the shared registry. Survives every config swap
+    // by watching the swap handle itself.
+    {
+        let swap = Arc::clone(&bedrock_swap);
+        let registry = bedrock_health.clone();
+        tokio::spawn(async move {
+            awsim_bedrock::run_poller(
+                swap,
+                registry,
+                std::time::Duration::from_secs(30),
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+        });
     }
 
     // Register all services; get back the ApiGateway Arc for proxy routing and
@@ -1318,6 +1346,20 @@ async fn async_main() -> Result<()> {
         axum::routing::get(admin::gateway_catalog),
     );
 
+    let gateway_health_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/gateway/health",
+            axum::routing::get(admin::gateway_health),
+        )
+        .with_state(bedrock_health.clone());
+
+    let gateway_health_check_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/gateway/health/{name}/check",
+            axum::routing::post(admin::gateway_health_check),
+        )
+        .with_state((Arc::clone(&bedrock_swap), bedrock_health.clone()));
+
     let runtime_config_router: axum::Router<()> = axum::Router::new()
         .route(
             "/_awsim/runtime-config",
@@ -1375,6 +1417,8 @@ async fn async_main() -> Result<()> {
         .merge(bedrock_admin_router)
         .merge(bedrock_defaults_router)
         .merge(gateway_catalog_router)
+        .merge(gateway_health_router)
+        .merge(gateway_health_check_router)
         .merge(runtime_config_router)
         .merge(seed_router)
         .merge(tls_admin_router)
@@ -2164,16 +2208,20 @@ struct ModelMapToml {
 
 // Translate a runtime-config snapshot into a live BedrockBackends
 // registry. `Ok(None)` means canned-response mode (proxy disabled or
-// no backends declared).
+// no backends declared). The health registry is attached so the
+// alias resolver can skip Down targets and the runtime layer can
+// drive error-fallback across all alias candidates.
 fn build_bedrock_backend_from_config(
     cfg: &runtime_config::RuntimeConfig,
+    health: &awsim_bedrock::HealthRegistry,
 ) -> Result<Option<awsim_bedrock::BedrockBackends>> {
     if !cfg.bedrock.enabled || cfg.bedrock.spec.backends.is_empty() {
         return Ok(None);
     }
     let backends =
         awsim_bedrock::build_from_spec(cfg.bedrock.spec.clone(), |v| std::env::var(v).ok())
-            .context("building bedrock backends from runtime config")?;
+            .context("building bedrock backends from runtime config")?
+            .with_health(health.clone());
     info!(
         backends = ?backends.backend_names(),
         default = ?backends.default_name(),

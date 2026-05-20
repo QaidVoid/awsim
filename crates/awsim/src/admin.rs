@@ -854,6 +854,61 @@ pub async fn gateway_catalog() -> Json<&'static awsim_bedrock::ProviderCatalog> 
     Json(awsim_bedrock::catalog())
 }
 
+/// GET /_awsim/gateway/health — snapshot of every backend's
+/// current health status (Healthy / Degraded / Down / Unknown),
+/// last latency, last error, plus a short history ring per
+/// backend. Drives the gateway Health tab + the inline status
+/// pills on the Backends tab. Cheap (no upstream calls); the
+/// poller updates the registry in the background.
+pub async fn gateway_health(State(registry): State<awsim_bedrock::HealthRegistry>) -> Json<Value> {
+    Json(registry.snapshot_json())
+}
+
+/// POST /_awsim/gateway/health/{name}/check — force a one-off
+/// probe for the named backend (independent of the background
+/// poller's schedule). Returns the fresh check result and also
+/// folds it into the registry so the UI refreshes accordingly.
+pub async fn gateway_health_check(
+    State((swap, registry)): State<(
+        awsim_bedrock::BedrockBackendsSwap,
+        awsim_bedrock::HealthRegistry,
+    )>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Response {
+    let guard = swap.load();
+    let Some(backends) = guard.as_ref().as_ref() else {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "ProxyDisabled",
+                "message": "Bedrock proxy is in canned-response mode; enable a backend first."
+            })),
+        )
+            .into_response();
+    };
+    let Some(backend) = backends.get_backend(&name) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "UnknownBackend",
+                "message": format!("Backend '{name}' is not configured.")
+            })),
+        )
+            .into_response();
+    };
+    let record = awsim_bedrock::probe(backend, std::time::Duration::from_secs(5)).await;
+    registry.record(&name, record.clone());
+    let updated = registry
+        .get(&name)
+        .map(|h| serde_json::to_value(&h).unwrap_or(Value::Null))
+        .unwrap_or(Value::Null);
+    Json(json!({
+        "result": record,
+        "backend": updated,
+    }))
+    .into_response()
+}
+
 /// GET /_awsim/bedrock/defaults — return the built-in Bedrock model
 /// map (the mappings that ship out of the box). The Settings page
 /// shows these as read-only context so users can see what they'd
