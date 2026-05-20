@@ -16,18 +16,19 @@
 	import CredentialsTab from '$lib/components/gateway/credentials-tab.svelte';
 	import ModelsAliasesTab from '$lib/components/gateway/models-aliases-tab.svelte';
 	import HealthTab from '$lib/components/gateway/health-tab.svelte';
+	import ActivityTab from '$lib/components/gateway/activity-tab.svelte';
 
 	import Network from '@lucide/svelte/icons/network';
 	import KeyRound from '@lucide/svelte/icons/key-round';
-	import Activity from '@lucide/svelte/icons/activity';
+	import ActivityIcon from '@lucide/svelte/icons/activity';
 	import Boxes from '@lucide/svelte/icons/boxes';
 	import SquareTerminal from '@lucide/svelte/icons/square-terminal';
-	import GitFork from '@lucide/svelte/icons/git-fork';
+	import LineChart from '@lucide/svelte/icons/line-chart';
 
 	let active: string = $state(
 		useTab(
 			'gateway',
-			['backends', 'credentials', 'models', 'routing', 'health', 'playground'] as const,
+			['backends', 'credentials', 'models', 'activity', 'health', 'playground'] as const,
 			'backends',
 			{
 				get: (): string => active,
@@ -52,11 +53,11 @@
 			<TabsTrigger value="models">
 				<Boxes class="mr-2 h-4 w-4" />Models &amp; Aliases
 			</TabsTrigger>
-			<TabsTrigger value="routing">
-				<GitFork class="mr-2 h-4 w-4" />Routing
+			<TabsTrigger value="activity">
+				<LineChart class="mr-2 h-4 w-4" />Activity
 			</TabsTrigger>
 			<TabsTrigger value="health">
-				<Activity class="mr-2 h-4 w-4" />Health
+				<ActivityIcon class="mr-2 h-4 w-4" />Health
 			</TabsTrigger>
 			<TabsTrigger value="playground">
 				<SquareTerminal class="mr-2 h-4 w-4" />Playground
@@ -76,14 +77,8 @@
 				<ModelsAliasesTab />
 			</TabsContent>
 
-			<TabsContent value="routing" class="m-0">
-				<div class="p-4">
-					<EmptyState
-						icon={GitFork}
-						title="Coming in Phase 4-5"
-						description="Automatic fallback on 5xx / timeout / rate-limit, per-target overrides (timeout, max tokens, temperature), and routing strategy (first / round-robin / least-latency)."
-					/>
-				</div>
+			<TabsContent value="activity" class="m-0">
+				<ActivityTab />
 			</TabsContent>
 
 			<TabsContent value="health" class="m-0">

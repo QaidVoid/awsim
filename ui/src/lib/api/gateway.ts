@@ -76,6 +76,66 @@ export interface RecheckResult {
   backend: BackendHealth;
 }
 
+export type Outcome = "success" | "retriable" | "fatal";
+export type OpKind = "chat" | "chat-stream" | "embed";
+
+export interface MetricMappingRow {
+  bedrockId: string;
+  backend: string;
+  success: number;
+  retriable: number;
+  fatal: number;
+  total: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  lastError: string | null;
+}
+
+export interface MetricTotals {
+  success: number;
+  retriable: number;
+  fatal: number;
+  total: number;
+}
+
+export interface MetricsResponse {
+  mappings: MetricMappingRow[];
+  totals: MetricTotals;
+}
+
+export async function getGatewayMetrics(): Promise<MetricsResponse> {
+  const res = await fetch("/_awsim/gateway/metrics");
+  if (!res.ok) throw new Error(`gateway/metrics failed (HTTP ${res.status})`);
+  return (await res.json()) as MetricsResponse;
+}
+
+export interface AttemptRecord {
+  backend: string;
+  tag: string;
+  outcome: Outcome;
+  latencyMs: number;
+  error: string | null;
+}
+
+export interface InvocationRecord {
+  at: string;
+  bedrockId: string;
+  op: OpKind;
+  attempts: AttemptRecord[];
+  outcome: Outcome;
+  totalLatencyMs: number;
+}
+
+export interface RecentResponse {
+  invocations: InvocationRecord[];
+}
+
+export async function getGatewayRecent(): Promise<RecentResponse> {
+  const res = await fetch("/_awsim/gateway/recent");
+  if (!res.ok) throw new Error(`gateway/recent failed (HTTP ${res.status})`);
+  return (await res.json()) as RecentResponse;
+}
+
 export async function recheckGatewayBackend(name: string): Promise<RecheckResult> {
   const res = await fetch(
     `/_awsim/gateway/health/${encodeURIComponent(name)}/check`,

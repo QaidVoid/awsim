@@ -5,7 +5,7 @@
 	// it to an alias and drops it from the legacy table. The runtime
 	// already prefers aliases over legacy entries, so promotion is
 	// safe and reversible (delete the alias to revert).
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import {
 		getRuntimeConfig,
 		putRuntimeConfig,
@@ -18,7 +18,9 @@
 	} from '$lib/api/runtime-config';
 	import {
 		getGatewayCatalog,
+		getGatewayMetrics,
 		type CatalogProvider,
+		type MetricMappingRow,
 		type ProviderCatalog,
 	} from '$lib/api/gateway';
 	import { Badge } from '$lib/components/ui/badge';
@@ -56,6 +58,8 @@
 	let catalog = $state<ProviderCatalog | null>(null);
 	let loading = $state(true);
 	let savingAction = $state(false);
+	let metricsByMapping = $state<Record<string, MetricMappingRow[]>>({});
+	let metricsTimer: ReturnType<typeof setInterval> | null = null;
 
 	let query = $state('');
 	let kindFilter = $state<FilterKind>('all');
@@ -74,7 +78,49 @@
 		} finally {
 			loading = false;
 		}
+		void refreshMetrics();
+		metricsTimer = setInterval(refreshMetrics, 5000);
 	});
+
+	onDestroy(() => {
+		if (metricsTimer !== null) clearInterval(metricsTimer);
+	});
+
+	// Per-bedrock-id rollup of the per-(id, backend) rows the
+	// server returns. The Models table shows one row per bedrock
+	// id, so we sum + percentile-pick across all backends to give
+	// the headline chips.
+	async function refreshMetrics() {
+		try {
+			const res = await getGatewayMetrics();
+			const next: Record<string, MetricMappingRow[]> = {};
+			for (const row of res.mappings) {
+				(next[row.bedrockId] ??= []).push(row);
+			}
+			metricsByMapping = next;
+		} catch {
+			// Silent: metrics poll failure shouldn't spam toasts.
+		}
+	}
+
+	function rollupForId(id: string): { total: number; p50: number | null; p95: number | null } {
+		const rows = metricsByMapping[id] ?? [];
+		if (rows.length === 0) return { total: 0, p50: null, p95: null };
+		let total = 0;
+		let p50 = 0;
+		let p95 = 0;
+		// Aggregate as the max of per-backend percentiles. Exact
+		// percentile-of-the-union would need bucket merging server-
+		// side; max-of-percentiles is the conservative read for a
+		// glance, and matches what the UI badge implies ("slowest
+		// you'd typically see").
+		for (const r of rows) {
+			total += r.total;
+			if (r.p50Ms !== null) p50 = Math.max(p50, r.p50Ms);
+			if (r.p95Ms !== null) p95 = Math.max(p95, r.p95Ms);
+		}
+		return { total, p50: p50 || null, p95: p95 || null };
+	}
 
 	async function reload() {
 		loading = true;
@@ -324,11 +370,13 @@
 						<TableHead>Kind</TableHead>
 						<TableHead>Source</TableHead>
 						<TableHead>Targets</TableHead>
+						<TableHead>Activity</TableHead>
 						<TableHead class="text-right">Actions</TableHead>
 					</TableRow>
 				</TableHeader>
 				<TableBody>
 					{#each filteredRows as row (row.id + '|' + row.kind)}
+						{@const stats = rollupForId(row.id)}
 						<TableRow>
 							<TableCell class="font-mono text-xs">{row.id}</TableCell>
 							<TableCell>
@@ -362,6 +410,27 @@
 										</div>
 									{/each}
 								</div>
+							</TableCell>
+							<TableCell>
+								{#if stats.total === 0}
+									<span class="text-xs text-muted-foreground">—</span>
+								{:else}
+									<div class="flex flex-wrap items-center gap-1 text-[10px]">
+										<Badge variant="outline" class="font-mono">
+											{stats.total} call{stats.total === 1 ? '' : 's'}
+										</Badge>
+										{#if stats.p50 !== null}
+											<Badge variant="secondary" class="font-mono">
+												p50 {stats.p50}ms
+											</Badge>
+										{/if}
+										{#if stats.p95 !== null}
+											<Badge variant="secondary" class="font-mono">
+												p95 {stats.p95}ms
+											</Badge>
+										{/if}
+									</div>
+								{/if}
 							</TableCell>
 							<TableCell class="text-right">
 								<div class="flex justify-end gap-1">
