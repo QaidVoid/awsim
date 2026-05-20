@@ -39,10 +39,34 @@ export interface CredentialSpec {
 
 export type ModelMapEntry = string | { backend: string; tag: string };
 
+/** Which call side this alias serves. */
+export type AliasKind = "chat" | "embed";
+
+/** Selection strategy across the alias's ordered targets. */
+export type AliasStrategy = "first";
+
+export interface AliasTarget {
+  backend: string;
+  tag: string;
+}
+
+export interface AliasSpec {
+  kind?: AliasKind;
+  strategy?: AliasStrategy;
+  targets: AliasTarget[];
+}
+
 export interface BedrockSpec {
   default_backend?: string | null;
   credentials?: Record<string, CredentialSpec>;
   backends: Record<string, BedrockBackendSpec>;
+  /**
+   * Multi-target alias groups keyed by Bedrock id. The runtime checks
+   * these before the legacy `invoke` / `embed` tables, so they can
+   * layer a primary + fallback ordering on top of an existing
+   * single-target mapping.
+   */
+  aliases?: Record<string, AliasSpec>;
   invoke: Record<string, ModelMapEntry>;
   embed: Record<string, ModelMapEntry>;
 }

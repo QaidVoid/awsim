@@ -14,6 +14,7 @@
 	import { route } from '$lib/url';
 	import BackendsTab from '$lib/components/gateway/backends-tab.svelte';
 	import CredentialsTab from '$lib/components/gateway/credentials-tab.svelte';
+	import ModelsAliasesTab from '$lib/components/gateway/models-aliases-tab.svelte';
 
 	import Network from '@lucide/svelte/icons/network';
 	import KeyRound from '@lucide/svelte/icons/key-round';
@@ -71,13 +72,7 @@
 			</TabsContent>
 
 			<TabsContent value="models" class="m-0">
-				<div class="p-4">
-					<EmptyState
-						icon={Boxes}
-						title="Coming in Phase 3"
-						description="Map Bedrock model ids to ordered lists of backend targets (primary + fallbacks), with drag-to-reorder. The existing read-only mapping view lives on the Bedrock page."
-					/>
-				</div>
+				<ModelsAliasesTab />
 			</TabsContent>
 
 			<TabsContent value="routing" class="m-0">
