@@ -117,35 +117,107 @@ mod titan_embed;
 async fn call_chat(
     backends: &BedrockBackends,
     bedrock_id: &str,
-    build: impl FnOnce(&str) -> Result<openai::ChatRequest, AwsError>,
+    build: impl Fn(&str) -> Result<openai::ChatRequest, AwsError>,
 ) -> Result<openai::ChatResponse, AwsError> {
-    let (backend, model_tag) = backends.resolve_invoke(bedrock_id).ok_or_else(|| {
-        AwsError::not_found(
+    let candidates = backends.resolve_invoke_all(bedrock_id);
+    if candidates.is_empty() {
+        return Err(AwsError::not_found(
             "ResourceNotFoundException",
             format!("No backend mapping for Bedrock model {bedrock_id}"),
-        )
-    })?;
-    let mut req = build(model_tag)?;
+        ));
+    }
+    let mut last_err: Option<AwsError> = None;
+    let total = candidates.len();
+    for (i, (backend, model_tag)) in candidates.iter().enumerate() {
+        match try_chat_once(backend, model_tag, &build).await {
+            Attempt::Ok(resp) => return Ok(resp),
+            Attempt::Retriable(e) => {
+                if i + 1 < total {
+                    debug!(
+                        backend = backend.name(),
+                        attempt = i + 1,
+                        of = total,
+                        "chat call hit retriable error; trying next alias target"
+                    );
+                }
+                last_err = Some(e);
+            }
+            Attempt::Fatal(e) => return Err(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| AwsError::internal("Bedrock backend chat: no attempts ran")))
+}
+
+/// Per-candidate attempt outcome. `Retriable` lets the caller roll
+/// forward to the next alias target; `Fatal` aborts immediately
+/// because retrying would not change the answer (e.g. a 400
+/// because the request is malformed, or a translator-side build
+/// error).
+enum Attempt<T> {
+    Ok(T),
+    Retriable(AwsError),
+    Fatal(AwsError),
+}
+
+async fn try_chat_once(
+    backend: &crate::backend::BedrockBackend,
+    model_tag: &str,
+    build: &impl Fn(&str) -> Result<openai::ChatRequest, AwsError>,
+) -> Attempt<openai::ChatResponse> {
+    let mut req = match build(model_tag) {
+        Ok(r) => r,
+        Err(e) => return Attempt::Fatal(e),
+    };
     let url = format!("{}/chat/completions", backend.endpoint());
-    let (status, body_text) = post_chat(backend, &url, &req).await?;
+    let (status, body_text) = match post_chat(backend, &url, &req).await {
+        Ok(pair) => pair,
+        Err(e) => return Attempt::Retriable(e),
+    };
     if status.is_success() {
-        return serde_json::from_str::<openai::ChatResponse>(&body_text)
-            .map_err(|e| AwsError::internal(format!("Bedrock backend JSON parse failed: {e}")));
+        return match serde_json::from_str::<openai::ChatResponse>(&body_text) {
+            Ok(v) => Attempt::Ok(v),
+            Err(e) => Attempt::Fatal(AwsError::internal(format!(
+                "Bedrock backend JSON parse failed: {e}"
+            ))),
+        };
     }
     if status == reqwest::StatusCode::BAD_REQUEST
         && needs_string_content_fallback(&body_text)
         && flatten_request_content(&mut req)
     {
         debug!("Bedrock backend rejected multimodal content array, retrying with flattened text");
-        let (status2, body2) = post_chat(backend, &url, &req).await?;
-        if status2.is_success() {
-            return serde_json::from_str::<openai::ChatResponse>(&body2).map_err(|e| {
-                AwsError::internal(format!("Bedrock backend JSON parse failed: {e}"))
-            });
+        match post_chat(backend, &url, &req).await {
+            Ok((status2, body2)) if status2.is_success() => {
+                return match serde_json::from_str::<openai::ChatResponse>(&body2) {
+                    Ok(v) => Attempt::Ok(v),
+                    Err(e) => Attempt::Fatal(AwsError::internal(format!(
+                        "Bedrock backend JSON parse failed: {e}"
+                    ))),
+                };
+            }
+            Ok((status2, body2)) => return classify_response(status2, &body2),
+            Err(e) => return Attempt::Retriable(e),
         }
-        return Err(map_upstream_error(status2, &body2));
     }
-    Err(map_upstream_error(status, &body_text))
+    classify_response(status, &body_text)
+}
+
+/// Map an upstream non-2xx response to an `Attempt`, deciding
+/// retriability from the raw HTTP status before translation: 408,
+/// 429, and 5xx are retriable; everything else (4xx other than
+/// those two) is fatal because retrying would just route the same
+/// bad request to the next backend.
+fn classify_response<T>(status: reqwest::StatusCode, body: &str) -> Attempt<T> {
+    let mapped = map_upstream_error(status, body);
+    if is_retriable_status(status) {
+        Attempt::Retriable(mapped)
+    } else {
+        Attempt::Fatal(mapped)
+    }
+}
+
+fn is_retriable_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 408 | 429 | 500..=599)
 }
 
 /// POST the OpenAI chat request and return the raw `(status, body)`
@@ -226,24 +298,65 @@ fn flatten_request_content(req: &mut openai::ChatRequest) -> bool {
 pub(crate) async fn call_chat_stream(
     backends: &BedrockBackends,
     bedrock_id: &str,
-    build: impl FnOnce(&str) -> Result<openai::ChatRequest, AwsError>,
+    build: impl Fn(&str) -> Result<openai::ChatRequest, AwsError>,
 ) -> Result<AccumulatedStream, AwsError> {
-    let (backend, model_tag) = backends.resolve_invoke(bedrock_id).ok_or_else(|| {
-        AwsError::not_found(
+    let candidates = backends.resolve_invoke_all(bedrock_id);
+    if candidates.is_empty() {
+        return Err(AwsError::not_found(
             "ResourceNotFoundException",
             format!("No backend mapping for Bedrock model {bedrock_id}"),
-        )
-    })?;
-    let mut req = build(model_tag)?;
+        ));
+    }
+    // The current SSE path buffers the entire upstream response
+    // before returning (see `accumulate_sse`), so per-candidate
+    // retry is safe: no downstream bytes have left awsim yet when
+    // we discover the upstream failed. Once Phase 6 / real
+    // eventstream framing pipes bytes through incrementally, retry
+    // becomes safe only up to the first forwarded byte.
+    let mut last_err: Option<AwsError> = None;
+    let total = candidates.len();
+    for (i, (backend, model_tag)) in candidates.iter().enumerate() {
+        match try_chat_stream_once(backend, model_tag, &build).await {
+            Attempt::Ok(acc) => return Ok(acc),
+            Attempt::Retriable(e) => {
+                if i + 1 < total {
+                    debug!(
+                        backend = backend.name(),
+                        attempt = i + 1,
+                        of = total,
+                        "chat stream hit retriable error; trying next alias target"
+                    );
+                }
+                last_err = Some(e);
+            }
+            Attempt::Fatal(e) => return Err(e),
+        }
+    }
+    Err(last_err
+        .unwrap_or_else(|| AwsError::internal("Bedrock backend chat stream: no attempts ran")))
+}
+
+async fn try_chat_stream_once(
+    backend: &crate::backend::BedrockBackend,
+    model_tag: &str,
+    build: &impl Fn(&str) -> Result<openai::ChatRequest, AwsError>,
+) -> Attempt<AccumulatedStream> {
+    let mut req = match build(model_tag) {
+        Ok(r) => r,
+        Err(e) => return Attempt::Fatal(e),
+    };
     req.stream = Some(true);
     req.stream_options = Some(openai::StreamOptions {
         include_usage: true,
     });
 
     let url = format!("{}/chat/completions", backend.endpoint());
-    let (status, raw) = post_chat(backend, &url, &req).await?;
+    let (status, raw) = match post_chat(backend, &url, &req).await {
+        Ok(pair) => pair,
+        Err(e) => return Attempt::Retriable(e),
+    };
     if status.is_success() {
-        return Ok(accumulate_sse(&raw));
+        return Attempt::Ok(accumulate_sse(&raw));
     }
     if status == reqwest::StatusCode::BAD_REQUEST
         && needs_string_content_fallback(&raw)
@@ -252,13 +365,15 @@ pub(crate) async fn call_chat_stream(
         debug!(
             "Bedrock backend rejected multimodal content array, retrying stream with flattened text"
         );
-        let (status2, raw2) = post_chat(backend, &url, &req).await?;
-        if status2.is_success() {
-            return Ok(accumulate_sse(&raw2));
+        match post_chat(backend, &url, &req).await {
+            Ok((status2, raw2)) if status2.is_success() => {
+                return Attempt::Ok(accumulate_sse(&raw2));
+            }
+            Ok((status2, raw2)) => return classify_response(status2, &raw2),
+            Err(e) => return Attempt::Retriable(e),
         }
-        return Err(map_upstream_error(status2, &raw2));
     }
-    Err(map_upstream_error(status, &raw))
+    classify_response(status, &raw)
 }
 
 #[derive(Debug, Default)]
@@ -400,32 +515,70 @@ pub(crate) fn converse_stream_envelope(events: Vec<Value>) -> Value {
 async fn call_embed(
     backends: &BedrockBackends,
     bedrock_id: &str,
-    build: impl FnOnce(&str) -> Result<openai::EmbeddingsRequest, AwsError>,
+    build: impl Fn(&str) -> Result<openai::EmbeddingsRequest, AwsError>,
 ) -> Result<openai::EmbeddingsResponse, AwsError> {
-    let (backend, model_tag) = backends.resolve_embed(bedrock_id).ok_or_else(|| {
-        AwsError::not_found(
+    let candidates = backends.resolve_embed_all(bedrock_id);
+    if candidates.is_empty() {
+        return Err(AwsError::not_found(
             "ResourceNotFoundException",
             format!("No backend mapping for Bedrock embedding model {bedrock_id}"),
-        )
-    })?;
-    let req = build(model_tag)?;
+        ));
+    }
+    let mut last_err: Option<AwsError> = None;
+    let total = candidates.len();
+    for (i, (backend, model_tag)) in candidates.iter().enumerate() {
+        match try_embed_once(backend, model_tag, &build).await {
+            Attempt::Ok(resp) => return Ok(resp),
+            Attempt::Retriable(e) => {
+                if i + 1 < total {
+                    debug!(
+                        backend = backend.name(),
+                        attempt = i + 1,
+                        of = total,
+                        "embed call hit retriable error; trying next alias target"
+                    );
+                }
+                last_err = Some(e);
+            }
+            Attempt::Fatal(e) => return Err(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| AwsError::internal("Bedrock backend embed: no attempts ran")))
+}
+
+async fn try_embed_once(
+    backend: &crate::backend::BedrockBackend,
+    model_tag: &str,
+    build: &impl Fn(&str) -> Result<openai::EmbeddingsRequest, AwsError>,
+) -> Attempt<openai::EmbeddingsResponse> {
+    let req = match build(model_tag) {
+        Ok(r) => r,
+        Err(e) => return Attempt::Fatal(e),
+    };
     let url = format!("{}/embeddings", backend.endpoint());
     let mut http_req = backend.client().post(&url).json(&req);
     if let Some(key) = backend.api_key() {
         http_req = http_req.bearer_auth(key);
     }
-    let resp = http_req
-        .send()
-        .await
-        .map_err(|e| AwsError::internal(format!("Bedrock backend POST {url} failed: {e}")))?;
+    let resp = match http_req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return Attempt::Retriable(AwsError::internal(format!(
+                "Bedrock backend POST {url} failed: {e}"
+            )));
+        }
+    };
     let status = resp.status();
     if !status.is_success() {
         let body_text = resp.text().await.unwrap_or_default();
-        return Err(map_upstream_error(status, &body_text));
+        return classify_response(status, &body_text);
     }
-    resp.json::<openai::EmbeddingsResponse>()
-        .await
-        .map_err(|e| AwsError::internal(format!("Bedrock backend JSON parse failed: {e}")))
+    match resp.json::<openai::EmbeddingsResponse>().await {
+        Ok(v) => Attempt::Ok(v),
+        Err(e) => Attempt::Fatal(AwsError::internal(format!(
+            "Bedrock backend JSON parse failed: {e}"
+        ))),
+    }
 }
 
 /// Dispatch InvokeModel by Bedrock model-id prefix. Routes Anthropic
