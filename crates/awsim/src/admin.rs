@@ -854,6 +854,21 @@ pub async fn gateway_catalog() -> Json<&'static awsim_bedrock::ProviderCatalog> 
     Json(awsim_bedrock::catalog())
 }
 
+/// GET /_awsim/gateway/metrics — per-mapping counters + latency
+/// histogram (p50/p95). Resets on restart; cheap to read.
+/// Drives the call/p50/p95 chips on the Models & Aliases tab.
+pub async fn gateway_metrics(State(metrics): State<awsim_bedrock::MetricsRegistry>) -> Json<Value> {
+    Json(metrics.snapshot_json())
+}
+
+/// GET /_awsim/gateway/recent — last ~200 outer-call records
+/// (one per InvokeModel / Converse / embed call, listing the
+/// candidates that were tried). Newest-first. Drives the
+/// Activity tab.
+pub async fn gateway_recent(State(recent): State<awsim_bedrock::RecentInvocations>) -> Json<Value> {
+    Json(recent.snapshot_json())
+}
+
 /// GET /_awsim/gateway/health — snapshot of every backend's
 /// current health status (Healthy / Degraded / Down / Unknown),
 /// last latency, last error, plus a short history ring per

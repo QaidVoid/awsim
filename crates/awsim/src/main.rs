@@ -433,13 +433,19 @@ async fn async_main() -> Result<()> {
     // reload. Read by the alias resolver (skip Down targets) and
     // by the gateway Health tab.
     let bedrock_health = awsim_bedrock::HealthRegistry::new();
+    let bedrock_metrics = awsim_bedrock::MetricsRegistry::new();
+    let bedrock_recent = awsim_bedrock::RecentInvocations::new();
 
     // Hot-swappable Bedrock backends handle. Built once from the
     // initial runtime config and swapped in-place whenever the
     // runtime config changes — request-path readers see the new
     // value without restarting the service.
-    let initial_bedrock =
-        build_bedrock_backend_from_config(&runtime_config_store.current(), &bedrock_health)?;
+    let initial_bedrock = build_bedrock_backend_from_config(
+        &runtime_config_store.current(),
+        &bedrock_health,
+        &bedrock_metrics,
+        &bedrock_recent,
+    )?;
     let bedrock_swap = awsim_bedrock::backends_swap(initial_bedrock);
 
     // Reload hook: rebuild backends from the new config and swap.
@@ -449,8 +455,15 @@ async fn async_main() -> Result<()> {
     {
         let swap = Arc::clone(&bedrock_swap);
         let health_for_reload = bedrock_health.clone();
+        let metrics_for_reload = bedrock_metrics.clone();
+        let recent_for_reload = bedrock_recent.clone();
         runtime_config_store.on_change(Box::new(
-            move |cfg| match build_bedrock_backend_from_config(cfg, &health_for_reload) {
+            move |cfg| match build_bedrock_backend_from_config(
+                cfg,
+                &health_for_reload,
+                &metrics_for_reload,
+                &recent_for_reload,
+            ) {
                 Ok(next) => {
                     swap.store(Arc::new(next));
                     info!("Bedrock backends hot-reloaded");
@@ -1360,6 +1373,20 @@ async fn async_main() -> Result<()> {
         )
         .with_state((Arc::clone(&bedrock_swap), bedrock_health.clone()));
 
+    let gateway_metrics_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/gateway/metrics",
+            axum::routing::get(admin::gateway_metrics),
+        )
+        .with_state(bedrock_metrics.clone());
+
+    let gateway_recent_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/gateway/recent",
+            axum::routing::get(admin::gateway_recent),
+        )
+        .with_state(bedrock_recent.clone());
+
     let runtime_config_router: axum::Router<()> = axum::Router::new()
         .route(
             "/_awsim/runtime-config",
@@ -1419,6 +1446,8 @@ async fn async_main() -> Result<()> {
         .merge(gateway_catalog_router)
         .merge(gateway_health_router)
         .merge(gateway_health_check_router)
+        .merge(gateway_metrics_router)
+        .merge(gateway_recent_router)
         .merge(runtime_config_router)
         .merge(seed_router)
         .merge(tls_admin_router)
@@ -2214,6 +2243,8 @@ struct ModelMapToml {
 fn build_bedrock_backend_from_config(
     cfg: &runtime_config::RuntimeConfig,
     health: &awsim_bedrock::HealthRegistry,
+    metrics: &awsim_bedrock::MetricsRegistry,
+    recent: &awsim_bedrock::RecentInvocations,
 ) -> Result<Option<awsim_bedrock::BedrockBackends>> {
     if !cfg.bedrock.enabled || cfg.bedrock.spec.backends.is_empty() {
         return Ok(None);
@@ -2221,7 +2252,8 @@ fn build_bedrock_backend_from_config(
     let backends =
         awsim_bedrock::build_from_spec(cfg.bedrock.spec.clone(), |v| std::env::var(v).ok())
             .context("building bedrock backends from runtime config")?
-            .with_health(health.clone());
+            .with_health(health.clone())
+            .with_metrics(metrics.clone(), recent.clone());
     info!(
         backends = ?backends.backend_names(),
         default = ?backends.default_name(),
