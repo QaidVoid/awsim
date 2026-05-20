@@ -9,7 +9,9 @@ mod state;
 
 pub use backend::{BedrockBackend, BedrockBackends, single_default};
 pub use catalog::{AuthKind, CatalogModel, Provider, ProviderCatalog, ProviderKind, catalog};
-pub use config::{BackendSpec, BedrockConfigError, BedrockSpec, build_from_spec, load_from_file};
+pub use config::{
+    BackendSpec, BedrockConfigError, BedrockSpec, CredentialSpec, build_from_spec, load_from_file,
+};
 pub use model_map::{ModelEntry, ModelMap, ModelMapError};
 
 use std::sync::Arc;

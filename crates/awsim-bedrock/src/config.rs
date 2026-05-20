@@ -48,6 +48,13 @@ pub struct BedrockSpec {
     /// Optional — without it, bare-tag entries don't route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_backend: Option<String>,
+    /// Named, reusable API-key credentials. A single credential can be
+    /// referenced from multiple `[backends.*]` blocks via the
+    /// `credential = "<name>"` field, so a fan-out setup (e.g. two
+    /// Groq backends with different endpoints but the same key)
+    /// doesn't have to restate the same secret in two places.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub credentials: HashMap<String, CredentialSpec>,
     #[serde(default)]
     pub backends: HashMap<String, BackendSpec>,
     #[serde(default)]
@@ -59,12 +66,34 @@ pub struct BedrockSpec {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct BackendSpec {
     pub endpoint: String,
-    /// Inline API key. Supported but discouraged; prefer `api_key_env`.
+    /// Reference into the top-level `[credentials.*]` table. When set,
+    /// the resolved credential's `api_key` is used. Mutually exclusive
+    /// with the legacy inline `api_key` / `api_key_env` fields on this
+    /// backend; setting both yields a hard error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+    /// Inline API key. Legacy shape, still supported for back-compat;
+    /// prefer `credential` once Phase 1 credentials exist.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
     /// Name of an env var holding the API key. Resolved at build time;
     /// missing env var is a hard error so misconfigured backends fail
     /// fast rather than silently sending unauthenticated requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+}
+
+/// Reusable API-key credential. Same `(api_key | api_key_env)`
+/// shape as the legacy per-backend fields, just lifted into a
+/// named table so multiple backends can share one secret.
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct CredentialSpec {
+    /// Inline API key. Discouraged; prefer `api_key_env` so secrets
+    /// stay out of the on-disk config file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// Name of an env var holding the API key. Resolved at build
+    /// time; missing env var is a hard error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
 }
@@ -87,6 +116,18 @@ pub enum BedrockConfigError {
     KeyConflict { backend: String },
     #[error("bedrock config backend '{backend}' references env var ${var} but it is unset")]
     MissingEnvVar { backend: String, var: String },
+    #[error(
+        "bedrock config backend '{backend}' sets both credential = '{credential}' and a legacy api_key/api_key_env; pick one"
+    )]
+    CredentialAndLegacyKey { backend: String, credential: String },
+    #[error(
+        "bedrock config backend '{backend}' references credential '{credential}' but there is no matching [credentials.{credential}] entry"
+    )]
+    UnknownCredential { backend: String, credential: String },
+    #[error("bedrock config credential '{credential}' sets both api_key and api_key_env; pick one")]
+    CredentialKeyConflict { credential: String },
+    #[error("bedrock config credential '{credential}' references env var ${var} but it is unset")]
+    CredentialMissingEnvVar { credential: String, var: String },
     #[error("bedrock config default_backend = '{name}' has no matching [backends.{name}] section")]
     UnknownDefault { name: String },
     #[error(
@@ -148,9 +189,11 @@ pub fn build_from_spec(
         });
     }
 
+    let resolved_credentials = resolve_credentials(&spec.credentials, &env_lookup)?;
+
     let mut built: HashMap<String, BedrockBackend> = HashMap::new();
     for (name, bc) in spec.backends {
-        let api_key = resolve_api_key(&name, &bc, &env_lookup)?;
+        let api_key = resolve_api_key(&name, &bc, &resolved_credentials, &env_lookup)?;
         built.insert(
             name.clone(),
             BedrockBackend::new(name, bc.endpoint, api_key),
@@ -171,11 +214,55 @@ pub fn build_from_spec(
     Ok(BedrockBackends::new(built, spec.default_backend, model_map))
 }
 
+fn resolve_credentials(
+    credentials: &HashMap<String, CredentialSpec>,
+    env_lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<HashMap<String, Option<String>>, BedrockConfigError> {
+    let mut out = HashMap::with_capacity(credentials.len());
+    for (name, cs) in credentials {
+        let key = match (&cs.api_key, &cs.api_key_env) {
+            (Some(_), Some(_)) => {
+                return Err(BedrockConfigError::CredentialKeyConflict {
+                    credential: name.clone(),
+                });
+            }
+            (Some(k), None) => Some(k.clone()),
+            (None, Some(var)) => Some(env_lookup(var).ok_or_else(|| {
+                BedrockConfigError::CredentialMissingEnvVar {
+                    credential: name.clone(),
+                    var: var.clone(),
+                }
+            })?),
+            (None, None) => None,
+        };
+        out.insert(name.clone(), key);
+    }
+    Ok(out)
+}
+
 fn resolve_api_key(
     name: &str,
     bc: &BackendSpec,
+    credentials: &HashMap<String, Option<String>>,
     env_lookup: &impl Fn(&str) -> Option<String>,
 ) -> Result<Option<String>, BedrockConfigError> {
+    if let Some(cred_name) = &bc.credential {
+        if bc.api_key.is_some() || bc.api_key_env.is_some() {
+            return Err(BedrockConfigError::CredentialAndLegacyKey {
+                backend: name.to_string(),
+                credential: cred_name.clone(),
+            });
+        }
+        let key =
+            credentials
+                .get(cred_name)
+                .ok_or_else(|| BedrockConfigError::UnknownCredential {
+                    backend: name.to_string(),
+                    credential: cred_name.clone(),
+                })?;
+        return Ok(key.clone());
+    }
+
     match (&bc.api_key, &bc.api_key_env) {
         (Some(_), Some(_)) => Err(BedrockConfigError::KeyConflict {
             backend: name.to_string(),
@@ -333,6 +420,112 @@ endpoint = "http://o"
                 table: "invoke",
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn shared_credential_across_two_backends() {
+        let toml_src = r#"
+[credentials.groq]
+api_key_env = "GROQ_API_KEY"
+
+[backends.groq_a]
+endpoint = "https://api.groq.com/openai/v1"
+credential = "groq"
+
+[backends.groq_b]
+endpoint = "https://api.groq.com/openai/v1"
+credential = "groq"
+"#;
+        let bs = load_from_str(toml_src, "test".into(), |v| {
+            (v == "GROQ_API_KEY").then_some("env-key".to_string())
+        })
+        .unwrap();
+        assert_eq!(bs.get_backend("groq_a").unwrap().api_key(), Some("env-key"));
+        assert_eq!(bs.get_backend("groq_b").unwrap().api_key(), Some("env-key"));
+    }
+
+    #[test]
+    fn inline_credential_resolves() {
+        let toml_src = r#"
+[credentials.openai]
+api_key = "sk-test"
+
+[backends.openai]
+endpoint = "https://api.openai.com/v1"
+credential = "openai"
+"#;
+        let bs = load_from_str(toml_src, "test".into(), empty_env).unwrap();
+        assert_eq!(bs.get_backend("openai").unwrap().api_key(), Some("sk-test"));
+    }
+
+    #[test]
+    fn credential_and_legacy_key_is_error() {
+        let toml_src = r#"
+[credentials.x]
+api_key = "a"
+
+[backends.x]
+endpoint = "http://x"
+credential = "x"
+api_key = "b"
+"#;
+        let err = expect_err(load_from_str(toml_src, "test".into(), empty_env));
+        assert!(matches!(
+            err,
+            BedrockConfigError::CredentialAndLegacyKey { ref backend, ref credential }
+                if backend == "x" && credential == "x"
+        ));
+    }
+
+    #[test]
+    fn unknown_credential_is_error() {
+        let toml_src = r#"
+[backends.x]
+endpoint = "http://x"
+credential = "ghost"
+"#;
+        let err = expect_err(load_from_str(toml_src, "test".into(), empty_env));
+        assert!(matches!(
+            err,
+            BedrockConfigError::UnknownCredential { ref backend, ref credential }
+                if backend == "x" && credential == "ghost"
+        ));
+    }
+
+    #[test]
+    fn credential_with_both_key_fields_is_error() {
+        let toml_src = r#"
+[credentials.x]
+api_key = "a"
+api_key_env = "B"
+
+[backends.b]
+endpoint = "http://b"
+credential = "x"
+"#;
+        let err = expect_err(load_from_str(toml_src, "test".into(), empty_env));
+        assert!(matches!(
+            err,
+            BedrockConfigError::CredentialKeyConflict { ref credential } if credential == "x"
+        ));
+    }
+
+    #[test]
+    fn credential_missing_env_var_is_error() {
+        let toml_src = r#"
+[credentials.x]
+api_key_env = "MISSING"
+
+[backends.b]
+endpoint = "http://b"
+credential = "x"
+"#;
+        let err = expect_err(load_from_str(toml_src, "test".into(), empty_env));
+        assert!(matches!(
+            err,
+            BedrockConfigError::CredentialMissingEnvVar { ref credential, ref var }
+                if credential == "x" && var == "MISSING"
         ));
     }
 }

@@ -2105,6 +2105,7 @@ fn build_runtime_config_seed(cli: &Cli) -> Result<runtime_config::RuntimeConfig>
             "default".to_string(),
             awsim_bedrock::BackendSpec {
                 endpoint: endpoint.to_string(),
+                credential: None,
                 api_key: cli.bedrock_api_key.clone(),
                 api_key_env: None,
             },
@@ -2123,6 +2124,7 @@ fn build_runtime_config_seed(cli: &Cli) -> Result<runtime_config::RuntimeConfig>
         };
         awsim_bedrock::BedrockSpec {
             default_backend: Some("default".into()),
+            credentials: Default::default(),
             backends,
             invoke,
             embed,
