@@ -48,6 +48,15 @@ export type AliasStrategy = "first";
 export interface AliasTarget {
   backend: string;
   tag: string;
+  /**
+   * Per-request upstream timeout in milliseconds. Honoured by
+   * both chat and embed paths; absent = the backend's default.
+   */
+  timeout_ms?: number | null;
+  /** Chat-only. Caps the upstream's max_tokens for this target. */
+  max_tokens?: number | null;
+  /** Chat-only. Pins the upstream sampling temperature. */
+  temperature?: number | null;
 }
 
 export interface AliasSpec {

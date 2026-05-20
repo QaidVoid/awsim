@@ -34,6 +34,7 @@
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
+	import SlidersIcon from '@lucide/svelte/icons/sliders-horizontal';
 
 	interface BackendOption {
 		name: string;
@@ -72,6 +73,9 @@
 		// reorders. Bumped on add/remove so Svelte doesn't reuse
 		// node identity across positions.
 		_k: number;
+		// UI-local toggle for the per-target overrides panel; not
+		// serialised back to the wire shape.
+		_overridesOpen: boolean;
 	}
 
 	let bedrockId = $state('');
@@ -94,14 +98,28 @@
 		if (mode === 'edit' && initial) {
 			bedrockId = initial.id;
 			kind = initial.alias.kind ?? 'chat';
-			targets = initial.alias.targets.map((t) => ({ ...t, _k: rowKeyCounter++ }));
+			targets = initial.alias.targets.map((t) => ({
+				...t,
+				_k: rowKeyCounter++,
+				// Auto-open the overrides panel when the target
+				// already has one set, so users see + can edit it.
+				_overridesOpen:
+					(t.timeout_ms ?? null) !== null ||
+					(t.max_tokens ?? null) !== null ||
+					(t.temperature ?? null) !== null,
+			}));
 		} else {
 			bedrockId = '';
 			kind = 'chat';
 			// Seed with one empty target so the user lands on a fillable
 			// row instead of an empty list with a Add-target button.
 			targets = [
-				{ backend: backends[0]?.name ?? '', tag: '', _k: rowKeyCounter++ },
+				{
+					backend: backends[0]?.name ?? '',
+					tag: '',
+					_k: rowKeyCounter++,
+					_overridesOpen: false,
+				},
 			];
 		}
 	}
@@ -131,7 +149,15 @@
 	}
 
 	function addTarget() {
-		targets = [...targets, { backend: backends[0]?.name ?? '', tag: '', _k: rowKeyCounter++ }];
+		targets = [
+			...targets,
+			{
+				backend: backends[0]?.name ?? '',
+				tag: '',
+				_k: rowKeyCounter++,
+				_overridesOpen: false,
+			},
+		];
 	}
 
 	function removeTarget(i: number) {
@@ -181,7 +207,17 @@
 		const alias: AliasSpec = {
 			kind,
 			strategy: 'first',
-			targets: targets.map((t) => ({ backend: t.backend, tag: t.tag.trim() })),
+			targets: targets.map((t) => {
+				const out: AliasTarget = { backend: t.backend, tag: t.tag.trim() };
+				if ((t.timeout_ms ?? null) !== null) out.timeout_ms = t.timeout_ms ?? undefined;
+				// Chat-only overrides: drop on embed so they don't
+				// land in the on-disk config and confuse future readers.
+				if (kind === 'chat') {
+					if ((t.max_tokens ?? null) !== null) out.max_tokens = t.max_tokens ?? undefined;
+					if ((t.temperature ?? null) !== null) out.temperature = t.temperature ?? undefined;
+				}
+				return out;
+			}),
 		};
 		try {
 			await onSubmit({ id: bedrockId.trim(), alias });
@@ -270,74 +306,150 @@
 				<div class="flex flex-col gap-2">
 					{#each targets as t, i (t._k)}
 						{@const suggestions = suggestedTagsFor(t.backend)}
-						<div class="grid grid-cols-[auto_1fr_1fr_auto] items-end gap-2 rounded border p-2">
-							<div class="flex flex-col gap-1">
-								<Label class="text-[10px] uppercase text-muted-foreground">Priority</Label>
-								<div class="flex h-9 w-12 items-center justify-center rounded bg-muted/40 font-mono text-sm">
-									#{i + 1}
+						{@const hasOverrides =
+							(t.timeout_ms ?? null) !== null ||
+							(t.max_tokens ?? null) !== null ||
+							(t.temperature ?? null) !== null}
+						<div class="flex flex-col gap-2 rounded border p-2">
+							<div class="grid grid-cols-[auto_1fr_1fr_auto] items-end gap-2">
+								<div class="flex flex-col gap-1">
+									<Label class="text-[10px] uppercase text-muted-foreground">Priority</Label>
+									<div class="flex h-9 w-12 items-center justify-center rounded bg-muted/40 font-mono text-sm">
+										#{i + 1}
+									</div>
+								</div>
+								<div class="flex flex-col gap-1">
+									<Label class="text-[10px] uppercase text-muted-foreground">Backend</Label>
+									<Select
+										type="single"
+										value={t.backend}
+										onValueChange={(v) => (t.backend = v)}
+									>
+										<SelectTrigger class="w-full font-mono">
+											{t.backend || '(pick)'}
+										</SelectTrigger>
+										<SelectContent>
+											{#each backends as b (b.name)}
+												<SelectItem value={b.name} label={b.name}>{b.name}</SelectItem>
+											{/each}
+										</SelectContent>
+									</Select>
+								</div>
+								<div class="flex flex-col gap-1">
+									<Label class="text-[10px] uppercase text-muted-foreground">Model tag</Label>
+									<Input
+										list={`alias-tag-suggestions-${t._k}`}
+										bind:value={t.tag}
+										placeholder="llama3.1:8b"
+										autocomplete="off"
+										class="font-mono"
+									/>
+									<datalist id={`alias-tag-suggestions-${t._k}`}>
+										{#each suggestions as s (s)}
+											<option value={s}></option>
+										{/each}
+									</datalist>
+								</div>
+								<div class="flex gap-0">
+									<Button
+										variant="ghost"
+										size="icon"
+										onclick={() => moveUp(i)}
+										disabled={i === 0}
+										aria-label="Move up"
+									>
+										<ArrowUpIcon class="h-4 w-4" />
+									</Button>
+									<Button
+										variant="ghost"
+										size="icon"
+										onclick={() => moveDown(i)}
+										disabled={i === targets.length - 1}
+										aria-label="Move down"
+									>
+										<ArrowDownIcon class="h-4 w-4" />
+									</Button>
+									<Button
+										variant="ghost"
+										size="icon"
+										onclick={() => removeTarget(i)}
+										disabled={targets.length === 1}
+										aria-label="Remove target"
+									>
+										<Trash2Icon class="h-4 w-4" />
+									</Button>
 								</div>
 							</div>
-							<div class="flex flex-col gap-1">
-								<Label class="text-[10px] uppercase text-muted-foreground">Backend</Label>
-								<Select
-									type="single"
-									value={t.backend}
-									onValueChange={(v) => (t.backend = v)}
-								>
-									<SelectTrigger class="w-full font-mono">
-										{t.backend || '(pick)'}
-									</SelectTrigger>
-									<SelectContent>
-										{#each backends as b (b.name)}
-											<SelectItem value={b.name} label={b.name}>{b.name}</SelectItem>
-										{/each}
-									</SelectContent>
-								</Select>
-							</div>
-							<div class="flex flex-col gap-1">
-								<Label class="text-[10px] uppercase text-muted-foreground">Model tag</Label>
-								<Input
-									list={`alias-tag-suggestions-${t._k}`}
-									bind:value={t.tag}
-									placeholder="llama3.1:8b"
-									autocomplete="off"
-									class="font-mono"
-								/>
-								<datalist id={`alias-tag-suggestions-${t._k}`}>
-									{#each suggestions as s (s)}
-										<option value={s}></option>
-									{/each}
-								</datalist>
-							</div>
-							<div class="flex gap-0">
-								<Button
-									variant="ghost"
-									size="icon"
-									onclick={() => moveUp(i)}
-									disabled={i === 0}
-									aria-label="Move up"
-								>
-									<ArrowUpIcon class="h-4 w-4" />
-								</Button>
-								<Button
-									variant="ghost"
-									size="icon"
-									onclick={() => moveDown(i)}
-									disabled={i === targets.length - 1}
-									aria-label="Move down"
-								>
-									<ArrowDownIcon class="h-4 w-4" />
-								</Button>
-								<Button
-									variant="ghost"
-									size="icon"
-									onclick={() => removeTarget(i)}
-									disabled={targets.length === 1}
-									aria-label="Remove target"
-								>
-									<Trash2Icon class="h-4 w-4" />
-								</Button>
-							</div>
+
+							<button
+								type="button"
+								class="flex items-center justify-between text-xs text-muted-foreground hover:text-foreground"
+								onclick={() => (t._overridesOpen = !t._overridesOpen)}
+							>
+								<span class="flex items-center gap-1">
+									<SlidersIcon class="h-3 w-3" />
+									Per-target overrides
+									{#if hasOverrides}
+										<Badge variant="secondary" class="ml-1 text-[9px]">customised</Badge>
+									{/if}
+								</span>
+								<span>{t._overridesOpen ? 'hide' : 'show'}</span>
+							</button>
+
+							{#if t._overridesOpen}
+								<div class="grid grid-cols-1 gap-2 rounded bg-muted/20 p-2 sm:grid-cols-3">
+									<div class="flex flex-col gap-1">
+										<Label class="text-[10px] uppercase text-muted-foreground">
+											Timeout (ms)
+										</Label>
+										<Input
+											type="number"
+											min="100"
+											step="100"
+											value={t.timeout_ms ?? ''}
+											oninput={(e) => {
+												const raw = e.currentTarget.value;
+												t.timeout_ms = raw === '' ? null : Number(raw);
+											}}
+											placeholder="backend default"
+										/>
+									</div>
+									{#if kind === 'chat'}
+										<div class="flex flex-col gap-1">
+											<Label class="text-[10px] uppercase text-muted-foreground">Max tokens</Label>
+											<Input
+												type="number"
+												min="1"
+												value={t.max_tokens ?? ''}
+												oninput={(e) => {
+													const raw = e.currentTarget.value;
+													t.max_tokens = raw === '' ? null : Number(raw);
+												}}
+												placeholder="(unset)"
+											/>
+										</div>
+										<div class="flex flex-col gap-1">
+											<Label class="text-[10px] uppercase text-muted-foreground">Temperature</Label>
+											<Input
+												type="number"
+												min="0"
+												max="2"
+												step="0.05"
+												value={t.temperature ?? ''}
+												oninput={(e) => {
+													const raw = e.currentTarget.value;
+													t.temperature = raw === '' ? null : Number(raw);
+												}}
+												placeholder="(unset)"
+											/>
+										</div>
+									{:else}
+										<div class="col-span-2 flex items-center text-xs text-muted-foreground">
+											max_tokens / temperature don't apply to embeddings; only timeout_ms is used.
+										</div>
+									{/if}
+								</div>
+							{/if}
 						</div>
 					{/each}
 				</div>
