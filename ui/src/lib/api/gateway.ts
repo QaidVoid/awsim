@@ -136,6 +136,39 @@ export async function getGatewayRecent(): Promise<RecentResponse> {
   return (await res.json()) as RecentResponse;
 }
 
+export interface TestPromptResult {
+  latencyMs: number;
+  response: string | null;
+  error: string | null;
+}
+
+/**
+ * Fires one Converse call through the live gateway. The call
+ * goes through the same alias resolution / fallback / overrides
+ * path real callers use, so the Activity tab will pick it up.
+ */
+export async function testGatewayPrompt(
+  bedrockId: string,
+  prompt: string,
+): Promise<TestPromptResult> {
+  const res = await fetch("/_awsim/gateway/test-prompt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bedrockId, prompt }),
+  });
+  if (!res.ok) {
+    let msg = `gateway/test-prompt failed (HTTP ${res.status})`;
+    try {
+      const err = (await res.json()) as { message?: string };
+      if (err.message) msg = err.message;
+    } catch {
+      /* fall through */
+    }
+    throw new Error(msg);
+  }
+  return (await res.json()) as TestPromptResult;
+}
+
 export async function recheckGatewayBackend(name: string): Promise<RecheckResult> {
   const res = await fetch(
     `/_awsim/gateway/health/${encodeURIComponent(name)}/check`,

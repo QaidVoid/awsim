@@ -19,9 +19,11 @@
 	import {
 		getGatewayCatalog,
 		getGatewayMetrics,
+		testGatewayPrompt,
 		type CatalogProvider,
 		type MetricMappingRow,
 		type ProviderCatalog,
+		type TestPromptResult,
 	} from '$lib/api/gateway';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -36,12 +38,17 @@
 	} from '$lib/components/ui/table';
 	import { EmptyState } from '$lib/components/service';
 	import AliasEditorDialog from './alias-editor-dialog.svelte';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import BoxesIcon from '@lucide/svelte/icons/boxes';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import SearchIcon from '@lucide/svelte/icons/search';
+	import PlayIcon from '@lucide/svelte/icons/play';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
+	import CircleXIcon from '@lucide/svelte/icons/circle-x';
 	import { toast } from 'svelte-sonner';
 
 	type FilterKind = 'all' | 'chat' | 'embed';
@@ -67,6 +74,50 @@
 	let dialogOpen = $state(false);
 	let dialogMode = $state<'add' | 'edit'>('add');
 	let dialogInitial = $state<{ id: string; alias: AliasSpec } | null>(null);
+
+	// Inline-tester UI state. Each chat row can expand to a small
+	// prompt panel; only one tester is "running" at a time so we
+	// keep a shared `running` flag rather than per-row.
+	let testerOpen = $state<Record<string, boolean>>({});
+	let testerPrompt = $state<Record<string, string>>({});
+	let testerResult = $state<Record<string, TestPromptResult | null>>({});
+	let testerRunning = $state<Record<string, boolean>>({});
+
+	function rowKey(r: Row): string {
+		return `${r.id}|${r.kind}`;
+	}
+
+	function toggleTester(r: Row) {
+		const k = rowKey(r);
+		testerOpen[k] = !testerOpen[k];
+		if (testerOpen[k] && testerPrompt[k] === undefined) {
+			testerPrompt[k] = 'Reply with a one-line confirmation.';
+		}
+	}
+
+	async function runTester(r: Row) {
+		const k = rowKey(r);
+		const prompt = (testerPrompt[k] ?? '').trim();
+		if (!prompt) {
+			toast.error('Enter a prompt first.');
+			return;
+		}
+		testerRunning[k] = true;
+		try {
+			testerResult[k] = await testGatewayPrompt(r.id, prompt);
+			// Bump metrics so the Activity chips update without
+			// waiting for the next 5s tick.
+			void refreshMetrics();
+		} catch (e) {
+			testerResult[k] = {
+				latencyMs: 0,
+				response: null,
+				error: e instanceof Error ? e.message : 'Test failed',
+			};
+		} finally {
+			testerRunning[k] = false;
+		}
+	}
 
 	onMount(async () => {
 		try {
@@ -434,6 +485,23 @@
 							</TableCell>
 							<TableCell class="text-right">
 								<div class="flex justify-end gap-1">
+									{#if row.kind === 'chat'}
+										{@const tk = rowKey(row)}
+										<Button
+											variant="ghost"
+											size="icon"
+											onclick={() => toggleTester(row)}
+											disabled={savingAction}
+											aria-label="Test"
+											title="Send test prompt"
+										>
+											<PlayIcon
+												class={testerOpen[tk]
+													? 'h-4 w-4 rotate-90 transition-transform'
+													: 'h-4 w-4 transition-transform'}
+											/>
+										</Button>
+									{/if}
 									<Button
 										variant="ghost"
 										size="icon"
@@ -455,6 +523,59 @@
 								</div>
 							</TableCell>
 						</TableRow>
+						{#if row.kind === 'chat'}
+							{@const tk = rowKey(row)}
+							{#if testerOpen[tk]}
+								{@const res = testerResult[tk]}
+								{@const running = testerRunning[tk] ?? false}
+								<TableRow>
+									<TableCell colspan={6} class="bg-muted/30">
+										<div class="flex flex-col gap-2 py-2">
+											<div class="flex items-start gap-2">
+												<ChevronRightIcon class="mt-2 h-4 w-4 shrink-0 text-muted-foreground" />
+												<div class="flex-1">
+													<Textarea
+														rows={2}
+														placeholder="Reply with a one-line confirmation."
+														value={testerPrompt[tk] ?? ''}
+														oninput={(e) => (testerPrompt[tk] = e.currentTarget.value)}
+													/>
+												</div>
+												<Button
+													size="sm"
+													onclick={() => runTester(row)}
+													disabled={running}
+												>
+													<PlayIcon class={running ? 'h-4 w-4 animate-pulse' : 'h-4 w-4'} />
+													<span class="ml-1">{running ? 'Running…' : 'Run'}</span>
+												</Button>
+											</div>
+											{#if res}
+												<div class="rounded border bg-background p-2 text-xs">
+													<div class="mb-1 flex items-center gap-2 text-muted-foreground">
+														{#if res.error}
+															<CircleXIcon class="h-3.5 w-3.5 text-rose-500" />
+															<span class="font-semibold text-rose-600">Failed</span>
+														{:else}
+															<CircleCheckIcon class="h-3.5 w-3.5 text-emerald-500" />
+															<span class="font-semibold text-emerald-600">OK</span>
+														{/if}
+														<span class="font-mono">{res.latencyMs}ms</span>
+													</div>
+													{#if res.error}
+														<pre class="whitespace-pre-wrap text-rose-600">{res.error}</pre>
+													{:else if res.response}
+														<pre class="whitespace-pre-wrap">{res.response}</pre>
+													{:else}
+														<span class="text-muted-foreground">(empty response)</span>
+													{/if}
+												</div>
+											{/if}
+										</div>
+									</TableCell>
+								</TableRow>
+							{/if}
+						{/if}
 					{/each}
 				</TableBody>
 			</Table>
