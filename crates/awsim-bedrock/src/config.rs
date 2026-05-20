@@ -2,31 +2,57 @@
 //!
 //! A single `--bedrock-config` file can declare multiple
 //! OpenAI-compatible backends and pin individual Bedrock model ids to
-//! specific backends — so one awsim instance can fan out across
+//! specific backends, so one awsim instance can fan out across
 //! Ollama (local), Groq (hosted), OpenAI (embeddings), etc.
 //!
-//! Example file:
+//! Full example covering every section the loader understands:
 //!
 //! ```toml
 //! default_backend = "ollama"
 //!
+//! # Reusable credentials. One secret can back multiple backends.
+//! [credentials.groq]
+//! api_key_env = "GROQ_API_KEY"
+//!
+//! # Backends. The `provider` field is a catalog key that the UI
+//! # uses for logos / templates; the runtime never branches on it.
 //! [backends.ollama]
+//! provider = "ollama"
 //! endpoint = "http://localhost:11434/v1"
 //!
 //! [backends.groq]
+//! provider = "groq"
 //! endpoint = "https://api.groq.com/openai/v1"
-//! api_key_env = "GROQ_API_KEY"
+//! credential = "groq"
 //!
+//! # Multi-target alias groups, keyed by Bedrock id. The resolver
+//! # checks aliases before the legacy [invoke] / [embed] tables and
+//! # walks targets in declaration order; the first whose backend is
+//! # configured and not currently marked Down wins. On a retriable
+//! # upstream error (5xx / 408 / 429 / network), the runtime rolls
+//! # forward to the next target automatically. Per-target overrides
+//! # (timeout_ms / max_tokens / temperature) shape the upstream
+//! # request only for that target.
+//! [aliases."anthropic.claude-3-5-sonnet-20241022-v2:0"]
+//! kind = "chat"            # "chat" | "embed"
+//! strategy = "first"
+//! targets = [
+//!   { backend = "groq",   tag = "llama-3.3-70b-versatile", timeout_ms = 8000 },
+//!   { backend = "ollama", tag = "llama3.1:8b", temperature = 0.2 },
+//! ]
+//!
+//! # Legacy single-target mappings still work. The runtime prefers
+//! # aliases when both exist for the same id.
 //! [invoke]
-//! "anthropic.claude-3-5-sonnet-20241022-v2:0" = { backend = "groq", tag = "llama-3.3-70b-versatile" }
 //! "anthropic.claude-3-haiku-20240307-v1:0" = "llama3.1:8b"
 //!
 //! [embed]
 //! "amazon.titan-embed-text-v2:0" = "nomic-embed-text"
 //! ```
 //!
-//! Inline `api_key` is supported but discouraged; prefer
-//! `api_key_env` so secrets stay out of the config file.
+//! Inline `api_key` on a backend is supported but discouraged;
+//! prefer a `[credentials.*]` block with `api_key_env` so secrets
+//! stay out of the config file.
 
 use std::collections::HashMap;
 use std::path::Path;
