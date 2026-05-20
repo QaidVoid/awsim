@@ -151,7 +151,7 @@
 			</p>
 		</div>
 		<div class="flex gap-2">
-			<Button variant="outline" size="sm" href={route('/gateway') + '?tab=providers'}>
+			<Button variant="outline" size="sm" href={route('/gateway') + '?tab=backends'}>
 				<SettingsIcon class="h-4 w-4" />
 				<span class="ml-2">Open Model Gateway</span>
 			</Button>

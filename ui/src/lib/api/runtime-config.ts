@@ -11,6 +11,13 @@
 export interface BedrockBackendSpec {
   endpoint: string;
   /**
+   * Catalog key the backend was wired from (e.g. "ollama", "openai",
+   * "groq", "custom"). Pure metadata; the runtime never branches on
+   * it. The UI uses it to render the right logo / notes / curated
+   * model list.
+   */
+  provider?: string | null;
+  /**
    * Reference into the top-level `credentials` map. When set, the
    * legacy `api_key` / `api_key_env` fields on this backend must be
    * absent; the resolved credential's key is used at request time.
