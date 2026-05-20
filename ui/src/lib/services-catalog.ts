@@ -411,6 +411,14 @@ export const SERVICES: Service[] = [
     keywords: ["llm", "foundation model"],
   },
   {
+    id: "gateway",
+    name: "Model Gateway",
+    href: "/gateway",
+    category: "AI/ML",
+    icon: Network,
+    keywords: ["proxy", "llm", "openai", "ollama", "providers", "routing", "litellm"],
+  },
+  {
     id: "polly",
     name: "Polly",
     href: "/polly",
