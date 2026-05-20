@@ -2,6 +2,7 @@ mod aliases;
 mod backend;
 mod catalog;
 mod config;
+mod health;
 mod management;
 mod model_map;
 mod models;
@@ -14,6 +15,7 @@ pub use catalog::{AuthKind, CatalogModel, Provider, ProviderCatalog, ProviderKin
 pub use config::{
     BackendSpec, BedrockConfigError, BedrockSpec, CredentialSpec, build_from_spec, load_from_file,
 };
+pub use health::{BackendHealth, BackendStatus, CheckRecord, HealthRegistry, probe, run_poller};
 pub use model_map::{ModelEntry, ModelMap, ModelMapError};
 
 use std::sync::Arc;

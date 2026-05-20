@@ -16,6 +16,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::aliases::{AliasKind, AliasSpec, alias_view};
+use crate::health::HealthRegistry;
 use crate::model_map::{ModelEntry, ModelMap};
 
 const DEFAULT_BACKEND_NAME: &str = "default";
@@ -82,6 +83,11 @@ struct BackendsInner {
     /// Multi-target alias groups, checked before the legacy
     /// `model_map`. Empty in the legacy single-backend setup.
     aliases: HashMap<String, AliasSpec>,
+    /// Optional handle to the process-lifetime health registry.
+    /// When present, the alias resolver skips targets whose
+    /// backend is currently marked `Down`. Absent in tests and
+    /// in the CLI single-backend setup that has no poller.
+    health: Option<HealthRegistry>,
 }
 
 impl BedrockBackends {
@@ -96,6 +102,7 @@ impl BedrockBackends {
             default_name: Some(name),
             model_map,
             aliases: HashMap::new(),
+            health: None,
         }))
     }
 
@@ -111,6 +118,7 @@ impl BedrockBackends {
             default_name,
             model_map,
             aliases: HashMap::new(),
+            health: None,
         }))
     }
 
@@ -127,7 +135,26 @@ impl BedrockBackends {
             default_name,
             model_map,
             aliases,
+            health: None,
         }))
+    }
+
+    /// Attach the process-lifetime health registry. The same
+    /// `HealthRegistry` handle flows through every hot-swap so
+    /// statuses don't reset on config reload. When set, alias
+    /// resolution skips `Down` targets; the runtime layer still
+    /// uses `resolve_*_all` to drive error-fallback even on
+    /// targets that aren't marked Down yet.
+    #[must_use]
+    pub fn with_health(self, health: HealthRegistry) -> Self {
+        let inner = BackendsInner {
+            backends: self.0.backends.clone(),
+            default_name: self.0.default_name.clone(),
+            model_map: self.0.model_map.clone(),
+            aliases: self.0.aliases.clone(),
+            health: Some(health),
+        };
+        Self(Arc::new(inner))
     }
 
     pub fn model_map(&self) -> &ModelMap {
@@ -186,11 +213,75 @@ impl BedrockBackends {
             return None;
         }
         for target in &alias.targets {
-            if let Some(backend) = self.0.backends.get(&target.backend) {
-                return Some((backend, target.tag.as_str()));
+            let Some(backend) = self.0.backends.get(&target.backend) else {
+                continue;
+            };
+            if self.is_down(&target.backend) {
+                continue;
             }
+            return Some((backend, target.tag.as_str()));
         }
         None
+    }
+
+    fn is_down(&self, backend_name: &str) -> bool {
+        self.0
+            .health
+            .as_ref()
+            .map(|h| h.is_down(backend_name))
+            .unwrap_or(false)
+    }
+
+    /// Return every candidate `(backend, tag)` pair an invoke call
+    /// could be routed to, in declaration order. Multi-target aliases
+    /// surface all their resolvable + non-down targets; a single
+    /// legacy entry surfaces as a 1-element vec. Used by the runtime
+    /// to drive error-fallback: try the first, on a retriable upstream
+    /// failure roll forward to the next.
+    pub fn resolve_invoke_all(&self, bedrock_id: &str) -> Vec<(&BedrockBackend, &str)> {
+        if let Some(alias) = self.0.aliases.get(bedrock_id)
+            && alias.kind == AliasKind::Chat
+        {
+            let candidates = self.alias_candidates(alias);
+            if !candidates.is_empty() {
+                return candidates;
+            }
+        }
+        match self.0.model_map.lookup(bedrock_id, false) {
+            Some(entry) => self.resolve_entry(entry).into_iter().collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Same as `resolve_invoke_all` for the embed-side alias /
+    /// legacy table.
+    pub fn resolve_embed_all(&self, bedrock_id: &str) -> Vec<(&BedrockBackend, &str)> {
+        if let Some(alias) = self.0.aliases.get(bedrock_id)
+            && alias.kind == AliasKind::Embed
+        {
+            let candidates = self.alias_candidates(alias);
+            if !candidates.is_empty() {
+                return candidates;
+            }
+        }
+        match self.0.model_map.lookup(bedrock_id, true) {
+            Some(entry) => self.resolve_entry(entry).into_iter().collect(),
+            None => Vec::new(),
+        }
+    }
+
+    fn alias_candidates<'a>(&'a self, alias: &'a AliasSpec) -> Vec<(&'a BedrockBackend, &'a str)> {
+        let mut out = Vec::with_capacity(alias.targets.len());
+        for target in &alias.targets {
+            let Some(backend) = self.0.backends.get(&target.backend) else {
+                continue;
+            };
+            if self.is_down(&target.backend) {
+                continue;
+            }
+            out.push((backend, target.tag.as_str()));
+        }
+        out
     }
 
     fn resolve_entry<'a>(&'a self, entry: &'a ModelEntry) -> Option<(&'a BedrockBackend, &'a str)> {
