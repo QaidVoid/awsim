@@ -30,7 +30,9 @@ All routes are POST unless noted, return JSON, and share the
 | `POST /_awsim/auth/setup` | First-run bootstrap. Consumes the printed token, creates the root operator. Returns the root access keys once. |
 | `POST /_awsim/auth/login` | Verify password (+ optional MFA), mint a 12-hour HMAC-signed session token, set the `awsim_session` HTTP-only cookie. |
 | `POST /_awsim/auth/logout` | Clear the session cookie. Sessions are stateless so there is nothing server-side to revoke. |
-| `GET /_awsim/auth/whoami` | Echo the current principal extracted from the cookie or `Authorization: Bearer` header. 401 when not signed in. |
+| `GET /_awsim/auth/whoami` | Return `{auth_required, setup_required, principal}` so the UI can distinguish loginless dev from "auth on, no session". Always 200. |
+| `GET /_awsim/auth/credentials` | Return the signed-in operator's first active IAM access key + secret for the UI's SigV4 signer. Gated by the session cookie. |
+| `POST /_awsim/auth/reveal-access-key` | Return the plaintext secret for an existing access key. AWSim retains secrets locally, unlike real AWS which hides them after creation. Gated. |
 
 ## First-run bootstrap
 
@@ -170,6 +172,63 @@ The two gates compose: `AWSIM_IAM_ENFORCE=true` plus
 `AWSIM_REQUIRE_OPERATOR_AUTH=true` gives a deployment where
 every SDK call is signed, authorized, and every admin call
 authenticated.
+
+## Cryptographic signature verification with AWSIM_VERIFY_SIGV4
+
+`AWSIM_REQUIRE_SIGNED_REQUESTS=true` only checks that the
+Authorization header is present and the access key ID resolves to
+a principal. The signature itself is trusted as-is, which means a
+stolen access key ID is sufficient to impersonate the principal.
+
+Set `AWSIM_VERIFY_SIGV4=true` to add real cryptographic
+verification: the gateway recomputes the canonical request,
+derives the signing key from the bound secret, and compares the
+resulting hex digest against the supplied signature in constant
+time. The check has a five-minute clock-skew window either side,
+matching AWS. Off by default so legacy clients sending
+`Signature=fakesignature` keep working.
+
+The admin access key (`AWSIM_ADMIN_ACCESS_KEY`, default
+`awsim-admin`) bypasses verification because it has no real
+secret; it's the break-glass key, not a real principal. Real
+operator IAM credentials must produce valid signatures.
+
+## Root user protection
+
+When operator auth is on, the IAM service hard-rejects any
+mutation that targets the `root` user with
+`AccessDeniedException`, regardless of the caller's policies. Real
+AWS treats root as the account-owner identity that exists outside
+the IAM principal hierarchy; AWSim mirrors that for every
+operation that takes a `UserName` parameter and changes state:
+delete / update user, password profile changes, access-key
+mutations, policy attach / detach / put / delete, group
+membership, MFA, SSH keys, signing certificates, and
+service-specific credentials. Read-only operations (Get*, List*)
+stay readable so root metadata is auditable.
+
+The first-run bootstrap is allowed to create root via
+`CreateUser("root")` + `CreateLoginProfile` + `CreateAccessKey`
+because the setup endpoint constructs its `RequestContext` with
+`internal_bypass = true`. No external HTTP call can set that
+flag.
+
+## UI signs with operator credentials
+
+After sign-in the admin UI fetches the operator's IAM access key
++ secret from `GET /_awsim/auth/credentials` and uses them to
+SigV4-sign every outbound AWS request. The gateway then sees the
+real principal at policy-evaluation time, so an IAM user with a
+restrictive policy gets 403s on the operations they're not
+allowed to perform. When operator auth is off (or no session is
+present), the UI falls back to the admin bypass key and works
+without setup.
+
+Credentials are cached client-side for the session lifetime and
+auto-refreshed when within 5 minutes of expiry. They are never
+exposed to other scripts: callers go through `sign()` in
+`$lib/credentials.svelte` which returns ready-to-use headers
+without disclosing the raw secret.
 
 ## Break-glass
 

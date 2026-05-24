@@ -93,7 +93,8 @@ All services share the same `http://localhost:4566` endpoint; routing comes from
 | (env-only) | `AWSIM_IAM_ENFORCE` | `false` | Turn on IAM policy enforcement on the gateway |
 | (env-only) | `AWSIM_REQUIRE_OPERATOR_AUTH` | `false` | Gate the admin UI + admin endpoints behind login. First boot prints a bootstrap token; `POST /_awsim/auth/setup` mints the root operator. See [docs/guide/operator-auth.md](docs/guide/operator-auth.md) |
 | (env-only) | `AWSIM_REQUIRE_SIGNED_REQUESTS` | `false` | Require every SDK call to carry a SigV4 access key resolvable to a known IAM user. Unsigned calls return `MissingAuthenticationTokenException`; unknown keys return `InvalidClientTokenId` |
-| (env-only) | `AWSIM_ADMIN_ACCESS_KEY` | (none) | Access key ID that bypasses IAM enforcement and the signed-request gate. Used for break-glass and bootstrap |
+| (env-only) | `AWSIM_VERIFY_SIGV4` | `false` | Cryptographically verify every SigV4 signature against the bound secret. Rejects forged signatures with `SignatureDoesNotMatch`; 5-minute clock skew matches AWS. The admin bypass key short-circuits verification because it has no real secret |
+| (env-only) | `AWSIM_ADMIN_ACCESS_KEY` | (none) | Access key ID that bypasses IAM enforcement, the signed-request gate, and SigV4 verification. Used for break-glass and bootstrap |
 | (env-only) | `AWSIM_TICK_INTERVAL_MS` | `1000` | How often the per-service tick loop fires (10 to 60000) |
 | (env-only) | `AWSIM_LIFECYCLE_FAST` | `false` | Collapse every observable resource-lifecycle delay to zero. Useful for CI |
 | (env-only) | `AWSIM_S3_LAX_MULTIPART_SIZE` | `false` | Skip the 5 MiB minimum-part-size check on `CompleteMultipartUpload` for tests that exercise the multipart flow with tiny parts |
