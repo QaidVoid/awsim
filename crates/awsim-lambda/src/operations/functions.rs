@@ -143,6 +143,28 @@ fn parse_ephemeral_storage_size(input: &Value) -> Result<Option<u32>, AwsError> 
     Ok(Some(size as u32))
 }
 
+/// Validate TracingConfig: Mode is one of Active | PassThrough.
+fn validate_tracing_config(input: &Value) -> Result<Option<Value>, AwsError> {
+    let Some(tracing) = input.get("TracingConfig").cloned() else {
+        return Ok(None);
+    };
+    if !tracing.is_object() {
+        return Err(invalid_parameter(
+            "TracingConfig must be an object with a Mode field",
+        ));
+    }
+    let mode = tracing
+        .get("Mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("PassThrough");
+    if mode != "Active" && mode != "PassThrough" {
+        return Err(invalid_parameter(
+            "TracingConfig.Mode must be Active or PassThrough",
+        ));
+    }
+    Ok(Some(tracing))
+}
+
 /// Validate SnapStart: ApplyOn is one of None | PublishedVersions.
 fn validate_snap_start(input: &Value) -> Result<Option<Value>, AwsError> {
     let Some(snap) = input.get("SnapStart").cloned() else {
@@ -319,7 +341,7 @@ pub fn create_function(
         layers,
         vpc_config: input.get("VpcConfig").cloned(),
         dead_letter_config: input.get("DeadLetterConfig").cloned(),
-        tracing_config: input.get("TracingConfig").cloned(),
+        tracing_config: validate_tracing_config(input)?,
         kms_key_arn: opt_str(input, "KMSKeyArn").map(str::to_string),
         file_system_configs: input.get("FileSystemConfigs").cloned(),
         logging_config: input.get("LoggingConfig").cloned(),
@@ -491,8 +513,8 @@ pub fn update_function_configuration(
     if input.get("DeadLetterConfig").is_some() {
         f.dead_letter_config = input.get("DeadLetterConfig").cloned();
     }
-    if input.get("TracingConfig").is_some() {
-        f.tracing_config = input.get("TracingConfig").cloned();
+    if let Some(tracing) = validate_tracing_config(input)? {
+        f.tracing_config = Some(tracing);
     }
     if let Some(arn) = opt_str(input, "KMSKeyArn") {
         f.kms_key_arn = Some(arn.to_string());
