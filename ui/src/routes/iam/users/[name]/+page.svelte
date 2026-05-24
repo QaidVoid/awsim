@@ -26,13 +26,16 @@
 	import { DetailPage, DetailNavItem } from '$lib/components/service';
 	import EntityPoliciesEditor from '$lib/components/iam/entity-policies-editor.svelte';
 	import AccessKeysPanel from '$lib/components/iam/access-keys-panel.svelte';
+	import ConsolePasswordPanel from '$lib/components/iam/console-password-panel.svelte';
 	import Key from '@lucide/svelte/icons/key';
+	import KeyRound from '@lucide/svelte/icons/key-round';
 	import UsersRound from '@lucide/svelte/icons/users-round';
 	import FileBadge from '@lucide/svelte/icons/file-badge';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import X from '@lucide/svelte/icons/x';
 
 	const SECTIONS = [
+		{ id: 'security', label: 'Security', icon: KeyRound },
 		{ id: 'keys', label: 'Access keys', icon: Key },
 		{ id: 'groups', label: 'Groups', icon: UsersRound },
 		{ id: 'policies', label: 'Policies', icon: FileBadge }
@@ -50,7 +53,7 @@
 
 	function initialSection(): SectionId {
 		const tab = page.url.searchParams.get('section');
-		return SECTION_IDS.includes(tab ?? '') ? (tab as SectionId) : 'keys';
+		return SECTION_IDS.includes(tab ?? '') ? (tab as SectionId) : 'security';
 	}
 
 	$effect(() => {
@@ -191,7 +194,7 @@
 	{/snippet}
 
 	{#if user}
-		{#if active === 'keys'}
+		{#if active === 'security'}
 			<div class="overflow-y-auto p-6">
 				<dl class="mb-6 grid grid-cols-3 gap-x-4 gap-y-2 text-sm">
 					<dt class="text-muted-foreground">User ID</dt>
@@ -201,6 +204,10 @@
 					<dt class="text-muted-foreground">ARN</dt>
 					<dd class="col-span-2 break-all font-mono text-xs">{user.arn}</dd>
 				</dl>
+				<ConsolePasswordPanel {userName} />
+			</div>
+		{:else if active === 'keys'}
+			<div class="overflow-y-auto p-6">
 				<AccessKeysPanel {userName} />
 			</div>
 		{:else if active === 'groups'}

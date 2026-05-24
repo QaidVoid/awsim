@@ -1126,3 +1126,67 @@ export const ACTION_SUGGESTIONS: string[] = [
   "bedrock:InvokeModelWithResponseStream",
   "bedrock:Converse",
 ];
+// ---- Login profile (console password) ----
+
+export interface IamLoginProfile {
+  userName: string;
+  createDate: string;
+  passwordResetRequired: boolean;
+}
+
+export async function getLoginProfile(
+  userName: string,
+): Promise<IamLoginProfile | null> {
+  try {
+    const xml = await iamRequest("GetLoginProfile", { UserName: userName });
+    return {
+      userName: xmlValue(xml, "UserName") || userName,
+      createDate: xmlValue(xml, "CreateDate"),
+      passwordResetRequired:
+        (xmlValue(xml, "PasswordResetRequired") || "false") === "true",
+    };
+  } catch (e) {
+    // NoSuchEntity means no profile; treat as null instead of error.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("NoSuchEntity") || msg.includes("LoginProfile")) {
+      return null;
+    }
+    throw e;
+  }
+}
+
+export async function createLoginProfile(
+  userName: string,
+  password: string,
+  passwordResetRequired = false,
+): Promise<IamLoginProfile> {
+  const xml = await iamRequest("CreateLoginProfile", {
+    UserName: userName,
+    Password: password,
+    PasswordResetRequired: passwordResetRequired ? "true" : "false",
+  });
+  return {
+    userName: xmlValue(xml, "UserName") || userName,
+    createDate: xmlValue(xml, "CreateDate"),
+    passwordResetRequired:
+      (xmlValue(xml, "PasswordResetRequired") || "false") === "true",
+  };
+}
+
+export async function updateLoginProfile(
+  userName: string,
+  opts: { password?: string; passwordResetRequired?: boolean },
+): Promise<void> {
+  const params: Record<string, string> = { UserName: userName };
+  if (opts.password !== undefined) params["Password"] = opts.password;
+  if (opts.passwordResetRequired !== undefined) {
+    params["PasswordResetRequired"] = opts.passwordResetRequired
+      ? "true"
+      : "false";
+  }
+  await iamRequest("UpdateLoginProfile", params);
+}
+
+export async function deleteLoginProfile(userName: string): Promise<void> {
+  await iamRequest("DeleteLoginProfile", { UserName: userName });
+}
