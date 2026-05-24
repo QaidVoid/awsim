@@ -28,6 +28,40 @@ fn derive_aes_key(secret: &[u8]) -> [u8; 32] {
     out
 }
 
+/// AWS-documented EncryptionContext serialized-size limit, in bytes.
+/// Exceeding this on any encrypt-side call returns ValidationException.
+const ENCRYPTION_CONTEXT_MAX_BYTES: usize = 4096;
+
+/// Validate the caller-supplied EncryptionContext shape and size.
+///
+/// AWS rejects:
+/// - non-object payloads (must be `Map<String, String>`)
+/// - non-string values
+/// - serialized contexts above 4 KiB
+fn validate_encryption_context(ctx: Option<&Value>) -> Result<(), AwsError> {
+    let Some(val) = ctx else {
+        return Ok(());
+    };
+    let obj = val.as_object().ok_or_else(|| {
+        AwsError::validation("EncryptionContext must be an object of string-to-string pairs.")
+    })?;
+    let mut total = 0usize;
+    for (k, v) in obj {
+        let s = v.as_str().ok_or_else(|| {
+            AwsError::validation(format!(
+                "EncryptionContext value for key '{k}' must be a string."
+            ))
+        })?;
+        total = total.saturating_add(k.len()).saturating_add(s.len());
+    }
+    if total > ENCRYPTION_CONTEXT_MAX_BYTES {
+        return Err(AwsError::validation(format!(
+            "EncryptionContext is {total} bytes; maximum is {ENCRYPTION_CONTEXT_MAX_BYTES}."
+        )));
+    }
+    Ok(())
+}
+
 /// Serialize EncryptionContext into the canonical AAD bytes used by AWS
 /// KMS: keys sorted ascending, joined as `k1=v1&k2=v2&...`. Returns an
 /// empty Vec when the input is `None` or empty so the AEAD path stays
@@ -159,6 +193,7 @@ pub fn encrypt(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result
         return Err(error::key_pending_deletion(&key.key_id));
     }
 
+    validate_encryption_context(input.get("EncryptionContext"))?;
     let aad = encryption_context_aad(input.get("EncryptionContext"));
     let blob = aes_encrypt(&key.key_id, &key.secret, &plaintext, &aad)?;
     let ciphertext_b64 = BASE64.encode(&blob);
@@ -193,6 +228,7 @@ pub fn decrypt(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result
         return Err(error::key_pending_deletion(&key.key_id));
     }
 
+    validate_encryption_context(input.get("EncryptionContext"))?;
     let aad = encryption_context_aad(input.get("EncryptionContext"));
     let plaintext = aes_decrypt(&key.secret, &payload, &aad)?;
     let plaintext_b64 = BASE64.encode(&plaintext);
@@ -244,6 +280,7 @@ pub fn generate_data_key(
     data_key_bytes.truncate(data_key_len);
 
     let plaintext_b64 = BASE64.encode(&data_key_bytes);
+    validate_encryption_context(input.get("EncryptionContext"))?;
     let aad = encryption_context_aad(input.get("EncryptionContext"));
     let blob = aes_encrypt(&key.key_id, &key.secret, &data_key_bytes, &aad)?;
     let ciphertext_b64 = BASE64.encode(&blob);
@@ -325,6 +362,7 @@ pub fn re_encrypt(
         return Err(error::key_pending_deletion(&src_key.key_id));
     }
 
+    validate_encryption_context(input.get("SourceEncryptionContext"))?;
     let src_aad = encryption_context_aad(input.get("SourceEncryptionContext"));
     let plaintext = aes_decrypt(&src_key.secret, &payload, &src_aad)?;
 
@@ -344,6 +382,7 @@ pub fn re_encrypt(
     }
 
     // Re-encrypt with destination key
+    validate_encryption_context(input.get("DestinationEncryptionContext"))?;
     let dest_aad = encryption_context_aad(input.get("DestinationEncryptionContext"));
     let new_blob = aes_encrypt(&dest_key.key_id, &dest_key.secret, &plaintext, &dest_aad)?;
     let new_ciphertext_b64 = BASE64.encode(&new_blob);
