@@ -1,6 +1,12 @@
 # IAM Policy Enforcement
 
-AWSim ships with a real IAM policy evaluation engine (`awsim-iam-policy`) that implements AWS IAM authorization semantics. Enforcement is **opt-in** via the `AWSIM_IAM_ENFORCE` environment variable — by default, AWSim accepts credentials and policies but does not evaluate them (preserving backwards-compatible behavior).
+AWSim ships with a real IAM policy evaluation engine (`awsim-iam-policy`) that implements AWS IAM authorization semantics. Enforcement is **opt-in** via the `AWSIM_IAM_ENFORCE` environment variable. By default, AWSim accepts credentials and policies but does not evaluate them (preserving backwards-compatible behavior).
+
+This page covers the policy decision flow. For who can log into the
+admin UI and how SDK calls are required to carry a signed identity at
+all, see [Operator authentication](operator-auth.md). The three gates
+(`AWSIM_IAM_ENFORCE`, `AWSIM_REQUIRE_SIGNED_REQUESTS`,
+`AWSIM_REQUIRE_OPERATOR_AUTH`) are independent and compose.
 
 When enforcement is enabled, requests are evaluated against the full IAM decision flow: identity policies, resource policies, permissions boundaries, service control policies (SCPs), and session policies.
 

@@ -83,6 +83,7 @@ All services share the same `http://localhost:4566` endpoint; routing comes from
 | `--port` | `AWSIM_PORT` | `4566` | Listen port |
 | `--region` | `AWSIM_REGION` | `us-east-1` | Default region |
 | `--account-id` | `AWSIM_ACCOUNT_ID` | `000000000000` | Default account |
+| `--partition` | `AWSIM_PARTITION` | `aws` | AWS partition reflected in every emitted ARN. Use `aws-cn`, `aws-us-gov`, `aws-iso`, or `aws-iso-b` for non-commercial regions |
 | `--data-dir` | `AWSIM_DATA_DIR` | (none) | Persistence directory; omit for in-memory only |
 | `--log-level` | `AWSIM_LOG_LEVEL` | `info` | Log verbosity |
 | `--no-gc` | `AWSIM_NO_GC` | `false` | Disable startup orphan-blob GC for body stores |
@@ -90,6 +91,12 @@ All services share the same `http://localhost:4566` endpoint; routing comes from
 | `--max-blob-bytes` | `AWSIM_MAX_BLOB_BYTES` | (unbounded) | Per-service body store cap (FIFO eviction); applies to S3, Lambda, SQS, ECR |
 | `--max-concurrent-requests` | `AWSIM_MAX_CONCURRENT_REQUESTS` | `5000` | In-flight request cap; excess returns 503 |
 | (env-only) | `AWSIM_IAM_ENFORCE` | `false` | Turn on IAM policy enforcement on the gateway |
+| (env-only) | `AWSIM_REQUIRE_OPERATOR_AUTH` | `false` | Gate the admin UI + admin endpoints behind login. First boot prints a bootstrap token; `POST /_awsim/auth/setup` mints the root operator. See [docs/guide/operator-auth.md](docs/guide/operator-auth.md) |
+| (env-only) | `AWSIM_REQUIRE_SIGNED_REQUESTS` | `false` | Require every SDK call to carry a SigV4 access key resolvable to a known IAM user. Unsigned calls return `MissingAuthenticationTokenException`; unknown keys return `InvalidClientTokenId` |
+| (env-only) | `AWSIM_ADMIN_ACCESS_KEY` | (none) | Access key ID that bypasses IAM enforcement and the signed-request gate. Used for break-glass and bootstrap |
+| (env-only) | `AWSIM_TICK_INTERVAL_MS` | `1000` | How often the per-service tick loop fires (10 to 60000) |
+| (env-only) | `AWSIM_LIFECYCLE_FAST` | `false` | Collapse every observable resource-lifecycle delay to zero. Useful for CI |
+| (env-only) | `AWSIM_S3_LAX_MULTIPART_SIZE` | `false` | Skip the 5 MiB minimum-part-size check on `CompleteMultipartUpload` for tests that exercise the multipart flow with tiny parts |
 
 ## Admin console
 
@@ -106,6 +113,7 @@ Open `http://localhost:5173`.
 - [Configuration](docs/guide/configuration.md)
 - [Persistence](docs/guide/persistence.md)
 - [IAM enforcement](docs/guide/iam-enforcement.md)
+- [Operator authentication](docs/guide/operator-auth.md)
 - [Lambda execution](docs/guide/lambda-execution.md)
 - [API Gateway](docs/guide/api-gateway.md)
 - [Cognito OAuth](docs/guide/cognito-oauth.md)
