@@ -1,6 +1,7 @@
 pub mod arn;
 pub mod auth;
 pub mod authz;
+pub mod bearer_token;
 pub mod body;
 pub mod body_store;
 pub mod error;
