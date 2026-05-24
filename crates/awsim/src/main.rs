@@ -846,6 +846,7 @@ async fn async_main() -> Result<()> {
         let cw_metrics_for_shutdown = Arc::clone(&cw_metrics_service);
         let kinesis_for_shutdown = Arc::clone(&kinesis_service);
         let ses_for_shutdown = Arc::clone(&ses_service);
+        let workers_for_shutdown = state.workers.clone();
         tokio::spawn(async move {
             #[cfg(unix)]
             {
@@ -864,7 +865,10 @@ async fn async_main() -> Result<()> {
                 tokio::signal::ctrl_c().await.ok();
             }
 
-            info!("Shutdown signal received — saving snapshots...");
+            info!("Shutdown signal received - draining background workers + saving snapshots...");
+            workers_for_shutdown
+                .shutdown(awsim_core::tick::DEFAULT_SHUTDOWN_DEADLINE)
+                .await;
             pm_shutdown.save_all(&services_for_shutdown);
             if let Some(bytes) = billing_for_shutdown.store.snapshot_to_bytes()
                 && let Err(e) = pm_shutdown.save_snapshot("billing", &bytes)
@@ -1019,12 +1023,20 @@ async fn async_main() -> Result<()> {
     spawn_event_router(&state);
 
     // Spawn the per-service tick loop. Each ServiceHandler::tick is
-    // called once a second; services use it for lifecycle work that
-    // doesn't fit in the request path (DDB TTL, SQS visibility-timeout
-    // reclamation, S3 lifecycle, EventBridge scheduling, …). The
-    // default trait impl is a no-op so non-tick-aware services pay
-    // nothing.
-    awsim_core::gateway::spawn_tick_loop(state.clone(), std::time::Duration::from_secs(1));
+    // called once per interval; services use it for lifecycle work
+    // that doesn't fit in the request path (DDB TTL, SQS
+    // visibility-timeout reclamation, S3 lifecycle, EventBridge
+    // scheduling, ...). The default trait impl is a no-op so
+    // non-tick-aware services pay nothing.
+    let tick_interval_ms = std::env::var("AWSIM_TICK_INTERVAL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|n| (10..=60_000).contains(n))
+        .unwrap_or(1000);
+    awsim_core::gateway::spawn_tick_loop(
+        state.clone(),
+        std::time::Duration::from_millis(tick_interval_ms),
+    );
 
     // Spawn SQS->Lambda poller: periodically polls SQS queues for event source mappings.
     let poll_services = Arc::clone(&state.services);

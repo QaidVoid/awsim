@@ -57,9 +57,14 @@ pub struct AppState {
     pub events: RequestEventBus,
     /// Ring buffer of recent per-request detail captures (headers + bodies).
     pub request_details: RequestDetailStore,
-    /// Chaos engine — empty by default, populated by admin endpoints.
+    /// Chaos engine - empty by default, populated by admin endpoints.
     /// Evaluated before dispatch to inject synthetic errors / latency.
     pub chaos: Arc<awsim_chaos::ChaosEngine>,
+    /// Worker pool for slow background tasks (rotation invocation,
+    /// scheduler dispatch, ESM polling, etc.). Services enqueue
+    /// futures here instead of spawning ad-hoc tokio tasks so we get
+    /// one bounded place to drain on shutdown.
+    pub workers: crate::tick::WorkerPool,
 }
 
 impl AppState {
@@ -94,6 +99,7 @@ impl AppState {
             events: RequestEventBus::new(),
             request_details: RequestDetailStore::default(),
             chaos: Arc::new(awsim_chaos::ChaosEngine::new()),
+            workers: crate::tick::WorkerPool::new(),
         }
     }
 
@@ -167,6 +173,15 @@ pub fn spawn_tick_loop(
     state: AppState,
     interval: std::time::Duration,
 ) -> tokio::task::JoinHandle<()> {
+    use futures::FutureExt;
+    use std::panic::AssertUnwindSafe;
+
+    /// Upper bound on how long a single service's `tick` is allowed
+    /// to take before the loop moves on. Tick is documented as a
+    /// fast-path (sub-10ms typical); anything longer indicates the
+    /// service is doing work that belongs in the worker pool.
+    const PER_SERVICE_TICK_DEADLINE: std::time::Duration = std::time::Duration::from_millis(50);
+
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         // Skip the immediate first tick so a slow startup doesn't ripple
@@ -177,9 +192,31 @@ pub fn spawn_tick_loop(
             ticker.tick().await;
             // Snapshot the service list so a service registering / removing
             // mid-loop doesn't disturb iteration.
-            let services: Vec<Arc<dyn ServiceHandler>> = state.services.values().cloned().collect();
-            for svc in services {
-                svc.tick().await;
+            let services: Vec<(String, Arc<dyn ServiceHandler>)> = state
+                .services
+                .iter()
+                .map(|(name, svc)| (name.clone(), svc.clone()))
+                .collect();
+            for (name, svc) in services {
+                let tick_fut = AssertUnwindSafe(svc.tick()).catch_unwind();
+                match tokio::time::timeout(PER_SERVICE_TICK_DEADLINE, tick_fut).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(panic)) => {
+                        let msg = panic
+                            .downcast_ref::<String>()
+                            .cloned()
+                            .or_else(|| panic.downcast_ref::<&'static str>().map(|s| s.to_string()))
+                            .unwrap_or_else(|| "<non-string panic payload>".to_string());
+                        warn!(service = %name, panic = %msg, "service tick panicked");
+                    }
+                    Err(_) => {
+                        warn!(
+                            service = %name,
+                            budget_ms = PER_SERVICE_TICK_DEADLINE.as_millis() as u64,
+                            "service tick exceeded budget; consider moving slow work to AppState::workers"
+                        );
+                    }
+                }
             }
         }
     })
@@ -922,5 +959,118 @@ mod tick_tests {
 
         let count = counter.load(Ordering::SeqCst);
         assert!(count >= 2, "expected at least 2 ticks, got {count}");
+    }
+
+    /// Service whose `tick` panics every time. Used to verify the
+    /// tick loop catches the panic and keeps invoking other
+    /// services.
+    struct PanickingService;
+
+    #[async_trait::async_trait]
+    impl ServiceHandler for PanickingService {
+        fn service_name(&self) -> &str {
+            "panicky"
+        }
+        fn protocol(&self) -> Protocol {
+            Protocol::AwsJson1_1
+        }
+        async fn handle(
+            &self,
+            _: &str,
+            _: serde_json::Value,
+            _: &RequestContext,
+        ) -> Result<serde_json::Value, AwsError> {
+            Ok(serde_json::Value::Null)
+        }
+        async fn tick(&self) {
+            panic!("intentional test panic from tick");
+        }
+    }
+
+    #[tokio::test]
+    async fn panicking_service_does_not_stop_other_services_ticking() {
+        let counter = Arc::new(AtomicU64::new(0));
+        let counting = Arc::new(CountingService {
+            ticks: counter.clone(),
+        }) as Arc<dyn ServiceHandler>;
+        let panicky = Arc::new(PanickingService) as Arc<dyn ServiceHandler>;
+
+        let mut services: HashMap<String, Arc<dyn ServiceHandler>> = HashMap::new();
+        services.insert("counting".to_string(), counting);
+        services.insert("panicky".to_string(), panicky);
+
+        let mut state = AppState::new("us-east-1".to_string(), "000000000000".to_string());
+        state.services = Arc::new(services);
+
+        let handle = spawn_tick_loop(state, Duration::from_millis(30));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        handle.abort();
+
+        let count = counter.load(Ordering::SeqCst);
+        assert!(
+            count >= 3,
+            "counting service should have continued ticking despite sibling panic; got {count}"
+        );
+    }
+
+    /// Service whose `tick` sleeps past the per-handler deadline.
+    /// The loop should time it out and keep going.
+    struct SlowService {
+        ticks: Arc<AtomicU64>,
+    }
+
+    #[async_trait::async_trait]
+    impl ServiceHandler for SlowService {
+        fn service_name(&self) -> &str {
+            "slow"
+        }
+        fn protocol(&self) -> Protocol {
+            Protocol::AwsJson1_1
+        }
+        async fn handle(
+            &self,
+            _: &str,
+            _: serde_json::Value,
+            _: &RequestContext,
+        ) -> Result<serde_json::Value, AwsError> {
+            Ok(serde_json::Value::Null)
+        }
+        async fn tick(&self) {
+            self.ticks.fetch_add(1, Ordering::SeqCst);
+            // Far exceed the 50ms per-handler deadline.
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_service_is_timed_out_so_loop_keeps_running() {
+        let slow_ticks = Arc::new(AtomicU64::new(0));
+        let fast_ticks = Arc::new(AtomicU64::new(0));
+        let slow = Arc::new(SlowService {
+            ticks: slow_ticks.clone(),
+        }) as Arc<dyn ServiceHandler>;
+        let fast = Arc::new(CountingService {
+            ticks: fast_ticks.clone(),
+        }) as Arc<dyn ServiceHandler>;
+
+        let mut services: HashMap<String, Arc<dyn ServiceHandler>> = HashMap::new();
+        services.insert("slow".to_string(), slow);
+        services.insert("fast".to_string(), fast);
+
+        let mut state = AppState::new("us-east-1".to_string(), "000000000000".to_string());
+        state.services = Arc::new(services);
+
+        let handle = spawn_tick_loop(state, Duration::from_millis(80));
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        handle.abort();
+
+        // Slow service starts each tick (increments before sleep) but
+        // is cut off; fast service should accumulate multiple ticks
+        // because the loop is not stuck waiting.
+        let fast = fast_ticks.load(Ordering::SeqCst);
+        assert!(
+            fast >= 3,
+            "fast service should keep ticking past the slow one; got {fast}"
+        );
     }
 }

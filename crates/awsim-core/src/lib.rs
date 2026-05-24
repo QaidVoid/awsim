@@ -13,6 +13,7 @@ pub mod request_detail;
 pub mod request_event;
 pub mod router;
 pub mod state;
+pub mod tick;
 
 pub use authz::{
     AuthzEngine, GrantLookup, NoopPrincipalLookup, PrincipalLookup, ResolvedPrincipal,
@@ -36,6 +37,7 @@ pub use request_detail::{
 pub use request_event::{RequestEvent, RequestEventBus};
 pub use router::{DEFAULT_PARTITION, RequestContext};
 pub use state::{AccountRegionStore, Snapshottable};
+pub use tick::WorkerPool;
 
 use bytes::Bytes;
 use futures::stream::BoxStream;
