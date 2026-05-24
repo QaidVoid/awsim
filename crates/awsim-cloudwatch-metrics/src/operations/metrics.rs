@@ -81,6 +81,19 @@ pub fn put_metric_data(
         .and_then(Value::as_array)
         .ok_or_else(|| AwsError::bad_request("InvalidParameterValue", "MetricData is required"))?;
 
+    // AWS documents a per-request cap of 1000 MetricData entries.
+    // Beyond that, real CloudWatch returns InvalidParameterValue.
+    const MAX_METRIC_DATA_PER_REQUEST: usize = 1000;
+    if metric_data.len() > MAX_METRIC_DATA_PER_REQUEST {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValue",
+            format!(
+                "MetricData has {} entries; the maximum allowed per PutMetricData request is {MAX_METRIC_DATA_PER_REQUEST}.",
+                metric_data.len()
+            ),
+        ));
+    }
+
     let mut rows: Vec<MetricDatumRow> = Vec::with_capacity(metric_data.len());
 
     for datum in metric_data {
