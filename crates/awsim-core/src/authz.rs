@@ -121,6 +121,13 @@ impl AuthzEngine {
         self.admin_access_key.as_deref() == Some(key)
     }
 
+    /// Public mirror of [`Self::is_admin_key`] for the gateway's
+    /// signed-request gate, which needs to let the admin key
+    /// through even when no IAM user maps to it (bootstrap path).
+    pub fn is_admin_access_key(&self, key: &str) -> bool {
+        self.is_admin_key(key)
+    }
+
     pub fn check(
         &self,
         ctx: &RequestContext,

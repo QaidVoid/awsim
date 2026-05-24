@@ -169,6 +169,17 @@ struct ProcessMeta {
 ///
 /// Returns the [`tokio::task::JoinHandle`] so callers can cancel the
 /// loop on shutdown if they want to.
+/// Cached once-per-process read of `AWSIM_REQUIRE_SIGNED_REQUESTS`.
+fn require_signed_requests_enabled() -> bool {
+    use std::sync::OnceLock;
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("AWSIM_REQUIRE_SIGNED_REQUESTS")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    })
+}
+
 pub fn spawn_tick_loop(
     state: AppState,
     interval: std::time::Duration,
@@ -483,6 +494,45 @@ async fn process_request(
     meta.region = region.clone();
     meta.account_id = account_id.clone();
     meta.access_key = access_key.clone();
+
+    // 1b. Enforce signed-request mode when configured. The default
+    // stays permissive so existing tests / dev workflows aren't
+    // broken; flipping AWSIM_REQUIRE_SIGNED_REQUESTS=true makes the
+    // gateway require every call to carry a SigV4 signature whose
+    // access key resolves to a known IAM principal. Otherwise the
+    // call is rejected with the same InvalidClientTokenId AWS
+    // returns for stale or unknown keys.
+    if require_signed_requests_enabled() {
+        let protocol = protocol::detect_protocol(headers, body).unwrap_or(Protocol::RestJson1);
+        match access_key.as_deref() {
+            None => {
+                return Err((
+                    protocol,
+                    AwsError::bad_request(
+                        "MissingAuthenticationTokenException",
+                        "Request must be signed; no Authorization header found.",
+                    ),
+                ));
+            }
+            Some(key)
+                if !state.authz.is_admin_access_key(key)
+                    && state
+                        .authz
+                        .principal_lookup
+                        .resolve_access_key(key)
+                        .is_none() =>
+            {
+                return Err((
+                    protocol,
+                    AwsError::bad_request(
+                        "InvalidClientTokenId",
+                        "The security token included in the request is invalid.",
+                    ),
+                ));
+            }
+            _ => {}
+        }
+    }
 
     // 2. Find the service handler
     let mut handler = state.services.get(&service_name).ok_or_else(|| {
