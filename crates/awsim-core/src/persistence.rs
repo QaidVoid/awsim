@@ -83,6 +83,13 @@ impl PersistenceManager {
     }
 
     /// Restore snapshots for all services that support it.
+    ///
+    /// Runs in two passes: every service is `restore`d first, then
+    /// every service's `rehydrate` is invoked. The split lets a
+    /// service that reads peer state at rehydration time (Lambda
+    /// event-source-mapping consulting the restored SQS queues,
+    /// Pipes restarting STARTING workers, ACM re-arming the 72h
+    /// validation timer, etc.) see a fully-restored neighbour.
     pub fn restore_all(
         &self,
         services: &std::collections::HashMap<String, std::sync::Arc<dyn crate::ServiceHandler>>,
@@ -92,6 +99,11 @@ impl PersistenceManager {
                 && let Err(e) = handler.restore(&data)
             {
                 tracing::warn!(service = %name, error = %e, "Failed to restore snapshot");
+            }
+        }
+        for (name, handler) in services {
+            if let Err(e) = handler.rehydrate() {
+                tracing::warn!(service = %name, error = %e, "Rehydrate hook failed");
             }
         }
     }

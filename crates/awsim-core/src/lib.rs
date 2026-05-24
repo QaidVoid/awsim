@@ -137,6 +137,27 @@ pub trait ServiceHandler: Send + Sync {
         Ok(())
     }
 
+    /// Called after every service has been restored from its
+    /// snapshot, before the gateway begins serving traffic.
+    ///
+    /// Use this to re-arm timers, restart event-source-mapping
+    /// pollers, and re-register tick-driven workers that don't
+    /// persist as data (because they are derivable from the
+    /// already-restored state). The default implementation is a
+    /// no-op so services that don't have background work pay
+    /// nothing.
+    ///
+    /// Two ordering guarantees the gateway makes:
+    /// - Every service's [`Self::restore`] completes before any
+    ///   service's `rehydrate` is invoked, so cross-service
+    ///   wiring (Lambda event source mappings reading SQS state,
+    ///   say) sees the fully restored peer.
+    /// - No request is dispatched until every service's
+    ///   `rehydrate` returns.
+    fn rehydrate(&self) -> Result<(), String> {
+        Ok(())
+    }
+
     fn iam_action(&self, _operation: &str) -> Option<String> {
         None
     }
