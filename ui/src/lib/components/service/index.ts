@@ -7,3 +7,4 @@ export { default as EmptyState } from "./empty-state.svelte";
 export { default as LoadingState } from "./loading-state.svelte";
 export { default as ErrorState } from "./error-state.svelte";
 export { default as ListSkeleton } from "./list-skeleton.svelte";
+export { default as PermissionDeniedState } from "./permission-denied-state.svelte";
