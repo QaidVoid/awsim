@@ -92,9 +92,16 @@ async fn start_server() -> String {
     let lambda_routes = lambda.routes();
     state.register(Arc::new(lambda), lambda_routes);
 
+    // Lift axum's default 2 MiB body cap so S3 multipart uploads
+    // with the AWS-required 5 MiB minimum part size go through.
+    // Production wires a similar cap on the bucket+key route in
+    // main.rs; the test server mirrors it across all routes since
+    // every test goes through `.fallback` rather than a dedicated
+    // S3 router.
     let app = axum::Router::new()
         .route("/_awsim/health", axum::routing::get(|| async { "ok" }))
         .fallback(awsim_core::gateway::handle_request)
+        .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024))
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
 
@@ -620,14 +627,25 @@ async fn test_s3_multipart_upload() {
         .expect("CreateMultipartUpload failed");
     let upload_id = create.upload_id().expect("upload_id missing");
 
-    // Upload parts
+    // Upload parts. Real S3 enforces a 5 MiB minimum on every part
+    // except the last: a 14-byte non-final part is rejected with
+    // EntityTooSmall, and AWSim mirrors that. Build part 1 at 5 MiB
+    // so the upload is AWS-correct; part 2 can stay tiny because it
+    // is the final part.
+    const PART_SIZE: usize = 5 * 1024 * 1024;
+    let mut part1_body = vec![b'a'; PART_SIZE];
+    // Make the last byte of part 1 distinguishable from part 2 so
+    // the assembled assertion still verifies ordering.
+    part1_body[PART_SIZE - 1] = b'1';
+    let part2_body: &[u8] = b"part two data";
+
     let part1 = client
         .upload_part()
         .bucket("multipart-test")
         .key("large-file.bin")
         .upload_id(upload_id)
         .part_number(1)
-        .body(ByteStream::from_static(b"part one data "))
+        .body(ByteStream::from(part1_body.clone()))
         .send()
         .await
         .expect("UploadPart 1 failed");
@@ -686,9 +704,16 @@ async fn test_s3_multipart_upload() {
         .into_bytes();
 
     assert_eq!(
-        body.as_ref(),
-        b"part one data part two data",
-        "assembled body does not match"
+        body.len(),
+        PART_SIZE + part2_body.len(),
+        "assembled length should be part1 + part2"
+    );
+    assert_eq!(body[0], b'a', "part 1 leading byte");
+    assert_eq!(body[PART_SIZE - 1], b'1', "part 1 trailing marker byte");
+    assert_eq!(
+        &body[PART_SIZE..],
+        part2_body,
+        "part 2 should follow part 1 verbatim"
     );
 }
 
