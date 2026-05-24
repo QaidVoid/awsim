@@ -101,7 +101,14 @@ impl PrincipalLookup for IamPrincipalLookup {
                     account: account_id.clone(),
                     identity_policies,
                     permissions_boundary,
-                    is_root: false,
+                    // The user named "root" is the account owner that
+                    // first-run setup provisions. Real AWS treats root
+                    // as outside the IAM principal hierarchy: its
+                    // credentials always allow everything, regardless
+                    // of attached policies. AWSim mirrors that by
+                    // flagging the principal so the AuthzEngine
+                    // short-circuits at the root-bypass check.
+                    is_root: user.user_name == crate::ROOT_USERNAME,
                     tags: user.tags.clone(),
                     session_policy: None,
                 });
