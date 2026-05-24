@@ -1,0 +1,68 @@
+@import 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap';
+
+:root {
+  --awsim-orange: #ff9900;
+  --awsim-orange-dim: #cc7a00;
+  --awsim-panel: #0d0c0a;
+  --awsim-edge: rgba(255, 153, 0, 0.18);
+  --awsim-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --awsim-sans: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+}
+
+/* Force the home page into a CRT/dark aesthetic regardless of system pref */
+html:has(.motd-home) {
+  background: #07060a;
+  color-scheme: dark;
+}
+html:has(.motd-home) body {
+  background:
+    radial-gradient(900px 600px at 80% -10%, rgba(255,153,0,0.08), transparent 60%),
+    radial-gradient(700px 500px at 0% 110%, rgba(92,194,255,0.05), transparent 60%),
+    #07060a;
+  font-family: var(--awsim-sans);
+}
+
+/* Hide vitepress's default chrome on the home page only */
+html:has(.motd-home) .VPNav,
+html:has(.motd-home) .VPLocalNav,
+html:has(.motd-home) .VPFooter {
+  display: none !important;
+}
+html:has(.motd-home) .VPContent {
+  padding: 0 !important;
+}
+
+/* Inner pages: subtle awsim accent on default theme */
+:root {
+  --vp-c-brand-1: #ff9900;
+  --vp-c-brand-2: #ffae33;
+  --vp-c-brand-3: #cc7a00;
+  --vp-c-brand-soft: rgba(255, 153, 0, 0.14);
+  --vp-font-family-base: 'Space Grotesk', system-ui, sans-serif;
+  --vp-font-family-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* Inner page navbar tweak - small awsim prompt feel */
+.VPNavBarTitle .title {
+  font-family: var(--awsim-mono) !important;
+  letter-spacing: 0.02em;
+}
+.VPNavBarTitle .title::before {
+  content: '$ ';
+  color: var(--awsim-orange);
+}
+
+/* Inner page sidebar headers */
+.VPSidebarItem.level-0 > .item > .text {
+  font-family: var(--awsim-mono) !important;
+  font-size: 12px !important;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--awsim-orange) !important;
+}
+
+/* Selected text glow inside the dark hero */
+.motd-home ::selection {
+  background: rgba(255, 153, 0, 0.4);
+  color: #fff;
+}
