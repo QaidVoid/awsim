@@ -16,10 +16,12 @@ export interface AuthSession {
 
 class AuthStore {
 	session = $state<AuthSession | null | undefined>(undefined);
+	setupRequired = $state(false);
 
 	async refresh(): Promise<void> {
 		const result = await whoami();
-		this.session = result ?? null;
+		this.session = result.session;
+		this.setupRequired = result.setupRequired;
 	}
 
 	async signOut(): Promise<void> {

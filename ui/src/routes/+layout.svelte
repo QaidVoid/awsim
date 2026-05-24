@@ -87,7 +87,14 @@
 		// /login itself.
 		auth.refresh()
 			.then(() => {
-				if (auth.session === null && !page.url.pathname.endsWith('/login')) {
+				const path = page.url.pathname;
+				if (auth.setupRequired && !path.endsWith('/setup')) {
+					goto(route('/setup'));
+				} else if (
+					auth.session === null &&
+					!auth.setupRequired &&
+					!path.endsWith('/login')
+				) {
 					goto(route('/login'));
 				}
 			})
