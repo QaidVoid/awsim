@@ -11,6 +11,19 @@ pub fn create_cluster(
     let name = input["name"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "name is required"))?;
+    validate_cluster_name(name)?;
+    let role_arn = input["roleArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "roleArn is required when creating an EKS cluster.",
+        )
+    })?;
+    if role_arn.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "roleArn must not be empty.",
+        ));
+    }
     if state.clusters.contains_key(name) {
         return Err(AwsError::conflict(
             "ResourceInUseException",
@@ -26,7 +39,7 @@ pub fn create_cluster(
         arn: arn.clone(),
         version: input["version"].as_str().unwrap_or("1.29").to_string(),
         endpoint: format!("https://{name}.eks.{}.amazonaws.com", ctx.region),
-        role_arn: input["roleArn"].as_str().unwrap_or("").to_string(),
+        role_arn: role_arn.to_string(),
         resources_vpc_config: input["resourcesVpcConfig"].clone(),
         kubernetes_network_config: input["kubernetesNetworkConfig"].clone(),
         logging: input["logging"].clone(),
@@ -141,4 +154,73 @@ pub(crate) fn serialize_cluster(c: &Cluster) -> Value {
         "platformVersion": c.platform_version,
         "tags": c.tags,
     })
+}
+
+/// Validate an EKS cluster name against AWS's documented constraint:
+/// 1-100 characters from `[0-9A-Za-z][A-Za-z0-9-_]*`. Real EKS
+/// rejects names starting with a hyphen / underscore or containing
+/// any other punctuation with InvalidParameterException.
+fn validate_cluster_name(name: &str) -> Result<(), AwsError> {
+    if name.is_empty() || name.len() > 100 {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!(
+                "Cluster name length must be between 1 and 100, got {}.",
+                name.len()
+            ),
+        ));
+    }
+    let mut chars = name.chars();
+    let first = chars.next().unwrap();
+    if !first.is_ascii_alphanumeric() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!("Cluster name '{name}' must start with an ASCII letter or digit."),
+        ));
+    }
+    for c in chars {
+        if !c.is_ascii_alphanumeric() && c != '-' && c != '_' {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!(
+                    "Cluster name '{name}' contains invalid character '{c}'. \
+                     Allowed: alphanumerics, hyphen, underscore."
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod cluster_name_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_documented_names() {
+        validate_cluster_name("prod").unwrap();
+        validate_cluster_name("prod-1").unwrap();
+        validate_cluster_name("a_b_c").unwrap();
+        validate_cluster_name("123abc").unwrap();
+    }
+
+    #[test]
+    fn rejects_leading_punctuation() {
+        assert!(validate_cluster_name("-prod").is_err());
+        assert!(validate_cluster_name("_prod").is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_characters() {
+        assert!(validate_cluster_name("prod.1").is_err());
+        assert!(validate_cluster_name("prod/1").is_err());
+        assert!(validate_cluster_name("prod 1").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_and_too_long() {
+        assert!(validate_cluster_name("").is_err());
+        let long = "a".repeat(101);
+        assert!(validate_cluster_name(&long).is_err());
+    }
 }
