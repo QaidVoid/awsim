@@ -127,6 +127,17 @@ pub fn set_queue_attributes(
                 format!("Unknown attribute name: {k}"),
             ));
         }
+        // FifoQueue is fixed at queue creation and cannot be flipped
+        // afterwards. Real SQS rejects with InvalidAttributeName even
+        // though the name itself is recognised - matches the AWS
+        // contract that swapping queue type after the fact is
+        // unsupported.
+        if k == "FifoQueue" {
+            return Err(AwsError::bad_request(
+                "InvalidAttributeName",
+                "FifoQueue cannot be modified after queue creation.",
+            ));
+        }
         if let Some(s) = v.as_str() {
             queue.attributes.insert(k.clone(), s.to_string());
         }
@@ -191,6 +202,21 @@ mod tests {
         assert_eq!(attrs["KmsMasterKeyId"], json!("alias/aws/sqs"));
         assert_eq!(attrs["KmsDataKeyReusePeriodSeconds"], json!("300"));
         assert_eq!(attrs["SqsManagedSseEnabled"], json!("true"));
+    }
+
+    #[test]
+    fn set_queue_attributes_rejects_fifo_queue_mutation() {
+        let state = standard_queue();
+        let err = set_queue_attributes(
+            &state,
+            &serde_json::json!({
+                "QueueUrl": "http://localhost/queue/q",
+                "Attributes": {"FifoQueue": "true"}
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidAttributeName");
     }
 
     #[test]
