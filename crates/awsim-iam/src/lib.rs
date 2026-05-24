@@ -4,6 +4,12 @@ mod ids;
 mod operations;
 pub mod state;
 
+/// Re-export the password-verification helper so the operator-auth
+/// flow in the awsim binary can authenticate IAM users against the
+/// bcrypt hash stored on their LoginProfile without each caller
+/// having to depend on the private `operations` module layout.
+pub use operations::users::verify_password;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;

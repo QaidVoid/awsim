@@ -27,6 +27,7 @@ mod bill_cli;
 mod chaos_cli;
 mod integrations;
 mod named_snapshots;
+mod operator_auth;
 mod proxy;
 mod runtime_config;
 mod seed;
@@ -1152,6 +1153,25 @@ async fn async_main() -> Result<()> {
     // before dispatching). Other methods on the same path fall through
     // to the universal gateway with the smaller `--max-body-bytes` cap.
     let s3_upload_limit = cli.max_s3_upload_bytes;
+    let operator_auth_state = operator_auth::OperatorAuthState {
+        iam: Arc::clone(&iam_service),
+        default_account_id: cli.account_id.clone(),
+        default_region: cli.region.clone(),
+    };
+    let auth_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/auth/login",
+            axum::routing::post(operator_auth::login),
+        )
+        .route(
+            "/_awsim/auth/logout",
+            axum::routing::post(operator_auth::logout),
+        )
+        .route(
+            "/_awsim/auth/whoami",
+            axum::routing::get(operator_auth::whoami),
+        )
+        .with_state(operator_auth_state);
     let main_router: axum::Router<()> = axum::Router::new()
         .route("/_awsim/health", axum::routing::get(admin::health))
         .route("/_awsim/services", axum::routing::get(admin::list_services))
@@ -1171,6 +1191,7 @@ async fn async_main() -> Result<()> {
             "/_awsim/requests/{id}/replay",
             axum::routing::post(admin::replay_request),
         )
+        .layer(axum::middleware::from_fn(operator_auth::require_auth))
         // Wide-open catch-all on `/{bucket}/{*key}`. Hands every
         // method to the gateway (which routes to the right service
         // by inspecting headers / path / verb internally) and
@@ -1192,7 +1213,8 @@ async fn async_main() -> Result<()> {
                 .layer(axum::extract::DefaultBodyLimit::max(s3_upload_limit)),
         )
         .fallback(awsim_core::gateway::handle_request)
-        .with_state(state.clone());
+        .with_state(state.clone())
+        .merge(auth_router);
 
     // Build the OpenSearch (Elasticsearch-compatible) sub-router.
     // Nest under `/opensearch` so it doesn't collide with AWS routes.
