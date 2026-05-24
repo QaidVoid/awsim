@@ -46,6 +46,7 @@ pub fn create_db_instance(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let identifier = require_str(input, "DBInstanceIdentifier")?;
+    validate_db_identifier(identifier)?;
     let instance_class = require_str(input, "DBInstanceClass")?;
     let engine = require_str(input, "Engine")?;
     let master_username = require_str(input, "MasterUsername")?;
@@ -56,6 +57,14 @@ pub fn create_db_instance(
     let multi_az = opt_bool(input, "MultiAZ").unwrap_or(false);
     let publicly_accessible = opt_bool(input, "PubliclyAccessible").unwrap_or(false);
     let storage_type = opt_str(input, "StorageType").unwrap_or("gp2").to_string();
+    if !matches!(
+        storage_type.as_str(),
+        "gp2" | "gp3" | "io1" | "io2" | "standard"
+    ) {
+        return Err(invalid_parameter(format!(
+            "StorageType '{storage_type}' must be one of: gp2, gp3, io1, io2, standard."
+        )));
+    }
 
     // Validate engine
     match engine {
@@ -244,4 +253,91 @@ pub fn reboot_db_instance(
     inst.status = "available".to_string();
     let result = instance_to_value(&inst);
     Ok(json!({ "DBInstance": result }))
+}
+
+/// Validate an RDS DBInstanceIdentifier against AWS's constraint:
+/// 1-63 characters, must start with a letter, only lowercase letters,
+/// digits, and hyphens; no consecutive hyphens and no trailing
+/// hyphen. AWS rejects mismatches with InvalidParameterValue at
+/// CreateDBInstance.
+fn validate_db_identifier(name: &str) -> Result<(), AwsError> {
+    if name.is_empty() || name.len() > 63 {
+        return Err(invalid_parameter(format!(
+            "DBInstanceIdentifier length must be between 1 and 63, got {}.",
+            name.len()
+        )));
+    }
+    let bytes = name.as_bytes();
+    if !bytes[0].is_ascii_alphabetic() {
+        return Err(invalid_parameter(format!(
+            "DBInstanceIdentifier '{name}' must start with a letter."
+        )));
+    }
+    if name.ends_with('-') {
+        return Err(invalid_parameter(format!(
+            "DBInstanceIdentifier '{name}' must not end with a hyphen."
+        )));
+    }
+    let mut prev_hyphen = false;
+    for &b in bytes {
+        let is_letter = b.is_ascii_alphabetic();
+        let is_digit = b.is_ascii_digit();
+        let is_hyphen = b == b'-';
+        if !is_letter && !is_digit && !is_hyphen {
+            return Err(invalid_parameter(format!(
+                "DBInstanceIdentifier '{name}' contains invalid character '{}'. \
+                 Allowed: letters, digits, hyphens.",
+                b as char
+            )));
+        }
+        if is_hyphen && prev_hyphen {
+            return Err(invalid_parameter(format!(
+                "DBInstanceIdentifier '{name}' must not contain consecutive hyphens."
+            )));
+        }
+        prev_hyphen = is_hyphen;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod db_identifier_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_documented_shapes() {
+        validate_db_identifier("prod").unwrap();
+        validate_db_identifier("Prod-db-1").unwrap();
+        validate_db_identifier("a").unwrap();
+    }
+
+    #[test]
+    fn rejects_leading_digit_or_hyphen() {
+        assert!(validate_db_identifier("1prod").is_err());
+        assert!(validate_db_identifier("-prod").is_err());
+    }
+
+    #[test]
+    fn rejects_trailing_hyphen() {
+        assert!(validate_db_identifier("prod-").is_err());
+    }
+
+    #[test]
+    fn rejects_consecutive_hyphens() {
+        assert!(validate_db_identifier("prod--db").is_err());
+    }
+
+    #[test]
+    fn rejects_disallowed_chars() {
+        assert!(validate_db_identifier("prod_db").is_err());
+        assert!(validate_db_identifier("prod.db").is_err());
+        assert!(validate_db_identifier("prod db").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_and_too_long() {
+        assert!(validate_db_identifier("").is_err());
+        let long = "a".repeat(64);
+        assert!(validate_db_identifier(&long).is_err());
+    }
 }
