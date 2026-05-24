@@ -38,6 +38,7 @@
 	let name = $state('');
 	let value = $state('');
 	let type = $state<ParameterType>('String');
+	let tier = $state<'Standard' | 'Advanced' | 'Intelligent-Tiering'>('Standard');
 	let description = $state('');
 	let revealed = $state(false);
 	let detail = $state<ParameterValue | null>(null);
@@ -55,6 +56,7 @@
 			name = '';
 			value = '';
 			type = 'String';
+			tier = 'Standard';
 			description = '';
 			return;
 		}
@@ -87,6 +89,7 @@
 				name: name.trim(),
 				value,
 				type,
+				tier,
 				description: description.trim() || undefined,
 				overwrite: true
 			});
@@ -167,6 +170,31 @@
 							Encrypted at rest with the default KMS key.
 						</p>
 					{/if}
+				</div>
+
+				<div class="flex flex-col gap-1">
+					<Label for="ssm-tier">Tier</Label>
+					<Select
+						type="single"
+						value={tier}
+						onValueChange={(v) =>
+							(tier = v as 'Standard' | 'Advanced' | 'Intelligent-Tiering')}
+					>
+						<SelectTrigger id="ssm-tier" class="w-full">
+							{tier}
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="Standard" label="Standard">Standard</SelectItem>
+							<SelectItem value="Advanced" label="Advanced">Advanced</SelectItem>
+							<SelectItem value="Intelligent-Tiering" label="Intelligent-Tiering">
+								Intelligent-Tiering
+							</SelectItem>
+						</SelectContent>
+					</Select>
+					<p class="text-[11px] text-muted-foreground">
+						Standard caps value size at 4 KiB. Advanced and Intelligent-Tiering
+						allow up to 8 KiB and unlock parameter policies.
+					</p>
 				</div>
 
 				<div class="flex flex-col gap-1">

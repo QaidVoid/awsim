@@ -213,7 +213,7 @@ export interface PutParameterInput {
   type: ParameterType;
   description?: string;
   overwrite?: boolean;
-  tier?: "Standard" | "Advanced";
+  tier?: "Standard" | "Advanced" | "Intelligent-Tiering";
 }
 
 export async function putParameter(
