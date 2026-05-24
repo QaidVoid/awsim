@@ -389,6 +389,7 @@ pub fn list_groups_for_user(state: &IamState, input: &Value) -> Result<Value, Aw
 
 pub fn create_login_profile(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
+    let password = require_str(input, "Password")?;
     let password_reset_required = input
         .get("PasswordResetRequired")
         .and_then(|v| v.as_bool())
@@ -403,10 +404,14 @@ pub fn create_login_profile(state: &IamState, input: &Value) -> Result<Value, Aw
         return Err(entity_already_exists("LoginProfile", user_name));
     }
 
+    enforce_password_policy(state, password)?;
+    let hash = hash_password(password)?;
+
     let profile = LoginProfile {
         user_name: user_name.to_string(),
         create_date: now_iso8601(),
         password_reset_required,
+        password_hash: Some(hash),
     };
 
     let result = json!({
@@ -458,9 +463,93 @@ pub fn update_login_profile(state: &IamState, input: &Value) -> Result<Value, Aw
     if let Some(reset) = input.get("PasswordResetRequired").and_then(|v| v.as_bool()) {
         profile.password_reset_required = reset;
     }
-    // Password itself is not stored (emulator doesn't validate passwords).
+    if let Some(new_password) = opt_str(input, "Password") {
+        drop(profile);
+        enforce_password_policy(state, new_password)?;
+        let hash = hash_password(new_password)?;
+        let mut profile = state
+            .login_profiles
+            .get_mut(user_name)
+            .ok_or_else(|| no_such_entity("LoginProfile", user_name))?;
+        profile.password_hash = Some(hash);
+    }
 
     Ok(json!({}))
+}
+
+/// Verify a user-supplied plaintext password against the stored
+/// bcrypt hash for `user_name`. Returns `Ok(())` on match,
+/// `AccessDeniedException` on no profile / no hash / bad password.
+pub fn verify_password(state: &IamState, user_name: &str, plaintext: &str) -> Result<(), AwsError> {
+    let profile = state
+        .login_profiles
+        .get(user_name)
+        .ok_or_else(|| AwsError::access_denied("Invalid credentials."))?;
+    let hash = profile
+        .password_hash
+        .as_ref()
+        .ok_or_else(|| AwsError::access_denied("Invalid credentials."))?;
+    match bcrypt::verify(plaintext, hash) {
+        Ok(true) => Ok(()),
+        _ => Err(AwsError::access_denied("Invalid credentials.")),
+    }
+}
+
+fn hash_password(plaintext: &str) -> Result<String, AwsError> {
+    bcrypt::hash(plaintext, bcrypt::DEFAULT_COST)
+        .map_err(|_| AwsError::internal("Failed to hash password"))
+}
+
+/// Validate `password` against the account's password policy (if set).
+///
+/// AWS rejects passwords that do not meet the active policy with
+/// `PasswordPolicyViolation`. The default policy permits any
+/// non-empty string, matching the AWS console default.
+fn enforce_password_policy(state: &IamState, password: &str) -> Result<(), AwsError> {
+    let guard = state.account_password_policy.lock().unwrap();
+    let policy = match guard.as_ref() {
+        Some(p) => p.clone(),
+        None => return Ok(()),
+    };
+    drop(guard);
+
+    let len = password.chars().count();
+    let min = policy.minimum_password_length as usize;
+    if len < min {
+        return Err(AwsError::bad_request(
+            "PasswordPolicyViolation",
+            format!("Password must be at least {min} characters."),
+        ));
+    }
+    if policy.require_uppercase_characters && !password.chars().any(|c| c.is_ascii_uppercase()) {
+        return Err(AwsError::bad_request(
+            "PasswordPolicyViolation",
+            "Password must contain at least one uppercase letter.",
+        ));
+    }
+    if policy.require_lowercase_characters && !password.chars().any(|c| c.is_ascii_lowercase()) {
+        return Err(AwsError::bad_request(
+            "PasswordPolicyViolation",
+            "Password must contain at least one lowercase letter.",
+        ));
+    }
+    if policy.require_numbers && !password.chars().any(|c| c.is_ascii_digit()) {
+        return Err(AwsError::bad_request(
+            "PasswordPolicyViolation",
+            "Password must contain at least one digit.",
+        ));
+    }
+    if policy.require_symbols
+        && !password
+            .chars()
+            .any(|c| !c.is_ascii_alphanumeric() && !c.is_whitespace())
+    {
+        return Err(AwsError::bad_request(
+            "PasswordPolicyViolation",
+            "Password must contain at least one symbol.",
+        ));
+    }
+    Ok(())
 }
 
 pub fn get_access_key_last_used(state: &IamState, input: &Value) -> Result<Value, AwsError> {
@@ -521,9 +610,22 @@ pub fn update_access_key(state: &IamState, input: &Value) -> Result<Value, AwsEr
     Ok(json!({}))
 }
 
-pub fn change_password(_state: &IamState, input: &Value) -> Result<Value, AwsError> {
-    let _old = require_str(input, "OldPassword")?;
-    let _new = require_str(input, "NewPassword")?;
+pub fn change_password(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+    let old_password = require_str(input, "OldPassword")?;
+    let new_password = require_str(input, "NewPassword")?;
+    let user_name = require_str(input, "UserName")?;
+
+    verify_password(state, user_name, old_password)?;
+    enforce_password_policy(state, new_password)?;
+    let hash = hash_password(new_password)?;
+
+    let mut profile = state
+        .login_profiles
+        .get_mut(user_name)
+        .ok_or_else(|| no_such_entity("LoginProfile", user_name))?;
+    profile.password_hash = Some(hash);
+    profile.password_reset_required = false;
+
     Ok(json!({}))
 }
 
@@ -565,4 +667,142 @@ pub fn delete_login_profile(state: &IamState, input: &Value) -> Result<Value, Aw
         .ok_or_else(|| no_such_entity("LoginProfile", user_name))?;
 
     Ok(json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AccountPasswordPolicy;
+
+    fn state_with_user(user: &str) -> IamState {
+        let state = IamState::default();
+        state.users.insert(
+            user.to_string(),
+            User {
+                user_name: user.to_string(),
+                user_id: "AIDA0000".into(),
+                arn: format!("arn:aws:iam::000000000000:user/{user}"),
+                path: "/".into(),
+                create_date: now_iso8601(),
+                tags: HashMap::new(),
+                access_keys: Vec::new(),
+                attached_policies: Vec::new(),
+                inline_policies: HashMap::new(),
+                groups: Vec::new(),
+                mfa_devices: Vec::new(),
+                ssh_public_keys: Vec::new(),
+                password_last_used: None,
+            },
+        );
+        state
+    }
+
+    #[test]
+    fn create_login_profile_stores_hash_and_verifies() {
+        let state = state_with_user("alice");
+        create_login_profile(
+            &state,
+            &json!({ "UserName": "alice", "Password": "hunter2!ABC" }),
+        )
+        .unwrap();
+        verify_password(&state, "alice", "hunter2!ABC").unwrap();
+        assert!(verify_password(&state, "alice", "wrong").is_err());
+    }
+
+    #[test]
+    fn create_login_profile_rejects_when_policy_requires_uppercase() {
+        let state = state_with_user("alice");
+        *state.account_password_policy.lock().unwrap() = Some(AccountPasswordPolicy {
+            minimum_password_length: 1,
+            require_uppercase_characters: true,
+            ..Default::default()
+        });
+        let err = create_login_profile(
+            &state,
+            &json!({ "UserName": "alice", "Password": "lowercase-only" }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "PasswordPolicyViolation");
+    }
+
+    #[test]
+    fn create_login_profile_rejects_short_password_against_min_length() {
+        let state = state_with_user("alice");
+        *state.account_password_policy.lock().unwrap() = Some(AccountPasswordPolicy {
+            minimum_password_length: 20,
+            ..Default::default()
+        });
+        let err =
+            create_login_profile(&state, &json!({ "UserName": "alice", "Password": "short" }))
+                .unwrap_err();
+        assert_eq!(err.code, "PasswordPolicyViolation");
+    }
+
+    #[test]
+    fn change_password_swaps_hash_and_clears_reset_required() {
+        let state = state_with_user("alice");
+        create_login_profile(
+            &state,
+            &json!({
+                "UserName": "alice",
+                "Password": "first-secret",
+                "PasswordResetRequired": true
+            }),
+        )
+        .unwrap();
+        change_password(
+            &state,
+            &json!({
+                "UserName": "alice",
+                "OldPassword": "first-secret",
+                "NewPassword": "second-secret"
+            }),
+        )
+        .unwrap();
+        verify_password(&state, "alice", "second-secret").unwrap();
+        assert!(verify_password(&state, "alice", "first-secret").is_err());
+        let p = state.login_profiles.get("alice").unwrap();
+        assert!(!p.password_reset_required);
+    }
+
+    #[test]
+    fn change_password_rejects_when_old_password_wrong() {
+        let state = state_with_user("alice");
+        create_login_profile(
+            &state,
+            &json!({ "UserName": "alice", "Password": "first-secret" }),
+        )
+        .unwrap();
+        let err = change_password(
+            &state,
+            &json!({
+                "UserName": "alice",
+                "OldPassword": "WRONG",
+                "NewPassword": "second-secret"
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AccessDeniedException");
+    }
+
+    #[test]
+    fn verify_password_rejects_unknown_user() {
+        let state = state_with_user("alice");
+        assert!(verify_password(&state, "bob", "any").is_err());
+    }
+
+    #[test]
+    fn verify_password_rejects_profile_without_hash() {
+        let state = state_with_user("alice");
+        state.login_profiles.insert(
+            "alice".to_string(),
+            LoginProfile {
+                user_name: "alice".to_string(),
+                create_date: now_iso8601(),
+                password_reset_required: false,
+                password_hash: None,
+            },
+        );
+        assert!(verify_password(&state, "alice", "any").is_err());
+    }
 }

@@ -288,12 +288,22 @@ pub struct VirtualMfaDevice {
 }
 
 /// IAM login profile (console password) for a user.
+///
+/// The password itself is never stored; only the bcrypt hash. A
+/// missing `password_hash` means the profile was created before
+/// password storage was wired and any login attempt against it
+/// fails. Operators should re-run `iam update-login-profile` to
+/// reset.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginProfile {
     pub user_name: String,
     pub create_date: String,
     /// Whether the user must reset their password on next sign-in.
     pub password_reset_required: bool,
+    /// bcrypt hash of the user's console password. Optional so old
+    /// snapshots that pre-date password storage still deserialise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
