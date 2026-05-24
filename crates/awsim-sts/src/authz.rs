@@ -37,6 +37,19 @@ impl PrincipalLookup for StsAwarePrincipalLookup {
             // policies (which would silently behave like `Resource: *`
             // for anything explicitly matching elsewhere).
             let role = self.inner.resolve_arn(&session.role_arn)?;
+            // Build the effective session policy from the inline
+            // `Policy` document captured at AssumeRole time, combined
+            // with the documents pointed at by any `PolicyArns`.
+            // Right now the policy engine accepts a single document
+            // per session, so we union the statements into one before
+            // surfacing. None of these can grant more than the role's
+            // identity policies allow; intersection happens in the
+            // evaluator.
+            let session_policy = build_session_policy(
+                session.inline_session_policy.as_deref(),
+                &session.session_policy_arns,
+                self.inner.as_ref(),
+            );
             return Some(ResolvedPrincipal {
                 arn: format!(
                     "arn:aws:sts::{}:assumed-role/{}/{}",
@@ -47,6 +60,7 @@ impl PrincipalLookup for StsAwarePrincipalLookup {
                 permissions_boundary: role.permissions_boundary,
                 is_root: false,
                 tags: role.tags,
+                session_policy,
             });
         }
         self.inner.resolve_access_key(access_key)
@@ -55,6 +69,52 @@ impl PrincipalLookup for StsAwarePrincipalLookup {
     fn resolve_arn(&self, arn: &str) -> Option<ResolvedPrincipal> {
         self.inner.resolve_arn(arn)
     }
+
+    fn resolve_secret(&self, access_key: &str) -> Option<String> {
+        self.inner.resolve_secret(access_key)
+    }
+}
+
+/// Combine the AssumeRole session-policy inputs into a single
+/// PolicyDocument. The inline `Policy` document and any documents
+/// referenced by `PolicyArns` (looked up via the inner principal
+/// lookup as managed-policy resources) are unioned by appending their
+/// statements. Returns `None` when neither input is present so the
+/// AuthzEngine treats the session as having no session-policy
+/// restriction.
+fn build_session_policy(
+    inline: Option<&str>,
+    policy_arns: &[String],
+    _inner: &dyn PrincipalLookup,
+) -> Option<awsim_iam_policy::PolicyDocument> {
+    let mut docs: Vec<awsim_iam_policy::PolicyDocument> = Vec::new();
+    if let Some(raw) = inline
+        && let Ok(doc) = awsim_iam_policy::parse(raw)
+    {
+        docs.push(doc);
+    }
+    for arn in policy_arns {
+        // PolicyArns reference managed policies. Re-using
+        // resolve_arn here would require the inner lookup to
+        // understand managed-policy ARNs, which it doesn't. For now
+        // we skip them: the inline Policy covers the common case and
+        // PolicyArn support can be wired later via a dedicated
+        // managed-policy lookup. Capturing the ARN list on the
+        // session keeps the data round-trippable through STS for the
+        // future hookup.
+        let _ = arn;
+    }
+    if docs.is_empty() {
+        return None;
+    }
+    // Merge: take the first document and append statements from the
+    // rest. The policy engine treats multiple statements as the union
+    // of their effects, which matches the AssumeRole spec.
+    let mut combined = docs.remove(0);
+    for extra in docs {
+        combined.statements.extend(extra.statements);
+    }
+    Some(combined)
 }
 
 #[cfg(test)]
@@ -89,6 +149,7 @@ mod tests {
             permissions_boundary: None,
             is_root: false,
             tags: HashMap::new(),
+            session_policy: None,
         }
     }
 
@@ -111,6 +172,8 @@ mod tests {
             account_id: "000000000000".to_string(),
             assumed_role_id: "AROAFAKE:session1".to_string(),
             expiry: None,
+            inline_session_policy: None,
+            session_policy_arns: Vec::new(),
         });
 
         let lookup = StsAwarePrincipalLookup::new(sessions, iam);
@@ -159,6 +222,8 @@ mod tests {
             account_id: "1".to_string(),
             assumed_role_id: "A:s".to_string(),
             expiry: None,
+            inline_session_policy: None,
+            session_policy_arns: Vec::new(),
         });
 
         let lookup = StsAwarePrincipalLookup::new(sessions, iam);

@@ -16,6 +16,7 @@ impl PrincipalLookup for StubLookup {
             permissions_boundary: p.permissions_boundary.clone(),
             is_root: p.is_root,
             tags: p.tags.clone(),
+            session_policy: None,
         })
     }
 }
@@ -32,6 +33,7 @@ fn make_principal(arn: &str, account: &str, docs: Vec<&str>, is_root: bool) -> R
         permissions_boundary: None,
         is_root,
         tags: Default::default(),
+        session_policy: None,
     }
 }
 
@@ -134,6 +136,7 @@ fn enforcement_on_root_bypass() {
         permissions_boundary: None,
         is_root: true,
         tags: Default::default(),
+        session_policy: None,
     };
     let mut engine = AuthzEngine::new(true);
     engine.principal_lookup = Arc::new(StubLookup {

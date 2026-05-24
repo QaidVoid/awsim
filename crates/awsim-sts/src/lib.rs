@@ -140,8 +140,16 @@ impl StsService {
 
         debug!(role_arn = %role_arn, session_name = %session_name, "AssumeRole");
 
-        let (credentials, assumed_role_user, session) =
-            generate_assumed_role_output(role_arn, session_name, &ctx.account_id, duration);
+        let inline_policy = extract_inline_session_policy(input);
+        let policy_arns = extract_session_policy_arns(input);
+        let (credentials, assumed_role_user, session) = generate_assumed_role_output(
+            role_arn,
+            session_name,
+            &ctx.account_id,
+            duration,
+            inline_policy,
+            policy_arns,
+        );
         self.sessions.record(session);
 
         Ok(json!({
@@ -200,8 +208,16 @@ impl StsService {
 
         debug!(role_arn = %role_arn, session_name = %session_name, "AssumeRoleWithWebIdentity");
 
-        let (credentials, assumed_role_user, session) =
-            generate_assumed_role_output(role_arn, session_name, &ctx.account_id, duration);
+        let inline_policy = extract_inline_session_policy(input);
+        let policy_arns = extract_session_policy_arns(input);
+        let (credentials, assumed_role_user, session) = generate_assumed_role_output(
+            role_arn,
+            session_name,
+            &ctx.account_id,
+            duration,
+            inline_policy,
+            policy_arns,
+        );
         self.sessions.record(session);
 
         Ok(json!({
@@ -362,8 +378,16 @@ impl StsService {
 
         debug!(role_arn = %role_arn, "AssumeRoleWithSAML");
 
-        let (credentials, assumed_role_user, session) =
-            generate_assumed_role_output(role_arn, &session_name, &ctx.account_id, duration);
+        let inline_policy = extract_inline_session_policy(input);
+        let policy_arns = extract_session_policy_arns(input);
+        let (credentials, assumed_role_user, session) = generate_assumed_role_output(
+            role_arn,
+            &session_name,
+            &ctx.account_id,
+            duration,
+            inline_policy,
+            policy_arns,
+        );
         self.sessions.record(session);
 
         Ok(json!({
@@ -867,6 +891,8 @@ fn generate_assumed_role_output(
     session_name: &str,
     account_id: &str,
     duration_seconds: u64,
+    inline_session_policy: Option<String>,
+    session_policy_arns: Vec<String>,
 ) -> (Value, Value, AssumedRoleSession) {
     let role_id_suffix = uuid::Uuid::new_v4().simple().to_string()[..20].to_uppercase();
     let assumed_role_id = format!("AROA{role_id_suffix}:{session_name}");
@@ -893,9 +919,37 @@ fn generate_assumed_role_output(
         account_id: account_id.to_string(),
         assumed_role_id,
         expiry: AssumedRoleSession::expiry_from_duration(duration_seconds),
+        inline_session_policy,
+        session_policy_arns,
     };
 
     (credentials, assumed_role_user, session)
+}
+
+/// Pull the inline `Policy` parameter off an AssumeRole-shaped input.
+/// Validation has already run by the time this is called; we just
+/// hand back the raw document so the session can carry it through to
+/// authz. Returns `None` when the caller didn't pass `Policy`.
+fn extract_inline_session_policy(input: &Value) -> Option<String> {
+    input
+        .get("Policy")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// Pull up to 10 managed-policy ARNs off the `PolicyArns` parameter on
+/// an AssumeRole-shaped input. AWS rejects more than 10 entries
+/// during validation, so we just collect whatever made it through.
+fn extract_session_policy_arns(input: &Value) -> Vec<String> {
+    input
+        .get("PolicyArns")
+        .and_then(Value::as_array)
+        .map(|arns| {
+            arns.iter()
+                .filter_map(|item| item.get("arn").and_then(Value::as_str).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

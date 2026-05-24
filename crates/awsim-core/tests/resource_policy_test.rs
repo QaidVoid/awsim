@@ -18,6 +18,7 @@ impl PrincipalLookup for StubLookup {
             permissions_boundary: p.permissions_boundary.clone(),
             is_root: p.is_root,
             tags: Default::default(),
+            session_policy: None,
         })
     }
 }
@@ -55,6 +56,7 @@ fn resource_policy_grants_access_when_identity_has_none() {
         permissions_boundary: None,
         is_root: false,
         tags: Default::default(),
+        session_policy: None,
     };
 
     let resource_policy = r#"{
@@ -97,6 +99,7 @@ fn resource_policy_only_used_for_matching_service() {
         permissions_boundary: None,
         is_root: false,
         tags: Default::default(),
+        session_policy: None,
     };
 
     let resource_policy = r#"{
@@ -148,6 +151,7 @@ fn resource_policy_explicit_deny_overrides_identity_allow() {
         permissions_boundary: None,
         is_root: false,
         tags: Default::default(),
+        session_policy: None,
     };
 
     let bucket_policy = r#"{

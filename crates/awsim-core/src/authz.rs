@@ -20,6 +20,13 @@ pub struct ResolvedPrincipal {
     /// condition evaluation. Empty for root and for federated principals
     /// without a backing IAM record.
     pub tags: HashMap<String, String>,
+    /// Session policy captured at AssumeRole time. Populated by the
+    /// STS-aware principal lookup when the resolved credential is an
+    /// ASIA token; `None` for long-lived IAM-user keys. Real AWS
+    /// narrows assumed-role permissions to the intersection of the
+    /// role's identity policies and this document, so the AuthzEngine
+    /// surfaces it into `EvalContext::session_policy`.
+    pub session_policy: Option<PolicyDocument>,
 }
 
 pub trait PrincipalLookup: Send + Sync {
@@ -204,7 +211,7 @@ impl AuthzEngine {
             permissions_boundary: principal.permissions_boundary.as_ref(),
             resource_policy: resource_policy.as_ref(),
             scps: &scps,
-            session_policy: None,
+            session_policy: principal.session_policy.as_ref(),
         };
 
         match evaluate(&req, &eval_ctx) {

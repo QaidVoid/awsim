@@ -642,6 +642,8 @@ fn get_credentials_for_identity(
         account_id: account_id.to_string(),
         assumed_role_id,
         expiry: AssumedRoleSession::expiry_from_duration(3_600),
+        inline_session_policy: None,
+        session_policy_arns: Vec::new(),
     });
 
     Ok(json!({

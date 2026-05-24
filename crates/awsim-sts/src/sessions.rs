@@ -45,6 +45,22 @@ pub struct AssumedRoleSession {
     /// honour whatever the caller passed in. `None` means "no expiry"
     /// — only used by tests; production paths always set one.
     pub expiry: Option<SystemTime>,
+
+    /// Optional inline session policy document JSON captured from the
+    /// `Policy` parameter on `AssumeRole`. Real AWS narrows the
+    /// assumed-role session's permissions to the intersection of the
+    /// role's identity policies and this document, so the gateway's
+    /// AuthzEngine must surface it when resolving the principal. Stays
+    /// `None` when the caller didn't pass `Policy` (which is the
+    /// common case).
+    pub inline_session_policy: Option<String>,
+
+    /// Up to 10 managed-policy ARNs from the `PolicyArns` parameter on
+    /// `AssumeRole`. Like `inline_session_policy`, real AWS treats
+    /// these as additional session-policy constraints rather than
+    /// granting new permissions. Plumbed through to the AuthzEngine so
+    /// it can pull the documents from IAM and combine them.
+    pub session_policy_arns: Vec<String>,
 }
 
 impl AssumedRoleSession {
@@ -137,6 +153,8 @@ mod tests {
             account_id: "000000000000".to_string(),
             assumed_role_id: "AROAFAKE:s1".to_string(),
             expiry,
+            inline_session_policy: None,
+            session_policy_arns: Vec::new(),
         }
     }
 
