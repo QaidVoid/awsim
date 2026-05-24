@@ -20,6 +20,30 @@ fn validate_policy_document(doc: &str) -> Result<(), AwsError> {
         .map_err(|e| malformed_policy_document(format!("Syntax errors in policy. {e}")))
 }
 
+/// Validate an IAM role name against AWS's documented constraint:
+/// 1-64 characters from the set `[A-Za-z0-9+=,.@_-]+`. Real IAM
+/// rejects anything else with ValidationError.
+fn validate_role_name(name: &str) -> Result<(), AwsError> {
+    if name.is_empty() || name.len() > 64 {
+        return Err(validation_error(format!(
+            "1 validation error detected: Value '{name}' at 'roleName' \
+             failed to satisfy constraint: Member must have length less than \
+             or equal to 64 and greater than or equal to 1"
+        )));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '=' | ',' | '.' | '@' | '_' | '-'))
+    {
+        return Err(validation_error(format!(
+            "1 validation error detected: Value '{name}' at 'roleName' \
+             failed to satisfy constraint: Member must satisfy regular \
+             expression pattern: [\\w+=,.@-]+"
+        )));
+    }
+    Ok(())
+}
+
 /// AWS rejects MaxSessionDuration values outside [3600, 43200] seconds
 /// with ValidationError ("1 validation error detected"). Mirror that.
 fn validate_max_session_duration(value: u32) -> Result<(), AwsError> {
@@ -57,6 +81,7 @@ pub fn create_role(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let role_name = require_str(input, "RoleName")?;
+    validate_role_name(role_name)?;
     let assume_role_policy = require_str(input, "AssumeRolePolicyDocument")?;
     let path = normalize_path(opt_str(input, "Path"));
     let description = opt_str(input, "Description").map(|s| s.to_string());
