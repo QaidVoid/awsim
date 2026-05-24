@@ -40,6 +40,10 @@ pub fn put_rule(
         ));
     }
 
+    if let Some(expr) = schedule_expression.as_deref() {
+        validate_schedule_expression(expr)?;
+    }
+
     let state_str = input["State"].as_str().unwrap_or("ENABLED").to_string();
     if state_str != "ENABLED" && state_str != "DISABLED" {
         return Err(AwsError::bad_request(
@@ -274,4 +278,138 @@ fn rule_to_json(rule: &Rule) -> Value {
     }
 
     obj
+}
+
+/// Validate a `ScheduleExpression` against AWS's accepted forms.
+///
+/// AWS EventBridge only honours two shapes:
+///   * `rate(N unit)` where unit is `minute`, `minutes`, `hour`,
+///     `hours`, `day`, or `days`. `N` is a positive integer, and
+///     a value of `1` requires the singular unit.
+///   * `cron(<minutes> <hours> <day-of-month> <month> <day-of-week> <year>)`
+///     - the six-field cron dialect EventBridge documents.
+///
+/// Anything else is rejected with ValidationException at PutRule
+/// time. The check is intentionally lightweight: it ensures the
+/// shape is recognisable so a typo (`rate 5 minutes`, `cron(* * * * *)`)
+/// fails fast instead of silently never firing.
+fn validate_schedule_expression(expr: &str) -> Result<(), AwsError> {
+    let trimmed = expr.trim();
+    if let Some(inner) = trimmed
+        .strip_prefix("rate(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        return validate_rate_inner(inner);
+    }
+    if let Some(inner) = trimmed
+        .strip_prefix("cron(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        return validate_cron_inner(inner);
+    }
+    Err(AwsError::bad_request(
+        "ValidationException",
+        format!("ScheduleExpression '{expr}' is not a valid rate() or cron() expression."),
+    ))
+}
+
+fn validate_rate_inner(inner: &str) -> Result<(), AwsError> {
+    let mut parts = inner.split_whitespace();
+    let value_raw = parts.next();
+    let unit = parts.next();
+    if value_raw.is_none() || unit.is_none() || parts.next().is_some() {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("rate({inner}) must be 'rate(N unit)'."),
+        ));
+    }
+    let value: u64 = value_raw.unwrap().parse().map_err(|_| {
+        AwsError::bad_request(
+            "ValidationException",
+            format!("rate({inner}) value must be a positive integer."),
+        )
+    })?;
+    if value == 0 {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            "rate() value must be at least 1.",
+        ));
+    }
+    let unit = unit.unwrap();
+    let singular = value == 1;
+    let valid = match unit {
+        "minute" | "hour" | "day" => singular,
+        "minutes" | "hours" | "days" => !singular,
+        _ => false,
+    };
+    if !valid {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "rate({inner}) unit must be minute(s), hour(s), or day(s); singular for value 1, plural otherwise."
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_cron_inner(inner: &str) -> Result<(), AwsError> {
+    // EventBridge cron uses six fields, not the traditional five.
+    let count = inner.split_whitespace().count();
+    if count != 6 {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "cron({inner}) must have exactly 6 space-separated fields (minutes hours day-of-month month day-of-week year)."
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod schedule_expression_tests {
+    use super::*;
+
+    #[test]
+    fn rate_singular_unit_only_valid_for_one() {
+        validate_schedule_expression("rate(1 minute)").unwrap();
+        validate_schedule_expression("rate(1 hour)").unwrap();
+        validate_schedule_expression("rate(1 day)").unwrap();
+        assert!(validate_schedule_expression("rate(1 minutes)").is_err());
+        assert!(validate_schedule_expression("rate(2 minute)").is_err());
+    }
+
+    #[test]
+    fn rate_plural_unit_required_for_n_above_one() {
+        validate_schedule_expression("rate(5 minutes)").unwrap();
+        validate_schedule_expression("rate(12 hours)").unwrap();
+        validate_schedule_expression("rate(30 days)").unwrap();
+    }
+
+    #[test]
+    fn rate_rejects_zero_and_negatives() {
+        assert!(validate_schedule_expression("rate(0 minutes)").is_err());
+        assert!(validate_schedule_expression("rate(-1 minutes)").is_err());
+    }
+
+    #[test]
+    fn rate_rejects_unknown_unit() {
+        assert!(validate_schedule_expression("rate(5 seconds)").is_err());
+        assert!(validate_schedule_expression("rate(2 weeks)").is_err());
+    }
+
+    #[test]
+    fn cron_requires_six_fields() {
+        validate_schedule_expression("cron(0 12 * * ? *)").unwrap();
+        assert!(validate_schedule_expression("cron(* * * * *)").is_err());
+        assert!(validate_schedule_expression("cron(0 12 * *)").is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_wrapper() {
+        assert!(validate_schedule_expression("at(2026-01-01T00:00:00)").is_err());
+        assert!(validate_schedule_expression("every 5 minutes").is_err());
+        assert!(validate_schedule_expression("").is_err());
+    }
 }
