@@ -212,21 +212,41 @@ pub fn get_secret_value(
         .get(&name)
         .ok_or_else(|| error::resource_not_found(secret_id))?;
 
-    let version_stage = input["VersionStage"].as_str().unwrap_or("AWSCURRENT");
-    let version_id = if let Some(vid) = input["VersionId"].as_str() {
-        // Explicit version ID requested
-        if !secret.versions.contains_key(vid) {
-            return Err(error::resource_not_found(vid));
+    let requested_stage = input["VersionStage"].as_str();
+    let requested_version_id = input["VersionId"].as_str();
+
+    let version_id = match (requested_version_id, requested_stage) {
+        // Both supplied: AWS requires that the named version actually
+        // carries the named stage, otherwise it's a mismatch and the
+        // service returns ResourceNotFoundException rather than
+        // silently honouring one and dropping the other.
+        (Some(vid), Some(stage)) => {
+            let v = secret
+                .versions
+                .get(vid)
+                .ok_or_else(|| error::resource_not_found(vid))?;
+            if !v.stages.iter().any(|s| s == stage) {
+                return Err(error::resource_not_found(&format!(
+                    "version {vid} does not carry stage {stage}"
+                )));
+            }
+            vid.to_string()
         }
-        vid.to_string()
-    } else {
-        // Find the version that has the requested stage
-        secret
-            .versions
-            .iter()
-            .find(|(_, v)| v.stages.contains(&version_stage.to_string()))
-            .map(|(id, _)| id.clone())
-            .ok_or_else(|| error::resource_not_found(&format!("stage {version_stage}")))?
+        (Some(vid), None) => {
+            if !secret.versions.contains_key(vid) {
+                return Err(error::resource_not_found(vid));
+            }
+            vid.to_string()
+        }
+        (None, stage_or_default) => {
+            let stage = stage_or_default.unwrap_or("AWSCURRENT");
+            secret
+                .versions
+                .iter()
+                .find(|(_, v)| v.stages.iter().any(|s| s == stage))
+                .map(|(id, _)| id.clone())
+                .ok_or_else(|| error::resource_not_found(&format!("stage {stage}")))?
+        }
     };
 
     let version = secret
