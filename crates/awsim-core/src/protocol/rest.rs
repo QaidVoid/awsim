@@ -1,6 +1,8 @@
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
+use base64::Engine as _;
 use bytes::Bytes;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::error::AwsError;
 
@@ -528,6 +530,116 @@ fn pascal_to_header(name: &str) -> String {
     out
 }
 
+/// Serialize a REST-XML error response (S3, CloudFront).
+///
+/// The envelope is a bare `<Error>` element with `<Code>`, `<Message>`,
+/// `<Resource>`, `<RequestId>`, and `<HostId>` fields, with no
+/// `<ErrorResponse>` wrapper. This matches S3's wire format; the Query
+/// protocol's `<ErrorResponse>` envelope is wrong for S3 and confuses
+/// SDK error parsers.
+///
+/// Additional extras (e.g. S3's `ActualObjectSize` on 416) are emitted
+/// as sibling elements inside `<Error>`. `DeleteMarker` and `VersionId`
+/// are promoted to `x-amz-delete-marker` and `x-amz-version-id`
+/// response headers instead.
+pub fn serialize_error(error: &AwsError, request_id: &str) -> (StatusCode, HeaderMap, Bytes) {
+    let host_id = derive_host_id(request_id);
+
+    let resource_xml = error
+        .extras
+        .as_deref()
+        .and_then(|extras| extras.get("Resource"))
+        .and_then(Value::as_str)
+        .map(|s| format!("<Resource>{}</Resource>\n", escape_xml(s)))
+        .unwrap_or_default();
+
+    let extras_xml = error
+        .extras
+        .as_deref()
+        .map(|extras| {
+            let mut buf = String::new();
+            for (key, val) in extras.iter() {
+                // Skip extras that are promoted to headers or the
+                // dedicated <Resource> element above.
+                if matches!(key.as_str(), "DeleteMarker" | "VersionId" | "Resource") {
+                    continue;
+                }
+                let s = match val {
+                    Value::String(s) => escape_xml(s),
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    _ => continue,
+                };
+                buf.push_str(&format!("<{key}>{s}</{key}>\n"));
+            }
+            buf
+        })
+        .unwrap_or_default();
+
+    let xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <Error>\n\
+         <Code>{code}</Code>\n\
+         <Message>{message}</Message>\n\
+         {resource_xml}<RequestId>{request_id}</RequestId>\n\
+         <HostId>{host_id}</HostId>\n\
+         {extras_xml}</Error>",
+        code = escape_xml(&error.code),
+        message = escape_xml(&error.message),
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", "application/xml".parse().unwrap());
+    headers.insert("x-amz-request-id", request_id.parse().unwrap());
+    if let Ok(v) = host_id.parse() {
+        headers.insert("x-amz-id-2", v);
+    }
+
+    if let Some(extras) = &error.extras {
+        if let Some(dm) = extras.get("DeleteMarker").and_then(Value::as_bool) {
+            headers.insert("x-amz-delete-marker", dm.to_string().parse().unwrap());
+        }
+        if let Some(vid) = extras.get("VersionId").and_then(Value::as_str)
+            && let Ok(v) = vid.parse()
+        {
+            headers.insert("x-amz-version-id", v);
+        }
+    }
+
+    (error.status, headers, Bytes::from(xml))
+}
+
+fn escape_xml(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Derive a deterministic opaque host id from the request id.
+///
+/// Real S3 emits a 76-character base64 string in `x-amz-id-2` for
+/// support diagnostics. Clients treat it as opaque; we use a stable
+/// SHA-256 of the request id so the same request id always yields the
+/// same host id, which keeps integration tests reproducible.
+fn derive_host_id(request_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(request_id.as_bytes());
+    let digest = hasher.finalize();
+    let mut input = [0u8; 57];
+    input[..32].copy_from_slice(&digest);
+    input[32..].copy_from_slice(&digest[..25]);
+    base64::engine::general_purpose::STANDARD.encode(input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,5 +745,106 @@ mod tests {
             header_to_param_name("x-amz-server-side-encryption"),
             "ServerSideEncryption"
         );
+    }
+
+    #[test]
+    fn serialize_error_emits_bare_error_envelope_with_host_id() {
+        let err = AwsError::not_found("NoSuchBucket", "The specified bucket does not exist");
+        let (status, headers, body) = serialize_error(&err, "req-1234");
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let xml = std::str::from_utf8(&body).unwrap();
+        assert!(xml.starts_with("<?xml"));
+        assert!(xml.contains("<Error>"));
+        assert!(!xml.contains("<ErrorResponse>"));
+        assert!(xml.contains("<Code>NoSuchBucket</Code>"));
+        assert!(xml.contains("<Message>The specified bucket does not exist</Message>"));
+        assert!(xml.contains("<RequestId>req-1234</RequestId>"));
+        assert!(xml.contains("<HostId>"));
+
+        assert_eq!(
+            headers
+                .get("x-amz-request-id")
+                .and_then(|v| v.to_str().ok()),
+            Some("req-1234")
+        );
+        assert!(headers.contains_key("x-amz-id-2"));
+        assert_eq!(
+            headers.get("content-type").and_then(|v| v.to_str().ok()),
+            Some("application/xml")
+        );
+    }
+
+    #[test]
+    fn serialize_error_promotes_delete_marker_and_version_id_to_headers() {
+        let err = AwsError::not_found("NoSuchKey", "The specified key does not exist")
+            .with_extra("DeleteMarker", Value::Bool(true))
+            .with_extra("VersionId", Value::String("abc123".to_string()));
+        let (_, headers, body) = serialize_error(&err, "req-1");
+
+        assert_eq!(
+            headers
+                .get("x-amz-delete-marker")
+                .and_then(|v| v.to_str().ok()),
+            Some("true")
+        );
+        assert_eq!(
+            headers
+                .get("x-amz-version-id")
+                .and_then(|v| v.to_str().ok()),
+            Some("abc123")
+        );
+
+        let xml = std::str::from_utf8(&body).unwrap();
+        assert!(!xml.contains("<DeleteMarker>"));
+        assert!(!xml.contains("<VersionId>"));
+    }
+
+    #[test]
+    fn serialize_error_emits_resource_and_extra_fields_as_xml() {
+        let err = AwsError::range_not_satisfiable(
+            "InvalidRange",
+            "The requested range is not satisfiable",
+        )
+        .with_extra("Resource", Value::String("/bucket/key".to_string()))
+        .with_extra(
+            "ActualObjectSize",
+            Value::Number(serde_json::Number::from(1024u64)),
+        );
+
+        let (status, _, body) = serialize_error(&err, "req-9");
+        assert_eq!(status, StatusCode::RANGE_NOT_SATISFIABLE);
+
+        let xml = std::str::from_utf8(&body).unwrap();
+        assert!(xml.contains("<Resource>/bucket/key</Resource>"));
+        assert!(xml.contains("<ActualObjectSize>1024</ActualObjectSize>"));
+    }
+
+    #[test]
+    fn serialize_error_escapes_xml_special_characters_in_message() {
+        let err = AwsError::bad_request(
+            "InvalidRequest",
+            "Path </etc/passwd> contains <bad> & \"chars\"",
+        );
+        let (_, _, body) = serialize_error(&err, "req-x");
+        let xml = std::str::from_utf8(&body).unwrap();
+        assert!(xml.contains("&lt;/etc/passwd&gt;"));
+        assert!(xml.contains("&lt;bad&gt;"));
+        assert!(xml.contains("&amp;"));
+        assert!(xml.contains("&quot;chars&quot;"));
+        // Ensure the envelope syntax isn't itself escaped.
+        assert!(xml.contains("<Error>"));
+        assert!(xml.contains("</Error>"));
+    }
+
+    #[test]
+    fn derive_host_id_is_deterministic_and_long() {
+        let a = derive_host_id("req-1");
+        let b = derive_host_id("req-1");
+        let c = derive_host_id("req-2");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        // Real S3 host ids are 76 chars (base64 of 57 bytes).
+        assert_eq!(a.len(), 76);
     }
 }

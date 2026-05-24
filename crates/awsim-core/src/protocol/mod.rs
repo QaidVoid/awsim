@@ -160,8 +160,7 @@ pub fn serialize_error(
         Protocol::AwsJson1_0 | Protocol::AwsJson1_1 | Protocol::RestJson1 => {
             json::serialize_error(error, request_id)
         }
-        Protocol::AwsQuery | Protocol::Ec2Query | Protocol::RestXml => {
-            query::serialize_error(error, request_id)
-        }
+        Protocol::AwsQuery | Protocol::Ec2Query => query::serialize_error(error, request_id),
+        Protocol::RestXml => rest::serialize_error(error, request_id),
     }
 }
