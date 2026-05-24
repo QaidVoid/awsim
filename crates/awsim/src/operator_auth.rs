@@ -25,8 +25,10 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Response};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -61,6 +63,21 @@ const MAX_FAILED_ATTEMPTS: u32 = 5;
 /// when the window elapses since the first attempt in the burst.
 const THROTTLE_WINDOW: Duration = Duration::from_secs(60);
 
+/// Username reserved for the bootstrap operator account that
+/// `setup` provisions. Convention follows AWS's `root` account
+/// owner name.
+pub const ROOT_USERNAME: &str = "root";
+
+/// Bootstrap-flow state. The `Pending` variant stores the SHA-256
+/// hash of the one-time setup token; the raw token is only ever
+/// printed to stdout on startup and never persisted.
+#[derive(Debug, Clone)]
+enum BootstrapState {
+    NotRequired,
+    Pending { token_hash: [u8; 32] },
+    Complete,
+}
+
 /// Shared state injected into the auth routes and the middleware.
 #[derive(Clone)]
 pub struct OperatorAuthState {
@@ -68,6 +85,7 @@ pub struct OperatorAuthState {
     pub default_account_id: String,
     pub default_region: String,
     failed_attempts: Arc<Mutex<AttemptMap>>,
+    bootstrap: Arc<Mutex<BootstrapState>>,
 }
 
 impl OperatorAuthState {
@@ -77,7 +95,34 @@ impl OperatorAuthState {
             default_account_id,
             default_region,
             failed_attempts: Arc::new(Mutex::new(HashMap::new())),
+            bootstrap: Arc::new(Mutex::new(BootstrapState::NotRequired)),
         }
+    }
+
+    /// Arm the bootstrap flow. Generates a fresh setup token,
+    /// stores its hash, and returns the raw token so the caller
+    /// (usually `main`) can print it to stdout. Subsequent setup
+    /// calls compare against the stored hash.
+    pub fn arm_bootstrap(&self) -> String {
+        let mut buf = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut buf);
+        let token = hex_encode(&buf);
+        let mut hasher = Sha256::new();
+        hasher.update(token.as_bytes());
+        let hash: [u8; 32] = hasher.finalize().into();
+        *self.bootstrap.lock().unwrap() = BootstrapState::Pending { token_hash: hash };
+        token
+    }
+
+    /// Mark bootstrap complete. Called once `setup` succeeds and
+    /// also by `main` at startup when an existing root user is
+    /// found in the snapshot.
+    pub fn mark_bootstrap_complete(&self) {
+        *self.bootstrap.lock().unwrap() = BootstrapState::Complete;
+    }
+
+    fn bootstrap_state(&self) -> BootstrapState {
+        self.bootstrap.lock().unwrap().clone()
     }
 
     /// Returns the seconds the caller must wait before retrying, or
@@ -146,6 +191,10 @@ pub async fn login(
     State(state): State<OperatorAuthState>,
     Json(req): Json<LoginRequest>,
 ) -> Response {
+    if matches!(state.bootstrap_state(), BootstrapState::Pending { .. }) {
+        return setup_required_response();
+    }
+
     if let Some(retry_after) = state.throttle_retry_after(&req.username) {
         let mut resp = (
             StatusCode::TOO_MANY_REQUESTS,
@@ -202,6 +251,142 @@ pub async fn login(
     response
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SetupRequest {
+    pub bootstrap_token: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SetupResponse {
+    pub principal: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+}
+
+/// `POST /_awsim/auth/setup`
+///
+/// First-run handshake. Accepts the bootstrap token AWSim printed
+/// to stdout on first boot when `AWSIM_REQUIRE_OPERATOR_AUTH=true`
+/// and no `root` user exists, plus a password the operator picks
+/// for the root account. On success, creates the root IAM user, a
+/// login profile with the password, an initial access-key pair
+/// for programmatic use, and flips the gate so normal login
+/// begins working.
+///
+/// Returns 410 Gone once setup has completed; the token is single
+/// use.
+pub async fn setup(
+    State(state): State<OperatorAuthState>,
+    Json(req): Json<SetupRequest>,
+) -> Response {
+    let bootstrap_state = state.bootstrap_state();
+    let expected_hash = match bootstrap_state {
+        BootstrapState::Pending { token_hash } => token_hash,
+        BootstrapState::Complete | BootstrapState::NotRequired => {
+            return (
+                StatusCode::GONE,
+                Json(json!({
+                    "code": "SetupAlreadyComplete",
+                    "message": "Operator setup has already run; use /_awsim/auth/login.",
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(req.bootstrap_token.as_bytes());
+    let supplied: [u8; 32] = hasher.finalize().into();
+    if !constant_time_eq(&supplied, &expected_hash) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "code": "InvalidBootstrapToken",
+                "message": "The supplied bootstrap token does not match the printed value.",
+            })),
+        )
+            .into_response();
+    }
+
+    use awsim_core::ServiceHandler;
+    let ctx = awsim_core::RequestContext::new_with_account(
+        "iam",
+        &state.default_region,
+        &state.default_account_id,
+    );
+
+    let create_user = serde_json::json!({ "UserName": ROOT_USERNAME });
+    if let Err(e) = state.iam.handle("CreateUser", create_user, &ctx).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(error_body(&e))).into_response();
+    }
+
+    let create_login = serde_json::json!({
+        "UserName": ROOT_USERNAME,
+        "Password": req.password,
+        "PasswordResetRequired": false,
+    });
+    if let Err(e) = state
+        .iam
+        .handle("CreateLoginProfile", create_login, &ctx)
+        .await
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(error_body(&e))).into_response();
+    }
+
+    let key_input = serde_json::json!({ "UserName": ROOT_USERNAME });
+    let key_resp = match state.iam.handle("CreateAccessKey", key_input, &ctx).await {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(error_body(&e))).into_response(),
+    };
+    let access_key_id = key_resp["AccessKey"]["AccessKeyId"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let secret_access_key = key_resp["AccessKey"]["SecretAccessKey"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+
+    state.mark_bootstrap_complete();
+
+    Json(SetupResponse {
+        principal: format!("iam-user:{}/{}", state.default_account_id, ROOT_USERNAME),
+        access_key_id,
+        secret_access_key,
+    })
+    .into_response()
+}
+
+fn setup_required_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "code": "OperatorSetupRequired",
+            "message": "Run POST /_awsim/auth/setup with the bootstrap token printed to stdout before signing in.",
+        })),
+    )
+        .into_response()
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(*b >> 4) as usize] as char);
+        out.push(HEX[(*b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn constant_time_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    let mut diff = 0u8;
+    for i in 0..32 {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
+
 /// `POST /_awsim/auth/logout`
 ///
 /// Clears the cookie. Sessions are stateless so there's nothing
@@ -236,9 +421,21 @@ pub async fn whoami(headers: HeaderMap) -> Response {
 /// Axum middleware that enforces operator-auth on the admin
 /// endpoints when `AWSIM_REQUIRE_OPERATOR_AUTH=true`. Off by
 /// default so single-user dev / test setups keep working.
-pub async fn require_auth(headers: HeaderMap, req: axum::extract::Request, next: Next) -> Response {
+///
+/// Returns 503 when the bootstrap flow has not yet run so the
+/// operator gets a clear pointer at `/_awsim/auth/setup` instead
+/// of a confusing 401.
+pub async fn require_auth(
+    State(state): State<OperatorAuthState>,
+    headers: HeaderMap,
+    req: axum::extract::Request,
+    next: Next,
+) -> Response {
     if !require_operator_auth_enabled() {
         return next.run(req).await;
+    }
+    if matches!(state.bootstrap_state(), BootstrapState::Pending { .. }) {
+        return setup_required_response();
     }
     if resolve_session(&headers).is_some() {
         return next.run(req).await;

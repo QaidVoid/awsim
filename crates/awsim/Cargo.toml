@@ -78,6 +78,7 @@ awsim-pinpoint = { workspace = true }
 awsim-identitystore = { workspace = true }
 fake = { workspace = true }
 rand = { workspace = true }
+sha2 = { workspace = true }
 md-5 = { workspace = true }
 chrono = { workspace = true }
 toml = { workspace = true }

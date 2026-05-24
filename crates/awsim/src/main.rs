@@ -1158,6 +1158,7 @@ async fn async_main() -> Result<()> {
         cli.account_id.clone(),
         cli.region.clone(),
     );
+    arm_operator_auth_if_required(&operator_auth_state);
     let auth_router: axum::Router<()> = axum::Router::new()
         .route(
             "/_awsim/auth/login",
@@ -1171,7 +1172,11 @@ async fn async_main() -> Result<()> {
             "/_awsim/auth/whoami",
             axum::routing::get(operator_auth::whoami),
         )
-        .with_state(operator_auth_state);
+        .route(
+            "/_awsim/auth/setup",
+            axum::routing::post(operator_auth::setup),
+        )
+        .with_state(operator_auth_state.clone());
     let main_router: axum::Router<()> = axum::Router::new()
         .route("/_awsim/health", axum::routing::get(admin::health))
         .route("/_awsim/services", axum::routing::get(admin::list_services))
@@ -1191,7 +1196,10 @@ async fn async_main() -> Result<()> {
             "/_awsim/requests/{id}/replay",
             axum::routing::post(admin::replay_request),
         )
-        .layer(axum::middleware::from_fn(operator_auth::require_auth))
+        .layer(axum::middleware::from_fn_with_state(
+            operator_auth_state.clone(),
+            operator_auth::require_auth,
+        ))
         // Wide-open catch-all on `/{bucket}/{*key}`. Hands every
         // method to the gateway (which routes to the right service
         // by inspecting headers / path / verb internally) and
@@ -2106,6 +2114,57 @@ fn spawn_event_router(state: &AppState) {
 /// cannot be parsed.
 /// Format the current UTC time as the ISO 8601 string AWS uses on SNS
 /// notification envelopes (e.g. `2026-05-04T09:00:00.000Z`).
+/// Print the first-run bootstrap instructions and arm
+/// [`operator_auth::OperatorAuthState`] when
+/// `AWSIM_REQUIRE_OPERATOR_AUTH=true` is set and the IAM service
+/// has no existing `root` login profile.
+///
+/// On every subsequent boot the snapshot will contain the root
+/// user, so this routine flips the gate to "Complete" instead of
+/// printing a new token.
+fn arm_operator_auth_if_required(state: &operator_auth::OperatorAuthState) {
+    let enabled = std::env::var("AWSIM_REQUIRE_OPERATOR_AUTH")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
+    if !enabled {
+        return;
+    }
+
+    let iam_state = state
+        .iam
+        .store()
+        .get(&state.default_account_id, &state.default_region);
+    let root_exists = iam_state
+        .login_profiles
+        .contains_key(operator_auth::ROOT_USERNAME);
+    if root_exists {
+        state.mark_bootstrap_complete();
+        info!(
+            "AWSIM_REQUIRE_OPERATOR_AUTH is on; root login profile present, admin access requires login."
+        );
+        return;
+    }
+
+    let token = state.arm_bootstrap();
+    println!();
+    println!("===================================================================");
+    println!(" AWSim operator setup required");
+    println!("-------------------------------------------------------------------");
+    println!(" AWSIM_REQUIRE_OPERATOR_AUTH=true and no root login profile");
+    println!(" exists. Pick a root password and POST to /_awsim/auth/setup:");
+    println!();
+    println!(" curl -s -X POST http://localhost:4566/_awsim/auth/setup \\");
+    println!("      -H 'content-type: application/json' \\");
+    println!(
+        "      -d '{{\"bootstrap_token\":\"{token}\",\"password\":\"<choose-a-strong-password>\"}}'"
+    );
+    println!();
+    println!(" The token above is shown once; copy it now. Until setup runs,");
+    println!(" all admin endpoints return 503 OperatorSetupRequired.");
+    println!("===================================================================");
+    println!();
+}
+
 fn iso8601_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
