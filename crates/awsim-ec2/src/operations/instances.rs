@@ -128,7 +128,30 @@ pub fn run_instances(state: &Ec2State, input: &Value) -> Result<Value, AwsError>
         .to_string();
     let min_count = input["MinCount"].as_u64().unwrap_or(1);
     let max_count = input["MaxCount"].as_u64().unwrap_or(1);
-    let count = min_count.max(1).min(max_count);
+    // AWS rejects MinCount of 0 with InvalidParameterValue, and a
+    // MinCount that exceeds MaxCount with InvalidParameterCombination.
+    // Without these checks the silent-clamp on min_count.max(1) hid
+    // the misconfiguration so a caller's "give me at least 5" turned
+    // into "give me 1" instead of the real-AWS error.
+    if min_count == 0 {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValue",
+            "MinCount must be at least 1.",
+        ));
+    }
+    if max_count == 0 {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValue",
+            "MaxCount must be at least 1.",
+        ));
+    }
+    if min_count > max_count {
+        return Err(AwsError::bad_request(
+            "InvalidParameterCombination",
+            format!("MinCount ({min_count}) must be less than or equal to MaxCount ({max_count})."),
+        ));
+    }
+    let count = max_count;
 
     let subnet_id = input["SubnetId"].as_str().map(|s| s.to_string());
     let now = now_iso8601();
