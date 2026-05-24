@@ -292,6 +292,7 @@ pub async fn handle_s3_event(
                     let sqs_ctx = RequestContext {
                         account_id: event.account_id.clone(),
                         region: event.region.clone(),
+                        partition: awsim_core::DEFAULT_PARTITION.to_string(),
                         service: "sqs".to_string(),
                         access_key: None,
                         request_id: uuid::Uuid::new_v4().to_string(),
@@ -326,6 +327,7 @@ pub async fn handle_s3_event(
                     let sns_ctx = RequestContext {
                         account_id: event.account_id.clone(),
                         region: event.region.clone(),
+                        partition: awsim_core::DEFAULT_PARTITION.to_string(),
                         service: "sns".to_string(),
                         access_key: None,
                         request_id: uuid::Uuid::new_v4().to_string(),
@@ -361,6 +363,7 @@ pub async fn handle_s3_event(
                     let lambda_ctx = RequestContext {
                         account_id: event.account_id.clone(),
                         region: event.region.clone(),
+                        partition: awsim_core::DEFAULT_PARTITION.to_string(),
                         service: "lambda".to_string(),
                         access_key: None,
                         request_id: uuid::Uuid::new_v4().to_string(),
@@ -433,6 +436,7 @@ pub async fn handle_dynamodb_stream(
     let ctx = RequestContext {
         account_id: event.account_id.clone(),
         region: event.region.clone(),
+        partition: awsim_core::DEFAULT_PARTITION.to_string(),
         service: "lambda".to_string(),
         access_key: None,
         request_id: uuid::Uuid::new_v4().to_string(),
@@ -488,6 +492,7 @@ pub async fn handle_dynamodb_stream(
         let invoke_ctx = RequestContext {
             account_id: event.account_id.clone(),
             region: event.region.clone(),
+            partition: awsim_core::DEFAULT_PARTITION.to_string(),
             service: "lambda".to_string(),
             access_key: None,
             request_id: uuid::Uuid::new_v4().to_string(),
@@ -914,6 +919,7 @@ pub async fn handle_cf_create_resource(
     let ctx = RequestContext {
         account_id: event.account_id.clone(),
         region: event.region.clone(),
+        partition: awsim_core::DEFAULT_PARTITION.to_string(),
         service: "cloudformation".to_string(),
         access_key: None,
         request_id: uuid::Uuid::new_v4().to_string(),
@@ -1129,6 +1135,7 @@ pub async fn handle_cf_delete_resource(
     let ctx = RequestContext {
         account_id: event.account_id.clone(),
         region: event.region.clone(),
+        partition: awsim_core::DEFAULT_PARTITION.to_string(),
         service: "cloudformation".to_string(),
         access_key: None,
         request_id: uuid::Uuid::new_v4().to_string(),

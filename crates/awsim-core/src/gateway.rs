@@ -39,6 +39,8 @@ pub struct AppState {
     pub default_region: String,
     /// Default AWS account ID.
     pub default_account_id: String,
+    /// Default AWS partition (`aws`, `aws-cn`, `aws-us-gov`, ...).
+    pub default_partition: String,
     /// Internal event bus for cross-service fan-out (SNS→SQS, etc.).
     pub event_bus: EventBus,
     /// Total number of AWS API requests handled since startup.
@@ -62,11 +64,27 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(default_region: String, default_account_id: String) -> Self {
+        Self::with_partition(
+            default_region,
+            default_account_id,
+            crate::router::DEFAULT_PARTITION.to_string(),
+        )
+    }
+
+    /// Construct an `AppState` with a non-default AWS partition.
+    /// Use this for `aws-cn`, `aws-us-gov`, or `aws-iso(-b)` deployments
+    /// so emitted ARNs match the configured partition.
+    pub fn with_partition(
+        default_region: String,
+        default_account_id: String,
+        default_partition: String,
+    ) -> Self {
         Self {
             services: Arc::new(HashMap::new()),
             routes: Arc::new(HashMap::new()),
             default_region,
             default_account_id,
+            default_partition,
             event_bus: EventBus::new(),
             request_count: Arc::new(AtomicU64::new(0)),
             start_time: std::time::Instant::now(),
@@ -495,6 +513,7 @@ async fn process_request(
     let ctx = crate::router::RequestContext {
         account_id,
         region,
+        partition: state.default_partition.clone(),
         service: service_name.clone(),
         access_key,
         request_id: request_id.to_string(),

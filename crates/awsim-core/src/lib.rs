@@ -1,3 +1,4 @@
+pub mod arn;
 pub mod auth;
 pub mod authz;
 pub mod body;
@@ -19,6 +20,7 @@ pub use authz::{
 };
 // `HandlerByteStream` and `HandlerResult` are defined further down in
 // this file; re-exported here for crate consumers.
+pub use arn::Arn;
 pub use body::Body;
 pub use body_store::{BlobInventory, BodyStore};
 pub use error::AwsError;
@@ -32,7 +34,7 @@ pub use request_detail::{
     RequestDetailStore, capture_body, capture_headers,
 };
 pub use request_event::{RequestEvent, RequestEventBus};
-pub use router::RequestContext;
+pub use router::{DEFAULT_PARTITION, RequestContext};
 pub use state::{AccountRegionStore, Snapshottable};
 
 use bytes::Bytes;

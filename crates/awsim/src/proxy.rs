@@ -286,6 +286,7 @@ async fn invoke_authorizer_lambda(
     let ctx = RequestContext {
         account_id: state.default_account_id.clone(),
         region: state.default_region.clone(),
+        partition: awsim_core::DEFAULT_PARTITION.to_string(),
         service: "lambda".to_string(),
         access_key: None,
         request_id: uuid::Uuid::new_v4().to_string(),
@@ -688,6 +689,7 @@ async fn invoke_lambda_raw(
     let ctx = RequestContext {
         account_id: state.default_account_id.clone(),
         region: state.default_region.clone(),
+        partition: awsim_core::DEFAULT_PARTITION.to_string(),
         service: "lambda".to_string(),
         access_key: None,
         request_id: uuid::Uuid::new_v4().to_string(),
@@ -827,6 +829,7 @@ async fn invoke_lambda(
     let ctx = RequestContext {
         account_id: state.default_account_id.clone(),
         region: state.default_region.clone(),
+        partition: awsim_core::DEFAULT_PARTITION.to_string(),
         service: "lambda".to_string(),
         access_key: None,
         request_id: uuid::Uuid::new_v4().to_string(),

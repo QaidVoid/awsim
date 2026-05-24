@@ -1,14 +1,21 @@
+/// Default AWS partition used when no override is configured.
+pub const DEFAULT_PARTITION: &str = "aws";
+
 /// Context extracted from an incoming AWS API request.
 ///
 /// Contains the account ID, region, service, and request metadata
 /// needed by service handlers to process the request.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RequestContext {
     /// AWS account ID (default: "000000000000" in bypass mode)
     pub account_id: String,
 
     /// AWS region (e.g., "us-east-1")
     pub region: String,
+
+    /// AWS partition: `aws`, `aws-cn`, `aws-us-gov`, `aws-iso(-b)`. Used
+    /// in every ARN this request emits.
+    pub partition: String,
 
     /// Service name extracted from the request
     pub service: String,
@@ -25,7 +32,7 @@ pub struct RequestContext {
     /// URI path of the original request
     pub uri: String,
 
-    /// Internal event bus — present for requests routed through the gateway;
+    /// Internal event bus - present for requests routed through the gateway;
     /// `None` in unit tests or any context where no bus was configured.
     pub event_bus: Option<crate::events::EventBus>,
 
@@ -39,11 +46,30 @@ pub struct RequestContext {
     pub is_secure: bool,
 }
 
+impl Default for RequestContext {
+    fn default() -> Self {
+        Self {
+            account_id: String::new(),
+            region: String::new(),
+            partition: DEFAULT_PARTITION.to_string(),
+            service: String::new(),
+            access_key: None,
+            request_id: String::new(),
+            method: String::new(),
+            uri: String::new(),
+            event_bus: None,
+            source_ip: None,
+            is_secure: false,
+        }
+    }
+}
+
 impl RequestContext {
     pub fn new(service: impl Into<String>, region: impl Into<String>) -> Self {
         Self {
             account_id: "000000000000".to_string(),
             region: region.into(),
+            partition: DEFAULT_PARTITION.to_string(),
             service: service.into(),
             access_key: None,
             request_id: uuid::Uuid::new_v4().to_string(),
@@ -55,7 +81,7 @@ impl RequestContext {
         }
     }
 
-    /// Like [`new`] but with an explicit account id — used by background
+    /// Like [`new`] but with an explicit account id, used by background
     /// pollers that fan out across every (account, region) pair.
     pub fn new_with_account(
         service: impl Into<String>,
@@ -65,6 +91,7 @@ impl RequestContext {
         Self {
             account_id: account_id.into(),
             region: region.into(),
+            partition: DEFAULT_PARTITION.to_string(),
             service: service.into(),
             access_key: None,
             request_id: uuid::Uuid::new_v4().to_string(),
@@ -76,9 +103,13 @@ impl RequestContext {
         }
     }
 
-    /// Returns an ARN prefix for this account and region.
-    /// e.g., "arn:aws:s3:us-east-1:000000000000"
+    /// Returns an ARN prefix for this partition, account, and region.
+    ///
+    /// e.g. `arn:aws:s3:us-east-1:000000000000`.
     pub fn arn_prefix(&self, service: &str) -> String {
-        format!("arn:aws:{}:{}:{}", service, self.region, self.account_id)
+        format!(
+            "arn:{}:{}:{}:{}",
+            self.partition, service, self.region, self.account_id
+        )
     }
 }

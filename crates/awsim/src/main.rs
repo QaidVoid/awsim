@@ -78,6 +78,11 @@ struct Cli {
     #[arg(long, default_value = "000000000000", env = "AWSIM_ACCOUNT_ID")]
     account_id: String,
 
+    /// Default AWS partition: `aws`, `aws-cn`, `aws-us-gov`, `aws-iso`,
+    /// or `aws-iso-b`. Reflected in every emitted ARN.
+    #[arg(long, default_value = "aws", env = "AWSIM_PARTITION")]
+    partition: String,
+
     /// Data directory for persistence (omit for in-memory only)
     #[arg(long, env = "AWSIM_DATA_DIR")]
     data_dir: Option<String>,
@@ -416,7 +421,11 @@ async fn async_main() -> Result<()> {
 
     raise_nofile_limit();
 
-    let mut state = AppState::new(cli.region.clone(), cli.account_id.clone());
+    let mut state = AppState::with_partition(
+        cli.region.clone(),
+        cli.account_id.clone(),
+        cli.partition.clone(),
+    );
 
     // Runtime config store — disk-backed when --data-dir is set, in
     // memory only otherwise. CLI flags seed initial values; persisted
@@ -1897,6 +1906,7 @@ fn spawn_event_router(state: &AppState) {
                                 let ctx = RequestContext {
                                     account_id: event.account_id.clone(),
                                     region: event.region.clone(),
+                                    partition: awsim_core::DEFAULT_PARTITION.to_string(),
                                     service: "sqs".to_string(),
                                     access_key: None,
                                     request_id: uuid::Uuid::new_v4().to_string(),
