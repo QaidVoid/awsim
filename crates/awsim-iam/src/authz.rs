@@ -108,6 +108,22 @@ impl PrincipalLookup for IamPrincipalLookup {
         debug!(access_key = %access_key, "No IAM user found for access key");
         None
     }
+
+    fn resolve_secret(&self, access_key: &str) -> Option<String> {
+        for (_, state) in self.store.iter_all() {
+            for entry in state.users.iter() {
+                if let Some(k) = entry
+                    .value()
+                    .access_keys
+                    .iter()
+                    .find(|k| k.access_key_id == access_key)
+                {
+                    return Some(k.secret_access_key.clone());
+                }
+            }
+        }
+        None
+    }
 }
 
 fn find_user_with_key(state: &IamState, access_key: &str) -> Option<crate::state::User> {

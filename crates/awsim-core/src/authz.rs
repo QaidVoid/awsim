@@ -33,6 +33,16 @@ pub trait PrincipalLookup: Send + Sync {
     fn resolve_arn(&self, _arn: &str) -> Option<ResolvedPrincipal> {
         None
     }
+
+    /// Look up the plaintext secret access key for a given access key
+    /// ID. Used by the SigV4 verifier on the request path when
+    /// `AWSIM_VERIFY_SIGV4` is enabled so the gateway can recompute
+    /// the signature and reject impostors. Default returns `None`,
+    /// which the verifier treats as "unknown principal" and rejects
+    /// with `InvalidClientTokenId`.
+    fn resolve_secret(&self, _access_key: &str) -> Option<String> {
+        None
+    }
 }
 
 pub trait ResourcePolicyLookup: Send + Sync {

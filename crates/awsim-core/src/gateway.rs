@@ -534,6 +534,21 @@ async fn process_request(
         }
     }
 
+    // 1c. Cryptographic SigV4 verification when AWSIM_VERIFY_SIGV4
+    // is on. The presence-check above only confirmed the access key
+    // exists; this step recomputes the signature with the matching
+    // secret and rejects mismatches. Off by default so legacy
+    // clients sending "Signature=fakesignature" keep working.
+    if crate::sigv4_verify::verify_enabled()
+        && let Some(key) = access_key.as_deref()
+        && !state.authz.is_admin_access_key(key)
+    {
+        let protocol = protocol::detect_protocol(headers, body).unwrap_or(Protocol::RestJson1);
+        if let Err(err) = verify_signature_for_request(state, headers, method, uri, body, key) {
+            return Err((protocol, err));
+        }
+    }
+
     // 2. Find the service handler
     let mut handler = state.services.get(&service_name).ok_or_else(|| {
         let protocol = protocol::detect_protocol(headers, body).unwrap_or(Protocol::RestJson1);
@@ -745,6 +760,132 @@ async fn process_request(
 }
 
 /// Extract service name, region, account ID, and access key from the request.
+/// Reconstruct the canonical request from the inbound axum pieces and
+/// hand it to `sigv4_verify::verify` along with the secret bound to
+/// the caller's access key. Returns a translated AWS-style error on
+/// rejection so the gateway can wrap it with the request's protocol.
+fn verify_signature_for_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &Bytes,
+    access_key: &str,
+) -> Result<(), AwsError> {
+    let auth_value = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "MissingAuthenticationTokenException",
+                "Request must be signed with SigV4 when AWSIM_VERIFY_SIGV4 is on.",
+            )
+        })?;
+    let auth = crate::sigv4_verify::parse_authorization_header(auth_value).ok_or_else(|| {
+        AwsError::bad_request(
+            "IncompleteSignatureException",
+            "Authorization header is not in the expected AWS4-HMAC-SHA256 shape.",
+        )
+    })?;
+    let amz_date = headers
+        .get("x-amz-date")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "IncompleteSignatureException",
+                "x-amz-date header is required for SigV4-signed requests.",
+            )
+        })?;
+    let payload_hash_header = headers
+        .get("x-amz-content-sha256")
+        .and_then(|v| v.to_str().ok());
+    let secret = state
+        .authz
+        .principal_lookup
+        .resolve_secret(access_key)
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidClientTokenId",
+                "The security token included in the request is invalid.",
+            )
+        })?;
+
+    // Pull the headers listed in SignedHeaders out of the inbound
+    // request in the same order. Missing entries make the signature
+    // unrecoverable, so reject early.
+    let mut headers_for_canonical: Vec<(String, String)> =
+        Vec::with_capacity(auth.signed_headers.len());
+    for name in &auth.signed_headers {
+        let lower = name.to_ascii_lowercase();
+        let value = if lower == "host" {
+            headers
+                .get("host")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+                .or_else(|| uri.host().map(|s| s.to_string()))
+                .unwrap_or_default()
+        } else {
+            headers
+                .get(lower.as_str())
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string()
+        };
+        headers_for_canonical.push((lower, value));
+    }
+
+    let path = uri.path();
+    let query = uri.query().unwrap_or("");
+    // The query string already canonicalises easily because it comes
+    // off the wire in encoded form; for SigV4 we still must sort the
+    // key/value pairs.
+    let canonical_query = canonicalize_query(query);
+
+    let outcome = crate::sigv4_verify::verify(
+        &auth,
+        &secret,
+        method.as_str(),
+        path,
+        &canonical_query,
+        &headers_for_canonical,
+        amz_date,
+        body,
+        payload_hash_header,
+        std::time::SystemTime::now(),
+        std::time::Duration::from_secs(300),
+    );
+    match outcome {
+        crate::sigv4_verify::VerifyOutcome::Ok => Ok(()),
+        crate::sigv4_verify::VerifyOutcome::IncompleteSignature => Err(AwsError::bad_request(
+            "IncompleteSignatureException",
+            "SigV4 verification failed: required header missing.",
+        )),
+        crate::sigv4_verify::VerifyOutcome::SignatureMismatch => Err(AwsError::bad_request(
+            "SignatureDoesNotMatch",
+            "The request signature we calculated does not match the signature you provided.",
+        )),
+    }
+}
+
+fn canonicalize_query(query: &str) -> String {
+    if query.is_empty() {
+        return String::new();
+    }
+    let mut parts: Vec<(String, String)> = query
+        .split('&')
+        .map(|kv| match kv.split_once('=') {
+            Some((k, v)) => (k.to_string(), v.to_string()),
+            None => (kv.to_string(), String::new()),
+        })
+        .collect();
+    parts.sort();
+    parts
+        .into_iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
 fn extract_service_info(
     state: &AppState,
     headers: &HeaderMap,
