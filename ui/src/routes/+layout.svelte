@@ -14,6 +14,7 @@
 	import InspectDrawer from '$lib/components/inspect-drawer.svelte';
 	import { fetchConfig } from '$lib/api';
 	import { fetchRecentRequestIds } from '$lib/api/requests';
+	import { auth } from '$lib/auth-state.svelte';
 	import { route } from '$lib/url';
 	import { recent } from '$lib/recent.svelte';
 	import { shortcuts } from '$lib/shortcuts.svelte';
@@ -77,6 +78,21 @@
 			.then((c) => (config = c))
 			.catch(() => {
 				/* leave defaults */
+			});
+
+		// Probe whoami to populate the session. When operator auth is
+		// off the endpoint responds OK with no body and the layout
+		// stays loginless; when it's on and the user isn't signed in,
+		// the probe returns null and we redirect every page except
+		// /login itself.
+		auth.refresh()
+			.then(() => {
+				if (auth.session === null && !page.url.pathname.endsWith('/login')) {
+					goto(route('/login'));
+				}
+			})
+			.catch(() => {
+				/* leave loginless */
 			});
 
 		registerShortcuts();

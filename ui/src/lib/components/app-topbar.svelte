@@ -9,7 +9,15 @@
 	import Menu from '@lucide/svelte/icons/menu';
 	import Keyboard from '@lucide/svelte/icons/keyboard';
 	import Settings from '@lucide/svelte/icons/settings';
+	import LogOut from '@lucide/svelte/icons/log-out';
 	import { route } from '$lib/url';
+	import { auth } from '$lib/auth-state.svelte';
+	import { goto } from '$app/navigation';
+
+	async function signOut() {
+		await auth.signOut();
+		await goto(route('/login'));
+	}
 
 	interface Props {
 		region?: string;
@@ -152,5 +160,23 @@
 		>
 			<BookOpen class="size-4" />
 		</Button>
+
+		{#if auth.signedIn}
+			<div class="hidden items-center gap-2 border-l border-border pl-2 ml-1 sm:flex">
+				<Badge variant="outline" class="gap-1 font-mono text-[11px] font-normal">
+					<span class="text-muted-foreground">user</span>
+					<span>{auth.displayName}</span>
+				</Badge>
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon"
+					onclick={signOut}
+					aria-label="Sign out"
+				>
+					<LogOut class="size-4" />
+				</Button>
+			</div>
+		{/if}
 	</div>
 </header>
