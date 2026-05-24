@@ -89,16 +89,41 @@ pub fn delete_virtual_mfa_device(state: &IamState, input: &Value) -> Result<Valu
 pub fn enable_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
     let serial_number = require_str(input, "SerialNumber")?;
-    // Auth codes are accepted but not validated in dev mode
-    let _code1 = require_str(input, "AuthenticationCode1")?;
-    let _code2 = require_str(input, "AuthenticationCode2")?;
+    let code1 = parse_auth_code(input, "AuthenticationCode1")?;
+    let code2 = parse_auth_code(input, "AuthenticationCode2")?;
 
     // Ensure user exists
     if !state.users.contains_key(user_name) {
         return Err(no_such_entity("User", user_name));
     }
 
-    // Ensure device exists
+    // Ensure device exists, then verify the two consecutive TOTP
+    // codes match the seed we issued at CreateVirtualMFADevice.
+    {
+        let device = state
+            .virtual_mfa_devices
+            .get(serial_number)
+            .ok_or_else(|| no_such_entity("VirtualMFADevice", serial_number))?;
+        let seed = device.base32_string_seed.as_deref().ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidAuthenticationCode",
+                "MFA device has no seed; recreate the device.",
+            )
+        })?;
+        if !awsim_core::totp::verify_consecutive(
+            seed,
+            code1,
+            code2,
+            std::time::SystemTime::now(),
+            1,
+        ) {
+            return Err(AwsError::bad_request(
+                "InvalidAuthenticationCode",
+                "AuthenticationCode1 and AuthenticationCode2 must be two consecutive valid TOTP codes for the device.",
+            ));
+        }
+    }
+
     {
         let mut device = state
             .virtual_mfa_devices
@@ -108,7 +133,6 @@ pub fn enable_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsEr
         device.enable_date = Some(now_iso8601());
     }
 
-    // Add serial number to user's mfa_devices
     {
         let mut user = state
             .users
@@ -120,6 +144,16 @@ pub fn enable_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsEr
     }
 
     Ok(json!({}))
+}
+
+fn parse_auth_code(input: &Value, field: &str) -> Result<u32, AwsError> {
+    let raw = require_str(input, field)?;
+    raw.parse::<u32>().map_err(|_| {
+        AwsError::bad_request(
+            "InvalidAuthenticationCode",
+            format!("{field} must be a 6-digit number."),
+        )
+    })
 }
 
 pub fn deactivate_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsError> {
@@ -167,11 +201,26 @@ pub fn get_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsError
 pub fn resync_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let _user_name = require_str(input, "UserName")?;
     let serial_number = require_str(input, "SerialNumber")?;
-    let _code1 = require_str(input, "AuthenticationCode1")?;
-    let _code2 = require_str(input, "AuthenticationCode2")?;
+    let code1 = parse_auth_code(input, "AuthenticationCode1")?;
+    let code2 = parse_auth_code(input, "AuthenticationCode2")?;
 
-    if !state.virtual_mfa_devices.contains_key(serial_number) {
-        return Err(no_such_entity("VirtualMFADevice", serial_number));
+    let device = state
+        .virtual_mfa_devices
+        .get(serial_number)
+        .ok_or_else(|| no_such_entity("VirtualMFADevice", serial_number))?;
+    let seed = device.base32_string_seed.as_deref().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidAuthenticationCode",
+            "MFA device has no seed; recreate the device.",
+        )
+    })?;
+    // Use a wider window for resync since the whole point is the
+    // device clock has drifted.
+    if !awsim_core::totp::verify_consecutive(seed, code1, code2, std::time::SystemTime::now(), 4) {
+        return Err(AwsError::bad_request(
+            "InvalidAuthenticationCode",
+            "AuthenticationCode1 and AuthenticationCode2 must be two consecutive valid TOTP codes for the device.",
+        ));
     }
     Ok(json!({}))
 }

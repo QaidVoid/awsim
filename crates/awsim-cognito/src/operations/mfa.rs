@@ -209,7 +209,7 @@ pub fn verify_software_token(
                     "No software token associated for this user",
                 )
             })?;
-            if !crate::totp::verify(&secret, user_code) {
+            if !awsim_core::totp::verify_str(&secret, user_code, 1) {
                 return Err(AwsError::bad_request(
                     "EnableSoftwareTokenMFAException",
                     "Invalid software token code",

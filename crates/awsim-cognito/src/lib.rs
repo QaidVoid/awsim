@@ -11,7 +11,6 @@ pub mod password;
 mod secret_hash;
 mod srp;
 pub mod state;
-mod totp;
 
 pub use identity::CognitoIdentityService;
 pub use oauth::CognitoOAuthState;

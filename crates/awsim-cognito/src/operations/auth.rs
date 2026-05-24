@@ -925,7 +925,7 @@ pub fn respond_to_auth_challenge(
                     "User has no software token configured",
                 )
             })?;
-            if !crate::totp::verify(secret, user_code) {
+            if !awsim_core::totp::verify_str(secret, user_code, 1) {
                 return Err(AwsError::bad_request(
                     "CodeMismatchException",
                     "Invalid software token code",

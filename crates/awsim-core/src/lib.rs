@@ -18,6 +18,7 @@ pub mod router;
 pub mod state;
 pub mod tags;
 pub mod tick;
+pub mod totp;
 
 pub use authz::{
     AuthzEngine, GrantLookup, NoopPrincipalLookup, PrincipalLookup, ResolvedPrincipal,
