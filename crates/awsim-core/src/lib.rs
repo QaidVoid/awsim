@@ -13,6 +13,7 @@ pub mod request_detail;
 pub mod request_event;
 pub mod router;
 pub mod state;
+pub mod tags;
 pub mod tick;
 
 pub use authz::{
