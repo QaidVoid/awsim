@@ -26,6 +26,21 @@ pub fn put_log_events(
         AwsError::bad_request("InvalidParameterException", "logEvents is required")
     })?;
 
+    // AWS documents a per-request cap of 10000 log events and rejects
+    // anything larger with InvalidParameterException at the API
+    // boundary. Beyond that, batched ingestion silently drops events
+    // here which masks the failure clients would see in prod.
+    const MAX_EVENTS_PER_REQUEST: usize = 10_000;
+    if log_events.len() > MAX_EVENTS_PER_REQUEST {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!(
+                "logEvents contains {} entries; the maximum allowed per PutLogEvents request is {MAX_EVENTS_PER_REQUEST}.",
+                log_events.len()
+            ),
+        ));
+    }
+
     let group = state.log_groups.get(group_name).ok_or_else(|| {
         AwsError::not_found(
             "ResourceNotFoundException",
