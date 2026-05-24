@@ -148,6 +148,7 @@ pub fn query(
     let expr_attr_names = get_expr_attr_names(input);
     let expr_attr_values = get_expr_attr_values(input);
     let projection_expr = opt_str(input, "ProjectionExpression");
+    super::reject_attrs_to_get_with_projection(input, projection_expr)?;
     let filter_expr = opt_str(input, "FilterExpression");
     let key_condition_expr = opt_str(input, "KeyConditionExpression")
         .ok_or_else(|| AwsError::validation("KeyConditionExpression is required for Query"))?;
@@ -436,6 +437,7 @@ pub fn scan(
     let expr_attr_names = get_expr_attr_names(input);
     let expr_attr_values = get_expr_attr_values(input);
     let projection_expr = opt_str(input, "ProjectionExpression");
+    super::reject_attrs_to_get_with_projection(input, projection_expr)?;
     let filter_expr = opt_str(input, "FilterExpression");
     let limit = input
         .get("Limit")

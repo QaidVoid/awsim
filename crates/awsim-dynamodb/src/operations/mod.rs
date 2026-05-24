@@ -45,6 +45,28 @@ pub fn get_expr_attr_values(input: &Value) -> serde_json::Map<String, Value> {
         .unwrap_or_default()
 }
 
+/// Reject a request that supplies both `ProjectionExpression` and the
+/// legacy `AttributesToGet`.
+///
+/// AWS treats the two as mutually exclusive: supplying both returns
+/// `ValidationException`. Call this from any read path that accepts
+/// `ProjectionExpression` (GetItem, BatchGetItem, Query, Scan) before
+/// reading the value to keep callers from picking one and silently
+/// dropping the other.
+pub fn reject_attrs_to_get_with_projection(
+    input: &Value,
+    projection_expr: Option<&str>,
+) -> Result<(), awsim_core::AwsError> {
+    if projection_expr.is_some() && input.get("AttributesToGet").is_some() {
+        return Err(awsim_core::AwsError::bad_request(
+            "ValidationException",
+            "Cannot specify both AttributesToGet and ProjectionExpression. \
+             Use ProjectionExpression instead - AttributesToGet is a legacy parameter.",
+        ));
+    }
+    Ok(())
+}
+
 /// Translate a byte count to read capacity units. AWS rounds up by 4 KiB
 /// for strongly consistent reads and halves the result for eventually
 /// consistent (the default). Transactional reads consume 2× the

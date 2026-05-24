@@ -29,6 +29,7 @@ fn fetch_existing(
     .transpose()
 }
 
+use super::reject_attrs_to_get_with_projection;
 use super::{
     build_consumed_capacity, get_expr_attr_names, get_expr_attr_values, opt_str,
     read_capacity_units, require_str, write_capacity_units,
@@ -420,6 +421,7 @@ pub fn get_item(
 
     let expr_attr_names = get_expr_attr_names(input);
     let projection_expr = opt_str(input, "ProjectionExpression");
+    reject_attrs_to_get_with_projection(input, projection_expr)?;
 
     // Drop the dashmap guard before SQLite IO to avoid pinning the shard.
     drop(table);
