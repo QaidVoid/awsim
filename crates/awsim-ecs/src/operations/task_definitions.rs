@@ -54,6 +54,14 @@ pub fn register_task_definition(
         .as_str()
         .unwrap_or("bridge")
         .to_string();
+    if !matches!(network_mode.as_str(), "bridge" | "host" | "awsvpc" | "none") {
+        return Err(AwsError::bad_request(
+            "ClientException",
+            format!(
+                "networkMode '{network_mode}' is not supported. Must be one of: bridge, host, awsvpc, none."
+            ),
+        ));
+    }
     let requires_compatibilities: Vec<String> = input["requiresCompatibilities"]
         .as_array()
         .map(|arr| {
@@ -62,6 +70,24 @@ pub fn register_task_definition(
                 .collect()
         })
         .unwrap_or_default();
+    for compat in &requires_compatibilities {
+        if !matches!(compat.as_str(), "EC2" | "FARGATE" | "EXTERNAL") {
+            return Err(AwsError::bad_request(
+                "ClientException",
+                format!(
+                    "requiresCompatibilities entry '{compat}' is invalid. Must be one of: EC2, FARGATE, EXTERNAL."
+                ),
+            ));
+        }
+    }
+    // Fargate tasks must use awsvpc networking; the real ECS API
+    // returns ClientException when this combination is wrong.
+    if requires_compatibilities.iter().any(|c| c == "FARGATE") && network_mode != "awsvpc" {
+        return Err(AwsError::bad_request(
+            "ClientException",
+            "Tasks using the Fargate launch type must use the awsvpc network mode.",
+        ));
+    }
 
     let revision = {
         let mut revisions = state.task_definitions.entry(family.clone()).or_default();
