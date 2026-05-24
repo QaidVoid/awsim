@@ -20,6 +20,7 @@
 	import { EmptyState } from '$lib/components/service';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
+	import { validateEksClusterName, validateIamRoleArn } from '$lib/validators';
 	import Plus from '@lucide/svelte/icons/plus';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -47,6 +48,13 @@
 	let deleteOpen = $state(false);
 	let deleteBusy = $state(false);
 
+	const nameError = $derived(
+		newCluster.name.trim() ? validateEksClusterName(newCluster.name.trim()) : null
+	);
+	const roleArnError = $derived(
+		newCluster.roleArn.trim() ? validateIamRoleArn(newCluster.roleArn.trim()) : null
+	);
+
 	function statusVariant(s: string): 'default' | 'secondary' | 'destructive' | 'outline' {
 		if (s === 'ACTIVE') return 'default';
 		if (s === 'FAILED') return 'destructive';
@@ -57,6 +65,14 @@
 	async function submit(e: Event) {
 		e.preventDefault();
 		if (!newCluster.name.trim()) return;
+		if (nameError) {
+			toast.error(nameError);
+			return;
+		}
+		if (roleArnError) {
+			toast.error(roleArnError);
+			return;
+		}
 		creating = true;
 		try {
 			await createCluster({
@@ -186,7 +202,16 @@
 		<form onsubmit={submit} class="flex flex-col gap-3 py-2">
 			<div class="flex flex-col gap-1.5">
 				<Label for="eks-name">Cluster name</Label>
-				<Input id="eks-name" bind:value={newCluster.name} placeholder="my-cluster" required />
+				<Input
+					id="eks-name"
+					bind:value={newCluster.name}
+					placeholder="my-cluster"
+					required
+					aria-invalid={nameError ? 'true' : undefined}
+				/>
+				{#if nameError}
+					<p class="text-[11px] text-destructive">{nameError}</p>
+				{/if}
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="eks-version">Kubernetes version</Label>
@@ -194,11 +219,29 @@
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<Label for="eks-role">Role ARN</Label>
-				<Input id="eks-role" bind:value={newCluster.roleArn} class="font-mono text-xs" />
+				<Input
+					id="eks-role"
+					bind:value={newCluster.roleArn}
+					class="font-mono text-xs"
+					aria-invalid={roleArnError ? 'true' : undefined}
+				/>
+				{#if roleArnError}
+					<p class="text-[11px] text-destructive">{roleArnError}</p>
+				{:else}
+					<p class="text-[11px] text-muted-foreground">
+						The IAM role EKS assumes to manage the cluster.
+					</p>
+				{/if}
 			</div>
 			<DialogFooter>
 				<Button type="button" variant="ghost" onclick={() => (createOpen = false)}>Cancel</Button>
-				<Button type="submit" disabled={creating || !newCluster.name.trim()}>
+				<Button
+					type="submit"
+					disabled={creating ||
+						!newCluster.name.trim() ||
+						nameError !== null ||
+						roleArnError !== null}
+				>
 					<Plus />
 					{creating ? 'Creating...' : 'Create'}
 				</Button>

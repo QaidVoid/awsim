@@ -13,6 +13,7 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { toast } from 'svelte-sonner';
 	import { createRepository } from '$lib/api/ecr';
+	import { validateEcrRepositoryName } from '$lib/validators';
 
 	interface Props {
 		open: boolean;
@@ -27,6 +28,10 @@
 	let scanOnPush = $state(false);
 	let creating = $state(false);
 
+	const nameError = $derived(
+		name.trim() ? validateEcrRepositoryName(name.trim()) : null
+	);
+
 	function reset() {
 		name = '';
 		immutable = false;
@@ -36,6 +41,10 @@
 	async function submit() {
 		if (!name.trim()) {
 			toast.error('Repository name is required.');
+			return;
+		}
+		if (nameError) {
+			toast.error(nameError);
 			return;
 		}
 		creating = true;
@@ -75,10 +84,15 @@
 					bind:value={name}
 					placeholder="my-app"
 					autocomplete="off"
+					aria-invalid={nameError ? 'true' : undefined}
 				/>
-				<p class="text-[11px] text-muted-foreground">
-					Lowercase alphanumeric, optionally separated by <code>/</code>, <code>_</code>, <code>-</code>.
-				</p>
+				{#if nameError}
+					<p class="text-[11px] text-destructive">{nameError}</p>
+				{:else}
+					<p class="text-[11px] text-muted-foreground">
+						Lowercase alphanumeric, optionally separated by <code>/</code>, <code>_</code>, <code>-</code>.
+					</p>
+				{/if}
 			</div>
 
 			<div class="flex items-center justify-between rounded-md border border-border px-3 py-2">
@@ -104,8 +118,11 @@
 
 		<DialogFooter>
 			<Button variant="outline" onclick={() => onOpenChange(false)}>Cancel</Button>
-			<Button onclick={submit} disabled={creating || !name.trim()}>
-				{creating ? 'Creating…' : 'Create repository'}
+			<Button
+				onclick={submit}
+				disabled={creating || !name.trim() || nameError !== null}
+			>
+				{creating ? 'Creating...' : 'Create repository'}
 			</Button>
 		</DialogFooter>
 	</DialogContent>

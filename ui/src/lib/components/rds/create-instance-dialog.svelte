@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { createDBInstance } from '$lib/api/rds';
+	import { validateRdsDbIdentifier } from '$lib/validators';
 	import {
 		Dialog,
 		DialogContent,
@@ -32,6 +33,10 @@
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 
+	const identifierError = $derived(
+		identifier.trim() ? validateRdsDbIdentifier(identifier.trim()) : null
+	);
+
 	const ENGINE_LABELS: Record<string, string> = {
 		postgres: 'PostgreSQL',
 		mysql: 'MySQL',
@@ -51,6 +56,10 @@
 		const id = identifier.trim();
 		if (!id) {
 			error = 'Identifier required';
+			return;
+		}
+		if (identifierError) {
+			error = identifierError;
 			return;
 		}
 		saving = true;
@@ -97,7 +106,15 @@
 					bind:value={identifier}
 					placeholder="my-database"
 					autocomplete="off"
+					aria-invalid={identifierError ? 'true' : undefined}
 				/>
+				{#if identifierError}
+					<p class="text-[11px] text-destructive">{identifierError}</p>
+				{:else}
+					<p class="text-[11px] text-muted-foreground">
+						1-63 chars, starts with a letter, letters / digits / hyphens.
+					</p>
+				{/if}
 			</div>
 			<div class="grid grid-cols-2 gap-3">
 				<div class="flex flex-col gap-1.5">
@@ -156,7 +173,10 @@
 				<Button type="button" variant="outline" onclick={onClose} disabled={saving}>
 					Cancel
 				</Button>
-				<Button type="submit" disabled={saving || !identifier.trim()}>
+				<Button
+					type="submit"
+					disabled={saving || !identifier.trim() || identifierError !== null}
+				>
 					{#if saving}
 						<Loader2 class="size-3.5 animate-spin" />
 					{/if}
