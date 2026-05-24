@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 awsim-core = { workspace = true }
+awsim-iam-policy = { workspace = true }
 async-trait = { workspace = true }
 dashmap = { workspace = true }
 serde = { workspace = true }

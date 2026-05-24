@@ -1,8 +1,10 @@
+pub mod authz;
 pub mod filter;
 mod handler;
 mod operations;
-mod state;
+pub mod state;
 
+pub use authz::SnsResourcePolicyLookup;
 pub use handler::SnsService;
 
 #[cfg(test)]

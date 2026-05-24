@@ -24,6 +24,14 @@ impl SnsService {
     pub(crate) fn store(&self) -> &AccountRegionStore<SnsState> {
         &self.store
     }
+
+    /// Borrow the inner store so the gateway can wire it into a
+    /// [`SnsResourcePolicyLookup`](crate::SnsResourcePolicyLookup) and
+    /// run topic-level resource-policy evaluation against the same
+    /// state this handler mutates.
+    pub fn store_handle(&self) -> AccountRegionStore<SnsState> {
+        self.store.clone()
+    }
 }
 
 impl Default for SnsService {

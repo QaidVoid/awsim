@@ -533,6 +533,7 @@ async fn async_main() -> Result<()> {
         kinesis_service,
         ses_service,
         sts_sessions,
+        sns_store,
     ) = register_services(
         &mut state,
         &cli.account_id,
@@ -622,6 +623,10 @@ async fn async_main() -> Result<()> {
         authz.resource_policy_lookups.insert(
             "sqs".to_string(),
             Arc::new(awsim_sqs::SqsResourcePolicyLookup::new(sqs_store.clone())),
+        );
+        authz.resource_policy_lookups.insert(
+            "sns".to_string(),
+            Arc::new(awsim_sns::SnsResourcePolicyLookup::new(sns_store.clone())),
         );
         authz.resource_policy_lookups.insert(
             "secretsmanager".to_string(),
@@ -2280,6 +2285,7 @@ type RegisteredServices = (
     Arc<awsim_kinesis::KinesisService>,
     Arc<awsim_ses::SesService>,
     Arc<awsim_sts::StsSessionStore>,
+    awsim_core::AccountRegionStore<awsim_sns::state::SnsState>,
 );
 
 /// Register all services and return handles needed by the router:
@@ -2436,6 +2442,7 @@ fn register_services(
     state.register(sts, vec![]);
 
     let sns = Arc::new(awsim_sns::SnsService::new());
+    let sns_store = sns.store_handle();
     state.register(sns, vec![]);
 
     let sqs = match data_dir {
@@ -2843,6 +2850,7 @@ fn register_services(
         kinesis_clone,
         ses_service,
         sts_sessions,
+        sns_store,
     )
 }
 
