@@ -1,34 +1,87 @@
 //! Opaque-token pagination helper shared by every service's `List*` operation.
 //!
 //! AWS pagination tokens (`NextToken`, `NextMarker`, `ContinuationToken`,
-//! `NextKeyMarker`, …) are opaque base64 strings. SDK clients send them back
-//! verbatim and must not attempt to decode or compare them. This module
-//! encodes a service-chosen marker string into a URL-safe base64 token, and
-//! decodes it back when the client returns.
+//! `NextKeyMarker`, ...) are opaque base64 strings. SDK clients send them
+//! back verbatim and must not attempt to decode or compare them. This
+//! module wraps a service-chosen marker string in a per-process
+//! HMAC-SHA256 envelope with an expiry timestamp, then base64-encodes the
+//! result.
 //!
 //! Callers provide:
-//! - a sorted `Vec<T>` of results (sorted by the same key used to derive the
-//!   marker — typically alphabetical resource name)
+//! - a sorted `Vec<T>` of results (sorted by the same key used to derive
+//!   the marker, typically alphabetical resource name)
 //! - the page size requested by the caller (already capped via
-//!   [`cap_max_results`])
+//!   [`cap_max_results`] or rejected via [`clamp_max_results_strict`])
 //! - the optional starting token from the request
 //! - a closure that extracts the marker key from each item
 //!
-//! The result is a [`Page<T>`] containing the items for this page plus the
-//! token to resume from. The marker stored in the token is the key of the
-//! *first item not yet returned*, so resuming a page hands back exactly the
-//! next slice with no overlap or gap.
+//! The result is a [`Page<T>`] containing the items for this page plus
+//! the token to resume from. The marker stored in the token is the key of
+//! the *first item not yet returned*, so resuming a page hands back
+//! exactly the next slice with no overlap or gap.
 //!
 //! Items whose keys compare lexicographically less than the marker are
-//! skipped, which means the helper handles a resource being deleted between
-//! list calls gracefully — it advances to the first key still present.
+//! skipped, which means the helper handles a resource being deleted
+//! between list calls gracefully: it advances to the first key still
+//! present.
+//!
+//! ## Token format
+//!
+//! Tokens are URL-safe base64 (no padding) of a binary envelope:
+//!
+//! ```text
+//! version (1 byte) || expiry_unix_seconds (8 bytes, big-endian)
+//!     || marker_bytes (variable) || hmac_sha256_truncated (16 bytes)
+//! ```
+//!
+//! The HMAC key is generated once per process from OS randomness. This
+//! means tokens issued by one process cannot be redeemed by another, and
+//! tokens do not survive a process restart. That matches how AWS itself
+//! behaves across regional failovers: an in-flight paginator must restart
+//! from the beginning if the backend rotates.
+//!
+//! Tokens carry a 6-hour TTL. Expired tokens are rejected with the same
+//! error as malformed or forged tokens, since AWS does not distinguish.
 
 use crate::error::AwsError;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use hmac::{Hmac, Mac};
+use rand::RngCore;
+use sha2::Sha256;
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const TOKEN_INVALID_CODE: &str = "InvalidParameterValue";
 const TOKEN_INVALID_MSG: &str = "The pagination token is malformed or expired.";
+
+const MAX_RESULTS_INVALID_CODE: &str = "ValidationException";
+
+const TOKEN_VERSION: u8 = 1;
+const TAG_LEN: usize = 16;
+const MIN_ENVELOPE_LEN: usize = 1 + 8 + TAG_LEN;
+
+/// Default time-to-live for pagination tokens (6 hours).
+pub const TOKEN_TTL_SECONDS: u64 = 6 * 60 * 60;
+
+type HmacSha256 = Hmac<Sha256>;
+
+static SIGNING_KEY: OnceLock<[u8; 32]> = OnceLock::new();
+
+fn signing_key() -> &'static [u8; 32] {
+    SIGNING_KEY.get_or_init(|| {
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        key
+    })
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 /// One page of results plus the token to resume from.
 #[derive(Debug)]
@@ -37,26 +90,82 @@ pub struct Page<T> {
     pub next_token: Option<String>,
 }
 
-/// Encode a marker string as a URL-safe base64 token.
+/// Encode a marker string as a signed, time-limited pagination token.
 pub fn encode_token(marker: &str) -> String {
-    URL_SAFE_NO_PAD.encode(marker.as_bytes())
+    encode_token_with_expiry(marker, now_unix().saturating_add(TOKEN_TTL_SECONDS))
 }
 
-/// Decode a URL-safe base64 token back to its marker string.
+fn encode_token_with_expiry(marker: &str, expiry: u64) -> String {
+    let marker_bytes = marker.as_bytes();
+    let mut envelope = Vec::with_capacity(1 + 8 + marker_bytes.len() + TAG_LEN);
+    envelope.push(TOKEN_VERSION);
+    envelope.extend_from_slice(&expiry.to_be_bytes());
+    envelope.extend_from_slice(marker_bytes);
+
+    let mut mac = HmacSha256::new_from_slice(signing_key()).expect("HMAC accepts any key length");
+    mac.update(&envelope);
+    let tag = mac.finalize().into_bytes();
+    envelope.extend_from_slice(&tag[..TAG_LEN]);
+
+    URL_SAFE_NO_PAD.encode(&envelope)
+}
+
+/// Decode a signed pagination token back to its marker string.
+///
+/// Rejects tokens that are malformed, signed with a different key, or
+/// past their expiry timestamp.
 pub fn decode_token(token: &str) -> Result<String, AwsError> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(token)
-        .map_err(|_| AwsError::bad_request(TOKEN_INVALID_CODE, TOKEN_INVALID_MSG))?;
-    String::from_utf8(bytes)
-        .map_err(|_| AwsError::bad_request(TOKEN_INVALID_CODE, TOKEN_INVALID_MSG))
+    let envelope = URL_SAFE_NO_PAD.decode(token).map_err(|_| token_invalid())?;
+    if envelope.len() < MIN_ENVELOPE_LEN {
+        return Err(token_invalid());
+    }
+    if envelope[0] != TOKEN_VERSION {
+        return Err(token_invalid());
+    }
+
+    let tag_start = envelope.len() - TAG_LEN;
+    let (signed, tag) = envelope.split_at(tag_start);
+
+    let mut mac = HmacSha256::new_from_slice(signing_key()).expect("HMAC accepts any key length");
+    mac.update(signed);
+    let expected = mac.finalize().into_bytes();
+    if !constant_time_eq(tag, &expected[..TAG_LEN]) {
+        return Err(token_invalid());
+    }
+
+    let mut expiry_bytes = [0u8; 8];
+    expiry_bytes.copy_from_slice(&signed[1..9]);
+    let expiry = u64::from_be_bytes(expiry_bytes);
+    if expiry < now_unix() {
+        return Err(token_invalid());
+    }
+
+    let marker_bytes = &signed[9..];
+    String::from_utf8(marker_bytes.to_vec()).map_err(|_| token_invalid())
+}
+
+fn token_invalid() -> AwsError {
+    AwsError::bad_request(TOKEN_INVALID_CODE, TOKEN_INVALID_MSG)
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// Cap a caller-requested page size to a service-defined range.
 ///
-/// `default` applies when the caller did not specify a value; `max` is the
-/// service's documented hard limit. Negative or zero values are coerced to
-/// `1`. AWS itself also rejects values out of range with a validation error;
-/// services that want strict behavior should validate before calling this.
+/// `default` applies when the caller did not specify a value; `max` is
+/// the service's documented hard limit. Negative or zero values are
+/// coerced to `1`. AWS itself rejects values out of range with a
+/// validation error; services that want strict behavior should use
+/// [`clamp_max_results_strict`] instead.
 pub fn cap_max_results(requested: Option<i64>, default: usize, max: usize) -> usize {
     match requested {
         None => default.min(max),
@@ -65,13 +174,44 @@ pub fn cap_max_results(requested: Option<i64>, default: usize, max: usize) -> us
     }
 }
 
+/// Strict variant of [`cap_max_results`] that returns a validation error
+/// instead of silently clamping. Use this when implementing services
+/// whose documented contract is to reject `MaxResults` outside the
+/// allowed range.
+pub fn clamp_max_results_strict(
+    requested: Option<i64>,
+    default: usize,
+    max: usize,
+) -> Result<usize, AwsError> {
+    let n = match requested {
+        None => return Ok(default.min(max)),
+        Some(n) => n,
+    };
+    if n < 1 {
+        return Err(AwsError::bad_request(
+            MAX_RESULTS_INVALID_CODE,
+            format!("MaxResults must be at least 1, got {n}."),
+        ));
+    }
+    let n = n as usize;
+    if n > max {
+        return Err(AwsError::bad_request(
+            MAX_RESULTS_INVALID_CODE,
+            format!("MaxResults must be at most {max}, got {n}."),
+        ));
+    }
+    Ok(n)
+}
+
 /// Paginate a sorted owned `Vec<T>`.
 ///
-/// `key_fn` extracts the marker key from an item. Items must be sorted by
-/// that same key for the resume-after-deletion behavior to work correctly.
+/// `key_fn` extracts the marker key from an item. Items must be sorted
+/// by that same key for the resume-after-deletion behavior to work
+/// correctly.
 ///
-/// `max_results` is the page size; the caller is expected to have already
-/// applied any service-specific bounds via [`cap_max_results`].
+/// `max_results` is the page size; the caller is expected to have
+/// already applied any service-specific bounds via [`cap_max_results`]
+/// or [`clamp_max_results_strict`].
 pub fn paginate<T, F>(
     items: Vec<T>,
     max_results: usize,
@@ -190,10 +330,79 @@ mod tests {
     }
 
     #[test]
-    fn invalid_utf8_token_returns_error() {
-        let bad = URL_SAFE_NO_PAD.encode([0xff, 0xfe, 0xfd]);
+    fn invalid_utf8_marker_returns_error() {
+        let bad_marker = [0xff, 0xfe, 0xfd];
+        let expiry = now_unix().saturating_add(TOKEN_TTL_SECONDS);
+        let mut envelope = Vec::new();
+        envelope.push(TOKEN_VERSION);
+        envelope.extend_from_slice(&expiry.to_be_bytes());
+        envelope.extend_from_slice(&bad_marker);
+        let mut mac = HmacSha256::new_from_slice(signing_key()).unwrap();
+        mac.update(&envelope);
+        let tag = mac.finalize().into_bytes();
+        envelope.extend_from_slice(&tag[..TAG_LEN]);
+        let token = URL_SAFE_NO_PAD.encode(&envelope);
+
         let items = vec!["alpha"];
-        let err = paginate(items, 10, Some(&bad), key).unwrap_err();
+        let err = paginate(items, 10, Some(&token), key).unwrap_err();
+        assert_eq!(err.code, TOKEN_INVALID_CODE);
+    }
+
+    #[test]
+    fn tampered_token_is_rejected() {
+        let token = encode_token("charlie");
+        let mut bytes = URL_SAFE_NO_PAD.decode(&token).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0x01;
+        let tampered = URL_SAFE_NO_PAD.encode(&bytes);
+        let err = decode_token(&tampered).unwrap_err();
+        assert_eq!(err.code, TOKEN_INVALID_CODE);
+    }
+
+    #[test]
+    fn forged_token_with_wrong_key_is_rejected() {
+        let foreign_key = [0u8; 32];
+        let mut envelope = Vec::new();
+        envelope.push(TOKEN_VERSION);
+        envelope.extend_from_slice(&now_unix().saturating_add(TOKEN_TTL_SECONDS).to_be_bytes());
+        envelope.extend_from_slice(b"charlie");
+        let mut mac = HmacSha256::new_from_slice(&foreign_key).unwrap();
+        mac.update(&envelope);
+        let tag = mac.finalize().into_bytes();
+        envelope.extend_from_slice(&tag[..TAG_LEN]);
+        let forged = URL_SAFE_NO_PAD.encode(&envelope);
+
+        let err = decode_token(&forged).unwrap_err();
+        assert_eq!(err.code, TOKEN_INVALID_CODE);
+    }
+
+    #[test]
+    fn expired_token_is_rejected() {
+        let already_expired = now_unix().saturating_sub(60);
+        let token = encode_token_with_expiry("charlie", already_expired);
+        let err = decode_token(&token).unwrap_err();
+        assert_eq!(err.code, TOKEN_INVALID_CODE);
+    }
+
+    #[test]
+    fn wrong_version_byte_is_rejected() {
+        let mut envelope = Vec::new();
+        envelope.push(99);
+        envelope.extend_from_slice(&now_unix().saturating_add(TOKEN_TTL_SECONDS).to_be_bytes());
+        envelope.extend_from_slice(b"charlie");
+        let mut mac = HmacSha256::new_from_slice(signing_key()).unwrap();
+        mac.update(&envelope);
+        let tag = mac.finalize().into_bytes();
+        envelope.extend_from_slice(&tag[..TAG_LEN]);
+        let token = URL_SAFE_NO_PAD.encode(&envelope);
+
+        let err = decode_token(&token).unwrap_err();
+        assert_eq!(err.code, TOKEN_INVALID_CODE);
+    }
+
+    #[test]
+    fn truncated_envelope_is_rejected() {
+        let err = decode_token("YQ").unwrap_err();
         assert_eq!(err.code, TOKEN_INVALID_CODE);
     }
 
@@ -232,5 +441,33 @@ mod tests {
     #[test]
     fn cap_max_results_caps_default_at_max() {
         assert_eq!(cap_max_results(None, 5000, 1000), 1000);
+    }
+
+    #[test]
+    fn clamp_strict_accepts_in_range() {
+        assert_eq!(clamp_max_results_strict(Some(50), 100, 1000).unwrap(), 50);
+    }
+
+    #[test]
+    fn clamp_strict_uses_default_when_unset() {
+        assert_eq!(clamp_max_results_strict(None, 100, 1000).unwrap(), 100);
+    }
+
+    #[test]
+    fn clamp_strict_rejects_zero() {
+        let err = clamp_max_results_strict(Some(0), 100, 1000).unwrap_err();
+        assert_eq!(err.code, MAX_RESULTS_INVALID_CODE);
+    }
+
+    #[test]
+    fn clamp_strict_rejects_above_max() {
+        let err = clamp_max_results_strict(Some(2000), 100, 1000).unwrap_err();
+        assert_eq!(err.code, MAX_RESULTS_INVALID_CODE);
+    }
+
+    #[test]
+    fn clamp_strict_rejects_negative() {
+        let err = clamp_max_results_strict(Some(-5), 100, 1000).unwrap_err();
+        assert_eq!(err.code, MAX_RESULTS_INVALID_CODE);
     }
 }
