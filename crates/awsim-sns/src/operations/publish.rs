@@ -25,12 +25,32 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Message is required"))?;
 
-    if !state.topics.contains_key(topic_arn) {
-        return Err(AwsError::not_found(
-            "NotFound",
-            format!("Topic not found: {topic_arn}"),
-        ));
+    let topic = state
+        .topics
+        .get(topic_arn)
+        .ok_or_else(|| AwsError::not_found("NotFound", format!("Topic not found: {topic_arn}")))?;
+
+    if topic.is_fifo {
+        if input["MessageGroupId"].as_str().is_none() {
+            return Err(AwsError::bad_request(
+                "InvalidParameter",
+                "MessageGroupId is required for FIFO topics.",
+            ));
+        }
+        let has_dedup_id = input["MessageDeduplicationId"].as_str().is_some();
+        let cbd = topic
+            .attributes
+            .get("ContentBasedDeduplication")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        if !has_dedup_id && !cbd {
+            return Err(AwsError::bad_request(
+                "InvalidParameter",
+                "MessageDeduplicationId is required for FIFO topics unless ContentBasedDeduplication is enabled.",
+            ));
+        }
     }
+    drop(topic);
 
     // When MessageStructure="json", the Message must parse as a JSON object
     // with at least a "default" key — AWS rejects otherwise. We keep the
