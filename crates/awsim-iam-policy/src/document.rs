@@ -186,8 +186,57 @@ impl ConditionOperator {
 }
 
 pub fn parse(json: &str) -> Result<PolicyDocument, ParseError> {
+    parse_cached(json)
+}
+
+/// Parsed-policy cache, keyed by a hash of the raw JSON. Looked up
+/// from [`parse`] on every call. Hit ratio is high in practice
+/// because the same managed-policy / inline-policy JSON gets parsed
+/// once per request through the AuthzEngine, so caching collapses
+/// that to once-per-distinct-document for the lifetime of the
+/// process. Negative entries (parse failures) are also cached so a
+/// malformed policy doesn't re-allocate the ParseError chain on
+/// every request that touches it.
+///
+/// Keyed by SipHash of the input string — collisions are
+/// vanishingly unlikely for the volumes of JSON policy documents
+/// AWSim ever sees, and the cost of a collision is just a single
+/// redundant parse. No eviction: the working set of distinct
+/// policy documents in a local-dev instance is bounded by what the
+/// developer's tests provision, which is small.
+static PARSE_CACHE: std::sync::OnceLock<dashmap::DashMap<u64, PolicyDocument>> =
+    std::sync::OnceLock::new();
+
+fn parse_cached(json: &str) -> Result<PolicyDocument, ParseError> {
+    use std::hash::{BuildHasher, Hasher};
+    let cache = PARSE_CACHE.get_or_init(dashmap::DashMap::new);
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write(json.as_bytes());
+    let key = hasher.finish();
+
+    if let Some(entry) = cache.get(&key) {
+        return Ok(entry.value().clone());
+    }
+    // Only successful parses are cached. ParseError contains a
+    // serde_json::Error which isn't Clone, and a re-parse on a
+    // malformed policy is cheap relative to the policy-eval pipeline,
+    // so the simpler design wins.
     let value: Value = serde_json::from_str(json)?;
-    parse_value(&value)
+    let parsed = parse_value(&value)?;
+    cache.insert(key, parsed.clone());
+    Ok(parsed)
+}
+
+/// Drop every entry from the parse cache. Tests use this to make
+/// assertions about parse-call counts independent of prior test
+/// runs in the same process; production code doesn't need it because
+/// the cache key is a content hash and stale entries can't return
+/// the wrong result.
+#[doc(hidden)]
+pub fn _clear_parse_cache() {
+    if let Some(cache) = PARSE_CACHE.get() {
+        cache.clear();
+    }
 }
 
 pub fn parse_value(v: &Value) -> Result<PolicyDocument, ParseError> {

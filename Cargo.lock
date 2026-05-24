@@ -2362,6 +2362,7 @@ name = "awsim-iam-policy"
 version = "0.4.1"
 dependencies = [
  "chrono",
+ "dashmap",
  "ipnet",
  "serde",
  "serde_json",
