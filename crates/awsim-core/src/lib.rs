@@ -6,6 +6,7 @@ pub mod body_store;
 pub mod error;
 pub mod events;
 pub mod gateway;
+pub mod lifecycle;
 pub mod pagination;
 pub mod persistence;
 pub mod protocol;
