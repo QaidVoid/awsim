@@ -1153,11 +1153,11 @@ async fn async_main() -> Result<()> {
     // before dispatching). Other methods on the same path fall through
     // to the universal gateway with the smaller `--max-body-bytes` cap.
     let s3_upload_limit = cli.max_s3_upload_bytes;
-    let operator_auth_state = operator_auth::OperatorAuthState {
-        iam: Arc::clone(&iam_service),
-        default_account_id: cli.account_id.clone(),
-        default_region: cli.region.clone(),
-    };
+    let operator_auth_state = operator_auth::OperatorAuthState::new(
+        Arc::clone(&iam_service),
+        cli.account_id.clone(),
+        cli.region.clone(),
+    );
     let auth_router: axum::Router<()> = axum::Router::new()
         .route(
             "/_awsim/auth/login",

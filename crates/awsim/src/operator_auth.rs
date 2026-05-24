@@ -27,8 +27,9 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// How long an operator login session lives (12 hours, matches
 /// AWS IAM console default).
@@ -43,12 +44,80 @@ pub const SESSION_COOKIE: &str = "awsim_session";
 /// namespace.
 const PRINCIPAL_PREFIX: &str = "operator:";
 
+/// Failed-login attempts tracked per principal so a flood of
+/// guesses against a single name can be throttled without locking
+/// out a different operator from logging in concurrently.
+type AttemptMap = HashMap<String, AttemptRecord>;
+
+#[derive(Debug, Clone, Copy)]
+struct AttemptRecord {
+    count: u32,
+    first_attempt: Instant,
+}
+
+/// How many bad logins per username before the throttle trips.
+const MAX_FAILED_ATTEMPTS: u32 = 5;
+/// Sliding window for counting failed attempts. The throttle lifts
+/// when the window elapses since the first attempt in the burst.
+const THROTTLE_WINDOW: Duration = Duration::from_secs(60);
+
 /// Shared state injected into the auth routes and the middleware.
 #[derive(Clone)]
 pub struct OperatorAuthState {
     pub iam: Arc<IamService>,
     pub default_account_id: String,
     pub default_region: String,
+    failed_attempts: Arc<Mutex<AttemptMap>>,
+}
+
+impl OperatorAuthState {
+    pub fn new(iam: Arc<IamService>, default_account_id: String, default_region: String) -> Self {
+        Self {
+            iam,
+            default_account_id,
+            default_region,
+            failed_attempts: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Returns the seconds the caller must wait before retrying, or
+    /// `None` if they're still within the allowed budget.
+    fn throttle_retry_after(&self, username: &str) -> Option<u64> {
+        let mut g = self.failed_attempts.lock().unwrap();
+        if let Some(rec) = g.get(username).copied() {
+            let elapsed = rec.first_attempt.elapsed();
+            if rec.count >= MAX_FAILED_ATTEMPTS && elapsed < THROTTLE_WINDOW {
+                return Some((THROTTLE_WINDOW - elapsed).as_secs().max(1));
+            }
+            if elapsed >= THROTTLE_WINDOW {
+                g.remove(username);
+            }
+        }
+        None
+    }
+
+    fn record_failure(&self, username: &str) {
+        let mut g = self.failed_attempts.lock().unwrap();
+        let now = Instant::now();
+        match g.get_mut(username) {
+            Some(rec) if rec.first_attempt.elapsed() < THROTTLE_WINDOW => {
+                rec.count = rec.count.saturating_add(1);
+            }
+            _ => {
+                g.insert(
+                    username.to_string(),
+                    AttemptRecord {
+                        count: 1,
+                        first_attempt: now,
+                    },
+                );
+            }
+        }
+    }
+
+    fn clear_failures(&self, username: &str) {
+        self.failed_attempts.lock().unwrap().remove(username);
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,18 +146,39 @@ pub async fn login(
     State(state): State<OperatorAuthState>,
     Json(req): Json<LoginRequest>,
 ) -> Response {
+    if let Some(retry_after) = state.throttle_retry_after(&req.username) {
+        let mut resp = (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "code": "ThrottlingException",
+                "message": format!(
+                    "Too many failed login attempts. Retry after {retry_after} seconds."
+                ),
+            })),
+        )
+            .into_response();
+        if let Ok(v) = retry_after.to_string().parse() {
+            resp.headers_mut().insert(header::RETRY_AFTER, v);
+        }
+        return resp;
+    }
+
     let iam_state = state
         .iam
         .store()
         .get(&state.default_account_id, &state.default_region);
 
     if let Err(e) = awsim_iam::verify_password(&iam_state, &req.username, &req.password) {
+        state.record_failure(&req.username);
         return (StatusCode::UNAUTHORIZED, Json(error_body(&e))).into_response();
     }
 
     if let Err(e) = require_mfa_if_enabled(&iam_state, &req.username, req.mfa_code.as_deref()) {
+        state.record_failure(&req.username);
         return (StatusCode::UNAUTHORIZED, Json(error_body(&e))).into_response();
     }
+
+    state.clear_failures(&req.username);
 
     let principal = format!(
         "{PRINCIPAL_PREFIX}iam-user:{}/{}",
@@ -239,4 +329,68 @@ fn error_body(e: &awsim_core::AwsError) -> serde_json::Value {
         "code": e.code,
         "message": e.message,
     })
+}
+
+#[cfg(test)]
+mod throttle_tests {
+    use super::*;
+
+    fn empty_state() -> OperatorAuthState {
+        OperatorAuthState::new(
+            Arc::new(IamService::new()),
+            "000000000000".to_string(),
+            "us-east-1".to_string(),
+        )
+    }
+
+    #[test]
+    fn under_threshold_does_not_trip_throttle() {
+        let s = empty_state();
+        for _ in 0..(MAX_FAILED_ATTEMPTS - 1) {
+            s.record_failure("alice");
+            assert!(s.throttle_retry_after("alice").is_none());
+        }
+    }
+
+    #[test]
+    fn at_threshold_trips_throttle() {
+        let s = empty_state();
+        for _ in 0..MAX_FAILED_ATTEMPTS {
+            s.record_failure("alice");
+        }
+        assert!(s.throttle_retry_after("alice").is_some());
+    }
+
+    #[test]
+    fn throttle_is_per_username() {
+        let s = empty_state();
+        for _ in 0..MAX_FAILED_ATTEMPTS {
+            s.record_failure("alice");
+        }
+        assert!(s.throttle_retry_after("alice").is_some());
+        assert!(s.throttle_retry_after("bob").is_none());
+    }
+
+    #[test]
+    fn successful_login_clears_failures() {
+        let s = empty_state();
+        for _ in 0..3 {
+            s.record_failure("alice");
+        }
+        s.clear_failures("alice");
+        for _ in 0..(MAX_FAILED_ATTEMPTS - 1) {
+            s.record_failure("alice");
+            assert!(s.throttle_retry_after("alice").is_none());
+        }
+    }
+
+    #[test]
+    fn retry_after_decreases_as_window_elapses() {
+        let s = empty_state();
+        for _ in 0..MAX_FAILED_ATTEMPTS {
+            s.record_failure("alice");
+        }
+        let first = s.throttle_retry_after("alice").unwrap();
+        assert!(first >= 1 && first <= THROTTLE_WINDOW.as_secs());
+    }
 }
