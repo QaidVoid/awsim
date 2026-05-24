@@ -1888,6 +1888,7 @@ version = "0.4.1"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "base64",
  "dashmap",
  "saphyr",
  "serde",

@@ -311,8 +311,11 @@ pub fn resolve_value(
             if let Some(if_val) = map.get("Fn::If") {
                 return resolve_if(if_val, params, conditions, resources);
             }
+            if let Some(b64_val) = map.get("Fn::Base64") {
+                return resolve_base64(b64_val, params, conditions, resources);
+            }
 
-            // Regular object — resolve all values recursively
+            // Regular object: resolve all values recursively.
             let resolved_map: Map<String, Value> = map
                 .iter()
                 .map(|(k, v)| (k.clone(), resolve_value(v, params, conditions, resources)))
@@ -515,6 +518,27 @@ fn resolve_if(
     Value::Null
 }
 
+/// `Fn::Base64`: resolve the inner value and return its UTF-8
+/// bytes base64-encoded as a string. CloudFormation uses this for
+/// EC2 UserData and inline launch-config blobs; without it,
+/// `Fn::Base64: !Sub <...>` produced an empty map and any AMI
+/// that consumed UserData booted with no user data set.
+fn resolve_base64(
+    val: &Value,
+    params: &HashMap<String, Value>,
+    conditions: &HashMap<String, bool>,
+    resources: &HashMap<String, Value>,
+) -> Value {
+    use base64::Engine as _;
+    let inner = resolve_value(val, params, conditions, resources);
+    let raw = match &inner {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(raw.as_bytes());
+    Value::String(encoded)
+}
+
 /// Topological sort of resources by DependsOn.
 fn topological_sort(resources: Vec<ResourceDef>) -> Result<Vec<ResourceDef>, String> {
     let mut name_to_idx: HashMap<String, usize> = HashMap::new();
@@ -659,5 +683,40 @@ Resources:
         assert_eq!(result.parameters.len(), 1);
         assert_eq!(result.parameters[0].name, "BucketName");
         assert_eq!(result.parameters[0].default, Some("my-bucket".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod base64_intrinsic_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn fn_base64_encodes_static_string() {
+        let val = json!({ "Fn::Base64": "hello world" });
+        let got = resolve_value(&val, &HashMap::new(), &HashMap::new(), &HashMap::new());
+        // base64("hello world") == "aGVsbG8gd29ybGQ="
+        assert_eq!(got, json!("aGVsbG8gd29ybGQ="));
+    }
+
+    #[test]
+    fn fn_base64_encodes_nested_intrinsic_result() {
+        let val = json!({
+            "Fn::Base64": {
+                "Fn::Sub": "#!/bin/bash\necho ${Name}"
+            }
+        });
+        let mut params = HashMap::new();
+        params.insert("Name".to_string(), json!("alice"));
+        let got = resolve_value(&val, &params, &HashMap::new(), &HashMap::new());
+        // base64("#!/bin/bash\necho alice") == "IyEvYmluL2Jhc2gKZWNobyBhbGljZQ=="
+        assert_eq!(got, json!("IyEvYmluL2Jhc2gKZWNobyBhbGljZQ=="));
+    }
+
+    #[test]
+    fn fn_base64_handles_empty_string() {
+        let val = json!({ "Fn::Base64": "" });
+        let got = resolve_value(&val, &HashMap::new(), &HashMap::new(), &HashMap::new());
+        assert_eq!(got, json!(""));
     }
 }
