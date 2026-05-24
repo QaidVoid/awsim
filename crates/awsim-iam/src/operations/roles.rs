@@ -20,6 +20,37 @@ fn validate_policy_document(doc: &str) -> Result<(), AwsError> {
         .map_err(|e| malformed_policy_document(format!("Syntax errors in policy. {e}")))
 }
 
+/// Trust policies (the AssumeRolePolicyDocument on a role) must
+/// authorise at least one of the `sts:AssumeRole*` actions, or no
+/// caller will ever be able to assume the role. Real AWS rejects
+/// trust policies that don't contain any AssumeRole action with
+/// MalformedPolicyDocument; mirror that so a typo isn't caught at
+/// the next AssumeRole call instead of at role creation.
+fn validate_trust_policy_actions(doc: &str) -> Result<(), AwsError> {
+    use awsim_iam_policy::Effect;
+    let parsed = awsim_iam_policy::parse(doc)
+        .map_err(|e| malformed_policy_document(format!("Syntax errors in policy. {e}")))?;
+
+    let has_assume_action = parsed.statements.iter().any(|st| {
+        if !matches!(st.effect, Effect::Allow) {
+            return false;
+        }
+        match &st.action {
+            Some(list) => list
+                .iter()
+                .any(|a| a == "*" || a == "sts:*" || a.starts_with("sts:AssumeRole")),
+            None => false,
+        }
+    });
+
+    if !has_assume_action {
+        return Err(malformed_policy_document(
+            "Trust policy must allow at least one sts:AssumeRole* action.",
+        ));
+    }
+    Ok(())
+}
+
 /// Validate an IAM role name against AWS's documented constraint:
 /// 1-64 characters from the set `[A-Za-z0-9+=,.@_-]+`. Real IAM
 /// rejects anything else with ValidationError.
@@ -87,6 +118,7 @@ pub fn create_role(
     let description = opt_str(input, "Description").map(|s| s.to_string());
 
     validate_policy_document(assume_role_policy)?;
+    validate_trust_policy_actions(assume_role_policy)?;
 
     if state.roles.contains_key(role_name) {
         return Err(entity_already_exists("Role", role_name));
@@ -202,11 +234,16 @@ pub fn list_roles(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     Ok(result)
 }
 
+/// `UpdateAssumeRolePolicy` rewrites a role's trust policy. Validates
+/// both the document syntax and the requirement that at least one
+/// AssumeRole-shaped action is present, since a trust policy without
+/// one renders the role unassumable.
 pub fn update_assume_role_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let role_name = require_str(input, "RoleName")?;
     let policy_document = require_str(input, "PolicyDocument")?;
 
     validate_policy_document(policy_document)?;
+    validate_trust_policy_actions(policy_document)?;
 
     let mut role = state
         .roles
