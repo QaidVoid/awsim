@@ -293,6 +293,42 @@ export async function deleteAccessKey(
   });
 }
 
+/**
+ * Fetches the plaintext secret for an existing access key. Goes
+ * through a non-AWS admin endpoint because the AWS API hides
+ * secrets after CreateAccessKey returns. Gated by operator-auth on
+ * the server.
+ */
+export async function revealAccessKeySecret(
+  userName: string,
+  accessKeyId: string,
+): Promise<IamAccessKeyWithSecret> {
+  const res = await fetch("/_awsim/auth/reveal-access-key", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ user_name: userName, access_key_id: accessKeyId }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Reveal failed: ${res.status}`);
+  }
+  const body = (await res.json()) as {
+    user_name: string;
+    access_key_id: string;
+    secret_access_key: string;
+    status: string;
+    create_date: string;
+  };
+  return {
+    accessKeyId: body.access_key_id,
+    secretAccessKey: body.secret_access_key,
+    status: body.status,
+    createDate: body.create_date,
+  };
+}
+
+
 // ---- Roles ----
 
 export async function listRoles(): Promise<IamRole[]> {

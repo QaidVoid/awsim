@@ -5,6 +5,7 @@
 		createAccessKey,
 		updateAccessKey,
 		deleteAccessKey,
+		revealAccessKeySecret,
 		type IamAccessKey,
 		type IamAccessKeyWithSecret,
 	} from '$lib/api/iam';
@@ -23,6 +24,8 @@
 	import Power from '@lucide/svelte/icons/power';
 	import Copy from '@lucide/svelte/icons/copy';
 	import Key from '@lucide/svelte/icons/key';
+	import Eye from '@lucide/svelte/icons/eye';
+	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import { toast } from 'svelte-sonner';
 
@@ -37,6 +40,8 @@
 	let creating = $state(false);
 	let revealOpen = $state(false);
 	let revealed = $state<IamAccessKeyWithSecret | null>(null);
+	let revealKind = $state<'created' | 'existing'>('created');
+	let revealingId = $state<string | null>(null);
 	let deleteTarget = $state<IamAccessKey | null>(null);
 	let deleteOpen = $state(false);
 	let deleteBusy = $state(false);
@@ -66,12 +71,26 @@
 		try {
 			const k = await createAccessKey(userName);
 			revealed = k;
+			revealKind = 'created';
 			revealOpen = true;
 			await reload();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Create failed');
 		} finally {
 			creating = false;
+		}
+	}
+
+	async function reveal(k: IamAccessKey) {
+		revealingId = k.accessKeyId;
+		try {
+			revealed = await revealAccessKeySecret(userName, k.accessKeyId);
+			revealKind = 'existing';
+			revealOpen = true;
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Reveal failed');
+		} finally {
+			revealingId = null;
 		}
 	}
 
@@ -161,6 +180,20 @@
 					<Button
 						variant="ghost"
 						size="icon-sm"
+						aria-label="Reveal secret"
+						title="Show secret access key"
+						onclick={() => reveal(k)}
+						disabled={revealingId !== null}
+					>
+						{#if revealingId === k.accessKeyId}
+							<Loader2 class="size-3.5 animate-spin" />
+						{:else}
+							<Eye class="size-3.5" />
+						{/if}
+					</Button>
+					<Button
+						variant="ghost"
+						size="icon-sm"
 						aria-label="Toggle status"
 						onclick={() => toggle(k)}
 						title={k.status === 'Active' ? 'Deactivate' : 'Activate'}
@@ -184,10 +217,19 @@
 <Dialog bind:open={revealOpen} onOpenChange={(v) => (revealOpen = v)}>
 	<DialogContent class="max-w-lg">
 		<DialogHeader>
-			<DialogTitle>Access key created</DialogTitle>
+			<DialogTitle>
+				{revealKind === 'created' ? 'Access key created' : 'Access key secret'}
+			</DialogTitle>
 			<DialogDescription>
-				Copy the secret now — it won't be shown again. The key is also visible in the access-keys list,
-				but the secret only appears here.
+				{#if revealKind === 'created'}
+					Save the secret in your credentials store. Real AWS hides it after this
+					point; AWSim retains it locally so you can use the reveal button later if
+					you lose it.
+				{:else}
+					Plaintext secret for an existing key. Visible because AWSim is a local-dev
+					emulator and stores the secret in the snapshot. Treat it like real AWS
+					credentials and never commit it.
+				{/if}
 			</DialogDescription>
 		</DialogHeader>
 		{#if revealed}

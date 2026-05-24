@@ -1159,7 +1159,10 @@ async fn async_main() -> Result<()> {
         cli.region.clone(),
     );
     arm_operator_auth_if_required(&operator_auth_state);
-    let auth_router: axum::Router<()> = axum::Router::new()
+    // Public auth routes: reachable without a session because they
+    // are the entry point into one (login, setup) or are intended to
+    // be safe to probe (whoami, logout).
+    let public_auth_router: axum::Router<()> = axum::Router::new()
         .route(
             "/_awsim/auth/login",
             axum::routing::post(operator_auth::login),
@@ -1177,6 +1180,20 @@ async fn async_main() -> Result<()> {
             axum::routing::post(operator_auth::setup),
         )
         .with_state(operator_auth_state.clone());
+    // Privileged auth routes: gated by the same operator-auth
+    // middleware as `/_awsim/*` admin endpoints so an unauthenticated
+    // caller cannot fetch plaintext secrets.
+    let private_auth_router: axum::Router<()> = axum::Router::new()
+        .route(
+            "/_awsim/auth/reveal-access-key",
+            axum::routing::post(operator_auth::reveal_access_key),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            operator_auth_state.clone(),
+            operator_auth::require_auth,
+        ))
+        .with_state(operator_auth_state.clone());
+    let auth_router = public_auth_router.merge(private_auth_router);
     let main_router: axum::Router<()> = axum::Router::new()
         .route("/_awsim/health", axum::routing::get(admin::health))
         .route("/_awsim/services", axum::routing::get(admin::list_services))

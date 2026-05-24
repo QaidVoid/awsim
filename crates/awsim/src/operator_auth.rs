@@ -392,6 +392,83 @@ fn constant_time_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
     diff == 0
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RevealSecretRequest {
+    pub user_name: String,
+    pub access_key_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RevealSecretResponse {
+    pub user_name: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub status: String,
+    pub create_date: String,
+}
+
+/// `POST /_awsim/auth/reveal-access-key`
+///
+/// Returns the plaintext secret access key for an existing
+/// access-key ID. AWS hides the secret after creation, but AWSim is
+/// a local-dev emulator and persists it plaintext on the user
+/// record. Exposing it here means developers can recover credentials
+/// after closing the create-key dialog instead of rotating the key.
+///
+/// Gated by the operator-auth middleware so only signed-in operators
+/// can call it; off entirely when operator auth is disabled because
+/// that mode is single-user dev where any client already has access
+/// to the snapshot file.
+pub async fn reveal_access_key(
+    State(state): State<OperatorAuthState>,
+    Json(req): Json<RevealSecretRequest>,
+) -> Response {
+    let iam_state = state
+        .iam
+        .store()
+        .get(&state.default_account_id, awsim_iam::IAM_REGION);
+    let user = match iam_state.users.get(&req.user_name) {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "code": "NoSuchEntity",
+                    "message": format!("User {} not found.", req.user_name),
+                })),
+            )
+                .into_response();
+        }
+    };
+    let key = user
+        .access_keys
+        .iter()
+        .find(|k| k.access_key_id == req.access_key_id)
+        .cloned();
+    drop(user);
+    match key {
+        Some(k) => Json(RevealSecretResponse {
+            user_name: req.user_name,
+            access_key_id: k.access_key_id,
+            secret_access_key: k.secret_access_key,
+            status: k.status,
+            create_date: k.create_date,
+        })
+        .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "code": "NoSuchEntity",
+                "message": format!(
+                    "Access key {} not found on user {}.",
+                    req.access_key_id, req.user_name
+                ),
+            })),
+        )
+            .into_response(),
+    }
+}
+
 /// `POST /_awsim/auth/logout`
 ///
 /// Clears the cookie. Sessions are stateless so there's nothing
