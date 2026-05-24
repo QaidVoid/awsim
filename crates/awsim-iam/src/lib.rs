@@ -23,6 +23,77 @@ use state::{DeletionTask, IamState, IamStateSnapshot};
 /// The region key is always "global" for IAM state lookups.
 pub const IAM_REGION: &str = "global";
 
+/// Username reserved for the account owner. Real AWS treats `root`
+/// as the account-creator identity that exists outside the IAM
+/// principal hierarchy; AWSim materializes it as a regular IAM user
+/// at bootstrap so the existing storage and login flows can be
+/// reused, but applies the same protections.
+pub const ROOT_USERNAME: &str = "root";
+
+/// Refuse any mutation that targets the `root` user unless the
+/// caller is an internal server-side flow (bootstrap, background
+/// task). Real AWS keeps root unreachable from the IAM API: an IAM
+/// admin cannot delete the root user, swap its password, attach a
+/// policy, or rotate its access keys. Apply this guard at the top
+/// of every operation in `operations::users`, `operations::policies`,
+/// `operations::groups`, `operations::mfa`, etc. that takes a
+/// `UserName` parameter and mutates state.
+pub fn deny_if_targets_root(user_name: &str, ctx: &RequestContext) -> Result<(), AwsError> {
+    if ctx.internal_bypass {
+        return Ok(());
+    }
+    if user_name == ROOT_USERNAME {
+        return Err(AwsError::access_denied(
+            "The root account owner cannot be modified via the IAM API. \
+             Use the account-owner workflow instead.",
+        ));
+    }
+    Ok(())
+}
+
+/// IAM operations whose `UserName` input parameter must be protected
+/// from targeting the `root` user. Read-only operations (Get*,
+/// List*) are intentionally absent: querying root metadata is
+/// harmless. Pure create-without-target operations like `CreateUser`
+/// are also absent because the bootstrap flow needs to be able to
+/// provision the root record; the check applies to operations that
+/// modify state belonging to an *existing* user.
+const USER_MUTATIONS_REQUIRING_ROOT_PROTECTION: &[&str] = &[
+    "CreateUser",
+    "DeleteUser",
+    "UpdateUser",
+    "TagUser",
+    "UntagUser",
+    "PutUserPermissionsBoundary",
+    "DeleteUserPermissionsBoundary",
+    "CreateLoginProfile",
+    "UpdateLoginProfile",
+    "DeleteLoginProfile",
+    "ChangePassword",
+    "CreateAccessKey",
+    "DeleteAccessKey",
+    "UpdateAccessKey",
+    "AttachUserPolicy",
+    "DetachUserPolicy",
+    "PutUserPolicy",
+    "DeleteUserPolicy",
+    "AddUserToGroup",
+    "RemoveUserFromGroup",
+    "EnableMFADevice",
+    "DeactivateMFADevice",
+    "ResyncMFADevice",
+    "UploadSSHPublicKey",
+    "UpdateSSHPublicKey",
+    "DeleteSSHPublicKey",
+    "UploadSigningCertificate",
+    "UpdateSigningCertificate",
+    "DeleteSigningCertificate",
+    "CreateServiceSpecificCredential",
+    "DeleteServiceSpecificCredential",
+    "UpdateServiceSpecificCredential",
+    "ResetServiceSpecificCredential",
+];
+
 /// The AWSim IAM service handler.
 pub struct IamService {
     store: AccountRegionStore<IamState>,
@@ -109,6 +180,20 @@ impl ServiceHandler for IamService {
     ) -> Result<Value, AwsError> {
         debug!(operation, "IAM request");
         let state = self.get_state(ctx);
+
+        // Root-user protection precondition. Real AWS forbids any IAM
+        // mutation against the account owner; AWSim mirrors that for
+        // every operation that takes a `UserName` parameter and
+        // changes state. Lookup / list / get operations are not in
+        // this set, since reading root metadata is harmless. The
+        // bootstrap setup endpoint sets `ctx.internal_bypass = true`
+        // so CreateUser("root") + CreateLoginProfile + CreateAccessKey
+        // can run during first-run provisioning.
+        if USER_MUTATIONS_REQUIRING_ROOT_PROTECTION.contains(&operation)
+            && let Some(target) = input.get("UserName").and_then(Value::as_str)
+        {
+            deny_if_targets_root(target, ctx)?;
+        }
 
         match operation {
             // Users
@@ -843,5 +928,115 @@ impl ServiceHandler for IamService {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod root_protection_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn external_ctx() -> RequestContext {
+        RequestContext::new_with_account("iam", "us-east-1", "000000000000")
+    }
+
+    fn internal_ctx() -> RequestContext {
+        RequestContext::internal("iam", "us-east-1", "000000000000")
+    }
+
+    #[tokio::test]
+    async fn external_delete_user_root_is_denied() {
+        let svc = IamService::new();
+        let err = svc
+            .handle("DeleteUser", json!({ "UserName": "root" }), &external_ctx())
+            .await
+            .expect_err("expected AccessDenied");
+        assert_eq!(err.code, "AccessDeniedException");
+    }
+
+    #[tokio::test]
+    async fn external_attach_user_policy_root_is_denied() {
+        let svc = IamService::new();
+        let err = svc
+            .handle(
+                "AttachUserPolicy",
+                json!({
+                    "UserName": "root",
+                    "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess",
+                }),
+                &external_ctx(),
+            )
+            .await
+            .expect_err("expected AccessDenied");
+        assert_eq!(err.code, "AccessDeniedException");
+    }
+
+    #[tokio::test]
+    async fn external_create_login_profile_root_is_denied() {
+        let svc = IamService::new();
+        let err = svc
+            .handle(
+                "CreateLoginProfile",
+                json!({ "UserName": "root", "Password": "anything!ABC" }),
+                &external_ctx(),
+            )
+            .await
+            .expect_err("expected AccessDenied");
+        assert_eq!(err.code, "AccessDeniedException");
+    }
+
+    #[tokio::test]
+    async fn internal_create_user_root_is_allowed() {
+        let svc = IamService::new();
+        svc.handle("CreateUser", json!({ "UserName": "root" }), &internal_ctx())
+            .await
+            .expect("internal bootstrap should succeed");
+    }
+
+    #[tokio::test]
+    async fn external_list_users_succeeds_with_root_present() {
+        let svc = IamService::new();
+        svc.handle("CreateUser", json!({ "UserName": "root" }), &internal_ctx())
+            .await
+            .unwrap();
+        // Listing is intentionally not in the protected set: reading
+        // root metadata is harmless and required for auditing.
+        let resp = svc.handle("ListUsers", json!({}), &external_ctx()).await;
+        assert!(resp.is_ok());
+    }
+
+    #[tokio::test]
+    async fn external_get_user_root_is_allowed() {
+        let svc = IamService::new();
+        svc.handle("CreateUser", json!({ "UserName": "root" }), &internal_ctx())
+            .await
+            .unwrap();
+        let resp = svc
+            .handle("GetUser", json!({ "UserName": "root" }), &external_ctx())
+            .await;
+        assert!(resp.is_ok(), "GetUser on root must remain readable");
+    }
+
+    #[tokio::test]
+    async fn external_mutation_on_non_root_user_is_allowed() {
+        let svc = IamService::new();
+        // alice exists and is not root - all mutations should pass
+        // the root precondition (they may still fail for other
+        // reasons but the precondition itself must not trigger).
+        svc.handle(
+            "CreateUser",
+            json!({ "UserName": "alice" }),
+            &external_ctx(),
+        )
+        .await
+        .unwrap();
+        let resp = svc
+            .handle(
+                "DeleteUser",
+                json!({ "UserName": "alice" }),
+                &external_ctx(),
+            )
+            .await;
+        assert!(resp.is_ok());
     }
 }

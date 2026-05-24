@@ -44,6 +44,15 @@ pub struct RequestContext {
     /// Whether the original request reached us over TLS, recovered from
     /// `X-Forwarded-Proto` when present. Surfaced as `aws:SecureTransport`.
     pub is_secure: bool,
+
+    /// True when the request originated inside the server (bootstrap
+    /// setup, background tasks) rather than from an external HTTP call.
+    /// Used to bypass guardrails that AWS-parity demands of external
+    /// callers but that the server itself must be able to perform during
+    /// startup. For example, real AWS forbids any IAM mutation against
+    /// the root user, but AWSim's first-run setup must be able to
+    /// CreateUser("root") to provision the account-owner record.
+    pub internal_bypass: bool,
 }
 
 impl Default for RequestContext {
@@ -60,6 +69,7 @@ impl Default for RequestContext {
             event_bus: None,
             source_ip: None,
             is_secure: false,
+            internal_bypass: false,
         }
     }
 }
@@ -78,6 +88,7 @@ impl RequestContext {
             event_bus: None,
             source_ip: None,
             is_secure: false,
+            internal_bypass: false,
         }
     }
 
@@ -100,7 +111,24 @@ impl RequestContext {
             event_bus: None,
             source_ip: None,
             is_secure: false,
+            internal_bypass: false,
         }
+    }
+
+    /// Builder variant for server-internal callers (bootstrap setup,
+    /// background tasks). Identical to [`new_with_account`] except the
+    /// resulting context has [`internal_bypass`](Self::internal_bypass)
+    /// set to `true`, so guardrails that would reject the same call
+    /// coming from an external HTTP client (notably the root-user
+    /// protection in awsim-iam) will let it through.
+    pub fn internal(
+        service: impl Into<String>,
+        region: impl Into<String>,
+        account_id: impl Into<String>,
+    ) -> Self {
+        let mut ctx = Self::new_with_account(service, region, account_id);
+        ctx.internal_bypass = true;
+        ctx
     }
 
     /// Returns an ARN prefix for this partition, account, and region.

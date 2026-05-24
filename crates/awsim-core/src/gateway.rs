@@ -646,6 +646,10 @@ async fn process_request(
         event_bus: Some(state.event_bus.clone()),
         source_ip,
         is_secure,
+        // External request from the gateway: bypass is never set
+        // here. Only server-internal flows like bootstrap setup may
+        // construct a context with `internal_bypass = true`.
+        internal_bypass: false,
     };
 
     // 6b. IAM authorization (opt-in via AWSIM_IAM_ENFORCE)

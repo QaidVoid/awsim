@@ -301,6 +301,7 @@ pub async fn handle_s3_event(
                         event_bus: None,
                         source_ip: None,
                         is_secure: false,
+                        internal_bypass: false,
                     };
                     let input = serde_json::json!({
                         "QueueUrl": queue_url,
@@ -336,6 +337,7 @@ pub async fn handle_s3_event(
                         event_bus: None,
                         source_ip: None,
                         is_secure: false,
+                        internal_bypass: false,
                     };
                     let input = serde_json::json!({
                         "TopicArn": dest_arn,
@@ -372,6 +374,7 @@ pub async fn handle_s3_event(
                         event_bus: None,
                         source_ip: None,
                         is_secure: false,
+                        internal_bypass: false,
                     };
                     let invoke_input = serde_json::json!({
                         "FunctionName": dest_arn,
@@ -445,6 +448,7 @@ pub async fn handle_dynamodb_stream(
         event_bus: None,
         source_ip: None,
         is_secure: false,
+        internal_bypass: false,
     };
 
     let list_input = serde_json::json!({ "EventSourceArn": stream_arn });
@@ -501,6 +505,7 @@ pub async fn handle_dynamodb_stream(
             event_bus: None,
             source_ip: None,
             is_secure: false,
+            internal_bypass: false,
         };
 
         let invoke_input = serde_json::json!({
@@ -928,6 +933,7 @@ pub async fn handle_cf_create_resource(
         event_bus: None,
         source_ip: None,
         is_secure: false,
+        internal_bypass: false,
     };
 
     match resource_type {
@@ -1144,6 +1150,7 @@ pub async fn handle_cf_delete_resource(
         event_bus: None,
         source_ip: None,
         is_secure: false,
+        internal_bypass: false,
     };
 
     match resource_type {

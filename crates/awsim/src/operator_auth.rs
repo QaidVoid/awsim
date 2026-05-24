@@ -64,9 +64,10 @@ const MAX_FAILED_ATTEMPTS: u32 = 5;
 const THROTTLE_WINDOW: Duration = Duration::from_secs(60);
 
 /// Username reserved for the bootstrap operator account that
-/// `setup` provisions. Convention follows AWS's `root` account
-/// owner name.
-pub const ROOT_USERNAME: &str = "root";
+/// `setup` provisions. Re-exported from awsim-iam so the IAM
+/// service's root-protection guard and the operator-auth setup
+/// flow agree on a single source of truth.
+pub use awsim_iam::ROOT_USERNAME;
 
 /// Bootstrap-flow state. The `Pending` variant stores the SHA-256
 /// hash of the one-time setup token; the raw token is only ever
@@ -315,7 +316,12 @@ pub async fn setup(
     }
 
     use awsim_core::ServiceHandler;
-    let ctx = awsim_core::RequestContext::new_with_account(
+    // Bootstrap flow needs to provision the root IAM record, which
+    // the IAM service blocks on every external call. `internal`
+    // builds a context that bypasses the root-protection precondition
+    // so CreateUser("root") + CreateLoginProfile + CreateAccessKey
+    // succeed exactly once here at first-run setup.
+    let ctx = awsim_core::RequestContext::internal(
         "iam",
         &state.default_region,
         &state.default_account_id,
