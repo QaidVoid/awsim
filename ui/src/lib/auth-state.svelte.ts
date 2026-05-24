@@ -16,12 +16,14 @@ export interface AuthSession {
 
 class AuthStore {
 	session = $state<AuthSession | null | undefined>(undefined);
+	authRequired = $state(false);
 	setupRequired = $state(false);
 
 	async refresh(): Promise<void> {
 		const result = await whoami();
-		this.session = result.session;
+		this.authRequired = result.authRequired;
 		this.setupRequired = result.setupRequired;
+		this.session = result.session;
 	}
 
 	async signOut(): Promise<void> {
@@ -35,6 +37,11 @@ class AuthStore {
 
 	get signedIn(): boolean {
 		return !!this.session;
+	}
+
+	/** True when the app should redirect to /login: auth on, not signed in, bootstrap done. */
+	get blocked(): boolean {
+		return this.authRequired && !this.setupRequired && !this.signedIn;
 	}
 
 	get displayName(): string {

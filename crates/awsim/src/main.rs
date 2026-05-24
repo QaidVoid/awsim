@@ -2130,10 +2130,14 @@ fn arm_operator_auth_if_required(state: &operator_auth::OperatorAuthState) {
         return;
     }
 
+    // IAM is global: the store shards by `(account_id,
+    // IAM_REGION)`. Reading with `default_region` always lands on an
+    // empty IamState and we'd re-arm bootstrap on every restart even
+    // though the root profile is sitting in the snapshot.
     let iam_state = state
         .iam
         .store()
-        .get(&state.default_account_id, &state.default_region);
+        .get(&state.default_account_id, awsim_iam::IAM_REGION);
     let root_exists = iam_state
         .login_profiles
         .contains_key(operator_auth::ROOT_USERNAME);

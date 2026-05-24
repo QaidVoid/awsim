@@ -33,6 +33,20 @@
 	let helpOpen = $state(false);
 	let config = $state<{ region?: string; accountId?: string } | null>(null);
 
+	/** Routes that render bare (no sidebar / topbar) and shouldn't redirect.
+	 * Handles a trailing slash and the SvelteKit base prefix
+	 * (`/_awsim/ui/login/`) by normalizing first. */
+	function isAuthRoute(path: string | undefined): boolean {
+		if (!path) return false;
+		const trimmed = path.replace(/\/+$/, '');
+		return trimmed.endsWith('/login') || trimmed.endsWith('/setup');
+	}
+
+	const pathname = $derived(page.url?.pathname ?? '');
+	const onAuthRoute = $derived(isAuthRoute(pathname));
+	/** Block the app shell from rendering protected content while the gate is on. */
+	const hideAppContent = $derived(!onAuthRoute && (!auth.loaded || auth.blocked || auth.setupRequired));
+
 	function registerShortcuts() {
 		shortcuts.register([
 			// General
@@ -74,27 +88,29 @@
 		} catch {
 			/* ignore */
 		}
-		fetchConfig()
-			.then((c) => (config = c))
-			.catch(() => {
-				/* leave defaults */
-			});
+		// Skip protected admin probes on the bare auth pages: they sit
+		// behind the operator-auth middleware and would 503 / 401
+		// before sign-in, polluting the console.
+		const initialPath = window.location.pathname;
+		if (!isAuthRoute(initialPath)) {
+			fetchConfig()
+				.then((c) => (config = c))
+				.catch(() => {
+					/* leave defaults */
+				});
+		}
 
-		// Probe whoami to populate the session. When operator auth is
-		// off the endpoint responds OK with no body and the layout
-		// stays loginless; when it's on and the user isn't signed in,
-		// the probe returns null and we redirect every page except
-		// /login itself.
+		// Probe whoami to populate the session. The response always
+		// 200s with { auth_required, setup_required, principal } so a
+		// loginless build looks distinct from an enabled-but-not-yet-
+		// signed-in build. We redirect to /setup or /login only when
+		// the gate actually applies.
 		auth.refresh()
 			.then(() => {
 				const path = page.url.pathname;
-				if (auth.setupRequired && !path.endsWith('/setup')) {
+				if (auth.setupRequired && !isAuthRoute(path)) {
 					goto(route('/setup'));
-				} else if (
-					auth.session === null &&
-					!auth.setupRequired &&
-					!path.endsWith('/login')
-				) {
+				} else if (auth.blocked && !isAuthRoute(path)) {
 					goto(route('/login'));
 				}
 			})
@@ -157,48 +173,65 @@
 </script>
 
 <TooltipProvider delayDuration={150}>
-	<div class="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
-		<AppTopbar
-			region={config?.region}
-			accountId={config?.accountId}
-			onOpenPalette={() => (paletteOpen = true)}
-			onOpenHelp={() => (helpOpen = true)}
-			onOpenMobileNav={() => (mobileOpen = true)}
-		/>
-
-		<div class="flex min-h-0 flex-1">
-			<!-- Desktop sidebar -->
-			<aside class="hidden h-full md:block">
-				<AppSidebar
-					collapsed={sidebarCollapsed}
-					onCollapseToggle={toggleCollapse}
-				/>
-			</aside>
-
-			<!-- Mobile sidebar via sheet -->
-			<Sheet bind:open={mobileOpen}>
-				<SheetContent
-					side="left"
-					class="w-[260px] border-sidebar-border bg-sidebar p-0"
-					showCloseButton={false}
-				>
-					<AppSidebar
-						collapsed={false}
-						onCollapseToggle={() => (mobileOpen = false)}
-						onNavigate={() => (mobileOpen = false)}
-					/>
-				</SheetContent>
-			</Sheet>
-
-			<!-- Main content — pages own their scroll containment via ServicePage -->
-			<main class="flex min-h-0 flex-1 flex-col overflow-hidden">
-				{@render children()}
-			</main>
-
-			<!-- Optional context drawer slot — hidden by default, future-use. -->
-			<aside class="hidden w-[320px] shrink-0 border-l border-border bg-card xl:hidden"></aside>
+	{#if onAuthRoute}
+		<!-- Bare shell for /login and /setup. No sidebar, no topbar,
+			 nothing the user could click to bypass the gate. -->
+		<div class="min-h-screen w-screen bg-background text-foreground">
+			{@render children()}
 		</div>
-	</div>
+	{:else}
+		<div class="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
+			<AppTopbar
+				region={config?.region}
+				accountId={config?.accountId}
+				onOpenPalette={() => (paletteOpen = true)}
+				onOpenHelp={() => (helpOpen = true)}
+				onOpenMobileNav={() => (mobileOpen = true)}
+			/>
+
+			<div class="flex min-h-0 flex-1">
+				<!-- Desktop sidebar -->
+				<aside class="hidden h-full md:block">
+					<AppSidebar
+						collapsed={sidebarCollapsed}
+						onCollapseToggle={toggleCollapse}
+					/>
+				</aside>
+
+				<!-- Mobile sidebar via sheet -->
+				<Sheet bind:open={mobileOpen}>
+					<SheetContent
+						side="left"
+						class="w-[260px] border-sidebar-border bg-sidebar p-0"
+						showCloseButton={false}
+					>
+						<AppSidebar
+							collapsed={false}
+							onCollapseToggle={() => (mobileOpen = false)}
+							onNavigate={() => (mobileOpen = false)}
+						/>
+					</SheetContent>
+				</Sheet>
+
+				<!-- Main content — pages own their scroll containment via ServicePage.
+					 Hidden while the auth gate is still resolving or actively
+					 blocking so an unauthenticated user can never see the
+					 protected pages even for a frame. -->
+				<main class="flex min-h-0 flex-1 flex-col overflow-hidden">
+					{#if hideAppContent}
+						<div class="flex flex-1 items-center justify-center text-xs text-muted-foreground">
+							{auth.loaded ? 'Redirecting...' : 'Loading...'}
+						</div>
+					{:else}
+						{@render children()}
+					{/if}
+				</main>
+
+				<!-- Optional context drawer slot — hidden by default, future-use. -->
+				<aside class="hidden w-[320px] shrink-0 border-l border-border bg-card xl:hidden"></aside>
+			</div>
+		</div>
+	{/if}
 
 	<CommandPalette bind:open={paletteOpen} />
 	<KeyboardHelp bind:open={helpOpen} />

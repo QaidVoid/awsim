@@ -212,10 +212,15 @@ pub async fn login(
         return resp;
     }
 
+    // IAM is a global service: the store always shards by
+    // `(account_id, IAM_REGION)` regardless of which AWS region the
+    // gateway was configured with. Reading with `default_region`
+    // instead lands on an empty IamState and every login fails with
+    // "Invalid credentials".
     let iam_state = state
         .iam
         .store()
-        .get(&state.default_account_id, &state.default_region);
+        .get(&state.default_account_id, awsim_iam::IAM_REGION);
 
     if let Err(e) = awsim_iam::verify_password(&iam_state, &req.username, &req.password) {
         state.record_failure(&req.username);
@@ -401,21 +406,30 @@ pub async fn logout() -> Response {
 
 /// `GET /_awsim/auth/whoami`
 ///
-/// Returns `{ "principal": "..." }` for the bearer token in the
-/// `Authorization` header or `awsim_session` cookie. 401 on missing
-/// or invalid token.
-pub async fn whoami(headers: HeaderMap) -> Response {
-    match resolve_session(&headers) {
-        Some(p) => Json(json!({ "principal": p })).into_response(),
-        None => (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "code": "UnauthorizedException",
-                "message": "Missing or invalid operator session.",
-            })),
-        )
-            .into_response(),
-    }
+/// Always returns 200 with a status envelope so the UI can decide
+/// what to render without parsing distinct status codes:
+///
+/// ```json
+/// { "auth_required": false, "setup_required": false, "principal": null }
+/// { "auth_required": true,  "setup_required": true,  "principal": null }
+/// { "auth_required": true,  "setup_required": false, "principal": null }
+/// { "auth_required": true,  "setup_required": false, "principal": "iam-user:..." }
+/// ```
+///
+/// The previous shape returned 401 unconditionally when no session
+/// was attached, which made the loginless dev flow indistinguishable
+/// from an enabled-but-not-signed-in state.
+pub async fn whoami(State(state): State<OperatorAuthState>, headers: HeaderMap) -> Response {
+    let auth_required = require_operator_auth_enabled();
+    let setup_required =
+        auth_required && matches!(state.bootstrap_state(), BootstrapState::Pending { .. });
+    let principal = resolve_session(&headers);
+    Json(json!({
+        "auth_required": auth_required,
+        "setup_required": setup_required,
+        "principal": principal,
+    }))
+    .into_response()
 }
 
 /// Axum middleware that enforces operator-auth on the admin

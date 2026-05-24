@@ -91,17 +91,28 @@ export async function logout(): Promise<void> {
 }
 
 export interface WhoamiResult {
-	session: WhoamiResponse | null;
+	authRequired: boolean;
 	setupRequired: boolean;
+	session: WhoamiResponse | null;
+}
+
+interface WhoamiBody {
+	auth_required: boolean;
+	setup_required: boolean;
+	principal: string | null;
 }
 
 export async function whoami(): Promise<WhoamiResult> {
 	const res = await fetch(`${BASE}/whoami`, { credentials: "same-origin" });
-	if (res.status === 503) return { session: null, setupRequired: true };
-	if (res.status === 401) return { session: null, setupRequired: false };
-	if (!res.ok) return { session: null, setupRequired: false };
-	const session = (await res.json()) as WhoamiResponse;
-	return { session, setupRequired: false };
+	if (!res.ok) {
+		return { authRequired: false, setupRequired: false, session: null };
+	}
+	const body = (await res.json()) as WhoamiBody;
+	return {
+		authRequired: body.auth_required,
+		setupRequired: body.setup_required,
+		session: body.principal ? { principal: body.principal } : null,
+	};
 }
 
 export async function setup(req: SetupRequest): Promise<SetupResponse> {
