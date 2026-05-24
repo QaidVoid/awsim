@@ -118,3 +118,41 @@ export async function whoami(): Promise<WhoamiResult> {
 export async function setup(req: SetupRequest): Promise<SetupResponse> {
 	return postJson("/setup", req);
 }
+
+export interface OperatorCredentials {
+	accessKeyId: string;
+	secretAccessKey: string;
+	expiresAt: string;
+	principal: string;
+}
+
+/**
+ * Fetches the IAM access-key pair the UI should use to sign AWS
+ * requests as the currently signed-in operator. Returns null when:
+ *
+ *  - There is no operator session (auth disabled, or signed out),
+ *  - The signed-in user has no active IAM access key.
+ *
+ * Callers fall back to the loginless admin key in those cases.
+ */
+export async function getCredentials(): Promise<OperatorCredentials | null> {
+	const res = await fetch(`${BASE}/credentials`, {
+		credentials: "same-origin",
+	});
+	if (res.status === 401 || res.status === 404) return null;
+	if (!res.ok) {
+		throw new Error(`Credentials probe failed: ${res.status}`);
+	}
+	const body = (await res.json()) as {
+		access_key_id: string;
+		secret_access_key: string;
+		expires_at: string;
+		principal: string;
+	};
+	return {
+		accessKeyId: body.access_key_id,
+		secretAccessKey: body.secret_access_key,
+		expiresAt: body.expires_at,
+		principal: body.principal,
+	};
+}

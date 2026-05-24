@@ -9,6 +9,7 @@
  */
 
 import { whoami, logout as apiLogout } from "$lib/api/auth";
+import { credentials } from "$lib/credentials.svelte";
 
 export interface AuthSession {
 	principal: string;
@@ -24,11 +25,21 @@ class AuthStore {
 		this.authRequired = result.authRequired;
 		this.setupRequired = result.setupRequired;
 		this.session = result.session;
+		// Pull the operator's IAM credentials whenever the session
+		// changes so subsequent signed AWS calls use the new
+		// principal. Drop them on sign-out so the next request falls
+		// back to the admin key.
+		if (this.signedIn) {
+			void credentials.refresh();
+		} else {
+			credentials.clear();
+		}
 	}
 
 	async signOut(): Promise<void> {
 		await apiLogout();
 		this.session = null;
+		credentials.clear();
 	}
 
 	get loaded(): boolean {

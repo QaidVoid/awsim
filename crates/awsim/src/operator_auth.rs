@@ -398,6 +398,105 @@ fn constant_time_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
     diff == 0
 }
 
+#[derive(Debug, Serialize)]
+pub struct OperatorCredentialsResponse {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    /// IAM access keys never expire on their own. We surface
+    /// `expires_at` so the UI can refresh in step with the operator
+    /// session, but the underlying credentials remain valid until the
+    /// operator explicitly rotates them. The value here mirrors the
+    /// session TTL so client-side caching tracks the wall-clock
+    /// lifetime of the sign-in.
+    pub expires_at: String,
+    pub principal: String,
+}
+
+/// `GET /_awsim/auth/credentials`
+///
+/// Returns the IAM access-key + secret pair the UI should use to
+/// sign AWS requests on behalf of the currently signed-in operator.
+/// Behind the operator-auth middleware so only the holder of a
+/// valid session cookie can fetch the secret.
+///
+/// AWS-parity note: real AWS console federates through STS and
+/// hands the browser short-lived ASIA credentials; AWSim returns
+/// the operator's own long-lived IAM keys directly. This is a
+/// documented simplification for the local-dev case where
+/// short-lived credentials add deployment complexity (token
+/// rotation, refresh loop, expiry handling) without buying real
+/// security since the snapshot file already contains every secret.
+/// A future phase can swap this for `sts:GetSessionToken` once the
+/// session store gains support for user-issued sessions.
+pub async fn credentials(State(state): State<OperatorAuthState>, headers: HeaderMap) -> Response {
+    let principal = match resolve_session(&headers) {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "code": "UnauthorizedException",
+                    "message": "No operator session.",
+                })),
+            )
+                .into_response();
+        }
+    };
+    let user_name = match principal.rsplit_once('/') {
+        Some((_, name)) => name.to_string(),
+        None => principal.clone(),
+    };
+    let iam_state = state
+        .iam
+        .store()
+        .get(&state.default_account_id, awsim_iam::IAM_REGION);
+    let user = match iam_state.users.get(&user_name) {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "code": "NoSuchEntity",
+                    "message": format!("IAM user {user_name} no longer exists."),
+                })),
+            )
+                .into_response();
+        }
+    };
+    let active_key = user
+        .access_keys
+        .iter()
+        .find(|k| k.status == "Active")
+        .cloned();
+    drop(user);
+    let key = match active_key {
+        Some(k) => k,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "code": "NoAccessKey",
+                    "message": format!(
+                        "IAM user {user_name} has no active access key. \
+                         Create one before signing requests as this principal.",
+                    ),
+                })),
+            )
+                .into_response();
+        }
+    };
+    let expires_at = (chrono::Utc::now()
+        + chrono::Duration::from_std(SESSION_TTL).unwrap_or(chrono::Duration::zero()))
+    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    Json(OperatorCredentialsResponse {
+        access_key_id: key.access_key_id,
+        secret_access_key: key.secret_access_key,
+        expires_at,
+        principal,
+    })
+    .into_response()
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RevealSecretRequest {
     pub user_name: String,

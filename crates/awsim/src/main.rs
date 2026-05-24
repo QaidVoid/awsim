@@ -1188,6 +1188,10 @@ async fn async_main() -> Result<()> {
             "/_awsim/auth/reveal-access-key",
             axum::routing::post(operator_auth::reveal_access_key),
         )
+        .route(
+            "/_awsim/auth/credentials",
+            axum::routing::get(operator_auth::credentials),
+        )
         .layer(axum::middleware::from_fn_with_state(
             operator_auth_state.clone(),
             operator_auth::require_auth,

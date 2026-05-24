@@ -15,6 +15,8 @@
 	import { fetchConfig } from '$lib/api';
 	import { fetchRecentRequestIds } from '$lib/api/requests';
 	import { auth } from '$lib/auth-state.svelte';
+	import { credentials, installFetchSigner } from '$lib/credentials.svelte';
+	import { ENDPOINT } from '$lib/aws';
 	import { route } from '$lib/url';
 	import { recent } from '$lib/recent.svelte';
 	import { shortcuts } from '$lib/shortcuts.svelte';
@@ -88,6 +90,12 @@
 		} catch {
 			/* ignore */
 		}
+		// Install the SigV4 interceptor before any API calls fire.
+		// The interceptor rewrites every outbound AWS request to the
+		// gateway with a real signature, so the server can run policy
+		// evaluation against the operator's IAM principal. Falls back
+		// to the admin key when no operator session is present.
+		installFetchSigner(ENDPOINT);
 		// Skip protected admin probes on the bare auth pages: they sit
 		// behind the operator-auth middleware and would 503 / 401
 		// before sign-in, polluting the console.
@@ -98,6 +106,10 @@
 				.catch(() => {
 					/* leave defaults */
 				});
+			// Pick up the operator's IAM credentials so subsequent
+			// signed requests carry their access key (and therefore
+			// surface the right principal to policy evaluation).
+			void credentials.refresh();
 		}
 
 		// Probe whoami to populate the session. The response always
