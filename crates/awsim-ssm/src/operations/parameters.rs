@@ -88,6 +88,32 @@ pub fn put_parameter(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Value is required"))?;
 
+    let tier = input["Tier"].as_str().unwrap_or("Standard");
+    if !matches!(tier, "Standard" | "Advanced" | "Intelligent-Tiering") {
+        return Err(AwsError::bad_request(
+            "InvalidParameter",
+            format!("Tier '{tier}' must be Standard, Advanced, or Intelligent-Tiering."),
+        ));
+    }
+    // AWS-documented per-value byte cap. Standard tier is 4 KiB,
+    // Advanced (and Intelligent-Tiering when it promotes) is 8 KiB.
+    // Over-limit values come back as ValidationException at the API
+    // boundary; without the check, callers can persist values here
+    // that real SSM would refuse on the same call.
+    let max_value_bytes = match tier {
+        "Standard" => 4 * 1024,
+        _ => 8 * 1024,
+    };
+    if value.len() > max_value_bytes {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "Parameter value is {} bytes; the maximum for tier '{tier}' is {max_value_bytes}.",
+                value.len()
+            ),
+        ));
+    }
+
     let param_type = input["Type"].as_str().unwrap_or("String");
     validate_param_type(param_type)?;
 
@@ -134,9 +160,10 @@ pub fn put_parameter(
             existing.tags.extend(tags);
         }
 
+        existing.tier = tier.to_string();
         let version = existing.version;
         info!(name, version, "Updated parameter");
-        return Ok(json!({ "Version": version, "Tier": "Standard" }));
+        return Ok(json!({ "Version": version, "Tier": tier }));
     }
 
     let param = Parameter {
@@ -149,14 +176,14 @@ pub fn put_parameter(
         last_modified_date: now,
         tags,
         history: Vec::new(),
-        tier: "Standard".to_string(),
+        tier: tier.to_string(),
         labels: Vec::new(),
     };
 
     info!(name, "Created parameter");
     state.parameters.insert(name.to_string(), param);
 
-    Ok(json!({ "Version": 1, "Tier": "Standard" }))
+    Ok(json!({ "Version": 1, "Tier": tier }))
 }
 
 // ---------------------------------------------------------------------------
