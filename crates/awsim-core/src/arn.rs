@@ -118,6 +118,71 @@ pub fn parse(s: &str) -> Result<Arn, AwsError> {
     }
 }
 
+/// Reject an ARN that belongs to a different account, region, or
+/// partition than the caller's [`RequestContext`].
+///
+/// Use this on operations that take an ARN of an arbitrary resource
+/// (TagResource, GetResourceShare, GrantPermissions) and need to
+/// keep cross-tenant access from leaking. Pass `RegionScope::Global`
+/// for services whose ARNs intentionally have an empty region
+/// segment (IAM, Route 53, CloudFront).
+///
+/// Returns `Ok(arn)` parsed on success so the caller can use the
+/// resource segment directly. Returns
+/// `AccessDeniedException`-shaped error on a tenant mismatch and
+/// `InvalidParameterValue` on a malformed ARN.
+pub fn expect_owned_by(
+    arn_str: &str,
+    ctx: &RequestContext,
+    region_scope: RegionScope,
+) -> Result<Arn, AwsError> {
+    let parsed = parse(arn_str)?;
+    if parsed.partition != ctx.partition {
+        return Err(AwsError::access_denied(format!(
+            "ARN partition '{}' does not match request partition '{}'.",
+            parsed.partition, ctx.partition
+        )));
+    }
+    if !parsed.account.is_empty() && parsed.account != ctx.account_id {
+        return Err(AwsError::access_denied(format!(
+            "ARN account '{}' does not match request account '{}'.",
+            parsed.account, ctx.account_id
+        )));
+    }
+    match region_scope {
+        RegionScope::Global => {
+            if !parsed.region.is_empty() {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterValue",
+                    format!(
+                        "ARN region must be empty for global service '{}'.",
+                        parsed.service
+                    ),
+                ));
+            }
+        }
+        RegionScope::Regional => {
+            if !parsed.region.is_empty() && parsed.region != ctx.region {
+                return Err(AwsError::access_denied(format!(
+                    "ARN region '{}' does not match request region '{}'.",
+                    parsed.region, ctx.region
+                )));
+            }
+        }
+    }
+    Ok(parsed)
+}
+
+/// Whether a service's ARNs carry a region segment or live in the
+/// global namespace. Passed to [`expect_owned_by`] so the same
+/// helper works for IAM / Route 53 ARNs (global) and EC2 / DDB ARNs
+/// (regional).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionScope {
+    Global,
+    Regional,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +288,55 @@ mod tests {
     fn parse_rejects_empty_partition_or_service() {
         assert!(parse("arn::s3:us-east-1:111:bucket").is_err());
         assert!(parse("arn:aws::us-east-1:111:bucket").is_err());
+    }
+
+    #[test]
+    fn expect_owned_by_accepts_matching_tenant() {
+        let ctx = ctx_with("aws", "us-east-1", "111122223333");
+        let arn = "arn:aws:dynamodb:us-east-1:111122223333:table/users";
+        expect_owned_by(arn, &ctx, RegionScope::Regional).unwrap();
+    }
+
+    #[test]
+    fn expect_owned_by_rejects_foreign_account() {
+        let ctx = ctx_with("aws", "us-east-1", "111122223333");
+        let arn = "arn:aws:dynamodb:us-east-1:999988887777:table/users";
+        let err = expect_owned_by(arn, &ctx, RegionScope::Regional).unwrap_err();
+        assert_eq!(err.code, "AccessDeniedException");
+    }
+
+    #[test]
+    fn expect_owned_by_rejects_foreign_region() {
+        let ctx = ctx_with("aws", "us-east-1", "111122223333");
+        let arn = "arn:aws:dynamodb:eu-west-1:111122223333:table/users";
+        let err = expect_owned_by(arn, &ctx, RegionScope::Regional).unwrap_err();
+        assert_eq!(err.code, "AccessDeniedException");
+    }
+
+    #[test]
+    fn expect_owned_by_rejects_foreign_partition() {
+        let ctx = ctx_with("aws", "us-east-1", "111122223333");
+        let arn = "arn:aws-cn:dynamodb:us-east-1:111122223333:table/users";
+        let err = expect_owned_by(arn, &ctx, RegionScope::Regional).unwrap_err();
+        assert_eq!(err.code, "AccessDeniedException");
+    }
+
+    #[test]
+    fn expect_owned_by_allows_empty_account_segment() {
+        let ctx = ctx_with("aws", "us-east-1", "111122223333");
+        let arn = "arn:aws:s3:::my-bucket";
+        let parsed = expect_owned_by(arn, &ctx, RegionScope::Regional).unwrap();
+        assert_eq!(parsed.resource, "my-bucket");
+    }
+
+    #[test]
+    fn expect_owned_by_global_requires_empty_region() {
+        let ctx = ctx_with("aws", "us-east-1", "111122223333");
+        let arn = "arn:aws:iam::111122223333:role/AdminRole";
+        expect_owned_by(arn, &ctx, RegionScope::Global).unwrap();
+
+        let bad = "arn:aws:iam:us-east-1:111122223333:role/AdminRole";
+        let err = expect_owned_by(bad, &ctx, RegionScope::Global).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
     }
 }
