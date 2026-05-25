@@ -423,6 +423,32 @@ fn eks_error_factories_match_smithy() {
 }
 
 #[test]
+fn cognito_identity_error_factories_match_smithy() {
+    // Cognito Identity reuses the same helper module as Cognito IDP
+    // because the IdentityService and IdentityProvider services run
+    // from the same crate. The codes that overlap (NotAuthorized,
+    // ResourceNotFound, InvalidParameter) carry the same statuses in
+    // both Smithy models.
+    let errors = load("cognito-identity");
+
+    assert_matches(
+        awsim_cognito::error::resource_not_found("Identity pool"),
+        &expect(&errors, "ResourceNotFoundException"),
+        "resource_not_found",
+    );
+    assert_matches(
+        awsim_cognito::error::not_authorized("invalid token"),
+        &expect(&errors, "NotAuthorizedException"),
+        "not_authorized",
+    );
+    assert_matches(
+        awsim_cognito::error::invalid_parameter("IdentityPoolId is required"),
+        &expect(&errors, "InvalidParameterException"),
+        "invalid_parameter",
+    );
+}
+
+#[test]
 fn cognito_idp_error_factories_match_smithy() {
     let errors = load("cognito-idp");
 

@@ -322,9 +322,9 @@ fn create_identity_pool(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["IdentityPoolName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolName is required"))?;
+    let name = input["IdentityPoolName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolName is required")
+    })?;
 
     let allow_unauthenticated = input["AllowUnauthenticatedIdentities"]
         .as_bool()
@@ -411,9 +411,9 @@ fn create_identity_pool(
 
 /// DeleteIdentityPool
 fn delete_identity_pool(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
 
     state.pools.remove(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -427,9 +427,9 @@ fn delete_identity_pool(state: &IdentityPoolState, input: &Value) -> Result<Valu
 
 /// DescribeIdentityPool
 fn describe_identity_pool(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
 
     let pool = get_pool(state, pool_id)?;
     Ok(pool_to_json(&pool))
@@ -437,9 +437,9 @@ fn describe_identity_pool(state: &IdentityPoolState, input: &Value) -> Result<Va
 
 /// UpdateIdentityPool
 fn update_identity_pool(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
 
     let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -502,9 +502,9 @@ fn get_id(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
 
     let pool = get_pool(state, pool_id)?;
 
@@ -584,9 +584,9 @@ fn get_credentials_for_identity(
     sessions: &StsSessionStore,
     account_id: &str,
 ) -> Result<Value, AwsError> {
-    let identity_id = input["IdentityId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityId is required"))?;
+    let identity_id = input["IdentityId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityId is required")
+    })?;
 
     // Validate the identity exists
     let identity = state.identities.get(identity_id).ok_or_else(|| {
@@ -934,9 +934,9 @@ fn get_open_id_token(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let identity_id = input["IdentityId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityId is required"))?;
+    let identity_id = input["IdentityId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityId is required")
+    })?;
 
     if !state.identities.contains_key(identity_id) {
         return Err(AwsError::not_found(
@@ -964,15 +964,15 @@ fn get_open_id_token_for_developer_identity(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
 
     get_pool(state, pool_id)?;
 
     let logins = input["Logins"]
         .as_object()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Logins is required"))?;
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "Logins is required"))?;
 
     // Extract developer user identifier from the logins map
     let dev_user_identifier = logins
@@ -1030,9 +1030,9 @@ fn get_open_id_token_for_developer_identity(
 
 /// SetIdentityPoolRoles
 fn set_identity_pool_roles(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
 
     let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -1060,9 +1060,9 @@ fn set_identity_pool_roles(state: &IdentityPoolState, input: &Value) -> Result<V
 
 /// GetIdentityPoolRoles
 fn get_identity_pool_roles(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
 
     let pool = get_pool(state, pool_id)?;
 
@@ -1088,9 +1088,9 @@ fn get_identity_pool_roles(state: &IdentityPoolState, input: &Value) -> Result<V
 
 /// LookupDeveloperIdentity
 fn lookup_developer_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
 
     get_pool(state, pool_id)?;
 
@@ -1125,7 +1125,7 @@ fn lookup_developer_identity(state: &IdentityPoolState, input: &Value) -> Result
     }
 
     Err(AwsError::bad_request(
-        "InvalidParameter",
+        "InvalidParameterException",
         "Either IdentityId or DeveloperUserIdentifier is required",
     ))
 }
@@ -1136,9 +1136,9 @@ fn lookup_developer_identity(state: &IdentityPoolState, input: &Value) -> Result
 
 /// DescribeIdentity
 fn describe_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let identity_id = input["IdentityId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityId is required"))?;
+    let identity_id = input["IdentityId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityId is required")
+    })?;
 
     let identity = state.identities.get(identity_id).ok_or_else(|| {
         AwsError::not_found(
@@ -1157,9 +1157,9 @@ fn describe_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, 
 
 /// ListIdentities
 fn list_identities(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
 
     get_pool(state, pool_id)?;
 
@@ -1189,7 +1189,10 @@ fn list_identities(state: &IdentityPoolState, input: &Value) -> Result<Value, Aw
 /// DeleteIdentities
 fn delete_identities(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
     let ids = input["IdentityIdsToDelete"].as_array().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "IdentityIdsToDelete is required")
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "IdentityIdsToDelete is required",
+        )
     })?;
 
     for id_val in ids {
@@ -1207,17 +1210,26 @@ fn merge_developer_identities(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
     let source_id = input["SourceUserIdentifier"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "SourceUserIdentifier is required")
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "SourceUserIdentifier is required",
+        )
     })?;
     let dest_id = input["DestinationUserIdentifier"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "DestinationUserIdentifier is required")
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "DestinationUserIdentifier is required",
+        )
     })?;
     let dev_provider = input["DeveloperProviderName"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "DeveloperProviderName is required")
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "DeveloperProviderName is required",
+        )
     })?;
 
     get_pool(state, pool_id)?;
@@ -1299,14 +1311,17 @@ fn merge_developer_identities(
 
 /// UnlinkDeveloperIdentity — remove a developer user identifier from an identity.
 fn unlink_developer_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let identity_id = input["IdentityId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityId is required"))?;
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let identity_id = input["IdentityId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityId is required")
+    })?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
     let dev_user_identifier = input["DeveloperUserIdentifier"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "DeveloperUserIdentifier is required")
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "DeveloperUserIdentifier is required",
+        )
     })?;
 
     get_pool(state, pool_id)?;
@@ -1328,12 +1343,12 @@ fn unlink_developer_identity(state: &IdentityPoolState, input: &Value) -> Result
 
 /// UnlinkIdentity — remove federated logins from an identity.
 fn unlink_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let identity_id = input["IdentityId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityId is required"))?;
-    let logins_to_remove = input["LoginsToRemove"]
-        .as_array()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "LoginsToRemove is required"))?;
+    let identity_id = input["IdentityId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityId is required")
+    })?;
+    let logins_to_remove = input["LoginsToRemove"].as_array().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "LoginsToRemove is required")
+    })?;
 
     let mut identity = state.identities.get_mut(identity_id).ok_or_else(|| {
         AwsError::not_found(
@@ -1361,11 +1376,14 @@ fn get_principal_tag_attribute_map(
     state: &IdentityPoolState,
     input: &Value,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
     let provider_name = input["IdentityProviderName"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "IdentityProviderName is required")
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "IdentityProviderName is required",
+        )
     })?;
 
     let pool = get_pool(state, pool_id)?;
@@ -1394,11 +1412,14 @@ fn set_principal_tag_attribute_map(
     state: &IdentityPoolState,
     input: &Value,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
     let provider_name = input["IdentityProviderName"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "IdentityProviderName is required")
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "IdentityProviderName is required",
+        )
     })?;
     let use_defaults = input["UseDefaults"].as_bool().unwrap_or(true);
 
@@ -1444,11 +1465,14 @@ fn delete_principal_tag_attribute_map(
     state: &IdentityPoolState,
     input: &Value,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["IdentityPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdentityPoolId is required"))?;
+    let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
+    })?;
     let provider_name = input["IdentityProviderName"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "IdentityProviderName is required")
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "IdentityProviderName is required",
+        )
     })?;
 
     let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
@@ -1474,9 +1498,9 @@ fn pool_id_from_arn(arn: &str) -> Option<&str> {
 
 /// TagResource
 fn tag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let resource_arn = input["ResourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
+    let resource_arn = input["ResourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ResourceArn is required")
+    })?;
 
     let new_tags: HashMap<String, String> = input["Tags"]
         .as_object()
@@ -1488,8 +1512,9 @@ fn tag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsEr
         .unwrap_or_default();
 
     // Resolve the pool from ARN
-    let pool_id = pool_id_from_arn(resource_arn)
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format"))?;
+    let pool_id = pool_id_from_arn(resource_arn).ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Invalid ResourceArn format")
+    })?;
 
     let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -1507,19 +1532,20 @@ fn tag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsEr
 
 /// UntagResource
 fn untag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let resource_arn = input["ResourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
+    let resource_arn = input["ResourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ResourceArn is required")
+    })?;
 
     let tag_keys: Vec<&str> = input["TagKeys"]
         .as_array()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TagKeys is required"))?
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "TagKeys is required"))?
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
 
-    let pool_id = pool_id_from_arn(resource_arn)
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format"))?;
+    let pool_id = pool_id_from_arn(resource_arn).ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Invalid ResourceArn format")
+    })?;
 
     let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -1537,12 +1563,13 @@ fn untag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, Aws
 
 /// ListTagsForResource
 fn list_tags_for_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let resource_arn = input["ResourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
+    let resource_arn = input["ResourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ResourceArn is required")
+    })?;
 
-    let pool_id = pool_id_from_arn(resource_arn)
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Invalid ResourceArn format"))?;
+    let pool_id = pool_id_from_arn(resource_arn).ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Invalid ResourceArn format")
+    })?;
 
     let pool = get_pool(state, pool_id)?;
 
