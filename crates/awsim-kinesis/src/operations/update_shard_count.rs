@@ -26,7 +26,7 @@ pub fn handle(
     }
 
     let mut stream = state.streams.get_mut(stream_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {} does not exist", stream_name),
         )

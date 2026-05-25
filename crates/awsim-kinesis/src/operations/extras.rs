@@ -36,7 +36,7 @@ pub fn get_resource_policy(
         .get(arn)
         .map(|p| p.value().clone())
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "ResourceNotFoundException",
                 format!("Policy for {arn} not found"),
             )
@@ -200,7 +200,7 @@ pub fn update_stream_mode(
         })?;
 
     let mut stream = state.streams.get_mut(&stream_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {} does not exist", stream_name),
         )
@@ -222,7 +222,7 @@ pub fn update_stream_warm_throughput(
         .unwrap_or(0);
 
     let mut stream = state.streams.get_mut(&stream_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {} does not exist", stream_name),
         )

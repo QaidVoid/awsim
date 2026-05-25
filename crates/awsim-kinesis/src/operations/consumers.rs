@@ -22,7 +22,7 @@ pub fn register_stream_consumer(
     // Verify the stream exists
     let stream_name = stream_arn.rsplit('/').next().unwrap_or("");
     if !state.streams.contains_key(stream_name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream ARN {} does not exist", stream_arn),
         ));
@@ -107,7 +107,7 @@ pub fn describe_stream_consumer(
             .consumers
             .get(arn)
             .ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::bad_request(
                     "ResourceNotFoundException",
                     format!("Consumer not found: {arn}"),
                 )
@@ -120,7 +120,7 @@ pub fn describe_stream_consumer(
             .find(|e| e.stream_arn == s_arn && e.consumer_name == name)
             .map(|e| e.value().clone())
             .ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::bad_request(
                     "ResourceNotFoundException",
                     format!("Consumer '{}' not found on stream {}", name, s_arn),
                 )

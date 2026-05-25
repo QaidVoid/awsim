@@ -13,7 +13,7 @@ pub fn handle(
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "StreamName is required"))?;
 
     let stream = state.streams.get(stream_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {} does not exist", stream_name),
         )

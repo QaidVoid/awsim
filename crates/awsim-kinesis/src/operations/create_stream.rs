@@ -45,7 +45,7 @@ pub fn handle(
     };
 
     if state.streams.contains_key(stream_name) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "ResourceInUseException",
             format!("Stream {} already exists", stream_name),
         ));

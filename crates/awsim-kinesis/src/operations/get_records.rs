@@ -23,7 +23,7 @@ pub fn handle(
     })?;
 
     let stream = state.streams.get(&info.stream_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {} does not exist", info.stream_name),
         )

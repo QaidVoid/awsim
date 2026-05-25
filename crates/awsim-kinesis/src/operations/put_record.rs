@@ -25,7 +25,7 @@ pub fn handle(
     let explicit_hash_key = input["ExplicitHashKey"].as_str().map(|s| s.to_string());
 
     let mut stream = state.streams.get_mut(stream_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {stream_name} does not exist"),
         )

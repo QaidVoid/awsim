@@ -12,7 +12,7 @@ pub fn add_tags(
     let stream_name = resolve_stream_name(state, input)?;
 
     let mut stream = state.streams.get_mut(&stream_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {} does not exist", stream_name),
         )
@@ -37,7 +37,7 @@ pub fn remove_tags(
     let stream_name = resolve_stream_name(state, input)?;
 
     let mut stream = state.streams.get_mut(&stream_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {} does not exist", stream_name),
         )
@@ -62,7 +62,7 @@ pub fn list_tags(
     let stream_name = resolve_stream_name(state, input)?;
 
     let stream = state.streams.get(&stream_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {} does not exist", stream_name),
         )

@@ -161,6 +161,42 @@ fn secretsmanager_error_factories_match_smithy() {
 }
 
 #[test]
+fn kinesis_error_factories_match_smithy() {
+    let errors = load("kinesis");
+
+    assert_matches(
+        awsim_kinesis::error::resource_not_found("Stream not found"),
+        &expect(&errors, "ResourceNotFoundException"),
+        "resource_not_found",
+    );
+    assert_matches(
+        awsim_kinesis::error::resource_in_use("Stream already exists"),
+        &expect(&errors, "ResourceInUseException"),
+        "resource_in_use",
+    );
+    assert_matches(
+        awsim_kinesis::error::limit_exceeded("too many streams"),
+        &expect(&errors, "LimitExceededException"),
+        "limit_exceeded",
+    );
+    assert_matches(
+        awsim_kinesis::error::provisioned_throughput_exceeded("throttled"),
+        &expect(&errors, "ProvisionedThroughputExceededException"),
+        "provisioned_throughput_exceeded",
+    );
+    assert_matches(
+        awsim_kinesis::error::expired_iterator("iterator expired"),
+        &expect(&errors, "ExpiredIteratorException"),
+        "expired_iterator",
+    );
+    assert_matches(
+        awsim_kinesis::error::invalid_argument("bad arg"),
+        &expect(&errors, "InvalidArgumentException"),
+        "invalid_argument",
+    );
+}
+
+#[test]
 fn s3_error_factories_match_smithy() {
     let errors = load("s3");
 
