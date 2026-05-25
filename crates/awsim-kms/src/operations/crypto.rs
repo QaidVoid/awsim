@@ -125,7 +125,10 @@ fn aes_encrypt(
 
 fn aes_decrypt(secret: &[u8], nonce_and_ct: &[u8], aad: &[u8]) -> Result<Vec<u8>, AwsError> {
     if nonce_and_ct.len() < NONCE_LEN + 16 {
-        return Err(error::invalid_parameter("CiphertextBlob is too short"));
+        return Err(AwsError::bad_request(
+            "InvalidCiphertextException",
+            "CiphertextBlob is too short to contain a nonce and GCM tag.",
+        ));
     }
     let aes_key = derive_aes_key(secret);
     let cipher = Aes256Gcm::new((&aes_key).into());
@@ -154,15 +157,25 @@ pub fn encrypt_raw(key_id: &str, secret: &[u8], plaintext: &[u8]) -> Vec<u8> {
 }
 
 fn decode_ciphertext_blob(blob_b64: &str) -> Result<(String, Vec<u8>), AwsError> {
-    let blob = BASE64
-        .decode(blob_b64)
-        .map_err(|_| error::invalid_parameter("CiphertextBlob is not valid base64"))?;
+    let blob = BASE64.decode(blob_b64).map_err(|_| {
+        AwsError::bad_request(
+            "InvalidCiphertextException",
+            "CiphertextBlob is not valid base64.",
+        )
+    })?;
     if blob.len() < KEY_ID_LEN + NONCE_LEN {
-        return Err(error::invalid_parameter("CiphertextBlob is too short"));
+        return Err(AwsError::bad_request(
+            "InvalidCiphertextException",
+            "CiphertextBlob is too short to contain a KMS key id and nonce.",
+        ));
     }
     let key_id_bytes = &blob[..KEY_ID_LEN];
-    let key_id = String::from_utf8(key_id_bytes.to_vec())
-        .map_err(|_| error::invalid_parameter("CiphertextBlob contains invalid key ID"))?;
+    let key_id = String::from_utf8(key_id_bytes.to_vec()).map_err(|_| {
+        AwsError::bad_request(
+            "InvalidCiphertextException",
+            "CiphertextBlob key-id segment is not valid UTF-8.",
+        )
+    })?;
     let payload = blob[KEY_ID_LEN..].to_vec();
     Ok((key_id, payload))
 }
