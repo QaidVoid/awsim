@@ -30,6 +30,21 @@ pub fn create_grant(
         return Err(error::not_found("Key"));
     }
 
+    // AWS limits grants to 50_000 per KMS key. Beyond that, CreateGrant
+    // returns LimitExceededException.
+    const GRANTS_PER_KEY_LIMIT: usize = 50_000;
+    let live_grants_for_key = state
+        .grants
+        .iter()
+        .filter(|e| e.value().key_id == resolved_id)
+        .count();
+    if live_grants_for_key >= GRANTS_PER_KEY_LIMIT {
+        return Err(AwsError::bad_request(
+            "LimitExceededException",
+            format!("Key {resolved_id} already has the maximum {GRANTS_PER_KEY_LIMIT} grants."),
+        ));
+    }
+
     let operations: Vec<String> = input["Operations"]
         .as_array()
         .unwrap_or(&vec![])
