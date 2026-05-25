@@ -1,8 +1,9 @@
 use clap::Parser;
 
+use awsim_conformance::smithy;
+
 mod runner;
 mod server;
-mod smithy;
 
 #[derive(Parser)]
 #[command(

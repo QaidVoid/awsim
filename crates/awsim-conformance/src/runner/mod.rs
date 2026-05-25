@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::smithy::SmithyModel;
+use awsim_conformance::smithy::SmithyModel;
 
 pub mod common;
 

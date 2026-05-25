@@ -38,7 +38,7 @@ pub fn invalid_parameter(message: impl Into<String>) -> AwsError {
     AwsError::bad_request("InvalidParameterException", message)
 }
 
-/// HTTP 400 InvalidKeyUsageException — raised when an operation is called
+/// HTTP 400 InvalidKeyUsageException: raised when an operation is called
 /// against a key whose KeyUsage doesn't match (e.g. GenerateMac on a
 /// SIGN_VERIFY key).
 pub fn invalid_key_usage(message: impl Into<String>) -> AwsError {
