@@ -104,6 +104,8 @@ pub fn request_certificate(
         ));
     }
 
+    // AWS limits ACM certificates to 10 total names (DomainName + 9
+    // SANs). Reject early when the caller requested more.
     let mut sans: Vec<String> = input["SubjectAlternativeNames"]
         .as_array()
         .map(|arr| {
@@ -113,10 +115,54 @@ pub fn request_certificate(
         })
         .unwrap_or_default();
 
-    // domain_name is always included in SANs
-    if !sans.contains(&domain_name) {
-        sans.insert(0, domain_name.clone());
+    // Domain validation dedupes case-insensitively across DomainName
+    // and SANs. Real AWS rejects with InvalidDomainValidationOptionsException
+    // when the same name appears twice.
+    let domain_lower = domain_name.to_ascii_lowercase();
+    sans.retain(|s| s.to_ascii_lowercase() != domain_lower);
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for s in &sans {
+        let key = s.to_ascii_lowercase();
+        if !seen.insert(key) {
+            return Err(AwsError::bad_request(
+                "InvalidDomainValidationOptionsException",
+                format!("SubjectAlternativeNames contains the duplicate name `{s}`."),
+            ));
+        }
     }
+    const MAX_SANS: usize = 9;
+    if sans.len() > MAX_SANS {
+        return Err(AwsError::bad_request(
+            "InvalidParameter",
+            format!(
+                "Up to 9 SubjectAlternativeNames are allowed in addition to DomainName \
+                 ({} supplied).",
+                sans.len()
+            ),
+        ));
+    }
+
+    // KeyAlgorithm allowlist matches AWS public docs. Defaults to
+    // RSA_2048 to match ACM's default; reject anything off-list.
+    let key_algorithm = input["KeyAlgorithm"].as_str().unwrap_or("RSA_2048");
+    if !matches!(
+        key_algorithm,
+        "RSA_1024"
+            | "RSA_2048"
+            | "RSA_3072"
+            | "RSA_4096"
+            | "EC_prime256v1"
+            | "EC_secp384r1"
+            | "EC_secp521r1"
+    ) {
+        return Err(AwsError::bad_request(
+            "InvalidParameter",
+            format!("KeyAlgorithm `{key_algorithm}` is not supported."),
+        ));
+    }
+
+    // domain_name is always included in SANs
+    sans.insert(0, domain_name.clone());
 
     let cert_id = Uuid::new_v4();
     let certificate_arn = format!(
