@@ -65,6 +65,17 @@ pub fn put_rule(
         .map(|r| r.targets.clone())
         .unwrap_or_default();
 
+    // AWS caps an event bus at 300 rules. Beyond that, PutRule returns
+    // LimitExceededException. The check skips when the rule already
+    // exists (this is an update, not a new slot).
+    const MAX_RULES_PER_BUS: usize = 300;
+    if !bus.rules.contains_key(name) && bus.rules.len() >= MAX_RULES_PER_BUS {
+        return Err(AwsError::conflict(
+            "LimitExceededException",
+            format!("Event bus {bus_name} already has the maximum {MAX_RULES_PER_BUS} rules."),
+        ));
+    }
+
     let rule = Rule {
         name: name.to_string(),
         arn: arn.clone(),

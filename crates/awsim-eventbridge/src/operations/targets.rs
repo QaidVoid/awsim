@@ -40,6 +40,32 @@ pub fn put_targets(
         )
     })?;
 
+    // AWS caps a rule at 5 targets. Compute the post-call total
+    // (existing targets keyed by Id minus the ones this call replaces,
+    // plus new ones) and reject before any state mutation when it
+    // would exceed the cap.
+    const MAX_TARGETS_PER_RULE: usize = 5;
+    {
+        let incoming_ids: std::collections::HashSet<String> = targets_input
+            .iter()
+            .filter_map(|t| t.get("Id").and_then(|v| v.as_str()).map(str::to_string))
+            .collect();
+        let keep = rule
+            .targets
+            .iter()
+            .filter(|t| !incoming_ids.contains(&t.id))
+            .count();
+        let projected = keep + incoming_ids.len();
+        if projected > MAX_TARGETS_PER_RULE {
+            return Err(AwsError::bad_request(
+                "LimitExceededException",
+                format!(
+                    "Rule {rule_name} can have at most {MAX_TARGETS_PER_RULE} targets ({projected} requested)."
+                ),
+            ));
+        }
+    }
+
     let mut failed_entries: Vec<Value> = Vec::new();
     let mut failed_count = 0u64;
 
