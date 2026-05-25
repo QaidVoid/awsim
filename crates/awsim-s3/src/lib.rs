@@ -128,6 +128,10 @@ impl S3Service {
                     expires: None,
                     checksum_algorithm: None,
                     checksum_value: None,
+                    sse_algorithm: None,
+                    sse_kms_key_id: None,
+                    sse_customer_algorithm: None,
+                    sse_customer_key_md5: None,
                     is_delete_marker: false,
                 };
                 bucket.objects.insert(

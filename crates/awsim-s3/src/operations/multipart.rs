@@ -427,6 +427,10 @@ pub fn complete_multipart_upload(state: &S3State, input: &Value) -> Result<Value
         expires: None,
         checksum_algorithm: None,
         checksum_value: None,
+        sse_algorithm: None,
+        sse_kms_key_id: None,
+        sse_customer_algorithm: None,
+        sse_customer_key_md5: None,
         is_delete_marker: false,
     };
 
@@ -631,6 +635,10 @@ mod tests {
             expires: None,
             checksum_algorithm: None,
             checksum_value: None,
+            sse_algorithm: None,
+            sse_kms_key_id: None,
+            sse_customer_algorithm: None,
+            sse_customer_key_md5: None,
             is_delete_marker: false,
         });
         bucket.objects.insert(src_key.to_string(), versions);

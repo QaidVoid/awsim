@@ -242,6 +242,145 @@ fn version_id_input(input: &Value) -> Option<&str> {
 ///   CRC32 / CRC32C → 4 bytes (base64 `XXXXXXXX`, with `=` padding)
 ///   SHA1            → 20 bytes
 ///   SHA256          → 32 bytes
+/// Server-side encryption parameters resolved from the request and the
+/// bucket's default encryption config. All four fields are filled in
+/// from one of three sources, in priority order:
+///
+/// 1. Explicit `ServerSideEncryption` / `SSEKMSKeyId` / SSE-C trio on
+///    the request.
+/// 2. The bucket's `PutBucketEncryption` default when the request
+///    doesn't specify one.
+/// 3. `None` for a plain unencrypted write.
+#[derive(Debug, Default)]
+struct SseParams {
+    algorithm: Option<String>,
+    kms_key_id: Option<String>,
+    customer_algorithm: Option<String>,
+    customer_key_md5: Option<String>,
+}
+
+/// Extract and validate the server-side encryption knobs on a PutObject
+/// (or CreateMultipartUpload) request.
+///
+/// Validation rules mirror AWS:
+/// - SSE-C requires the trio (`SSECustomerAlgorithm`, `SSECustomerKey`,
+///   `SSECustomerKeyMD5`); the algorithm must be `AES256`; the key must
+///   decode to 32 bytes; the supplied MD5 must equal the actual MD5 of
+///   the key.
+/// - SSE-C and SSE-KMS cannot be combined.
+/// - SSE-KMS / `aws:kms:dsse` accept an optional `SSEKMSKeyId`.
+/// - When neither is supplied, fall back to the bucket's default
+///   encryption config so a bucket-default `aws:kms` policy still
+///   covers writes that didn't opt in explicitly.
+fn extract_sse_params(state: &S3State, input: &Value, bucket: &str) -> Result<SseParams, AwsError> {
+    let mut params = SseParams::default();
+
+    let sse_algo = opt_str(input, "ServerSideEncryption").map(str::to_string);
+    let sse_kms_key = opt_str(input, "SSEKMSKeyId").map(str::to_string);
+    let sse_c_algo = opt_str(input, "SSECustomerAlgorithm").map(str::to_string);
+    let sse_c_key = opt_str(input, "SSECustomerKey").map(str::to_string);
+    let sse_c_md5 = opt_str(input, "SSECustomerKeyMD5").map(str::to_string);
+
+    // SSE-C: validate the trio is complete and the MD5 echoes the key.
+    if sse_c_algo.is_some() || sse_c_key.is_some() || sse_c_md5.is_some() {
+        if sse_algo.is_some() {
+            return Err(AwsError::bad_request(
+                "InvalidArgument",
+                "Cannot combine SSE-KMS with SSE-C; supply at most one.",
+            ));
+        }
+        let algo = sse_c_algo.ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidArgument",
+                "SSECustomerAlgorithm is required when supplying SSE-C parameters.",
+            )
+        })?;
+        if algo != "AES256" {
+            return Err(AwsError::bad_request(
+                "InvalidArgument",
+                format!("SSECustomerAlgorithm '{algo}' is not supported; only AES256 is accepted."),
+            ));
+        }
+        let key = sse_c_key.ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidArgument",
+                "SSECustomerKey is required when supplying SSE-C parameters.",
+            )
+        })?;
+        let md5 = sse_c_md5.ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidArgument",
+                "SSECustomerKeyMD5 is required when supplying SSE-C parameters.",
+            )
+        })?;
+        use base64::Engine as _;
+        let key_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&key)
+            .map_err(|_| {
+                AwsError::bad_request("InvalidArgument", "SSECustomerKey is not valid base64.")
+            })?;
+        if key_bytes.len() != 32 {
+            return Err(AwsError::bad_request(
+                "InvalidArgument",
+                format!(
+                    "SSECustomerKey must decode to 32 bytes (decoded {}).",
+                    key_bytes.len()
+                ),
+            ));
+        }
+        use md5::{Digest, Md5};
+        let computed = base64::engine::general_purpose::STANDARD.encode(Md5::digest(&key_bytes));
+        if computed != md5 {
+            return Err(AwsError::bad_request(
+                "InvalidArgument",
+                "SSECustomerKeyMD5 does not match the MD5 of the supplied SSECustomerKey.",
+            ));
+        }
+        params.customer_algorithm = Some(algo);
+        params.customer_key_md5 = Some(md5);
+        return Ok(params);
+    }
+
+    // SSE-KMS / SSE-S3: persist whatever the client supplied.
+    if let Some(algo) = sse_algo {
+        if !matches!(algo.as_str(), "AES256" | "aws:kms" | "aws:kms:dsse") {
+            return Err(AwsError::bad_request(
+                "InvalidArgument",
+                format!("ServerSideEncryption '{algo}' is not supported."),
+            ));
+        }
+        params.algorithm = Some(algo);
+        params.kms_key_id = sse_kms_key;
+        return Ok(params);
+    }
+
+    // Fall back to bucket default encryption (PutBucketEncryption).
+    if let Some(bucket) = state.buckets.get(bucket)
+        && let Some(raw) = &bucket.encryption
+        && let Ok(default) = serde_json::from_str::<Value>(raw)
+    {
+        // Default format is the AWS GetBucketEncryption shape:
+        // { "Rules": [ { "ApplyServerSideEncryptionByDefault":
+        //                { "SSEAlgorithm": "...", "KMSMasterKeyID": "..." } } ] }
+        let rule = default
+            .get("Rules")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .unwrap_or(&default);
+        let apply = rule
+            .get("ApplyServerSideEncryptionByDefault")
+            .unwrap_or(rule);
+        if let Some(algo) = apply.get("SSEAlgorithm").and_then(|v| v.as_str()) {
+            params.algorithm = Some(algo.to_string());
+        }
+        if let Some(kid) = apply.get("KMSMasterKeyID").and_then(|v| v.as_str()) {
+            params.kms_key_id = Some(kid.to_string());
+        }
+    }
+
+    Ok(params)
+}
+
 fn parse_request_checksum(input: &Value) -> Result<(Option<String>, Option<String>), AwsError> {
     // Each pair: (input field, algorithm name, expected decoded bytes)
     const FIELDS: &[(&str, &str, usize)] = &[
@@ -434,6 +573,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
 
     let metadata = extract_user_metadata(input);
     let (checksum_algorithm, checksum_value) = parse_request_checksum(input)?;
+    let sse = extract_sse_params(state, input, bucket_name)?;
     let bypass_governance = input
         .get("BypassGovernanceRetention")
         .and_then(Value::as_str)
@@ -505,6 +645,10 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
             expires,
             checksum_algorithm: checksum_algorithm.clone(),
             checksum_value: checksum_value.clone(),
+            sse_algorithm: sse.algorithm.clone(),
+            sse_kms_key_id: sse.kms_key_id.clone(),
+            sse_customer_algorithm: sse.customer_algorithm.clone(),
+            sse_customer_key_md5: sse.customer_key_md5.clone(),
             is_delete_marker: false,
         };
 
@@ -535,7 +679,62 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     {
         map.insert("VersionId".to_string(), Value::String(vid));
     }
+    inject_sse_response_fields(&mut result, &sse);
     Ok(result)
+}
+
+/// Mirror the SSE parameters on a put-style response so SDKs that key
+/// off `x-amz-server-side-encryption` / `x-amz-server-side-encryption-customer-algorithm`
+/// see the same headers they would on real AWS.
+fn inject_sse_response_fields(result: &mut Value, sse: &SseParams) {
+    let Some(map) = result.as_object_mut() else {
+        return;
+    };
+    if let Some(algo) = &sse.algorithm {
+        map.insert(
+            "ServerSideEncryption".to_string(),
+            Value::String(algo.clone()),
+        );
+    }
+    if let Some(kid) = &sse.kms_key_id {
+        map.insert("SSEKMSKeyId".to_string(), Value::String(kid.clone()));
+    }
+    if let Some(algo) = &sse.customer_algorithm {
+        map.insert(
+            "SSECustomerAlgorithm".to_string(),
+            Value::String(algo.clone()),
+        );
+    }
+    if let Some(md5) = &sse.customer_key_md5 {
+        map.insert("SSECustomerKeyMD5".to_string(), Value::String(md5.clone()));
+    }
+}
+
+/// Mirror the stored SSE state on a GET / HEAD response so callers can
+/// confirm the algorithm and (for SSE-C) the key fingerprint match what
+/// they put.
+fn inject_stored_sse_fields(result: &mut Value, obj: &S3Object) {
+    let Some(map) = result.as_object_mut() else {
+        return;
+    };
+    if let Some(algo) = &obj.sse_algorithm {
+        map.insert(
+            "ServerSideEncryption".to_string(),
+            Value::String(algo.clone()),
+        );
+    }
+    if let Some(kid) = &obj.sse_kms_key_id {
+        map.insert("SSEKMSKeyId".to_string(), Value::String(kid.clone()));
+    }
+    if let Some(algo) = &obj.sse_customer_algorithm {
+        map.insert(
+            "SSECustomerAlgorithm".to_string(),
+            Value::String(algo.clone()),
+        );
+    }
+    if let Some(md5) = &obj.sse_customer_key_md5 {
+        map.insert("SSECustomerKeyMD5".to_string(), Value::String(md5.clone()));
+    }
 }
 
 /// GET /{Bucket}/{Key+} — retrieve object data, optionally a specific version.
@@ -602,6 +801,7 @@ pub fn get_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     if let Some(ex) = &obj.expires {
         result["Expires"] = Value::String(ex.clone());
     }
+    inject_stored_sse_fields(&mut result, obj);
 
     // Surface the stored x-amz-checksum-* value when the caller asks
     // for it via ChecksumMode=ENABLED. AWS includes both the algorithm
@@ -679,6 +879,7 @@ pub fn head_object(
     if let Some(ex) = &obj.expires {
         result["Expires"] = Value::String(ex.clone());
     }
+    inject_stored_sse_fields(&mut result, obj);
     result["AcceptRanges"] = json!("bytes");
     for (k, v) in &obj.metadata {
         result[k.clone()] = Value::String(v.clone());
@@ -702,6 +903,10 @@ fn delete_marker_object(key: &str, version_id: Option<String>) -> S3Object {
         content_disposition: None,
         content_language: None,
         expires: None,
+        sse_algorithm: None,
+        sse_kms_key_id: None,
+        sse_customer_algorithm: None,
+        sse_customer_key_md5: None,
         is_delete_marker: true,
         checksum_algorithm: None,
         checksum_value: None,
@@ -1012,6 +1217,10 @@ fn copy_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<V
         content_disposition,
         content_language,
         expires,
+        sse_algorithm: None,
+        sse_kms_key_id: None,
+        sse_customer_algorithm: None,
+        sse_customer_key_md5: None,
         is_delete_marker: false,
         checksum_algorithm: None,
         checksum_value: None,
@@ -2042,5 +2251,126 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "AccessDeniedException");
+    }
+
+    fn sse_c_key_and_md5() -> (String, String) {
+        use base64::Engine as _;
+        use md5::{Digest, Md5};
+        // 32 random-looking bytes (deterministic for the test).
+        let key: Vec<u8> = (0..32u8).collect();
+        let key_b64 = base64::engine::general_purpose::STANDARD.encode(&key);
+        let md5_b64 = base64::engine::general_purpose::STANDARD.encode(Md5::digest(&key));
+        (key_b64, md5_b64)
+    }
+
+    #[test]
+    fn put_object_persists_sse_kms_algorithm() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        let resp = put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "Body": "hi",
+                "ServerSideEncryption": "aws:kms",
+                "SSEKMSKeyId": "alias/aws/s3",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["ServerSideEncryption"], json!("aws:kms"));
+        assert_eq!(resp["SSEKMSKeyId"], json!("alias/aws/s3"));
+
+        let head = head_object(&state, &json!({"Bucket": "b", "Key": "k"}), &ctx()).unwrap();
+        assert_eq!(head["ServerSideEncryption"], json!("aws:kms"));
+        assert_eq!(head["SSEKMSKeyId"], json!("alias/aws/s3"));
+    }
+
+    #[test]
+    fn put_object_rejects_sse_c_md5_mismatch() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        let (key, _md5) = sse_c_key_and_md5();
+        let err = put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "Body": "hi",
+                "SSECustomerAlgorithm": "AES256",
+                "SSECustomerKey": key,
+                "SSECustomerKeyMD5": "AAAAAAAAAAAAAAAAAAAAAA==",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgument");
+    }
+
+    #[test]
+    fn put_object_echoes_sse_c_md5_on_get() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        let (key, md5) = sse_c_key_and_md5();
+        put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "Body": "hi",
+                "SSECustomerAlgorithm": "AES256",
+                "SSECustomerKey": key,
+                "SSECustomerKeyMD5": md5.clone(),
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let got = get_object(&state, &json!({"Bucket": "b", "Key": "k"}), &ctx()).unwrap();
+        assert_eq!(got["SSECustomerAlgorithm"], json!("AES256"));
+        assert_eq!(got["SSECustomerKeyMD5"], json!(md5));
+    }
+
+    #[test]
+    fn put_object_inherits_bucket_default_encryption() {
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        // Stage a bucket-default encryption config.
+        let state = state_with(bucket);
+        state.buckets.get_mut("b").unwrap().encryption = Some(
+            serde_json::json!({
+                "Rules": [{
+                    "ApplyServerSideEncryptionByDefault": {
+                        "SSEAlgorithm": "AES256"
+                    }
+                }]
+            })
+            .to_string(),
+        );
+
+        let resp = put_object(
+            &state,
+            &json!({"Bucket": "b", "Key": "k", "Body": "hi"}),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["ServerSideEncryption"], json!("AES256"));
+    }
+
+    #[test]
+    fn put_object_rejects_sse_kms_combined_with_sse_c() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        let (key, md5) = sse_c_key_and_md5();
+        let err = put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "Body": "hi",
+                "ServerSideEncryption": "aws:kms",
+                "SSECustomerAlgorithm": "AES256",
+                "SSECustomerKey": key,
+                "SSECustomerKeyMD5": md5,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgument");
     }
 }

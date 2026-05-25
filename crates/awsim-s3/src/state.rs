@@ -132,6 +132,28 @@ pub struct S3Object {
     pub checksum_algorithm: Option<String>,
     #[serde(default)]
     pub checksum_value: Option<String>,
+    /// Server-side encryption algorithm captured from
+    /// `x-amz-server-side-encryption` (`AES256`, `aws:kms`,
+    /// `aws:kms:dsse`) or filled in from the bucket's default
+    /// encryption config. `None` for explicitly-unencrypted writes.
+    #[serde(default)]
+    pub sse_algorithm: Option<String>,
+    /// KMS key id captured from `x-amz-server-side-encryption-aws-kms-key-id`.
+    /// Only meaningful when `sse_algorithm` is `aws:kms` or
+    /// `aws:kms:dsse`; falls back to the bucket default.
+    #[serde(default)]
+    pub sse_kms_key_id: Option<String>,
+    /// SSE-C customer-provided-key algorithm captured from
+    /// `x-amz-server-side-encryption-customer-algorithm`. The pair
+    /// `(sse_customer_algorithm, sse_customer_key_md5)` is echoed on
+    /// GetObject / HeadObject so SDKs can confirm the same key the
+    /// client supplied is still in use.
+    #[serde(default)]
+    pub sse_customer_algorithm: Option<String>,
+    /// Base64 MD5 of the SSE-C key, captured from
+    /// `x-amz-server-side-encryption-customer-key-MD5`.
+    #[serde(default)]
+    pub sse_customer_key_md5: Option<String>,
     /// True when this entry is a delete marker — a tombstone written when
     /// DeleteObject lands on a versioning-enabled bucket without a VersionId.
     /// Delete markers carry a version_id but no body, and reads against them
@@ -418,6 +440,10 @@ impl Snapshottable for S3State {
                             expires: None,
                             checksum_algorithm: None,
                             checksum_value: None,
+                            sse_algorithm: None,
+                            sse_kms_key_id: None,
+                            sse_customer_algorithm: None,
+                            sse_customer_key_md5: None,
                             is_delete_marker: meta.is_delete_marker,
                         };
                         dm.entry(meta.key).or_default().push(obj);
