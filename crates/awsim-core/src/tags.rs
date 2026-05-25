@@ -14,6 +14,7 @@
 //! batch requests that supply the same key twice.
 
 use crate::error::AwsError;
+use serde_json::Value;
 use std::collections::HashSet;
 
 /// AWS-documented per-resource tag limit. Most services cap at 50;
@@ -171,6 +172,76 @@ fn validation(msg: impl Into<String>) -> AwsError {
     AwsError::validation(msg)
 }
 
+/// Validate the `Tags` input from an AWS request body.
+///
+/// Accepts both shapes AWS APIs use in the wild:
+/// - JSON object: `{"Owner": "alice", "Cost-Center": "eng"}` (Cognito,
+///   SecretsManager, Lambda, KMS, etc.).
+/// - JSON array of `{Key, Value}` records: `[{"Key": "Owner", "Value": "alice"}]`
+///   (EC2, S3, RDS, CloudFormation, etc.).
+/// - JSON null or missing field: treated as an empty tag set.
+///
+/// Use this instead of hand-rolling the extraction in every service so
+/// the AWS limits stay uniform.
+pub fn validate_aws_tags(tags: &Value, opts: &TagOpts) -> Result<(), AwsError> {
+    let pairs = extract_pairs(tags)?;
+    validate(&pairs, opts)
+}
+
+/// Validate a `TagKeys` array (UntagResource-style requests).
+///
+/// Enforces the reserved-prefix rule and rejects duplicate keys. The
+/// caller is responsible for resolving missing keys (untagging an
+/// unknown key is silently ignored per AWS).
+pub fn validate_aws_tag_keys(tag_keys: &Value) -> Result<(), AwsError> {
+    let keys: Vec<String> = tag_keys
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    reject_aws_prefix_on_write(&keys)?;
+    let mut seen: HashSet<&str> = HashSet::with_capacity(keys.len());
+    for k in &keys {
+        if !seen.insert(k.as_str()) {
+            return Err(validation(format!("Duplicate tag key: '{k}'.")));
+        }
+    }
+    Ok(())
+}
+
+fn extract_pairs(tags: &Value) -> Result<Vec<(String, String)>, AwsError> {
+    match tags {
+        Value::Null => Ok(Vec::new()),
+        Value::Object(map) => Ok(map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+            .collect()),
+        Value::Array(items) => {
+            let mut pairs = Vec::with_capacity(items.len());
+            for item in items {
+                let key = item
+                    .get("Key")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| validation("Tag entry is missing Key."))?
+                    .to_string();
+                let value = item
+                    .get("Value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                pairs.push((key, value));
+            }
+            Ok(pairs)
+        }
+        _ => Err(validation(
+            "Tags must be a JSON object or array of {Key, Value} records.",
+        )),
+    }
+}
+
 fn is_charset_ok(s: &str, charset: TagCharset) -> bool {
     match charset {
         TagCharset::Permissive => true,
@@ -303,6 +374,47 @@ mod tests {
         };
         let tags = vec![("k".to_string(), "\u{1F680}".to_string())];
         validate(&tags, &opts).unwrap();
+    }
+
+    #[test]
+    fn validate_aws_tags_accepts_object_shape() {
+        let v = serde_json::json!({"Owner": "alice", "Cost-Center": "eng"});
+        validate_aws_tags(&v, &TagOpts::aws_default()).unwrap();
+    }
+
+    #[test]
+    fn validate_aws_tags_accepts_array_shape() {
+        let v = serde_json::json!([
+            {"Key": "Owner", "Value": "alice"},
+            {"Key": "Cost-Center", "Value": "eng"},
+        ]);
+        validate_aws_tags(&v, &TagOpts::aws_default()).unwrap();
+    }
+
+    #[test]
+    fn validate_aws_tags_rejects_array_without_key() {
+        let v = serde_json::json!([{"Value": "alice"}]);
+        let err = validate_aws_tags(&v, &TagOpts::aws_default()).unwrap_err();
+        assert!(err.message.contains("Key"));
+    }
+
+    #[test]
+    fn validate_aws_tags_treats_null_as_empty() {
+        validate_aws_tags(&Value::Null, &TagOpts::aws_default()).unwrap();
+    }
+
+    #[test]
+    fn validate_aws_tag_keys_rejects_reserved_prefix() {
+        let v = serde_json::json!(["Owner", "aws:internal"]);
+        let err = validate_aws_tag_keys(&v).unwrap_err();
+        assert!(err.message.contains("aws:"));
+    }
+
+    #[test]
+    fn validate_aws_tag_keys_rejects_duplicates() {
+        let v = serde_json::json!(["Owner", "Cost", "Owner"]);
+        let err = validate_aws_tag_keys(&v).unwrap_err();
+        assert!(err.message.contains("Owner"));
     }
 
     #[test]
