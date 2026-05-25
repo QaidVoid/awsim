@@ -521,6 +521,18 @@ pub fn update_secret(
         .as_str()
         .ok_or_else(|| error::missing_parameter("SecretId"))?;
 
+    // AWS UpdateSecret deliberately does not accept rotation-related
+    // fields; those go through RotateSecret / CancelRotateSecret.
+    // Reject early so callers can't sneak rotation changes through the
+    // update path.
+    for field in ["RotationLambdaARN", "RotationRules", "RotationEnabled"] {
+        if !input[field].is_null() {
+            return Err(error::invalid_request(format!(
+                "UpdateSecret does not accept {field}; use RotateSecret or CancelRotateSecret."
+            )));
+        }
+    }
+
     let name = resolve_name(state, secret_id)?;
     let mut secret = state
         .secrets
