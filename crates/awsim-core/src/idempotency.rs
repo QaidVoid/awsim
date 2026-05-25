@@ -107,6 +107,43 @@ impl<V: Clone> IdempotencyCache<V> {
         );
     }
 
+    /// Convenience around [`Self::lookup`] + [`Self::insert`].
+    ///
+    /// Cache hit: return the stored value without invoking `compute`.
+    /// Mismatch: return `IdempotencyParameterMismatchException` so the
+    /// caller can `?` it from a handler.
+    /// Miss: run `compute`, cache its successful result, and return it.
+    /// Errors from `compute` are propagated unchanged and not cached
+    /// (AWS only replays successful results on retry).
+    ///
+    /// Note: this is intentionally NOT async-aware. Concurrent calls
+    /// with the same token may both run `compute`; the loser of the
+    /// race silently overwrites the earlier insert. That matches AWS
+    /// semantics as long as `compute` is idempotent itself, which is
+    /// the whole point of the operations that use this cache.
+    pub fn lookup_or_insert<F>(
+        &self,
+        token: &str,
+        request_hash: u64,
+        compute: F,
+    ) -> Result<V, AwsError>
+    where
+        F: FnOnce() -> Result<V, AwsError>,
+    {
+        match self.lookup(token, request_hash) {
+            Lookup::Hit(v) => Ok(v),
+            Lookup::Mismatch => Err(AwsError::bad_request(
+                "IdempotencyParameterMismatchException",
+                "Request parameters do not match those used in a prior call with the same ClientToken.",
+            )),
+            Lookup::Miss => {
+                let value = compute()?;
+                self.insert(token, request_hash, value.clone());
+                Ok(value)
+            }
+        }
+    }
+
     /// Drop entries past their TTL. Call from the tick loop.
     pub fn sweep(&self) {
         let ttl = self.ttl;
@@ -229,6 +266,44 @@ mod tests {
         assert!(validate_token("with\tspace").is_err());
         assert!(validate_token("with space").is_err());
         assert!(validate_token("with\ncontrol").is_err());
+    }
+
+    #[test]
+    fn lookup_or_insert_runs_compute_on_miss() {
+        let cache: IdempotencyCache<String> = IdempotencyCache::new();
+        let result = cache
+            .lookup_or_insert("tok", 7, || Ok("computed".to_string()))
+            .unwrap();
+        assert_eq!(result, "computed");
+        // Second call hits the cache without running compute.
+        let result = cache
+            .lookup_or_insert("tok", 7, || panic!("compute must not run on hit"))
+            .unwrap();
+        assert_eq!(result, "computed");
+    }
+
+    #[test]
+    fn lookup_or_insert_returns_mismatch_exception() {
+        let cache: IdempotencyCache<String> = IdempotencyCache::new();
+        cache.insert("tok", 1, "first".into());
+        let err = cache
+            .lookup_or_insert("tok", 2, || Ok("second".to_string()))
+            .unwrap_err();
+        assert_eq!(err.code, "IdempotencyParameterMismatchException");
+    }
+
+    #[test]
+    fn lookup_or_insert_does_not_cache_compute_errors() {
+        let cache: IdempotencyCache<String> = IdempotencyCache::new();
+        let err = cache
+            .lookup_or_insert("tok", 1, || Err(AwsError::validation("boom")))
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        // Token is still a miss; a retry with valid compute succeeds.
+        let result = cache
+            .lookup_or_insert("tok", 1, || Ok("ok".to_string()))
+            .unwrap();
+        assert_eq!(result, "ok");
     }
 
     #[test]
