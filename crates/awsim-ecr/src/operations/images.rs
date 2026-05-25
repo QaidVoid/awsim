@@ -87,7 +87,8 @@ pub fn put_image(state: &EcrState, input: &Value, ctx: &RequestContext) -> Resul
         )
     })?;
 
-    // Compute digest from manifest
+    // Compute digest from manifest. AWS guarantees the digest is
+    // content-addressable: sha256 of the canonical manifest bytes.
     let mut hasher = Sha256::new();
     hasher.update(manifest.as_bytes());
     let digest = format!("sha256:{:x}", hasher.finalize());
@@ -103,6 +104,29 @@ pub fn put_image(state: &EcrState, input: &Value, ctx: &RequestContext) -> Resul
         return Err(AwsError::bad_request(
             "ImageTagAlreadyExistsException",
             format!("An image with tag '{tag}' already exists in the repository '{repo_name}'"),
+        ));
+    }
+
+    // Pushing the exact same manifest content (== same digest) without
+    // a new tag is the AWS-defined collision case: real ECR returns
+    // ImageAlreadyExistsException to make replays idempotent-or-loud.
+    // We surface that only when the digest matches an existing image
+    // that already has the same tag (or both are tagless), otherwise
+    // re-tagging an existing manifest is fine.
+    if repo
+        .images
+        .iter()
+        .any(|img| img.image_digest == digest && img.image_tag.as_deref() == image_tag.as_deref())
+    {
+        return Err(AwsError::bad_request(
+            "ImageAlreadyExistsException",
+            format!(
+                "Image with digest {digest} already exists in repository {repo_name}{}",
+                image_tag
+                    .as_deref()
+                    .map(|t| format!(" under tag {t}"))
+                    .unwrap_or_default()
+            ),
         ));
     }
 
