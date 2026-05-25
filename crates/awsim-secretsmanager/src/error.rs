@@ -1,14 +1,16 @@
 use awsim_core::AwsError;
 
 pub fn resource_not_found(id: &str) -> AwsError {
-    AwsError::not_found(
+    // SecretsManager's Smithy model leaves httpError unset on every error
+    // shape, so the protocol default of 400 is what AWS actually returns.
+    AwsError::bad_request(
         "ResourceNotFoundException",
         format!("Secrets Manager can't find the specified secret: {id}"),
     )
 }
 
 pub fn resource_exists(name: &str) -> AwsError {
-    AwsError::conflict(
+    AwsError::bad_request(
         "ResourceExistsException",
         format!("A secret with name {name} already exists"),
     )

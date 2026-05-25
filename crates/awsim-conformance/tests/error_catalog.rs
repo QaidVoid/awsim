@@ -114,6 +114,32 @@ fn kms_error_factories_match_smithy() {
 }
 
 #[test]
+fn secretsmanager_error_factories_match_smithy() {
+    let errors = load("secretsmanager");
+
+    assert_matches(
+        awsim_secretsmanager::error::resource_not_found("MySecret"),
+        &expect(&errors, "ResourceNotFoundException"),
+        "resource_not_found",
+    );
+    assert_matches(
+        awsim_secretsmanager::error::resource_exists("MySecret"),
+        &expect(&errors, "ResourceExistsException"),
+        "resource_exists",
+    );
+    assert_matches(
+        awsim_secretsmanager::error::invalid_parameter("bad value"),
+        &expect(&errors, "InvalidParameterException"),
+        "invalid_parameter",
+    );
+    assert_matches(
+        awsim_secretsmanager::error::invalid_request("conflicting state"),
+        &expect(&errors, "InvalidRequestException"),
+        "invalid_request",
+    );
+}
+
+#[test]
 fn lambda_error_factories_match_smithy() {
     let errors = load("lambda");
 
