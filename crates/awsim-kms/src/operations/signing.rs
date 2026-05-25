@@ -21,6 +21,27 @@ const SIGNING_ALGORITHMS: &[&str] = &[
     "SM2DSA",
 ];
 
+/// AWS rejects sign/verify when SigningAlgorithm doesn't match the
+/// KeySpec family: an RSA key must use RSASSA_*, an ECC NIST key must
+/// use ECDSA_SHA_*, and SM2DSA pairs only with the SM2 KeySpec.
+///
+/// The exact ECDSA hash size is also bound to the curve (ECC_NIST_P256
+/// rejects ECDSA_SHA_384). Surface that as InvalidKeyUsageException so
+/// signers fix the algorithm choice instead of getting a silent stub.
+fn signing_algorithm_matches_key_spec(algo: &str, key_spec: &str) -> bool {
+    match (algo, key_spec) {
+        // RSA: every RSASSA_* works for any RSA_* spec.
+        (a, s) if a.starts_with("RSASSA_") && s.starts_with("RSA_") => true,
+        // ECC NIST: hash size must match curve size.
+        ("ECDSA_SHA_256", "ECC_NIST_P256" | "ECC_SECG_P256K1") => true,
+        ("ECDSA_SHA_384", "ECC_NIST_P384") => true,
+        ("ECDSA_SHA_512", "ECC_NIST_P521") => true,
+        // SM2 has its own DSA variant.
+        ("SM2DSA", "SM2") => true,
+        _ => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Sign
 // ---------------------------------------------------------------------------
@@ -56,6 +77,12 @@ pub fn sign(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Va
         return Err(error::invalid_key_usage(format!(
             "Key {} cannot be used for signing because its KeyUsage is {}, not SIGN_VERIFY",
             key.key_id, key.key_usage
+        )));
+    }
+    if !signing_algorithm_matches_key_spec(signing_algorithm, &key.key_spec) {
+        return Err(error::invalid_key_usage(format!(
+            "Key {} (spec {}) does not support SigningAlgorithm {signing_algorithm}.",
+            key.key_id, key.key_spec
         )));
     }
 
@@ -103,6 +130,12 @@ pub fn verify(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<
         return Err(error::invalid_key_usage(format!(
             "Key {} cannot be used for verifying because its KeyUsage is {}, not SIGN_VERIFY",
             key.key_id, key.key_usage
+        )));
+    }
+    if !signing_algorithm_matches_key_spec(signing_algorithm, &key.key_spec) {
+        return Err(error::invalid_key_usage(format!(
+            "Key {} (spec {}) does not support SigningAlgorithm {signing_algorithm}.",
+            key.key_id, key.key_spec
         )));
     }
 
