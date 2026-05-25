@@ -59,7 +59,7 @@ pub fn handle_batch(
     }
     if entries.len() > 10 {
         return Err(AwsError::bad_request(
-            "TooManyEntriesInBatchRequest",
+            "AWS.SimpleQueueService.TooManyEntriesInBatchRequest",
             "Maximum number of entries per request is 10",
         ));
     }

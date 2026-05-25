@@ -31,6 +31,21 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     // Expire inflight timeouts and re-queue them
     queue.tick();
 
+    // AWS caps inflight messages at 120000 for Standard queues and 20000
+    // for FIFO queues; further Receive calls past the cap return
+    // OverLimit so the producer can back off rather than silently piling
+    // on more invisible messages.
+    let inflight_cap = if queue.is_fifo { 20_000 } else { 120_000 };
+    if queue.inflight.len() >= inflight_cap {
+        return Err(AwsError::forbidden(
+            "OverLimit",
+            format!(
+                "More than {inflight_cap} messages are inflight; \
+                 delete or extend visibility before receiving more."
+            ),
+        ));
+    }
+
     let now = Instant::now();
 
     // Determine visibility timeout for this receive call

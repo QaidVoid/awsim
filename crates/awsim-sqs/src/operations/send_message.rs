@@ -248,9 +248,42 @@ pub fn handle_batch(
     }
     if entries.len() > 10 {
         return Err(AwsError::bad_request(
-            "TooManyEntriesInBatchRequest",
+            "AWS.SimpleQueueService.TooManyEntriesInBatchRequest",
             "Maximum number of entries per request is 10",
         ));
+    }
+
+    // AWS rejects the entire batch (no entries delivered) when any two
+    // entries share the same Id. Each batch entry's Id must be a unique
+    // alphanumeric token; the SDK error is BatchEntryIdsNotDistinct.
+    let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for entry in entries {
+        let id = entry["Id"].as_str().unwrap_or("");
+        if !seen_ids.insert(id) {
+            return Err(AwsError::bad_request(
+                "AWS.SimpleQueueService.BatchEntryIdsNotDistinct",
+                format!("Id `{id}` repeats in the batch request."),
+            ));
+        }
+    }
+
+    // FIFO queues reject per-entry DelaySeconds: only queue-level delay
+    // (via SetQueueAttributes DelaySeconds) applies to FIFO.
+    let queue_name = queue_name_from_url(queue_url)?;
+    let is_fifo = state
+        .queues
+        .get(&queue_name)
+        .map(|q| q.is_fifo)
+        .unwrap_or(false);
+    if is_fifo {
+        for entry in entries {
+            if entry.get("DelaySeconds").is_some() {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterValue",
+                    "Value DelaySeconds is invalid: per-entry delay is only allowed on Standard queues.",
+                ));
+            }
+        }
     }
 
     // AWS rejects a SendMessageBatch whose summed message-body bytes
