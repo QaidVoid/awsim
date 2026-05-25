@@ -322,7 +322,7 @@ pub fn create_table(
     let table_name = require_str(input, "TableName")?;
 
     if state.tables.contains_key(table_name) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "ResourceInUseException",
             format!("Table already exists: {table_name}"),
         ));
@@ -1095,7 +1095,7 @@ pub fn create_global_table(
 
     let name = require_str(input, "GlobalTableName")?;
     if state.global_tables.contains_key(name) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "GlobalTableAlreadyExistsException",
             format!("Global table '{name}' already exists"),
         ));

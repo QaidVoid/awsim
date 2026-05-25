@@ -1,5 +1,6 @@
 #![deny(warnings)]
 
+pub mod error;
 mod expressions;
 mod keys;
 mod operations;

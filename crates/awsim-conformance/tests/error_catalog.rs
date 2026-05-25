@@ -140,6 +140,47 @@ fn secretsmanager_error_factories_match_smithy() {
 }
 
 #[test]
+fn dynamodb_error_factories_match_smithy() {
+    let errors = load("dynamodb");
+
+    assert_matches(
+        awsim_dynamodb::error::resource_in_use("Table is being created"),
+        &expect(&errors, "ResourceInUseException"),
+        "resource_in_use",
+    );
+    assert_matches(
+        awsim_dynamodb::error::table_already_exists("Users"),
+        &expect(&errors, "TableAlreadyExistsException"),
+        "table_already_exists",
+    );
+    assert_matches(
+        awsim_dynamodb::error::global_table_already_exists("Users"),
+        &expect(&errors, "GlobalTableAlreadyExistsException"),
+        "global_table_already_exists",
+    );
+    assert_matches(
+        awsim_dynamodb::error::resource_not_found("Table not found"),
+        &expect(&errors, "ResourceNotFoundException"),
+        "resource_not_found",
+    );
+    assert_matches(
+        awsim_dynamodb::error::provisioned_throughput_exceeded("throttled"),
+        &expect(&errors, "ProvisionedThroughputExceededException"),
+        "provisioned_throughput_exceeded",
+    );
+    assert_matches(
+        awsim_dynamodb::error::conditional_check_failed("condition failed"),
+        &expect(&errors, "ConditionalCheckFailedException"),
+        "conditional_check_failed",
+    );
+    assert_matches(
+        awsim_dynamodb::error::transaction_canceled("cancelled"),
+        &expect(&errors, "TransactionCanceledException"),
+        "transaction_canceled",
+    );
+}
+
+#[test]
 fn lambda_error_factories_match_smithy() {
     let errors = load("lambda");
 

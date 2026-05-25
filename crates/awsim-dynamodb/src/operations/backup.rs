@@ -224,7 +224,7 @@ pub fn restore_table_from_backup(
     })?;
 
     if state.tables.contains_key(target_name) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "TableAlreadyExistsException",
             format!("Table already exists: {target_name}"),
         ));
@@ -371,7 +371,7 @@ pub fn restore_table_to_point_in_time(
     })?;
 
     if state.tables.contains_key(target_name) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "TableAlreadyExistsException",
             format!("Table already exists: {target_name}"),
         ));
