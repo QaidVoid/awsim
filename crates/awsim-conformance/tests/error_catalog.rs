@@ -197,6 +197,27 @@ fn kinesis_error_factories_match_smithy() {
 }
 
 #[test]
+fn firehose_error_factories_match_smithy() {
+    let errors = load("firehose");
+
+    assert_matches(
+        awsim_firehose::error::resource_not_found("Stream not found"),
+        &expect(&errors, "ResourceNotFoundException"),
+        "resource_not_found",
+    );
+    assert_matches(
+        awsim_firehose::error::resource_in_use("Stream busy"),
+        &expect(&errors, "ResourceInUseException"),
+        "resource_in_use",
+    );
+    assert_matches(
+        awsim_firehose::error::invalid_argument("DeliveryStreamName is required"),
+        &expect(&errors, "InvalidArgumentException"),
+        "invalid_argument",
+    );
+}
+
+#[test]
 fn cloudtrail_error_factories_match_smithy() {
     let errors = load("cloudtrail");
 

@@ -12,7 +12,7 @@ pub fn create_delivery_stream(
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
     if state.streams.contains_key(name) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "ResourceInUseException",
             format!("Delivery stream {name} already exists"),
         ));
@@ -64,7 +64,7 @@ pub fn delete_delivery_stream(
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
     state.streams.remove(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {name} not found"),
         )
@@ -81,7 +81,7 @@ pub fn describe_delivery_stream(
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
     let s = state.streams.get(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {name} not found"),
         )
@@ -127,7 +127,7 @@ pub fn update_destination(
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
     let mut s = state.streams.get_mut(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {name} not found"),
         )

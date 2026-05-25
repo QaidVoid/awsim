@@ -12,7 +12,7 @@ pub fn tag_delivery_stream(
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
     let mut s = state.streams.get_mut(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {name} not found"),
         )
@@ -37,7 +37,7 @@ pub fn untag_delivery_stream(
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
     let mut s = state.streams.get_mut(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {name} not found"),
         )
@@ -61,7 +61,7 @@ pub fn list_tags_for_delivery_stream(
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
     let s = state.streams.get(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {name} not found"),
         )

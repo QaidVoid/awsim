@@ -12,7 +12,7 @@ pub fn start_encryption(
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
     let mut s = state.streams.get_mut(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {name} not found"),
         )
@@ -36,7 +36,7 @@ pub fn stop_encryption(
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
     let mut s = state.streams.get_mut(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {name} not found"),
         )

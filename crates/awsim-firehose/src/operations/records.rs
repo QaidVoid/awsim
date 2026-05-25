@@ -12,7 +12,7 @@ pub fn put_record(
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
     if !state.streams.contains_key(name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {name} not found"),
         ));
@@ -33,7 +33,7 @@ pub fn put_record_batch(
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
     if !state.streams.contains_key(name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {name} not found"),
         ));
