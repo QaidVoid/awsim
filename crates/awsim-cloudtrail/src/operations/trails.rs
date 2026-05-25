@@ -212,11 +212,70 @@ pub fn list_trails(
 }
 
 pub fn lookup_events(
-    _state: &CloudTrailState,
-    _input: &Value,
+    state: &CloudTrailState,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    Ok(json!({ "Events": [] }))
+    // CloudTrail returns up to 50 events per page (1..50 acceptable);
+    // we honor the request's MaxResults if present.
+    let max_results = input
+        .get("MaxResults")
+        .and_then(|v| v.as_u64())
+        .map(|n| n.clamp(1, 50) as usize)
+        .unwrap_or(50);
+
+    // LookupAttributes is a filter list of {AttributeKey, AttributeValue}.
+    // Implement the common keys: EventName, EventSource, Username,
+    // ResourceName. Unknown keys are ignored, matching AWS's lenient
+    // filter parser.
+    let mut filters: Vec<(String, String)> = Vec::new();
+    if let Some(arr) = input.get("LookupAttributes").and_then(|v| v.as_array()) {
+        for entry in arr {
+            let key = entry
+                .get("AttributeKey")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let val = entry
+                .get("AttributeValue")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !key.is_empty() {
+                filters.push((key, val));
+            }
+        }
+    }
+
+    let log = state
+        .event_log
+        .lock()
+        .expect("CloudTrail event log mutex poisoned");
+    let events: Vec<Value> = log
+        .iter()
+        .filter(|d| {
+            filters.iter().all(|(k, v)| match k.as_str() {
+                "EventName" => d.event_name == *v,
+                "EventSource" => d.event_source == *v,
+                "Username" => d.user_identity_arn.as_deref() == Some(v.as_str()),
+                _ => true,
+            })
+        })
+        .take(max_results)
+        .map(|d| {
+            let cloudtrail_event = serde_json::to_string(d).unwrap_or_default();
+            json!({
+                "EventId": d.event_id,
+                "EventName": d.event_name,
+                "EventSource": d.event_source,
+                "EventTime": d.event_time_epoch,
+                "Username": d.user_identity_arn,
+                "Resources": [],
+                "CloudTrailEvent": cloudtrail_event,
+            })
+        })
+        .collect();
+    Ok(json!({ "Events": events }))
 }
 
 fn resolve_name(s: &str) -> String {

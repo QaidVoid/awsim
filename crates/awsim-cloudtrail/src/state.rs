@@ -1,5 +1,14 @@
+use awsim_core::events::ApiCallDetail;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::sync::Mutex;
+
+/// Soft cap on how many API-call events CloudTrail retains in its
+/// in-memory event store. Older events are dropped on overflow,
+/// mirroring how real CloudTrail rotates events out of `LookupEvents`
+/// past the 90-day window.
+pub const EVENT_LOG_CAPACITY: usize = 10_000;
 
 #[derive(Debug, Default)]
 pub struct CloudTrailState {
@@ -7,6 +16,24 @@ pub struct CloudTrailState {
     pub trail_status: DashMap<String, TrailStatus>,
     pub event_selectors: DashMap<String, Vec<EventSelector>>,
     pub insight_selectors: DashMap<String, Vec<InsightSelector>>,
+    /// Ring buffer of API-call events captured from the cross-service
+    /// event bus. Newest at the front; `LookupEvents` reads here.
+    pub event_log: Mutex<VecDeque<ApiCallDetail>>,
+}
+
+impl CloudTrailState {
+    /// Record an API-call event in the ring buffer, dropping the
+    /// oldest entry if the buffer is at capacity.
+    pub fn record_event(&self, detail: ApiCallDetail) {
+        let mut log = self
+            .event_log
+            .lock()
+            .expect("CloudTrail event log mutex poisoned");
+        if log.len() >= EVENT_LOG_CAPACITY {
+            log.pop_back();
+        }
+        log.push_front(detail);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
