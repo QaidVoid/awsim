@@ -772,6 +772,16 @@ fn verify_signature_for_request(
     body: &Bytes,
     access_key: &str,
 ) -> Result<(), AwsError> {
+    // Presigned URLs carry the signature in the query string, not the
+    // Authorization header. Detect the presence of X-Amz-Signature and
+    // route those through the presigned verifier before falling back
+    // to the header-based path.
+    if let Some(query) = uri.query()
+        && query.contains("X-Amz-Signature=")
+    {
+        return verify_presigned_for_request(state, headers, method, uri, access_key);
+    }
+
     let auth_value = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -859,6 +869,61 @@ fn verify_signature_for_request(
         crate::sigv4_verify::VerifyOutcome::IncompleteSignature => Err(AwsError::bad_request(
             "IncompleteSignatureException",
             "SigV4 verification failed: required header missing.",
+        )),
+        crate::sigv4_verify::VerifyOutcome::SignatureMismatch => Err(AwsError::bad_request(
+            "SignatureDoesNotMatch",
+            "The request signature we calculated does not match the signature you provided.",
+        )),
+    }
+}
+
+/// Verify a presigned URL's SigV4 signature.
+///
+/// The caller has already detected that the URL carries an
+/// `X-Amz-Signature` query parameter. We pull the access key from the
+/// `X-Amz-Credential` parameter, look up its secret, then hand the raw
+/// query string + path + host header to
+/// [`sigv4_verify::verify_presigned`]. Rejects with the AWS-standard
+/// `SignatureDoesNotMatch` / `IncompleteSignatureException` on
+/// mismatch or missing pieces.
+fn verify_presigned_for_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    access_key: &str,
+) -> Result<(), AwsError> {
+    let raw_query = uri.query().unwrap_or("");
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| uri.host().map(|s| s.to_string()))
+        .unwrap_or_default();
+    let secret = state
+        .authz
+        .principal_lookup
+        .resolve_secret(access_key)
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidClientTokenId",
+                "The security token included in the request is invalid.",
+            )
+        })?;
+    let outcome = crate::sigv4_verify::verify_presigned(
+        method.as_str(),
+        uri.path(),
+        raw_query,
+        &host,
+        &secret,
+        std::time::SystemTime::now(),
+        std::time::Duration::from_secs(300),
+    );
+    match outcome {
+        crate::sigv4_verify::VerifyOutcome::Ok => Ok(()),
+        crate::sigv4_verify::VerifyOutcome::IncompleteSignature => Err(AwsError::bad_request(
+            "IncompleteSignatureException",
+            "Presigned URL is missing one of X-Amz-Algorithm / X-Amz-Credential / X-Amz-Date / X-Amz-SignedHeaders / X-Amz-Signature.",
         )),
         crate::sigv4_verify::VerifyOutcome::SignatureMismatch => Err(AwsError::bad_request(
             "SignatureDoesNotMatch",

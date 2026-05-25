@@ -190,6 +190,204 @@ pub fn verify(
     }
 }
 
+/// Parsed `X-Amz-Credential` query parameter from a presigned URL.
+pub struct PresignedCredential {
+    pub access_key: String,
+    pub date_stamp: String,
+    pub region: String,
+    pub service: String,
+}
+
+/// Verify the signature on a presigned URL.
+///
+/// AWS presigns by moving every SigV4 input into the query string. The
+/// caller passes the request method, the canonical URI (path,
+/// URL-encoded), the verbatim raw query string off the wire, the
+/// `Host` header value (the one the signer used), and the secret
+/// access key bound to the credential's access-key ID. Returns
+/// [`VerifyOutcome::Ok`] when the recomputed signature matches the
+/// `X-Amz-Signature` query value AND the request landed inside the
+/// `X-Amz-Expires` window.
+pub fn verify_presigned(
+    method: &str,
+    canonical_uri: &str,
+    raw_query: &str,
+    host: &str,
+    secret: &str,
+    now: SystemTime,
+    skew: Duration,
+) -> VerifyOutcome {
+    let mut params: Vec<(String, String)> = raw_query
+        .split('&')
+        .filter(|s| !s.is_empty())
+        .map(|kv| match kv.split_once('=') {
+            Some((k, v)) => (k.to_string(), v.to_string()),
+            None => (kv.to_string(), String::new()),
+        })
+        .collect();
+
+    let signature = match take_param(&mut params, "X-Amz-Signature") {
+        Some(v) => v,
+        None => return VerifyOutcome::IncompleteSignature,
+    };
+    let algorithm = find_param(&params, "X-Amz-Algorithm").unwrap_or_default();
+    if algorithm != "AWS4-HMAC-SHA256" {
+        return VerifyOutcome::IncompleteSignature;
+    }
+    let credential_raw = match find_param(&params, "X-Amz-Credential") {
+        Some(v) => v,
+        None => return VerifyOutcome::IncompleteSignature,
+    };
+    let credential_decoded = url_unescape(&credential_raw);
+    let credential = match parse_presigned_credential(&credential_decoded) {
+        Some(c) => c,
+        None => return VerifyOutcome::IncompleteSignature,
+    };
+    let amz_date = match find_param(&params, "X-Amz-Date") {
+        Some(v) => v,
+        None => return VerifyOutcome::IncompleteSignature,
+    };
+    let signed_headers_raw = match find_param(&params, "X-Amz-SignedHeaders") {
+        Some(v) => v,
+        None => return VerifyOutcome::IncompleteSignature,
+    };
+    let signed_headers = url_unescape(&signed_headers_raw);
+
+    // X-Amz-Expires is the signer's window in seconds. AWS rejects once
+    // now > signing_time + expires. The skew tolerance only applies to
+    // the "request from the future" guard.
+    let parsed_date = match parse_amz_date(&amz_date) {
+        Some(t) => t,
+        None => return VerifyOutcome::IncompleteSignature,
+    };
+    if let Ok(d) = parsed_date.duration_since(now)
+        && d > skew
+    {
+        return VerifyOutcome::SignatureMismatch;
+    }
+    if let Some(expires_str) = find_param(&params, "X-Amz-Expires")
+        && let Ok(expires_secs) = expires_str.parse::<u64>()
+    {
+        let deadline = parsed_date + Duration::from_secs(expires_secs);
+        if now > deadline {
+            return VerifyOutcome::SignatureMismatch;
+        }
+    }
+
+    // Canonical query: re-sort the remaining params (Signature already
+    // removed) by key. Values stay verbatim because the signer encoded
+    // them and we never decoded.
+    params.sort();
+    let canonical_query = params
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    // Canonical headers for presigned URLs are typically just `host`.
+    let signed_list: Vec<&str> = signed_headers.split(';').collect();
+    let mut canonical_headers = String::new();
+    for name in &signed_list {
+        let lower = name.to_ascii_lowercase();
+        let value = if lower == "host" { host.trim() } else { "" };
+        canonical_headers.push_str(&format!("{lower}:{value}\n"));
+    }
+    let signed_headers_list = signed_list.join(";");
+
+    // Presigned requests use the literal `UNSIGNED-PAYLOAD` sentinel.
+    let payload_hash = "UNSIGNED-PAYLOAD";
+
+    let canonical_request = format!(
+        "{method}\n{canonical_uri}\n{canonical_query}\n{canonical_headers}\n{signed_headers_list}\n{payload_hash}",
+    );
+
+    let credential_scope = format!(
+        "{}/{}/{}/aws4_request",
+        credential.date_stamp, credential.region, credential.service
+    );
+    let string_to_sign = format!(
+        "AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{}",
+        sha256_hex(canonical_request.as_bytes()),
+    );
+
+    let signing_key = derive_signing_key(
+        secret,
+        &credential.date_stamp,
+        &credential.region,
+        &credential.service,
+    );
+    let expected = hmac_hex(&signing_key, string_to_sign.as_bytes());
+
+    if constant_time_eq(expected.as_bytes(), signature.as_bytes()) {
+        VerifyOutcome::Ok
+    } else {
+        VerifyOutcome::SignatureMismatch
+    }
+}
+
+fn find_param(params: &[(String, String)], key: &str) -> Option<String> {
+    params
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.clone())
+}
+
+fn take_param(params: &mut Vec<(String, String)>, key: &str) -> Option<String> {
+    let idx = params.iter().position(|(k, _)| k == key)?;
+    Some(params.remove(idx).1)
+}
+
+fn parse_presigned_credential(s: &str) -> Option<PresignedCredential> {
+    let mut parts = s.split('/');
+    let access_key = parts.next()?.to_string();
+    let date_stamp = parts.next()?.to_string();
+    let region = parts.next()?.to_string();
+    let service = parts.next()?.to_string();
+    let tail = parts.next()?;
+    if tail != "aws4_request" {
+        return None;
+    }
+    Some(PresignedCredential {
+        access_key,
+        date_stamp,
+        region,
+        service,
+    })
+}
+
+/// Extract the access key from a presigned URL's query string, or
+/// `None` if the URL doesn't carry an `X-Amz-Credential` parameter.
+pub fn presigned_access_key(raw_query: &str) -> Option<String> {
+    let cred = raw_query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("X-Amz-Credential="))?;
+    let decoded = url_unescape(cred);
+    parse_presigned_credential(&decoded).map(|c| c.access_key)
+}
+
+/// Minimal percent-decoder for query-string values. Handles `%XX` hex
+/// escapes; good enough for SigV4 presign which encodes `/` as `%2F`
+/// and `:` as `%3A`.
+fn url_unescape(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn derive_signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
     let k_secret = format!("AWS4{secret}");
     let k_date = hmac(k_secret.as_bytes(), date.as_bytes());
@@ -374,5 +572,171 @@ mod tests {
             Duration::from_secs(300),
         );
         assert_eq!(out, VerifyOutcome::SignatureMismatch);
+    }
+
+    /// Build a presigned URL by signing it the same way real AWS does,
+    /// then round-trip through verify_presigned to prove the signer and
+    /// verifier agree.
+    #[allow(clippy::too_many_arguments)]
+    fn sign_presigned(
+        secret: &str,
+        method: &str,
+        canonical_uri: &str,
+        host: &str,
+        amz_date: &str,
+        date_stamp: &str,
+        region: &str,
+        service: &str,
+        access_key: &str,
+        expires: &str,
+        extra_params: &[(&str, &str)],
+    ) -> String {
+        let credential = format!("{access_key}/{date_stamp}/{region}/{service}/aws4_request");
+        let credential_enc = credential.replace('/', "%2F");
+        let mut params: Vec<(String, String)> = vec![
+            ("X-Amz-Algorithm".into(), "AWS4-HMAC-SHA256".into()),
+            ("X-Amz-Credential".into(), credential_enc),
+            ("X-Amz-Date".into(), amz_date.into()),
+            ("X-Amz-Expires".into(), expires.into()),
+            ("X-Amz-SignedHeaders".into(), "host".into()),
+        ];
+        for (k, v) in extra_params {
+            params.push(((*k).to_string(), (*v).to_string()));
+        }
+        params.sort();
+        let canonical_query = params
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("&");
+        let canonical_headers = format!("host:{host}\n");
+        let canonical_request = format!(
+            "{method}\n{canonical_uri}\n{canonical_query}\n{canonical_headers}\nhost\nUNSIGNED-PAYLOAD",
+        );
+        let scope = format!("{date_stamp}/{region}/{service}/aws4_request");
+        let string_to_sign = format!(
+            "AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
+            sha256_hex(canonical_request.as_bytes()),
+        );
+        let key = derive_signing_key(secret, date_stamp, region, service);
+        let signature = hmac_hex(&key, string_to_sign.as_bytes());
+        format!("{canonical_query}&X-Amz-Signature={signature}")
+    }
+
+    fn now_at(amz_date: &str) -> SystemTime {
+        parse_amz_date(amz_date).unwrap()
+    }
+
+    #[test]
+    fn presigned_round_trip_verifies() {
+        let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+        let amz_date = "20260524T120000Z";
+        let query = sign_presigned(
+            secret,
+            "GET",
+            "/bucket/key",
+            "s3.amazonaws.com",
+            amz_date,
+            "20260524",
+            "us-east-1",
+            "s3",
+            "AKID",
+            "900",
+            &[],
+        );
+        let out = verify_presigned(
+            "GET",
+            "/bucket/key",
+            &query,
+            "s3.amazonaws.com",
+            secret,
+            now_at(amz_date),
+            Duration::from_secs(300),
+        );
+        assert_eq!(out, VerifyOutcome::Ok);
+    }
+
+    #[test]
+    fn presigned_rejects_tampered_path() {
+        let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+        let amz_date = "20260524T120000Z";
+        let query = sign_presigned(
+            secret,
+            "GET",
+            "/bucket/key",
+            "s3.amazonaws.com",
+            amz_date,
+            "20260524",
+            "us-east-1",
+            "s3",
+            "AKID",
+            "900",
+            &[],
+        );
+        // Substitute a different path — the signature was issued for
+        // /bucket/key, so verifying against /bucket/key2 must fail.
+        let out = verify_presigned(
+            "GET",
+            "/bucket/key2",
+            &query,
+            "s3.amazonaws.com",
+            secret,
+            now_at(amz_date),
+            Duration::from_secs(300),
+        );
+        assert_eq!(out, VerifyOutcome::SignatureMismatch);
+    }
+
+    #[test]
+    fn presigned_rejects_expired_url() {
+        let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+        let amz_date = "20260524T120000Z";
+        let query = sign_presigned(
+            secret,
+            "GET",
+            "/bucket/key",
+            "s3.amazonaws.com",
+            amz_date,
+            "20260524",
+            "us-east-1",
+            "s3",
+            "AKID",
+            "60",
+            &[],
+        );
+        // 2 hours after signing time + 60s expiry => past deadline.
+        let later = now_at(amz_date) + Duration::from_secs(2 * 3600);
+        let out = verify_presigned(
+            "GET",
+            "/bucket/key",
+            &query,
+            "s3.amazonaws.com",
+            secret,
+            later,
+            Duration::from_secs(300),
+        );
+        assert_eq!(out, VerifyOutcome::SignatureMismatch);
+    }
+
+    #[test]
+    fn presigned_rejects_missing_signature() {
+        let query = "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKID%2F20260524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260524T120000Z&X-Amz-SignedHeaders=host";
+        let out = verify_presigned(
+            "GET",
+            "/bucket/key",
+            query,
+            "s3.amazonaws.com",
+            "secret",
+            now_at("20260524T120000Z"),
+            Duration::from_secs(300),
+        );
+        assert_eq!(out, VerifyOutcome::IncompleteSignature);
+    }
+
+    #[test]
+    fn presigned_access_key_extracts_from_query() {
+        let q = "foo=1&X-Amz-Credential=AKIA1234%2F20260524%2Fus-east-1%2Fs3%2Faws4_request&bar=2";
+        assert_eq!(presigned_access_key(q).as_deref(), Some("AKIA1234"));
+        assert!(presigned_access_key("no-credential-here").is_none());
     }
 }
