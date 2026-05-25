@@ -1,3 +1,4 @@
+use awsim_core::pagination::{decode_token, encode_token};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -76,8 +77,14 @@ pub fn get_shard_iterator(
         }
     };
 
-    // Encode iterator as a pipe-separated token.
-    let iterator = format!("{stream_arn}|{shard_id}|{seq_start}");
+    // Encode the iterator as an HMAC-signed, TTL-bounded token so a
+    // tampered or stale handle is rejected as ExpiredIteratorException
+    // instead of being silently honored. The pagination helper signs
+    // with the per-process key and gives us a 6h TTL out of the box,
+    // which exceeds AWS's 15-minute iterator window — close enough for
+    // a simulator; tightening the TTL would require a per-domain
+    // encoder we don't have yet.
+    let iterator = encode_token(&format!("{stream_arn}|{shard_id}|{seq_start}"));
     Ok(json!({ "ShardIterator": iterator }))
 }
 
@@ -94,10 +101,21 @@ pub fn get_records(
 
     let limit = input.get("Limit").and_then(|v| v.as_u64()).unwrap_or(1000) as usize;
 
-    // Parse the iterator token produced by get_shard_iterator.
-    let parts: Vec<&str> = iterator.splitn(3, '|').collect();
+    // Decode the signed iterator. Any tampering or TTL expiry surfaces
+    // as ExpiredIteratorException, matching AWS's behavior of forcing
+    // the caller to issue a fresh GetShardIterator.
+    let decoded = decode_token(iterator).map_err(|_| {
+        AwsError::bad_request(
+            "ExpiredIteratorException",
+            "The provided iterator has expired; obtain a fresh one via GetShardIterator.",
+        )
+    })?;
+    let parts: Vec<&str> = decoded.splitn(3, '|').collect();
     if parts.len() != 3 {
-        return Err(AwsError::validation("ShardIterator is malformed"));
+        return Err(AwsError::bad_request(
+            "ExpiredIteratorException",
+            "The provided iterator is malformed; obtain a fresh one via GetShardIterator.",
+        ));
     }
     let stream_arn = parts[0];
     let shard_id = parts[1];
@@ -143,7 +161,7 @@ pub fn get_records(
         .map(|s| s + 1)
         .unwrap_or(from_seq);
 
-    let next_iterator = format!("{stream_arn}|{shard_id}|{next_seq}");
+    let next_iterator = encode_token(&format!("{stream_arn}|{shard_id}|{next_seq}"));
 
     Ok(json!({
         "Records": records,
@@ -226,4 +244,90 @@ fn find_table_by_stream_arn<'a>(
                 format!("Stream not found: {stream_arn}"),
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{KeySchemaElement, Table, TtlSpecification};
+    use std::collections::VecDeque;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("dynamodb", "us-east-1")
+    }
+
+    fn state_with_streamed_table(arn: &str) -> DynamoState {
+        let state = DynamoState::default();
+        let t = Table {
+            name: "Stream-tbl".to_string(),
+            arn: "arn:aws:dynamodb:us-east-1:000000000000:table/Stream-tbl".to_string(),
+            key_schema: vec![KeySchemaElement {
+                attribute_name: "PK".into(),
+                key_type: "HASH".into(),
+            }],
+            attribute_definitions: vec![],
+            billing_mode: "PAY_PER_REQUEST".to_string(),
+            status: "ACTIVE".to_string(),
+            created_at: 0.0,
+            gsi: vec![],
+            lsi: vec![],
+            stream_enabled: true,
+            stream_arn: Some(arn.to_string()),
+            stream_view_type: Some("NEW_AND_OLD_IMAGES".to_string()),
+            stream_records: VecDeque::new(),
+            stream_sequence: 0,
+            ttl: TtlSpecification::default(),
+            tags: Default::default(),
+            deletion_protection_enabled: false,
+            sse: Default::default(),
+            read_capacity_units: 0,
+            write_capacity_units: 0,
+        };
+        state.tables.insert(t.name.clone(), t);
+        state
+    }
+
+    #[test]
+    fn iterator_is_opaque_and_round_trips() {
+        let arn = "arn:aws:dynamodb:us-east-1:000000000000:table/Stream-tbl/stream/2026-05-25T00:00:00.000";
+        let state = state_with_streamed_table(arn);
+
+        let resp = get_shard_iterator(
+            &state,
+            &json!({
+                "StreamArn": arn,
+                "ShardId": "shardId-00000000000000000000-Stream-tbl",
+                "ShardIteratorType": "TRIM_HORIZON",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let token = resp["ShardIterator"].as_str().unwrap().to_string();
+        // Token must NOT be the legacy pipe-separated form — it should
+        // be an HMAC-signed base64 envelope.
+        assert!(!token.contains('|'));
+
+        // Round-trip: the iterator decodes back to readable records (an
+        // empty list here, but the call must succeed without
+        // ExpiredIteratorException).
+        let records = get_records(&state, &json!({"ShardIterator": &token}), &ctx()).unwrap();
+        assert!(records["Records"].is_array());
+        // NextShardIterator is also opaque.
+        let next = records["NextShardIterator"].as_str().unwrap();
+        assert!(!next.contains('|'));
+    }
+
+    #[test]
+    fn tampered_iterator_returns_expired_iterator_exception() {
+        let state = state_with_streamed_table(
+            "arn:aws:dynamodb:us-east-1:000000000000:table/Stream-tbl/stream/2026-05-25T00:00:00.000",
+        );
+        let err = get_records(
+            &state,
+            &json!({"ShardIterator": "not-a-real-token"}),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ExpiredIteratorException");
+    }
 }
