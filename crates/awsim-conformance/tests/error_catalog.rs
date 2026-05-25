@@ -197,6 +197,32 @@ fn kinesis_error_factories_match_smithy() {
 }
 
 #[test]
+fn eks_error_factories_match_smithy() {
+    let errors = load("eks");
+
+    assert_matches(
+        awsim_eks::error::resource_not_found("Cluster not found"),
+        &expect(&errors, "ResourceNotFoundException"),
+        "resource_not_found",
+    );
+    assert_matches(
+        awsim_eks::error::resource_in_use("Cluster active"),
+        &expect(&errors, "ResourceInUseException"),
+        "resource_in_use",
+    );
+    assert_matches(
+        awsim_eks::error::invalid_parameter("name is required"),
+        &expect(&errors, "InvalidParameterException"),
+        "invalid_parameter",
+    );
+    assert_matches(
+        awsim_eks::error::invalid_request("conflicting state"),
+        &expect(&errors, "InvalidRequestException"),
+        "invalid_request",
+    );
+}
+
+#[test]
 fn cognito_idp_error_factories_match_smithy() {
     let errors = load("cognito-idp");
 
