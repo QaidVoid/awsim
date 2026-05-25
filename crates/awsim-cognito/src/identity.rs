@@ -512,7 +512,7 @@ fn get_id(
     let is_authenticated = logins.map(|m| !m.is_empty()).unwrap_or(false);
 
     if !is_authenticated && !pool.allow_unauthenticated {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "Unauthenticated access is not supported for this identity pool",
         ));
@@ -606,7 +606,7 @@ fn get_credentials_for_identity(
 
     // Determine the IAM role to assume
     let role_arn = determine_role(&pool, &identity, input).ok_or_else(|| {
-        AwsError::bad_request(
+        AwsError::forbidden(
             "NotAuthorizedException",
             "No role configured for this identity's authentication state",
         )

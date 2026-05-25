@@ -119,7 +119,7 @@ pub fn validate_mutability(
     if violations.is_empty() {
         Ok(())
     } else {
-        Err(AwsError::bad_request(
+        Err(AwsError::forbidden(
             "NotAuthorizedException",
             format!(
                 "user.{} is read-only or not mutable",

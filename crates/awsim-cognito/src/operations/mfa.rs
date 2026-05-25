@@ -123,9 +123,8 @@ pub fn associate_software_token(
 ) -> Result<Value, AwsError> {
     // Resolve username from AccessToken or Session
     let username = if let Some(token) = input["AccessToken"].as_str() {
-        username_from_access_token(token).ok_or_else(|| {
-            AwsError::bad_request("NotAuthorizedException", "Invalid access token")
-        })?
+        username_from_access_token(token)
+            .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?
     } else if let Some(_session) = input["Session"].as_str() {
         // Session-based flow: session stores pool_id+username in MFA session map.
         // For dev emulator we look it up from the session store on CognitoState.
@@ -134,7 +133,7 @@ pub fn associate_software_token(
             .mfa_sessions
             .get(session)
             .map(|e| e.username.clone())
-            .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?
+            .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?
     } else {
         return Err(AwsError::bad_request(
             "InvalidParameter",
@@ -182,15 +181,14 @@ pub fn verify_software_token(
     }
 
     let username = if let Some(token) = input["AccessToken"].as_str() {
-        username_from_access_token(token).ok_or_else(|| {
-            AwsError::bad_request("NotAuthorizedException", "Invalid access token")
-        })?
+        username_from_access_token(token)
+            .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?
     } else if let Some(session) = input["Session"].as_str() {
         state
             .mfa_sessions
             .get(session)
             .map(|e| e.username.clone())
-            .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?
+            .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?
     } else {
         return Err(AwsError::bad_request(
             "InvalidParameter",
@@ -241,7 +239,7 @@ pub fn set_user_mfa_preference(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
 
     let username = username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
 
     apply_mfa_preference(state, &username, input);
 

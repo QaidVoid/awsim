@@ -309,7 +309,7 @@ pub fn initiate_auth(
                     )
                 })?;
                 if !user.enabled {
-                    return Err(AwsError::bad_request(
+                    return Err(AwsError::forbidden(
                         "NotAuthorizedException",
                         "User is disabled.",
                     ));
@@ -322,7 +322,7 @@ pub fn initiate_auth(
                         user,
                         super::auth_policy::build_signin_event(false, compromised),
                     );
-                    return Err(AwsError::bad_request(
+                    return Err(AwsError::forbidden(
                         "NotAuthorizedException",
                         "Incorrect username or password",
                     ));
@@ -333,7 +333,7 @@ pub fn initiate_auth(
                         user,
                         super::auth_policy::build_signin_event(false, true),
                     );
-                    return Err(AwsError::bad_request(
+                    return Err(AwsError::forbidden(
                         "NotAuthorizedException",
                         "Risk-based authentication blocked sign-in: compromised credentials",
                     ));
@@ -618,7 +618,7 @@ pub fn admin_initiate_auth(
                     )
                 })?;
                 if !user.enabled {
-                    return Err(AwsError::bad_request(
+                    return Err(AwsError::forbidden(
                         "NotAuthorizedException",
                         "User is disabled.",
                     ));
@@ -631,7 +631,7 @@ pub fn admin_initiate_auth(
                         user,
                         super::auth_policy::build_signin_event(false, compromised),
                     );
-                    return Err(AwsError::bad_request(
+                    return Err(AwsError::forbidden(
                         "NotAuthorizedException",
                         "Incorrect username or password",
                     ));
@@ -642,7 +642,7 @@ pub fn admin_initiate_auth(
                         user,
                         super::auth_policy::build_signin_event(false, true),
                     );
-                    return Err(AwsError::bad_request(
+                    return Err(AwsError::forbidden(
                         "NotAuthorizedException",
                         "Risk-based authentication blocked sign-in: compromised credentials",
                     ));
@@ -901,12 +901,10 @@ pub fn respond_to_auth_challenge(
                 .mfa_sessions
                 .get(session_id)
                 .map(|e| e.value().clone())
-                .ok_or_else(|| {
-                    AwsError::bad_request("NotAuthorizedException", "Invalid session")
-                })?;
+                .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?;
             if !session_still_valid(session_meta.issued_at) {
                 state.mfa_sessions.remove(session_id);
-                return Err(AwsError::bad_request(
+                return Err(AwsError::forbidden(
                     "NotAuthorizedException",
                     "MFA session has expired; restart the auth flow",
                 ));
@@ -920,7 +918,7 @@ pub fn respond_to_auth_challenge(
                 .get(&session_meta.username)
                 .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
             let secret = user.totp_secret.as_deref().ok_or_else(|| {
-                AwsError::bad_request(
+                AwsError::forbidden(
                     "NotAuthorizedException",
                     "User has no software token configured",
                 )
@@ -1065,7 +1063,7 @@ pub fn admin_respond_to_auth_challenge(
             let session_id = input["Session"].as_str().unwrap_or("");
             if let Some(session) = state.mfa_sessions.remove(session_id) {
                 if !session_still_valid(session.1.issued_at) {
-                    return Err(AwsError::bad_request(
+                    return Err(AwsError::forbidden(
                         "NotAuthorizedException",
                         "MFA session has expired; restart the auth flow",
                     ));
@@ -1182,7 +1180,7 @@ pub fn get_user_auth_factors(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
 
     let username = crate::jwt::extract_username_from_access_token(token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
 
     // Find pool containing this user
     for pool_ref in state.user_pools.iter() {
@@ -1257,20 +1255,21 @@ fn start_srp_challenge(
         .get(&resolved_username)
         .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
     if !user.enabled {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "User is disabled.",
         ));
     }
     let salt_hex = user.srp_salt.clone().ok_or_else(|| {
-        AwsError::bad_request(
+        AwsError::forbidden(
             "NotAuthorizedException",
             "User has no SRP material; ask the admin to reset the password",
         )
     })?;
-    let verifier_hex = user.srp_verifier.clone().ok_or_else(|| {
-        AwsError::bad_request("NotAuthorizedException", "User has no SRP verifier")
-    })?;
+    let verifier_hex = user
+        .srp_verifier
+        .clone()
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "User has no SRP verifier"))?;
     let verifier_big = BigUint::from_str_radix(&verifier_hex, 16)
         .map_err(|_| AwsError::internal("Stored SRP verifier is not valid hex"))?;
 
@@ -1326,16 +1325,16 @@ fn verify_srp_password(
         .srp_sessions
         .get(session_id)
         .map(|e| e.value().clone())
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?;
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?;
     if session.client_id != client_id || session.pool_id != pool_id {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "Session does not match client or pool",
         ));
     }
     if !session_still_valid(session.issued_at) {
         state.srp_sessions.remove(session_id);
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "SRP session has expired; restart the auth flow",
         ));
@@ -1352,7 +1351,7 @@ fn verify_srp_password(
             )
         })?;
     if secret_block_b64 != session.secret_block_b64 {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "PASSWORD_CLAIM_SECRET_BLOCK does not match server-issued value",
         ));
@@ -1405,7 +1404,7 @@ fn verify_srp_password(
 
     let k_session =
         crate::srp::derive_k(&a_pub, &b_pub, &b_priv, &verifier_big).ok_or_else(|| {
-            AwsError::bad_request("NotAuthorizedException", "SRP key derivation failed")
+            AwsError::forbidden("NotAuthorizedException", "SRP key derivation failed")
         })?;
 
     let pool_short = crate::password::pool_short_name(pool_id);
@@ -1417,7 +1416,7 @@ fn verify_srp_password(
         timestamp,
     );
     if !crate::srp::ct_eq(&expected, &provided_sig) {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "PASSWORD_CLAIM_SIGNATURE does not match",
         ));
@@ -1489,7 +1488,7 @@ fn start_custom_auth_challenge(
     if let Some(user) = pool.users.get(&resolved_username)
         && !user.enabled
     {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "User is disabled.",
         ));
@@ -1570,16 +1569,16 @@ fn verify_custom_auth_response(
         .mfa_sessions
         .get(session_id)
         .map(|e| e.value().clone())
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?;
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?;
     if !session_still_valid(session.issued_at) {
         state.mfa_sessions.remove(session_id);
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "Custom auth session has expired; restart the auth flow",
         ));
     }
     if session.pool_id != pool_id {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "Session does not match pool",
         ));
@@ -1614,7 +1613,7 @@ fn verify_custom_auth_response(
     if let Some(expected) = pool.custom_auth_expected_answer.as_deref()
         && expected != answer
     {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "Incorrect answer to custom challenge",
         ));

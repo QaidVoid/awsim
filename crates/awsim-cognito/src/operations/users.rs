@@ -219,7 +219,7 @@ fn enforce_write_attributes<'a>(
     }
     for name in names {
         if !client.write_attributes.iter().any(|w| w == name) {
-            return Err(AwsError::bad_request(
+            return Err(AwsError::forbidden(
                 "NotAuthorizedException",
                 "A client attempted to write unauthorized attribute",
             ));
@@ -921,14 +921,14 @@ pub fn get_user(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let claims = crate::jwt::verify_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
     let username = claims.username;
 
     for pool_entry in state.user_pools.iter() {
@@ -1187,14 +1187,14 @@ pub fn change_password(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ProposedPassword is required"))?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if pool_entry.users.contains_key(&username) {
@@ -1207,7 +1207,7 @@ pub fn change_password(
                 )
             })?;
             if !crate::password::verify(previous, &user.password_hash) {
-                return Err(AwsError::bad_request(
+                return Err(AwsError::forbidden(
                     "NotAuthorizedException",
                     "Incorrect previous password",
                 ));
@@ -1537,14 +1537,14 @@ pub fn update_user_attributes(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let claims = crate::jwt::verify_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
     let username = claims.username;
 
     let new_attrs = parse_user_attributes(input, "UserAttributes");
@@ -1588,14 +1588,14 @@ pub fn delete_user_attributes(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let claims = crate::jwt::verify_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
     let username = claims.username;
 
     let attr_names: Vec<String> = input["UserAttributeNames"]
@@ -1646,14 +1646,14 @@ pub fn delete_user(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if pool_entry.users.remove(&username).is_some() {
@@ -1751,14 +1751,14 @@ pub fn get_user_attribute_verification_code(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AttributeName is required"))?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
@@ -1804,14 +1804,14 @@ pub fn verify_user_attribute(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Code is required"))?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {

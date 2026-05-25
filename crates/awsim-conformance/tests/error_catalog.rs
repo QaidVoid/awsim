@@ -197,6 +197,47 @@ fn kinesis_error_factories_match_smithy() {
 }
 
 #[test]
+fn cognito_idp_error_factories_match_smithy() {
+    let errors = load("cognito-idp");
+
+    assert_matches(
+        awsim_cognito::error::not_authorized("bad password"),
+        &expect(&errors, "NotAuthorizedException"),
+        "not_authorized",
+    );
+    assert_matches(
+        awsim_cognito::error::resource_not_found("UserPool not found"),
+        &expect(&errors, "ResourceNotFoundException"),
+        "resource_not_found",
+    );
+    assert_matches(
+        awsim_cognito::error::user_not_found("User alice"),
+        &expect(&errors, "UserNotFoundException"),
+        "user_not_found",
+    );
+    assert_matches(
+        awsim_cognito::error::invalid_parameter("ClientId is required"),
+        &expect(&errors, "InvalidParameterException"),
+        "invalid_parameter",
+    );
+    assert_matches(
+        awsim_cognito::error::invalid_password("too short"),
+        &expect(&errors, "InvalidPasswordException"),
+        "invalid_password",
+    );
+    assert_matches(
+        awsim_cognito::error::code_mismatch("OTP wrong"),
+        &expect(&errors, "CodeMismatchException"),
+        "code_mismatch",
+    );
+    assert_matches(
+        awsim_cognito::error::username_exists("alice"),
+        &expect(&errors, "UsernameExistsException"),
+        "username_exists",
+    );
+}
+
+#[test]
 fn sts_error_factories_match_smithy() {
     let errors = load("sts");
 

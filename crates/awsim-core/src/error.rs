@@ -150,6 +150,18 @@ impl AwsError {
         }
     }
 
+    /// HTTP 403 with a service-specific error code (e.g. Cognito's
+    /// `NotAuthorizedException` or SNS's `AuthorizationError`).
+    pub fn forbidden(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code: code.into(),
+            message: message.into(),
+            error_type: ErrorType::Sender,
+            extras: None,
+        }
+    }
+
     pub fn access_denied_for(action: &str, principal_arn: &str, resource: &str) -> Self {
         Self {
             status: StatusCode::FORBIDDEN,

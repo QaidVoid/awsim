@@ -80,7 +80,7 @@ pub fn validate(
     };
 
     let supplied = provided.ok_or_else(|| {
-        AwsError::bad_request(
+        AwsError::forbidden(
             "NotAuthorizedException",
             "Client is configured with secret but SecretHash was not provided",
         )
@@ -90,7 +90,7 @@ pub fn validate(
     if ct_eq(expected.as_bytes(), supplied.as_bytes()) {
         Ok(())
     } else {
-        Err(AwsError::bad_request(
+        Err(AwsError::forbidden(
             "NotAuthorizedException",
             "SecretHash does not match",
         ))

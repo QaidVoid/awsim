@@ -33,7 +33,7 @@ fn get_username_from_token(
     token: &str,
 ) -> Result<(String, String), AwsError> {
     let username = jwt::extract_username_from_access_token(token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
 
     // Find pool containing this user
     for pool_ref in state.user_pools.iter() {

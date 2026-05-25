@@ -27,13 +27,13 @@ fn credential_to_value(c: &WebAuthnCredential) -> Value {
 
 fn username_for_token(state: &CognitoState, access_token: &str) -> Result<String, AwsError> {
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::bad_request(
+        return Err(AwsError::forbidden(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
     crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))
 }
 
 pub fn start_webauthn_registration(
