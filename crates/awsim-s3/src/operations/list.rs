@@ -437,7 +437,12 @@ pub fn list_object_versions(state: &S3State, input: &Value) -> Result<Value, Aws
 }
 
 /// POST /{Bucket}?delete — batch delete objects, version-aware.
-pub fn delete_objects(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+pub fn delete_objects(
+    state: &S3State,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    super::check_expected_bucket_owner(input, ctx)?;
     let bucket_name = require_str(input, "Bucket")?;
 
     let bucket = state
@@ -490,7 +495,7 @@ pub fn delete_objects(state: &S3State, input: &Value) -> Result<Value, AwsError>
             req["VersionId"] = Value::String(v.clone());
         }
         let _ = status;
-        let resp = match super::object::delete_object(state, &req) {
+        let resp = match super::object::delete_object(state, &req, ctx) {
             Ok(r) => r,
             Err(e) => {
                 errors.push(json!({

@@ -1169,7 +1169,7 @@ impl ServiceHandler for S3Service {
                         Vec::new()
                     };
 
-                let result = operations::object::delete_object(&state, &input)?;
+                let result = operations::object::delete_object(&state, &input, ctx)?;
 
                 // Emit s3:ObjectRemoved:Delete notification if configured
                 if let Some(bus) = &ctx.event_bus
@@ -1195,13 +1195,13 @@ impl ServiceHandler for S3Service {
                 Ok(result)
             }
             "GetObject" => operations::object::get_object(&state, &input, ctx),
-            "HeadObject" => operations::object::head_object(&state, &input),
+            "HeadObject" => operations::object::head_object(&state, &input, ctx),
 
             // Listing / batch
             "ListObjectsV2" => operations::list::list_objects_v2(&state, &input, ctx),
             "ListObjects" => operations::list::list_objects(&state, &input, ctx),
             "ListObjectVersions" => operations::list::list_object_versions(&state, &input),
-            "DeleteObjects" => operations::list::delete_objects(&state, &input),
+            "DeleteObjects" => operations::list::delete_objects(&state, &input, ctx),
 
             // Multipart
             "CreateMultipartUpload" => {

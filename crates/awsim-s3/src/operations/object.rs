@@ -365,6 +365,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
         return copy_object(state, input, ctx);
     }
 
+    super::check_expected_bucket_owner(input, ctx)?;
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
     validate_object_key(key)?;
@@ -538,11 +539,8 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
 }
 
 /// GET /{Bucket}/{Key+} — retrieve object data, optionally a specific version.
-pub fn get_object(
-    state: &S3State,
-    input: &Value,
-    _ctx: &RequestContext,
-) -> Result<Value, AwsError> {
+pub fn get_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
+    super::check_expected_bucket_owner(input, ctx)?;
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
     let range_header = opt_str(input, "Range");
@@ -635,7 +633,12 @@ pub fn get_object(
 }
 
 /// HEAD /{Bucket}/{Key+} — return object metadata only.
-pub fn head_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+pub fn head_object(
+    state: &S3State,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    super::check_expected_bucket_owner(input, ctx)?;
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
     let requested_version = version_id_input(input);
@@ -713,7 +716,12 @@ fn delete_marker_object(key: &str, version_id: Option<String>) -> S3Object {
 ///   * Without, on Suspended bucket — overwrite the `null`-version slot with
 ///     a delete marker.
 ///   * Without, on Disabled bucket — drop the (single) version entirely.
-pub fn delete_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+pub fn delete_object(
+    state: &S3State,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    super::check_expected_bucket_owner(input, ctx)?;
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
     let requested_version = version_id_input(input);
@@ -816,7 +824,19 @@ pub fn delete_object(state: &S3State, input: &Value) -> Result<Value, AwsError> 
 }
 
 /// PUT /{Bucket}/{Key+} with x-amz-copy-source — copy an object.
-fn copy_object(state: &S3State, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+fn copy_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
+    super::check_expected_bucket_owner(input, ctx)?;
+    // CopyObject also accepts ExpectedSourceBucketOwner; treat the
+    // bucket owner of the source as the calling account because all
+    // buckets in one process live in the same account slot.
+    if let Some(expected) = super::opt_str(input, "ExpectedSourceBucketOwner")
+        && expected != ctx.account_id
+    {
+        return Err(AwsError::access_denied(format!(
+            "The expected source bucket owner ({expected}) does not match the actual owner ({})",
+            ctx.account_id
+        )));
+    }
     let dst_bucket = require_str(input, "Bucket")?;
     let dst_key = require_str(input, "Key")?;
     let copy_source = require_str(input, "CopySource")?;
@@ -1208,7 +1228,8 @@ mod tests {
         assert_ne!(v1, v2, "successive puts must produce distinct VersionIds");
 
         // GetObject and HeadObject surface the current VersionId.
-        let head = head_object(&state, &json!({ "Bucket": "vbucket", "Key": "k" })).unwrap();
+        let head =
+            head_object(&state, &json!({ "Bucket": "vbucket", "Key": "k" }), &ctx()).unwrap();
         assert_eq!(head["VersionId"].as_str(), Some(v2));
     }
 
@@ -1254,7 +1275,7 @@ mod tests {
         // DeleteObject without VersionId pushes a delete marker; subsequent
         // GetObject sees NoSuchKey + DeleteMarker but the older VersionId
         // remains readable.
-        let del = delete_object(&state, &json!({ "Bucket": "v", "Key": "k" })).unwrap();
+        let del = delete_object(&state, &json!({ "Bucket": "v", "Key": "k" }), &ctx()).unwrap();
         assert_eq!(del["DeleteMarker"], json!(true));
 
         let err = get_object(&state, &json!({ "Bucket": "v", "Key": "k" }), &ctx()).unwrap_err();
@@ -1297,6 +1318,7 @@ mod tests {
         delete_object(
             &state,
             &json!({ "Bucket": "v", "Key": "k", "VersionId": v1.clone() }),
+            &ctx(),
         )
         .unwrap();
 
@@ -1308,7 +1330,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "NoSuchKey");
-        let head = head_object(&state, &json!({ "Bucket": "v", "Key": "k" })).unwrap();
+        let head = head_object(&state, &json!({ "Bucket": "v", "Key": "k" }), &ctx()).unwrap();
         assert_eq!(head["VersionId"].as_str(), Some(v2.as_str()));
     }
 
@@ -1397,6 +1419,7 @@ mod tests {
         let resp = head_object(
             &state,
             &json!({ "Bucket": "b", "Key": "k", "IfNoneMatch": etag }),
+            &ctx(),
         )
         .unwrap();
         assert_eq!(resp["__status_code"], json!(304));
@@ -1628,7 +1651,7 @@ mod tests {
             &ctx(),
         )
         .unwrap();
-        let head = head_object(&state, &json!({ "Bucket": "b", "Key": "dst" })).unwrap();
+        let head = head_object(&state, &json!({ "Bucket": "b", "Key": "dst" }), &ctx()).unwrap();
         assert_eq!(head["ContentType"].as_str(), Some("text/plain"));
         // User metadata round-trips on Head.
         assert_eq!(head["x-amz-meta-project"].as_str(), Some("alpha"));
@@ -1665,7 +1688,7 @@ mod tests {
             &ctx(),
         )
         .unwrap();
-        let head = head_object(&state, &json!({ "Bucket": "b", "Key": "dst" })).unwrap();
+        let head = head_object(&state, &json!({ "Bucket": "b", "Key": "dst" }), &ctx()).unwrap();
         assert_eq!(head["ContentType"].as_str(), Some("application/json"));
         // New request metadata appears.
         assert_eq!(head["x-amz-meta-team"].as_str(), Some("infra"));
@@ -1771,7 +1794,7 @@ mod tests {
         let bucket = Bucket::new("b", "us-east-1", "now");
         let state = state_with(bucket);
         put_with_legal_hold(&state, "b", "k");
-        let err = delete_object(&state, &json!({ "Bucket": "b", "Key": "k" })).unwrap_err();
+        let err = delete_object(&state, &json!({ "Bucket": "b", "Key": "k" }), &ctx()).unwrap_err();
         assert_eq!(err.code, "AccessDenied");
     }
 
@@ -1783,6 +1806,7 @@ mod tests {
         let err = delete_object(
             &state,
             &json!({ "Bucket": "b", "Key": "k", "BypassGovernanceRetention": "true" }),
+            &ctx(),
         )
         .unwrap_err();
         assert_eq!(err.code, "AccessDenied");
@@ -1794,12 +1818,13 @@ mod tests {
         let state = state_with(bucket);
         put_with_governance_retention(&state, "b", "k", "2999-01-01T00:00:00Z");
         // Without the bypass header: blocked.
-        let err = delete_object(&state, &json!({ "Bucket": "b", "Key": "k" })).unwrap_err();
+        let err = delete_object(&state, &json!({ "Bucket": "b", "Key": "k" }), &ctx()).unwrap_err();
         assert_eq!(err.code, "AccessDenied");
         // With the bypass header: allowed.
         delete_object(
             &state,
             &json!({ "Bucket": "b", "Key": "k", "BypassGovernanceRetention": "true" }),
+            &ctx(),
         )
         .unwrap();
     }
@@ -1809,7 +1834,7 @@ mod tests {
         let bucket = Bucket::new("b", "us-east-1", "now");
         let state = state_with(bucket);
         put_with_compliance_retention(&state, "b", "k", "1971-01-01T00:00:00Z");
-        delete_object(&state, &json!({ "Bucket": "b", "Key": "k" })).unwrap();
+        delete_object(&state, &json!({ "Bucket": "b", "Key": "k" }), &ctx()).unwrap();
     }
 
     #[test]
@@ -1905,5 +1930,117 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "PreconditionFailed");
+    }
+
+    fn other_account_ctx() -> RequestContext {
+        RequestContext::new_with_account("s3", "us-east-1", "999999999999")
+    }
+
+    #[test]
+    fn put_object_rejects_mismatched_expected_bucket_owner() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        let err = put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "Body": "hello",
+                "ExpectedBucketOwner": "111111111111",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AccessDeniedException");
+    }
+
+    #[test]
+    fn put_object_accepts_matching_expected_bucket_owner() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        // Default ctx is account 000000000000.
+        put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "Body": "hello",
+                "ExpectedBucketOwner": "000000000000",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn get_object_rejects_mismatched_expected_bucket_owner() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        put_object(
+            &state,
+            &json!({"Bucket": "b", "Key": "k", "Body": "hi"}),
+            &ctx(),
+        )
+        .unwrap();
+        // Caller from a different account.
+        let err = get_object(
+            &state,
+            &json!({"Bucket": "b", "Key": "k", "ExpectedBucketOwner": "000000000000"}),
+            &other_account_ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AccessDeniedException");
+    }
+
+    #[test]
+    fn delete_object_rejects_mismatched_expected_bucket_owner() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        put_object(
+            &state,
+            &json!({"Bucket": "b", "Key": "k", "Body": "hi"}),
+            &ctx(),
+        )
+        .unwrap();
+        let err = delete_object(
+            &state,
+            &json!({"Bucket": "b", "Key": "k", "ExpectedBucketOwner": "555555555555"}),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AccessDeniedException");
+    }
+
+    #[test]
+    fn copy_object_checks_both_expected_owners() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        put_object(
+            &state,
+            &json!({"Bucket": "b", "Key": "src", "Body": "hi"}),
+            &ctx(),
+        )
+        .unwrap();
+        // Mismatched destination owner.
+        let err = put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "dst",
+                "CopySource": "b/src",
+                "ExpectedBucketOwner": "555555555555",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AccessDeniedException");
+        // Mismatched source owner.
+        let err = put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "dst",
+                "CopySource": "b/src",
+                "ExpectedSourceBucketOwner": "555555555555",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AccessDeniedException");
     }
 }
