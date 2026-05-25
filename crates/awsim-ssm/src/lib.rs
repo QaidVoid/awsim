@@ -1,3 +1,4 @@
+pub mod error;
 mod handler;
 mod operations;
 mod state;

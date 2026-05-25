@@ -134,7 +134,7 @@ pub fn put_parameter(
 
     if let Some(mut existing) = state.parameters.get_mut(name) {
         if !overwrite {
-            return Err(AwsError::conflict(
+            return Err(AwsError::bad_request(
                 "ParameterAlreadyExists",
                 format!("Parameter {name} already exists. Use Overwrite to update."),
             ));
@@ -200,7 +200,7 @@ pub fn get_parameter(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
 
     let param = state.parameters.get(name).ok_or_else(|| {
-        AwsError::not_found("ParameterNotFound", format!("Parameter {name} not found"))
+        AwsError::bad_request("ParameterNotFound", format!("Parameter {name} not found"))
     })?;
 
     debug!(name, "GetParameter");
@@ -304,7 +304,7 @@ pub fn delete_parameter(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
 
     if state.parameters.remove(name).is_none() {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "ParameterNotFound",
             format!("Parameter {name} not found"),
         ));
@@ -418,7 +418,7 @@ pub fn get_parameter_history(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
 
     let param = state.parameters.get(name).ok_or_else(|| {
-        AwsError::not_found("ParameterNotFound", format!("Parameter {name} not found"))
+        AwsError::bad_request("ParameterNotFound", format!("Parameter {name} not found"))
     })?;
 
     // Build history: all previous versions + current
@@ -475,7 +475,7 @@ pub fn label_parameter_version(
     let requested_version = input["ParameterVersion"].as_u64();
 
     let mut param = state.parameters.get_mut(name).ok_or_else(|| {
-        AwsError::not_found("ParameterNotFound", format!("Parameter {name} not found"))
+        AwsError::bad_request("ParameterNotFound", format!("Parameter {name} not found"))
     })?;
 
     // If a specific version is given, apply to history; otherwise apply to current
@@ -495,7 +495,7 @@ pub fn label_parameter_version(
                     }
                 }
             } else {
-                return Err(AwsError::not_found(
+                return Err(AwsError::bad_request(
                     "ParameterVersionNotFound",
                     format!("Version {ver} of parameter {name} not found"),
                 ));

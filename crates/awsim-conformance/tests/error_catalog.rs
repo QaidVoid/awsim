@@ -197,6 +197,32 @@ fn kinesis_error_factories_match_smithy() {
 }
 
 #[test]
+fn ssm_error_factories_match_smithy() {
+    let errors = load("ssm");
+
+    assert_matches(
+        awsim_ssm::error::parameter_not_found("/missing"),
+        &expect(&errors, "ParameterNotFound"),
+        "parameter_not_found",
+    );
+    assert_matches(
+        awsim_ssm::error::parameter_already_exists("/dup"),
+        &expect(&errors, "ParameterAlreadyExists"),
+        "parameter_already_exists",
+    );
+    assert_matches(
+        awsim_ssm::error::invalid_parameters("Name is required"),
+        &expect(&errors, "InvalidParameters"),
+        "invalid_parameters",
+    );
+    assert_matches(
+        awsim_ssm::error::resource_not_found("Resource not found"),
+        &expect(&errors, "ResourceNotFoundException"),
+        "resource_not_found",
+    );
+}
+
+#[test]
 fn ecs_error_factories_match_smithy() {
     let errors = load("ecs");
 

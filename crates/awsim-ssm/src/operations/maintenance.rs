@@ -25,7 +25,7 @@ pub fn get_maintenance_window(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "WindowId is required"))?;
 
     let window = state.maintenance_windows.get(window_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "DoesNotExistException",
             format!("Maintenance window '{window_id}' does not exist"),
         )
@@ -58,7 +58,7 @@ pub fn update_maintenance_window(
         .maintenance_windows
         .get_mut(window_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "DoesNotExistException",
                 format!("Maintenance window '{window_id}' does not exist"),
             )
@@ -102,7 +102,7 @@ pub fn register_target_with_maintenance_window(
         .to_string();
 
     if !state.maintenance_windows.contains_key(&window_id) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "DoesNotExistException",
             format!("Maintenance window '{window_id}' does not exist"),
         ));
@@ -142,7 +142,7 @@ pub fn register_task_with_maintenance_window(
         .to_string();
 
     if !state.maintenance_windows.contains_key(&window_id) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "DoesNotExistException",
             format!("Maintenance window '{window_id}' does not exist"),
         ));
@@ -246,7 +246,7 @@ pub fn create_resource_data_sync(
         .to_string();
 
     if state.resource_data_syncs.contains_key(&sync_name) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "ResourceDataSyncAlreadyExistsException",
             format!("Resource data sync '{sync_name}' already exists"),
         ));
@@ -319,7 +319,7 @@ pub fn delete_resource_data_sync(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SyncName is required"))?;
 
     if state.resource_data_syncs.remove(sync_name).is_none() {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "ResourceDataSyncNotFoundException",
             format!("Resource data sync '{sync_name}' does not exist"),
         ));
@@ -338,7 +338,7 @@ pub fn update_association(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AssociationId is required"))?;
 
     let mut assoc = state.associations.get_mut(association_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "AssociationDoesNotExist",
             format!("Association '{association_id}' does not exist"),
         )
@@ -378,7 +378,7 @@ pub fn update_association_status(
         .find(|e| e.value().document_name == name)
         .map(|e| e.value().clone())
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "AssociationDoesNotExist",
                 format!("Association for '{name}' does not exist"),
             )
@@ -489,7 +489,7 @@ pub fn get_maintenance_window_task(
         .maintenance_window_tasks
         .get(window_task_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "DoesNotExistException",
                 format!("Maintenance window task '{window_task_id}' not found"),
             )
@@ -521,7 +521,7 @@ pub fn update_maintenance_window_target(
         .maintenance_window_targets
         .get_mut(window_target_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "DoesNotExistException",
                 format!("Maintenance window target '{window_target_id}' not found"),
             )
@@ -555,7 +555,7 @@ pub fn update_maintenance_window_task(
         .maintenance_window_tasks
         .get_mut(window_task_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "DoesNotExistException",
                 format!("Maintenance window task '{window_task_id}' not found"),
             )
@@ -898,7 +898,7 @@ pub fn update_resource_data_sync(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SyncName is required"))?;
 
     if !state.resource_data_syncs.contains_key(sync_name) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "ResourceDataSyncNotFoundException",
             format!("Resource data sync '{sync_name}' does not exist"),
         ));

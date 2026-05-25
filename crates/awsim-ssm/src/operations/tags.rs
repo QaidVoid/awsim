@@ -29,7 +29,7 @@ pub fn add_tags_to_resource(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Tags is required"))?;
 
     let mut param = state.parameters.get_mut(resource_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "InvalidResourceId",
             format!("Parameter {resource_id} not found"),
         )
@@ -70,7 +70,7 @@ pub fn remove_tags_from_resource(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TagKeys is required"))?;
 
     let mut param = state.parameters.get_mut(resource_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "InvalidResourceId",
             format!("Parameter {resource_id} not found"),
         )
@@ -107,7 +107,7 @@ pub fn list_tags_for_resource(
     }
 
     let param = state.parameters.get(resource_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "InvalidResourceId",
             format!("Parameter {resource_id} not found"),
         )

@@ -51,7 +51,7 @@ pub fn create_document(
         .to_string();
 
     if state.documents.contains_key(&name) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "DocumentAlreadyExists",
             format!("Document '{name}' already exists"),
         ));
@@ -108,7 +108,7 @@ pub fn get_document(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
 
     let doc = state.documents.get(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "InvalidDocument",
             format!("Document '{name}' does not exist"),
         )
@@ -139,7 +139,7 @@ pub fn describe_document(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
 
     let doc = state.documents.get(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "InvalidDocument",
             format!("Document '{name}' does not exist"),
         )
@@ -166,7 +166,7 @@ pub fn update_document(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Content is required"))?;
 
     let mut doc = state.documents.get_mut(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "InvalidDocument",
             format!("Document '{name}' does not exist"),
         )
@@ -196,7 +196,7 @@ pub fn delete_document(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
 
     if state.documents.remove(name).is_none() {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "InvalidDocument",
             format!("Document '{name}' does not exist"),
         ));
@@ -285,7 +285,7 @@ pub fn describe_association(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AssociationId is required"))?;
 
     let assoc = state.associations.get(association_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "AssociationDoesNotExist",
             format!("Association '{association_id}' does not exist"),
         )
@@ -316,7 +316,7 @@ pub fn delete_association(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AssociationId is required"))?;
 
     if state.associations.remove(association_id).is_none() {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "AssociationDoesNotExist",
             format!("Association '{association_id}' does not exist"),
         ));
@@ -495,7 +495,7 @@ pub fn get_ops_item(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "OpsItemId is required"))?;
 
     let item = state.ops_items.get(ops_item_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "OpsItemNotFoundException",
             format!("OpsItem '{ops_item_id}' does not exist"),
         )
@@ -528,7 +528,7 @@ pub fn update_ops_item(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "OpsItemId is required"))?;
 
     let mut item = state.ops_items.get_mut(ops_item_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "OpsItemNotFoundException",
             format!("OpsItem '{ops_item_id}' does not exist"),
         )

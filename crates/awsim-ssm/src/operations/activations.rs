@@ -64,7 +64,7 @@ pub fn delete_activation(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ActivationId is required"))?;
 
     if state.activations.remove(activation_id).is_none() {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "InvalidActivation",
             format!("Activation '{activation_id}' not found"),
         ));

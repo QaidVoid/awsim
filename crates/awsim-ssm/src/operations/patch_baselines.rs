@@ -90,7 +90,7 @@ pub fn get_patch_baseline(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "BaselineId is required"))?;
 
     let baseline = state.patch_baselines.get(baseline_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "DoesNotExistException",
             format!("Patch baseline '{baseline_id}' does not exist"),
         )
@@ -139,7 +139,7 @@ pub fn delete_patch_baseline(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "BaselineId is required"))?;
 
     if state.patch_baselines.remove(baseline_id).is_none() {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "DoesNotExistException",
             format!("Patch baseline '{baseline_id}' does not exist"),
         ));
@@ -158,7 +158,7 @@ pub fn update_patch_baseline(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "BaselineId is required"))?;
 
     let mut baseline = state.patch_baselines.get_mut(baseline_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "DoesNotExistException",
             format!("Patch baseline '{baseline_id}' does not exist"),
         )

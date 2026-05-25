@@ -104,9 +104,17 @@ pub fn load_errors(model_path: &Path) -> Vec<SmithyError> {
             .get("smithy.api#httpError")
             .and_then(|v| v.as_u64())
             .or_else(|| {
-                query_override
-                    .and_then(|q| q.get("httpResponseCode"))
-                    .and_then(|v| v.as_u64())
+                // awsQueryError.httpResponseCode only applies to Query,
+                // EC2, and awsQueryCompatible JSON protocols; pure JSON
+                // services that still carry the trait (legacy Query
+                // migrations like SSM) ignore the response code.
+                if matches!(protocol, AwsProtocol::AwsQuery | AwsProtocol::Ec2Query) {
+                    query_override
+                        .and_then(|q| q.get("httpResponseCode"))
+                        .and_then(|v| v.as_u64())
+                } else {
+                    None
+                }
             })
             .unwrap_or(match kind {
                 ErrorKind::Client => 400,

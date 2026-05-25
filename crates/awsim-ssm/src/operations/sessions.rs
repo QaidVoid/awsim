@@ -100,7 +100,7 @@ pub fn terminate_session(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SessionId is required"))?;
 
     let mut session = state.sessions.get_mut(session_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "DoesNotExistException",
             format!("Session '{session_id}' does not exist"),
         )
@@ -122,7 +122,7 @@ pub fn resume_session(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SessionId is required"))?;
 
     let _ = state.sessions.get(session_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "DoesNotExistException",
             format!("Session '{session_id}' does not exist"),
         )

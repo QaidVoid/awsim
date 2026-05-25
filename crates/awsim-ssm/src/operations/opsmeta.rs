@@ -33,7 +33,7 @@ pub fn create_ops_metadata(
 
     let arn = build_arn(ctx, &resource_id);
     if state.ops_metadata.contains_key(&arn) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "OpsMetadataAlreadyExistsException",
             format!("OpsMetadata for '{resource_id}' already exists"),
         ));
@@ -66,7 +66,7 @@ pub fn get_ops_metadata(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "OpsMetadataArn is required"))?;
 
     let om = state.ops_metadata.get(arn).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "OpsMetadataNotFoundException",
             format!("OpsMetadata '{arn}' not found"),
         )
@@ -88,7 +88,7 @@ pub fn update_ops_metadata(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "OpsMetadataArn is required"))?;
 
     let mut om = state.ops_metadata.get_mut(arn).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "OpsMetadataNotFoundException",
             format!("OpsMetadata '{arn}' not found"),
         )
@@ -112,7 +112,7 @@ pub fn delete_ops_metadata(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "OpsMetadataArn is required"))?;
 
     if state.ops_metadata.remove(arn).is_none() {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "OpsMetadataNotFoundException",
             format!("OpsMetadata '{arn}' not found"),
         ));
@@ -187,7 +187,7 @@ pub fn delete_ops_item(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "OpsItemId is required"))?;
 
     if state.ops_items.remove(ops_item_id).is_none() {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "OpsItemNotFoundException",
             format!("OpsItem '{ops_item_id}' not found"),
         ));

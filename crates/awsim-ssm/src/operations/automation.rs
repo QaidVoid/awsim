@@ -73,7 +73,7 @@ pub fn get_automation_execution(
         .automation_executions
         .get(execution_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "AutomationExecutionNotFoundException",
                 format!("Automation execution '{execution_id}' not found"),
             )
@@ -125,7 +125,7 @@ pub fn stop_automation_execution(
         .automation_executions
         .get_mut(execution_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "AutomationExecutionNotFoundException",
                 format!("Automation execution '{execution_id}' not found"),
             )

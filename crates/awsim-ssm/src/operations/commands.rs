@@ -140,7 +140,7 @@ pub fn get_command_invocation(
         .ok_or_else(|| AwsError::bad_request("InvalidCommandId", "CommandId is required"))?;
 
     let command = state.commands.get(command_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "InvalidCommandId",
             format!("Command {command_id} not found"),
         )
