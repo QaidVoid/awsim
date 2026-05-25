@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::error::{invalid_parameter, missing_parameter, resource_not_found};
 use crate::state::{LambdaState, ProvisionedConcurrencyConfig};
-use crate::util::{now_iso8601, require_str};
+use crate::util::{now_iso8601, require_str, validate_qualifier};
 
 const ACCOUNT_UNRESERVED_CAP: u32 = 1000;
 
@@ -88,6 +88,7 @@ pub fn put_provisioned_concurrency_config(
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "FunctionName")?;
     let qualifier = require_str(input, "Qualifier")?;
+    validate_qualifier(qualifier)?;
     let requested = input
         .get("ProvisionedConcurrentExecutions")
         .and_then(Value::as_u64)
@@ -138,6 +139,7 @@ pub fn get_provisioned_concurrency_config(
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "FunctionName")?;
     let qualifier = require_str(input, "Qualifier")?;
+    validate_qualifier(qualifier)?;
     let function = state
         .functions
         .get(name)
@@ -162,6 +164,7 @@ pub fn delete_provisioned_concurrency_config(
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "FunctionName")?;
     let qualifier = require_str(input, "Qualifier")?;
+    validate_qualifier(qualifier)?;
     let mut function = state
         .functions
         .get_mut(name)

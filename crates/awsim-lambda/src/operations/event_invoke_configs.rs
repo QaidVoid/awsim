@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::{
     error::resource_not_found,
     state::{EventInvokeConfig, LambdaState},
-    util::require_str,
+    util::{require_str, validate_qualifier},
 };
 
 fn now_epoch() -> f64 {
@@ -23,8 +23,14 @@ fn key(function_name: &str, qualifier: Option<&str>) -> String {
     }
 }
 
-fn qualifier_of(input: &Value) -> Option<&str> {
-    input.get("Qualifier").and_then(|v| v.as_str())
+fn qualifier_of(input: &Value) -> Result<Option<&str>, AwsError> {
+    match input.get("Qualifier").and_then(|v| v.as_str()) {
+        Some(q) => {
+            validate_qualifier(q)?;
+            Ok(Some(q))
+        }
+        None => Ok(None),
+    }
 }
 
 fn destination_of(input: &Value, field: &str) -> Option<String> {
@@ -65,7 +71,7 @@ pub fn put_function_event_invoke_config(
         .get(name)
         .ok_or_else(|| resource_not_found("function", name))?;
 
-    let k = key(name, qualifier_of(input));
+    let k = key(name, qualifier_of(input)?);
     let cfg = EventInvokeConfig {
         function_arn: func.arn.clone(),
         maximum_retry_attempts: input
@@ -92,7 +98,7 @@ pub fn get_function_event_invoke_config(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "FunctionName")?;
-    let k = key(name, qualifier_of(input));
+    let k = key(name, qualifier_of(input)?);
     let cfg = state
         .event_invoke_configs
         .get(&k)
@@ -114,7 +120,7 @@ pub fn delete_function_event_invoke_config(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "FunctionName")?;
-    let k = key(name, qualifier_of(input));
+    let k = key(name, qualifier_of(input)?);
     state.event_invoke_configs.remove(&k);
     Ok(json!({}))
 }

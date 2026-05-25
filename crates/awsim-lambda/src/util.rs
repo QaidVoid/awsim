@@ -179,3 +179,82 @@ pub fn sha256_base64(data: &[u8]) -> String {
     hasher.update(data);
     BASE64.encode(hasher.finalize())
 }
+
+/// Validate a Lambda function qualifier (the `?Qualifier=` query param
+/// or the `:Qualifier` suffix on a function ARN).
+///
+/// AWS accepts three shapes:
+/// - `$LATEST` — the unpublished current revision.
+/// - A decimal version number (1..u64::MAX).
+/// - An alias name matching `[a-zA-Z][a-zA-Z0-9-_]*`, 1..=128 characters.
+///
+/// Anything else is rejected with `InvalidParameterValueException` so
+/// SDK callers see the same diagnostic locally that they would in
+/// production.
+pub fn validate_qualifier(qualifier: &str) -> Result<(), awsim_core::AwsError> {
+    if qualifier == "$LATEST" {
+        return Ok(());
+    }
+    if qualifier.chars().all(|c| c.is_ascii_digit()) && !qualifier.is_empty() {
+        return Ok(());
+    }
+    if (1..=128).contains(&qualifier.len())
+        && let Some(first) = qualifier.chars().next()
+        && first.is_ascii_alphabetic()
+        && qualifier
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Ok(());
+    }
+    Err(awsim_core::AwsError::bad_request(
+        "InvalidParameterValueException",
+        format!(
+            "Qualifier `{qualifier}` is not valid. Must be $LATEST, a numeric version, \
+             or an alias matching [a-zA-Z][a-zA-Z0-9-_]{{0,127}}."
+        ),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_qualifier_accepts_dollar_latest() {
+        validate_qualifier("$LATEST").unwrap();
+    }
+
+    #[test]
+    fn validate_qualifier_accepts_numeric_version() {
+        validate_qualifier("1").unwrap();
+        validate_qualifier("42").unwrap();
+    }
+
+    #[test]
+    fn validate_qualifier_accepts_alias_name() {
+        validate_qualifier("prod").unwrap();
+        validate_qualifier("blue-green_1").unwrap();
+    }
+
+    #[test]
+    fn validate_qualifier_rejects_leading_digit_or_dash() {
+        assert!(validate_qualifier("-prod").is_err());
+        // Numeric is a separate accepted form; "1prod" is neither numeric
+        // nor a valid alias (must start with a letter).
+        assert!(validate_qualifier("1prod").is_err());
+    }
+
+    #[test]
+    fn validate_qualifier_rejects_invalid_chars() {
+        assert!(validate_qualifier("has space").is_err());
+        assert!(validate_qualifier("dot.name").is_err());
+        assert!(validate_qualifier("").is_err());
+    }
+
+    #[test]
+    fn validate_qualifier_rejects_over_128_chars() {
+        let long: String = "a".repeat(129);
+        assert!(validate_qualifier(&long).is_err());
+    }
+}
