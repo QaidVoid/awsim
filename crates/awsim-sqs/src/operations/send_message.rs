@@ -49,7 +49,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     };
 
     // Parse MessageAttributes
-    let message_attributes = parse_message_attributes(&input["MessageAttributes"]);
+    let message_attributes = parse_message_attributes(&input["MessageAttributes"])?;
 
     // FIFO-specific fields
     let group_id = if queue.is_fifo {
@@ -338,28 +338,71 @@ pub fn handle_batch(
     }))
 }
 
-fn parse_message_attributes(val: &Value) -> HashMap<String, MessageAttribute> {
+fn parse_message_attributes(val: &Value) -> Result<HashMap<String, MessageAttribute>, AwsError> {
     let mut map = HashMap::new();
-    if let Some(obj) = val.as_object() {
-        for (k, v) in obj {
-            let data_type = v["DataType"].as_str().unwrap_or("String").to_string();
-            let string_value = v["StringValue"].as_str().map(|s| s.to_string());
-            // BinaryValue arrives base64-encoded over the wire; decode so we
-            // round-trip the raw bytes the caller sent.
-            let binary_value = v["BinaryValue"]
-                .as_str()
-                .and_then(|s| BASE64.decode(s).ok());
-            map.insert(
-                k.clone(),
-                MessageAttribute {
-                    data_type,
-                    string_value,
-                    binary_value,
-                },
-            );
+    let Some(obj) = val.as_object() else {
+        return Ok(map);
+    };
+    for (k, v) in obj {
+        let data_type = v["DataType"].as_str().ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterValue",
+                format!("MessageAttribute `{k}` is missing DataType."),
+            )
+        })?;
+        // AWS accepts a base type ("String" / "Number" / "Binary") plus
+        // an optional `.CustomType` suffix (e.g. "String.Phone"). The
+        // base must be one of the three known types.
+        let base = data_type.split('.').next().unwrap_or("");
+        if !matches!(base, "String" | "Number" | "Binary") {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValue",
+                format!(
+                    "MessageAttribute `{k}` has unsupported DataType `{data_type}`; \
+                     must be String / Number / Binary, optionally with a .CustomType suffix."
+                ),
+            ));
         }
+        let string_value = v["StringValue"].as_str().map(|s| s.to_string());
+        // BinaryValue arrives base64-encoded; decode so we round-trip
+        // the raw bytes the caller sent.
+        let binary_value_raw = v["BinaryValue"].as_str();
+        let binary_value = match binary_value_raw {
+            Some(s) => Some(BASE64.decode(s).map_err(|_| {
+                AwsError::bad_request(
+                    "InvalidParameterValue",
+                    format!("MessageAttribute `{k}` BinaryValue is not valid base64."),
+                )
+            })?),
+            None => None,
+        };
+        // Exactly one of StringValue / BinaryValue must be supplied,
+        // and it must match the DataType base.
+        match base {
+            "String" | "Number" if string_value.is_none() => {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterValue",
+                    format!("MessageAttribute `{k}` is `{base}` but no StringValue was supplied."),
+                ));
+            }
+            "Binary" if binary_value.is_none() => {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterValue",
+                    format!("MessageAttribute `{k}` is Binary but no BinaryValue was supplied."),
+                ));
+            }
+            _ => {}
+        }
+        map.insert(
+            k.clone(),
+            MessageAttribute {
+                data_type: data_type.to_string(),
+                string_value,
+                binary_value,
+            },
+        );
     }
-    map
+    Ok(map)
 }
 
 fn sequence_number() -> String {
@@ -643,7 +686,7 @@ mod tests {
             "blob": { "DataType": "Binary", "BinaryValue": encoded },
             "label": { "DataType": "String", "StringValue": "world" },
         });
-        let attrs = parse_message_attributes(&input);
+        let attrs = parse_message_attributes(&input).unwrap();
         let blob = attrs.get("blob").expect("blob attribute parsed");
         assert_eq!(blob.data_type, "Binary");
         assert_eq!(blob.binary_value.as_deref(), Some(raw.as_ref()));
@@ -652,5 +695,41 @@ mod tests {
         let label = attrs.get("label").expect("label attribute parsed");
         assert_eq!(label.string_value.as_deref(), Some("world"));
         assert!(label.binary_value.is_none());
+    }
+
+    #[test]
+    fn parse_message_attributes_rejects_unknown_data_type() {
+        let input = json!({
+            "k": { "DataType": "Bogus", "StringValue": "v" },
+        });
+        let err = parse_message_attributes(&input).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn parse_message_attributes_accepts_custom_type_suffix() {
+        let input = json!({
+            "phone": { "DataType": "String.Phone", "StringValue": "+1234" },
+        });
+        let attrs = parse_message_attributes(&input).unwrap();
+        assert_eq!(attrs.get("phone").unwrap().data_type, "String.Phone");
+    }
+
+    #[test]
+    fn parse_message_attributes_requires_value_matching_data_type() {
+        let input = json!({
+            "k": { "DataType": "Binary" }, // no BinaryValue
+        });
+        let err = parse_message_attributes(&input).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn parse_message_attributes_rejects_missing_data_type() {
+        let input = json!({
+            "k": { "StringValue": "v" },
+        });
+        let err = parse_message_attributes(&input).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
     }
 }
