@@ -197,6 +197,17 @@ fn kinesis_error_factories_match_smithy() {
 }
 
 #[test]
+fn sts_error_factories_match_smithy() {
+    let errors = load("sts");
+
+    assert_matches(
+        awsim_sts::error::invalid_authorization_message("EncodedMessage cannot be empty"),
+        &expect(&errors, "InvalidAuthorizationMessageException"),
+        "invalid_authorization_message",
+    );
+}
+
+#[test]
 fn s3_error_factories_match_smithy() {
     let errors = load("s3");
 

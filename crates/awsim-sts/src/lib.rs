@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 pub mod authz;
+pub mod error;
 pub mod sessions;
 
 pub use authz::StsAwarePrincipalLookup;
