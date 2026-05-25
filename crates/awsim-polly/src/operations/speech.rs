@@ -97,7 +97,7 @@ pub fn get_speech_synthesis_task(
         .ok_or_else(|| AwsError::bad_request("InvalidTaskIdException", "TaskId is required"))?;
 
     let t = state.tasks.get(task_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "SynthesisTaskNotFoundException",
             format!("Task not found: {task_id}"),
         )

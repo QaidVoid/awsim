@@ -25,7 +25,7 @@ pub fn create_compute_environment(
     );
 
     if state.compute_environments.contains_key(&name) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "ClientException",
             format!("Compute environment '{name}' already exists"),
         ));
@@ -95,7 +95,7 @@ pub fn update_compute_environment(
     })?;
 
     let mut env = state.compute_environments.get_mut(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClientException",
             format!("Compute environment not found: {name}"),
         )

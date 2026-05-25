@@ -22,7 +22,7 @@ pub fn create_job_queue(
     );
 
     if state.job_queues.contains_key(&name) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "ClientException",
             format!("Job queue '{name}' already exists"),
         ));
@@ -90,7 +90,7 @@ pub fn update_job_queue(
         .ok_or_else(|| AwsError::bad_request("ValidationException", "jobQueue is required"))?;
 
     let mut q = state.job_queues.get_mut(name).ok_or_else(|| {
-        AwsError::not_found("ClientException", format!("Job queue not found: {name}"))
+        AwsError::bad_request("ClientException", format!("Job queue not found: {name}"))
     })?;
 
     if let Some(s) = input["state"].as_str() {

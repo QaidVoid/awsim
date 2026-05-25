@@ -197,6 +197,44 @@ fn kinesis_error_factories_match_smithy() {
 }
 
 #[test]
+fn polly_error_factories_match_smithy() {
+    let errors = load("polly");
+
+    assert_matches(
+        awsim_polly::error::lexicon_not_found("hello"),
+        &expect(&errors, "LexiconNotFoundException"),
+        "lexicon_not_found",
+    );
+    assert_matches(
+        awsim_polly::error::synthesis_task_not_found("task-1"),
+        &expect(&errors, "SynthesisTaskNotFoundException"),
+        "synthesis_task_not_found",
+    );
+}
+
+#[test]
+fn batch_error_factories_match_smithy() {
+    let errors = load("batch");
+
+    assert_matches(
+        awsim_batch::error::client_exception("Compute environment exists"),
+        &expect(&errors, "ClientException"),
+        "client_exception",
+    );
+}
+
+#[test]
+fn datasync_error_factories_match_smithy() {
+    let errors = load("datasync");
+
+    assert_matches(
+        awsim_datasync::error::invalid_request("LocationArn is required"),
+        &expect(&errors, "InvalidRequestException"),
+        "invalid_request",
+    );
+}
+
+#[test]
 fn firehose_error_factories_match_smithy() {
     let errors = load("firehose");
 

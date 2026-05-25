@@ -126,7 +126,7 @@ pub fn describe_location_s3(
     })?;
 
     let loc = state.locations.get(arn).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "InvalidRequestException",
             format!("Location not found: {arn}"),
         )

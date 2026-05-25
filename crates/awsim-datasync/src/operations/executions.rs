@@ -23,7 +23,7 @@ pub fn start_task_execution(
         .to_string();
 
     if !state.tasks.contains_key(&task_arn) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "InvalidRequestException",
             format!("Task not found: {task_arn}"),
         ));
@@ -53,7 +53,7 @@ pub fn describe_task_execution(
     })?;
 
     let e = state.executions.get(arn).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "InvalidRequestException",
             format!("Execution not found: {arn}"),
         )

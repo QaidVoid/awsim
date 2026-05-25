@@ -66,7 +66,7 @@ pub fn describe_task(
         .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "TaskArn is required"))?;
 
     let t = state.tasks.get(arn).ok_or_else(|| {
-        AwsError::not_found("InvalidRequestException", format!("Task not found: {arn}"))
+        AwsError::bad_request("InvalidRequestException", format!("Task not found: {arn}"))
     })?;
 
     Ok(json!({
@@ -107,7 +107,7 @@ pub fn update_task(
         .ok_or_else(|| AwsError::bad_request("InvalidRequestException", "TaskArn is required"))?;
 
     let mut t = state.tasks.get_mut(arn).ok_or_else(|| {
-        AwsError::not_found("InvalidRequestException", format!("Task not found: {arn}"))
+        AwsError::bad_request("InvalidRequestException", format!("Task not found: {arn}"))
     })?;
 
     if let Some(n) = input["Name"].as_str() {
