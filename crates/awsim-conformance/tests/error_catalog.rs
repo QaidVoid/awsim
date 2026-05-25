@@ -197,6 +197,17 @@ fn kinesis_error_factories_match_smithy() {
 }
 
 #[test]
+fn cloudtrail_error_factories_match_smithy() {
+    let errors = load("cloudtrail");
+
+    assert_matches(
+        awsim_cloudtrail::error::trail_not_found("my-trail"),
+        &expect(&errors, "TrailNotFoundException"),
+        "trail_not_found",
+    );
+}
+
+#[test]
 fn organizations_error_factories_match_smithy() {
     let errors = load("organizations");
 
