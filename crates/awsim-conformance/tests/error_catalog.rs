@@ -112,3 +112,24 @@ fn kms_error_factories_match_smithy() {
     // `invalid_parameter` and `missing_parameter` are tracked for a
     // follow-up sweep and intentionally have no Smithy peer here.
 }
+
+#[test]
+fn lambda_error_factories_match_smithy() {
+    let errors = load("lambda");
+
+    assert_matches(
+        awsim_lambda::error::resource_not_found("Function", "f"),
+        &expect(&errors, "ResourceNotFoundException"),
+        "resource_not_found",
+    );
+    assert_matches(
+        awsim_lambda::error::resource_conflict("update in progress"),
+        &expect(&errors, "ResourceConflictException"),
+        "resource_conflict",
+    );
+    assert_matches(
+        awsim_lambda::error::invalid_parameter("Runtime is invalid"),
+        &expect(&errors, "InvalidParameterValueException"),
+        "invalid_parameter",
+    );
+}
