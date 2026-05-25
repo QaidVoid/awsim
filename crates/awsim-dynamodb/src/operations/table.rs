@@ -348,6 +348,24 @@ pub fn create_table(
         .map(parse_lsi)
         .unwrap_or_default();
 
+    // AWS caps tables at 20 GSIs and 5 LSIs. Beyond that, CreateTable
+    // returns ValidationException. The cap is checked even for
+    // PAY_PER_REQUEST tables; only the rate-limiting differs.
+    const MAX_GSI_PER_TABLE: usize = 20;
+    const MAX_LSI_PER_TABLE: usize = 5;
+    if gsi.len() > MAX_GSI_PER_TABLE {
+        return Err(AwsError::validation(format!(
+            "A table can have at most {MAX_GSI_PER_TABLE} global secondary indexes ({} requested).",
+            gsi.len()
+        )));
+    }
+    if lsi.len() > MAX_LSI_PER_TABLE {
+        return Err(AwsError::validation(format!(
+            "A table can have at most {MAX_LSI_PER_TABLE} local secondary indexes ({} requested).",
+            lsi.len()
+        )));
+    }
+
     // Reject CreateTable when an index references an attribute that
     // isn't declared in AttributeDefinitions. AWS surfaces the same
     // check as a ValidationException; we'd previously accept it and
