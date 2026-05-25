@@ -161,6 +161,22 @@ fn secretsmanager_error_factories_match_smithy() {
 }
 
 #[test]
+fn sns_error_factories_match_smithy() {
+    let errors = load("sns");
+
+    assert_matches(
+        awsim_sns::error::invalid_parameter("ResourceArn is required"),
+        &expect(&errors, "InvalidParameterException"),
+        "invalid_parameter",
+    );
+    assert_matches(
+        awsim_sns::error::not_found("Topic not found: arn:aws:sns:..."),
+        &expect(&errors, "NotFoundException"),
+        "not_found",
+    );
+}
+
+#[test]
 fn sqs_error_factories_match_smithy() {
     // SQS is awsJson1_0 + awsQueryCompatible. SDKs read the Query-style
     // code from the `x-amzn-query-error` header, but awsim currently
