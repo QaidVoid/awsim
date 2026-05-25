@@ -65,9 +65,24 @@ pub fn handle(
 
         let explicit_hash_key = entry["ExplicitHashKey"].as_str().map(|s| s.to_string());
 
+        // ExplicitHashKey must parse as a decimal integer in
+        // [0, 2^128 - 1]; AWS surfaces a per-record
+        // InvalidArgumentException rather than silently falling back
+        // to the partition-key hash.
         let hash = if let Some(ref ehk) = explicit_hash_key {
-            ehk.parse::<u128>()
-                .unwrap_or_else(|_| partition_key_to_hash(partition_key))
+            match ehk.parse::<u128>() {
+                Ok(h) => h,
+                Err(_) => {
+                    failed_count += 1;
+                    result_records.push(json!({
+                        "ErrorCode": "InvalidArgumentException",
+                        "ErrorMessage": format!(
+                            "ExplicitHashKey `{ehk}` must be a decimal integer in [0, 2^128 - 1]."
+                        ),
+                    }));
+                    continue;
+                }
+            }
         } else {
             partition_key_to_hash(partition_key)
         };

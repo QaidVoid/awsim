@@ -31,9 +31,17 @@ pub fn handle(
         )
     })?;
 
+    // ExplicitHashKey must be a decimal integer in [0, 2^128 - 1].
+    // AWS rejects non-numeric or oversize values with
+    // InvalidArgumentException rather than silently falling back to
+    // the partition-key hash.
     let hash = if let Some(ref ehk) = explicit_hash_key {
-        ehk.parse::<u128>()
-            .unwrap_or_else(|_| partition_key_to_hash(partition_key))
+        ehk.parse::<u128>().map_err(|_| {
+            AwsError::bad_request(
+                "InvalidArgumentException",
+                format!("ExplicitHashKey `{ehk}` must be a decimal integer in [0, 2^128 - 1]."),
+            )
+        })?
     } else {
         partition_key_to_hash(partition_key)
     };
