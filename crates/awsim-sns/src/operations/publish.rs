@@ -270,7 +270,7 @@ pub fn publish_batch(
 
     if entries.is_empty() {
         return Err(AwsError::bad_request(
-            "InvalidParameter",
+            "EmptyBatchRequest",
             "PublishBatchRequestEntries must not be empty",
         ));
     }
@@ -278,6 +278,39 @@ pub fn publish_batch(
         return Err(AwsError::bad_request(
             "TooManyEntriesInBatchRequest",
             "Maximum 10 entries per batch",
+        ));
+    }
+
+    // AWS rejects the whole batch with BatchEntryIdsNotDistinct when
+    // two entries share an Id. Validate up front so callers can fix
+    // the duplicate before any side effects.
+    let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for entry in entries {
+        let id = entry["Id"].as_str().unwrap_or("");
+        if !seen_ids.insert(id) {
+            return Err(AwsError::bad_request(
+                "BatchEntryIdsNotDistinct",
+                format!("Id `{id}` repeats in the batch request."),
+            ));
+        }
+    }
+
+    // AWS caps a SNS PublishBatch payload at 262144 bytes (sum of
+    // Message body lengths). Each individual message may not exceed
+    // the same cap. Reject early with BatchRequestTooLong instead of
+    // letting the batch trickle through with partial deliveries.
+    const SNS_BATCH_PAYLOAD_CAP: usize = 262_144;
+    let total_bytes: usize = entries
+        .iter()
+        .filter_map(|e| e["Message"].as_str())
+        .map(str::len)
+        .sum();
+    if total_bytes > SNS_BATCH_PAYLOAD_CAP {
+        return Err(AwsError::bad_request(
+            "BatchRequestTooLong",
+            format!(
+                "Batch request total size {total_bytes} bytes exceeds the {SNS_BATCH_PAYLOAD_CAP}-byte limit."
+            ),
         ));
     }
 
