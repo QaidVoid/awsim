@@ -23,7 +23,7 @@ pub fn list_tags_for_resource(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "Invalid resourceArn"))?;
 
     let repo = state.repositories.get(repo_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "RepositoryNotFoundException",
             format!("The repository with name '{repo_name}' does not exist"),
         )
@@ -57,7 +57,7 @@ pub fn tag_resource(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "Invalid resourceArn"))?;
 
     let mut repo = state.repositories.get_mut(repo_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "RepositoryNotFoundException",
             format!("The repository with name '{repo_name}' does not exist"),
         )
@@ -93,7 +93,7 @@ pub fn untag_resource(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "Invalid resourceArn"))?;
 
     let mut repo = state.repositories.get_mut(repo_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "RepositoryNotFoundException",
             format!("The repository with name '{repo_name}' does not exist"),
         )

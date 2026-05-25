@@ -22,7 +22,7 @@ fn require_str<'a>(input: &'a Value, key: &str) -> Result<&'a str, AwsError> {
 }
 
 fn repo_not_found(name: &str) -> AwsError {
-    AwsError::not_found(
+    AwsError::bad_request(
         "RepositoryNotFoundException",
         format!("The repository with name '{name}' does not exist in the registry"),
     )
@@ -91,7 +91,7 @@ pub fn start_lifecycle_policy_preview(
         .map(|s| s.to_string())
         .or_else(|| repo.lifecycle_policy.clone())
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "LifecyclePolicyNotFoundException",
                 format!("Lifecycle policy for repository '{repo_name}' not found"),
             )
@@ -122,7 +122,7 @@ pub fn get_lifecycle_policy_preview(
         .as_deref()
         .or(repo.lifecycle_policy.as_deref())
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "LifecyclePolicyPreviewNotFoundException",
                 format!("Lifecycle policy preview for repository '{repo_name}' not found"),
             )
@@ -151,7 +151,7 @@ pub fn get_registry_policy(
         .get("default")
         .map(|p| p.value().clone())
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "RegistryPolicyNotFoundException",
                 "Registry policy does not exist",
             )
@@ -189,7 +189,7 @@ pub fn delete_registry_policy(
         .remove("default")
         .map(|(_, v)| v)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "RegistryPolicyNotFoundException",
                 "Registry policy does not exist",
             )
@@ -330,7 +330,7 @@ pub fn create_pull_through_cache_rule(
     let upstream = require_str(input, "upstreamRegistryUrl")?.to_string();
 
     if state.pull_through_cache_rules.contains_key(&prefix) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "PullThroughCacheRuleAlreadyExistsException",
             format!("A pull-through cache rule with prefix '{prefix}' already exists"),
         ));
@@ -369,7 +369,7 @@ pub fn delete_pull_through_cache_rule(
         .pull_through_cache_rules
         .remove(prefix)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "PullThroughCacheRuleNotFoundException",
                 format!("Pull-through cache rule with prefix '{prefix}' not found"),
             )

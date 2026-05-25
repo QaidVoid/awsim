@@ -48,7 +48,7 @@ pub fn create_repository(
     validate_repository_name(name)?;
 
     if state.repositories.contains_key(name) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "RepositoryAlreadyExistsException",
             format!(
                 "The repository with name '{name}' already exists in the registry with id '{}'",
@@ -129,14 +129,14 @@ pub fn delete_repository(
     let force = input["force"].as_bool().unwrap_or(false);
 
     let repo = state.repositories.get(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "RepositoryNotFoundException",
             format!("The repository with name '{name}' does not exist in the registry"),
         )
     })?;
 
     if !force && !repo.images.is_empty() {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "RepositoryNotEmptyException",
             format!("The repository with name '{name}' is not empty"),
         ));
@@ -172,7 +172,7 @@ pub fn describe_repositories(
         for name_val in names {
             let name = name_val.as_str().unwrap_or("");
             let repo = state.repositories.get(name).ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::bad_request(
                     "RepositoryNotFoundException",
                     format!("The repository with name '{name}' does not exist in the registry"),
                 )

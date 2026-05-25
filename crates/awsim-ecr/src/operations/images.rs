@@ -81,7 +81,7 @@ pub fn put_image(state: &EcrState, input: &Value, ctx: &RequestContext) -> Resul
     let image_tag = input["imageTag"].as_str().map(|s| s.to_string());
 
     let mut repo = state.repositories.get_mut(repo_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "RepositoryNotFoundException",
             format!("The repository with name '{repo_name}' does not exist"),
         )
@@ -100,7 +100,7 @@ pub fn put_image(state: &EcrState, input: &Value, ctx: &RequestContext) -> Resul
             .iter()
             .any(|img| img.image_tag.as_deref() == Some(tag))
     {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "ImageTagAlreadyExistsException",
             format!("An image with tag '{tag}' already exists in the repository '{repo_name}'"),
         ));
@@ -147,7 +147,7 @@ pub fn batch_get_image(
     })?;
 
     let repo = state.repositories.get(repo_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "RepositoryNotFoundException",
             format!("The repository with name '{repo_name}' does not exist"),
         )
@@ -203,7 +203,7 @@ pub fn batch_delete_image(
     })?;
 
     let mut repo = state.repositories.get_mut(repo_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "RepositoryNotFoundException",
             format!("The repository with name '{repo_name}' does not exist"),
         )
@@ -282,7 +282,7 @@ pub fn list_images(
     })?;
 
     let repo = state.repositories.get(repo_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "RepositoryNotFoundException",
             format!("The repository with name '{repo_name}' does not exist"),
         )
@@ -317,7 +317,7 @@ pub fn describe_images(
     })?;
 
     let repo = state.repositories.get(repo_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "RepositoryNotFoundException",
             format!("The repository with name '{repo_name}' does not exist"),
         )

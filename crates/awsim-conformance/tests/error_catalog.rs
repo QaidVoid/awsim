@@ -197,6 +197,37 @@ fn kinesis_error_factories_match_smithy() {
 }
 
 #[test]
+fn ecr_error_factories_match_smithy() {
+    let errors = load("ecr");
+
+    assert_matches(
+        awsim_ecr::error::repository_not_found("Repository not found"),
+        &expect(&errors, "RepositoryNotFoundException"),
+        "repository_not_found",
+    );
+    assert_matches(
+        awsim_ecr::error::repository_already_exists("Repository exists"),
+        &expect(&errors, "RepositoryAlreadyExistsException"),
+        "repository_already_exists",
+    );
+    assert_matches(
+        awsim_ecr::error::image_not_found("Image not found"),
+        &expect(&errors, "ImageNotFoundException"),
+        "image_not_found",
+    );
+    assert_matches(
+        awsim_ecr::error::invalid_parameter("repositoryName is required"),
+        &expect(&errors, "InvalidParameterException"),
+        "invalid_parameter",
+    );
+    assert_matches(
+        awsim_ecr::error::lifecycle_policy_not_found("not set"),
+        &expect(&errors, "LifecyclePolicyNotFoundException"),
+        "lifecycle_policy_not_found",
+    );
+}
+
+#[test]
 fn eks_error_factories_match_smithy() {
     let errors = load("eks");
 

@@ -31,7 +31,7 @@ fn require_repo_name(input: &Value) -> Result<&str, AwsError> {
 }
 
 fn repo_not_found(name: &str) -> AwsError {
-    AwsError::not_found(
+    AwsError::bad_request(
         "RepositoryNotFoundException",
         format!("The repository with name '{name}' does not exist in the registry"),
     )
@@ -79,7 +79,7 @@ pub fn get_lifecycle_policy(
         .ok_or_else(|| repo_not_found(repo_name))?;
 
     let policy = repo.lifecycle_policy.as_deref().ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "LifecyclePolicyNotFoundException",
             format!("Lifecycle policy for repository '{repo_name}' not found"),
         )
@@ -105,7 +105,7 @@ pub fn delete_lifecycle_policy(
         .ok_or_else(|| repo_not_found(repo_name))?;
 
     let policy = repo.lifecycle_policy.take().ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "LifecyclePolicyNotFoundException",
             format!("Lifecycle policy for repository '{repo_name}' not found"),
         )
@@ -157,7 +157,7 @@ pub fn get_repository_policy(
         .ok_or_else(|| repo_not_found(repo_name))?;
 
     let policy = repo.repository_policy.as_deref().ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "RepositoryPolicyNotFoundException",
             format!("Repository policy for repository '{repo_name}' not found"),
         )
@@ -182,7 +182,7 @@ pub fn delete_repository_policy(
         .ok_or_else(|| repo_not_found(repo_name))?;
 
     let policy = repo.repository_policy.take().ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "RepositoryPolicyNotFoundException",
             format!("Repository policy for repository '{repo_name}' not found"),
         )
@@ -226,7 +226,7 @@ pub fn start_image_scan(
     });
 
     if !image_exists {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "ImageNotFoundException",
             format!("The image requested does not exist in the repository '{repo_name}'"),
         ));
@@ -294,7 +294,7 @@ pub fn get_download_url_for_layer(
         .ok_or_else(|| repo_not_found(repo_name))?;
 
     if !repo.layers.contains_key(layer_digest) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "LayersNotFoundException",
             format!("Layer with digest '{layer_digest}' does not exist in the repository"),
         ));
@@ -408,7 +408,7 @@ pub fn upload_layer_part(
     let part_data = input["layerPartBlob"].as_str().unwrap_or("").as_bytes();
 
     let mut upload = state.layer_uploads.get_mut(upload_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "UploadNotFoundException",
             format!("Upload session '{upload_id}' not found"),
         )
@@ -441,7 +441,7 @@ pub fn complete_layer_upload(
         .ok_or_else(|| repo_not_found(repo_name))?;
 
     let (_, upload) = state.layer_uploads.remove(upload_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "UploadNotFoundException",
             format!("Upload session '{upload_id}' not found"),
         )
