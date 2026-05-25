@@ -161,6 +161,37 @@ fn secretsmanager_error_factories_match_smithy() {
 }
 
 #[test]
+fn s3_error_factories_match_smithy() {
+    let errors = load("s3");
+
+    assert_matches(
+        awsim_s3::error::no_such_bucket("missing"),
+        &expect(&errors, "NoSuchBucket"),
+        "no_such_bucket",
+    );
+    assert_matches(
+        awsim_s3::error::no_such_key("missing.txt"),
+        &expect(&errors, "NoSuchKey"),
+        "no_such_key",
+    );
+    assert_matches(
+        awsim_s3::error::no_such_upload("upload-1"),
+        &expect(&errors, "NoSuchUpload"),
+        "no_such_upload",
+    );
+    assert_matches(
+        awsim_s3::error::bucket_already_exists("b"),
+        &expect(&errors, "BucketAlreadyExists"),
+        "bucket_already_exists",
+    );
+    assert_matches(
+        awsim_s3::error::bucket_already_owned_by_you("b"),
+        &expect(&errors, "BucketAlreadyOwnedByYou"),
+        "bucket_already_owned_by_you",
+    );
+}
+
+#[test]
 fn sns_error_factories_match_smithy() {
     let errors = load("sns");
 
