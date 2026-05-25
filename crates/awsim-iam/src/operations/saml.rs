@@ -29,7 +29,7 @@ pub fn create_saml_provider(
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "Name")?;
     let saml_metadata_document = require_str(input, "SAMLMetadataDocument")?;
-    let tags = parse_tags(input);
+    let tags = parse_tags(input)?;
 
     let arn = format!("arn:aws:iam::{}:saml-provider/{}", ctx.account_id, name);
 

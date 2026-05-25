@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -79,6 +80,7 @@ pub fn tag_resource(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let resource = require_str(input, "Resource")?;
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
     let new_tags = parse_tags(input)?;
 
     match classify(resource)? {
@@ -120,6 +122,7 @@ pub fn untag_resource(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let resource = require_str(input, "Resource")?;
+    validate_aws_tag_keys(&input["TagKeys"])?;
     let keys = parse_tag_keys(input)?;
 
     match classify(resource)? {

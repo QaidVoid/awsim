@@ -1,4 +1,5 @@
 use awsim_core::AwsError;
+use awsim_core::tags::{TagOpts, validate};
 use serde_json::{Value, json};
 
 use crate::state::CloudFrontState;
@@ -43,6 +44,7 @@ pub fn tag_resource(state: &CloudFrontState, input: &Value) -> Result<Value, Aws
     // Extract distribution ID from ARN: arn:aws:cloudfront::{account}:distribution/{id}
     let dist_id = resource_arn.rsplit('/').next().unwrap_or("");
     let tags = parse_tags(input);
+    validate(&tags, &TagOpts::aws_default())?;
 
     if let Some(mut dist) = state.distributions.get_mut(dist_id) {
         for (k, v) in tags {

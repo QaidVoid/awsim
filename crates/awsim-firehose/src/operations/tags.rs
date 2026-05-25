@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -11,6 +12,7 @@ pub fn tag_delivery_stream(
     let name = input["DeliveryStreamName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
     let mut s = state.streams.get_mut(name).ok_or_else(|| {
         AwsError::bad_request(
             "ResourceNotFoundException",
@@ -36,6 +38,7 @@ pub fn untag_delivery_stream(
     let name = input["DeliveryStreamName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
+    validate_aws_tag_keys(&input["TagKeys"])?;
     let mut s = state.streams.get_mut(name).ok_or_else(|| {
         AwsError::bad_request(
             "ResourceNotFoundException",

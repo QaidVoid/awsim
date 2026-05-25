@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -41,6 +42,8 @@ pub fn tag_resource(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "ResourceArn is required"))?;
 
+    validate_aws_tags(&input["TagsToAdd"], &TagOpts::aws_default())?;
+
     let new_tags = input["TagsToAdd"]
         .as_object()
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "TagsToAdd is required"))?;
@@ -68,6 +71,8 @@ pub fn untag_resource(
     let resource_arn = input["ResourceArn"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidInputException", "ResourceArn is required"))?;
+
+    validate_aws_tag_keys(&input["TagsToRemove"])?;
 
     let tags_to_remove = input["TagsToRemove"].as_array().ok_or_else(|| {
         AwsError::bad_request("InvalidInputException", "TagsToRemove is required")

@@ -1,4 +1,5 @@
 use awsim_core::AwsError;
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -26,6 +27,7 @@ fn parse_tags(input: &Value) -> HashMap<String, String> {
 
 pub fn add_tags_to_resource(state: &RdsState, input: &Value) -> Result<Value, AwsError> {
     let resource_name = require_str(input, "ResourceName")?;
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
     let new_tags = parse_tags(input);
 
     let mut entry = state.tags.entry(resource_name.to_string()).or_default();
@@ -36,6 +38,7 @@ pub fn add_tags_to_resource(state: &RdsState, input: &Value) -> Result<Value, Aw
 
 pub fn remove_tags_from_resource(state: &RdsState, input: &Value) -> Result<Value, AwsError> {
     let resource_name = require_str(input, "ResourceName")?;
+    validate_aws_tag_keys(&input["TagKeys"])?;
 
     let keys_to_remove: Vec<String> = input
         .get("TagKeys")

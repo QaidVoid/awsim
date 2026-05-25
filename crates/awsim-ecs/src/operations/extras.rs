@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -17,6 +18,8 @@ pub fn tag_resource(
     let resource_arn = input["resourceArn"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "resourceArn is required")
     })?;
+
+    validate_aws_tags(&input["tags"], &TagOpts::aws_default())?;
 
     let mut entry = state
         .resource_tags
@@ -42,6 +45,8 @@ pub fn untag_resource(
     let resource_arn = input["resourceArn"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "resourceArn is required")
     })?;
+
+    validate_aws_tag_keys(&input["tagKeys"])?;
 
     let tag_keys: Vec<&str> = input["tagKeys"]
         .as_array()

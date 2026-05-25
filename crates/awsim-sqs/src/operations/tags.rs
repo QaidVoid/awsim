@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -12,6 +13,8 @@ pub fn tag_queue(
     let queue_url = input["QueueUrl"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "QueueUrl is required"))?;
+
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
 
     let tags = input["Tags"]
         .as_object()
@@ -43,6 +46,8 @@ pub fn untag_queue(
     let queue_url = input["QueueUrl"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "QueueUrl is required"))?;
+
+    validate_aws_tag_keys(&input["TagKeys"])?;
 
     let tag_keys = input["TagKeys"]
         .as_array()

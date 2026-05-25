@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -11,6 +12,8 @@ pub fn add_tags_to_certificate(
     let arn = input["CertificateArn"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "CertificateArn is required"))?;
+
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
 
     let mut cert = state.certificates.get_mut(arn).ok_or_else(|| {
         AwsError::not_found(

@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -21,6 +22,8 @@ pub fn tag_resource(
     let tags = input["Tags"]
         .as_array()
         .ok_or_else(|| error::missing_parameter("Tags"))?;
+
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
 
     let resolved_id = resolve_key_id(state, key_id_input)?;
     let mut key = state
@@ -63,6 +66,8 @@ pub fn untag_resource(
     let tag_keys = input["TagKeys"]
         .as_array()
         .ok_or_else(|| error::missing_parameter("TagKeys"))?;
+
+    validate_aws_tag_keys(&input["TagKeys"])?;
 
     let resolved_id = resolve_key_id(state, key_id_input)?;
     let mut key = state

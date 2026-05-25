@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -23,6 +24,8 @@ pub fn tag_resource(
         .get("ResourceId")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AwsError::bad_request("BadRequest", "ResourceId is required"))?;
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
+
     let tags = input
         .get("Tags")
         .and_then(|v| v.as_array())
@@ -68,6 +71,8 @@ pub fn untag_resource(
         .get("ResourceId")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AwsError::bad_request("BadRequest", "ResourceId is required"))?;
+    validate_aws_tag_keys(&input["TagKeys"])?;
+
     let keys = input
         .get("TagKeys")
         .and_then(|v| v.as_array())

@@ -107,7 +107,7 @@ pub fn delete_server_certificate(state: &IamState, input: &Value) -> Result<Valu
 
 pub fn tag_server_certificate(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let name = require_str(input, "ServerCertificateName")?;
-    let new_tags = parse_tags(input);
+    let new_tags = parse_tags(input)?;
 
     let mut cert = state
         .server_certificates
@@ -123,7 +123,7 @@ pub fn tag_server_certificate(state: &IamState, input: &Value) -> Result<Value, 
 
 pub fn untag_server_certificate(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let name = require_str(input, "ServerCertificateName")?;
-    let keys = parse_tag_keys(input);
+    let keys = parse_tag_keys(input)?;
 
     let mut cert = state
         .server_certificates

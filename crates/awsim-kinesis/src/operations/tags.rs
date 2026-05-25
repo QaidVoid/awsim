@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -10,6 +11,7 @@ pub fn add_tags(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let stream_name = resolve_stream_name(state, input)?;
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
 
     let mut stream = state.streams.get_mut(&stream_name).ok_or_else(|| {
         AwsError::bad_request(
@@ -35,6 +37,7 @@ pub fn remove_tags(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let stream_name = resolve_stream_name(state, input)?;
+    validate_aws_tag_keys(&input["TagKeys"])?;
 
     let mut stream = state.streams.get_mut(&stream_name).ok_or_else(|| {
         AwsError::bad_request(

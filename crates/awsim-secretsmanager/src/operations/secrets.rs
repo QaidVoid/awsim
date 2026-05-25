@@ -697,6 +697,8 @@ pub fn tag_resource(
         .as_str()
         .ok_or_else(|| error::missing_parameter("SecretId"))?;
 
+    awsim_core::tags::validate_aws_tags(&input["Tags"], &awsim_core::tags::TagOpts::aws_default())?;
+
     let name = resolve_name(state, secret_id)?;
     let mut secret = state
         .secrets
@@ -726,6 +728,8 @@ pub fn untag_resource(
     let secret_id = input["SecretId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("SecretId"))?;
+
+    awsim_core::tags::validate_aws_tag_keys(&input["TagKeys"])?;
 
     let name = resolve_name(state, secret_id)?;
     let mut secret = state

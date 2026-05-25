@@ -1,4 +1,5 @@
 use awsim_core::AwsError;
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -6,14 +7,18 @@ use crate::{error::no_such_entity, state::IamState};
 
 use super::require_str;
 
-pub fn parse_tags(input: &Value) -> HashMap<String, String> {
-    let mut tags = HashMap::new();
-    if let Some(members) = input
+/// Extract Tags from the Query-protocol nested shape and run AWS-spec
+/// validation in one pass. Returns the parsed key/value map on success.
+pub fn parse_tags(input: &Value) -> Result<HashMap<String, String>, AwsError> {
+    let members = input
         .get("Tags")
         .and_then(|t| t.get("member"))
-        .and_then(|m| m.as_array())
-    {
-        for member in members {
+        .cloned()
+        .unwrap_or(Value::Null);
+    validate_aws_tags(&members, &TagOpts::aws_default())?;
+    let mut tags = HashMap::new();
+    if let Some(arr) = members.as_array() {
+        for member in arr {
             if let (Some(k), Some(v)) = (
                 member.get("Key").and_then(|k| k.as_str()),
                 member.get("Value").and_then(|v| v.as_str()),
@@ -22,20 +27,24 @@ pub fn parse_tags(input: &Value) -> HashMap<String, String> {
             }
         }
     }
-    tags
+    Ok(tags)
 }
 
-pub fn parse_tag_keys(input: &Value) -> Vec<String> {
-    input
+pub fn parse_tag_keys(input: &Value) -> Result<Vec<String>, AwsError> {
+    let members = input
         .get("TagKeys")
         .and_then(|t| t.get("member"))
-        .and_then(|m| m.as_array())
+        .cloned()
+        .unwrap_or(Value::Null);
+    validate_aws_tag_keys(&members)?;
+    Ok(members
+        .as_array()
         .map(|arr| {
             arr.iter()
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default())
 }
 
 pub fn tags_to_value(tags: &HashMap<String, String>) -> Value {
@@ -50,7 +59,7 @@ pub fn tags_to_value(tags: &HashMap<String, String>) -> Value {
 
 pub fn tag_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
-    let new_tags = parse_tags(input);
+    let new_tags = parse_tags(input)?;
 
     let mut user = state
         .users
@@ -66,7 +75,7 @@ pub fn tag_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
 
 pub fn untag_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
-    let keys = parse_tag_keys(input);
+    let keys = parse_tag_keys(input)?;
 
     let mut user = state
         .users
@@ -97,7 +106,7 @@ pub fn list_user_tags(state: &IamState, input: &Value) -> Result<Value, AwsError
 
 pub fn tag_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let role_name = require_str(input, "RoleName")?;
-    let new_tags = parse_tags(input);
+    let new_tags = parse_tags(input)?;
 
     let mut role = state
         .roles
@@ -113,7 +122,7 @@ pub fn tag_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {
 
 pub fn untag_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let role_name = require_str(input, "RoleName")?;
-    let keys = parse_tag_keys(input);
+    let keys = parse_tag_keys(input)?;
 
     let mut role = state
         .roles
@@ -144,7 +153,7 @@ pub fn list_role_tags(state: &IamState, input: &Value) -> Result<Value, AwsError
 
 pub fn tag_instance_profile(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let name = require_str(input, "InstanceProfileName")?;
-    let new_tags = parse_tags(input);
+    let new_tags = parse_tags(input)?;
 
     let mut ip = state
         .instance_profiles
@@ -160,7 +169,7 @@ pub fn tag_instance_profile(state: &IamState, input: &Value) -> Result<Value, Aw
 
 pub fn untag_instance_profile(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let name = require_str(input, "InstanceProfileName")?;
-    let keys = parse_tag_keys(input);
+    let keys = parse_tag_keys(input)?;
 
     let mut ip = state
         .instance_profiles
@@ -191,7 +200,7 @@ pub fn list_instance_profile_tags(state: &IamState, input: &Value) -> Result<Val
 
 pub fn tag_open_id_connect_provider(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let arn = require_str(input, "OpenIDConnectProviderArn")?;
-    let new_tags = parse_tags(input);
+    let new_tags = parse_tags(input)?;
 
     let mut p = state
         .oidc_providers
@@ -205,7 +214,7 @@ pub fn tag_open_id_connect_provider(state: &IamState, input: &Value) -> Result<V
 
 pub fn untag_open_id_connect_provider(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let arn = require_str(input, "OpenIDConnectProviderArn")?;
-    let keys = parse_tag_keys(input);
+    let keys = parse_tag_keys(input)?;
 
     let mut p = state
         .oidc_providers
@@ -237,7 +246,7 @@ pub fn list_open_id_connect_provider_tags(
 
 pub fn tag_saml_provider(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let arn = require_str(input, "SAMLProviderArn")?;
-    let new_tags = parse_tags(input);
+    let new_tags = parse_tags(input)?;
 
     let mut p = state
         .saml_providers
@@ -251,7 +260,7 @@ pub fn tag_saml_provider(state: &IamState, input: &Value) -> Result<Value, AwsEr
 
 pub fn untag_saml_provider(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let arn = require_str(input, "SAMLProviderArn")?;
-    let keys = parse_tag_keys(input);
+    let keys = parse_tag_keys(input)?;
 
     let mut p = state
         .saml_providers

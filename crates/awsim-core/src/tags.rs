@@ -222,13 +222,21 @@ fn extract_pairs(tags: &Value) -> Result<Vec<(String, String)>, AwsError> {
         Value::Array(items) => {
             let mut pairs = Vec::with_capacity(items.len());
             for item in items {
+                // Most services use {Key, Value}; KMS uses {TagKey,
+                // TagValue}; StepFunctions/AppSync use lowercase
+                // {key, value}. Accept all three so per-service wiring
+                // stays a one-liner.
                 let key = item
                     .get("Key")
+                    .or_else(|| item.get("TagKey"))
+                    .or_else(|| item.get("key"))
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| validation("Tag entry is missing Key."))?
                     .to_string();
                 let value = item
                     .get("Value")
+                    .or_else(|| item.get("TagValue"))
+                    .or_else(|| item.get("value"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
@@ -387,6 +395,15 @@ mod tests {
         let v = serde_json::json!([
             {"Key": "Owner", "Value": "alice"},
             {"Key": "Cost-Center", "Value": "eng"},
+        ]);
+        validate_aws_tags(&v, &TagOpts::aws_default()).unwrap();
+    }
+
+    #[test]
+    fn validate_aws_tags_accepts_kms_tagkey_tagvalue_shape() {
+        let v = serde_json::json!([
+            {"TagKey": "Owner", "TagValue": "alice"},
+            {"TagKey": "Cost-Center", "TagValue": "eng"},
         ]);
         validate_aws_tags(&v, &TagOpts::aws_default()).unwrap();
     }

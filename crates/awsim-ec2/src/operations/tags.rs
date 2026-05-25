@@ -1,4 +1,5 @@
 use awsim_core::AwsError;
+use awsim_core::tags::{TagOpts, reject_aws_prefix_on_write, validate};
 use serde_json::{Value, json};
 
 use crate::state::Ec2State;
@@ -74,6 +75,7 @@ fn parse_resource_ids(input: &Value) -> Vec<String> {
 pub fn create_tags(state: &Ec2State, input: &Value) -> Result<Value, AwsError> {
     let resource_ids = parse_resource_ids(input);
     let tags = parse_tag_list(input, "Tag");
+    validate(&tags, &TagOpts::aws_default())?;
 
     for resource_id in &resource_ids {
         let mut entry = state.resource_tags.entry(resource_id.clone()).or_default();
@@ -134,6 +136,7 @@ pub fn delete_tags(state: &Ec2State, input: &Value) -> Result<Value, AwsError> {
     let resource_ids = parse_resource_ids(input);
     let tags_to_delete = parse_tag_list(input, "Tag");
     let keys: Vec<&str> = tags_to_delete.iter().map(|(k, _)| k.as_str()).collect();
+    reject_aws_prefix_on_write(&keys)?;
 
     for resource_id in &resource_ids {
         if let Some(mut entry) = state.resource_tags.get_mut(resource_id.as_str()) {

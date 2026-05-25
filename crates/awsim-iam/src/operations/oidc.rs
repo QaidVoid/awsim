@@ -49,7 +49,7 @@ pub fn create_open_id_connect_provider(
     let url = require_str(input, "Url")?;
     let client_id_list = parse_string_list(input, "ClientIDList");
     let thumbprint_list = parse_string_list(input, "ThumbprintList");
-    let tags = parse_tags(input);
+    let tags = parse_tags(input)?;
 
     // Normalize URL: strip trailing slash, strip scheme for the ARN
     let url_clean = url.trim_end_matches('/');

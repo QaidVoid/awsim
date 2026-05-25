@@ -1,4 +1,5 @@
 use awsim_core::AwsError;
+use awsim_core::tags::{TagOpts, reject_aws_prefix_on_write, validate};
 use serde_json::{Value, json};
 
 use crate::{error::resource_not_found, state::ElbState};
@@ -38,6 +39,7 @@ fn parse_tags(input: &Value) -> Vec<(String, String)> {
 pub fn add_tags(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
     let resource_arns = super::extract_string_list(input, "ResourceArns");
     let tags = parse_tags(input);
+    validate(&tags, &TagOpts::aws_default())?;
 
     for arn in &resource_arns {
         if let Some(mut lb) = state.load_balancers.get_mut(arn) {
@@ -61,6 +63,7 @@ pub fn add_tags(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
 pub fn remove_tags(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
     let resource_arns = super::extract_string_list(input, "ResourceArns");
     let tag_keys = super::extract_string_list(input, "TagKeys");
+    reject_aws_prefix_on_write(&tag_keys)?;
 
     for arn in &resource_arns {
         if let Some(mut lb) = state.load_balancers.get_mut(arn) {

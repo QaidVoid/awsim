@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -51,6 +52,8 @@ pub fn tag_resource(
         AwsError::bad_request("InvalidParameterException", "resourceArn is required")
     })?;
 
+    validate_aws_tags(&input["tags"], &TagOpts::aws_default())?;
+
     let repo_name = resource_arn
         .split("/")
         .last()
@@ -86,6 +89,8 @@ pub fn untag_resource(
     let resource_arn = input["resourceArn"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "resourceArn is required")
     })?;
+
+    validate_aws_tag_keys(&input["tagKeys"])?;
 
     let repo_name = resource_arn
         .split("/")

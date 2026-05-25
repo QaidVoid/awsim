@@ -33,7 +33,7 @@ pub fn create_virtual_mfa_device(
 ) -> Result<Value, AwsError> {
     let device_name = require_str(input, "VirtualMFADeviceName")?;
     let path = normalize_path(opt_str(input, "Path"));
-    let tags = parse_tags(input);
+    let tags = parse_tags(input)?;
 
     let serial_number = format!("arn:aws:iam::{}:mfa{}{}", ctx.account_id, path, device_name);
 
@@ -227,7 +227,7 @@ pub fn resync_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsEr
 
 pub fn tag_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let serial_number = require_str(input, "SerialNumber")?;
-    let new_tags = parse_tags(input);
+    let new_tags = parse_tags(input)?;
 
     let mut device = state
         .virtual_mfa_devices
@@ -241,7 +241,7 @@ pub fn tag_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsError
 
 pub fn untag_mfa_device(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let serial_number = require_str(input, "SerialNumber")?;
-    let keys = parse_tag_keys(input);
+    let keys = parse_tag_keys(input)?;
 
     let mut device = state
         .virtual_mfa_devices

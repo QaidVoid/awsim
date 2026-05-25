@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use awsim_core::tags::{TagOpts, reject_aws_prefix_on_write, validate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -44,6 +45,8 @@ pub fn change_tags_for_resource(
         })
         .unwrap_or_default();
 
+    validate(&add_tags, &TagOpts::aws_default())?;
+
     // Tags to remove
     let remove_keys: Vec<String> = input
         .get("RemoveTagKeys")
@@ -55,6 +58,7 @@ pub fn change_tags_for_resource(
                 .collect()
         })
         .unwrap_or_default();
+    reject_aws_prefix_on_write(&remove_keys)?;
 
     match resource_type {
         "hostedzone" => {

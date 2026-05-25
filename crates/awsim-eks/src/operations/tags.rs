@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -11,6 +12,7 @@ pub fn tag_resource(
     let arn = input["resourceArn"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "resourceArn is required")
     })?;
+    validate_aws_tags(&input["tags"], &TagOpts::aws_default())?;
     let mut entry = state.resource_tags.entry(arn.to_string()).or_default();
     if let Some(tags) = input["tags"].as_object() {
         for (k, v) in tags {
@@ -30,6 +32,7 @@ pub fn untag_resource(
     let arn = input["resourceArn"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "resourceArn is required")
     })?;
+    validate_aws_tag_keys(&input["tagKeys"])?;
     if let Some(mut t) = state.resource_tags.get_mut(arn)
         && let Some(keys) = input["tagKeys"].as_array()
     {

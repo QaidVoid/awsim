@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -23,6 +24,8 @@ pub fn add_tags_to_resource(
             format!("Unsupported resource type: {resource_type}"),
         ));
     }
+
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
 
     let tag_list = input["Tags"]
         .as_array()
@@ -64,6 +67,8 @@ pub fn remove_tags_from_resource(
             format!("Unsupported resource type: {resource_type}"),
         ));
     }
+
+    validate_aws_tag_keys(&input["TagKeys"])?;
 
     let tag_keys = input["TagKeys"]
         .as_array()
