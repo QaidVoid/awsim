@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use std::collections::HashMap;
 
-use awsim_core::AwsError;
+use awsim_core::{AwsError, RequestContext};
 use base64::Engine;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -534,10 +534,34 @@ pub fn list_multipart_uploads(state: &S3State, input: &Value) -> Result<Value, A
 }
 
 /// GET /{Bucket}/{Key+}?uploadId={id} — list parts for a multipart upload.
-pub fn list_parts(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+///
+/// Supports the AWS-standard pagination knobs:
+/// - `MaxParts` (default 1000, max 1000) clamps the page size.
+/// - `PartNumberMarker` lists parts whose number is strictly greater
+///   than the supplied marker.
+/// - The response surfaces `IsTruncated` and `NextPartNumberMarker`
+///   when there are more parts past the page.
+pub fn list_parts(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
+    super::check_expected_bucket_owner(input, ctx)?;
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
     let upload_id = require_str(input, "uploadId")?;
+
+    let max_parts = input
+        .get("MaxParts")
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
+        .map(|n| n.clamp(1, 1000) as usize)
+        .unwrap_or(1000);
+    let part_number_marker = input
+        .get("PartNumberMarker")
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
+        .unwrap_or(0);
 
     let bucket = state
         .buckets
@@ -549,9 +573,24 @@ pub fn list_parts(state: &S3State, input: &Value) -> Result<Value, AwsError> {
         .get(upload_id)
         .ok_or_else(|| no_such_upload(upload_id))?;
 
-    let parts: Vec<Value> = upload
+    // BTreeMap iterates by ascending key (part number), so pagination is
+    // stable across calls without an explicit sort.
+    let matched: Vec<(&u32, &PartData)> = upload
         .parts
         .iter()
+        .filter(|(num, _)| u64::from(**num) > part_number_marker)
+        .collect();
+
+    let truncated = matched.len() > max_parts;
+    let page = matched.into_iter().take(max_parts).collect::<Vec<_>>();
+    let next_marker = if truncated {
+        page.last().map(|(n, _)| u64::from(**n))
+    } else {
+        None
+    };
+
+    let parts: Vec<Value> = page
+        .into_iter()
         .map(|(num, part)| {
             json!({
                 "PartNumber": num,
@@ -561,14 +600,20 @@ pub fn list_parts(state: &S3State, input: &Value) -> Result<Value, AwsError> {
         })
         .collect();
 
-    Ok(json!({
+    let mut result = json!({
         "__xml_root": "ListPartsResult",
         "Bucket": bucket_name,
         "Key": key,
         "UploadId": upload_id,
         "Part": parts,
-        "IsTruncated": false,
-    }))
+        "MaxParts": max_parts as u64,
+        "PartNumberMarker": part_number_marker,
+        "IsTruncated": truncated,
+    });
+    if let Some(next) = next_marker {
+        result["NextPartNumberMarker"] = json!(next);
+    }
+    Ok(result)
 }
 
 fn no_such_upload(upload_id: &str) -> AwsError {
@@ -893,5 +938,76 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "NoSuchUpload");
+    }
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("s3", "us-east-1")
+    }
+
+    fn seed_upload_with_parts(state: &S3State, n: u32) -> String {
+        let upload_id = ensure_dst_with_upload(state, "lp", "obj");
+        for i in 1..=n {
+            // Pass partNumber as a string because upload_part calls
+            // require_str on it (matching the on-wire shape: AWS sends
+            // the query-string value, not a numeric).
+            upload_part(
+                state,
+                &json!({
+                    "Bucket": "lp",
+                    "Key": "obj",
+                    "uploadId": &upload_id,
+                    "partNumber": i.to_string(),
+                    "__raw_body": base64::engine::general_purpose::STANDARD.encode(b"hi"),
+                }),
+            )
+            .unwrap();
+        }
+        upload_id
+    }
+
+    #[test]
+    fn list_parts_paginates_with_max_parts() {
+        let state = S3State::default();
+        let upload_id = seed_upload_with_parts(&state, 5);
+        let resp = list_parts(
+            &state,
+            &json!({
+                "Bucket": "lp",
+                "Key": "obj",
+                "uploadId": &upload_id,
+                "MaxParts": 2,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let parts = resp["Part"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(resp["IsTruncated"], json!(true));
+        assert_eq!(resp["NextPartNumberMarker"], json!(2));
+    }
+
+    #[test]
+    fn list_parts_resumes_from_marker() {
+        let state = S3State::default();
+        let upload_id = seed_upload_with_parts(&state, 5);
+        let resp = list_parts(
+            &state,
+            &json!({
+                "Bucket": "lp",
+                "Key": "obj",
+                "uploadId": &upload_id,
+                "PartNumberMarker": 2,
+                "MaxParts": 10,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let parts = resp["Part"].as_array().unwrap();
+        // Parts 3, 4, 5.
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0]["PartNumber"], json!(3));
+        assert_eq!(parts[2]["PartNumber"], json!(5));
+        assert_eq!(resp["IsTruncated"], json!(false));
+        assert!(resp.get("NextPartNumberMarker").is_none());
     }
 }

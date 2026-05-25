@@ -1226,7 +1226,7 @@ impl ServiceHandler for S3Service {
             }
             "AbortMultipartUpload" => operations::multipart::abort_multipart_upload(&state, &input),
             "ListMultipartUploads" => operations::multipart::list_multipart_uploads(&state, &input),
-            "ListParts" => operations::multipart::list_parts(&state, &input),
+            "ListParts" => operations::multipart::list_parts(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
         }
