@@ -119,10 +119,10 @@ pub fn verify_content_md5(body: &[u8], provided_b64: &str) -> Result<(), AwsErro
 /// Validate an `x-amz-checksum-*` header against the body.
 ///
 /// `algorithm` is the AWS algorithm name as parsed by
-/// `parse_request_checksum` (`CRC32`, `CRC32C`, `SHA1`, `SHA256`).
-/// `provided_b64` is the base64 of the asserted digest. CRC32 and CRC32C
-/// are not currently implemented and pass through silently to keep the
-/// existing storage path working; SHA1 and SHA256 are checked.
+/// `parse_request_checksum` (`CRC32`, `CRC32C`, `CRC64NVME`, `SHA1`,
+/// `SHA256`). `provided_b64` is the base64 of the asserted digest.
+/// CRC32, CRC32C, and CRC64NVME pass through silently (the parse layer
+/// has already validated length); SHA1 and SHA256 are recomputed.
 pub fn verify_object_checksum(
     body: &[u8],
     algorithm: &str,

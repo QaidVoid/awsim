@@ -242,6 +242,54 @@ fn version_id_input(input: &Value) -> Option<&str> {
 ///   CRC32 / CRC32C → 4 bytes (base64 `XXXXXXXX`, with `=` padding)
 ///   SHA1            → 20 bytes
 ///   SHA256          → 32 bytes
+/// Parse the AWS `Tagging` querystring (`k1=v1&k2=v2`) into a tag map.
+/// Empty values are accepted; malformed segments (missing `=`) are
+/// skipped. Used by CopyObject's TaggingDirective=REPLACE path.
+fn parse_tagging_querystring(raw: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for pair in raw.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        if let Some((k, v)) = pair.split_once('=') {
+            out.insert(percent_decode(k), percent_decode(v));
+        }
+    }
+    out
+}
+
+/// Minimal percent-decoder for AWS tag values. Handles `+` (space) and
+/// `%XX` hex escapes. Invalid escapes are surfaced as-is.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                if let (Some(hi), Some(lo)) = (hi, lo) {
+                    out.push((hi * 16 + lo) as u8);
+                    i += 3;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Server-side encryption parameters resolved from the request and the
 /// bucket's default encryption config. All four fields are filled in
 /// from one of three sources, in priority order:
@@ -382,10 +430,14 @@ fn extract_sse_params(state: &S3State, input: &Value, bucket: &str) -> Result<Ss
 }
 
 fn parse_request_checksum(input: &Value) -> Result<(Option<String>, Option<String>), AwsError> {
-    // Each pair: (input field, algorithm name, expected decoded bytes)
+    // Each pair: (input field, algorithm name, expected decoded bytes).
+    // CRC64NVME is the newest AWS-flexible-checksum algorithm; SDKs that
+    // negotiate it expect the same parse+verify path the older
+    // CRC32/CRC32C/SHA1/SHA256 take.
     const FIELDS: &[(&str, &str, usize)] = &[
         ("ChecksumCrc32", "CRC32", 4),
         ("ChecksumCrc32c", "CRC32C", 4),
+        ("ChecksumCrc64Nvme", "CRC64NVME", 8),
         ("ChecksumSha1", "SHA1", 20),
         ("ChecksumSha256", "SHA256", 32),
     ];
@@ -1069,6 +1121,7 @@ fn copy_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<V
         src_version_id,
         src_etag,
         src_last_modified,
+        src_tags,
     ) = {
         let bucket = state
             .buckets
@@ -1098,6 +1151,7 @@ fn copy_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<V
             obj.version_id.clone(),
             obj.etag.clone(),
             obj.last_modified.clone(),
+            obj.tags.clone(),
         )
     };
 
@@ -1202,6 +1256,18 @@ fn copy_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<V
         None => Body::InMemory(data),
     };
 
+    // TaggingDirective controls whether destination tags are inherited
+    // from the source (COPY, the AWS default) or parsed from the
+    // request's `Tagging` field (REPLACE). The `Tagging` field is
+    // URL-encoded query-string syntax: "k1=v1&k2=v2".
+    let tagging_directive = opt_str(input, "TaggingDirective").unwrap_or("COPY");
+    let tags = if tagging_directive == "REPLACE" {
+        let raw = opt_str(input, "Tagging").unwrap_or("");
+        parse_tagging_querystring(raw)
+    } else {
+        src_tags
+    };
+
     let new_obj = S3Object {
         key: dst_key.to_string(),
         body,
@@ -1211,7 +1277,7 @@ fn copy_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<V
         last_modified: last_modified_http,
         metadata,
         version_id: version_id.clone(),
-        tags: Default::default(),
+        tags,
         content_encoding,
         cache_control,
         content_disposition,
@@ -2351,6 +2417,72 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resp["ServerSideEncryption"], json!("AES256"));
+    }
+
+    fn put_with_tags(state: &S3State, bucket: &str, key: &str, body: &str, tags: &str) {
+        // Tags can't be set on PutObject through the simple path; seed
+        // them by mutating the stored object directly.
+        put_object(
+            state,
+            &json!({"Bucket": bucket, "Key": key, "Body": body}),
+            &ctx(),
+        )
+        .unwrap();
+        if let Some(b) = state.buckets.get(bucket)
+            && let Some(mut versions) = b.objects.get_mut(key)
+            && let Some(obj) = versions.versions.last_mut()
+        {
+            for pair in tags.split('&') {
+                if let Some((k, v)) = pair.split_once('=') {
+                    obj.tags.insert(k.to_string(), v.to_string());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn copy_object_default_carries_source_tags() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        put_with_tags(&state, "b", "src", "hi", "env=prod&owner=alice");
+
+        put_object(
+            &state,
+            &json!({"Bucket": "b", "Key": "dst", "CopySource": "b/src"}),
+            &ctx(),
+        )
+        .unwrap();
+
+        let dst = state.buckets.get("b").unwrap();
+        let versions = dst.objects.get("dst").unwrap();
+        let obj = versions.versions.last().unwrap();
+        assert_eq!(obj.tags.get("env").map(String::as_str), Some("prod"));
+        assert_eq!(obj.tags.get("owner").map(String::as_str), Some("alice"));
+    }
+
+    #[test]
+    fn copy_object_tagging_directive_replace_uses_request_tagging() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        put_with_tags(&state, "b", "src", "hi", "env=prod");
+
+        put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "dst",
+                "CopySource": "b/src",
+                "TaggingDirective": "REPLACE",
+                "Tagging": "fresh=true&cost-center=eng",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let dst = state.buckets.get("b").unwrap();
+        let versions = dst.objects.get("dst").unwrap();
+        let obj = versions.versions.last().unwrap();
+        assert!(!obj.tags.contains_key("env"), "old tag must be dropped");
+        assert_eq!(obj.tags.get("fresh").map(String::as_str), Some("true"));
+        assert_eq!(obj.tags.get("cost-center").map(String::as_str), Some("eng"));
     }
 
     #[test]
