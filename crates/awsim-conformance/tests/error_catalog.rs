@@ -92,6 +92,11 @@ fn kms_error_factories_match_smithy() {
         "alias_exists",
     );
     assert_matches(
+        awsim_kms::error::key_disabled("abc"),
+        &expect(&errors, "DisabledException"),
+        "key_disabled",
+    );
+    assert_matches(
         awsim_kms::error::kms_invalid_state("pending deletion"),
         &expect(&errors, "KMSInvalidStateException"),
         "kms_invalid_state",

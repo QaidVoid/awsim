@@ -16,7 +16,8 @@ pub fn alias_exists(alias: &str) -> AwsError {
 }
 
 pub fn key_disabled(key_id: &str) -> AwsError {
-    AwsError::bad_request("DisabledException", format!("Key {key_id} is disabled"))
+    // AWS KMS models DisabledException with httpError=409.
+    AwsError::conflict("DisabledException", format!("Key {key_id} is disabled"))
 }
 
 pub fn kms_invalid_state(message: impl Into<String>) -> AwsError {
