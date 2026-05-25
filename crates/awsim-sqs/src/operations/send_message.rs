@@ -22,7 +22,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     let queue_name = queue_name_from_url(queue_url)?;
 
     let mut queue = state.queues.get_mut(&queue_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "AWS.SimpleQueueService.NonExistentQueue",
             format!("The specified queue does not exist: {queue_url}"),
         )
@@ -264,7 +264,7 @@ pub fn handle_batch(
         .sum();
     if total_payload > SQS_MAX_BATCH_PAYLOAD_BYTES {
         return Err(AwsError::bad_request(
-            "BatchRequestTooLong",
+            "AWS.SimpleQueueService.BatchRequestTooLong",
             format!(
                 "Batch requests cannot be longer than {SQS_MAX_BATCH_PAYLOAD_BYTES} bytes. \
                  You have sent {total_payload} bytes."
@@ -446,7 +446,7 @@ mod tests {
             &ctx,
         )
         .unwrap_err();
-        assert_eq!(err.code, "BatchRequestTooLong");
+        assert_eq!(err.code, "AWS.SimpleQueueService.BatchRequestTooLong");
     }
 
     #[test]

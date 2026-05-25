@@ -18,7 +18,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
 
     let removed_id = {
         let mut queue = state.queues.get_mut(&queue_name).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "AWS.SimpleQueueService.NonExistentQueue",
                 format!("The specified queue does not exist: {queue_url}"),
             )

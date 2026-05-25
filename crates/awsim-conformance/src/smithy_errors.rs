@@ -24,6 +24,11 @@ pub struct SmithyError {
     /// (typically the shape name with the `Exception` suffix stripped).
     /// For JSON protocols this is the shape name unchanged.
     pub wire_code: String,
+    /// `awsQueryError.code` if present, regardless of the service's
+    /// protocol. Useful for `awsQueryCompatible` JSON services where the
+    /// SDK reads the Query code from the `x-amzn-query-error` header
+    /// alongside the JSON body `__type`.
+    pub query_error_code: Option<String>,
     /// HTTP status code AWS returns when raising this error.
     pub http_status: u16,
     /// `"client"` or `"server"`, mirroring `smithy.api#error`.
@@ -81,6 +86,10 @@ pub fn load_errors(model_path: &Path) -> Vec<SmithyError> {
         let query_override = traits
             .get("aws.protocols#awsQueryError")
             .and_then(|q| q.as_object());
+        let query_error_code = query_override
+            .and_then(|q| q.get("code"))
+            .and_then(|c| c.as_str())
+            .map(|s| s.to_string());
 
         let wire_code = match (protocol, query_override) {
             (AwsProtocol::AwsQuery | AwsProtocol::Ec2Query, Some(q)) => q
@@ -108,6 +117,7 @@ pub fn load_errors(model_path: &Path) -> Vec<SmithyError> {
             service_sdk_id: service_sdk_id.clone(),
             shape_name,
             wire_code,
+            query_error_code,
             http_status,
             error_kind: kind,
         });

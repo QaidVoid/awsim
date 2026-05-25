@@ -20,7 +20,7 @@ pub fn list_dead_letter_source_queues(
     // Verify the DLQ itself exists and obtain its ARN.
     let dlq_arn = {
         let dlq = state.queues.get(&dlq_name).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "AWS.SimpleQueueService.NonExistentQueue",
                 format!("The specified queue does not exist: {queue_url}"),
             )

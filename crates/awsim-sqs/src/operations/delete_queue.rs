@@ -13,7 +13,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     let queue_name = queue_name_from_url(queue_url)?;
 
     if state.queues.remove(&queue_name).is_none() {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "AWS.SimpleQueueService.NonExistentQueue",
             format!("The specified queue does not exist: {queue_url}"),
         ));

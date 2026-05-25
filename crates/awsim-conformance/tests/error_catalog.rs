@@ -46,6 +46,27 @@ fn assert_matches(err: AwsError, smithy: &SmithyError, label: &str) {
     );
 }
 
+/// Variant for `awsQueryCompatible` JSON services (SQS): the factory's
+/// code is expected to match `awsQueryError.code` rather than the
+/// shape name.
+fn assert_query_compat_matches(err: AwsError, smithy: &SmithyError, label: &str) {
+    let expected_code = smithy
+        .query_error_code
+        .as_deref()
+        .unwrap_or(&smithy.wire_code);
+    assert_eq!(
+        err.code, expected_code,
+        "[{label}] code mismatch (smithy shape {})",
+        smithy.shape_name
+    );
+    assert_eq!(
+        err.status.as_u16(),
+        smithy.http_status,
+        "[{label}] HTTP status mismatch (smithy shape {})",
+        smithy.shape_name
+    );
+}
+
 #[test]
 fn iam_error_factories_match_smithy() {
     let errors = load("iam");
@@ -136,6 +157,41 @@ fn secretsmanager_error_factories_match_smithy() {
         awsim_secretsmanager::error::invalid_request("conflicting state"),
         &expect(&errors, "InvalidRequestException"),
         "invalid_request",
+    );
+}
+
+#[test]
+fn sqs_error_factories_match_smithy() {
+    // SQS is awsJson1_0 + awsQueryCompatible. SDKs read the Query-style
+    // code from the `x-amzn-query-error` header, but awsim currently
+    // emits the Query-style code as the JSON `__type` too for legacy
+    // SDK compatibility. Pin against awsQueryError.code rather than the
+    // shape name until the protocol layer learns to split header/body.
+    let errors = load("sqs");
+    assert_query_compat_matches(
+        awsim_sqs::error::nonexistent_queue("my-queue"),
+        &expect(&errors, "QueueDoesNotExist"),
+        "nonexistent_queue",
+    );
+    assert_query_compat_matches(
+        awsim_sqs::error::receipt_handle_invalid("bad handle"),
+        &expect(&errors, "ReceiptHandleIsInvalid"),
+        "receipt_handle_invalid",
+    );
+    assert_query_compat_matches(
+        awsim_sqs::error::resource_not_found("not here"),
+        &expect(&errors, "ResourceNotFoundException"),
+        "resource_not_found",
+    );
+    assert_query_compat_matches(
+        awsim_sqs::error::queue_name_exists("dup"),
+        &expect(&errors, "QueueNameExists"),
+        "queue_name_exists",
+    );
+    assert_query_compat_matches(
+        awsim_sqs::error::batch_request_too_long("over 256kb"),
+        &expect(&errors, "BatchRequestTooLong"),
+        "batch_request_too_long",
     );
 }
 

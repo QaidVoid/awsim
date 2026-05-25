@@ -9,7 +9,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "QueueName is required"))?;
 
     let queue = state.queues.get(queue_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "AWS.SimpleQueueService.NonExistentQueue",
             format!("The specified queue does not exist: {queue_name}"),
         )

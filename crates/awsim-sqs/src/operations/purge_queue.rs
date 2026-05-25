@@ -14,7 +14,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
 
     let (msg_count, inflight_count) = {
         let mut queue = state.queues.get_mut(&queue_name).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "AWS.SimpleQueueService.NonExistentQueue",
                 format!("The specified queue does not exist: {queue_url}"),
             )
