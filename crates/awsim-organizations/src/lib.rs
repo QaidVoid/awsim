@@ -1,4 +1,5 @@
 pub mod authz;
+pub mod error;
 mod operations;
 pub mod state;
 

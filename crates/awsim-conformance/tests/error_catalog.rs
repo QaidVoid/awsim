@@ -197,6 +197,37 @@ fn kinesis_error_factories_match_smithy() {
 }
 
 #[test]
+fn organizations_error_factories_match_smithy() {
+    let errors = load("organizations");
+
+    assert_matches(
+        awsim_organizations::error::account_not_found("123 gone"),
+        &expect(&errors, "AccountNotFoundException"),
+        "account_not_found",
+    );
+    assert_matches(
+        awsim_organizations::error::organizational_unit_not_found("ou-x"),
+        &expect(&errors, "OrganizationalUnitNotFoundException"),
+        "organizational_unit_not_found",
+    );
+    assert_matches(
+        awsim_organizations::error::policy_not_found("p-x"),
+        &expect(&errors, "PolicyNotFoundException"),
+        "policy_not_found",
+    );
+    assert_matches(
+        awsim_organizations::error::organizations_not_in_use("no org"),
+        &expect(&errors, "AWSOrganizationsNotInUseException"),
+        "organizations_not_in_use",
+    );
+    assert_matches(
+        awsim_organizations::error::already_in_organization("already member"),
+        &expect(&errors, "AlreadyInOrganizationException"),
+        "already_in_organization",
+    );
+}
+
+#[test]
 fn ssm_error_factories_match_smithy() {
     let errors = load("ssm");
 
