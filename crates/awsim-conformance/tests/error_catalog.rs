@@ -70,6 +70,11 @@ fn iam_error_factories_match_smithy() {
         &expect(&errors, "MalformedPolicyDocumentException"),
         "malformed_policy_document",
     );
+    assert_matches(
+        awsim_iam::error::limit_exceeded("cannot attach more than 10 policies"),
+        &expect(&errors, "LimitExceededException"),
+        "limit_exceeded",
+    );
 }
 
 #[test]

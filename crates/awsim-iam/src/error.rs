@@ -27,7 +27,8 @@ pub fn malformed_policy_document(message: impl Into<String>) -> AwsError {
 }
 
 pub fn limit_exceeded(message: impl Into<String>) -> AwsError {
-    AwsError::bad_request("LimitExceeded", message)
+    // AWS IAM models LimitExceededException with httpResponseCode=409.
+    AwsError::conflict("LimitExceeded", message)
 }
 
 pub fn validation_error(message: impl Into<String>) -> AwsError {
