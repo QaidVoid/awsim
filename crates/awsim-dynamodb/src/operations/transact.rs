@@ -373,6 +373,28 @@ pub fn transact_write_items(
         }
     }
 
+    // AWS rejects a TransactWriteItems whose actions target the same
+    // (table, primary key) more than once. The atomicity guarantee
+    // doesn't extend to "last write wins" within the same call — the
+    // SDK gets ValidationException with the offending operation index.
+    let mut seen_keys: std::collections::HashSet<(String, String, String)> =
+        std::collections::HashSet::with_capacity(mutations.len());
+    for (idx, m) in mutations.iter().enumerate() {
+        let (pk, sk) = match &m.action {
+            Action::Put { pk, sk, .. }
+            | Action::Delete { pk, sk, .. }
+            | Action::Update { pk, sk, .. }
+            | Action::ConditionCheck { pk, sk, .. } => (pk.clone(), sk.clone()),
+        };
+        if !seen_keys.insert((m.table_name.clone(), pk, sk)) {
+            return Err(AwsError::validation(format!(
+                "Transaction request cannot include multiple operations on one item: \
+                 operation #{idx} targets the same key on table `{}`.",
+                m.table_name
+            )));
+        }
+    }
+
     // Snapshot the schema cache up front so the txn body — which can't
     // reach back into the dashmap (we'd block other writers) — has every
     // GSI key schema it needs.
