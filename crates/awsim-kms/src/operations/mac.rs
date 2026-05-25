@@ -17,6 +17,30 @@ fn compute_mac(secret: &[u8], message: &[u8], algorithm: &str) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
+/// AWS limits MacAlgorithm to one of the documented HMAC variants and
+/// rejects anything else with InvalidParameterException. The
+/// HMAC_<n> KeySpec must also match: an HMAC_256 key cannot run
+/// HMAC_SHA_512 even though the algorithm is otherwise valid.
+fn validate_mac_algorithm(algo: &str, key_spec: &str) -> Result<(), AwsError> {
+    let expected_spec = match algo {
+        "HMAC_SHA_224" => "HMAC_224",
+        "HMAC_SHA_256" => "HMAC_256",
+        "HMAC_SHA_384" => "HMAC_384",
+        "HMAC_SHA_512" => "HMAC_512",
+        _ => {
+            return Err(error::invalid_parameter(format!(
+                "Unsupported MacAlgorithm: {algo}. Must be one of HMAC_SHA_224 / 256 / 384 / 512."
+            )));
+        }
+    };
+    if key_spec != expected_spec {
+        return Err(error::invalid_key_usage(format!(
+            "MacAlgorithm {algo} requires KeySpec {expected_spec}; key has spec {key_spec}."
+        )));
+    }
+    Ok(())
+}
+
 pub fn generate_mac(
     state: &KmsState,
     input: &Value,
@@ -48,6 +72,7 @@ pub fn generate_mac(
             key.key_usage
         )));
     }
+    validate_mac_algorithm(&algorithm, &key.key_spec)?;
 
     let message = BASE64
         .decode(message_b64)
@@ -95,6 +120,7 @@ pub fn verify_mac(
             key.key_usage
         )));
     }
+    validate_mac_algorithm(&algorithm, &key.key_spec)?;
 
     let message = BASE64
         .decode(message_b64)
