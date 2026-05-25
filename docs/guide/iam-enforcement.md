@@ -152,6 +152,18 @@ Syntax errors in policy. unknown condition operator: StringEqualsFoo
 
 Validation runs regardless of `AWSIM_IAM_ENFORCE` — a bad policy is always rejected at write time.
 
+## AssumeRole Trust Policies
+
+`sts:AssumeRole` (and its WebIdentity / SAML variants) routes the calling principal through the target role's `AssumeRolePolicyDocument`. The trust policy is evaluated as a resource-based policy with the role ARN as the resource and these condition variables populated from the request:
+
+- `sts:ExternalId` — set from the `ExternalId` request parameter. Use with `StringEquals` to harden cross-account assumes against the confused-deputy attack.
+- `aws:MultiFactorAuthPresent` — `true` when the caller supplied both `SerialNumber` and `TokenCode`, `false` otherwise. Use with `Bool` to gate the role behind an MFA challenge.
+- `aws:MultiFactorAuthAge` — set to `0` when MFA is present. Use with `NumericLessThan` to enforce a recent challenge.
+- `aws:SourceIp` — taken from the request's client IP. Use with `IpAddress` to restrict the role to a known network.
+- `aws:PrincipalArn` / `aws:PrincipalAccount` / `aws:SourceAccount` — mirror the caller's identity for `StringEquals` checks.
+
+A trust policy that declares any of these conditions rejects the assume request with `AccessDenied` when the condition isn't satisfied.
+
 ## Not Yet Implemented
 
 - **Session tags** (`aws:PrincipalTag/*`, `aws:ResourceTag/*`) — parsed but empty context.
