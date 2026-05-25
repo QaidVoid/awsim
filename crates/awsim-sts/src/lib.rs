@@ -136,7 +136,7 @@ impl StsService {
         validate_assume_role_duration(duration)?;
 
         if let Some(resolver) = self.trust_policy_resolver() {
-            evaluate_trust_policy(resolver.as_ref(), ctx, role_arn)?;
+            evaluate_trust_policy(resolver.as_ref(), ctx, role_arn, input)?;
         }
 
         debug!(role_arn = %role_arn, session_name = %session_name, "AssumeRole");
@@ -693,6 +693,7 @@ fn evaluate_trust_policy(
     resolver: &dyn TrustPolicyResolver,
     ctx: &RequestContext,
     role_arn: &str,
+    input: &Value,
 ) -> Result<(), AwsError> {
     let Some(policy_json) = resolver.resolve(&ctx.account_id, role_arn) else {
         return Err(AwsError::access_denied_for(
@@ -716,7 +717,55 @@ fn evaluate_trust_policy(
         _ => format!("arn:aws:iam::{}:root", ctx.account_id),
     };
 
-    let context = std::collections::HashMap::new();
+    // Trust policies key off these condition variables for cross-account
+    // hardening (ExternalId), MFA gates (aws:MultiFactorAuthPresent /
+    // aws:MultiFactorAuthAge), source-IP allowlists, and the standard
+    // principal/account variables. AWS rejects the AssumeRole if any
+    // declared condition isn't satisfied.
+    let mut context = std::collections::HashMap::new();
+    if let Some(eid) = input.get("ExternalId").and_then(|v| v.as_str()) {
+        context.insert(
+            "sts:ExternalId".to_string(),
+            awsim_iam_policy::ContextValue::String(eid.to_string()),
+        );
+    }
+    let mfa_present = input
+        .get("SerialNumber")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.is_empty())
+        && input
+            .get("TokenCode")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.is_empty());
+    context.insert(
+        "aws:MultiFactorAuthPresent".to_string(),
+        awsim_iam_policy::ContextValue::Bool(mfa_present),
+    );
+    if mfa_present {
+        context.insert(
+            "aws:MultiFactorAuthAge".to_string(),
+            awsim_iam_policy::ContextValue::Number(0.0),
+        );
+    }
+    if let Some(ref ip) = ctx.source_ip {
+        context.insert(
+            "aws:SourceIp".to_string(),
+            awsim_iam_policy::ContextValue::Ip(ip.clone()),
+        );
+    }
+    context.insert(
+        "aws:PrincipalArn".to_string(),
+        awsim_iam_policy::ContextValue::String(principal_arn.clone()),
+    );
+    context.insert(
+        "aws:PrincipalAccount".to_string(),
+        awsim_iam_policy::ContextValue::String(ctx.account_id.clone()),
+    );
+    context.insert(
+        "aws:SourceAccount".to_string(),
+        awsim_iam_policy::ContextValue::String(ctx.account_id.clone()),
+    );
+
     let req = awsim_iam_policy::AuthzRequest {
         principal_arn: &principal_arn,
         principal_account: &ctx.account_id,
@@ -1557,6 +1606,101 @@ mod tests {
                     "RoleSessionName": "session",
                 }),
                 &ctx,
+            )
+            .unwrap();
+        assert!(resp["Credentials"]["AccessKeyId"].as_str().is_some());
+    }
+
+    const TRUST_POLICY_WITH_EXTERNAL_ID: &str = r#"{
+        "Version":"2012-10-17",
+        "Statement":[{
+            "Effect":"Allow",
+            "Principal":{"AWS":"arn:aws:iam::000000000000:root"},
+            "Action":"sts:AssumeRole",
+            "Condition":{
+                "StringEquals":{"sts:ExternalId":"secret-id"}
+            }
+        }]
+    }"#;
+
+    #[test]
+    fn assume_role_rejects_missing_external_id() {
+        let svc = StsService::new();
+        svc.set_trust_policy_resolver(Arc::new(StaticResolver(Some(
+            TRUST_POLICY_WITH_EXTERNAL_ID,
+        ))));
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/Locked",
+                    "RoleSessionName": "session",
+                }),
+                &make_ctx(),
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "AccessDenied");
+    }
+
+    #[test]
+    fn assume_role_accepts_matching_external_id() {
+        let svc = StsService::new();
+        svc.set_trust_policy_resolver(Arc::new(StaticResolver(Some(
+            TRUST_POLICY_WITH_EXTERNAL_ID,
+        ))));
+        let resp = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/Locked",
+                    "RoleSessionName": "session",
+                    "ExternalId": "secret-id",
+                }),
+                &make_ctx(),
+            )
+            .unwrap();
+        assert!(resp["Credentials"]["AccessKeyId"].as_str().is_some());
+    }
+
+    const TRUST_POLICY_REQUIRES_MFA: &str = r#"{
+        "Version":"2012-10-17",
+        "Statement":[{
+            "Effect":"Allow",
+            "Principal":{"AWS":"arn:aws:iam::000000000000:root"},
+            "Action":"sts:AssumeRole",
+            "Condition":{
+                "Bool":{"aws:MultiFactorAuthPresent":"true"}
+            }
+        }]
+    }"#;
+
+    #[test]
+    fn assume_role_rejects_when_mfa_required_and_absent() {
+        let svc = StsService::new();
+        svc.set_trust_policy_resolver(Arc::new(StaticResolver(Some(TRUST_POLICY_REQUIRES_MFA))));
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MfaRole",
+                    "RoleSessionName": "session",
+                }),
+                &make_ctx(),
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "AccessDenied");
+    }
+
+    #[test]
+    fn assume_role_accepts_when_mfa_supplied() {
+        let svc = StsService::new();
+        svc.set_trust_policy_resolver(Arc::new(StaticResolver(Some(TRUST_POLICY_REQUIRES_MFA))));
+        let resp = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MfaRole",
+                    "RoleSessionName": "session",
+                    "SerialNumber": "arn:aws:iam::000000000000:mfa/alice",
+                    "TokenCode": "123456",
+                }),
+                &make_ctx(),
             )
             .unwrap();
         assert!(resp["Credentials"]["AccessKeyId"].as_str().is_some());
