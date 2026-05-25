@@ -135,7 +135,7 @@ pub fn deregister_task_definition(
     let (family, maybe_rev) = parse_task_definition_id(td_id);
 
     let mut revisions = state.task_definitions.get_mut(family).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClientException",
             format!("The specified task definition does not exist: {td_id}"),
         )
@@ -150,7 +150,7 @@ pub fn deregister_task_definition(
 
     let idx = (rev - 1) as usize;
     if idx >= revisions.len() {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "ClientException",
             format!("The specified task definition does not exist: {td_id}"),
         ));
@@ -180,7 +180,7 @@ pub fn describe_task_definition(
     let (family, maybe_rev) = parse_task_definition_id(td_id);
 
     let revisions = state.task_definitions.get(family).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClientException",
             format!("The specified task definition does not exist: {td_id}"),
         )
@@ -189,7 +189,7 @@ pub fn describe_task_definition(
     let td = if let Some(rev) = maybe_rev {
         let idx = (rev - 1) as usize;
         revisions.get(idx).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::bad_request(
                 "ClientException",
                 format!("The specified task definition does not exist: {td_id}"),
             )
@@ -201,7 +201,7 @@ pub fn describe_task_definition(
             .rev()
             .find(|td| td.status == "ACTIVE")
             .ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::bad_request(
                     "ClientException",
                     format!("No active task definition found for family: {family}"),
                 )

@@ -103,7 +103,7 @@ pub fn delete_cluster(
     let name = resolve_cluster_name(cluster_id);
 
     let cluster = state.clusters.get(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClusterNotFoundException",
             format!("The specified cluster '{name}' does not exist"),
         )

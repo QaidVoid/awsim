@@ -55,7 +55,7 @@ pub fn create_service(
     let launch_type = input["launchType"].as_str().unwrap_or("EC2").to_string();
 
     let mut cluster = state.clusters.get_mut(&cluster_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClusterNotFoundException",
             format!("The specified cluster '{cluster_name}' does not exist"),
         )
@@ -110,14 +110,14 @@ pub fn delete_service(
     };
 
     let mut cluster = state.clusters.get_mut(cluster_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClusterNotFoundException",
             format!("The specified cluster '{cluster_name}' does not exist"),
         )
     })?;
 
     let svc = cluster.services.remove(service_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ServiceNotFoundException",
             format!("The specified service '{service_name}' does not exist"),
         )
@@ -145,7 +145,7 @@ pub fn describe_services(
     })?;
 
     let cluster = state.clusters.get(cluster_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClusterNotFoundException",
             format!("The specified cluster '{cluster_name}' does not exist"),
         )
@@ -188,7 +188,7 @@ pub fn list_services(
     let cluster_name = resolve_cluster_name(cluster_id);
 
     let cluster = state.clusters.get(cluster_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClusterNotFoundException",
             format!("The specified cluster '{cluster_name}' does not exist"),
         )
@@ -230,14 +230,14 @@ pub fn update_service(
     };
 
     let mut cluster = state.clusters.get_mut(&cluster_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClusterNotFoundException",
             format!("The specified cluster '{cluster_name}' does not exist"),
         )
     })?;
 
     let svc = cluster.services.get_mut(&service_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ServiceNotFoundException",
             format!("The specified service '{service_name}' does not exist"),
         )

@@ -99,7 +99,7 @@ pub fn put_cluster_capacity_providers(
     };
 
     let mut cluster = state.clusters.get_mut(name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClusterNotFoundException",
             format!("The specified cluster '{name}' does not exist"),
         )
@@ -311,7 +311,7 @@ pub fn update_container_agent(
     // Verify cluster exists (or use default)
     let cluster_exists = state.clusters.contains_key(name);
     if !cluster_exists && name != "default" {
-        return Err(AwsError::not_found(
+        return Err(AwsError::bad_request(
             "ClusterNotFoundException",
             format!("The specified cluster '{name}' does not exist"),
         ));

@@ -39,7 +39,7 @@ pub fn run_task(state: &EcsState, input: &Value, ctx: &RequestContext) -> Result
     let count = input["count"].as_u64().unwrap_or(1);
 
     let mut cluster = state.clusters.get_mut(&cluster_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClusterNotFoundException",
             format!("The specified cluster '{cluster_name}' does not exist"),
         )
@@ -111,7 +111,7 @@ pub fn stop_task(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "task is required"))?;
 
     let mut cluster = state.clusters.get_mut(&cluster_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClusterNotFoundException",
             format!("The specified cluster '{cluster_name}' does not exist"),
         )
@@ -131,7 +131,7 @@ pub fn stop_task(
     };
 
     let task = cluster.tasks.get_mut(&task_arn).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "InvalidParameterException",
             format!("The specified task '{task_id}' does not exist"),
         )
@@ -162,7 +162,7 @@ pub fn describe_tasks(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "tasks is required"))?;
 
     let cluster = state.clusters.get(cluster_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClusterNotFoundException",
             format!("The specified cluster '{cluster_name}' does not exist"),
         )
@@ -212,7 +212,7 @@ pub fn list_tasks(
     let family_filter = input["family"].as_str();
 
     let cluster = state.clusters.get(cluster_name).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::bad_request(
             "ClusterNotFoundException",
             format!("The specified cluster '{cluster_name}' does not exist"),
         )

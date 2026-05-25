@@ -197,6 +197,32 @@ fn kinesis_error_factories_match_smithy() {
 }
 
 #[test]
+fn ecs_error_factories_match_smithy() {
+    let errors = load("ecs");
+
+    assert_matches(
+        awsim_ecs::error::cluster_not_found("cluster gone"),
+        &expect(&errors, "ClusterNotFoundException"),
+        "cluster_not_found",
+    );
+    assert_matches(
+        awsim_ecs::error::service_not_found("service gone"),
+        &expect(&errors, "ServiceNotFoundException"),
+        "service_not_found",
+    );
+    assert_matches(
+        awsim_ecs::error::invalid_parameter("name is required"),
+        &expect(&errors, "InvalidParameterException"),
+        "invalid_parameter",
+    );
+    assert_matches(
+        awsim_ecs::error::client_exception("bad request"),
+        &expect(&errors, "ClientException"),
+        "client_exception",
+    );
+}
+
+#[test]
 fn ecr_error_factories_match_smithy() {
     let errors = load("ecr");
 
