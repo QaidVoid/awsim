@@ -43,7 +43,7 @@ pub use request_detail::{
 pub use request_event::{RequestEvent, RequestEventBus};
 pub use router::{DEFAULT_PARTITION, RequestContext};
 pub use state::{AccountRegionStore, Snapshottable};
-pub use tick::WorkerPool;
+pub use tick::{TestDriver, WorkerPool};
 
 use bytes::Bytes;
 use futures::stream::BoxStream;

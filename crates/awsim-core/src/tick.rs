@@ -19,27 +19,49 @@
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::FutureExt;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
+use crate::ServiceHandler;
+
 /// Drain timeout used by [`WorkerPool::shutdown`] if no explicit
 /// deadline is supplied.
-pub const DEFAULT_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+pub const DEFAULT_SHUTDOWN_DEADLINE: Duration = Duration::from_secs(5);
+
+/// Default cap on concurrent worker-pool jobs. Bounded at 8 because
+/// real I/O on these handlers is supposed to be light; if a service
+/// genuinely needs more parallelism, construct the pool explicitly
+/// with [`WorkerPool::with_capacity`].
+const DEFAULT_MAX_CONCURRENCY: usize = 8;
 
 /// Shared worker pool. Cloneable so handlers can keep their own
 /// handle without each one owning a separate set of tasks.
 #[derive(Clone)]
 pub struct WorkerPool {
     inner: Arc<Mutex<JoinSet<()>>>,
+    /// Bounds the number of jobs running at once so a pathological
+    /// burst of `spawn` calls can't starve the tokio runtime.
+    permits: Arc<Semaphore>,
 }
 
 impl WorkerPool {
+    /// Construct a pool sized to `min(available_parallelism, 8)`.
     pub fn new() -> Self {
+        let parallelism = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1);
+        Self::with_capacity(parallelism.min(DEFAULT_MAX_CONCURRENCY))
+    }
+
+    /// Construct a pool with an explicit concurrency cap.
+    pub fn with_capacity(max_concurrency: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(JoinSet::new())),
+            permits: Arc::new(Semaphore::new(max_concurrency.max(1))),
         }
     }
 
@@ -50,8 +72,15 @@ impl WorkerPool {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        let permits = self.permits.clone();
         let mut inner = self.inner.lock().await;
         inner.spawn(async move {
+            // The unwrap is safe: the semaphore is owned by the
+            // pool and never closed while jobs are submitted.
+            let _permit = permits
+                .acquire_owned()
+                .await
+                .expect("pool semaphore closed");
             if let Err(panic) = AssertUnwindSafe(future).catch_unwind().await {
                 let msg = panic
                     .downcast_ref::<String>()
@@ -91,6 +120,63 @@ impl WorkerPool {
 }
 
 impl Default for WorkerPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Test harness for the central tick loop.
+///
+/// `TestDriver` lets unit tests register one or more
+/// [`ServiceHandler`]s and invoke their [`ServiceHandler::tick`] hooks
+/// deterministically, without spawning a real interval task or
+/// sleeping. Each [`Self::advance`] call runs one tick per registered
+/// service in registration order, the same sequence the production
+/// driver would use.
+///
+/// `TestDriver` does not patch wall-clock-reading services; callers
+/// that depend on `SystemTime::now()` inside `tick` should either
+/// inject a clock or accept that real time still advances. The
+/// virtual elapsed time accumulator is exposed via
+/// [`Self::elapsed`] for tests that want to assert "the harness
+/// thinks N seconds have passed".
+pub struct TestDriver {
+    services: Vec<Arc<dyn ServiceHandler>>,
+    elapsed: std::sync::Mutex<Duration>,
+}
+
+impl TestDriver {
+    pub fn new() -> Self {
+        Self {
+            services: Vec::new(),
+            elapsed: std::sync::Mutex::new(Duration::ZERO),
+        }
+    }
+
+    /// Register a service so it receives a tick on every
+    /// [`Self::advance`] call. Services tick in registration order.
+    pub fn register(&mut self, service: Arc<dyn ServiceHandler>) {
+        self.services.push(service);
+    }
+
+    /// Advance the virtual clock by `dur` and invoke each registered
+    /// service's `tick` exactly once. Tests that need multiple ticks
+    /// (e.g. a 10s scheduler test) should call `advance` once per
+    /// desired tick.
+    pub async fn advance(&self, dur: Duration) {
+        *self.elapsed.lock().expect("elapsed mutex poisoned") += dur;
+        for svc in &self.services {
+            svc.tick().await;
+        }
+    }
+
+    /// Total time the harness has been advanced.
+    pub fn elapsed(&self) -> Duration {
+        *self.elapsed.lock().expect("elapsed mutex poisoned")
+    }
+}
+
+impl Default for TestDriver {
     fn default() -> Self {
         Self::new()
     }
@@ -164,5 +250,85 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(started.load(Ordering::SeqCst), 1);
         pool.shutdown(Duration::from_millis(50)).await;
+    }
+
+    #[tokio::test]
+    async fn pool_caps_concurrency_at_capacity() {
+        // With capacity=2 and four 50ms jobs, the second pair can only
+        // start after the first pair finishes; total wall time should
+        // be at least 2 quanta.
+        let pool = WorkerPool::with_capacity(2);
+        let running = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        for _ in 0..4 {
+            let r = running.clone();
+            let p = peak.clone();
+            pool.spawn(async move {
+                let now = r.fetch_add(1, Ordering::SeqCst) + 1;
+                p.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(40)).await;
+                r.fetch_sub(1, Ordering::SeqCst);
+            })
+            .await;
+        }
+        pool.shutdown(Duration::from_secs(2)).await;
+        assert!(
+            peak.load(Ordering::SeqCst) <= 2,
+            "peak concurrency exceeded cap of 2"
+        );
+    }
+
+    use crate::error::AwsError;
+    use crate::{Protocol, RequestContext, ServiceHandler};
+    use async_trait::async_trait;
+    use serde_json::Value;
+
+    struct CountingHandler {
+        name: &'static str,
+        ticks: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ServiceHandler for CountingHandler {
+        fn service_name(&self) -> &str {
+            self.name
+        }
+        fn protocol(&self) -> Protocol {
+            Protocol::AwsJson1_1
+        }
+        async fn handle(
+            &self,
+            _operation: &str,
+            _input: Value,
+            _ctx: &RequestContext,
+        ) -> Result<Value, AwsError> {
+            Ok(Value::Null)
+        }
+        async fn tick(&self) {
+            self.ticks.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_driver_invokes_each_handler_on_advance() {
+        let a = Arc::new(CountingHandler {
+            name: "a",
+            ticks: AtomicUsize::new(0),
+        });
+        let b = Arc::new(CountingHandler {
+            name: "b",
+            ticks: AtomicUsize::new(0),
+        });
+        let mut driver = TestDriver::new();
+        driver.register(a.clone());
+        driver.register(b.clone());
+
+        driver.advance(Duration::from_secs(1)).await;
+        driver.advance(Duration::from_secs(1)).await;
+        driver.advance(Duration::from_secs(1)).await;
+
+        assert_eq!(a.ticks.load(Ordering::SeqCst), 3);
+        assert_eq!(b.ticks.load(Ordering::SeqCst), 3);
+        assert_eq!(driver.elapsed(), Duration::from_secs(3));
     }
 }
