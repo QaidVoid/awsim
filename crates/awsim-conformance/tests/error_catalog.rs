@@ -197,6 +197,22 @@ fn kinesis_error_factories_match_smithy() {
 }
 
 #[test]
+fn sso_admin_error_factories_match_smithy() {
+    let errors = load("sso-admin");
+
+    assert_matches(
+        awsim_sso_admin::error::resource_not_found("PermissionSet not found"),
+        &expect(&errors, "ResourceNotFoundException"),
+        "resource_not_found",
+    );
+    assert_matches(
+        awsim_sso_admin::error::validation("Name is required"),
+        &expect(&errors, "ValidationException"),
+        "validation",
+    );
+}
+
+#[test]
 fn polly_error_factories_match_smithy() {
     let errors = load("polly");
 
