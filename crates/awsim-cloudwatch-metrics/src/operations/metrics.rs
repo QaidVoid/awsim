@@ -104,7 +104,52 @@ pub fn put_metric_data(
                 AwsError::bad_request("InvalidParameterValue", "MetricName is required")
             })?
             .to_string();
-        let value = datum.get("Value").and_then(Value::as_f64).unwrap_or(0.0);
+        // AWS requires exactly one of Value or StatisticValues per
+        // datum. When StatisticValues is provided, treat the
+        // aggregate as a single observation whose stored value is
+        // Sum / SampleCount (the mean); SampleCount must be > 0.
+        let raw_value = datum.get("Value").and_then(Value::as_f64);
+        let stats = datum.get("StatisticValues").and_then(Value::as_object);
+        let value = match (raw_value, stats) {
+            (Some(v), None) => v,
+            (None, Some(s)) => {
+                let sum = s.get("Sum").and_then(Value::as_f64).ok_or_else(|| {
+                    AwsError::bad_request(
+                        "InvalidParameterValue",
+                        format!("MetricDatum `{metric_name}` StatisticValues requires Sum."),
+                    )
+                })?;
+                let count = s
+                    .get("SampleCount")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| {
+                        AwsError::bad_request(
+                            "InvalidParameterValue",
+                            format!(
+                                "MetricDatum `{metric_name}` StatisticValues requires SampleCount."
+                            ),
+                        )
+                    })?;
+                if count <= 0.0 {
+                    return Err(AwsError::bad_request(
+                        "InvalidParameterValue",
+                        format!(
+                            "MetricDatum `{metric_name}` StatisticValues.SampleCount must be > 0."
+                        ),
+                    ));
+                }
+                sum / count
+            }
+            (Some(_), Some(_)) => {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterValue",
+                    format!(
+                        "MetricDatum `{metric_name}` must specify either Value or StatisticValues, not both."
+                    ),
+                ));
+            }
+            (None, None) => 0.0,
+        };
         let unit = datum
             .get("Unit")
             .and_then(Value::as_str)
@@ -421,6 +466,82 @@ mod tests {
             ctx,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn put_metric_data_uses_statistic_values_mean() {
+        let state = fresh_state();
+        let ctx = ctx();
+        put_metric_data(
+            &state,
+            &json!({
+                "Namespace": "App",
+                "MetricData": [{
+                    "MetricName": "RequestSize",
+                    "StatisticValues": {
+                        "Sum": 1000.0,
+                        "SampleCount": 4.0,
+                        "Minimum": 200.0,
+                        "Maximum": 300.0,
+                    },
+                }],
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let sqlite = require_sqlite(&state).unwrap();
+        let rows = sqlite
+            .get_datapoints(
+                &ctx.account_id,
+                &ctx.region,
+                "App",
+                "RequestSize",
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].value, 250.0);
+    }
+
+    #[test]
+    fn put_metric_data_rejects_both_value_and_statistic_values() {
+        let state = fresh_state();
+        let ctx = ctx();
+        let err = put_metric_data(
+            &state,
+            &json!({
+                "Namespace": "App",
+                "MetricData": [{
+                    "MetricName": "Bad",
+                    "Value": 1.0,
+                    "StatisticValues": { "Sum": 1.0, "SampleCount": 1.0 },
+                }],
+            }),
+            &ctx,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+        assert!(err.message.contains("either Value or StatisticValues"));
+    }
+
+    #[test]
+    fn put_metric_data_rejects_zero_sample_count() {
+        let state = fresh_state();
+        let ctx = ctx();
+        let err = put_metric_data(
+            &state,
+            &json!({
+                "Namespace": "App",
+                "MetricData": [{
+                    "MetricName": "Zero",
+                    "StatisticValues": { "Sum": 5.0, "SampleCount": 0.0 },
+                }],
+            }),
+            &ctx,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
     }
 
     #[test]
