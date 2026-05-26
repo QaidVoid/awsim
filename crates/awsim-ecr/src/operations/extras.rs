@@ -282,6 +282,41 @@ pub fn describe_image_scan_findings(
         .get(repo_name)
         .ok_or_else(|| repo_not_found(repo_name))?;
 
+    // ENHANCED scanning surfaces a CVE-shaped finding list; BASIC just
+    // returns severity counts. We synthesize deterministic example
+    // findings for ENHANCED so SDKs that key off `enhancedFindings`
+    // see the expected shape, and emit only severity counts for BASIC.
+    let scan_type = state
+        .registry_scanning_config
+        .read()
+        .ok()
+        .map(|c| c.scan_type.clone())
+        .unwrap_or_default();
+    let is_enhanced = scan_type == "ENHANCED";
+
+    let findings = Value::Array(vec![]);
+    let enhanced_findings = if is_enhanced {
+        Value::Array(vec![json!({
+            "title": "CVE-2024-EXAMPLE-0001",
+            "description": "Synthetic finding emitted by awsim ENHANCED scanning.",
+            "severity": "MEDIUM",
+            "packageVulnerabilityDetails": {
+                "source": "AWSIM",
+                "vulnerabilityId": "CVE-2024-EXAMPLE-0001",
+            },
+            "remediation": {
+                "recommendation": { "text": "Upgrade to the latest patched version." }
+            }
+        })])
+    } else {
+        Value::Array(vec![])
+    };
+    let severity_counts = if is_enhanced {
+        json!({ "MEDIUM": 1 })
+    } else {
+        json!({})
+    };
+
     Ok(json!({
         "registryId": ctx.account_id,
         "repositoryName": repo_name,
@@ -291,8 +326,9 @@ pub fn describe_image_scan_findings(
             "description": "The scan is complete for the specified image.",
         },
         "imageScanFindings": {
-            "findings": [],
-            "findingSeverityCounts": {},
+            "findings": findings,
+            "enhancedFindings": enhanced_findings,
+            "findingSeverityCounts": severity_counts,
             "imageScanCompletedAt": now_epoch_str(),
             "vulnerabilitySourceUpdatedAt": now_epoch_str(),
         },
