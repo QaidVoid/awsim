@@ -336,14 +336,16 @@ pub fn put_secret_value(
 
     let new_version_id_str = client_token.unwrap_or_else(new_version_id);
 
-    // Determine stages for new version
-    let requested_stages: Vec<String> = if let Some(stages) = input["VersionStages"].as_array() {
-        stages
+    // Determine stages for new version. AWS treats both an omitted
+    // VersionStages field and an empty array the same way: the new
+    // version is tagged AWSCURRENT (and the prior AWSCURRENT shifts to
+    // AWSPREVIOUS below).
+    let requested_stages: Vec<String> = match input["VersionStages"].as_array() {
+        Some(stages) if !stages.is_empty() => stages
             .iter()
             .filter_map(|s| s.as_str().map(|s| s.to_string()))
-            .collect()
-    } else {
-        vec!["AWSCURRENT".to_string()]
+            .collect(),
+        _ => vec!["AWSCURRENT".to_string()],
     };
 
     // If new version will be AWSCURRENT, demote old AWSCURRENT to AWSPREVIOUS
@@ -1497,6 +1499,38 @@ mod tests {
         .unwrap();
         assert_eq!(first["VersionId"], replay["VersionId"]);
         assert_eq!(replay["VersionId"].as_str().unwrap(), tok);
+    }
+
+    #[test]
+    fn put_secret_value_empty_stages_defaults_to_awscurrent() {
+        let state = SecretsState::default();
+        create_secret(
+            &state,
+            &json!({ "Name": "s", "SecretString": "v1" }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let resp = put_secret_value(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "SecretString": "v2",
+                "VersionStages": [],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let stages = resp["VersionStages"].as_array().unwrap();
+        assert!(stages.iter().any(|s| s == "AWSCURRENT"));
+
+        let secret = state.secrets.get("s").unwrap();
+        let prev = secret
+            .versions
+            .values()
+            .find(|v| v.stages.iter().any(|s| s == "AWSPREVIOUS"))
+            .expect("previous AWSCURRENT should have moved to AWSPREVIOUS");
+        assert_eq!(prev.secret_string.as_deref(), Some("v1"));
     }
 
     #[test]
