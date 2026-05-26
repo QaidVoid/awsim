@@ -64,6 +64,38 @@ pub fn create_listener(
 
     let protocol = opt_str(input, "Protocol").unwrap_or("HTTP").to_string();
 
+    // Protocol must match the load-balancer family.
+    //   * `application` ALB  -> HTTP, HTTPS
+    //   * `network`     NLB  -> TCP, UDP, TCP_UDP, TLS
+    //   * `gateway`     GWLB -> GENEVE (only on port 6081)
+    let lb_type = state
+        .load_balancers
+        .get(input["LoadBalancerArn"].as_str().unwrap_or(""))
+        .map(|e| e.lb_type.clone())
+        .unwrap_or_else(|| "application".to_string());
+    let allowed: &[&str] = match lb_type.as_str() {
+        "application" => &["HTTP", "HTTPS"],
+        "network" => &["TCP", "UDP", "TCP_UDP", "TLS"],
+        "gateway" => &["GENEVE"],
+        _ => &["HTTP", "HTTPS"],
+    };
+    if !allowed.contains(&protocol.as_str()) {
+        return Err(awsim_core::AwsError::bad_request(
+            "ValidationError",
+            format!(
+                "Listener protocol `{protocol}` is not valid for load balancer type `{lb_type}`. \
+                 Allowed: {}.",
+                allowed.join(", "),
+            ),
+        ));
+    }
+    if lb_type == "gateway" && port != 6081 {
+        return Err(awsim_core::AwsError::bad_request(
+            "ValidationError",
+            format!("Gateway load balancer listeners must use port 6081 (got {port})."),
+        ));
+    }
+
     // AWS requires at least one Certificates[] entry when the listener
     // terminates TLS. Surface the documented CertificateNotFound error
     // up front so SDKs don't get a half-configured listener that fails
@@ -422,5 +454,93 @@ mod tests {
             &ctx(),
         )
         .unwrap();
+    }
+
+    fn state_with_lb_of_type(lb_type: &str) -> (ElbState, String) {
+        let state = ElbState::default();
+        let arn = format!(
+            "arn:aws:elasticloadbalancing:us-east-1:000000000000:loadbalancer/{}/lb/abc",
+            match lb_type {
+                "network" => "net",
+                "gateway" => "gwy",
+                _ => "app",
+            }
+        );
+        state.load_balancers.insert(
+            arn.clone(),
+            LoadBalancer {
+                arn: arn.clone(),
+                name: "lb".to_string(),
+                dns_name: "lb.elb".to_string(),
+                lb_type: lb_type.to_string(),
+                scheme: "internet-facing".to_string(),
+                state: "active".to_string(),
+                subnets: vec![],
+                security_groups: vec![],
+                tags: HashMap::new(),
+                created_at: "now".to_string(),
+                vpc_id: "vpc-test".to_string(),
+            },
+        );
+        (state, arn)
+    }
+
+    #[test]
+    fn alb_rejects_network_protocol() {
+        let (state, lb) = state_with_lb_of_type("application");
+        let err = create_listener(
+            &state,
+            &json!({ "LoadBalancerArn": lb, "Protocol": "TCP", "Port": 80 }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    #[test]
+    fn nlb_accepts_tcp_udp_protocol() {
+        let (state, lb) = state_with_lb_of_type("network");
+        create_listener(
+            &state,
+            &json!({ "LoadBalancerArn": lb, "Protocol": "TCP_UDP", "Port": 80 }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nlb_rejects_http_protocol() {
+        let (state, lb) = state_with_lb_of_type("network");
+        let err = create_listener(
+            &state,
+            &json!({ "LoadBalancerArn": lb, "Protocol": "HTTP", "Port": 80 }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    #[test]
+    fn gwlb_requires_geneve_on_6081() {
+        let (state, lb) = state_with_lb_of_type("gateway");
+        create_listener(
+            &state,
+            &json!({ "LoadBalancerArn": lb, "Protocol": "GENEVE", "Port": 6081 }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn gwlb_rejects_wrong_port() {
+        let (state, lb) = state_with_lb_of_type("gateway");
+        let err = create_listener(
+            &state,
+            &json!({ "LoadBalancerArn": lb, "Protocol": "GENEVE", "Port": 80 }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+        assert!(err.message.contains("6081"));
     }
 }
