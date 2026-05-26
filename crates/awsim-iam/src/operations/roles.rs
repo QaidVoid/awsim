@@ -48,7 +48,86 @@ fn validate_trust_policy_actions(doc: &str) -> Result<(), AwsError> {
             "Trust policy must allow at least one sts:AssumeRole* action.",
         ));
     }
+
+    // Trust policies must also identify a Principal that's well-formed.
+    // AWS rejects shapes like "Service": "ec2" (no `.amazonaws.com`) or
+    // "AWS": "alice" (not an ARN or account id) with
+    // MalformedPolicyDocument.
+    for st in &parsed.statements {
+        if let Some(principal) = &st.principal {
+            validate_principal_shape(principal)?;
+        }
+    }
     Ok(())
+}
+
+fn validate_principal_shape(principal: &awsim_iam_policy::Principal) -> Result<(), AwsError> {
+    use awsim_iam_policy::Principal;
+    fn check_aws_entries(items: &[String]) -> Result<(), AwsError> {
+        for entry in items {
+            if entry == "*" {
+                continue;
+            }
+            if entry.starts_with("arn:") {
+                continue;
+            }
+            // 12-digit account id shortcut is allowed by AWS.
+            if entry.len() == 12 && entry.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            return Err(malformed_policy_document(format!(
+                "Principal.AWS `{entry}` must be `*`, a 12-digit account id, or an ARN."
+            )));
+        }
+        Ok(())
+    }
+    fn check_service_entries(items: &[String]) -> Result<(), AwsError> {
+        for entry in items {
+            if !entry.ends_with(".amazonaws.com") && !entry.ends_with(".aws.com") {
+                return Err(malformed_policy_document(format!(
+                    "Principal.Service `{entry}` must look like a service domain (ends with .amazonaws.com)."
+                )));
+            }
+        }
+        Ok(())
+    }
+    fn check_federated_entries(items: &[String]) -> Result<(), AwsError> {
+        for entry in items {
+            // Federated principals are either SAML/OIDC provider ARNs
+            // or known web-identity issuers.
+            let is_arn = entry.starts_with("arn:");
+            let is_known_idp = matches!(
+                entry.as_str(),
+                "accounts.google.com"
+                    | "cognito-identity.amazonaws.com"
+                    | "graph.facebook.com"
+                    | "www.amazon.com"
+            );
+            if !is_arn && !is_known_idp {
+                return Err(malformed_policy_document(format!(
+                    "Principal.Federated `{entry}` must be an IdP ARN or a known web-identity issuer."
+                )));
+            }
+        }
+        Ok(())
+    }
+    match principal {
+        Principal::Wildcard | Principal::CanonicalUser(_) => Ok(()),
+        Principal::Aws(items) => check_aws_entries(items),
+        Principal::Service(items) => check_service_entries(items),
+        Principal::Federated(items) => check_federated_entries(items),
+        Principal::Mixed {
+            aws,
+            service,
+            federated,
+            ..
+        } => {
+            check_aws_entries(aws)?;
+            check_service_entries(service)?;
+            check_federated_entries(federated)?;
+            Ok(())
+        }
+    }
 }
 
 /// Validate an IAM role name against AWS's documented constraint:
@@ -447,5 +526,113 @@ mod update_role_immutable_tests {
         )
         .unwrap();
         assert_eq!(resp["Role"]["Description"], "updated");
+    }
+}
+
+#[cfg(test)]
+mod trust_policy_principal_tests {
+    use super::*;
+    use crate::state::IamState;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("iam", "us-east-1")
+    }
+
+    fn create_with_trust(state: &IamState, name: &str, policy: &str) -> Result<Value, AwsError> {
+        create_role(
+            state,
+            &json!({
+                "RoleName": name,
+                "AssumeRolePolicyDocument": policy,
+            }),
+            &ctx(),
+        )
+    }
+
+    #[test]
+    fn accepts_service_principal() {
+        let state = IamState::default();
+        let policy = r#"{
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "ec2.amazonaws.com" },
+                "Action": "sts:AssumeRole"
+            }]
+        }"#;
+        create_with_trust(&state, "r1", policy).unwrap();
+    }
+
+    #[test]
+    fn rejects_service_without_amazonaws_com_suffix() {
+        let state = IamState::default();
+        let policy = r#"{
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "ec2" },
+                "Action": "sts:AssumeRole"
+            }]
+        }"#;
+        let err = create_with_trust(&state, "r2", policy).unwrap_err();
+        assert_eq!(err.code, "MalformedPolicyDocument");
+    }
+
+    #[test]
+    fn accepts_aws_account_id_principal() {
+        let state = IamState::default();
+        let policy = r#"{
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "AWS": "123456789012" },
+                "Action": "sts:AssumeRole"
+            }]
+        }"#;
+        create_with_trust(&state, "r3", policy).unwrap();
+    }
+
+    #[test]
+    fn rejects_aws_principal_that_is_not_arn_or_account() {
+        let state = IamState::default();
+        let policy = r#"{
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "AWS": "alice" },
+                "Action": "sts:AssumeRole"
+            }]
+        }"#;
+        let err = create_with_trust(&state, "r4", policy).unwrap_err();
+        assert_eq!(err.code, "MalformedPolicyDocument");
+    }
+
+    #[test]
+    fn accepts_federated_known_idp() {
+        let state = IamState::default();
+        let policy = r#"{
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Federated": "accounts.google.com" },
+                "Action": "sts:AssumeRoleWithWebIdentity"
+            }]
+        }"#;
+        create_with_trust(&state, "r5", policy).unwrap();
+    }
+
+    #[test]
+    fn rejects_federated_garbage() {
+        let state = IamState::default();
+        let policy = r#"{
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Federated": "garbage" },
+                "Action": "sts:AssumeRoleWithWebIdentity"
+            }]
+        }"#;
+        let err = create_with_trust(&state, "r6", policy).unwrap_err();
+        assert_eq!(err.code, "MalformedPolicyDocument");
     }
 }
