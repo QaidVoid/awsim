@@ -58,6 +58,16 @@ pub struct IpPermission {
     pub to_port: Option<i64>,
     pub ip_protocol: String,
     pub ip_ranges: Vec<IpRange>,
+    /// References to other security groups. Each entry is
+    /// `{ GroupId, UserId? }` — AWS allows SGs to authorize traffic
+    /// from other SGs, including cross-account when UserId is set.
+    pub user_id_group_pairs: Vec<UserIdGroupPair>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UserIdGroupPair {
+    pub group_id: String,
+    pub user_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]

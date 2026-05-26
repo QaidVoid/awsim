@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::{
     error::resource_not_found,
     ids::new_ec2_id,
-    state::{Ec2State, IpPermission, IpRange, SecurityGroup},
+    state::{self, Ec2State, IpPermission, IpRange, SecurityGroup},
 };
 
 use super::{opt_i64, opt_str, require_str};
@@ -30,6 +30,11 @@ fn ip_permissions_to_value(perms: &[IpPermission]) -> Vec<Value> {
                 "toPort": p.to_port,
                 "ipProtocol": p.ip_protocol,
                 "ipRanges": { "item": p.ip_ranges.iter().map(|r| json!({ "cidrIp": r.cidr_ip })).collect::<Vec<_>>() },
+                "groups": { "item": p.user_id_group_pairs.iter().map(|g| {
+                    let mut obj = json!({ "groupId": g.group_id });
+                    if let Some(ref u) = g.user_id { obj["userId"] = json!(u); }
+                    obj
+                }).collect::<Vec<_>>() },
             })
         })
         .collect()
@@ -64,16 +69,47 @@ fn parse_ip_permissions(input: &Value) -> Vec<IpPermission> {
         let ip_protocol = opt_str(&item, "IpProtocol").unwrap_or("-1").to_string();
 
         let ip_ranges = parse_ip_ranges(&item);
+        let user_id_group_pairs = parse_user_id_group_pairs(&item);
 
         perms.push(IpPermission {
             from_port,
             to_port,
             ip_protocol,
             ip_ranges,
+            user_id_group_pairs,
         });
     }
 
     perms
+}
+
+fn parse_user_id_group_pairs(input: &Value) -> Vec<state::UserIdGroupPair> {
+    let mut out = Vec::new();
+    let items = match input.get("UserIdGroupPairs") {
+        Some(Value::Array(arr)) => arr.clone(),
+        Some(Value::Object(map)) => {
+            if let Some(Value::Array(arr)) = map.get("member") {
+                arr.clone()
+            } else {
+                let mut numbered: Vec<(usize, Value)> = map
+                    .iter()
+                    .filter_map(|(k, v)| k.parse::<usize>().ok().map(|n| (n, v.clone())))
+                    .collect();
+                numbered.sort_by_key(|(n, _)| *n);
+                numbered.into_iter().map(|(_, v)| v).collect()
+            }
+        }
+        _ => return out,
+    };
+    for item in items {
+        let group_id = match opt_str(&item, "GroupId") {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let user_id = opt_str(&item, "UserId").map(str::to_string);
+        out.push(state::UserIdGroupPair { group_id, user_id });
+    }
+    out
 }
 
 fn parse_ip_ranges(input: &Value) -> Vec<IpRange> {
@@ -126,6 +162,7 @@ pub fn create_security_group(state: &Ec2State, input: &Value) -> Result<Value, A
         ip_ranges: vec![IpRange {
             cidr_ip: "0.0.0.0/0".to_string(),
         }],
+        user_id_group_pairs: Vec::new(),
     };
 
     let sg = SecurityGroup {
@@ -232,4 +269,58 @@ pub fn revoke_security_group_egress(state: &Ec2State, input: &Value) -> Result<V
     }
 
     Ok(json!({ "return": true }))
+}
+
+#[cfg(test)]
+mod user_id_group_pair_tests {
+    use super::*;
+
+    #[test]
+    fn parses_user_id_group_pair_array() {
+        let input = json!({
+            "IpPermissions": [{
+                "FromPort": 22,
+                "ToPort": 22,
+                "IpProtocol": "tcp",
+                "UserIdGroupPairs": [
+                    { "GroupId": "sg-abc" },
+                    { "GroupId": "sg-def", "UserId": "111122223333" }
+                ],
+            }]
+        });
+        let perms = parse_ip_permissions(&input);
+        assert_eq!(perms.len(), 1);
+        let pairs = &perms[0].user_id_group_pairs;
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].group_id, "sg-abc");
+        assert!(pairs[0].user_id.is_none());
+        assert_eq!(pairs[1].group_id, "sg-def");
+        assert_eq!(pairs[1].user_id.as_deref(), Some("111122223333"));
+    }
+
+    #[test]
+    fn sg_to_value_surfaces_user_id_group_pairs() {
+        let sg = SecurityGroup {
+            group_id: "sg-aaa".to_string(),
+            group_name: "n".to_string(),
+            description: "d".to_string(),
+            vpc_id: "vpc-1".to_string(),
+            ip_permissions: vec![IpPermission {
+                from_port: Some(80),
+                to_port: Some(80),
+                ip_protocol: "tcp".to_string(),
+                ip_ranges: vec![],
+                user_id_group_pairs: vec![state::UserIdGroupPair {
+                    group_id: "sg-bbb".to_string(),
+                    user_id: Some("000000000000".to_string()),
+                }],
+            }],
+            ip_permissions_egress: vec![],
+            tags: HashMap::new(),
+        };
+        let v = sg_to_value(&sg);
+        let groups = &v["ipPermissions"]["item"][0]["groups"]["item"];
+        assert_eq!(groups[0]["groupId"], "sg-bbb");
+        assert_eq!(groups[0]["userId"], "000000000000");
+    }
 }
