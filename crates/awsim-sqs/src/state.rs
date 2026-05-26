@@ -144,6 +144,11 @@ pub struct MessageMoveTask {
     pub started_timestamp: u64,
     pub approximate_number_of_messages_moved: u64,
     pub approximate_number_of_messages_to_move: u64,
+    /// Token-bucket cap configured by the caller. AWS bounds this at
+    /// 1..=500 messages/sec; default behavior (None) leaves the rate
+    /// uncapped on the simulator's synchronous move loop.
+    #[serde(default)]
+    pub max_messages_per_second: Option<u32>,
 }
 
 /// Per-account/region SQS state.

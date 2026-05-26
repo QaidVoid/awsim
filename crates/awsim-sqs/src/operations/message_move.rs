@@ -23,6 +23,20 @@ pub fn start_message_move_task(
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "SourceArn is required"))?;
     let destination_arn = input["DestinationArn"].as_str().map(str::to_string);
 
+    // AWS bounds MaxNumberOfMessagesPerSecond at 1..=500; outside-range
+    // values come back as InvalidParameterValue. None leaves the move
+    // loop uncapped (the AWS-managed default).
+    let max_messages_per_second = match input["MaxNumberOfMessagesPerSecond"].as_i64() {
+        Some(n) if !(1..=500).contains(&n) => {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValue",
+                format!("MaxNumberOfMessagesPerSecond {n} must be between 1 and 500."),
+            ));
+        }
+        Some(n) => Some(n as u32),
+        None => None,
+    };
+
     let task_handle = Uuid::new_v4().to_string();
 
     let task = MessageMoveTask {
@@ -33,6 +47,7 @@ pub fn start_message_move_task(
         started_timestamp: now_secs(),
         approximate_number_of_messages_moved: 0,
         approximate_number_of_messages_to_move: 0,
+        max_messages_per_second,
     };
 
     state.move_tasks.insert(task_handle.clone(), task);
