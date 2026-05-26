@@ -11,11 +11,13 @@ pub struct SentEmail {
     pub to: Vec<String>,
     pub cc: Vec<String>,
     pub bcc: Vec<String>,
+    pub reply_to: Vec<String>,
     pub subject: Option<String>,
     pub body_text: Option<String>,
     pub body_html: Option<String>,
     pub raw: Option<String>,
     pub sent_at: u64,
+    pub configuration_set_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]

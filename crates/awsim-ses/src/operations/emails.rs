@@ -63,6 +63,17 @@ pub fn send_email(
         ));
     }
 
+    let reply_to: Vec<String> = input["ReplyToAddresses"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let configuration_set_name = input["ConfigurationSetName"].as_str().map(str::to_string);
+
     // Content — Simple or Raw
     let content = &input["Content"];
     let (subject, body_text, body_html, raw) = if !content["Simple"].is_null() {
@@ -89,11 +100,13 @@ pub fn send_email(
         to,
         cc,
         bcc,
+        reply_to,
         subject,
         body_text,
         body_html,
         raw,
         sent_at: now_epoch(),
+        configuration_set_name,
     };
 
     info!(message_id = %message_id, "SES: email sent");

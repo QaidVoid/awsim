@@ -165,11 +165,13 @@ fn row_to_email(row: &rusqlite::Row<'_>) -> rusqlite::Result<SentEmailRow> {
             to,
             cc,
             bcc,
+            reply_to: Vec::new(),
             subject: row.get(7)?,
             body_text: row.get(8)?,
             body_html: row.get(9)?,
             raw: row.get(10)?,
             sent_at: sent_at.max(0) as u64,
+            configuration_set_name: None,
         },
     })
 }
@@ -231,11 +233,13 @@ mod tests {
             to: vec!["bob@example.com".into()],
             cc: vec![],
             bcc: vec![],
+            reply_to: vec![],
             subject: Some("hi".into()),
             body_text: Some("hello".into()),
             body_html: None,
             raw: None,
             sent_at: ts,
+            configuration_set_name: None,
         }
     }
 

@@ -49,11 +49,13 @@ pub fn send_bulk_email(
             to,
             cc: vec![],
             bcc: vec![],
+            reply_to: vec![],
             subject: None,
             body_text: None,
             body_html: None,
             raw: None,
             sent_at: now(),
+            configuration_set_name: None,
         };
         if let Some(store) = state.sqlite() {
             store.put_email(&ctx.account_id, &ctx.region, &email)?;
@@ -83,11 +85,13 @@ pub fn send_custom_verification_email(
         to: vec![email.to_string()],
         cc: vec![],
         bcc: vec![],
+        reply_to: vec![],
         subject: Some(format!("Verify {email} via {template}")),
         body_text: None,
         body_html: None,
         raw: None,
         sent_at: now(),
+        configuration_set_name: None,
     };
     if let Some(store) = state.sqlite() {
         store.put_email(&ctx.account_id, &ctx.region, &entry)?;
