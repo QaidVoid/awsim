@@ -10,7 +10,7 @@ use crate::{
 use super::{opt_str, require_str};
 
 fn snapshot_to_value(s: &DbSnapshot) -> Value {
-    json!({
+    let mut obj = json!({
         "DBSnapshotIdentifier": s.snapshot_identifier,
         "DBSnapshotArn": s.arn,
         "DBInstanceIdentifier": s.db_instance_identifier,
@@ -21,8 +21,20 @@ fn snapshot_to_value(s: &DbSnapshot) -> Value {
         "SnapshotCreateTime": s.created_at,
         "SnapshotType": "manual",
         "PercentProgress": 100,
-        "Encrypted": false,
-    })
+        "Encrypted": s.kms_key_id.is_some(),
+        "TagList": s
+            .tags
+            .iter()
+            .map(|(k, v)| json!({ "Key": k, "Value": v }))
+            .collect::<Vec<_>>(),
+    });
+    if let Some(ref k) = s.kms_key_id {
+        obj["KmsKeyId"] = json!(k);
+    }
+    if let Some(ref r) = s.source_region {
+        obj["SourceRegion"] = json!(r);
+    }
+    obj
 }
 
 /// CreateDBSnapshot — create a snapshot from an existing instance.
@@ -46,6 +58,20 @@ pub fn create_db_snapshot(
         ));
     }
 
+    // CopyTagsToSnapshot honors the instance flag; AWS folds the
+    // instance's tag set into the snapshot when enabled.
+    let mut tags: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    if instance.copy_tags_to_snapshot {
+        for (resource_arn, t) in state
+            .tags
+            .iter()
+            .map(|e| (e.key().clone(), e.value().clone()))
+        {
+            if resource_arn == instance.arn {
+                tags.extend(t);
+            }
+        }
+    }
     let snapshot = DbSnapshot {
         snapshot_identifier: snapshot_id.to_string(),
         arn: snapshot_arn(&ctx.region, &ctx.account_id, snapshot_id),
@@ -55,6 +81,9 @@ pub fn create_db_snapshot(
         allocated_storage: instance.allocated_storage,
         status: "available".to_string(),
         created_at: now_iso8601(),
+        tags,
+        kms_key_id: instance.kms_key_id.clone(),
+        source_region: None,
     };
 
     let result = snapshot_to_value(&snapshot);
@@ -168,6 +197,11 @@ pub fn copy_db_snapshot(
         allocated_storage: source.allocated_storage,
         status: "available".to_string(),
         created_at: now_iso8601(),
+        tags: source.tags.clone(),
+        kms_key_id: opt_str(input, "KmsKeyId")
+            .map(str::to_string)
+            .or_else(|| source.kms_key_id.clone()),
+        source_region: opt_str(input, "SourceRegion").map(str::to_string),
     };
 
     let result = snapshot_to_value(&copied);
@@ -193,4 +227,115 @@ pub fn describe_db_log_files(input: &Value) -> Result<Value, AwsError> {
         "DescribeDBLogFiles": { "DescribeDBLogFilesDetails": [] },
         "Marker": null,
     }))
+}
+
+#[cfg(test)]
+mod copy_tags_to_snapshot_tests {
+    use super::*;
+    use crate::operations::instances::create_db_instance;
+    use crate::operations::tags::add_tags_to_resource;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("rds", "us-east-1")
+    }
+
+    fn create_instance(state: &RdsState, copy_flag: bool, kms: Option<&str>) -> String {
+        let mut input = json!({
+            "DBInstanceIdentifier": "prod-db",
+            "DBInstanceClass": "db.t3.micro",
+            "Engine": "postgres",
+            "MasterUsername": "admin",
+            "MasterUserPassword": "secret123",
+            "CopyTagsToSnapshot": copy_flag,
+        });
+        if let Some(k) = kms {
+            input["KmsKeyId"] = json!(k);
+        }
+        let resp = create_db_instance(state, &input, &ctx()).unwrap();
+        resp["DBInstance"]["DBInstanceArn"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn copies_tags_and_kms_when_flag_set() {
+        let state = RdsState::default();
+        let arn = create_instance(&state, true, Some("alias/aws/rds"));
+
+        let tag_input = json!({
+            "ResourceName": arn,
+            "Tags": [{ "Key": "env", "Value": "prod" }],
+        });
+        add_tags_to_resource(&state, &tag_input).unwrap();
+
+        let snap_input = json!({
+            "DBSnapshotIdentifier": "snap-1",
+            "DBInstanceIdentifier": "prod-db",
+        });
+        let resp = create_db_snapshot(&state, &snap_input, &ctx()).unwrap();
+        let tags = resp["DBSnapshot"]["TagList"].as_array().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0]["Key"], "env");
+        assert_eq!(tags[0]["Value"], "prod");
+        assert_eq!(resp["DBSnapshot"]["KmsKeyId"], "alias/aws/rds");
+        assert_eq!(resp["DBSnapshot"]["Encrypted"], true);
+    }
+
+    #[test]
+    fn skips_tag_copy_when_flag_unset() {
+        let state = RdsState::default();
+        let arn = create_instance(&state, false, None);
+
+        let tag_input = json!({
+            "ResourceName": arn,
+            "Tags": [{ "Key": "env", "Value": "prod" }],
+        });
+        add_tags_to_resource(&state, &tag_input).unwrap();
+
+        let snap_input = json!({
+            "DBSnapshotIdentifier": "snap-2",
+            "DBInstanceIdentifier": "prod-db",
+        });
+        let resp = create_db_snapshot(&state, &snap_input, &ctx()).unwrap();
+        let tags = resp["DBSnapshot"]["TagList"].as_array().unwrap();
+        assert!(tags.is_empty());
+        assert!(resp["DBSnapshot"].get("KmsKeyId").is_none());
+        assert_eq!(resp["DBSnapshot"]["Encrypted"], false);
+    }
+
+    #[test]
+    fn copy_snapshot_carries_kms_and_tags_forward() {
+        let state = RdsState::default();
+        let arn = create_instance(&state, true, Some("alias/aws/rds"));
+
+        let tag_input = json!({
+            "ResourceName": arn,
+            "Tags": [{ "Key": "team", "Value": "data" }],
+        });
+        add_tags_to_resource(&state, &tag_input).unwrap();
+
+        create_db_snapshot(
+            &state,
+            &json!({
+                "DBSnapshotIdentifier": "snap-src",
+                "DBInstanceIdentifier": "prod-db",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let copy = copy_db_snapshot(
+            &state,
+            &json!({
+                "SourceDBSnapshotIdentifier": "snap-src",
+                "TargetDBSnapshotIdentifier": "snap-dst",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let tags = copy["DBSnapshot"]["TagList"].as_array().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(copy["DBSnapshot"]["KmsKeyId"], "alias/aws/rds");
+    }
 }

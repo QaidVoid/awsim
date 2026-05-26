@@ -60,6 +60,14 @@ pub struct DbInstance {
     /// depend on the engine.
     #[serde(default)]
     pub license_model: Option<String>,
+    /// When true, CreateDBSnapshot copies the instance's tags onto the
+    /// new snapshot. AWS defaults to false.
+    #[serde(default)]
+    pub copy_tags_to_snapshot: bool,
+    /// KmsKeyId used at instance creation; propagated onto snapshots
+    /// taken from this instance.
+    #[serde(default)]
+    pub kms_key_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +120,17 @@ pub struct DbSnapshot {
     pub allocated_storage: u32,
     pub status: String,
     pub created_at: String,
+    /// Tags copied from the source DB instance when
+    /// `CopyTagsToSnapshot=true`, plus any tags supplied directly to
+    /// CreateDBSnapshot.
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
+    /// KmsKeyId carried over from the source DB instance when set.
+    #[serde(default)]
+    pub kms_key_id: Option<String>,
+    /// Source region for cross-region copy bookkeeping.
+    #[serde(default)]
+    pub source_region: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -2349,6 +2349,7 @@ dependencies = [
  "async-trait",
  "awsim-core",
  "awsim-iam-policy",
+ "base64",
  "bcrypt",
  "dashmap",
  "serde",
@@ -2472,6 +2473,7 @@ dependencies = [
  "dashmap",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tracing",
  "uuid",
 ]

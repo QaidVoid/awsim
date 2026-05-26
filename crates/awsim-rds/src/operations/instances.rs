@@ -47,6 +47,13 @@ fn instance_to_value(inst: &DbInstance) -> Value {
     if let Some(ref lm) = inst.license_model {
         obj["LicenseModel"] = json!(lm);
     }
+    obj["CopyTagsToSnapshot"] = json!(inst.copy_tags_to_snapshot);
+    if let Some(ref k) = inst.kms_key_id {
+        obj["KmsKeyId"] = json!(k);
+        obj["StorageEncrypted"] = json!(true);
+    } else {
+        obj["StorageEncrypted"] = json!(false);
+    }
     obj
 }
 
@@ -179,6 +186,8 @@ pub fn create_db_instance(
         iops,
         storage_throughput,
         license_model,
+        copy_tags_to_snapshot: opt_bool(input, "CopyTagsToSnapshot").unwrap_or(false),
+        kms_key_id: opt_str(input, "KmsKeyId").map(str::to_string),
     };
 
     let result = instance_to_value(&inst);
