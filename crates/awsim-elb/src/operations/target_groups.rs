@@ -30,6 +30,40 @@ pub fn tg_to_value(tg: &TargetGroup) -> Value {
     })
 }
 
+/// Validate `Matcher.GrpcCode`. AWS accepts a single code, a hyphenated
+/// range, or a comma-separated list — all values must fall in 0..=99.
+fn validate_grpc_matcher(spec: &str) -> Result<(), AwsError> {
+    if spec.is_empty() {
+        return Err(AwsError::bad_request(
+            "ValidationError",
+            "Matcher.GrpcCode must not be empty.",
+        ));
+    }
+    let codes = spec.split(',').flat_map(|piece| {
+        let piece = piece.trim();
+        if let Some((lo, hi)) = piece.split_once('-') {
+            vec![lo.trim().to_string(), hi.trim().to_string()]
+        } else {
+            vec![piece.to_string()]
+        }
+    });
+    for raw in codes {
+        let code: u16 = raw.parse().map_err(|_| {
+            AwsError::bad_request(
+                "ValidationError",
+                format!("Matcher.GrpcCode `{spec}` entry `{raw}` is not a valid integer."),
+            )
+        })?;
+        if code > 99 {
+            return Err(AwsError::bad_request(
+                "ValidationError",
+                format!("Matcher.GrpcCode `{spec}` entry `{raw}` must be in 0..=99."),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn create_target_group(
     state: &ElbState,
     input: &Value,
@@ -57,6 +91,25 @@ pub fn create_target_group(
     let target_type = opt_str(input, "TargetType")
         .unwrap_or("instance")
         .to_string();
+
+    // HealthCheckProtocol must be a documented value. GRPC target
+    // groups are matched against `Matcher.GrpcCode` rather than
+    // HttpCode, and the range is documented as 0..=99.
+    let hc_protocol = opt_str(input, "HealthCheckProtocol").unwrap_or(&protocol);
+    if !matches!(hc_protocol, "HTTP" | "HTTPS" | "TCP" | "GRPC") {
+        return Err(AwsError::bad_request(
+            "ValidationError",
+            format!(
+                "HealthCheckProtocol `{hc_protocol}` is not valid. \
+                 Allowed: HTTP, HTTPS, TCP, GRPC."
+            ),
+        ));
+    }
+    if let Some(matcher) = input.get("Matcher")
+        && let Some(grpc) = matcher.get("GrpcCode").and_then(Value::as_str)
+    {
+        validate_grpc_matcher(grpc)?;
+    }
 
     let arn = tg_arn(&ctx.region, &ctx.account_id, &name);
 
@@ -321,4 +374,83 @@ fn parse_targets(input: &Value) -> Vec<Target> {
     }
 
     targets
+}
+
+#[cfg(test)]
+mod grpc_matcher_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_single_code() {
+        validate_grpc_matcher("0").unwrap();
+        validate_grpc_matcher("99").unwrap();
+    }
+
+    #[test]
+    fn accepts_range() {
+        validate_grpc_matcher("0-99").unwrap();
+        validate_grpc_matcher("3-15").unwrap();
+    }
+
+    #[test]
+    fn accepts_comma_list() {
+        validate_grpc_matcher("0,3,16").unwrap();
+        validate_grpc_matcher("0,3-15,99").unwrap();
+    }
+
+    #[test]
+    fn rejects_code_above_99() {
+        let err = validate_grpc_matcher("100").unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    #[test]
+    fn rejects_empty() {
+        let err = validate_grpc_matcher("").unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    #[test]
+    fn rejects_non_numeric() {
+        let err = validate_grpc_matcher("abc").unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("elasticloadbalancing", "us-east-1")
+    }
+
+    #[test]
+    fn create_target_group_rejects_unknown_hc_protocol() {
+        let state = ElbState::default();
+        let err = create_target_group(
+            &state,
+            &json!({
+                "Name": "tg",
+                "Protocol": "HTTP",
+                "Port": 80,
+                "HealthCheckProtocol": "GOPHER",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    #[test]
+    fn create_target_group_accepts_grpc_matcher() {
+        let state = ElbState::default();
+        create_target_group(
+            &state,
+            &json!({
+                "Name": "tg",
+                "Protocol": "HTTP",
+                "Port": 80,
+                "HealthCheckProtocol": "GRPC",
+                "Matcher": { "GrpcCode": "0-99" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
 }
