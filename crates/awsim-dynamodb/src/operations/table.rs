@@ -38,6 +38,41 @@ fn parse_key_schema(input: &Value) -> Vec<KeySchemaElement> {
         .unwrap_or_default()
 }
 
+/// AWS caps DynamoDB attribute names at 255 bytes. CreateTable /
+/// UpdateTable raises ValidationException when any AttributeDefinition
+/// or KeySchema entry exceeds the limit, instead of silently truncating.
+const MAX_ATTRIBUTE_NAME_BYTES: usize = 255;
+
+fn validate_attribute_name(name: &str) -> Result<(), AwsError> {
+    if name.is_empty() {
+        return Err(AwsError::validation(
+            "AttributeName must be at least 1 character long.",
+        ));
+    }
+    if name.len() > MAX_ATTRIBUTE_NAME_BYTES {
+        return Err(AwsError::validation(format!(
+            "AttributeName `{}...` is {} bytes; maximum is {MAX_ATTRIBUTE_NAME_BYTES}.",
+            &name[..name.len().min(32)],
+            name.len()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_attribute_names(defs: &[AttributeDefinition]) -> Result<(), AwsError> {
+    for d in defs {
+        validate_attribute_name(&d.attribute_name)?;
+    }
+    Ok(())
+}
+
+fn validate_attribute_names_in_key_schema(schema: &[KeySchemaElement]) -> Result<(), AwsError> {
+    for el in schema {
+        validate_attribute_name(&el.attribute_name)?;
+    }
+    Ok(())
+}
+
 fn parse_attribute_definitions(input: &Value) -> Vec<AttributeDefinition> {
     input
         .as_array()
@@ -334,6 +369,9 @@ pub fn create_table(
     }
 
     let attribute_definitions = parse_attribute_definitions(&input["AttributeDefinitions"]);
+    validate_attribute_names(&attribute_definitions)?;
+    validate_attribute_names_in_key_schema(&key_schema)?;
+
     let billing_mode = opt_str(input, "BillingMode")
         .unwrap_or("PAY_PER_REQUEST")
         .to_string();
@@ -2276,5 +2314,27 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
         assert!(err.message.contains("at most 20"));
+    }
+
+    #[test]
+    fn create_table_rejects_overlong_attribute_name() {
+        use crate::sqlite_store::SqliteStore;
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let long = "x".repeat(256);
+        let err = create_table(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeySchema": [{ "AttributeName": long, "KeyType": "HASH" }],
+                "AttributeDefinitions": [{ "AttributeName": long, "AttributeType": "S" }],
+                "BillingMode": "PAY_PER_REQUEST",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("maximum is 255"));
     }
 }
