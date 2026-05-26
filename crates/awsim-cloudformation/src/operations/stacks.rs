@@ -178,6 +178,60 @@ fn build_events(
     events
 }
 
+/// CloudFormation requires callers to opt-in to powerful template
+/// constructs via Capabilities. The three documented requirements are:
+///   * `CAPABILITY_IAM` / `CAPABILITY_NAMED_IAM` for AWS::IAM::* resources
+///     (named when an IAM resource carries an explicit Name property)
+///   * `CAPABILITY_AUTO_EXPAND` when the template uses a Transform
+///     directive (AWS::Serverless, AWS::Include, custom)
+fn validate_capabilities(
+    parsed: &template::ParsedTemplate,
+    template_body: &str,
+    supplied: &[String],
+) -> Result<(), AwsError> {
+    let has_iam = parsed
+        .resources
+        .iter()
+        .any(|r| r.resource_type.starts_with("AWS::IAM::"));
+    let needs_named_iam = parsed.resources.iter().any(|r| {
+        r.resource_type.starts_with("AWS::IAM::")
+            && r.properties
+                .get(match r.resource_type.as_str() {
+                    "AWS::IAM::Role" => "RoleName",
+                    "AWS::IAM::User" => "UserName",
+                    "AWS::IAM::Group" => "GroupName",
+                    "AWS::IAM::Policy" => "PolicyName",
+                    "AWS::IAM::ManagedPolicy" => "ManagedPolicyName",
+                    _ => "",
+                })
+                .is_some()
+    });
+    let has_transform =
+        template_body.contains("\"Transform\"") || template_body.contains("Transform:");
+
+    let has_cap = |c: &str| supplied.iter().any(|x| x == c);
+
+    if needs_named_iam && !has_cap("CAPABILITY_NAMED_IAM") {
+        return Err(AwsError::bad_request(
+            "InsufficientCapabilitiesException",
+            "Requires capabilities : [CAPABILITY_NAMED_IAM]",
+        ));
+    }
+    if has_iam && !has_cap("CAPABILITY_IAM") && !has_cap("CAPABILITY_NAMED_IAM") {
+        return Err(AwsError::bad_request(
+            "InsufficientCapabilitiesException",
+            "Requires capabilities : [CAPABILITY_IAM]",
+        ));
+    }
+    if has_transform && !has_cap("CAPABILITY_AUTO_EXPAND") {
+        return Err(AwsError::bad_request(
+            "InsufficientCapabilitiesException",
+            "Requires capabilities : [CAPABILITY_AUTO_EXPAND]",
+        ));
+    }
+    Ok(())
+}
+
 pub fn create_stack(
     state: &CloudFormationState,
     input: &Value,
@@ -199,6 +253,17 @@ pub fn create_stack(
 
     // Validate and parse template
     let parsed = template::validate_and_parse(&template_body, &parameters)?;
+
+    // Validate Capabilities against what the template actually requires.
+    let supplied_capabilities: Vec<String> = input["Capabilities"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    validate_capabilities(&parsed, &template_body, &supplied_capabilities)?;
 
     let now = now_iso8601();
     let stack_id = stack_arn(&ctx.region, &ctx.account_id, &stack_name);
@@ -763,5 +828,91 @@ mod termination_protection_tests {
         let resp = describe_stacks(&state, &json!({ "StackName": "s1" })).unwrap();
         let stacks = &resp["Stacks"]["member"];
         assert_eq!(stacks[0]["EnableTerminationProtection"], true);
+    }
+}
+
+#[cfg(test)]
+mod capabilities_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("cloudformation", "us-east-1")
+    }
+
+    const IAM_TEMPLATE: &str = r#"{
+        "Resources": {
+            "R": { "Type": "AWS::IAM::Role" }
+        }
+    }"#;
+
+    const NAMED_IAM_TEMPLATE: &str = r#"{
+        "Resources": {
+            "R": { "Type": "AWS::IAM::Role", "Properties": { "RoleName": "named" } }
+        }
+    }"#;
+
+    const SAM_TEMPLATE: &str = r#"{
+        "Transform": "AWS::Serverless-2016-10-31",
+        "Resources": {
+            "F": { "Type": "AWS::Serverless::Function" }
+        }
+    }"#;
+
+    #[test]
+    fn iam_template_without_capability_is_rejected() {
+        let state = CloudFormationState::default();
+        let err = create_stack(
+            &state,
+            &json!({ "StackName": "s", "TemplateBody": IAM_TEMPLATE }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InsufficientCapabilitiesException");
+        assert!(err.message.contains("CAPABILITY_IAM"));
+    }
+
+    #[test]
+    fn iam_template_with_capability_iam_is_accepted() {
+        let state = CloudFormationState::default();
+        create_stack(
+            &state,
+            &json!({
+                "StackName": "s",
+                "TemplateBody": IAM_TEMPLATE,
+                "Capabilities": ["CAPABILITY_IAM"],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn named_iam_template_requires_named_capability() {
+        let state = CloudFormationState::default();
+        let err = create_stack(
+            &state,
+            &json!({
+                "StackName": "s",
+                "TemplateBody": NAMED_IAM_TEMPLATE,
+                "Capabilities": ["CAPABILITY_IAM"],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InsufficientCapabilitiesException");
+        assert!(err.message.contains("CAPABILITY_NAMED_IAM"));
+    }
+
+    #[test]
+    fn transform_template_requires_auto_expand() {
+        let state = CloudFormationState::default();
+        let err = create_stack(
+            &state,
+            &json!({ "StackName": "s", "TemplateBody": SAM_TEMPLATE }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InsufficientCapabilitiesException");
+        assert!(err.message.contains("CAPABILITY_AUTO_EXPAND"));
     }
 }
