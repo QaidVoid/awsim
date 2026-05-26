@@ -572,6 +572,40 @@ mod tests {
     }
 
     #[test]
+    fn test_create_log_group_persists_log_group_class() {
+        let svc = CloudWatchLogsService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/ia/group", "logGroupClass": "INFREQUENT_ACCESS" }),
+            &ctx,
+        ))
+        .unwrap();
+        let desc = block_on(svc.handle(
+            "DescribeLogGroups",
+            json!({ "logGroupNamePrefix": "/ia/" }),
+            &ctx,
+        ))
+        .unwrap();
+        let groups = desc["logGroups"].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0]["logGroupClass"], "INFREQUENT_ACCESS");
+    }
+
+    #[test]
+    fn test_create_log_group_rejects_invalid_log_group_class() {
+        let svc = CloudWatchLogsService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/bad/group", "logGroupClass": "ARCHIVE" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
     fn test_put_log_events_rejects_too_old_events() {
         let svc = CloudWatchLogsService::new();
         let ctx = ctx();

@@ -40,8 +40,17 @@ pub fn create_log_group(
         }
     }
 
-    let group = LogGroup::new(name.to_string(), arn.clone(), tags);
-    info!(log_group = %name, "Created log group");
+    let log_group_class = input["logGroupClass"].as_str().unwrap_or("STANDARD");
+    if !matches!(log_group_class, "STANDARD" | "INFREQUENT_ACCESS") {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!("logGroupClass `{log_group_class}` must be STANDARD or INFREQUENT_ACCESS."),
+        ));
+    }
+
+    let mut group = LogGroup::new(name.to_string(), arn.clone(), tags);
+    group.log_group_class = log_group_class.to_string();
+    info!(log_group = %name, class = %log_group_class, "Created log group");
     state.log_groups.insert(name.to_string(), group);
 
     Ok(json!({}))
@@ -106,6 +115,7 @@ pub fn describe_log_groups(
                 "creationTime": g.creation_time,
                 "storedBytes": g.stored_bytes,
                 "metricFilterCount": 0,
+                "logGroupClass": g.log_group_class,
             });
             if let Some(days) = g.retention_in_days {
                 obj["retentionInDays"] = json!(days);

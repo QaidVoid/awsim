@@ -57,6 +57,8 @@ pub struct LogGroup {
     pub stored_bytes: u64,
     pub tags: HashMap<String, String>,
     pub streams: DashMap<String, LogStream>,
+    /// `STANDARD` or `INFREQUENT_ACCESS`; surfaced in DescribeLogGroups.
+    pub log_group_class: String,
 }
 
 impl LogGroup {
@@ -69,6 +71,7 @@ impl LogGroup {
             stored_bytes: 0,
             tags,
             streams: DashMap::new(),
+            log_group_class: "STANDARD".to_string(),
         }
     }
 }
@@ -167,6 +170,12 @@ pub struct LogGroupSnapshot {
     pub stored_bytes: u64,
     pub tags: HashMap<String, String>,
     pub streams: Vec<LogStreamSnapshot>,
+    #[serde(default = "default_log_group_class")]
+    pub log_group_class: String,
+}
+
+fn default_log_group_class() -> String {
+    "STANDARD".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -341,6 +350,7 @@ impl Snapshottable for LogsState {
                     stored_bytes: g.stored_bytes,
                     tags: g.tags.clone(),
                     streams,
+                    log_group_class: g.log_group_class.clone(),
                 }
             })
             .collect();
@@ -388,6 +398,7 @@ impl Snapshottable for LogsState {
                 stored_bytes: gs.stored_bytes,
                 tags: gs.tags,
                 streams: DashMap::new(),
+                log_group_class: gs.log_group_class,
             };
             for ss in gs.streams {
                 let stream = LogStream {
