@@ -48,6 +48,13 @@ pub struct DbInstance {
     pub storage_type: String,
     pub cluster_identifier: Option<String>,
     pub created_at: String,
+    /// Provisioned IOPS. Only meaningful for `io1`/`io2`/`gp3`; AWS
+    /// rejects any non-zero Iops on `gp2`/`magnetic`.
+    #[serde(default)]
+    pub iops: Option<u32>,
+    /// Provisioned storage throughput in MiB/s. Only valid on `gp3`.
+    #[serde(default)]
+    pub storage_throughput: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

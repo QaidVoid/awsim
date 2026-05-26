@@ -20,7 +20,7 @@ fn instance_to_value(inst: &DbInstance) -> Value {
         })
     });
 
-    json!({
+    let mut obj = json!({
         "DBInstanceIdentifier": inst.identifier,
         "DBInstanceArn": inst.arn,
         "DBInstanceClass": inst.instance_class,
@@ -37,7 +37,14 @@ fn instance_to_value(inst: &DbInstance) -> Value {
         "StorageType": inst.storage_type,
         "DBClusterIdentifier": inst.cluster_identifier,
         "InstanceCreateTime": inst.created_at,
-    })
+    });
+    if let Some(iops) = inst.iops {
+        obj["Iops"] = json!(iops);
+    }
+    if let Some(t) = inst.storage_throughput {
+        obj["StorageThroughput"] = json!(t);
+    }
+    obj
 }
 
 pub fn create_db_instance(
@@ -66,6 +73,27 @@ pub fn create_db_instance(
         )));
     }
 
+    // AWS only accepts Iops on io1/io2/gp3; everything else must be
+    // either omitted or zero. StorageThroughput is gp3-only.
+    let iops = opt_u32(input, "Iops");
+    if let Some(v) = iops
+        && v > 0
+        && !matches!(storage_type.as_str(), "io1" | "io2" | "gp3")
+    {
+        return Err(invalid_parameter(format!(
+            "Iops is only supported with io1, io2, or gp3 storage; got `{storage_type}`."
+        )));
+    }
+    let storage_throughput = opt_u32(input, "StorageThroughput");
+    if let Some(v) = storage_throughput
+        && v > 0
+        && storage_type != "gp3"
+    {
+        return Err(invalid_parameter(format!(
+            "StorageThroughput is only supported with gp3 storage; got `{storage_type}`."
+        )));
+    }
+
     // Validate engine
     match engine {
         "postgres" | "mysql" | "mariadb" | "oracle-ee" | "sqlserver-ex" | "sqlserver-se"
@@ -87,6 +115,15 @@ pub fn create_db_instance(
     let address = instance_endpoint(identifier, &ctx.region);
     let port = default_port(engine);
 
+    let vpc_security_groups: Vec<String> = input["VpcSecurityGroupIds"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let inst = DbInstance {
         identifier: identifier.to_string(),
         arn: arn.clone(),
@@ -98,12 +135,14 @@ pub fn create_db_instance(
         allocated_storage,
         endpoint: Some(DbEndpoint { address, port }),
         subnet_group_name,
-        vpc_security_groups: vec![],
+        vpc_security_groups,
         multi_az,
         publicly_accessible,
         storage_type,
         cluster_identifier: opt_str(input, "DBClusterIdentifier").map(|s| s.to_string()),
         created_at: now_iso8601(),
+        iops,
+        storage_throughput,
     };
 
     let result = instance_to_value(&inst);
@@ -339,5 +378,68 @@ mod db_identifier_tests {
         assert!(validate_db_identifier("").is_err());
         let long = "a".repeat(64);
         assert!(validate_db_identifier(&long).is_err());
+    }
+}
+
+#[cfg(test)]
+mod create_db_instance_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("rds", "us-east-1")
+    }
+
+    fn base_input() -> Value {
+        json!({
+            "DBInstanceIdentifier": "prod-db",
+            "DBInstanceClass": "db.t3.micro",
+            "Engine": "postgres",
+            "MasterUsername": "admin",
+            "MasterUserPassword": "secret123",
+        })
+    }
+
+    #[test]
+    fn persists_iops_and_storage_throughput_on_gp3() {
+        let state = RdsState::default();
+        let mut input = base_input();
+        input["StorageType"] = json!("gp3");
+        input["Iops"] = json!(3000);
+        input["StorageThroughput"] = json!(125);
+        let resp = create_db_instance(&state, &input, &ctx()).unwrap();
+        assert_eq!(resp["DBInstance"]["Iops"], 3000);
+        assert_eq!(resp["DBInstance"]["StorageThroughput"], 125);
+    }
+
+    #[test]
+    fn rejects_iops_on_gp2() {
+        let state = RdsState::default();
+        let mut input = base_input();
+        input["StorageType"] = json!("gp2");
+        input["Iops"] = json!(3000);
+        let err = create_db_instance(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn rejects_storage_throughput_on_io1() {
+        let state = RdsState::default();
+        let mut input = base_input();
+        input["StorageType"] = json!("io1");
+        input["Iops"] = json!(3000);
+        input["StorageThroughput"] = json!(125);
+        let err = create_db_instance(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn persists_vpc_security_group_ids() {
+        let state = RdsState::default();
+        let mut input = base_input();
+        input["VpcSecurityGroupIds"] = json!(["sg-1", "sg-2"]);
+        let resp = create_db_instance(&state, &input, &ctx()).unwrap();
+        let sgs = resp["DBInstance"]["VpcSecurityGroups"].as_array().unwrap();
+        assert_eq!(sgs.len(), 2);
+        assert_eq!(sgs[0]["VpcSecurityGroupId"], "sg-1");
     }
 }
