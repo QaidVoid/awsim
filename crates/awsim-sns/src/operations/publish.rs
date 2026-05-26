@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use awsim_core::{AwsError, InternalEvent, RequestContext};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
@@ -89,7 +90,18 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
     };
 
     let subject = input["Subject"].as_str().map(str::to_string);
-    let message_attributes = parse_message_attributes(input);
+    let message_attributes = parse_message_attributes(input)?;
+
+    let payload_bytes = message.len() + attributes_payload_size(&message_attributes);
+    if payload_bytes > SNS_MAX_PAYLOAD_BYTES {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValue",
+            format!(
+                "Message + MessageAttributes payload is {payload_bytes} bytes; \
+                 SNS rejects payloads larger than {SNS_MAX_PAYLOAD_BYTES} bytes."
+            ),
+        ));
+    }
 
     let message_id = Uuid::new_v4().to_string();
 
@@ -295,21 +307,18 @@ pub fn publish_batch(
         }
     }
 
-    // AWS caps a SNS PublishBatch payload at 262144 bytes (sum of
-    // Message body lengths). Each individual message may not exceed
-    // the same cap. Reject early with BatchRequestTooLong instead of
-    // letting the batch trickle through with partial deliveries.
-    const SNS_BATCH_PAYLOAD_CAP: usize = 262_144;
+    // AWS caps total PublishBatch payload at 256 KB; per-entry caps
+    // are enforced separately inside the loop after attributes parse.
     let total_bytes: usize = entries
         .iter()
         .filter_map(|e| e["Message"].as_str())
         .map(str::len)
         .sum();
-    if total_bytes > SNS_BATCH_PAYLOAD_CAP {
+    if total_bytes > SNS_MAX_PAYLOAD_BYTES {
         return Err(AwsError::bad_request(
             "BatchRequestTooLong",
             format!(
-                "Batch request total size {total_bytes} bytes exceeds the {SNS_BATCH_PAYLOAD_CAP}-byte limit."
+                "Batch request total size {total_bytes} bytes exceeds the {SNS_MAX_PAYLOAD_BYTES}-byte limit."
             ),
         ));
     }
@@ -333,7 +342,31 @@ pub fn publish_batch(
             Some(msg) => {
                 let message_id = Uuid::new_v4().to_string();
                 let subject = entry["Subject"].as_str().map(str::to_string);
-                let message_attributes = parse_message_attributes(entry);
+                let message_attributes = match parse_message_attributes(entry) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        failed.push(json!({
+                            "Id": id,
+                            "Code": e.code,
+                            "Message": e.message,
+                            "SenderFault": true,
+                        }));
+                        continue;
+                    }
+                };
+
+                let entry_bytes = msg.len() + attributes_payload_size(&message_attributes);
+                if entry_bytes > SNS_MAX_PAYLOAD_BYTES {
+                    failed.push(json!({
+                        "Id": id,
+                        "Code": "InvalidParameterValue",
+                        "Message": format!(
+                            "Entry payload is {entry_bytes} bytes; SNS rejects entries larger than {SNS_MAX_PAYLOAD_BYTES} bytes."
+                        ),
+                        "SenderFault": true,
+                    }));
+                    continue;
+                }
 
                 info!(
                     message_id = %message_id,
@@ -381,6 +414,23 @@ pub fn publish_batch(
 // Helpers
 // ---------------------------------------------------------------------------
 
+const SNS_MAX_PAYLOAD_BYTES: usize = 262_144;
+
+fn attributes_payload_size(attrs: &HashMap<String, MessageAttribute>) -> usize {
+    attrs
+        .iter()
+        .map(|(name, attr)| {
+            let value_bytes = attr
+                .string_value
+                .as_ref()
+                .map(|s| s.len())
+                .or_else(|| attr.binary_value.as_ref().map(|b| b.len()))
+                .unwrap_or(0);
+            name.len() + attr.data_type.len() + value_bytes
+        })
+        .sum()
+}
+
 /// When `MessageStructure="json"` was supplied on Publish, select the
 /// protocol-specific message body from the parsed JSON. Returns `None`
 /// when no MessageStructure was provided (caller should deliver the raw
@@ -396,21 +446,134 @@ fn select_message_for_protocol<'a>(
         .and_then(Value::as_str)
 }
 
-fn parse_message_attributes(input: &Value) -> HashMap<String, MessageAttribute> {
+fn parse_message_attributes(input: &Value) -> Result<HashMap<String, MessageAttribute>, AwsError> {
     let mut result = HashMap::new();
-    if let Some(attrs) = input["MessageAttributes"].as_object() {
-        for (name, attr) in attrs {
-            let data_type = attr["DataType"].as_str().unwrap_or("String").to_string();
-            let string_value = attr["StringValue"].as_str().map(str::to_string);
-            result.insert(
-                name.clone(),
-                MessageAttribute {
-                    data_type,
-                    string_value,
-                    binary_value: None,
-                },
-            );
+    let Some(attrs) = input["MessageAttributes"].as_object() else {
+        return Ok(result);
+    };
+    for (name, attr) in attrs {
+        let data_type = attr["DataType"].as_str().ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterValue",
+                format!("MessageAttribute `{name}` is missing DataType."),
+            )
+        })?;
+        let base = data_type.split('.').next().unwrap_or("");
+        if !matches!(base, "String" | "Number" | "Binary") {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValue",
+                format!(
+                    "MessageAttribute `{name}` has unsupported DataType `{data_type}`; \
+                     must be String / Number / Binary, optionally with a .CustomType suffix."
+                ),
+            ));
         }
+        let string_value = attr["StringValue"].as_str().map(str::to_string);
+        let binary_value = match attr["BinaryValue"].as_str() {
+            Some(s) => Some(BASE64.decode(s).map_err(|_| {
+                AwsError::bad_request(
+                    "InvalidParameterValue",
+                    format!("MessageAttribute `{name}` BinaryValue is not valid base64."),
+                )
+            })?),
+            None => None,
+        };
+        match base {
+            "String" | "Number" if string_value.is_none() => {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterValue",
+                    format!(
+                        "MessageAttribute `{name}` is `{base}` but no StringValue was supplied."
+                    ),
+                ));
+            }
+            "Binary" if binary_value.is_none() => {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterValue",
+                    format!("MessageAttribute `{name}` is Binary but no BinaryValue was supplied."),
+                ));
+            }
+            _ => {}
+        }
+        result.insert(
+            name.clone(),
+            MessageAttribute {
+                data_type: data_type.to_string(),
+                string_value,
+                binary_value,
+            },
+        );
     }
-    result
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn wrap(attr: Value) -> Value {
+        json!({ "MessageAttributes": { "k": attr } })
+    }
+
+    #[test]
+    fn accepts_string_attribute() {
+        let v = wrap(json!({ "DataType": "String", "StringValue": "hello" }));
+        let out = parse_message_attributes(&v).unwrap();
+        let a = &out["k"];
+        assert_eq!(a.data_type, "String");
+        assert_eq!(a.string_value.as_deref(), Some("hello"));
+        assert!(a.binary_value.is_none());
+    }
+
+    #[test]
+    fn accepts_custom_string_suffix() {
+        let v = wrap(json!({ "DataType": "String.Phone", "StringValue": "+1" }));
+        let out = parse_message_attributes(&v).unwrap();
+        assert_eq!(out["k"].data_type, "String.Phone");
+    }
+
+    #[test]
+    fn decodes_binary_value() {
+        let v = wrap(json!({ "DataType": "Binary", "BinaryValue": BASE64.encode(b"abc") }));
+        let out = parse_message_attributes(&v).unwrap();
+        assert_eq!(out["k"].binary_value.as_deref(), Some(&b"abc"[..]));
+    }
+
+    #[test]
+    fn rejects_missing_data_type() {
+        let v = wrap(json!({ "StringValue": "x" }));
+        let err = parse_message_attributes(&v).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+        assert!(err.message.contains("missing DataType"));
+    }
+
+    #[test]
+    fn rejects_unknown_data_type() {
+        let v = wrap(json!({ "DataType": "Object", "StringValue": "x" }));
+        let err = parse_message_attributes(&v).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+        assert!(err.message.contains("unsupported DataType"));
+    }
+
+    #[test]
+    fn rejects_string_without_string_value() {
+        let v = wrap(json!({ "DataType": "String" }));
+        let err = parse_message_attributes(&v).unwrap_err();
+        assert!(err.message.contains("no StringValue was supplied"));
+    }
+
+    #[test]
+    fn rejects_binary_without_binary_value() {
+        let v = wrap(json!({ "DataType": "Binary" }));
+        let err = parse_message_attributes(&v).unwrap_err();
+        assert!(err.message.contains("no BinaryValue was supplied"));
+    }
+
+    #[test]
+    fn rejects_malformed_base64() {
+        let v = wrap(json!({ "DataType": "Binary", "BinaryValue": "!!!not-base64!!!" }));
+        let err = parse_message_attributes(&v).unwrap_err();
+        assert!(err.message.contains("not valid base64"));
+    }
 }
