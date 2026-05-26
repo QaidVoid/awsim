@@ -117,6 +117,25 @@ pub fn put_parameter(
     let param_type = input["Type"].as_str().unwrap_or("String");
     validate_param_type(param_type)?;
 
+    // AWS optionally tags the parameter's `DataType` (separate from
+    // `Type`). Allowed values: `text` (default), `aws:ec2:image`,
+    // `aws:ssm:integration`, plus list variants. `aws:ec2:image`
+    // additionally validates that Value looks like an AMI id when
+    // Type=String.
+    let data_type = input["DataType"].as_str().unwrap_or("text");
+    if !matches!(data_type, "text" | "aws:ec2:image" | "aws:ssm:integration") {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("DataType `{data_type}` must be text, aws:ec2:image, or aws:ssm:integration."),
+        ));
+    }
+    if data_type == "aws:ec2:image" && !value.starts_with("ami-") {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("DataType aws:ec2:image requires Value to start with `ami-`; got `{value}`."),
+        ));
+    }
+
     // AWS optionally validates Value against AllowedPattern at
     // PutParameter time. Reject malformed regex and non-matching
     // values with ValidationException to match the real API.

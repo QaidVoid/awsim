@@ -259,6 +259,57 @@ mod tests {
     }
 
     #[test]
+    fn test_put_parameter_data_type_aws_ec2_image_requires_ami_value() {
+        let svc = SsmService::new();
+        let ctx = ctx();
+        // Valid AMI id passes.
+        block_on(svc.handle(
+            "PutParameter",
+            json!({
+                "Name": "/ami/golden",
+                "Value": "ami-0123456789abcdef0",
+                "Type": "String",
+                "DataType": "aws:ec2:image",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        // Non-AMI Value is rejected.
+        let err = block_on(svc.handle(
+            "PutParameter",
+            json!({
+                "Name": "/ami/bad",
+                "Value": "not-an-ami",
+                "Type": "String",
+                "DataType": "aws:ec2:image",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("ami-"));
+    }
+
+    #[test]
+    fn test_put_parameter_rejects_unknown_data_type() {
+        let svc = SsmService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "PutParameter",
+            json!({
+                "Name": "/p",
+                "Value": "v",
+                "Type": "String",
+                "DataType": "aws:rds:cluster",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
     fn test_put_parameter_allowed_pattern_rejects_bad_regex() {
         let svc = SsmService::new();
         let ctx = ctx();
