@@ -23,6 +23,11 @@ pub struct Certificate {
     pub dns_validation_records: HashMap<String, DnsValidationRecord>,
     pub tags: HashMap<String, String>,
     pub created_at: u64,
+    /// ARNs of resources that reference this certificate. Populated by
+    /// downstream services (e.g. ELBv2, CloudFront) via the cross-service
+    /// event sink. DeleteCertificate is rejected while non-empty.
+    #[serde(default)]
+    pub in_use_by: Vec<String>,
 }
 
 /// Serializable snapshot.

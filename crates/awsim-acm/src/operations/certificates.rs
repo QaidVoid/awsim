@@ -195,6 +195,7 @@ pub fn request_certificate(
         dns_validation_records,
         tags,
         created_at: now_secs(),
+        in_use_by: Vec::new(),
     };
 
     state.certificates.insert(certificate_arn.clone(), cert);
@@ -253,7 +254,7 @@ pub fn describe_certificate(
         "Type": "AMAZON_ISSUED",
         "KeyAlgorithm": "RSA_2048",
         "SignatureAlgorithm": "SHA256WITHRSA",
-        "InUseBy": [],
+        "InUseBy": cert.in_use_by,
         "NotBefore": cert.created_at,
         "NotAfter": cert.created_at + 365 * 24 * 3600,
         "CreatedAt": cert.created_at,
@@ -304,13 +305,26 @@ pub fn delete_certificate(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "CertificateArn is required"))?;
 
-    if state.certificates.remove(arn).is_none() {
-        return Err(AwsError::not_found(
-            "ResourceNotFoundException",
-            format!("Certificate not found: {arn}"),
+    let in_use_by = {
+        let cert = state.certificates.get(arn).ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Certificate not found: {arn}"),
+            )
+        })?;
+        cert.in_use_by.clone()
+    };
+    if !in_use_by.is_empty() {
+        return Err(AwsError::bad_request(
+            "ResourceInUseException",
+            format!(
+                "Certificate {arn} is in use by {} resource(s) and cannot be deleted.",
+                in_use_by.len()
+            ),
         ));
     }
 
+    state.certificates.remove(arn);
     Ok(json!({}))
 }
 
@@ -333,6 +347,13 @@ pub fn get_certificate(
             format!("Certificate not found: {arn}"),
         )
     })?;
+
+    if cert.status == "PENDING_VALIDATION" {
+        return Err(AwsError::bad_request(
+            "RequestInProgressException",
+            format!("Certificate {arn} is still PENDING_VALIDATION."),
+        ));
+    }
 
     let pem = fake_pem_certificate(&cert.domain_name);
     let chain = fake_pem_chain();
@@ -435,6 +456,7 @@ pub fn import_certificate(
         dns_validation_records: HashMap::new(),
         tags,
         created_at: now_secs(),
+        in_use_by: Vec::new(),
     };
 
     state.certificates.insert(certificate_arn.clone(), cert);
@@ -512,4 +534,68 @@ pub fn resend_validation_email(
 
     // Stub: email sending always succeeds
     Ok(json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("acm", "us-east-1")
+    }
+
+    fn pending_cert(arn: &str) -> Certificate {
+        Certificate {
+            certificate_arn: arn.to_string(),
+            domain_name: "example.com".to_string(),
+            subject_alternative_names: Vec::new(),
+            status: "PENDING_VALIDATION".to_string(),
+            validation_method: "DNS".to_string(),
+            dns_validation_records: HashMap::new(),
+            tags: HashMap::new(),
+            created_at: 0,
+            in_use_by: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn get_certificate_rejects_pending_validation() {
+        let state = AcmState::default();
+        let arn = "arn:aws:acm:us-east-1:000000000000:certificate/pending";
+        state
+            .certificates
+            .insert(arn.to_string(), pending_cert(arn));
+
+        let err = get_certificate(&state, &json!({ "CertificateArn": arn }), &ctx()).unwrap_err();
+        assert_eq!(err.code, "RequestInProgressException");
+    }
+
+    #[test]
+    fn delete_certificate_rejects_when_in_use() {
+        let state = AcmState::default();
+        let arn = "arn:aws:acm:us-east-1:000000000000:certificate/inuse";
+        let mut cert = pending_cert(arn);
+        cert.status = "ISSUED".to_string();
+        cert.in_use_by.push(
+            "arn:aws:elasticloadbalancing:us-east-1:000000000000:loadbalancer/app/x/y".into(),
+        );
+        state.certificates.insert(arn.to_string(), cert);
+
+        let err =
+            delete_certificate(&state, &json!({ "CertificateArn": arn }), &ctx()).unwrap_err();
+        assert_eq!(err.code, "ResourceInUseException");
+        assert!(state.certificates.contains_key(arn));
+    }
+
+    #[test]
+    fn delete_certificate_succeeds_when_not_in_use() {
+        let state = AcmState::default();
+        let arn = "arn:aws:acm:us-east-1:000000000000:certificate/free";
+        let mut cert = pending_cert(arn);
+        cert.status = "ISSUED".to_string();
+        state.certificates.insert(arn.to_string(), cert);
+
+        delete_certificate(&state, &json!({ "CertificateArn": arn }), &ctx()).unwrap();
+        assert!(!state.certificates.contains_key(arn));
+    }
 }
