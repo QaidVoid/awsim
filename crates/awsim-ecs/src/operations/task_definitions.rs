@@ -15,6 +15,8 @@ fn task_def_to_json(td: &TaskDefinition) -> Value {
         "networkMode": td.network_mode,
         "requiresCompatibilities": td.requires_compatibilities,
         "registeredAt": now_epoch_str(),
+        "placementConstraints": td.placement_constraints,
+        "placementStrategy": td.placement_strategy,
     });
     if let Some(ref cpu) = td.cpu {
         obj["cpu"] = json!(cpu);
@@ -153,6 +155,36 @@ pub fn register_task_definition(
         ));
     }
 
+    // placementConstraints + placementStrategy. AWS rejects unknown
+    // `type` values at RegisterTaskDefinition with ClientException, so
+    // do the same here.
+    let placement_constraints: Vec<Value> = input["placementConstraints"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    for c in &placement_constraints {
+        let t = c.get("type").and_then(Value::as_str).unwrap_or("");
+        if !matches!(t, "memberOf" | "distinctInstance") {
+            return Err(AwsError::bad_request(
+                "ClientException",
+                format!("placementConstraints.type `{t}` must be memberOf or distinctInstance."),
+            ));
+        }
+    }
+    let placement_strategy: Vec<Value> = input["placementStrategy"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    for s in &placement_strategy {
+        let t = s.get("type").and_then(Value::as_str).unwrap_or("");
+        if !matches!(t, "random" | "spread" | "binpack") {
+            return Err(AwsError::bad_request(
+                "ClientException",
+                format!("placementStrategy.type `{t}` must be random, spread, or binpack."),
+            ));
+        }
+    }
+
     let cpu = input["cpu"].as_str().map(str::to_string);
     let memory = input["memory"].as_str().map(str::to_string);
     if needs_fargate {
@@ -185,6 +217,8 @@ pub fn register_task_definition(
             requires_compatibilities,
             cpu: cpu.clone(),
             memory: memory.clone(),
+            placement_constraints: placement_constraints.clone(),
+            placement_strategy: placement_strategy.clone(),
         };
         revisions.push(td);
         rev
@@ -368,5 +402,53 @@ mod fargate_cpu_memory_tests {
     fn rejects_non_numeric_cpu_or_memory() {
         assert!(validate_fargate_cpu_memory("xyz", "512").is_err());
         assert!(validate_fargate_cpu_memory("256", "xyz").is_err());
+    }
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+    use crate::state::EcsState;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("ecs", "us-east-1")
+    }
+
+    fn base_input() -> Value {
+        json!({
+            "family": "t",
+            "containerDefinitions": [],
+        })
+    }
+
+    #[test]
+    fn persists_placement_constraints_and_strategy() {
+        let state = EcsState::default();
+        let mut input = base_input();
+        input["placementConstraints"] = json!([{ "type": "memberOf", "expression": "attribute:ecs.instance-type == t3.medium" }]);
+        input["placementStrategy"] =
+            json!([{ "type": "spread", "field": "attribute:ecs.availability-zone" }]);
+        let resp = register_task_definition(&state, &input, &ctx()).unwrap();
+        let td = &resp["taskDefinition"];
+        assert_eq!(td["placementConstraints"][0]["type"], "memberOf");
+        assert_eq!(td["placementStrategy"][0]["type"], "spread");
+    }
+
+    #[test]
+    fn rejects_unknown_placement_constraint_type() {
+        let state = EcsState::default();
+        let mut input = base_input();
+        input["placementConstraints"] = json!([{ "type": "bogus" }]);
+        let err = register_task_definition(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "ClientException");
+    }
+
+    #[test]
+    fn rejects_unknown_placement_strategy_type() {
+        let state = EcsState::default();
+        let mut input = base_input();
+        input["placementStrategy"] = json!([{ "type": "bogus" }]);
+        let err = register_task_definition(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "ClientException");
     }
 }

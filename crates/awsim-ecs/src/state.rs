@@ -68,6 +68,12 @@ pub struct TaskDefinition {
     /// Task-level memory in MiB as a string (Fargate uses fixed pairs
     /// with cpu; EC2 is any positive integer).
     pub memory: Option<String>,
+    /// Per-task placementConstraints. Each entry is `{ type, expression }`;
+    /// `type` is one of `memberOf` or `distinctInstance`. Stored verbatim.
+    pub placement_constraints: Vec<Value>,
+    /// Per-task placementStrategy. Each entry is `{ type, field }`;
+    /// `type` is one of `random`, `spread`, or `binpack`. Stored verbatim.
+    pub placement_strategy: Vec<Value>,
 }
 
 /// A capacity provider.
