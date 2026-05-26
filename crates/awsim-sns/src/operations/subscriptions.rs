@@ -95,6 +95,11 @@ pub fn subscribe(state: &SnsState, input: &Value, ctx: &RequestContext) -> Resul
         {
             validate_filter_policy_str(fp)?;
         }
+        if let Some(rp) = attrs.get("RedrivePolicy").and_then(Value::as_str)
+            && !rp.is_empty()
+        {
+            validate_redrive_policy(rp)?;
+        }
         for (k, v) in attrs {
             if let Some(s) = v.as_str() {
                 sub_attributes.insert(k.clone(), s.to_string());
@@ -264,6 +269,9 @@ pub fn set_subscription_attributes(
     if attr_name == "FilterPolicy" && !attr_value.is_empty() {
         validate_filter_policy_str(attr_value)?;
     }
+    if attr_name == "RedrivePolicy" && !attr_value.is_empty() {
+        validate_redrive_policy(attr_value)?;
+    }
 
     let mut sub = state.subscriptions.get_mut(sub_arn).ok_or_else(|| {
         AwsError::not_found("NotFound", format!("Subscription not found: {sub_arn}"))
@@ -348,4 +356,68 @@ fn subscription_summary(sub: &Subscription) -> Value {
         "Endpoint": sub.endpoint,
         "Owner": "",
     })
+}
+
+/// Validate a `RedrivePolicy` JSON document. AWS requires the policy to
+/// be valid JSON containing `deadLetterTargetArn` that points to an SQS
+/// queue in the same partition. Other dead-letter targets (SNS, Lambda,
+/// etc.) are not supported by SNS.
+fn validate_redrive_policy(policy: &str) -> Result<(), AwsError> {
+    let parsed: Value = serde_json::from_str(policy).map_err(|e| {
+        AwsError::bad_request(
+            "InvalidParameter",
+            format!("RedrivePolicy is not valid JSON: {e}"),
+        )
+    })?;
+    let target = parsed
+        .get("deadLetterTargetArn")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameter",
+                "RedrivePolicy.deadLetterTargetArn is required.",
+            )
+        })?;
+    if !target.starts_with("arn:aws:sqs:") {
+        return Err(AwsError::bad_request(
+            "InvalidParameter",
+            format!("RedrivePolicy.deadLetterTargetArn `{target}` must be an SQS queue ARN."),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod redrive_policy_tests {
+    use super::*;
+
+    #[test]
+    fn valid_sqs_arn_passes() {
+        validate_redrive_policy(
+            r#"{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:000000000000:dlq"}"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_non_sqs_target() {
+        let err = validate_redrive_policy(
+            r#"{"deadLetterTargetArn":"arn:aws:sns:us-east-1:000000000000:topic"}"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+        assert!(err.message.contains("SQS"));
+    }
+
+    #[test]
+    fn rejects_missing_dead_letter_target_arn() {
+        let err = validate_redrive_policy("{}").unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+    }
+
+    #[test]
+    fn rejects_malformed_json() {
+        let err = validate_redrive_policy("not-json").unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+    }
 }
