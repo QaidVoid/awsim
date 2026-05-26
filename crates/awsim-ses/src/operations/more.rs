@@ -233,6 +233,10 @@ pub fn create_configuration_set(
     let reputation_enabled = input["ReputationOptions"]["ReputationMetricsEnabled"]
         .as_bool()
         .unwrap_or(true);
+    let tls_policy = parse_tls_policy(&input["DeliveryOptions"]["TlsPolicy"])?;
+    let sending_pool_name = input["DeliveryOptions"]["SendingPoolName"]
+        .as_str()
+        .map(str::to_string);
     let mut cs = ConfigurationSet {
         name: name.to_string(),
         sending_enabled,
@@ -242,6 +246,8 @@ pub fn create_configuration_set(
         } else {
             None
         },
+        tls_policy,
+        sending_pool_name,
         ..Default::default()
     };
     if let Some(t) = input["Tags"].as_array() {
@@ -252,6 +258,45 @@ pub fn create_configuration_set(
         }
     }
     state.configuration_sets.insert(name.to_string(), cs);
+    Ok(json!({}))
+}
+
+/// Validate `DeliveryOptions.TlsPolicy` against the AWS enum. Returns
+/// `None` when the field is absent (configuration sets created without
+/// DeliveryOptions inherit AWS's `OPTIONAL` default at send time).
+fn parse_tls_policy(value: &Value) -> Result<Option<String>, AwsError> {
+    let Some(raw) = value.as_str() else {
+        return Ok(None);
+    };
+    match raw {
+        "REQUIRE" | "OPTIONAL" => Ok(Some(raw.to_string())),
+        other => Err(AwsError::bad_request(
+            "InvalidParameter",
+            format!("TlsPolicy '{other}' must be REQUIRE or OPTIONAL"),
+        )),
+    }
+}
+
+/// PutConfigurationSetDeliveryOptions — update TLS policy + sending pool
+/// on an existing configuration set. AWS keeps unspecified fields as-is
+/// when omitted, but in awsim we treat the request as a full replace per
+/// the v2 API contract.
+pub fn put_configuration_set_delivery_options(
+    state: &SesState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["ConfigurationSetName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "ConfigurationSetName is required")
+    })?;
+    let tls_policy = parse_tls_policy(&input["TlsPolicy"])?;
+    let sending_pool_name = input["SendingPoolName"].as_str().map(str::to_string);
+    let mut cs = state
+        .configuration_sets
+        .get_mut(name)
+        .ok_or_else(|| AwsError::not_found("NotFoundException", format!("Not found: {name}")))?;
+    cs.tls_policy = tls_policy;
+    cs.sending_pool_name = sending_pool_name;
     Ok(json!({}))
 }
 
@@ -311,11 +356,19 @@ pub fn get_configuration_set(
     if let Some(ts) = cs.reputation_last_fresh_start {
         reputation["LastFreshStart"] = json!(ts);
     }
+    let mut delivery = serde_json::Map::new();
+    if let Some(ref policy) = cs.tls_policy {
+        delivery.insert("TlsPolicy".to_string(), json!(policy));
+    }
+    if let Some(ref pool) = cs.sending_pool_name {
+        delivery.insert("SendingPoolName".to_string(), json!(pool));
+    }
     Ok(json!({
         "ConfigurationSetName": cs.name,
         "Tags": tags,
         "SendingOptions": { "SendingEnabled": cs.sending_enabled },
         "ReputationOptions": reputation,
+        "DeliveryOptions": Value::Object(delivery),
     }))
 }
 
@@ -1069,5 +1122,95 @@ mod reputation_options_tests {
             resp["ReputationOptions"].get("LastFreshStart").is_some(),
             "LastFreshStart should appear when reputation is enabled"
         );
+    }
+}
+
+#[cfg(test)]
+mod delivery_options_tests {
+    use super::*;
+
+    fn ctx() -> awsim_core::RequestContext {
+        awsim_core::RequestContext::new("ses", "us-east-1")
+    }
+
+    #[test]
+    fn create_configuration_set_persists_tls_policy() {
+        let state = SesState::default();
+        create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "DeliveryOptions": { "TlsPolicy": "REQUIRE", "SendingPoolName": "pool-1" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let cs = state.configuration_sets.get("cs").unwrap();
+        assert_eq!(cs.tls_policy.as_deref(), Some("REQUIRE"));
+        assert_eq!(cs.sending_pool_name.as_deref(), Some("pool-1"));
+    }
+
+    #[test]
+    fn create_configuration_set_rejects_invalid_tls_policy() {
+        let state = SesState::default();
+        let err = create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "DeliveryOptions": { "TlsPolicy": "STRICT" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+        assert!(err.message.contains("TlsPolicy"));
+    }
+
+    #[test]
+    fn put_delivery_options_updates_policy_and_pool() {
+        let state = SesState::default();
+        create_configuration_set(&state, &json!({ "ConfigurationSetName": "cs" }), &ctx()).unwrap();
+        put_configuration_set_delivery_options(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "TlsPolicy": "OPTIONAL",
+                "SendingPoolName": "pool-2",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let cs = state.configuration_sets.get("cs").unwrap();
+        assert_eq!(cs.tls_policy.as_deref(), Some("OPTIONAL"));
+        assert_eq!(cs.sending_pool_name.as_deref(), Some("pool-2"));
+    }
+
+    #[test]
+    fn put_delivery_options_not_found_for_missing_set() {
+        let state = SesState::default();
+        let err = put_configuration_set_delivery_options(
+            &state,
+            &json!({ "ConfigurationSetName": "nope", "TlsPolicy": "REQUIRE" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotFoundException");
+    }
+
+    #[test]
+    fn get_configuration_set_surfaces_delivery_options() {
+        let state = SesState::default();
+        create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "DeliveryOptions": { "TlsPolicy": "REQUIRE" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = get_configuration_set(&state, &json!({ "ConfigurationSetName": "cs" }), &ctx())
+            .unwrap();
+        assert_eq!(resp["DeliveryOptions"]["TlsPolicy"], "REQUIRE");
     }
 }

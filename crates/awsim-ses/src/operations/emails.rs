@@ -15,6 +15,22 @@ fn now_epoch() -> u64 {
         .as_secs()
 }
 
+/// Returns true when EmailTags carry the `aws-ses-disable-tls` marker
+/// with a truthy value, used by the simulator to model a recipient MTA
+/// without TLS support.
+fn tags_signal_no_tls(tags: Option<&Value>) -> bool {
+    let Some(arr) = tags.and_then(|v| v.as_array()) else {
+        return false;
+    };
+    arr.iter().any(|t| {
+        t.get("Name").and_then(|v| v.as_str()) == Some("aws-ses-disable-tls")
+            && matches!(
+                t.get("Value").and_then(|v| v.as_str()),
+                Some("true" | "1" | "yes")
+            )
+    })
+}
+
 // ---------------------------------------------------------------------------
 // SendEmail
 // ---------------------------------------------------------------------------
@@ -74,6 +90,27 @@ pub fn send_email(
 
     let configuration_set_name = input["ConfigurationSetName"].as_str().map(str::to_string);
 
+    // Configuration set lookup + TLS policy enforcement. When the set is
+    // configured with TlsPolicy=REQUIRE we refuse sends that the caller
+    // tags as plaintext-only via the `aws-ses-disable-tls=true` email
+    // tag. This mirrors the AWS behavior of refusing delivery when the
+    // recipient MTA cannot negotiate TLS.
+    if let Some(ref cs_name) = configuration_set_name {
+        let cs = state.configuration_sets.get(cs_name).ok_or_else(|| {
+            AwsError::not_found(
+                "ConfigurationSetDoesNotExist",
+                format!("Configuration set does not exist: {cs_name}"),
+            )
+        })?;
+        if cs.tls_policy.as_deref() == Some("REQUIRE") && tags_signal_no_tls(input.get("EmailTags"))
+        {
+            return Err(AwsError::bad_request(
+                "MessageRejected",
+                "ConfigurationSet TlsPolicy is REQUIRE; recipient does not support TLS",
+            ));
+        }
+    }
+
     // Content — Simple or Raw
     let content = &input["Content"];
     let (subject, body_text, body_html, raw) = if !content["Simple"].is_null() {
@@ -115,4 +152,84 @@ pub fn send_email(
     }
 
     Ok(json!({ "MessageId": message_id }))
+}
+
+#[cfg(test)]
+mod tls_policy_enforcement_tests {
+    use super::*;
+    use crate::operations::more::create_configuration_set;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("ses", "us-east-1")
+    }
+
+    fn send_input(cs_name: &str, no_tls: bool) -> Value {
+        let mut tags = vec![json!({ "Name": "campaign", "Value": "spring" })];
+        if no_tls {
+            tags.push(json!({ "Name": "aws-ses-disable-tls", "Value": "true" }));
+        }
+        json!({
+            "FromEmailAddress": "sender@example.com",
+            "Destination": { "ToAddresses": ["recipient@example.com"] },
+            "Content": { "Simple": { "Subject": { "Data": "hi" }, "Body": { "Text": { "Data": "hi" } } } },
+            "ConfigurationSetName": cs_name,
+            "EmailTags": tags,
+        })
+    }
+
+    #[test]
+    fn require_policy_blocks_send_marked_plaintext_only() {
+        let state = SesState::default();
+        create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "DeliveryOptions": { "TlsPolicy": "REQUIRE" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = send_email(&state, &send_input("cs", true), &ctx()).unwrap_err();
+        assert_eq!(err.code, "MessageRejected");
+        assert!(err.message.contains("REQUIRE"));
+    }
+
+    #[test]
+    fn require_policy_allows_send_without_disable_tag() {
+        let state = SesState::default();
+        create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "DeliveryOptions": { "TlsPolicy": "REQUIRE" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = send_email(&state, &send_input("cs", false), &ctx()).unwrap();
+        assert!(resp["MessageId"].is_string());
+    }
+
+    #[test]
+    fn optional_policy_accepts_plaintext_only_send() {
+        let state = SesState::default();
+        create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "DeliveryOptions": { "TlsPolicy": "OPTIONAL" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = send_email(&state, &send_input("cs", true), &ctx()).unwrap();
+        assert!(resp["MessageId"].is_string());
+    }
+
+    #[test]
+    fn missing_configuration_set_is_rejected() {
+        let state = SesState::default();
+        let err = send_email(&state, &send_input("nope", false), &ctx()).unwrap_err();
+        assert_eq!(err.code, "ConfigurationSetDoesNotExist");
+    }
 }

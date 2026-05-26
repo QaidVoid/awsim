@@ -295,6 +295,12 @@ impl ServiceHandler for SesService {
                 required_query_param: None,
             },
             RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/configuration-sets/{ConfigurationSetName}/delivery-options",
+                operation: "PutConfigurationSetDeliveryOptions",
+                required_query_param: None,
+            },
+            RouteDefinition {
                 method: "POST",
                 path_pattern: "/v2/email/configuration-sets/{ConfigurationSetName}/event-destinations",
                 operation: "CreateConfigurationSetEventDestination",
@@ -571,6 +577,9 @@ impl ServiceHandler for SesService {
             }
             "PutConfigurationSetReputationOptions" => {
                 operations::more::put_configuration_set_reputation_options(&state, &input, ctx)
+            }
+            "PutConfigurationSetDeliveryOptions" => {
+                operations::more::put_configuration_set_delivery_options(&state, &input, ctx)
             }
             "CreateConfigurationSetEventDestination" => {
                 operations::more::create_configuration_set_event_destination(&state, &input, ctx)

@@ -50,6 +50,12 @@ pub struct ConfigurationSet {
     /// metrics to the current "fresh" window.
     pub reputation_last_fresh_start: Option<u64>,
     pub event_destinations: Vec<EventDestination>,
+    /// DeliveryOptions.TlsPolicy. Either `REQUIRE` or `OPTIONAL`.
+    /// SendEmail through this set rejects when the policy is REQUIRE and
+    /// the caller signals that TLS is unavailable for the recipient.
+    pub tls_policy: Option<String>,
+    /// Dedicated IP pool used for sends through this configuration set.
+    pub sending_pool_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
