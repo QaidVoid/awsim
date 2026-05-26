@@ -117,6 +117,26 @@ pub fn put_parameter(
     let param_type = input["Type"].as_str().unwrap_or("String");
     validate_param_type(param_type)?;
 
+    // AWS optionally validates Value against AllowedPattern at
+    // PutParameter time. Reject malformed regex and non-matching
+    // values with ValidationException to match the real API.
+    if let Some(pattern) = input["AllowedPattern"].as_str()
+        && !pattern.is_empty()
+    {
+        let re = regex::Regex::new(pattern).map_err(|e| {
+            AwsError::bad_request(
+                "ValidationException",
+                format!("AllowedPattern `{pattern}` is not a valid regular expression: {e}"),
+            )
+        })?;
+        if !re.is_match(value) {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!("Parameter value does not match the AllowedPattern `{pattern}`."),
+            ));
+        }
+    }
+
     let description = input["Description"].as_str().unwrap_or("").to_string();
     let overwrite = input["Overwrite"].as_bool().unwrap_or(false);
 

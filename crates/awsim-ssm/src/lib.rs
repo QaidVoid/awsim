@@ -223,6 +223,61 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
+    fn test_put_parameter_allowed_pattern_matching() {
+        let svc = SsmService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutParameter",
+            json!({
+                "Name": "/port",
+                "Value": "8080",
+                "Type": "String",
+                "AllowedPattern": "^[0-9]{1,5}$",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn test_put_parameter_allowed_pattern_rejects_mismatch() {
+        let svc = SsmService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "PutParameter",
+            json!({
+                "Name": "/port",
+                "Value": "abc",
+                "Type": "String",
+                "AllowedPattern": "^[0-9]+$",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("AllowedPattern"));
+    }
+
+    #[test]
+    fn test_put_parameter_allowed_pattern_rejects_bad_regex() {
+        let svc = SsmService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "PutParameter",
+            json!({
+                "Name": "/oops",
+                "Value": "anything",
+                "Type": "String",
+                "AllowedPattern": "(unclosed",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("not a valid regular expression"));
+    }
+
+    #[test]
     fn test_delete_parameter() {
         let svc = SsmService::new();
         let ctx = ctx();
