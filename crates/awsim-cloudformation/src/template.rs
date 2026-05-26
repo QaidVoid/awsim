@@ -314,6 +314,9 @@ pub fn resolve_value(
             if let Some(b64_val) = map.get("Fn::Base64") {
                 return resolve_base64(b64_val, params, conditions, resources);
             }
+            if let Some(azs_val) = map.get("Fn::GetAZs") {
+                return resolve_get_azs(azs_val, params, conditions, resources);
+            }
 
             // Regular object: resolve all values recursively.
             let resolved_map: Map<String, Value> = map
@@ -539,6 +542,30 @@ fn resolve_base64(
     Value::String(encoded)
 }
 
+/// `Fn::GetAZs`: return the list of availability zones for the given
+/// region. Real AWS varies the count per region; awsim is a single-
+/// node emulator without real AZ topology, so we return three
+/// synthesized zones (`<region>a`, `<region>b`, `<region>c`).
+/// An empty string is shorthand for the calling region; CloudFormation
+/// uses `Fn::GetAZs: ""` idiomatically inside `Fn::Select`.
+fn resolve_get_azs(
+    val: &Value,
+    params: &HashMap<String, Value>,
+    conditions: &HashMap<String, bool>,
+    resources: &HashMap<String, Value>,
+) -> Value {
+    let inner = resolve_value(val, params, conditions, resources);
+    let region = match &inner {
+        Value::String(s) if !s.is_empty() => s.clone(),
+        _ => "us-east-1".to_string(),
+    };
+    Value::Array(vec![
+        Value::String(format!("{region}a")),
+        Value::String(format!("{region}b")),
+        Value::String(format!("{region}c")),
+    ])
+}
+
 /// Topological sort of resources by DependsOn.
 fn topological_sort(resources: Vec<ResourceDef>) -> Result<Vec<ResourceDef>, String> {
     let mut name_to_idx: HashMap<String, usize> = HashMap::new();
@@ -718,5 +745,26 @@ mod base64_intrinsic_tests {
         let val = json!({ "Fn::Base64": "" });
         let got = resolve_value(&val, &HashMap::new(), &HashMap::new(), &HashMap::new());
         assert_eq!(got, json!(""));
+    }
+
+    #[test]
+    fn fn_get_azs_with_explicit_region() {
+        let val = json!({ "Fn::GetAZs": "us-west-2" });
+        let got = resolve_value(&val, &HashMap::new(), &HashMap::new(), &HashMap::new());
+        assert_eq!(got, json!(["us-west-2a", "us-west-2b", "us-west-2c"]));
+    }
+
+    #[test]
+    fn fn_get_azs_with_empty_region_defaults() {
+        let val = json!({ "Fn::GetAZs": "" });
+        let got = resolve_value(&val, &HashMap::new(), &HashMap::new(), &HashMap::new());
+        assert_eq!(got, json!(["us-east-1a", "us-east-1b", "us-east-1c"]));
+    }
+
+    #[test]
+    fn fn_get_azs_inside_fn_select_picks_first_zone() {
+        let val = json!({ "Fn::Select": [0, { "Fn::GetAZs": "eu-central-1" }] });
+        let got = resolve_value(&val, &HashMap::new(), &HashMap::new(), &HashMap::new());
+        assert_eq!(got, json!("eu-central-1a"));
     }
 }
