@@ -21,9 +21,13 @@ fn cluster_to_value(c: &DbCluster) -> Value {
         "MasterUsername": c.master_username,
         "Endpoint": c.endpoint,
         "ReaderEndpoint": c.reader_endpoint,
-        "DBClusterMembers": c.members.iter().map(|m| json!({
+        // AWS Aurora clusters have exactly one writer (the first member,
+        // by AddRoleToDBCluster ordering); the rest are read replicas.
+        "DBClusterMembers": c.members.iter().enumerate().map(|(i, m)| json!({
             "DBInstanceIdentifier": m,
-            "IsClusterWriter": true,
+            "IsClusterWriter": i == 0,
+            "DBClusterParameterGroupStatus": "in-sync",
+            "PromotionTier": i + 1,
         })).collect::<Vec<_>>(),
         "VpcSecurityGroups": c.vpc_security_groups.iter().map(|sg| json!({
             "VpcSecurityGroupId": sg,
