@@ -4,6 +4,91 @@ use serde_json::{Value, json};
 use crate::state::{Connection, EventBridgeState};
 use crate::util::now_iso8601;
 
+/// Validate AuthorizationType + AuthParameters shape per AWS Smithy:
+/// BASIC requires `BasicAuthParameters { Username, Password }`,
+/// API_KEY requires `ApiKeyAuthParameters { ApiKeyName, ApiKeyValue }`,
+/// OAUTH_CLIENT_CREDENTIALS requires `OAuthParameters` with
+/// AuthorizationEndpoint + HttpMethod + ClientParameters.
+fn validate_auth_parameters(auth_type: &str, params: &Value) -> Result<(), AwsError> {
+    match auth_type {
+        "BASIC" => {
+            let basic = params.get("BasicAuthParameters").ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameter",
+                    "BasicAuthParameters is required when AuthorizationType is BASIC.",
+                )
+            })?;
+            if basic
+                .get("Username")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+                || basic
+                    .get("Password")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+            {
+                return Err(AwsError::bad_request(
+                    "InvalidParameter",
+                    "BasicAuthParameters requires Username and Password.",
+                ));
+            }
+        }
+        "API_KEY" => {
+            let api = params.get("ApiKeyAuthParameters").ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameter",
+                    "ApiKeyAuthParameters is required when AuthorizationType is API_KEY.",
+                )
+            })?;
+            if api
+                .get("ApiKeyName")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+                || api
+                    .get("ApiKeyValue")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+            {
+                return Err(AwsError::bad_request(
+                    "InvalidParameter",
+                    "ApiKeyAuthParameters requires ApiKeyName and ApiKeyValue.",
+                ));
+            }
+        }
+        "OAUTH_CLIENT_CREDENTIALS" => {
+            let oauth = params.get("OAuthParameters").ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameter",
+                    "OAuthParameters is required when AuthorizationType is OAUTH_CLIENT_CREDENTIALS.",
+                )
+            })?;
+            if oauth
+                .get("AuthorizationEndpoint")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+                || oauth
+                    .get("HttpMethod")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+            {
+                return Err(AwsError::bad_request(
+                    "InvalidParameter",
+                    "OAuthParameters requires AuthorizationEndpoint and HttpMethod.",
+                ));
+            }
+        }
+        other => {
+            return Err(AwsError::bad_request(
+                "InvalidParameter",
+                format!(
+                    "AuthorizationType `{other}` must be BASIC, API_KEY, or OAUTH_CLIENT_CREDENTIALS."
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn connection_to_value(c: &Connection) -> Value {
     json!({
         "ConnectionArn": c.arn,
@@ -40,6 +125,8 @@ pub fn create_connection(
     let auth_type = input["AuthorizationType"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameter", "AuthorizationType is required")
     })?;
+    let auth_params = &input["AuthParameters"];
+    validate_auth_parameters(auth_type, auth_params)?;
 
     let arn = format!(
         "arn:aws:events:{}:{}:connection/{}",

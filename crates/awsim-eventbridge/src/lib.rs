@@ -421,6 +421,53 @@ mod tests {
     }
 
     #[test]
+    fn test_create_connection_validates_basic_auth_parameters() {
+        let svc = EventBridgeService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateConnection",
+            json!({
+                "Name": "no-creds",
+                "AuthorizationType": "BASIC",
+                "AuthParameters": { "BasicAuthParameters": {} }
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+
+        block_on(svc.handle(
+            "CreateConnection",
+            json!({
+                "Name": "ok-basic",
+                "AuthorizationType": "BASIC",
+                "AuthParameters": {
+                    "BasicAuthParameters": { "Username": "u", "Password": "p" }
+                }
+            }),
+            &ctx,
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn test_create_connection_rejects_unknown_authorization_type() {
+        let svc = EventBridgeService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateConnection",
+            json!({
+                "Name": "magic",
+                "AuthorizationType": "MAGIC_LINK",
+                "AuthParameters": {}
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+    }
+
+    #[test]
     fn test_put_targets_persists_batch_parameters() {
         let svc = EventBridgeService::new();
         let ctx = ctx();
