@@ -697,6 +697,29 @@ pub fn update_table(
         .get("GlobalSecondaryIndexUpdates")
         .and_then(|v| v.as_array())
     {
+        // Cap-check the projected GSI count before mutating: AWS
+        // caps a table at 20 GSIs across the full lifecycle, so
+        // UpdateTable must reject a Create that would push past the
+        // limit even though CreateTable already enforces the same
+        // cap up front.
+        const MAX_GSI_PER_TABLE: usize = 20;
+        let to_create: usize = gsi_updates
+            .iter()
+            .filter(|u| u.get("Create").is_some())
+            .count();
+        let to_delete: usize = gsi_updates
+            .iter()
+            .filter_map(|u| u.get("Delete"))
+            .filter_map(|d| d.get("IndexName").and_then(|v| v.as_str()))
+            .filter(|name| table.gsi.iter().any(|g| g.index_name == *name))
+            .count();
+        let projected = table.gsi.len() + to_create - to_delete;
+        if projected > MAX_GSI_PER_TABLE {
+            return Err(AwsError::validation(format!(
+                "A table can have at most {MAX_GSI_PER_TABLE} global secondary indexes ({projected} after this update)."
+            )));
+        }
+
         for update in gsi_updates {
             if let Some(create) = update.get("Create") {
                 let index_name = create
@@ -2208,5 +2231,50 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
         assert!(err.message.contains("missing.ghost"));
+    }
+
+    #[test]
+    fn update_table_rejects_gsi_create_past_cap() {
+        use crate::sqlite_store::SqliteStore;
+        let state = state_with_table("t");
+        {
+            let mut t = state.tables.get_mut("t").unwrap();
+            for i in 0..20 {
+                t.gsi.push(GlobalSecondaryIndex {
+                    index_name: format!("idx{i}"),
+                    key_schema: vec![KeySchemaElement {
+                        attribute_name: "pk".into(),
+                        key_type: "HASH".into(),
+                    }],
+                    projection: crate::state::Projection {
+                        projection_type: "ALL".into(),
+                        non_key_attributes: vec![],
+                    },
+                    status: "ACTIVE".into(),
+                });
+            }
+        }
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = update_table(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "AttributeDefinitions": [
+                    { "AttributeName": "tag", "AttributeType": "S" }
+                ],
+                "GlobalSecondaryIndexUpdates": [{
+                    "Create": {
+                        "IndexName": "byTag",
+                        "KeySchema": [{ "AttributeName": "tag", "KeyType": "HASH" }],
+                        "Projection": { "ProjectionType": "ALL" }
+                    }
+                }]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("at most 20"));
     }
 }
