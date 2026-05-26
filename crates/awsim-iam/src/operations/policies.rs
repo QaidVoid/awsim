@@ -108,6 +108,15 @@ pub fn create_policy(
     let path = normalize_path(opt_str(input, "Path"));
     let description = opt_str(input, "Description").map(|s| s.to_string());
 
+    if policy_document.len() > MANAGED_POLICY_SIZE_LIMIT {
+        return Err(AwsError::bad_request(
+            "LimitExceeded",
+            format!(
+                "Managed policy document is {} characters; maximum is {MANAGED_POLICY_SIZE_LIMIT}.",
+                policy_document.len()
+            ),
+        ));
+    }
     validate_policy_document(policy_document)?;
 
     let arn = build_policy_arn(&ctx.account_id, &path, policy_name);
@@ -397,6 +406,15 @@ pub fn create_policy_version(state: &IamState, input: &Value) -> Result<Value, A
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    if policy_document.len() > MANAGED_POLICY_SIZE_LIMIT {
+        return Err(AwsError::bad_request(
+            "LimitExceeded",
+            format!(
+                "Managed policy document is {} characters; maximum is {MANAGED_POLICY_SIZE_LIMIT}.",
+                policy_document.len()
+            ),
+        ));
+    }
     validate_policy_document(policy_document)?;
 
     let mut policy = state
@@ -777,6 +795,8 @@ pub fn list_policy_tags(state: &IamState, input: &Value) -> Result<Value, AwsErr
 const USER_POLICY_SIZE_LIMIT: usize = 2048;
 const ROLE_POLICY_SIZE_LIMIT: usize = 10240;
 const GROUP_POLICY_SIZE_LIMIT: usize = 5120;
+/// AWS hard limit on managed policy document length (per version).
+pub(crate) const MANAGED_POLICY_SIZE_LIMIT: usize = 6144;
 
 fn check_policy_size(doc: &str, limit: usize, entity_type: &str) -> Result<(), AwsError> {
     if doc.len() > limit {
@@ -843,4 +863,54 @@ pub fn put_group_policy(state: &IamState, input: &Value) -> Result<Value, AwsErr
         .inline_policies
         .insert(policy_name.to_string(), policy_document.to_string());
     Ok(json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("iam", "us-east-1")
+    }
+
+    fn oversize_policy_doc(len: usize) -> String {
+        let template = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::PAD"}]}"#;
+        let extra = len.saturating_sub(template.len()) + "PAD".len();
+        let padded = template.replace("PAD", &"x".repeat(extra));
+        assert!(padded.len() >= len);
+        padded
+    }
+
+    #[test]
+    fn create_policy_rejects_oversize_document() {
+        let state = IamState::default();
+        let doc = oversize_policy_doc(MANAGED_POLICY_SIZE_LIMIT + 1);
+        let err = create_policy(
+            &state,
+            &json!({ "PolicyName": "big", "PolicyDocument": doc }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "LimitExceeded");
+        assert!(err.message.contains("maximum is 6144"));
+    }
+
+    #[test]
+    fn create_policy_version_rejects_oversize_document() {
+        let state = IamState::default();
+        let small_doc = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}"#;
+        let resp = create_policy(
+            &state,
+            &json!({ "PolicyName": "p", "PolicyDocument": small_doc }),
+            &ctx(),
+        )
+        .unwrap();
+        let arn = resp["Policy"]["Arn"].as_str().unwrap().to_string();
+
+        let big = oversize_policy_doc(MANAGED_POLICY_SIZE_LIMIT + 1);
+        let err =
+            create_policy_version(&state, &json!({ "PolicyArn": arn, "PolicyDocument": big }))
+                .unwrap_err();
+        assert_eq!(err.code, "LimitExceeded");
+    }
 }
