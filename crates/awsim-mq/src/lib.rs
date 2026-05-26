@@ -278,6 +278,63 @@ mod tests {
     }
 
     #[test]
+    fn create_broker_rejects_invalid_name() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "bad name!",
+                "EngineType": "ACTIVEMQ",
+                "EngineVersion": "5.18",
+                "HostInstanceType": "mq.t3.micro"
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
+    }
+
+    #[test]
+    fn create_broker_rejects_rabbitmq_with_efs_storage() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "rmq",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+                "HostInstanceType": "mq.m5.large",
+                "StorageType": "EFS"
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
+    }
+
+    #[test]
+    fn create_broker_requires_ldap_metadata_when_strategy_is_ldap() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "ldap-broker",
+                "EngineType": "ACTIVEMQ",
+                "EngineVersion": "5.18",
+                "HostInstanceType": "mq.t3.micro",
+                "AuthenticationStrategy": "LDAP"
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
+        assert!(err.message.contains("LdapServerMetadata"));
+    }
+
+    #[test]
     fn duplicate_broker_name_rejected() {
         let svc = MqService::new();
         let ctx = ctx();

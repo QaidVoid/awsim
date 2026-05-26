@@ -24,6 +24,21 @@ fn new_id() -> String {
     format!("b-{}", &uuid::Uuid::new_v4().simple().to_string()[..16])
 }
 
+/// Validate broker name per AWS MQ regex: 1-50 alphanumeric + `_-`.
+fn validate_broker_name(name: &str) -> Result<(), AwsError> {
+    if !(1..=50).contains(&name.len())
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(AwsError::bad_request(
+            "BadRequestException",
+            format!("BrokerName `{name}` must be 1-50 chars from [a-zA-Z0-9_-]."),
+        ));
+    }
+    Ok(())
+}
+
 fn broker_arn(ctx: &RequestContext, id: &str) -> String {
     format!("arn:aws:mq:{}:{}:broker:{}", ctx.region, ctx.account_id, id)
 }
@@ -100,6 +115,7 @@ pub fn create_broker(
 ) -> Result<Value, AwsError> {
     let id = new_id();
     let name = require_str(input, "BrokerName")?.to_string();
+    validate_broker_name(&name)?;
     if state.brokers.iter().any(|e| e.value().broker_name == name) {
         return Err(AwsError::conflict(
             "ConflictException",
@@ -109,6 +125,50 @@ pub fn create_broker(
     let host = require_str(input, "HostInstanceType")?.to_string();
     let engine_type = require_str(input, "EngineType")?.to_string();
     let engine_version = require_str(input, "EngineVersion")?.to_string();
+
+    // StorageType allowlist per engine. ActiveMQ accepts EFS or EBS;
+    // RabbitMQ only supports EBS. Default differs per engine, so we
+    // resolve the supplied (or omitted) value against the engine.
+    let storage_type = input
+        .get("StorageType")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| match engine_type.as_str() {
+            "RABBITMQ" => "EBS".to_string(),
+            _ => "EFS".to_string(),
+        });
+    match (engine_type.as_str(), storage_type.as_str()) {
+        ("ACTIVEMQ", "EFS" | "EBS") => {}
+        ("RABBITMQ", "EBS") => {}
+        _ => {
+            return Err(AwsError::bad_request(
+                "BadRequestException",
+                format!(
+                    "StorageType `{storage_type}` is not supported with engine `{engine_type}`."
+                ),
+            ));
+        }
+    }
+
+    // LDAP authentication requires server metadata; rejecting up front
+    // matches what real MQ does instead of accepting a half-broken
+    // broker config.
+    let authentication_strategy = input
+        .get("AuthenticationStrategy")
+        .and_then(|v| v.as_str())
+        .unwrap_or("SIMPLE")
+        .to_string();
+    if authentication_strategy == "LDAP"
+        && input
+            .get("LdapServerMetadata")
+            .and_then(|v| v.as_object())
+            .is_none_or(|m| m.is_empty())
+    {
+        return Err(AwsError::bad_request(
+            "BadRequestException",
+            "LdapServerMetadata is required when AuthenticationStrategy is LDAP.",
+        ));
+    }
 
     let tags: HashMap<String, String> = input
         .get("Tags")
@@ -142,16 +202,8 @@ pub fn create_broker(
             .unwrap_or(false),
         host_instance_type: host,
         created: now(),
-        authentication_strategy: input
-            .get("AuthenticationStrategy")
-            .and_then(|v| v.as_str())
-            .unwrap_or("SIMPLE")
-            .to_string(),
-        storage_type: input
-            .get("StorageType")
-            .and_then(|v| v.as_str())
-            .unwrap_or("EFS")
-            .to_string(),
+        authentication_strategy,
+        storage_type,
         security_groups: input
             .get("SecurityGroups")
             .and_then(|v| v.as_array())
