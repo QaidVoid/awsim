@@ -17,6 +17,27 @@ pub fn create_delivery_stream(
             format!("Delivery stream {name} already exists"),
         ));
     }
+
+    let stream_type = input["DeliveryStreamType"]
+        .as_str()
+        .unwrap_or("DirectPut")
+        .to_string();
+    if !matches!(
+        stream_type.as_str(),
+        "DirectPut" | "KinesisStreamAsSource" | "MSKAsSource" | "DatabaseAsSource"
+    ) {
+        return Err(AwsError::bad_request(
+            "InvalidArgumentException",
+            format!(
+                "DeliveryStreamType `{stream_type}` must be DirectPut, KinesisStreamAsSource, MSKAsSource, or DatabaseAsSource."
+            ),
+        ));
+    }
+
+    if let Some(ext) = input.get("ExtendedS3DestinationConfiguration") {
+        validate_extended_s3(ext)?;
+    }
+
     let arn = format!(
         "arn:aws:firehose:{}:{}:deliverystream/{}",
         ctx.region, ctx.account_id, name
@@ -26,10 +47,7 @@ pub fn create_delivery_stream(
         name: name.to_string(),
         arn: arn.clone(),
         status: "ACTIVE".to_string(),
-        stream_type: input["DeliveryStreamType"]
-            .as_str()
-            .unwrap_or("DirectPut")
-            .to_string(),
+        stream_type,
         version_id: "1".to_string(),
         create_timestamp: now_secs(),
         last_update_timestamp: now_secs(),
@@ -136,6 +154,46 @@ pub fn update_destination(
     s.last_update_timestamp = now_secs();
     s.version_id = format!("{}", s.version_id.parse::<u64>().unwrap_or(1) + 1);
     Ok(json!({}))
+}
+
+/// Validate ExtendedS3DestinationConfiguration: BufferingHints size
+/// in `[1, 128]` MiB and interval in `[60, 900]` s, and
+/// CompressionFormat from the documented allowlist.
+fn validate_extended_s3(cfg: &Value) -> Result<(), AwsError> {
+    if let Some(b) = cfg.get("BufferingHints") {
+        if let Some(size) = b.get("SizeInMBs").and_then(Value::as_u64)
+            && !(1..=128).contains(&size)
+        {
+            return Err(AwsError::bad_request(
+                "InvalidArgumentException",
+                format!("BufferingHints.SizeInMBs must be between 1 and 128 (got {size})."),
+            ));
+        }
+        if let Some(secs) = b.get("IntervalInSeconds").and_then(Value::as_u64)
+            && !(60..=900).contains(&secs)
+        {
+            return Err(AwsError::bad_request(
+                "InvalidArgumentException",
+                format!(
+                    "BufferingHints.IntervalInSeconds must be between 60 and 900 (got {secs})."
+                ),
+            ));
+        }
+    }
+    if let Some(cf) = cfg.get("CompressionFormat").and_then(Value::as_str)
+        && !matches!(
+            cf,
+            "UNCOMPRESSED" | "GZIP" | "Snappy" | "HADOOP_SNAPPY" | "ZIP"
+        )
+    {
+        return Err(AwsError::bad_request(
+            "InvalidArgumentException",
+            format!(
+                "CompressionFormat `{cf}` must be UNCOMPRESSED, GZIP, Snappy, HADOOP_SNAPPY, or ZIP."
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn collect_destinations(input: &Value) -> Vec<Value> {

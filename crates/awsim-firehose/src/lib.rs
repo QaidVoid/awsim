@@ -81,3 +81,85 @@ impl ServiceHandler for FirehoseService {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("firehose", "us-east-1")
+    }
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+        fn noop_clone(_: *const ()) -> RawWaker {
+            noop_raw_waker()
+        }
+        fn noop(_: *const ()) {}
+        fn noop_raw_waker() -> RawWaker {
+            static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+        let waker = unsafe { Waker::from_raw(noop_raw_waker()) };
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = std::pin::pin!(f);
+        loop {
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(v) => return v,
+                Poll::Pending => {}
+            }
+        }
+    }
+
+    #[test]
+    fn create_delivery_stream_rejects_unknown_type() {
+        let svc = FirehoseService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateDeliveryStream",
+            json!({ "DeliveryStreamName": "bad", "DeliveryStreamType": "MAGIC" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn create_delivery_stream_rejects_invalid_compression() {
+        let svc = FirehoseService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateDeliveryStream",
+            json!({
+                "DeliveryStreamName": "bad-compression",
+                "ExtendedS3DestinationConfiguration": {
+                    "BucketARN": "arn:aws:s3:::b",
+                    "CompressionFormat": "BROTLI"
+                }
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn create_delivery_stream_rejects_buffering_size_out_of_range() {
+        let svc = FirehoseService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateDeliveryStream",
+            json!({
+                "DeliveryStreamName": "bad-buf",
+                "ExtendedS3DestinationConfiguration": {
+                    "BucketARN": "arn:aws:s3:::b",
+                    "BufferingHints": { "SizeInMBs": 1024, "IntervalInSeconds": 300 }
+                }
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+    }
+}
