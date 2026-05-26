@@ -6,7 +6,7 @@ use crate::operations::clusters::now_epoch_str;
 use crate::state::{EcsState, TaskDefinition};
 
 fn task_def_to_json(td: &TaskDefinition) -> Value {
-    json!({
+    let mut obj = json!({
         "taskDefinitionArn": td.arn,
         "family": td.family,
         "revision": td.revision,
@@ -15,7 +15,70 @@ fn task_def_to_json(td: &TaskDefinition) -> Value {
         "networkMode": td.network_mode,
         "requiresCompatibilities": td.requires_compatibilities,
         "registeredAt": now_epoch_str(),
-    })
+    });
+    if let Some(ref cpu) = td.cpu {
+        obj["cpu"] = json!(cpu);
+    }
+    if let Some(ref mem) = td.memory {
+        obj["memory"] = json!(mem);
+    }
+    obj
+}
+
+/// AWS Fargate cpu/memory pair allowlist. Each cpu value maps to the
+/// memory values that ECS accepts; any other combination is rejected at
+/// RegisterTaskDefinition with ClientException. See:
+/// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-cpu-memory.html
+fn fargate_memory_options(cpu_mib: u32) -> Option<Vec<u32>> {
+    match cpu_mib {
+        256 => Some(vec![512, 1024, 2048]),
+        512 => Some((1024..=4096).step_by(1024).collect()),
+        1024 => Some((2048..=8192).step_by(1024).collect()),
+        2048 => Some((4096..=16384).step_by(1024).collect()),
+        4096 => Some((8192..=30720).step_by(1024).collect()),
+        8192 => Some((16384..=61440).step_by(4096).collect()),
+        16384 => Some((32768..=122880).step_by(8192).collect()),
+        _ => None,
+    }
+}
+
+fn validate_fargate_cpu_memory(cpu: &str, memory: &str) -> Result<(), AwsError> {
+    let cpu_n: u32 = cpu.parse().map_err(|_| {
+        AwsError::bad_request(
+            "ClientException",
+            format!("Task cpu '{cpu}' is not a valid number."),
+        )
+    })?;
+    let mem_n: u32 = memory.parse().map_err(|_| {
+        AwsError::bad_request(
+            "ClientException",
+            format!("Task memory '{memory}' is not a valid number."),
+        )
+    })?;
+    let options = fargate_memory_options(cpu_n).ok_or_else(|| {
+        AwsError::bad_request(
+            "ClientException",
+            format!(
+                "Task cpu '{cpu}' is not a valid Fargate vCPU value; \
+                 must be one of: 256, 512, 1024, 2048, 4096, 8192, 16384."
+            ),
+        )
+    })?;
+    if !options.contains(&mem_n) {
+        return Err(AwsError::bad_request(
+            "ClientException",
+            format!(
+                "Task memory '{memory}' MiB is not valid for Fargate cpu '{cpu}'; \
+                 allowed values: {}.",
+                options
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Parse "family:revision" or just "family" or an ARN into (family, optional revision).
@@ -82,11 +145,27 @@ pub fn register_task_definition(
     }
     // Fargate tasks must use awsvpc networking; the real ECS API
     // returns ClientException when this combination is wrong.
-    if requires_compatibilities.iter().any(|c| c == "FARGATE") && network_mode != "awsvpc" {
+    let needs_fargate = requires_compatibilities.iter().any(|c| c == "FARGATE");
+    if needs_fargate && network_mode != "awsvpc" {
         return Err(AwsError::bad_request(
             "ClientException",
             "Tasks using the Fargate launch type must use the awsvpc network mode.",
         ));
+    }
+
+    let cpu = input["cpu"].as_str().map(str::to_string);
+    let memory = input["memory"].as_str().map(str::to_string);
+    if needs_fargate {
+        let cpu_str = cpu.as_deref().ok_or_else(|| {
+            AwsError::bad_request("ClientException", "Fargate tasks require task-level cpu.")
+        })?;
+        let mem_str = memory.as_deref().ok_or_else(|| {
+            AwsError::bad_request(
+                "ClientException",
+                "Fargate tasks require task-level memory.",
+            )
+        })?;
+        validate_fargate_cpu_memory(cpu_str, mem_str)?;
     }
 
     let revision = {
@@ -104,6 +183,8 @@ pub fn register_task_definition(
             status: "ACTIVE".to_string(),
             network_mode,
             requires_compatibilities,
+            cpu: cpu.clone(),
+            memory: memory.clone(),
         };
         revisions.push(td);
         rev
@@ -255,4 +336,37 @@ pub fn list_task_definition_families(
         .collect();
 
     Ok(json!({ "families": families }))
+}
+
+#[cfg(test)]
+mod fargate_cpu_memory_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_documented_pairs() {
+        validate_fargate_cpu_memory("256", "512").unwrap();
+        validate_fargate_cpu_memory("256", "2048").unwrap();
+        validate_fargate_cpu_memory("1024", "8192").unwrap();
+        validate_fargate_cpu_memory("16384", "122880").unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_cpu() {
+        let err = validate_fargate_cpu_memory("300", "1024").unwrap_err();
+        assert_eq!(err.code, "ClientException");
+        assert!(err.message.contains("cpu"));
+    }
+
+    #[test]
+    fn rejects_memory_outside_cpu_band() {
+        let err = validate_fargate_cpu_memory("256", "3072").unwrap_err();
+        assert_eq!(err.code, "ClientException");
+        assert!(err.message.contains("memory"));
+    }
+
+    #[test]
+    fn rejects_non_numeric_cpu_or_memory() {
+        assert!(validate_fargate_cpu_memory("xyz", "512").is_err());
+        assert!(validate_fargate_cpu_memory("256", "xyz").is_err());
+    }
 }

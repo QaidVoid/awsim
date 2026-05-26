@@ -126,7 +126,9 @@ mod tests {
                     { "name": "nginx", "image": "nginx:latest", "cpu": 256, "memory": 512, "essential": true }
                 ],
                 "networkMode": "awsvpc",
-                "requiresCompatibilities": ["FARGATE"]
+                "requiresCompatibilities": ["FARGATE"],
+                "cpu": "256",
+                "memory": "512",
             }),
             &ctx,
         ))

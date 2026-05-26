@@ -61,6 +61,13 @@ pub struct TaskDefinition {
     pub status: String,
     pub network_mode: String,
     pub requires_compatibilities: Vec<String>,
+    /// Task-level CPU as a string (Fargate uses "256".."16384"; EC2
+    /// supports CPU shares 0-10240). Stored verbatim so DescribeTaskDefinition
+    /// echoes what the caller registered.
+    pub cpu: Option<String>,
+    /// Task-level memory in MiB as a string (Fargate uses fixed pairs
+    /// with cpu; EC2 is any positive integer).
+    pub memory: Option<String>,
 }
 
 /// A capacity provider.
