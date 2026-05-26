@@ -209,6 +209,7 @@ pub fn request_certificate(
         created_at: now_secs(),
         in_use_by: Vec::new(),
         certificate_transparency_logging_preference: ct_logging,
+        certificate_type: "AMAZON_ISSUED".to_string(),
     };
 
     state.certificates.insert(certificate_arn.clone(), cert);
@@ -259,12 +260,21 @@ pub fn describe_certificate(
         })
         .collect();
 
+    // RenewalEligibility tracks whether ACM can renew the cert
+    // automatically. Imported certs have no private key on AWS's
+    // side, so the answer is always INELIGIBLE.
+    let renewal_eligibility = if cert.certificate_type == "IMPORTED" {
+        "INELIGIBLE"
+    } else {
+        "ELIGIBLE"
+    };
     let certificate_obj = json!({
         "CertificateArn": cert.certificate_arn,
         "DomainName": cert.domain_name,
         "SubjectAlternativeNames": cert.subject_alternative_names,
         "Status": cert.status,
-        "Type": "AMAZON_ISSUED",
+        "Type": cert.certificate_type,
+        "RenewalEligibility": renewal_eligibility,
         "KeyAlgorithm": "RSA_2048",
         "SignatureAlgorithm": "SHA256WITHRSA",
         "InUseBy": cert.in_use_by,
@@ -474,6 +484,7 @@ pub fn import_certificate(
         created_at: now_secs(),
         in_use_by: Vec::new(),
         certificate_transparency_logging_preference: "ENABLED".to_string(),
+        certificate_type: "IMPORTED".to_string(),
     };
 
     state.certificates.insert(certificate_arn.clone(), cert);
@@ -494,14 +505,25 @@ pub fn renew_certificate(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "CertificateArn is required"))?;
 
-    if !state.certificates.contains_key(arn) {
-        return Err(AwsError::not_found(
+    let cert = state.certificates.get(arn).ok_or_else(|| {
+        AwsError::not_found(
             "ResourceNotFoundException",
             format!("Certificate not found: {arn}"),
+        )
+    })?;
+
+    // Imported certs carry no private key on AWS's side, so ACM cannot
+    // renew them — the documented response is InvalidRequestException.
+    if cert.certificate_type == "IMPORTED" {
+        return Err(AwsError::bad_request(
+            "InvalidRequestException",
+            format!(
+                "Certificate {arn} is IMPORTED and cannot be renewed; \
+                 re-import a new certificate instead."
+            ),
         ));
     }
 
-    // Auto-renewal succeeds immediately for the dev emulator
     Ok(json!({}))
 }
 
@@ -585,6 +607,7 @@ mod tests {
             created_at: 0,
             in_use_by: Vec::new(),
             certificate_transparency_logging_preference: "ENABLED".to_string(),
+            certificate_type: "AMAZON_ISSUED".to_string(),
         }
     }
 
@@ -675,5 +698,55 @@ mod tests {
 
         delete_certificate(&state, &json!({ "CertificateArn": arn }), &ctx()).unwrap();
         assert!(!state.certificates.contains_key(arn));
+    }
+
+    #[test]
+    fn imported_certificate_is_ineligible_for_renewal() {
+        let state = AcmState::default();
+        let arn_resp = import_certificate(
+            &state,
+            &json!({
+                "Certificate": "-----BEGIN CERT-----",
+                "PrivateKey": "-----BEGIN KEY-----",
+                "DomainName": "imp.example.com",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let arn = arn_resp["CertificateArn"].as_str().unwrap();
+        let desc = describe_certificate(&state, &json!({ "CertificateArn": arn }), &ctx()).unwrap();
+        assert_eq!(desc["Certificate"]["Type"], "IMPORTED");
+        assert_eq!(desc["Certificate"]["RenewalEligibility"], "INELIGIBLE");
+    }
+
+    #[test]
+    fn renew_certificate_rejects_imported() {
+        let state = AcmState::default();
+        let arn_resp = import_certificate(
+            &state,
+            &json!({
+                "Certificate": "-----BEGIN CERT-----",
+                "PrivateKey": "-----BEGIN KEY-----",
+                "DomainName": "imp.example.com",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let arn = arn_resp["CertificateArn"].as_str().unwrap();
+        let err = renew_certificate(&state, &json!({ "CertificateArn": arn }), &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidRequestException");
+        assert!(err.message.contains("IMPORTED"));
+    }
+
+    #[test]
+    fn amazon_issued_certificate_is_eligible_for_renewal() {
+        let state = AcmState::default();
+        let resp = request_certificate(&state, &json!({ "DomainName": "iss.example.com" }), &ctx())
+            .unwrap();
+        let arn = resp["CertificateArn"].as_str().unwrap();
+        let desc = describe_certificate(&state, &json!({ "CertificateArn": arn }), &ctx()).unwrap();
+        assert_eq!(desc["Certificate"]["Type"], "AMAZON_ISSUED");
+        assert_eq!(desc["Certificate"]["RenewalEligibility"], "ELIGIBLE");
+        renew_certificate(&state, &json!({ "CertificateArn": arn }), &ctx()).unwrap();
     }
 }

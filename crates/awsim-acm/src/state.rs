@@ -32,10 +32,19 @@ pub struct Certificate {
     /// and lets callers flip the value via UpdateCertificateOptions.
     #[serde(default = "default_ct_pref")]
     pub certificate_transparency_logging_preference: String,
+    /// `AMAZON_ISSUED`, `IMPORTED`, or `PRIVATE`. Drives
+    /// `RenewalEligibility` — imported certs are always
+    /// `INELIGIBLE` because AWS has no key material to renew.
+    #[serde(default = "default_cert_type")]
+    pub certificate_type: String,
 }
 
 fn default_ct_pref() -> String {
     "ENABLED".to_string()
+}
+
+fn default_cert_type() -> String {
+    "AMAZON_ISSUED".to_string()
 }
 
 /// Serializable snapshot.
