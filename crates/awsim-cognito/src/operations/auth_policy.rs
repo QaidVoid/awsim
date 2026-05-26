@@ -313,6 +313,7 @@ mod tests {
             terms: Vec::new(),
             custom_auth_expected_answer: None,
             custom_auth_challenge_parameters: Default::default(),
+            sign_in_policy_first_auth_factors: Vec::new(),
         };
 
         // No risk config — None.

@@ -314,6 +314,11 @@ pub struct UserPool {
     /// CUSTOM_CHALLENGE. Configurable per pool so tests can pin them.
     #[serde(default)]
     pub custom_auth_challenge_parameters: HashMap<String, String>,
+    /// `Policies.SignInPolicy.AllowedFirstAuthFactors`. AWS allows any
+    /// non-empty subset of {PASSWORD, WEB_AUTHN, EMAIL_OTP, SMS_OTP};
+    /// empty arrays (after parse) reject as InvalidParameterException.
+    #[serde(default)]
+    pub sign_in_policy_first_auth_factors: Vec<String>,
 }
 
 /// A Cognito User Pool App Client.

@@ -135,6 +135,8 @@ pub fn create_user_pool(
 
     // Parse policies from input
     let policies = parse_password_policy(&input["Policies"]["PasswordPolicy"])?;
+    let sign_in_policy_first_auth_factors =
+        parse_sign_in_policy(&input["Policies"]["SignInPolicy"])?;
 
     let mfa_configuration = input["MfaConfiguration"]
         .as_str()
@@ -186,6 +188,7 @@ pub fn create_user_pool(
         terms: Vec::new(),
         custom_auth_expected_answer: None,
         custom_auth_challenge_parameters: HashMap::new(),
+        sign_in_policy_first_auth_factors,
     };
 
     info!(pool_id = %pool_id, "Cognito: created user pool");
@@ -263,7 +266,14 @@ pub fn describe_user_pool(
             "AliasAttributes": pool.alias_attributes,
             "SchemaAttributes": schema_attributes,
             "Policies": {
-                "PasswordPolicy": password_policy_to_value(&pool.policies)
+                "PasswordPolicy": password_policy_to_value(&pool.policies),
+                "SignInPolicy": if pool.sign_in_policy_first_auth_factors.is_empty() {
+                    Value::Null
+                } else {
+                    json!({
+                        "AllowedFirstAuthFactors": pool.sign_in_policy_first_auth_factors,
+                    })
+                },
             },
             "Domain": pool.domain,
             "EstimatedNumberOfUsers": pool.users.len()
@@ -952,6 +962,58 @@ pub fn schema_attr_to_value(attr: &SchemaAttribute) -> Value {
     obj
 }
 
+/// `Policies.SignInPolicy.AllowedFirstAuthFactors` must be a non-empty
+/// subset of the documented enum when supplied. Returns the parsed
+/// list (empty when the caller omitted the policy entirely so default
+/// PASSWORD-only behavior still applies).
+fn parse_sign_in_policy(v: &Value) -> Result<Vec<String>, AwsError> {
+    if v.is_null() {
+        return Ok(Vec::new());
+    }
+    let obj = v.as_object().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "Policies.SignInPolicy must be an object.",
+        )
+    })?;
+    let Some(arr) = obj.get("AllowedFirstAuthFactors").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    if arr.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "Policies.SignInPolicy.AllowedFirstAuthFactors must be non-empty when supplied.",
+        ));
+    }
+    let mut out = Vec::with_capacity(arr.len());
+    let mut seen = std::collections::HashSet::new();
+    for entry in arr {
+        let f = entry.as_str().ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterException",
+                "Policies.SignInPolicy.AllowedFirstAuthFactors entries must be strings.",
+            )
+        })?;
+        if !matches!(f, "PASSWORD" | "WEB_AUTHN" | "EMAIL_OTP" | "SMS_OTP") {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!(
+                    "Policies.SignInPolicy.AllowedFirstAuthFactors `{f}` must be one of \
+                     PASSWORD, WEB_AUTHN, EMAIL_OTP, SMS_OTP."
+                ),
+            ));
+        }
+        if !seen.insert(f.to_string()) {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!("Policies.SignInPolicy.AllowedFirstAuthFactors contains duplicate `{f}`."),
+            ));
+        }
+        out.push(f.to_string());
+    }
+    Ok(out)
+}
+
 fn parse_password_policy(v: &Value) -> Result<PasswordPolicy, AwsError> {
     let default = PasswordPolicy::default();
     let minimum_length = v["MinimumLength"]
@@ -1303,6 +1365,87 @@ mod tests {
             &json!({
                 "UserPoolId": pool_id,
                 "CustomAttributes": [{ "Name": "weird", "AttributeDataType": "Hex" }]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn create_user_pool_accepts_sign_in_policy() {
+        let state = CognitoState::default();
+        let resp = create_user_pool(
+            &state,
+            &json!({
+                "PoolName": "p",
+                "Policies": {
+                    "SignInPolicy": {
+                        "AllowedFirstAuthFactors": ["PASSWORD", "EMAIL_OTP"]
+                    }
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let pool_id = resp["UserPool"]["Id"].as_str().unwrap().to_string();
+        let desc = describe_user_pool(&state, &json!({ "UserPoolId": pool_id }), &ctx()).unwrap();
+        let factors = desc["UserPool"]["Policies"]["SignInPolicy"]["AllowedFirstAuthFactors"]
+            .as_array()
+            .expect("AllowedFirstAuthFactors populated");
+        assert_eq!(factors.len(), 2);
+    }
+
+    #[test]
+    fn create_user_pool_rejects_unknown_first_auth_factor() {
+        let state = CognitoState::default();
+        let err = create_user_pool(
+            &state,
+            &json!({
+                "PoolName": "p",
+                "Policies": {
+                    "SignInPolicy": {
+                        "AllowedFirstAuthFactors": ["MAGIC"]
+                    }
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn create_user_pool_rejects_empty_first_auth_factors() {
+        let state = CognitoState::default();
+        let err = create_user_pool(
+            &state,
+            &json!({
+                "PoolName": "p",
+                "Policies": {
+                    "SignInPolicy": {
+                        "AllowedFirstAuthFactors": []
+                    }
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn create_user_pool_rejects_duplicate_first_auth_factor() {
+        let state = CognitoState::default();
+        let err = create_user_pool(
+            &state,
+            &json!({
+                "PoolName": "p",
+                "Policies": {
+                    "SignInPolicy": {
+                        "AllowedFirstAuthFactors": ["PASSWORD", "PASSWORD"]
+                    }
+                }
             }),
             &ctx(),
         )
