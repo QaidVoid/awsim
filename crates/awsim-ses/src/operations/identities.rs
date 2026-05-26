@@ -41,6 +41,12 @@ pub fn create_email_identity(
         verified: true, // auto-verify for local dev
         identity_type: id_type.to_string(),
         created_at: now_epoch(),
+        dkim_signing_attributes_origin: Some("AWS_SES".to_string()),
+        dkim_signing_enabled: true,
+        dkim_status: Some("SUCCESS".to_string()),
+        dkim_domain_signing_selector: None,
+        dkim_domain_signing_private_key: None,
+        dkim_next_signing_key_length: Some("RSA_2048_BIT".to_string()),
     };
 
     info!(identity = %identity, "SES: created identity");
@@ -101,15 +107,27 @@ pub fn get_email_identity(
         )
     })?;
 
+    let mut dkim = json!({
+        "SigningEnabled": entry.dkim_signing_enabled,
+        "Status": entry.dkim_status.as_deref().unwrap_or("SUCCESS"),
+        "Tokens": [],
+        "SigningAttributesOrigin": entry
+            .dkim_signing_attributes_origin
+            .as_deref()
+            .unwrap_or("AWS_SES"),
+    });
+    if let Some(ref kl) = entry.dkim_next_signing_key_length {
+        dkim["NextSigningKeyLength"] = json!(kl);
+    }
+    if let Some(ref s) = entry.dkim_domain_signing_selector {
+        dkim["CurrentSigningKeyLength"] = json!("EXTERNAL");
+        dkim["DomainSigningSelector"] = json!(s);
+    }
     Ok(json!({
         "IdentityType": entry.identity_type,
         "FeedbackForwardingStatus": true,
         "VerifiedForSendingStatus": entry.verified,
-        "DkimAttributes": {
-            "SigningEnabled": true,
-            "Status": "SUCCESS",
-            "Tokens": []
-        },
+        "DkimAttributes": dkim,
         "MailFromAttributes": {
             "BehaviorOnMxFailure": "USE_DEFAULT_VALUE"
         },

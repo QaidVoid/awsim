@@ -27,6 +27,15 @@ pub struct EmailIdentity {
     pub verified: bool,
     pub identity_type: String,
     pub created_at: u64,
+    /// DKIM signing config. `AWS_SES` is the managed `EASY_DKIM` flow;
+    /// `EXTERNAL` is BYODKIM where the caller supplies the private key.
+    pub dkim_signing_attributes_origin: Option<String>,
+    pub dkim_signing_enabled: bool,
+    pub dkim_status: Option<String>,
+    pub dkim_domain_signing_selector: Option<String>,
+    /// Stored verbatim from BYODKIM input; never read back by GetEmailIdentity.
+    pub dkim_domain_signing_private_key: Option<String>,
+    pub dkim_next_signing_key_length: Option<String>,
 }
 
 #[derive(Debug, Clone)]

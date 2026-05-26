@@ -100,11 +100,99 @@ pub fn send_custom_verification_email(
 }
 
 pub fn put_email_identity_dkim_attributes(
-    _state: &SesState,
-    _input: &Value,
+    state: &SesState,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    let identity = input["EmailIdentity"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EmailIdentity is required"))?;
+    let mut entry = state.identities.get_mut(identity).ok_or_else(|| {
+        AwsError::not_found(
+            "NotFoundException",
+            format!("Email identity not found: {identity}"),
+        )
+    })?;
+    if let Some(enabled) = input["SigningEnabled"].as_bool() {
+        entry.dkim_signing_enabled = enabled;
+    }
     Ok(json!({}))
+}
+
+/// PutEmailIdentityDkimSigningAttributes — switch the identity between
+/// `AWS_SES` (EASY_DKIM) and `EXTERNAL` (BYODKIM). For EXTERNAL the
+/// caller supplies a domain signing selector + private key, both of
+/// which are persisted so subsequent GetEmailIdentity calls reflect the
+/// state. AWS_SES bumps `DkimAttributes.NextSigningKeyLength` and
+/// schedules a key rotation; we surface the requested key length without
+/// modelling rotation.
+pub fn put_email_identity_dkim_signing_attributes(
+    state: &SesState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identity = input["EmailIdentity"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EmailIdentity is required"))?;
+    let origin = input["SigningAttributesOrigin"].as_str().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameter",
+            "SigningAttributesOrigin is required (AWS_SES or EXTERNAL)",
+        )
+    })?;
+    let mut entry = state.identities.get_mut(identity).ok_or_else(|| {
+        AwsError::not_found(
+            "NotFoundException",
+            format!("Email identity not found: {identity}"),
+        )
+    })?;
+    let attrs = &input["SigningAttributes"];
+    match origin {
+        "AWS_SES" => {
+            let next_key = attrs["NextSigningKeyLength"]
+                .as_str()
+                .unwrap_or("RSA_2048_BIT");
+            if !matches!(next_key, "RSA_1024_BIT" | "RSA_2048_BIT") {
+                return Err(AwsError::bad_request(
+                    "InvalidParameter",
+                    format!(
+                        "NextSigningKeyLength '{next_key}' must be RSA_1024_BIT or RSA_2048_BIT"
+                    ),
+                ));
+            }
+            entry.dkim_signing_attributes_origin = Some(origin.to_string());
+            entry.dkim_next_signing_key_length = Some(next_key.to_string());
+            entry.dkim_domain_signing_selector = None;
+            entry.dkim_domain_signing_private_key = None;
+            entry.dkim_status = Some("PENDING".to_string());
+        }
+        "EXTERNAL" => {
+            let selector = attrs["DomainSigningSelector"].as_str().ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameter",
+                    "SigningAttributes.DomainSigningSelector is required for EXTERNAL",
+                )
+            })?;
+            let private_key = attrs["DomainSigningPrivateKey"].as_str().ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameter",
+                    "SigningAttributes.DomainSigningPrivateKey is required for EXTERNAL",
+                )
+            })?;
+            entry.dkim_signing_attributes_origin = Some(origin.to_string());
+            entry.dkim_domain_signing_selector = Some(selector.to_string());
+            entry.dkim_domain_signing_private_key = Some(private_key.to_string());
+            entry.dkim_next_signing_key_length = None;
+            entry.dkim_status = Some("SUCCESS".to_string());
+        }
+        other => {
+            return Err(AwsError::bad_request(
+                "InvalidParameter",
+                format!("SigningAttributesOrigin '{other}' must be AWS_SES or EXTERNAL"),
+            ));
+        }
+    }
+    Ok(json!({ "DkimStatus": entry.dkim_status, "DkimTokens": [] }))
 }
 
 pub fn put_email_identity_mail_from_attributes(
@@ -1269,6 +1357,134 @@ mod delivery_options_tests {
         let resp = get_configuration_set(&state, &json!({ "ConfigurationSetName": "cs" }), &ctx())
             .unwrap();
         assert_eq!(resp["DeliveryOptions"]["TlsPolicy"], "REQUIRE");
+    }
+}
+
+#[cfg(test)]
+mod dkim_signing_attributes_tests {
+    use super::*;
+    use crate::operations::identities::create_email_identity;
+
+    fn ctx() -> awsim_core::RequestContext {
+        awsim_core::RequestContext::new("ses", "us-east-1")
+    }
+
+    fn seed_identity(state: &SesState) {
+        create_email_identity(state, &json!({ "EmailIdentity": "example.com" }), &ctx()).unwrap();
+    }
+
+    #[test]
+    fn easy_dkim_records_next_key_length_and_pending_status() {
+        let state = SesState::default();
+        seed_identity(&state);
+        put_email_identity_dkim_signing_attributes(
+            &state,
+            &json!({
+                "EmailIdentity": "example.com",
+                "SigningAttributesOrigin": "AWS_SES",
+                "SigningAttributes": { "NextSigningKeyLength": "RSA_1024_BIT" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let entry = state.identities.get("example.com").unwrap();
+        assert_eq!(
+            entry.dkim_signing_attributes_origin.as_deref(),
+            Some("AWS_SES")
+        );
+        assert_eq!(
+            entry.dkim_next_signing_key_length.as_deref(),
+            Some("RSA_1024_BIT")
+        );
+        assert_eq!(entry.dkim_status.as_deref(), Some("PENDING"));
+    }
+
+    #[test]
+    fn byodkim_stores_selector_and_private_key() {
+        let state = SesState::default();
+        seed_identity(&state);
+        put_email_identity_dkim_signing_attributes(
+            &state,
+            &json!({
+                "EmailIdentity": "example.com",
+                "SigningAttributesOrigin": "EXTERNAL",
+                "SigningAttributes": {
+                    "DomainSigningSelector": "selector1",
+                    "DomainSigningPrivateKey": "MIIEvgIBADANBgkqhkiG9w0BAQEFAASC..."
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let entry = state.identities.get("example.com").unwrap();
+        assert_eq!(
+            entry.dkim_signing_attributes_origin.as_deref(),
+            Some("EXTERNAL")
+        );
+        assert_eq!(
+            entry.dkim_domain_signing_selector.as_deref(),
+            Some("selector1")
+        );
+        assert!(
+            entry
+                .dkim_domain_signing_private_key
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("MIIEvgIBADANBg")
+        );
+        assert_eq!(entry.dkim_status.as_deref(), Some("SUCCESS"));
+    }
+
+    #[test]
+    fn byodkim_requires_selector_and_key() {
+        let state = SesState::default();
+        seed_identity(&state);
+        let err = put_email_identity_dkim_signing_attributes(
+            &state,
+            &json!({
+                "EmailIdentity": "example.com",
+                "SigningAttributesOrigin": "EXTERNAL",
+                "SigningAttributes": { "DomainSigningSelector": "sel" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+        assert!(err.message.contains("DomainSigningPrivateKey"));
+    }
+
+    #[test]
+    fn rejects_unknown_origin() {
+        let state = SesState::default();
+        seed_identity(&state);
+        let err = put_email_identity_dkim_signing_attributes(
+            &state,
+            &json!({
+                "EmailIdentity": "example.com",
+                "SigningAttributesOrigin": "WHATEVER",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+    }
+
+    #[test]
+    fn rejects_invalid_next_key_length() {
+        let state = SesState::default();
+        seed_identity(&state);
+        let err = put_email_identity_dkim_signing_attributes(
+            &state,
+            &json!({
+                "EmailIdentity": "example.com",
+                "SigningAttributesOrigin": "AWS_SES",
+                "SigningAttributes": { "NextSigningKeyLength": "RSA_4096_BIT" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+        assert!(err.message.contains("NextSigningKeyLength"));
     }
 }
 

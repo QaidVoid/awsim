@@ -170,6 +170,12 @@ impl ServiceHandler for SesService {
             },
             RouteDefinition {
                 method: "PUT",
+                path_pattern: "/v2/email/identities/{EmailIdentity}/dkim/signing",
+                operation: "PutEmailIdentityDkimSigningAttributes",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
                 path_pattern: "/v2/email/identities/{EmailIdentity}/mail-from",
                 operation: "PutEmailIdentityMailFromAttributes",
                 required_query_param: None,
@@ -528,6 +534,9 @@ impl ServiceHandler for SesService {
             }
             "PutEmailIdentityDkimAttributes" => {
                 operations::more::put_email_identity_dkim_attributes(&state, &input, ctx)
+            }
+            "PutEmailIdentityDkimSigningAttributes" => {
+                operations::more::put_email_identity_dkim_signing_attributes(&state, &input, ctx)
             }
             "PutEmailIdentityMailFromAttributes" => {
                 operations::more::put_email_identity_mail_from_attributes(&state, &input, ctx)
