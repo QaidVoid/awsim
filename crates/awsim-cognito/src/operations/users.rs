@@ -506,6 +506,7 @@ pub fn confirm_sign_up(
     })?;
 
     let code_key = format!("{pool_id}:{username}");
+    let auto_verified = pool.auto_verified_attributes.clone();
     let user = pool.users.get_mut(username).ok_or_else(|| {
         AwsError::not_found(
             "UserNotFoundException",
@@ -558,6 +559,15 @@ pub fn confirm_sign_up(
     let _ = state.confirmation_codes_issued.remove(&code_key);
 
     user.status = "CONFIRMED".to_string();
+    // AutoVerifiedAttributes on the pool flips the matching
+    // `<attr>_verified` flag the moment the user confirms sign-up.
+    // Without this the user is CONFIRMED but their email/phone never
+    // shows up as verified, and downstream services that depend on
+    // those flags (token claims, ListUsers filters) reject the user.
+    for attr in &auto_verified {
+        let flag = format!("{attr}_verified");
+        user.attributes.insert(flag, "true".to_string());
+    }
     info!(username = %username, "Cognito: user confirmed sign-up");
 
     // Post-Confirmation trigger (fire-and-forget)
