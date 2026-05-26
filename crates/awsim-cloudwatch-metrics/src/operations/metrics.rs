@@ -296,7 +296,7 @@ pub fn get_metric_statistics(
         .map(parse_timestamp_ms);
 
     let sqlite = require_sqlite(state)?;
-    let rows = sqlite.get_datapoints(
+    let mut rows = sqlite.get_datapoints(
         &ctx.account_id,
         &ctx.region,
         namespace,
@@ -304,6 +304,25 @@ pub fn get_metric_statistics(
         start_ms,
         end_ms,
     )?;
+
+    // Dimensions parameter narrows to datapoints whose stored
+    // dimensions match exactly (same set of name/value pairs). AWS
+    // treats missing Dimensions as "match any" — so when the caller
+    // doesn't supply any, we skip the filter.
+    if let Some(dims_arr) = input.get("Dimensions").and_then(Value::as_array)
+        && !dims_arr.is_empty()
+    {
+        let wanted = parse_dimensions(&Value::Array(dims_arr.clone()));
+        rows.retain(|r| {
+            let stored = json_to_dimensions(&r.dimensions_json);
+            stored.len() == wanted.len()
+                && wanted.iter().all(|w| {
+                    stored
+                        .iter()
+                        .any(|s| s.name == w.name && s.value == w.value)
+                })
+        });
+    }
 
     // GetMetricStatistics Period must be a valid resolution for the
     // metric. For standard-resolution metrics, only multiples of 60 are
@@ -729,5 +748,56 @@ mod tests {
         let metrics = resp["Metrics"].as_array().unwrap();
         assert_eq!(metrics.len(), 1);
         assert_eq!(metrics[0]["Dimensions"][0]["Name"], "Region");
+    }
+
+    #[test]
+    fn get_metric_statistics_filters_by_dimensions() {
+        let state = fresh_state();
+        let ctx = ctx();
+        // Two datapoints under the same metric name, different dims.
+        put_datum(
+            &state,
+            &ctx,
+            "App",
+            "Latency",
+            json!([{ "Name": "Service", "Value": "auth" }]),
+        );
+        put_datum(
+            &state,
+            &ctx,
+            "App",
+            "Latency",
+            json!([{ "Name": "Service", "Value": "billing" }]),
+        );
+
+        // Asking for billing only must return a single datapoint.
+        let resp = get_metric_statistics(
+            &state,
+            &json!({
+                "Namespace": "App",
+                "MetricName": "Latency",
+                "Statistics": ["Sum"],
+                "Dimensions": [{ "Name": "Service", "Value": "billing" }],
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let dps = resp["Datapoints"].as_array().unwrap();
+        assert_eq!(dps.len(), 1);
+        assert_eq!(dps[0]["SampleCount"], 1.0);
+
+        // No dimensions filter aggregates both.
+        let resp = get_metric_statistics(
+            &state,
+            &json!({
+                "Namespace": "App",
+                "MetricName": "Latency",
+                "Statistics": ["Sum"],
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let dps = resp["Datapoints"].as_array().unwrap();
+        assert_eq!(dps[0]["SampleCount"], 2.0);
     }
 }
