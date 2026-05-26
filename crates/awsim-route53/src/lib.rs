@@ -393,3 +393,91 @@ impl ServiceHandler for Route53Service {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("route53", "us-east-1")
+    }
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+        fn noop_clone(_: *const ()) -> RawWaker {
+            noop_raw_waker()
+        }
+        fn noop(_: *const ()) {}
+        fn noop_raw_waker() -> RawWaker {
+            static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+        let waker = unsafe { Waker::from_raw(noop_raw_waker()) };
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = std::pin::pin!(f);
+        loop {
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(v) => return v,
+                Poll::Pending => {}
+            }
+        }
+    }
+
+    #[test]
+    fn create_private_zone_requires_vpc() {
+        let svc = Route53Service::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateHostedZone",
+            json!({
+                "Name": "example.com.",
+                "CallerReference": "r1",
+                "HostedZoneConfig": { "PrivateZone": true }
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidInput");
+    }
+
+    #[test]
+    fn create_private_zone_with_vpc_round_trips() {
+        let svc = Route53Service::new();
+        let ctx = ctx();
+        let resp = block_on(svc.handle(
+            "CreateHostedZone",
+            json!({
+                "Name": "internal.example.com.",
+                "CallerReference": "r2",
+                "HostedZoneConfig": { "PrivateZone": true },
+                "VPC": { "VPCId": "vpc-1", "VPCRegion": "us-east-1" }
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(resp["HostedZone"]["Config"]["PrivateZone"], true);
+
+        let id = resp["HostedZone"]["Id"].as_str().unwrap().to_string();
+        let got = block_on(svc.handle("GetHostedZone", json!({ "Id": id }), &ctx)).unwrap();
+        assert_eq!(got["HostedZone"]["Config"]["PrivateZone"], true);
+        assert_eq!(got["VPCs"][0]["VPCId"], "vpc-1");
+    }
+
+    #[test]
+    fn create_public_zone_rejects_vpc() {
+        let svc = Route53Service::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateHostedZone",
+            json!({
+                "Name": "public.example.com.",
+                "CallerReference": "r3",
+                "VPC": { "VPCId": "vpc-9", "VPCRegion": "us-east-1" }
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidInput");
+    }
+}

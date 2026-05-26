@@ -32,6 +32,18 @@ pub struct HostedZone {
     pub record_sets: Vec<ResourceRecordSet>,
     pub tags: HashMap<String, String>,
     pub created_at: String,
+    /// `true` for VPC-scoped private zones. Public zones default to
+    /// `false`. AWS requires at least one VPC at CreateHostedZone time
+    /// when this flips on.
+    #[serde(default)]
+    pub private_zone: bool,
+    /// VPC associations for private zones. Each entry is
+    /// `{ VPCId, VPCRegion }`.
+    #[serde(default)]
+    pub vpcs: Vec<serde_json::Value>,
+    /// HostedZoneConfig.Comment (free-form description).
+    #[serde(default)]
+    pub comment: Option<String>,
 }
 
 /// A Route53 health check.

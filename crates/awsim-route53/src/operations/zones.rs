@@ -61,6 +61,43 @@ pub fn create_hosted_zone(
     let id = format!("/hostedzone/{}", Uuid::new_v4());
     let now = chrono_now();
 
+    let private_zone = input
+        .get("HostedZoneConfig")
+        .and_then(|c| c.get("PrivateZone"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let comment = input
+        .get("HostedZoneConfig")
+        .and_then(|c| c.get("Comment"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let vpc_input = input.get("VPC").cloned();
+    let mut vpcs = Vec::new();
+    if let Some(v) = vpc_input.clone() {
+        if v.get("VPCId")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            return Err(AwsError::bad_request(
+                "InvalidInput",
+                "VPC.VPCId is required when associating a VPC with a hosted zone.",
+            ));
+        }
+        vpcs.push(v);
+    }
+    if private_zone && vpcs.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidInput",
+            "Private hosted zones require a VPC at CreateHostedZone time.",
+        ));
+    }
+    if !private_zone && !vpcs.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidInput",
+            "VPC is only allowed on private hosted zones.",
+        ));
+    }
+
     let zone = HostedZone {
         id: id.clone(),
         name: name.clone(),
@@ -68,17 +105,24 @@ pub fn create_hosted_zone(
         record_sets: default_records(&name),
         tags: std::collections::HashMap::new(),
         created_at: now,
+        private_zone,
+        vpcs: vpcs.clone(),
+        comment: comment.clone(),
     };
 
     state.hosted_zones.insert(id.clone(), zone);
 
-    Ok(json!({
+    let mut config = json!({ "PrivateZone": private_zone });
+    if let Some(c) = &comment {
+        config["Comment"] = json!(c);
+    }
+    let mut response = json!({
         "__xml_root": "CreateHostedZoneResponse",
         "HostedZone": {
             "Id": id,
             "Name": name,
             "CallerReference": caller_reference,
-            "Config": { "PrivateZone": false },
+            "Config": config,
             "ResourceRecordSetCount": 2,
         },
         "ChangeInfo": {
@@ -94,7 +138,11 @@ pub fn create_hosted_zone(
                 "ns-4.awsim.invalid",
             ]
         }
-    }))
+    });
+    if let Some(v) = vpc_input {
+        response["VPC"] = v;
+    }
+    Ok(response)
 }
 
 /// GET /2013-04-01/hostedzone/{Id}
@@ -122,13 +170,13 @@ pub fn get_hosted_zone(
         )
     })?;
 
-    Ok(json!({
+    let mut response = json!({
         "__xml_root": "GetHostedZoneResponse",
         "HostedZone": {
             "Id": zone.id,
             "Name": zone.name,
             "CallerReference": zone.caller_reference,
-            "Config": { "PrivateZone": false },
+            "Config": { "PrivateZone": zone.private_zone },
             "ResourceRecordSetCount": zone.record_sets.len(),
         },
         "DelegationSet": {
@@ -139,7 +187,11 @@ pub fn get_hosted_zone(
                 "ns-4.awsim.invalid",
             ]
         }
-    }))
+    });
+    if zone.private_zone && !zone.vpcs.is_empty() {
+        response["VPCs"] = json!(zone.vpcs);
+    }
+    Ok(response)
 }
 
 /// GET /2013-04-01/hostedzone
@@ -157,7 +209,7 @@ pub fn list_hosted_zones(
                 "Id": z.id,
                 "Name": z.name,
                 "CallerReference": z.caller_reference,
-                "Config": { "PrivateZone": false },
+                "Config": { "PrivateZone": z.private_zone },
                 "ResourceRecordSetCount": z.record_sets.len(),
             })
         })
@@ -231,7 +283,7 @@ pub fn list_hosted_zones_by_name(
                 "Id": z.id,
                 "Name": z.name,
                 "CallerReference": z.caller_reference,
-                "Config": { "PrivateZone": false },
+                "Config": { "PrivateZone": z.private_zone },
                 "ResourceRecordSetCount": z.record_sets.len(),
             })
         })
