@@ -68,6 +68,18 @@ pub struct DbInstance {
     /// taken from this instance.
     #[serde(default)]
     pub kms_key_id: Option<String>,
+    /// Enhanced monitoring interval in seconds. 0 disables it; AWS
+    /// accepts 0, 1, 5, 10, 15, 30, 60.
+    #[serde(default)]
+    pub monitoring_interval: Option<u32>,
+    /// IAM role used by enhanced monitoring to publish metrics. Required
+    /// by AWS whenever monitoring_interval > 0.
+    #[serde(default)]
+    pub monitoring_role_arn: Option<String>,
+    /// Log types enabled for export to CloudWatch Logs. Engine-specific:
+    /// e.g. ["error","slowquery"] for MySQL or ["postgresql"] for PG.
+    #[serde(default)]
+    pub enabled_cloudwatch_logs_exports: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

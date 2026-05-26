@@ -54,6 +54,13 @@ fn instance_to_value(inst: &DbInstance) -> Value {
     } else {
         obj["StorageEncrypted"] = json!(false);
     }
+    if let Some(iv) = inst.monitoring_interval {
+        obj["MonitoringInterval"] = json!(iv);
+    }
+    if let Some(ref role) = inst.monitoring_role_arn {
+        obj["MonitoringRoleArn"] = json!(role);
+    }
+    obj["EnabledCloudwatchLogsExports"] = json!(inst.enabled_cloudwatch_logs_exports);
     obj
 }
 
@@ -73,6 +80,31 @@ fn allowed_license_models(engine: &str) -> &'static [&'static str] {
 
 fn default_license_model(engine: &str) -> Option<&'static str> {
     allowed_license_models(engine).first().copied()
+}
+
+/// Per-engine allowlist for CloudWatch Logs exports. AWS rejects
+/// out-of-range values with InvalidParameterValue.
+fn allowed_log_exports(engine: &str) -> &'static [&'static str] {
+    match engine {
+        "mysql" | "mariadb" => &["audit", "error", "general", "slowquery"],
+        "postgres" => &["postgresql", "upgrade"],
+        "oracle-ee" | "oracle-se" | "oracle-se1" | "oracle-se2" => {
+            &["alert", "audit", "listener", "trace"]
+        }
+        "sqlserver-ex" | "sqlserver-web" | "sqlserver-se" | "sqlserver-ee" => &["agent", "error"],
+        _ => &[],
+    }
+}
+
+fn validate_log_export(engine: &str, log_type: &str) -> Result<(), AwsError> {
+    let allowed = allowed_log_exports(engine);
+    if !allowed.contains(&log_type) {
+        return Err(invalid_parameter(format!(
+            "Log export '{log_type}' is not valid for engine '{engine}'; allowed: {}.",
+            allowed.join(", "),
+        )));
+    }
+    Ok(())
 }
 
 pub fn create_db_instance(
@@ -166,6 +198,32 @@ pub fn create_db_instance(
         })
         .unwrap_or_default();
 
+    let monitoring_interval = opt_u32(input, "MonitoringInterval");
+    if let Some(iv) = monitoring_interval
+        && !matches!(iv, 0 | 1 | 5 | 10 | 15 | 30 | 60)
+    {
+        return Err(invalid_parameter(format!(
+            "MonitoringInterval '{iv}' must be one of: 0, 1, 5, 10, 15, 30, 60."
+        )));
+    }
+    let monitoring_role_arn = opt_str(input, "MonitoringRoleArn").map(str::to_string);
+    if matches!(monitoring_interval, Some(iv) if iv > 0) && monitoring_role_arn.is_none() {
+        return Err(invalid_parameter(
+            "MonitoringRoleArn is required when MonitoringInterval is greater than 0.",
+        ));
+    }
+    let enabled_cloudwatch_logs_exports: Vec<String> = input["EnableCloudwatchLogsExports"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    for log_type in &enabled_cloudwatch_logs_exports {
+        validate_log_export(engine, log_type)?;
+    }
+
     let inst = DbInstance {
         identifier: identifier.to_string(),
         arn: arn.clone(),
@@ -188,6 +246,9 @@ pub fn create_db_instance(
         license_model,
         copy_tags_to_snapshot: opt_bool(input, "CopyTagsToSnapshot").unwrap_or(false),
         kms_key_id: opt_str(input, "KmsKeyId").map(str::to_string),
+        monitoring_interval,
+        monitoring_role_arn,
+        enabled_cloudwatch_logs_exports,
     };
 
     let result = instance_to_value(&inst);
@@ -526,5 +587,55 @@ mod create_db_instance_tests {
         let sgs = resp["DBInstance"]["VpcSecurityGroups"].as_array().unwrap();
         assert_eq!(sgs.len(), 2);
         assert_eq!(sgs[0]["VpcSecurityGroupId"], "sg-1");
+    }
+
+    #[test]
+    fn persists_enhanced_monitoring_and_log_exports() {
+        let state = RdsState::default();
+        let mut input = base_input();
+        input["MonitoringInterval"] = json!(60);
+        input["MonitoringRoleArn"] = json!("arn:aws:iam::123:role/rds-monitoring");
+        input["EnableCloudwatchLogsExports"] = json!(["postgresql", "upgrade"]);
+        let resp = create_db_instance(&state, &input, &ctx()).unwrap();
+        assert_eq!(resp["DBInstance"]["MonitoringInterval"], 60);
+        assert_eq!(
+            resp["DBInstance"]["MonitoringRoleArn"],
+            "arn:aws:iam::123:role/rds-monitoring"
+        );
+        let exports = resp["DBInstance"]["EnabledCloudwatchLogsExports"]
+            .as_array()
+            .unwrap();
+        assert_eq!(exports.len(), 2);
+    }
+
+    #[test]
+    fn rejects_monitoring_interval_not_in_allowed_set() {
+        let state = RdsState::default();
+        let mut input = base_input();
+        input["MonitoringInterval"] = json!(7);
+        let err = create_db_instance(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+        assert!(err.message.contains("MonitoringInterval"));
+    }
+
+    #[test]
+    fn rejects_monitoring_without_role_arn() {
+        let state = RdsState::default();
+        let mut input = base_input();
+        input["MonitoringInterval"] = json!(60);
+        let err = create_db_instance(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+        assert!(err.message.contains("MonitoringRoleArn"));
+    }
+
+    #[test]
+    fn rejects_log_export_not_valid_for_engine() {
+        let state = RdsState::default();
+        let mut input = base_input();
+        // postgres does not have a "slowquery" log type.
+        input["EnableCloudwatchLogsExports"] = json!(["slowquery"]);
+        let err = create_db_instance(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+        assert!(err.message.contains("slowquery"));
     }
 }
