@@ -284,6 +284,8 @@ impl StsService {
     }
 
     fn decode_authorization_message(&self, input: &Value) -> Result<Value, AwsError> {
+        use base64::Engine as _;
+
         let encoded = input["EncodedMessage"]
             .as_str()
             .ok_or_else(|| AwsError::validation("EncodedMessage is required"))?;
@@ -295,25 +297,39 @@ impl StsService {
             ));
         }
 
-        let decoded = json!({
-            "allowed": false,
-            "explicitDeny": false,
-            "matchedStatements": {"items": []},
-            "failures": {"items": []},
-            "context": {
-                "principal": {
-                    "id": "AIDEXAMPLEAWSIM",
-                    "arn": "arn:aws:iam::000000000000:user/awsim-user"
-                },
-                "action": "unknown:Action",
-                "resource": "*",
-                "conditions": {"items": []}
-            }
-        });
+        // AWS encodes authorization messages as base64(zip(json)). We
+        // don't ship a zip dependency in this crate, so we accept the
+        // simpler base64(utf8) shape produced by `encode_authorization_message`
+        // below and round-trip it. Anything that isn't valid base64 or
+        // isn't UTF-8 is rejected with InvalidAuthorizationMessageException,
+        // matching the AWS error for malformed input.
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|_| {
+                AwsError::bad_request(
+                    "InvalidAuthorizationMessageException",
+                    "EncodedMessage is not valid base64.",
+                )
+            })?;
+        let decoded = String::from_utf8(bytes).map_err(|_| {
+            AwsError::bad_request(
+                "InvalidAuthorizationMessageException",
+                "EncodedMessage payload is not valid UTF-8.",
+            )
+        })?;
 
         Ok(json!({
-            "DecodedMessage": decoded.to_string(),
+            "DecodedMessage": decoded,
         }))
+    }
+
+    /// Internal helper for tests + future call sites that need to mint
+    /// an EncodedMessage that DecodeAuthorizationMessage will accept.
+    /// Not part of the AWS API.
+    #[cfg(test)]
+    fn encode_authorization_message(payload: &str) -> String {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(payload.as_bytes())
     }
 
     fn get_access_key_info(&self, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
@@ -1795,5 +1811,37 @@ mod tests {
             )
             .unwrap();
         assert!(resp["Credentials"]["AccessKeyId"].as_str().is_some());
+    }
+
+    #[test]
+    fn decode_authorization_message_round_trips_encoded_payload() {
+        let sts = StsService::new();
+        let payload = r#"{"allowed":false,"action":"s3:GetObject"}"#;
+        let encoded = StsService::encode_authorization_message(payload);
+        let resp = sts
+            .decode_authorization_message(&json!({ "EncodedMessage": encoded }))
+            .unwrap();
+        assert_eq!(resp["DecodedMessage"].as_str().unwrap(), payload);
+    }
+
+    #[test]
+    fn decode_authorization_message_rejects_non_base64() {
+        let sts = StsService::new();
+        let err = sts
+            .decode_authorization_message(&json!({ "EncodedMessage": "!@#$not-base64$%^&" }))
+            .unwrap_err();
+        assert_eq!(err.code, "InvalidAuthorizationMessageException");
+    }
+
+    #[test]
+    fn decode_authorization_message_rejects_non_utf8_payload() {
+        use base64::Engine as _;
+        let sts = StsService::new();
+        // 0xFF on its own is not valid UTF-8.
+        let encoded = base64::engine::general_purpose::STANDARD.encode([0xFFu8]);
+        let err = sts
+            .decode_authorization_message(&json!({ "EncodedMessage": encoded }))
+            .unwrap_err();
+        assert_eq!(err.code, "InvalidAuthorizationMessageException");
     }
 }
