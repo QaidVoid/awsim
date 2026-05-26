@@ -52,6 +52,41 @@ fn check_topic_subscription(
     Ok(())
 }
 
+/// Substitute `{{key}}` placeholders in `text` with stringified values
+/// from `data`. Unknown keys collapse to an empty string, matching SES's
+/// behavior when TemplateData omits a referenced variable.
+fn render_template(text: &str, data: &Value) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        rest = &rest[start + 2..];
+        if let Some(end) = rest.find("}}") {
+            let key = rest[..end].trim();
+            let value = data.get(key).map(value_to_plain).unwrap_or_default();
+            out.push_str(&value);
+            rest = &rest[end + 2..];
+        } else {
+            out.push_str("{{");
+            break;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Coerce a JSON scalar to its plain string form (avoiding the quotes
+/// that `Value::to_string` adds around strings).
+fn value_to_plain(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
 /// Returns true when EmailTags carry the `aws-ses-disable-tls` marker
 /// with a truthy value, used by the simulator to model a recipient MTA
 /// without TLS support.
@@ -165,7 +200,10 @@ pub fn send_email(
         }
     }
 
-    // Content — Simple or Raw
+    // Content — Simple, Raw, or Templated. The Templated branch loads
+    // the named template, parses the TemplateData JSON string, and
+    // expands `{{var}}` placeholders within each part. AWS SES is
+    // Handlebars-compatible; we cover the common substitution case.
     let content = &input["Content"];
     let (subject, body_text, body_html, raw) = if !content["Simple"].is_null() {
         let simple = &content["Simple"];
@@ -176,10 +214,38 @@ pub fn send_email(
     } else if !content["Raw"].is_null() {
         let raw_data = content["Raw"]["Data"].as_str().map(String::from);
         (None, None, None, raw_data)
+    } else if !content["Templated"].is_null() {
+        let templated = &content["Templated"];
+        let template_name = templated["TemplateName"].as_str().ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameter",
+                "Content.Templated requires TemplateName",
+            )
+        })?;
+        let template = state.templates.get(template_name).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Template not found: {template_name}"),
+            )
+        })?;
+        let data_str = templated["TemplateData"].as_str().unwrap_or("{}");
+        let data: Value = serde_json::from_str(data_str).map_err(|_| {
+            AwsError::bad_request(
+                "InvalidParameter",
+                "Content.Templated.TemplateData must be a JSON object string",
+            )
+        })?;
+        let subject = template
+            .subject
+            .as_deref()
+            .map(|s| render_template(s, &data));
+        let body_text = template.text.as_deref().map(|s| render_template(s, &data));
+        let body_html = template.html.as_deref().map(|s| render_template(s, &data));
+        (subject, body_text, body_html, None)
     } else {
         return Err(AwsError::bad_request(
             "InvalidParameter",
-            "Content must include Simple or Raw",
+            "Content must include Simple, Raw, or Templated",
         ));
     };
 
@@ -401,6 +467,88 @@ mod list_management_suppression_tests {
         .unwrap_err();
         assert_eq!(err.code, "MessageRejected");
         assert!(err.message.contains("unsubscribed"));
+    }
+
+    #[test]
+    fn renders_templated_content() {
+        let state = SesState::default();
+        crate::operations::templates::create_email_template(
+            &state,
+            &json!({
+                "TemplateName": "welcome",
+                "TemplateContent": {
+                    "Subject": "Hello {{name}}",
+                    "Text": "Hi {{name}}, your code is {{code}}.",
+                    "Html": "<p>Hi {{name}}</p>",
+                },
+            }),
+            &RequestContext::new("ses", "us-east-1"),
+        )
+        .unwrap();
+
+        let input = json!({
+            "FromEmailAddress": "sender@example.com",
+            "Destination": { "ToAddresses": ["user@example.com"] },
+            "Content": {
+                "Templated": {
+                    "TemplateName": "welcome",
+                    "TemplateData": "{\"name\":\"Alex\",\"code\":\"42\"}",
+                },
+            },
+        });
+        let resp = send_email(&state, &input, &RequestContext::new("ses", "us-east-1")).unwrap();
+        assert!(resp["MessageId"].is_string());
+    }
+
+    #[test]
+    fn templated_branch_rejects_missing_template() {
+        let state = SesState::default();
+        let input = json!({
+            "FromEmailAddress": "sender@example.com",
+            "Destination": { "ToAddresses": ["user@example.com"] },
+            "Content": {
+                "Templated": {
+                    "TemplateName": "missing",
+                    "TemplateData": "{}",
+                },
+            },
+        });
+        let err = send_email(&state, &input, &RequestContext::new("ses", "us-east-1")).unwrap_err();
+        assert_eq!(err.code, "NotFoundException");
+    }
+
+    #[test]
+    fn templated_branch_rejects_invalid_template_data() {
+        let state = SesState::default();
+        crate::operations::templates::create_email_template(
+            &state,
+            &json!({
+                "TemplateName": "welcome",
+                "TemplateContent": { "Subject": "x", "Text": "x" },
+            }),
+            &RequestContext::new("ses", "us-east-1"),
+        )
+        .unwrap();
+        let input = json!({
+            "FromEmailAddress": "sender@example.com",
+            "Destination": { "ToAddresses": ["user@example.com"] },
+            "Content": {
+                "Templated": {
+                    "TemplateName": "welcome",
+                    "TemplateData": "{not-json",
+                },
+            },
+        });
+        let err = send_email(&state, &input, &RequestContext::new("ses", "us-east-1")).unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+        assert!(err.message.contains("TemplateData"));
+    }
+
+    #[test]
+    fn render_template_substitutes_keys() {
+        let data = json!({ "name": "Alex", "n": 7 });
+        let out = render_template("Hi {{name}}, count={{n}}, missing={{x}}!", &data);
+        assert_eq!(out, "Hi Alex, count=7, missing=!");
     }
 
     #[test]
