@@ -27,7 +27,7 @@ fn build_sm_arn(ctx: &RequestContext, name: &str) -> String {
 }
 
 fn sm_to_value(sm: &StateMachine) -> Value {
-    json!({
+    let mut obj = json!({
         "stateMachineArn": sm.arn,
         "name": sm.name,
         "status": sm.status,
@@ -35,7 +35,83 @@ fn sm_to_value(sm: &StateMachine) -> Value {
         "roleArn": sm.role_arn,
         "type": sm.machine_type,
         "creationDate": sm.creation_date,
-    })
+    });
+    if let Some(tc) = &sm.tracing_configuration {
+        obj["tracingConfiguration"] = tc.clone();
+    }
+    if let Some(ec) = &sm.encryption_configuration {
+        obj["encryptionConfiguration"] = ec.clone();
+    }
+    obj
+}
+
+/// Validate `tracingConfiguration` per Smithy: an object with an
+/// optional boolean `enabled`. Anything else fails CreateStateMachine
+/// with InvalidParameterValue.
+fn validate_tracing_config(input: &Value) -> Result<Option<Value>, AwsError> {
+    let Some(tc) = input.get("tracingConfiguration") else {
+        return Ok(None);
+    };
+    if tc.is_null() {
+        return Ok(None);
+    }
+    let obj = tc.as_object().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterValue",
+            "tracingConfiguration must be an object.",
+        )
+    })?;
+    if let Some(enabled) = obj.get("enabled")
+        && !enabled.is_boolean()
+    {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValue",
+            "tracingConfiguration.enabled must be a boolean.",
+        ));
+    }
+    Ok(Some(Value::Object(obj.clone())))
+}
+
+/// Validate `encryptionConfiguration`: `type` must be
+/// `AWS_OWNED_KEY` or `CUSTOMER_MANAGED_KMS_KEY`; the latter requires
+/// a non-empty `kmsKeyId`. Returns the validated object.
+fn validate_encryption_config(input: &Value) -> Result<Option<Value>, AwsError> {
+    let Some(ec) = input.get("encryptionConfiguration") else {
+        return Ok(None);
+    };
+    if ec.is_null() {
+        return Ok(None);
+    }
+    let obj = ec.as_object().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterValue",
+            "encryptionConfiguration must be an object.",
+        )
+    })?;
+    let ty = obj.get("type").and_then(Value::as_str).ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterValue",
+            "encryptionConfiguration.type is required.",
+        )
+    })?;
+    if !matches!(ty, "AWS_OWNED_KEY" | "CUSTOMER_MANAGED_KMS_KEY") {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValue",
+            format!(
+                "encryptionConfiguration.type `{ty}` must be AWS_OWNED_KEY or CUSTOMER_MANAGED_KMS_KEY."
+            ),
+        ));
+    }
+    if ty == "CUSTOMER_MANAGED_KMS_KEY" {
+        let kms_key = obj.get("kmsKeyId").and_then(Value::as_str).unwrap_or("");
+        if kms_key.is_empty() {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValue",
+                "encryptionConfiguration.kmsKeyId is required when type is CUSTOMER_MANAGED_KMS_KEY.",
+            ));
+        }
+    }
+    Ok(Some(Value::Object(obj.clone())))
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +175,9 @@ pub fn create_state_machine(
         })
         .unwrap_or_default();
 
+    let tracing_configuration = validate_tracing_config(input)?;
+    let encryption_configuration = validate_encryption_config(input)?;
+
     let creation_date = now_iso8601();
     let sm = StateMachine {
         name: name.to_string(),
@@ -109,6 +188,8 @@ pub fn create_state_machine(
         status: "ACTIVE".to_string(),
         creation_date: creation_date.clone(),
         tags,
+        tracing_configuration,
+        encryption_configuration,
     };
 
     info!(name, arn = %arn, "Created state machine");
@@ -232,6 +313,13 @@ pub fn update_state_machine(
 
     if let Some(role_arn) = input["roleArn"].as_str() {
         sm.role_arn = role_arn.to_string();
+    }
+
+    if input.get("tracingConfiguration").is_some() {
+        sm.tracing_configuration = validate_tracing_config(input)?;
+    }
+    if input.get("encryptionConfiguration").is_some() {
+        sm.encryption_configuration = validate_encryption_config(input)?;
     }
 
     let update_date = now_iso8601();

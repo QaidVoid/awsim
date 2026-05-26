@@ -38,6 +38,11 @@ pub struct StateMachine {
     pub creation_date: String,
     /// Tags attached to this state machine.
     pub tags: HashMap<String, String>,
+    /// `{ enabled: bool }`. Persisted verbatim and surfaced in describe.
+    pub tracing_configuration: Option<serde_json::Value>,
+    /// `{ type, kmsKeyId?, kmsDataKeyReusePeriodSeconds? }`. Type must
+    /// be AWS_OWNED_KEY or CUSTOMER_MANAGED_KMS_KEY.
+    pub encryption_configuration: Option<serde_json::Value>,
 }
 
 /// A Step Functions activity.

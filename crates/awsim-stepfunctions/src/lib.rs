@@ -139,6 +139,74 @@ mod tests {
     }
 
     #[test]
+    fn test_create_state_machine_persists_tracing_and_encryption() {
+        let svc = StepFunctionsService::new();
+        let ctx = ctx();
+        let create = block_on(svc.handle(
+            "CreateStateMachine",
+            json!({
+                "name": "config-machine",
+                "definition": pass_definition(),
+                "tracingConfiguration": { "enabled": true },
+                "encryptionConfiguration": {
+                    "type": "CUSTOMER_MANAGED_KMS_KEY",
+                    "kmsKeyId": "arn:aws:kms:us-east-1:000000000000:key/abc",
+                    "kmsDataKeyReusePeriodSeconds": 60,
+                },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let arn = create["stateMachineArn"].as_str().unwrap().to_string();
+        let desc = block_on(svc.handle(
+            "DescribeStateMachine",
+            json!({ "stateMachineArn": arn }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(desc["tracingConfiguration"]["enabled"], true);
+        assert_eq!(
+            desc["encryptionConfiguration"]["type"],
+            "CUSTOMER_MANAGED_KMS_KEY"
+        );
+    }
+
+    #[test]
+    fn test_create_state_machine_rejects_kms_without_key_id() {
+        let svc = StepFunctionsService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateStateMachine",
+            json!({
+                "name": "missing-key",
+                "definition": pass_definition(),
+                "encryptionConfiguration": { "type": "CUSTOMER_MANAGED_KMS_KEY" },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+        assert!(err.message.contains("kmsKeyId"));
+    }
+
+    #[test]
+    fn test_create_state_machine_rejects_invalid_encryption_type() {
+        let svc = StepFunctionsService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateStateMachine",
+            json!({
+                "name": "bad-enc",
+                "definition": pass_definition(),
+                "encryptionConfiguration": { "type": "ROLL_YOUR_OWN" },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
     fn test_create_state_machine_duplicate() {
         let svc = StepFunctionsService::new();
         let ctx = ctx();
