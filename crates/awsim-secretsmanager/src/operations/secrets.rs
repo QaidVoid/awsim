@@ -414,7 +414,7 @@ pub fn describe_secret(
 pub fn list_secrets(
     state: &SecretsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let filters = parse_list_filters(input)?;
     let include_planned_deletion = input["IncludePlannedDeletion"].as_bool().unwrap_or(false);
@@ -427,7 +427,7 @@ pub fn list_secrets(
             if !include_planned_deletion && s.deleted_date.is_some() {
                 return false;
             }
-            filters.iter().all(|f| f.matches(s))
+            filters.iter().all(|f| f.matches(s, &ctx.region))
         })
         .map(|entry| entry.value().clone())
         .collect();
@@ -456,7 +456,7 @@ struct ListFilter {
 }
 
 impl ListFilter {
-    fn matches(&self, s: &Secret) -> bool {
+    fn matches(&self, s: &Secret, region: &str) -> bool {
         // AWS treats multiple values within a single filter as OR; they
         // also do prefix matching on string fields and accept a leading
         // `!` to negate.
@@ -470,7 +470,12 @@ impl ListFilter {
                 "description" => s.description.contains(needle),
                 "tag-key" => s.tags.keys().any(|k| k.contains(needle)),
                 "tag-value" => s.tags.values().any(|v| v.contains(needle)),
-                "primary-region" => false,
+                // Secrets live in a per-region store, so every secret
+                // visible here is primary in `region`.
+                "primary-region" => region == needle,
+                // No cross-account ownership in awsim, so every secret
+                // is owned by the calling account.
+                "owned-by-me" => needle.eq_ignore_ascii_case("true"),
                 "owning-service" => false,
                 "all" => {
                     s.name.contains(needle)
@@ -1499,6 +1504,45 @@ mod tests {
         .unwrap();
         assert_eq!(first["VersionId"], replay["VersionId"]);
         assert_eq!(replay["VersionId"].as_str().unwrap(), tok);
+    }
+
+    #[test]
+    fn list_secrets_filters_owned_by_me_and_primary_region() {
+        let state = SecretsState::default();
+        create_secret(&state, &json!({ "Name": "a", "SecretString": "v" }), &ctx()).unwrap();
+        create_secret(&state, &json!({ "Name": "b", "SecretString": "v" }), &ctx()).unwrap();
+
+        // owned-by-me=true matches everything; false matches nothing.
+        let resp = list_secrets(
+            &state,
+            &json!({ "Filters": [{ "Key": "owned-by-me", "Values": ["true"] }] }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["SecretList"].as_array().unwrap().len(), 2);
+        let resp = list_secrets(
+            &state,
+            &json!({ "Filters": [{ "Key": "owned-by-me", "Values": ["false"] }] }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(resp["SecretList"].as_array().unwrap().is_empty());
+
+        // primary-region matches when value equals ctx.region (us-east-1).
+        let resp = list_secrets(
+            &state,
+            &json!({ "Filters": [{ "Key": "primary-region", "Values": ["us-east-1"] }] }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["SecretList"].as_array().unwrap().len(), 2);
+        let resp = list_secrets(
+            &state,
+            &json!({ "Filters": [{ "Key": "primary-region", "Values": ["us-west-2"] }] }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(resp["SecretList"].as_array().unwrap().is_empty());
     }
 
     #[test]
