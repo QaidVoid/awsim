@@ -811,6 +811,15 @@ fn set_nested_value(target: &mut Value, path: &str, val: Value) {
 // Choice condition evaluation
 // ---------------------------------------------------------------------------
 
+/// Coerce a JSON value to a number for Choice numeric comparisons.
+/// Numbers pass through; strings that parse as f64 round-trip. Anything
+/// else is None so the comparison evaluates to false.
+fn coerce_to_number(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|s| s.parse::<f64>().ok()))
+}
+
 fn evaluate_condition(choice: &Value, input: &Value) -> bool {
     // Handle And / Or / Not compound conditions
     if let Some(and_conditions) = choice["And"].as_array() {
@@ -865,31 +874,32 @@ fn evaluate_condition(choice: &Value, input: &Value) -> bool {
             .unwrap_or(false);
     }
 
-    // NumericEquals / LessThan / GreaterThan
+    // NumericEquals / LessThan / GreaterThan. AWS Step Functions
+    // coerces the variable to a number when it's stored as a string,
+    // so "42" matches NumericEquals:42. Non-numeric strings (and
+    // booleans / null / objects / arrays) compare as false.
     if let Some(expected) = choice["NumericEquals"].as_f64() {
-        return variable_value.as_f64() == Some(expected);
+        return coerce_to_number(&variable_value)
+            .map(|v| (v - expected).abs() < f64::EPSILON)
+            .unwrap_or(false);
     }
     if let Some(expected) = choice["NumericLessThan"].as_f64() {
-        return variable_value
-            .as_f64()
+        return coerce_to_number(&variable_value)
             .map(|v| v < expected)
             .unwrap_or(false);
     }
     if let Some(expected) = choice["NumericGreaterThan"].as_f64() {
-        return variable_value
-            .as_f64()
+        return coerce_to_number(&variable_value)
             .map(|v| v > expected)
             .unwrap_or(false);
     }
     if let Some(expected) = choice["NumericLessThanOrEquals"].as_f64() {
-        return variable_value
-            .as_f64()
+        return coerce_to_number(&variable_value)
             .map(|v| v <= expected)
             .unwrap_or(false);
     }
     if let Some(expected) = choice["NumericGreaterThanOrEquals"].as_f64() {
-        return variable_value
-            .as_f64()
+        return coerce_to_number(&variable_value)
             .map(|v| v >= expected)
             .unwrap_or(false);
     }
@@ -976,6 +986,53 @@ mod tests {
         }"#;
         let result = run_express(def, "{}");
         assert_eq!(result.status, "SUCCEEDED");
+    }
+
+    #[test]
+    fn choice_numeric_coerces_stringified_number() {
+        let def = r#"{
+            "StartAt": "C",
+            "States": {
+                "C": {
+                    "Type": "Choice",
+                    "Choices": [{
+                        "Variable": "$.count",
+                        "NumericGreaterThan": 5,
+                        "Next": "Hit"
+                    }],
+                    "Default": "Miss"
+                },
+                "Hit": { "Type": "Pass", "Result": "hit", "End": true },
+                "Miss": { "Type": "Pass", "Result": "miss", "End": true }
+            }
+        }"#;
+        let result = run(def, r#"{"count":"42"}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out, json!("hit"));
+    }
+
+    #[test]
+    fn choice_numeric_rejects_non_numeric_string() {
+        let def = r#"{
+            "StartAt": "C",
+            "States": {
+                "C": {
+                    "Type": "Choice",
+                    "Choices": [{
+                        "Variable": "$.count",
+                        "NumericEquals": 0,
+                        "Next": "Hit"
+                    }],
+                    "Default": "Miss"
+                },
+                "Hit": { "Type": "Pass", "Result": "hit", "End": true },
+                "Miss": { "Type": "Pass", "Result": "miss", "End": true }
+            }
+        }"#;
+        let result = run(def, r#"{"count":"hello"}"#);
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out, json!("miss"));
     }
 
     #[test]
