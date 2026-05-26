@@ -41,12 +41,58 @@ fn image_to_json(img: &ContainerImage, repo_name: &str, registry_id: &str) -> Va
     if let Some(tag) = &img.image_tag {
         id["imageTag"] = json!(tag);
     }
-    json!({
+    let mut obj = json!({
         "registryId": registry_id,
         "repositoryName": repo_name,
         "imageId": id,
         "imageManifest": img.image_manifest,
-    })
+    });
+    if let Some(ref mt) = img.image_manifest_media_type {
+        obj["imageManifestMediaType"] = json!(mt);
+    }
+    obj
+}
+
+/// Identify the manifest's canonical media type. Detects Docker schema 1
+/// (signed), Docker schema 2 (manifest or list), and OCI image manifest /
+/// image index. Returns Ok(None) if the manifest is structurally valid
+/// JSON but lacks recognizable schema markers (the caller may still
+/// declare it via imageManifestMediaType); returns InvalidParameterException
+/// for non-JSON or non-object manifests.
+fn detect_manifest_media_type(manifest: &str) -> Result<Option<String>, AwsError> {
+    let parsed: Value = serde_json::from_str(manifest).map_err(|e| {
+        AwsError::bad_request(
+            "InvalidParameterException",
+            format!("imageManifest is not valid JSON: {e}"),
+        )
+    })?;
+    let obj = parsed.as_object().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "imageManifest must be a JSON object.",
+        )
+    })?;
+
+    if let Some(mt) = obj.get("mediaType").and_then(Value::as_str) {
+        return Ok(Some(mt.to_string()));
+    }
+    match obj.get("schemaVersion").and_then(Value::as_i64) {
+        Some(1) => Ok(Some(
+            "application/vnd.docker.distribution.manifest.v1+json".to_string(),
+        )),
+        Some(2) => {
+            if obj.contains_key("manifests") {
+                Ok(Some(
+                    "application/vnd.docker.distribution.manifest.list.v2+json".to_string(),
+                ))
+            } else {
+                Ok(Some(
+                    "application/vnd.docker.distribution.manifest.v2+json".to_string(),
+                ))
+            }
+        }
+        _ => Ok(None),
+    }
 }
 
 fn image_detail_to_json(img: &ContainerImage, repo_name: &str, registry_id: &str) -> Value {
@@ -79,6 +125,15 @@ pub fn put_image(state: &EcrState, input: &Value, ctx: &RequestContext) -> Resul
     })?;
 
     let image_tag = input["imageTag"].as_str().map(|s| s.to_string());
+
+    // Determine the manifest media type. Prefer the caller's explicit
+    // `imageManifestMediaType` (used by clients that produce manifests
+    // without a top-level mediaType field), otherwise parse the
+    // manifest JSON and detect Docker schema 1/2 or OCI image
+    // manifest/index. A malformed manifest is an InvalidParameter.
+    let declared_media_type = input["imageManifestMediaType"].as_str().map(str::to_string);
+    let detected_media_type = detect_manifest_media_type(manifest)?;
+    let image_manifest_media_type = declared_media_type.or(detected_media_type);
 
     let mut repo = state.repositories.get_mut(repo_name).ok_or_else(|| {
         AwsError::bad_request(
@@ -143,6 +198,7 @@ pub fn put_image(state: &EcrState, input: &Value, ctx: &RequestContext) -> Resul
         image_manifest: manifest.to_string(),
         pushed_at: now_epoch_str(),
         image_size_in_bytes: size,
+        image_manifest_media_type: image_manifest_media_type.clone(),
     };
 
     let image_json = image_to_json(&img, repo_name, &ctx.account_id);
@@ -372,4 +428,60 @@ pub fn describe_images(
     };
 
     Ok(json!({ "imageDetails": details }))
+}
+
+#[cfg(test)]
+mod manifest_media_type_tests {
+    use super::detect_manifest_media_type;
+
+    #[test]
+    fn detects_explicit_media_type_field() {
+        let mt = detect_manifest_media_type(
+            r#"{"mediaType":"application/vnd.oci.image.manifest.v1+json","layers":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            mt.as_deref(),
+            Some("application/vnd.oci.image.manifest.v1+json"),
+        );
+    }
+
+    #[test]
+    fn detects_schema_2_manifest_without_media_type() {
+        let mt = detect_manifest_media_type(r#"{"schemaVersion":2,"layers":[]}"#).unwrap();
+        assert_eq!(
+            mt.as_deref(),
+            Some("application/vnd.docker.distribution.manifest.v2+json"),
+        );
+    }
+
+    #[test]
+    fn detects_schema_2_manifest_list() {
+        let mt = detect_manifest_media_type(r#"{"schemaVersion":2,"manifests":[]}"#).unwrap();
+        assert_eq!(
+            mt.as_deref(),
+            Some("application/vnd.docker.distribution.manifest.list.v2+json"),
+        );
+    }
+
+    #[test]
+    fn detects_schema_1() {
+        let mt = detect_manifest_media_type(r#"{"schemaVersion":1,"fsLayers":[]}"#).unwrap();
+        assert_eq!(
+            mt.as_deref(),
+            Some("application/vnd.docker.distribution.manifest.v1+json"),
+        );
+    }
+
+    #[test]
+    fn rejects_non_json_manifest() {
+        let err = detect_manifest_media_type("not-json").unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn rejects_non_object_json_manifest() {
+        let err = detect_manifest_media_type("[]").unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
 }

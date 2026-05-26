@@ -13,6 +13,11 @@ pub struct ContainerImage {
     pub image_manifest: String,
     pub pushed_at: String,
     pub image_size_in_bytes: u64,
+    /// Canonical media type detected from manifest content (Docker schema
+    /// 1/2, OCI image manifest, OCI image index). Surfaced via PutImage
+    /// and BatchGetImage so clients can disambiguate single-arch from
+    /// multi-arch indexes.
+    pub image_manifest_media_type: Option<String>,
 }
 
 /// A layer upload session.
@@ -165,6 +170,7 @@ impl Snapshottable for EcrState {
                             image_manifest: i.image_manifest.clone(),
                             pushed_at: i.pushed_at.clone(),
                             image_size_in_bytes: i.image_size_in_bytes,
+                            image_manifest_media_type: i.image_manifest_media_type.clone(),
                         })
                         .collect(),
                     encryption_type: Some(r.encryption_type.clone()),
@@ -204,6 +210,7 @@ impl Snapshottable for EcrState {
                     image_manifest: i.image_manifest,
                     pushed_at: i.pushed_at,
                     image_size_in_bytes: i.image_size_in_bytes,
+                    image_manifest_media_type: i.image_manifest_media_type,
                 })
                 .collect();
 
@@ -279,6 +286,8 @@ pub struct ImageSnapshot {
     pub image_manifest: String,
     pub pushed_at: String,
     pub image_size_in_bytes: u64,
+    #[serde(default)]
+    pub image_manifest_media_type: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
