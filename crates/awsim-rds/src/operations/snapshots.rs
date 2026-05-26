@@ -305,6 +305,36 @@ mod copy_tags_to_snapshot_tests {
     }
 
     #[test]
+    fn copy_snapshot_records_source_region_and_overrides_kms() {
+        let state = RdsState::default();
+        let _ = create_instance(&state, false, Some("alias/src-key"));
+        create_db_snapshot(
+            &state,
+            &json!({
+                "DBSnapshotIdentifier": "snap-source",
+                "DBInstanceIdentifier": "prod-db",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let copy = copy_db_snapshot(
+            &state,
+            &json!({
+                "SourceDBSnapshotIdentifier": "snap-source",
+                "TargetDBSnapshotIdentifier": "snap-target",
+                "SourceRegion": "us-west-2",
+                "KmsKeyId": "alias/dst-key",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(copy["DBSnapshot"]["SourceRegion"], "us-west-2");
+        assert_eq!(copy["DBSnapshot"]["KmsKeyId"], "alias/dst-key");
+        assert_eq!(copy["DBSnapshot"]["Encrypted"], true);
+    }
+
+    #[test]
     fn copy_snapshot_carries_kms_and_tags_forward() {
         let state = RdsState::default();
         let arn = create_instance(&state, true, Some("alias/aws/rds"));
