@@ -678,6 +678,41 @@ mod tests {
     }
 
     #[test]
+    fn test_publish_batch_rejects_invalid_entry_id() {
+        let svc = SnsService::new();
+        let ctx = ctx();
+        let created =
+            block_on(svc.handle("CreateTopic", json!({ "Name": "badid-topic" }), &ctx)).unwrap();
+        let arn = created["TopicArn"].as_str().unwrap();
+
+        let err = block_on(svc.handle(
+            "PublishBatch",
+            json!({
+                "TopicArn": arn,
+                "PublishBatchRequestEntries": [
+                    { "Id": "has space!", "Message": "x" }
+                ]
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidBatchEntryId");
+
+        let err = block_on(svc.handle(
+            "PublishBatch",
+            json!({
+                "TopicArn": arn,
+                "PublishBatchRequestEntries": [
+                    { "Id": "", "Message": "x" }
+                ]
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidBatchEntryId");
+    }
+
+    #[test]
     fn test_unknown_operation() {
         let svc = SnsService::new();
         let ctx = ctx();

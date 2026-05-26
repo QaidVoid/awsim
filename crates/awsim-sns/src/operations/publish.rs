@@ -296,9 +296,25 @@ pub fn publish_batch(
     // AWS rejects the whole batch with BatchEntryIdsNotDistinct when
     // two entries share an Id. Validate up front so callers can fix
     // the duplicate before any side effects.
+    //
+    // Each Id must also satisfy the AWS-documented format: 1..=80
+    // characters from `[A-Za-z0-9_-]`. Missing / malformed Ids surface
+    // as InvalidBatchEntryId so SDKs can distinguish "wrong shape"
+    // from "duplicate".
     let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for entry in entries {
         let id = entry["Id"].as_str().unwrap_or("");
+        if id.is_empty()
+            || id.len() > 80
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+        {
+            return Err(AwsError::bad_request(
+                "InvalidBatchEntryId",
+                format!("Batch entry Id `{id}` must be 1..=80 characters of [A-Za-z0-9_-]."),
+            ));
+        }
         if !seen_ids.insert(id) {
             return Err(AwsError::bad_request(
                 "BatchEntryIdsNotDistinct",
