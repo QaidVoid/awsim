@@ -476,6 +476,40 @@ pub fn upload_layer_part(
         )
     })?;
 
+    // AWS verifies that the part is contiguous with what the server has
+    // already received: `partFirstByte` must equal the current
+    // last-byte-received, and `partLastByte` must equal
+    // partFirstByte + len(layerPartBlob) - 1. Mismatches return
+    // InvalidLayerPartException so the client can recover by resuming
+    // from `lastByteReceived`.
+    let current = upload.part_data.len() as u64;
+    let supplied_first = input.get("partFirstByte").and_then(Value::as_u64);
+    let supplied_last = input.get("partLastByte").and_then(Value::as_u64);
+    if let Some(first) = supplied_first
+        && first != current
+    {
+        return Err(AwsError::bad_request(
+            "InvalidLayerPartException",
+            format!(
+                "partFirstByte {first} does not match the upload's lastByteReceived ({current}); \
+                 resume from that offset."
+            ),
+        ));
+    }
+    if let (Some(first), Some(last)) = (supplied_first, supplied_last) {
+        let expected_last = first + part_data.len() as u64 - 1;
+        if last != expected_last {
+            return Err(AwsError::bad_request(
+                "InvalidLayerPartException",
+                format!(
+                    "partLastByte {last} does not match partFirstByte {first} + payload length \
+                     ({}) - 1.",
+                    part_data.len()
+                ),
+            ));
+        }
+    }
+
     upload.part_data.extend_from_slice(part_data);
     let last_byte = upload.part_data.len() as u64;
 
