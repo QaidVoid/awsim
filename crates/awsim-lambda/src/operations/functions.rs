@@ -347,6 +347,7 @@ pub fn create_function(
         logging_config: input.get("LoggingConfig").cloned(),
         snap_start,
         image_config: input.get("ImageConfig").cloned(),
+        recursive_loop: "Terminate".to_string(),
     };
 
     let config = function_configuration(&func);
@@ -389,6 +390,45 @@ pub fn get_function_configuration(
         .get(name)
         .ok_or_else(|| resource_not_found("function", name))?;
     Ok(function_configuration(&f))
+}
+
+/// `GetFunctionRecursionConfig`: report the self-invoke recursion
+/// posture currently configured on the function.
+pub fn get_function_recursion_config(
+    state: &LambdaState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = require_str(input, "FunctionName")?;
+    let func = state
+        .functions
+        .get(name)
+        .ok_or_else(|| resource_not_found("function", name))?;
+    Ok(json!({ "RecursiveLoop": func.recursive_loop }))
+}
+
+/// `PutFunctionRecursionConfig`: set the recursion posture. AWS
+/// accepts only `Allow` and `Terminate` (the default); anything else
+/// raises `InvalidParameterValueException`.
+pub fn put_function_recursion_config(
+    state: &LambdaState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = require_str(input, "FunctionName")?;
+    let value = require_str(input, "RecursiveLoop")?;
+    if !matches!(value, "Allow" | "Terminate") {
+        return Err(awsim_core::AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!("RecursiveLoop `{value}` is not valid. Must be Allow or Terminate."),
+        ));
+    }
+    let mut func = state
+        .functions
+        .get_mut(name)
+        .ok_or_else(|| resource_not_found("function", name))?;
+    func.recursive_loop = value.to_string();
+    Ok(json!({ "RecursiveLoop": value }))
 }
 
 pub fn delete_function(state: &LambdaState, input: &Value) -> Result<Value, AwsError> {
@@ -730,5 +770,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resp["FunctionName"], json!("f"));
+    }
+
+    #[test]
+    fn recursion_config_defaults_to_terminate_and_round_trips() {
+        let state = LambdaState::default();
+        create_function(&state, &create_input("nodejs20.x", "index.handler"), &ctx()).unwrap();
+
+        let got =
+            get_function_recursion_config(&state, &json!({ "FunctionName": "f" }), &ctx()).unwrap();
+        assert_eq!(got["RecursiveLoop"], json!("Terminate"));
+
+        put_function_recursion_config(
+            &state,
+            &json!({ "FunctionName": "f", "RecursiveLoop": "Allow" }),
+            &ctx(),
+        )
+        .unwrap();
+        let got =
+            get_function_recursion_config(&state, &json!({ "FunctionName": "f" }), &ctx()).unwrap();
+        assert_eq!(got["RecursiveLoop"], json!("Allow"));
+    }
+
+    #[test]
+    fn put_recursion_config_rejects_invalid_value() {
+        let state = LambdaState::default();
+        create_function(&state, &create_input("nodejs20.x", "index.handler"), &ctx()).unwrap();
+
+        let err = put_function_recursion_config(
+            &state,
+            &json!({ "FunctionName": "f", "RecursiveLoop": "Maybe" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
     }
 }

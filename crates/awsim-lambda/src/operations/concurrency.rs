@@ -256,6 +256,7 @@ mod tests {
                 logging_config: None,
                 snap_start: None,
                 image_config: None,
+                recursive_loop: "Terminate".to_string(),
             },
         );
         state

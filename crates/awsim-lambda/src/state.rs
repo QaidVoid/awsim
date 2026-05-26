@@ -94,6 +94,7 @@ impl Snapshottable for LambdaState {
                     logging_config: f.logging_config.clone(),
                     snap_start: f.snap_start.clone(),
                     image_config: f.image_config.clone(),
+                    recursive_loop: Some(f.recursive_loop.clone()),
                 }
             })
             .collect();
@@ -173,6 +174,7 @@ impl Snapshottable for LambdaState {
                 logging_config: fs.logging_config,
                 snap_start: fs.snap_start,
                 image_config: fs.image_config,
+                recursive_loop: fs.recursive_loop.unwrap_or_else(|| "Terminate".to_string()),
             };
             state.functions.insert(fs.name, func);
         }
@@ -250,6 +252,11 @@ pub struct LambdaFunction {
     pub snap_start: Option<serde_json::Value>,
     /// ImageConfig for container-image functions.
     pub image_config: Option<serde_json::Value>,
+    /// Self-invoke recursion control. AWS Lambda stamps this on the
+    /// function and exposes it via Get / Put FunctionRecursionConfig;
+    /// `Allow` lets the function call itself in a loop, `Terminate`
+    /// (default) stops recursive invocation chains.
+    pub recursive_loop: String,
 }
 
 /// Provisioned concurrency configuration for a single (function, qualifier)
@@ -410,6 +417,8 @@ pub struct FunctionSnapshot {
     pub snap_start: Option<serde_json::Value>,
     #[serde(default)]
     pub image_config: Option<serde_json::Value>,
+    #[serde(default)]
+    pub recursive_loop: Option<String>,
 }
 
 fn default_architectures() -> Vec<String> {

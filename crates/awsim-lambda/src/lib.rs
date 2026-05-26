@@ -313,6 +313,19 @@ impl ServiceHandler for LambdaService {
                 operation: "DeleteFunctionConcurrency",
                 required_query_param: None,
             },
+            // Recursion (self-invoke) control.
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2024-08-31/functions/{FunctionName}/recursion-config",
+                operation: "GetFunctionRecursionConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/2024-08-31/functions/{FunctionName}/recursion-config",
+                operation: "PutFunctionRecursionConfig",
+                required_query_param: None,
+            },
             // Provisioned concurrency — single config (Get/Put/Delete) keys
             // off the Qualifier query param; List omits it.
             RouteDefinition {
@@ -548,6 +561,12 @@ impl ServiceHandler for LambdaService {
             }
             "DeleteFunctionConcurrency" => {
                 operations::concurrency::delete_function_concurrency(&state, &input, ctx)
+            }
+            "GetFunctionRecursionConfig" => {
+                operations::functions::get_function_recursion_config(&state, &input, ctx)
+            }
+            "PutFunctionRecursionConfig" => {
+                operations::functions::put_function_recursion_config(&state, &input, ctx)
             }
             "PutProvisionedConcurrencyConfig" => {
                 operations::concurrency::put_provisioned_concurrency_config(&state, &input, ctx)
