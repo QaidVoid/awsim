@@ -96,9 +96,10 @@ pub fn start_execution(
 
     // Run the ASL interpreter synchronously (dev emulator)
     let definition = sm.definition.clone();
+    let is_express = sm.machine_type == "EXPRESS";
     drop(sm); // release dashmap reference before potentially mutating
 
-    let result = asl::run_execution(&definition, &exec_input, &start_date)?;
+    let result = asl::run_execution(&definition, &exec_input, &start_date, is_express)?;
 
     let exec = Execution {
         arn: exec_arn.clone(),

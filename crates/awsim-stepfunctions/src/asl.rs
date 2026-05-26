@@ -19,6 +19,18 @@ pub struct ExecResult {
 
 /// Walk through the ASL starting from StartAt.
 pub fn execute(definition: &str, input: &str, start_time: &str) -> ExecResult {
+    execute_typed(definition, input, start_time, false)
+}
+
+/// Same as [`execute`], but flags whether the state machine is EXPRESS
+/// so the interpreter can enforce the 5-minute cap on accumulated
+/// `Wait` seconds.
+pub fn execute_typed(
+    definition: &str,
+    input: &str,
+    start_time: &str,
+    is_express: bool,
+) -> ExecResult {
     let def: Value = match serde_json::from_str(definition) {
         Ok(v) => v,
         Err(e) => {
@@ -39,6 +51,8 @@ pub fn execute(definition: &str, input: &str, start_time: &str) -> ExecResult {
         history: Vec::new(),
         event_counter: 0,
         start_time: start_time.to_string(),
+        is_express,
+        simulated_wait_secs: 0,
     };
 
     let start_at = match def["StartAt"].as_str() {
@@ -101,6 +115,12 @@ struct InterpreterContext {
     history: Vec<HistoryEvent>,
     event_counter: u64,
     start_time: String,
+    /// EXPRESS workflows have a hard 5-minute (300 s) cap on the
+    /// accumulated simulated wait time. Tracked so the interpreter can
+    /// short-circuit with `States.Timeout` when a definition would have
+    /// exceeded that bound in real AWS.
+    is_express: bool,
+    simulated_wait_secs: u64,
 }
 
 impl InterpreterContext {
@@ -279,7 +299,24 @@ impl InterpreterContext {
         state: &Value,
         input: Value,
     ) -> Result<(Value, StateTransition), StateFailed> {
-        // In dev emulator, Wait just proceeds immediately
+        // The dev emulator skips real sleeping, but for EXPRESS
+        // workflows AWS still enforces a 5-minute cap on the total
+        // wait time accumulated across the execution. Sum the
+        // documented `Seconds` parameter and trip States.Timeout
+        // before the next state runs when the cap is exceeded.
+        if let Some(secs) = state.get("Seconds").and_then(Value::as_u64) {
+            self.simulated_wait_secs = self.simulated_wait_secs.saturating_add(secs);
+            if self.is_express && self.simulated_wait_secs > 300 {
+                return Err(StateFailed {
+                    error: "States.Timeout".to_string(),
+                    cause: format!(
+                        "EXPRESS state machine exceeded the 5-minute (300 s) cap; \
+                         accumulated wait = {} s.",
+                        self.simulated_wait_secs
+                    ),
+                });
+            }
+        }
         Ok((input, transition(state)))
     }
 
@@ -899,8 +936,9 @@ pub fn run_execution(
     definition: &str,
     input: &str,
     start_time: &str,
+    is_express: bool,
 ) -> Result<ExecResult, AwsError> {
-    Ok(execute(definition, input, start_time))
+    Ok(execute_typed(definition, input, start_time, is_express))
 }
 
 #[cfg(test)]
@@ -909,6 +947,47 @@ mod tests {
 
     fn run(def: &str, input: &str) -> ExecResult {
         execute(def, input, "2024-01-01T00:00:00Z")
+    }
+
+    fn run_express(def: &str, input: &str) -> ExecResult {
+        execute_typed(def, input, "2024-01-01T00:00:00Z", true)
+    }
+
+    #[test]
+    fn express_workflow_times_out_when_wait_exceeds_5_minutes() {
+        let def = r#"{
+            "StartAt": "W",
+            "States": {
+                "W": { "Type": "Wait", "Seconds": 400, "End": true }
+            }
+        }"#;
+        let result = run_express(def, "{}");
+        assert_eq!(result.status, "FAILED");
+        assert_eq!(result.error.as_deref(), Some("States.Timeout"));
+    }
+
+    #[test]
+    fn express_workflow_succeeds_when_wait_stays_within_cap() {
+        let def = r#"{
+            "StartAt": "W",
+            "States": {
+                "W": { "Type": "Wait", "Seconds": 60, "End": true }
+            }
+        }"#;
+        let result = run_express(def, "{}");
+        assert_eq!(result.status, "SUCCEEDED");
+    }
+
+    #[test]
+    fn standard_workflow_not_capped_by_express_limit() {
+        let def = r#"{
+            "StartAt": "W",
+            "States": {
+                "W": { "Type": "Wait", "Seconds": 1000, "End": true }
+            }
+        }"#;
+        let result = run(def, "{}");
+        assert_eq!(result.status, "SUCCEEDED");
     }
 
     #[test]
