@@ -119,6 +119,23 @@ pub fn describe_log_streams(
     let limit = input["limit"].as_u64().unwrap_or(50).min(50) as usize;
     let next_token = input["nextToken"].as_str().unwrap_or("");
 
+    // orderBy must be either LogStreamName or LastEventTime. AWS docs
+    // also state that logStreamNamePrefix cannot be combined with
+    // orderBy=LastEventTime — the sort key isn't a prefix-friendly
+    // field, so both being set is rejected with InvalidParameterException.
+    if !matches!(order_by, "LogStreamName" | "LastEventTime") {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!("orderBy `{order_by}` must be LogStreamName or LastEventTime."),
+        ));
+    }
+    if order_by == "LastEventTime" && !prefix.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "logStreamNamePrefix cannot be specified with orderBy=LastEventTime.",
+        ));
+    }
+
     let mut streams: Vec<Value> = group
         .streams
         .iter()
@@ -195,4 +212,72 @@ pub fn describe_log_streams(
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod order_by_tests {
+    use super::*;
+    use crate::state::LogsState;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("logs", "us-east-1")
+    }
+
+    fn setup(state: &LogsState, group: &str) {
+        crate::operations::log_groups::create_log_group(
+            state,
+            &json!({ "logGroupName": group }),
+            &ctx(),
+        )
+        .unwrap();
+        create_log_stream(
+            state,
+            &json!({ "logGroupName": group, "logStreamName": "s1" }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_unknown_order_by() {
+        let state = LogsState::default();
+        setup(&state, "g");
+        let err = describe_log_streams(
+            &state,
+            &json!({ "logGroupName": "g", "orderBy": "Bogus" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn rejects_prefix_with_order_by_last_event_time() {
+        let state = LogsState::default();
+        setup(&state, "g");
+        let err = describe_log_streams(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "orderBy": "LastEventTime",
+                "logStreamNamePrefix": "s",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+        assert!(err.message.contains("logStreamNamePrefix"));
+    }
+
+    #[test]
+    fn accepts_order_by_last_event_time_without_prefix() {
+        let state = LogsState::default();
+        setup(&state, "g");
+        describe_log_streams(
+            &state,
+            &json!({ "logGroupName": "g", "orderBy": "LastEventTime" }),
+            &ctx(),
+        )
+        .unwrap();
+    }
 }
