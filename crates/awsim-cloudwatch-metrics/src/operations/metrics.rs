@@ -166,6 +166,22 @@ pub fn put_metric_data(
             .unwrap_or_default();
         let ts_ms = parse_timestamp_ms(&timestamp);
 
+        // StorageResolution is documented as 1 (high-res) or 60
+        // (standard). Default to 60; anything else is rejected with
+        // InvalidParameterValue.
+        let storage_resolution = datum
+            .get("StorageResolution")
+            .and_then(Value::as_i64)
+            .unwrap_or(60);
+        if !matches!(storage_resolution, 1 | 60) {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValue",
+                format!(
+                    "MetricDatum `{metric_name}` StorageResolution must be 1 or 60 (got {storage_resolution})."
+                ),
+            ));
+        }
+
         rows.push(MetricDatumRow {
             namespace: namespace.clone(),
             metric_name,
@@ -174,6 +190,7 @@ pub fn put_metric_data(
             timestamp,
             ts_ms,
             dimensions_json: dimensions_to_json(&dimensions),
+            storage_resolution: storage_resolution as u32,
         });
     }
 
@@ -287,6 +304,29 @@ pub fn get_metric_statistics(
         start_ms,
         end_ms,
     )?;
+
+    // GetMetricStatistics Period must be a valid resolution for the
+    // metric. For standard-resolution metrics, only multiples of 60 are
+    // accepted; high-resolution metrics additionally accept 1/5/10/30.
+    // Period defaults to 60 when omitted.
+    if let Some(period) = input.get("Period").and_then(Value::as_i64) {
+        let any_high_res = rows.iter().any(|r| r.storage_resolution == 1);
+        let valid = if any_high_res {
+            matches!(period, 1 | 5 | 10 | 30) || (period > 0 && period % 60 == 0)
+        } else {
+            period > 0 && period % 60 == 0
+        };
+        if !valid {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValue",
+                format!(
+                    "Period {period} is not valid for this metric; \
+                     standard-resolution metrics require a multiple of 60, \
+                     high-resolution metrics additionally accept 1, 5, 10, or 30."
+                ),
+            ));
+        }
+    }
 
     let values: Vec<f64> = rows.iter().map(|r| r.value).collect();
     let first_unit = rows
@@ -523,6 +563,87 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterValue");
         assert!(err.message.contains("either Value or StatisticValues"));
+    }
+
+    #[test]
+    fn put_metric_data_rejects_invalid_storage_resolution() {
+        let state = fresh_state();
+        let ctx = ctx();
+        let err = put_metric_data(
+            &state,
+            &json!({
+                "Namespace": "App",
+                "MetricData": [{
+                    "MetricName": "M",
+                    "Value": 1.0,
+                    "StorageResolution": 30,
+                }],
+            }),
+            &ctx,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+        assert!(err.message.contains("StorageResolution"));
+    }
+
+    #[test]
+    fn get_metric_statistics_rejects_high_res_only_period_on_standard_metric() {
+        let state = fresh_state();
+        let ctx = ctx();
+        put_metric_data(
+            &state,
+            &json!({
+                "Namespace": "App",
+                "MetricData": [{
+                    "MetricName": "M",
+                    "Value": 1.0,
+                }],
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let err = get_metric_statistics(
+            &state,
+            &json!({
+                "Namespace": "App",
+                "MetricName": "M",
+                "Statistics": ["Sum"],
+                "Period": 10,
+            }),
+            &ctx,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn get_metric_statistics_accepts_period_10_for_high_res_metric() {
+        let state = fresh_state();
+        let ctx = ctx();
+        put_metric_data(
+            &state,
+            &json!({
+                "Namespace": "App",
+                "MetricData": [{
+                    "MetricName": "M",
+                    "Value": 1.0,
+                    "StorageResolution": 1,
+                }],
+            }),
+            &ctx,
+        )
+        .unwrap();
+        get_metric_statistics(
+            &state,
+            &json!({
+                "Namespace": "App",
+                "MetricName": "M",
+                "Statistics": ["Sum"],
+                "Period": 10,
+            }),
+            &ctx,
+        )
+        .unwrap();
     }
 
     #[test]

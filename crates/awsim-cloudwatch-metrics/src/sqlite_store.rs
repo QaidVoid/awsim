@@ -53,6 +53,10 @@ pub struct MetricDatumRow {
     pub ts_ms: i64,
     /// Wire-format dimensions: `[{"Name":..,"Value":..}, ...]`.
     pub dimensions_json: Value,
+    /// 1 (high-resolution) or 60 (standard). Get* APIs reject Period
+    /// values smaller than the highest stored resolution for the
+    /// requested metric.
+    pub storage_resolution: u32,
 }
 
 impl SqliteStore {
@@ -105,8 +109,8 @@ impl SqliteStore {
                 .prepare(
                     "INSERT INTO datapoints
                      (account, region, namespace, metric_name, value, unit,
-                      timestamp, ts_ms, dimensions_json)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                      timestamp, ts_ms, dimensions_json, storage_resolution)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 )
                 .map_err(sqlite_err)?;
             for r in rows {
@@ -120,6 +124,7 @@ impl SqliteStore {
                     &r.timestamp,
                     r.ts_ms,
                     serde_json::to_string(&r.dimensions_json).unwrap_or_else(|_| "[]".to_string()),
+                    r.storage_resolution,
                 ])
                 .map_err(sqlite_err)?;
             }
@@ -142,7 +147,8 @@ impl SqliteStore {
         let conn = self.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT namespace, metric_name, value, unit, timestamp, ts_ms, dimensions_json
+                "SELECT namespace, metric_name, value, unit, timestamp, ts_ms,
+                        dimensions_json, storage_resolution
                  FROM datapoints
                  WHERE account = ?1 AND region = ?2 AND namespace = ?3 AND metric_name = ?4
                    AND (?5 IS NULL OR ts_ms >= ?5)
@@ -164,6 +170,7 @@ impl SqliteStore {
                         ts_ms: row.get(5)?,
                         dimensions_json: serde_json::from_str(&dims_str)
                             .unwrap_or_else(|_| Value::Array(Vec::new())),
+                        storage_resolution: row.get::<_, i64>(7)? as u32,
                     })
                 },
             )
@@ -244,7 +251,8 @@ fn init_schema(conn: &Connection) -> Result<(), AwsError> {
              unit TEXT NOT NULL,
              timestamp TEXT NOT NULL,
              ts_ms INTEGER NOT NULL,
-             dimensions_json TEXT NOT NULL
+             dimensions_json TEXT NOT NULL,
+             storage_resolution INTEGER NOT NULL DEFAULT 60
          );
          CREATE INDEX IF NOT EXISTS datapoints_lookup
              ON datapoints (account, region, namespace, metric_name, ts_ms);
@@ -252,6 +260,16 @@ fn init_schema(conn: &Connection) -> Result<(), AwsError> {
              ON datapoints (account, region, ts_ms);",
     )
     .map_err(sqlite_err)?;
+    // Upgrade pre-existing tables that lack storage_resolution. Ignore
+    // the duplicate-column error so this stays idempotent.
+    let upgrade = conn.execute_batch(
+        "ALTER TABLE datapoints ADD COLUMN storage_resolution INTEGER NOT NULL DEFAULT 60",
+    );
+    if let Err(e) = upgrade
+        && !e.to_string().contains("duplicate column")
+    {
+        return Err(sqlite_err(e));
+    }
     Ok(())
 }
 
@@ -303,6 +321,7 @@ mod tests {
             timestamp: format!("ts-{ts_ms}"),
             ts_ms,
             dimensions_json: serde_json::json!([]),
+            storage_resolution: 60,
         }
     }
 
