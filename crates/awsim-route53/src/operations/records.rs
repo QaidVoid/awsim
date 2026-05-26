@@ -141,6 +141,39 @@ pub fn change_resource_record_sets(
         .cloned()
         .unwrap_or_default();
 
+    // AWS caps a single ChangeResourceRecordSets call at 1000 changes
+    // and 32_000 ResourceRecord values across the batch. Real Route53
+    // rejects with InvalidChangeBatch when either limit is exceeded.
+    const MAX_CHANGES_PER_BATCH: usize = 1000;
+    const MAX_VALUES_PER_BATCH: usize = 32_000;
+    if changes.len() > MAX_CHANGES_PER_BATCH {
+        return Err(AwsError::bad_request(
+            "InvalidChangeBatch",
+            format!(
+                "ChangeBatch contains {} changes; maximum is {MAX_CHANGES_PER_BATCH}.",
+                changes.len()
+            ),
+        ));
+    }
+    let total_values: usize = changes
+        .iter()
+        .filter_map(|c| {
+            c.get("ResourceRecordSet")
+                .and_then(|rs| rs.get("ResourceRecords"))
+                .and_then(|rr| rr.get("ResourceRecord"))
+                .and_then(Value::as_array)
+                .map(|v| v.len())
+        })
+        .sum();
+    if total_values > MAX_VALUES_PER_BATCH {
+        return Err(AwsError::bad_request(
+            "InvalidChangeBatch",
+            format!(
+                "ChangeBatch contains {total_values} ResourceRecord values; maximum is {MAX_VALUES_PER_BATCH}."
+            ),
+        ));
+    }
+
     for change in &changes {
         let action = change
             .get("Action")
