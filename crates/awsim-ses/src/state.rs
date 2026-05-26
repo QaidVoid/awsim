@@ -36,6 +36,13 @@ pub struct EmailIdentity {
     /// Stored verbatim from BYODKIM input; never read back by GetEmailIdentity.
     pub dkim_domain_signing_private_key: Option<String>,
     pub dkim_next_signing_key_length: Option<String>,
+    /// MAIL FROM configuration. AWS stores both the custom domain and
+    /// the behavior to apply when the MX lookup fails.
+    pub mail_from_domain: Option<String>,
+    pub mail_from_behavior_on_mx_failure: Option<String>,
+    /// Default configuration set attached to this identity. Used as a
+    /// fallback when a SendEmail call doesn't name one explicitly.
+    pub configuration_set_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]

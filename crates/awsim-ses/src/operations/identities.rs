@@ -47,6 +47,9 @@ pub fn create_email_identity(
         dkim_domain_signing_selector: None,
         dkim_domain_signing_private_key: None,
         dkim_next_signing_key_length: Some("RSA_2048_BIT".to_string()),
+        mail_from_domain: None,
+        mail_from_behavior_on_mx_failure: None,
+        configuration_set_name: None,
     };
 
     info!(identity = %identity, "SES: created identity");
@@ -123,16 +126,49 @@ pub fn get_email_identity(
         dkim["CurrentSigningKeyLength"] = json!("EXTERNAL");
         dkim["DomainSigningSelector"] = json!(s);
     }
-    Ok(json!({
+    let mut mail_from = json!({
+        "BehaviorOnMxFailure": entry
+            .mail_from_behavior_on_mx_failure
+            .as_deref()
+            .unwrap_or("USE_DEFAULT_VALUE"),
+    });
+    if let Some(ref d) = entry.mail_from_domain {
+        mail_from["MailFromDomain"] = json!(d);
+        mail_from["MailFromDomainStatus"] = json!("SUCCESS");
+    } else {
+        mail_from["MailFromDomainStatus"] = json!("PENDING");
+    }
+    let tags: Vec<Value> = state
+        .identity_tags
+        .get(identity)
+        .map(|m| {
+            m.iter()
+                .map(|(k, v)| json!({ "Key": k, "Value": v }))
+                .collect()
+        })
+        .unwrap_or_default();
+    let policies: serde_json::Map<String, Value> = state
+        .identity_policies
+        .get(identity)
+        .map(|m| {
+            m.iter()
+                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut resp = json!({
         "IdentityType": entry.identity_type,
         "FeedbackForwardingStatus": true,
         "VerifiedForSendingStatus": entry.verified,
         "DkimAttributes": dkim,
-        "MailFromAttributes": {
-            "BehaviorOnMxFailure": "USE_DEFAULT_VALUE"
-        },
-        "Tags": []
-    }))
+        "MailFromAttributes": mail_from,
+        "Policies": Value::Object(policies),
+        "Tags": tags,
+    });
+    if let Some(ref cs) = entry.configuration_set_name {
+        resp["ConfigurationSetName"] = json!(cs);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -157,4 +193,137 @@ pub fn list_email_identities(
         .collect();
 
     Ok(json!({ "EmailIdentities": identities }))
+}
+
+#[cfg(test)]
+mod get_email_identity_tests {
+    use super::*;
+    use crate::operations::more::{
+        create_configuration_set, create_email_identity_policy,
+        put_email_identity_configuration_set_attributes,
+        put_email_identity_dkim_signing_attributes, put_email_identity_mail_from_attributes,
+    };
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("ses", "us-east-1")
+    }
+
+    fn seed(state: &SesState) {
+        create_email_identity(state, &json!({ "EmailIdentity": "example.com" }), &ctx()).unwrap();
+    }
+
+    #[test]
+    fn returns_default_attribute_set_for_freshly_created_identity() {
+        let state = SesState::default();
+        seed(&state);
+        let resp =
+            get_email_identity(&state, &json!({ "EmailIdentity": "example.com" }), &ctx()).unwrap();
+        assert_eq!(resp["IdentityType"], "DOMAIN");
+        assert_eq!(resp["DkimAttributes"]["SigningEnabled"], true);
+        assert_eq!(resp["DkimAttributes"]["SigningAttributesOrigin"], "AWS_SES");
+        assert_eq!(
+            resp["MailFromAttributes"]["MailFromDomainStatus"],
+            "PENDING"
+        );
+        assert!(resp["Tags"].as_array().unwrap().is_empty());
+        assert!(resp["Policies"].as_object().unwrap().is_empty());
+        assert!(resp.get("ConfigurationSetName").is_none());
+    }
+
+    #[test]
+    fn returns_mail_from_and_policies_and_configuration_set() {
+        let state = SesState::default();
+        seed(&state);
+        create_configuration_set(&state, &json!({ "ConfigurationSetName": "cs" }), &ctx()).unwrap();
+        put_email_identity_mail_from_attributes(
+            &state,
+            &json!({
+                "EmailIdentity": "example.com",
+                "MailFromDomain": "bounce.example.com",
+                "BehaviorOnMxFailure": "REJECT_MESSAGE",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        put_email_identity_configuration_set_attributes(
+            &state,
+            &json!({ "EmailIdentity": "example.com", "ConfigurationSetName": "cs" }),
+            &ctx(),
+        )
+        .unwrap();
+        create_email_identity_policy(
+            &state,
+            &json!({
+                "EmailIdentity": "example.com",
+                "PolicyName": "policy-1",
+                "Policy": "{\"Version\":\"2012-10-17\"}",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        state
+            .identity_tags
+            .entry("example.com".to_string())
+            .or_default()
+            .insert("env".to_string(), "prod".to_string());
+
+        let resp =
+            get_email_identity(&state, &json!({ "EmailIdentity": "example.com" }), &ctx()).unwrap();
+        assert_eq!(
+            resp["MailFromAttributes"]["MailFromDomain"],
+            "bounce.example.com"
+        );
+        assert_eq!(
+            resp["MailFromAttributes"]["MailFromDomainStatus"],
+            "SUCCESS"
+        );
+        assert_eq!(
+            resp["MailFromAttributes"]["BehaviorOnMxFailure"],
+            "REJECT_MESSAGE"
+        );
+        assert_eq!(resp["ConfigurationSetName"], "cs");
+        assert!(resp["Policies"]["policy-1"].is_string());
+        let tags = resp["Tags"].as_array().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0]["Key"], "env");
+    }
+
+    #[test]
+    fn surfaces_byodkim_attributes_when_set() {
+        let state = SesState::default();
+        seed(&state);
+        put_email_identity_dkim_signing_attributes(
+            &state,
+            &json!({
+                "EmailIdentity": "example.com",
+                "SigningAttributesOrigin": "EXTERNAL",
+                "SigningAttributes": {
+                    "DomainSigningSelector": "sel",
+                    "DomainSigningPrivateKey": "MIIE..."
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp =
+            get_email_identity(&state, &json!({ "EmailIdentity": "example.com" }), &ctx()).unwrap();
+        assert_eq!(
+            resp["DkimAttributes"]["SigningAttributesOrigin"],
+            "EXTERNAL"
+        );
+        assert_eq!(resp["DkimAttributes"]["DomainSigningSelector"], "sel");
+    }
+
+    #[test]
+    fn attaching_missing_configuration_set_errors() {
+        let state = SesState::default();
+        seed(&state);
+        let err = put_email_identity_configuration_set_attributes(
+            &state,
+            &json!({ "EmailIdentity": "example.com", "ConfigurationSetName": "nope" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotFoundException");
+    }
 }

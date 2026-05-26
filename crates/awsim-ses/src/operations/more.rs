@@ -203,27 +203,27 @@ pub fn put_email_identity_mail_from_attributes(
     let identity = input["EmailIdentity"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EmailIdentity is required"))?;
-    if !state.identities.contains_key(identity) {
-        return Err(AwsError::not_found(
+    let mut entry = state.identities.get_mut(identity).ok_or_else(|| {
+        AwsError::not_found(
             "NotFoundException",
             format!("Email identity not found: {identity}"),
-        ));
-    }
+        )
+    })?;
     // BehaviorOnMxFailure: REJECT_MESSAGE | USE_DEFAULT_VALUE.
-    if let Some(behavior) = input["BehaviorOnMxFailure"].as_str()
-        && !matches!(behavior, "REJECT_MESSAGE" | "USE_DEFAULT_VALUE")
+    let behavior = input["BehaviorOnMxFailure"].as_str();
+    if let Some(b) = behavior
+        && !matches!(b, "REJECT_MESSAGE" | "USE_DEFAULT_VALUE")
     {
         return Err(AwsError::bad_request(
             "BadRequestException",
-            format!(
-                "BehaviorOnMxFailure `{behavior}` must be REJECT_MESSAGE or USE_DEFAULT_VALUE."
-            ),
+            format!("BehaviorOnMxFailure `{b}` must be REJECT_MESSAGE or USE_DEFAULT_VALUE."),
         ));
     }
     // MailFromDomain must end with the identity domain to be valid in
     // real SES (it has to live under the identity). Empty / null
     // values mean "remove MAIL FROM", which is allowed.
-    if let Some(mail_from) = input["MailFromDomain"].as_str()
+    let mail_from = input["MailFromDomain"].as_str();
+    if let Some(mail_from) = mail_from
         && !mail_from.is_empty()
     {
         let identity_domain = identity.split_once('@').map(|(_, d)| d).unwrap_or(identity);
@@ -237,6 +237,38 @@ pub fn put_email_identity_mail_from_attributes(
             ));
         }
     }
+    entry.mail_from_domain = mail_from.filter(|s| !s.is_empty()).map(str::to_string);
+    entry.mail_from_behavior_on_mx_failure = behavior.map(str::to_string);
+    Ok(json!({}))
+}
+
+/// PutEmailIdentityConfigurationSetAttributes — attach a default
+/// configuration set to an identity. Subsequent SendEmail calls that
+/// omit `ConfigurationSetName` inherit this value.
+pub fn put_email_identity_configuration_set_attributes(
+    state: &SesState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identity = input["EmailIdentity"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EmailIdentity is required"))?;
+    let mut entry = state.identities.get_mut(identity).ok_or_else(|| {
+        AwsError::not_found(
+            "NotFoundException",
+            format!("Email identity not found: {identity}"),
+        )
+    })?;
+    let cs_name = input["ConfigurationSetName"].as_str().map(str::to_string);
+    if let Some(ref name) = cs_name
+        && !state.configuration_sets.contains_key(name)
+    {
+        return Err(AwsError::not_found(
+            "NotFoundException",
+            format!("Configuration set does not exist: {name}"),
+        ));
+    }
+    entry.configuration_set_name = cs_name;
     Ok(json!({}))
 }
 
