@@ -257,6 +257,19 @@ pub fn update_assume_role_policy(state: &IamState, input: &Value) -> Result<Valu
 pub fn update_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let role_name = require_str(input, "RoleName")?;
 
+    // UpdateRole is documented as accepting only Description and
+    // MaxSessionDuration. Path / Arn / RoleId are immutable; AWS returns
+    // ValidationError (HTTP 400) when callers try to mutate them via
+    // this operation, so reject explicitly rather than silently dropping.
+    for immutable in ["Path", "Arn", "RoleId"] {
+        if input.get(immutable).and_then(Value::as_str).is_some() {
+            return Err(AwsError::bad_request(
+                "ValidationError",
+                format!("{immutable} is not modifiable via UpdateRole."),
+            ));
+        }
+    }
+
     let mut role = state
         .roles
         .get_mut(role_name)
@@ -371,4 +384,68 @@ pub fn list_role_policies(state: &IamState, input: &Value) -> Result<Value, AwsE
         "PolicyNames": { "member": names },
         "IsTruncated": false,
     }))
+}
+
+#[cfg(test)]
+mod update_role_immutable_tests {
+    use super::*;
+    use crate::state::IamState;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("iam", "us-east-1")
+    }
+
+    fn create_test_role(state: &IamState, name: &str) {
+        let trust_policy = serde_json::to_string(&json!({
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "ec2.amazonaws.com" },
+                "Action": "sts:AssumeRole"
+            }]
+        }))
+        .unwrap();
+        create_role(
+            state,
+            &json!({
+                "RoleName": name,
+                "AssumeRolePolicyDocument": trust_policy,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn update_role_rejects_path_mutation() {
+        let state = IamState::default();
+        create_test_role(&state, "r1");
+        let err = update_role(&state, &json!({ "RoleName": "r1", "Path": "/new/" })).unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+        assert!(err.message.contains("Path"));
+    }
+
+    #[test]
+    fn update_role_rejects_arn_mutation() {
+        let state = IamState::default();
+        create_test_role(&state, "r2");
+        let err = update_role(
+            &state,
+            &json!({ "RoleName": "r2", "Arn": "arn:aws:iam::000000000000:role/new" }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    #[test]
+    fn update_role_still_updates_description() {
+        let state = IamState::default();
+        create_test_role(&state, "r3");
+        let resp = update_role(
+            &state,
+            &json!({ "RoleName": "r3", "Description": "updated" }),
+        )
+        .unwrap();
+        assert_eq!(resp["Role"]["Description"], "updated");
+    }
 }
