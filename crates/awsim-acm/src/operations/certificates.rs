@@ -186,6 +186,18 @@ pub fn request_certificate(
         }
     }
 
+    let ct_logging = input["Options"]
+        .get("CertificateTransparencyLoggingPreference")
+        .and_then(|v| v.as_str())
+        .unwrap_or("ENABLED")
+        .to_string();
+    if !matches!(ct_logging.as_str(), "ENABLED" | "DISABLED") {
+        return Err(AwsError::bad_request(
+            "InvalidParameter",
+            "Options.CertificateTransparencyLoggingPreference must be ENABLED or DISABLED.",
+        ));
+    }
+
     let cert = Certificate {
         certificate_arn: certificate_arn.clone(),
         domain_name,
@@ -196,6 +208,7 @@ pub fn request_certificate(
         tags,
         created_at: now_secs(),
         in_use_by: Vec::new(),
+        certificate_transparency_logging_preference: ct_logging,
     };
 
     state.certificates.insert(certificate_arn.clone(), cert);
@@ -262,6 +275,9 @@ pub fn describe_certificate(
         "Issuer": "Amazon",
         "Subject": format!("CN={}", cert.domain_name),
         "DomainValidationOptions": domain_validation,
+        "Options": {
+            "CertificateTransparencyLoggingPreference": cert.certificate_transparency_logging_preference,
+        },
     });
 
     Ok(json!({ "Certificate": certificate_obj }))
@@ -457,6 +473,7 @@ pub fn import_certificate(
         tags,
         created_at: now_secs(),
         in_use_by: Vec::new(),
+        certificate_transparency_logging_preference: "ENABLED".to_string(),
     };
 
     state.certificates.insert(certificate_arn.clone(), cert);
@@ -501,12 +518,24 @@ pub fn update_certificate_options(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "CertificateArn is required"))?;
 
-    // Options currently accepted but not deeply stored — just verify the cert exists
-    if !state.certificates.contains_key(arn) {
-        return Err(AwsError::not_found(
+    let mut cert = state.certificates.get_mut(arn).ok_or_else(|| {
+        AwsError::not_found(
             "ResourceNotFoundException",
             format!("Certificate not found: {arn}"),
-        ));
+        )
+    })?;
+
+    if let Some(pref) = input["Options"]
+        .get("CertificateTransparencyLoggingPreference")
+        .and_then(|v| v.as_str())
+    {
+        if !matches!(pref, "ENABLED" | "DISABLED") {
+            return Err(AwsError::bad_request(
+                "InvalidParameter",
+                "Options.CertificateTransparencyLoggingPreference must be ENABLED or DISABLED.",
+            ));
+        }
+        cert.certificate_transparency_logging_preference = pref.to_string();
     }
 
     Ok(json!({}))
@@ -555,6 +584,7 @@ mod tests {
             tags: HashMap::new(),
             created_at: 0,
             in_use_by: Vec::new(),
+            certificate_transparency_logging_preference: "ENABLED".to_string(),
         }
     }
 
@@ -568,6 +598,54 @@ mod tests {
 
         let err = get_certificate(&state, &json!({ "CertificateArn": arn }), &ctx()).unwrap_err();
         assert_eq!(err.code, "RequestInProgressException");
+    }
+
+    #[test]
+    fn certificate_transparency_defaults_enabled_and_round_trips() {
+        let state = AcmState::default();
+        let resp =
+            request_certificate(&state, &json!({ "DomainName": "example.com" }), &ctx()).unwrap();
+        let arn = resp["CertificateArn"].as_str().unwrap().to_string();
+        let desc =
+            describe_certificate(&state, &json!({ "CertificateArn": &arn }), &ctx()).unwrap();
+        assert_eq!(
+            desc["Certificate"]["Options"]["CertificateTransparencyLoggingPreference"],
+            "ENABLED"
+        );
+
+        update_certificate_options(
+            &state,
+            &json!({
+                "CertificateArn": arn,
+                "Options": { "CertificateTransparencyLoggingPreference": "DISABLED" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let desc =
+            describe_certificate(&state, &json!({ "CertificateArn": &arn }), &ctx()).unwrap();
+        assert_eq!(
+            desc["Certificate"]["Options"]["CertificateTransparencyLoggingPreference"],
+            "DISABLED"
+        );
+    }
+
+    #[test]
+    fn update_certificate_options_rejects_invalid_preference() {
+        let state = AcmState::default();
+        let resp =
+            request_certificate(&state, &json!({ "DomainName": "example.com" }), &ctx()).unwrap();
+        let arn = resp["CertificateArn"].as_str().unwrap().to_string();
+        let err = update_certificate_options(
+            &state,
+            &json!({
+                "CertificateArn": arn,
+                "Options": { "CertificateTransparencyLoggingPreference": "MAYBE" }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
     }
 
     #[test]

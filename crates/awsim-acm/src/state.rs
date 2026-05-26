@@ -28,6 +28,14 @@ pub struct Certificate {
     /// event sink. DeleteCertificate is rejected while non-empty.
     #[serde(default)]
     pub in_use_by: Vec<String>,
+    /// `ENABLED` or `DISABLED`; AWS defaults to `ENABLED` when omitted
+    /// and lets callers flip the value via UpdateCertificateOptions.
+    #[serde(default = "default_ct_pref")]
+    pub certificate_transparency_logging_preference: String,
+}
+
+fn default_ct_pref() -> String {
+    "ENABLED".to_string()
 }
 
 /// Serializable snapshot.
