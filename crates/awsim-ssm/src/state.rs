@@ -30,6 +30,10 @@ pub struct Parameter {
     pub tier: String,
     /// Labels on the current version.
     pub labels: Vec<String>,
+    /// KMS key identifier used to encrypt SecureString values. AWS
+    /// defaults to `alias/aws/ssm` when the caller omits KeyId. Other
+    /// parameter types must not carry a KeyId.
+    pub key_id: Option<String>,
 }
 
 /// A stored SSM Run Command record (stub).

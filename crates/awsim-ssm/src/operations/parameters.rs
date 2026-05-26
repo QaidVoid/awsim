@@ -59,7 +59,7 @@ fn parameter_to_value(p: &Parameter) -> Value {
 }
 
 fn parameter_metadata(p: &Parameter) -> Value {
-    json!({
+    let mut obj = json!({
         "Name": p.name,
         "Type": p.param_type,
         "Version": p.version,
@@ -68,7 +68,11 @@ fn parameter_metadata(p: &Parameter) -> Value {
         "Description": p.description,
         "Tier": p.tier,
         "DataType": "text",
-    })
+    });
+    if let Some(ref k) = p.key_id {
+        obj["KeyId"] = json!(k);
+    }
+    obj
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +163,24 @@ pub fn put_parameter(
     let description = input["Description"].as_str().unwrap_or("").to_string();
     let overwrite = input["Overwrite"].as_bool().unwrap_or(false);
 
+    // KeyId is only valid on SecureString. Real SSM rejects KeyId on
+    // String/StringList with InvalidKeyId, and falls back to the
+    // `alias/aws/ssm` AWS-managed key when the caller omits it.
+    let key_id_input = input["KeyId"].as_str().filter(|s| !s.is_empty());
+    let key_id = if param_type == "SecureString" {
+        Some(key_id_input.unwrap_or("alias/aws/ssm").to_string())
+    } else {
+        if key_id_input.is_some() {
+            return Err(AwsError::bad_request(
+                "InvalidKeyId",
+                format!(
+                    "KeyId is only valid for SecureString parameters; got Type=`{param_type}`."
+                ),
+            ));
+        }
+        None
+    };
+
     let mut tags: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     if let Some(tag_list) = input["Tags"].as_array() {
         for tag in tag_list {
@@ -200,6 +222,7 @@ pub fn put_parameter(
         }
 
         existing.tier = tier.to_string();
+        existing.key_id = key_id;
         let version = existing.version;
         info!(name, version, "Updated parameter");
         return Ok(json!({ "Version": version, "Tier": tier }));
@@ -217,6 +240,7 @@ pub fn put_parameter(
         history: Vec::new(),
         tier: tier.to_string(),
         labels: Vec::new(),
+        key_id,
     };
 
     info!(name, "Created parameter");
@@ -438,8 +462,8 @@ pub fn describe_parameters(
     Ok(json!({ "Parameters": params }))
 }
 
-/// Legacy `Filters[]` keys: Name / Type (KeyId / Tag pass-through since
-/// we don't persist them today).
+/// Legacy `Filters[]` keys: Name / Type / KeyId (Tag pass-through since
+/// tags are not yet keyed for filtering).
 fn legacy_filter_match(f: &Value, name: &str, p: &Parameter) -> bool {
     let key = f.get("Key").and_then(Value::as_str).unwrap_or("");
     let values = f
@@ -454,6 +478,9 @@ fn legacy_filter_match(f: &Value, name: &str, p: &Parameter) -> bool {
     match key {
         "Name" => values.iter().any(|v| v == name),
         "Type" => values.iter().any(|v| v == &p.param_type),
+        "KeyId" => values
+            .iter()
+            .any(|v| p.key_id.as_deref() == Some(v.as_str())),
         _ => true,
     }
 }
@@ -926,5 +953,109 @@ mod describe_parameters_tests {
         .unwrap();
         let ns = names(&resp);
         assert_eq!(ns, vec!["/dev/api/url"]);
+    }
+}
+
+#[cfg(test)]
+mod secure_string_key_id_tests {
+    use super::*;
+
+    fn ctx() -> awsim_core::RequestContext {
+        awsim_core::RequestContext::new("ssm", "us-east-1")
+    }
+
+    #[test]
+    fn default_key_id_falls_back_to_alias_aws_ssm() {
+        let state = SsmState::default();
+        put_parameter(
+            &state,
+            &json!({
+                "Name": "/secret/db",
+                "Value": "hunter2",
+                "Type": "SecureString",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let stored = state.parameters.get("/secret/db").unwrap();
+        assert_eq!(stored.key_id.as_deref(), Some("alias/aws/ssm"));
+    }
+
+    #[test]
+    fn custom_key_id_is_persisted() {
+        let state = SsmState::default();
+        put_parameter(
+            &state,
+            &json!({
+                "Name": "/secret/db",
+                "Value": "hunter2",
+                "Type": "SecureString",
+                "KeyId": "alias/team-keys",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let stored = state.parameters.get("/secret/db").unwrap();
+        assert_eq!(stored.key_id.as_deref(), Some("alias/team-keys"));
+        let resp = describe_parameters(&state, &json!({}), &ctx()).unwrap();
+        let first = resp["Parameters"].as_array().unwrap().first().unwrap();
+        assert_eq!(first["KeyId"], "alias/team-keys");
+    }
+
+    #[test]
+    fn key_id_on_string_type_is_rejected() {
+        let state = SsmState::default();
+        let err = put_parameter(
+            &state,
+            &json!({
+                "Name": "/foo",
+                "Value": "bar",
+                "Type": "String",
+                "KeyId": "alias/team-keys",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidKeyId");
+    }
+
+    #[test]
+    fn describe_parameters_filters_by_key_id() {
+        let state = SsmState::default();
+        put_parameter(
+            &state,
+            &json!({
+                "Name": "/a",
+                "Value": "v",
+                "Type": "SecureString",
+                "KeyId": "alias/team-a",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        put_parameter(
+            &state,
+            &json!({
+                "Name": "/b",
+                "Value": "v",
+                "Type": "SecureString",
+                "KeyId": "alias/team-b",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = describe_parameters(
+            &state,
+            &json!({ "Filters": [{ "Key": "KeyId", "Values": ["alias/team-b"] }] }),
+            &ctx(),
+        )
+        .unwrap();
+        let names: Vec<String> = resp["Parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["Name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["/b"]);
     }
 }
