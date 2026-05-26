@@ -340,18 +340,33 @@ pub fn get_parameters_by_path(
     let path = input["Path"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Path is required"))?;
+    if !path.starts_with('/') {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("Path '{path}' must start with '/'."),
+        ));
+    }
 
     let recursive = input["Recursive"].as_bool().unwrap_or(false);
     let max_results = input["MaxResults"].as_u64().unwrap_or(10) as usize;
+    let with_decryption = input["WithDecryption"].as_bool().unwrap_or(false);
+    let parameter_filters = input["ParameterFilters"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
 
-    // Normalize: ensure path ends with /
+    // Normalize so collisions like `/foo` -> `/foobar/x` cannot match.
+    // Real AWS GetParametersByPath only returns strict descendants of
+    // the given path; a parameter named exactly the same as the path
+    // (sans trailing slash) is excluded.
     let prefix = if path.ends_with('/') {
         path.to_string()
     } else {
         format!("{path}/")
     };
 
-    let mut parameters: Vec<Value> = state
+    // Pre-collect for stable sort + pagination on a snapshot.
+    let mut matches: Vec<(String, Parameter)> = state
         .parameters
         .iter()
         .filter(|entry| {
@@ -359,26 +374,44 @@ pub fn get_parameters_by_path(
             if !name.starts_with(&prefix) {
                 return false;
             }
-            if recursive {
-                return true;
+            if !recursive {
+                let suffix = &name[prefix.len()..];
+                if suffix.contains('/') {
+                    return false;
+                }
             }
-            // Non-recursive: only direct children — no additional slashes after prefix
-            let suffix = &name[prefix.len()..];
-            !suffix.contains('/')
+            parameter_filters
+                .iter()
+                .all(|f| parameter_filter_match(f, name, entry.value()))
         })
-        .map(|entry| parameter_to_value(entry.value()))
-        .take(max_results)
+        .map(|entry| (entry.key().clone(), entry.value().clone()))
         .collect();
+    matches.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // Stable sort by name
-    parameters.sort_by(|a, b| {
-        a["Name"]
-            .as_str()
-            .unwrap_or("")
-            .cmp(b["Name"].as_str().unwrap_or(""))
-    });
+    let start = match input["NextToken"].as_str() {
+        Some(tok) if !tok.is_empty() => matches.iter().position(|(n, _)| n == tok).unwrap_or(0),
+        _ => 0,
+    };
+    let end = (start + max_results).min(matches.len());
+    let next_token = if end < matches.len() {
+        Some(matches[end].0.clone())
+    } else {
+        None
+    };
 
-    Ok(json!({ "Parameters": parameters }))
+    let mut parameters = Vec::with_capacity(end - start);
+    for (_, p) in &matches[start..end] {
+        if with_decryption && p.param_type == "SecureString" {
+            check_decrypt_eligibility(p.key_id.as_deref())?;
+        }
+        parameters.push(parameter_to_value(p));
+    }
+
+    let mut resp = json!({ "Parameters": parameters });
+    if let Some(tok) = next_token {
+        resp["NextToken"] = json!(tok);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,6 +1078,100 @@ mod secure_string_key_id_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "InvalidKeyId");
+    }
+
+    #[test]
+    fn get_parameters_by_path_excludes_prefix_siblings() {
+        let state = SsmState::default();
+        for n in ["/foo", "/foobar/x", "/foo/y"] {
+            put_parameter(
+                &state,
+                &json!({ "Name": n, "Value": "v", "Type": "String" }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        let resp = get_parameters_by_path(&state, &json!({ "Path": "/foo" }), &ctx()).unwrap();
+        let names: Vec<String> = resp["Parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["Name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["/foo/y"]);
+    }
+
+    #[test]
+    fn get_parameters_by_path_rejects_relative_path() {
+        let state = SsmState::default();
+        let err = get_parameters_by_path(&state, &json!({ "Path": "foo" }), &ctx()).unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn get_parameters_by_path_recursive_with_pagination() {
+        let state = SsmState::default();
+        for i in 0..5 {
+            put_parameter(
+                &state,
+                &json!({ "Name": format!("/a/b/c/{i}"), "Value": "v", "Type": "String" }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        let resp = get_parameters_by_path(
+            &state,
+            &json!({ "Path": "/a", "Recursive": true, "MaxResults": 2 }),
+            &ctx(),
+        )
+        .unwrap();
+        let page1: Vec<String> = resp["Parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["Name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(page1, vec!["/a/b/c/0", "/a/b/c/1"]);
+        let token = resp["NextToken"].as_str().unwrap().to_string();
+        let resp = get_parameters_by_path(
+            &state,
+            &json!({
+                "Path": "/a",
+                "Recursive": true,
+                "MaxResults": 2,
+                "NextToken": token,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let page2: Vec<String> = resp["Parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["Name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(page2, vec!["/a/b/c/2", "/a/b/c/3"]);
+    }
+
+    #[test]
+    fn get_parameters_by_path_non_recursive_skips_grandchildren() {
+        let state = SsmState::default();
+        for n in ["/a/x", "/a/y/z"] {
+            put_parameter(
+                &state,
+                &json!({ "Name": n, "Value": "v", "Type": "String" }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        let resp = get_parameters_by_path(&state, &json!({ "Path": "/a" }), &ctx()).unwrap();
+        let names: Vec<String> = resp["Parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["Name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["/a/x"]);
     }
 
     #[test]
