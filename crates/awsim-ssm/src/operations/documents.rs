@@ -21,6 +21,15 @@ fn build_document_arn(ctx: &RequestContext, name: &str) -> String {
 }
 
 fn document_description(doc: &SsmDocument) -> Value {
+    let attachments_info: Vec<Value> = doc
+        .attachments
+        .iter()
+        .map(|a| {
+            json!({
+                "Name": a.get("Name").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect();
     json!({
         "Name": doc.name,
         "DocumentVersion": doc.document_version,
@@ -28,7 +37,49 @@ fn document_description(doc: &SsmDocument) -> Value {
         "DocumentType": doc.document_type,
         "DocumentFormat": doc.document_format,
         "CreatedDate": doc.created_date,
+        "AttachmentsInformation": attachments_info,
+        "Requires": doc.requires,
     })
+}
+
+fn parse_attachments(input: &Value) -> Result<Vec<Value>, AwsError> {
+    let Some(arr) = input["Attachments"].as_array() else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for a in arr {
+        let key = a.get("Key").and_then(Value::as_str).ok_or_else(|| {
+            AwsError::bad_request(
+                "ValidationException",
+                "Attachments[].Key is required (e.g. SourceUrl or S3FileUrl)",
+            )
+        })?;
+        if !matches!(key, "SourceUrl" | "S3FileUrl" | "AttachmentReference") {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!(
+                    "Attachments[].Key '{key}' must be SourceUrl, S3FileUrl, or AttachmentReference"
+                ),
+            ));
+        }
+        out.push(a.clone());
+    }
+    Ok(out)
+}
+
+fn parse_requires(input: &Value) -> Result<Vec<Value>, AwsError> {
+    let Some(arr) = input["Requires"].as_array() else {
+        return Ok(Vec::new());
+    };
+    for r in arr {
+        if r.get("Name").and_then(Value::as_str).is_none() {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                "Requires[].Name is required",
+            ));
+        }
+    }
+    Ok(arr.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -66,6 +117,9 @@ pub fn create_document(
         .unwrap_or("JSON")
         .to_string();
 
+    let attachments = parse_attachments(input)?;
+    let requires = parse_requires(input)?;
+
     let arn = build_document_arn(ctx, &name);
     let now = now_epoch_secs();
 
@@ -78,20 +132,14 @@ pub fn create_document(
         status: "Active".to_string(),
         document_version: "1".to_string(),
         created_date: now,
+        attachments,
+        requires,
     };
 
+    let desc = document_description(&doc);
     state.documents.insert(name.clone(), doc);
 
-    Ok(json!({
-        "DocumentDescription": {
-            "Name": name,
-            "DocumentVersion": "1",
-            "Status": "Active",
-            "DocumentType": document_type,
-            "DocumentFormat": document_format,
-            "CreatedDate": now,
-        }
-    }))
+    Ok(json!({ "DocumentDescription": desc }))
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +162,24 @@ pub fn get_document(
         )
     })?;
 
+    let attachments_content: Vec<Value> = doc
+        .attachments
+        .iter()
+        .map(|a| {
+            json!({
+                "Name": a.get("Name").cloned().unwrap_or(Value::Null),
+                "Url": a
+                    .get("Values")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "Size": 0,
+                "Hash": "",
+                "HashType": "Sha256",
+            })
+        })
+        .collect();
     Ok(json!({
         "Name": doc.name,
         "DocumentVersion": doc.document_version,
@@ -122,6 +188,8 @@ pub fn get_document(
         "DocumentFormat": doc.document_format,
         "Status": doc.status,
         "CreatedDate": doc.created_date,
+        "AttachmentsContent": attachments_content,
+        "Requires": doc.requires,
     }))
 }
 
@@ -165,6 +233,9 @@ pub fn update_document(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Content is required"))?;
 
+    let attachments = parse_attachments(input)?;
+    let requires = parse_requires(input)?;
+
     let mut doc = state.documents.get_mut(name).ok_or_else(|| {
         AwsError::bad_request(
             "InvalidDocument",
@@ -175,6 +246,12 @@ pub fn update_document(
     doc.content = content.to_string();
     let new_version: u64 = doc.document_version.parse().unwrap_or(1) + 1;
     doc.document_version = new_version.to_string();
+    if !attachments.is_empty() {
+        doc.attachments = attachments;
+    }
+    if !requires.is_empty() {
+        doc.requires = requires;
+    }
 
     let desc = document_description(&doc);
     drop(doc);
@@ -581,4 +658,131 @@ pub fn describe_ops_items(
         .collect();
 
     Ok(json!({ "OpsItemSummaries": items }))
+}
+
+#[cfg(test)]
+mod document_attachments_requires_tests {
+    use super::*;
+
+    fn ctx() -> awsim_core::RequestContext {
+        awsim_core::RequestContext::new("ssm", "us-east-1")
+    }
+
+    #[test]
+    fn create_document_persists_attachments_and_requires() {
+        let state = SsmState::default();
+        let resp = create_document(
+            &state,
+            &json!({
+                "Name": "MyDoc",
+                "Content": "{}",
+                "Attachments": [
+                    { "Key": "S3FileUrl", "Name": "helper.sh", "Values": ["s3://b/helper.sh"] }
+                ],
+                "Requires": [
+                    { "Name": "OtherDoc", "Version": "$DEFAULT" }
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let stored = state.documents.get("MyDoc").unwrap();
+        assert_eq!(stored.attachments.len(), 1);
+        assert_eq!(stored.requires.len(), 1);
+        let attachments = resp["DocumentDescription"]["AttachmentsInformation"]
+            .as_array()
+            .unwrap();
+        assert_eq!(attachments[0]["Name"], "helper.sh");
+    }
+
+    #[test]
+    fn rejects_attachment_with_unknown_key() {
+        let state = SsmState::default();
+        let err = create_document(
+            &state,
+            &json!({
+                "Name": "MyDoc",
+                "Content": "{}",
+                "Attachments": [
+                    { "Key": "Mystery", "Name": "x" }
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn rejects_requires_without_name() {
+        let state = SsmState::default();
+        let err = create_document(
+            &state,
+            &json!({
+                "Name": "MyDoc",
+                "Content": "{}",
+                "Requires": [ { "Version": "1" } ],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn get_document_surfaces_attachments_content_and_requires() {
+        let state = SsmState::default();
+        create_document(
+            &state,
+            &json!({
+                "Name": "MyDoc",
+                "Content": "{}",
+                "Attachments": [
+                    { "Key": "SourceUrl", "Name": "init.sh", "Values": ["https://example.com/init.sh"] }
+                ],
+                "Requires": [
+                    { "Name": "Bootstrap", "Version": "1" }
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = get_document(&state, &json!({ "Name": "MyDoc" }), &ctx()).unwrap();
+        let attachments = resp["AttachmentsContent"].as_array().unwrap();
+        assert_eq!(attachments[0]["Name"], "init.sh");
+        assert_eq!(attachments[0]["Url"], "https://example.com/init.sh");
+        let requires = resp["Requires"].as_array().unwrap();
+        assert_eq!(requires[0]["Name"], "Bootstrap");
+    }
+
+    #[test]
+    fn update_document_replaces_attachments_when_supplied() {
+        let state = SsmState::default();
+        create_document(
+            &state,
+            &json!({
+                "Name": "MyDoc",
+                "Content": "{}",
+                "Attachments": [
+                    { "Key": "S3FileUrl", "Name": "v1.sh", "Values": ["s3://b/v1.sh"] }
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        update_document(
+            &state,
+            &json!({
+                "Name": "MyDoc",
+                "Content": "{\"v\":2}",
+                "Attachments": [
+                    { "Key": "S3FileUrl", "Name": "v2.sh", "Values": ["s3://b/v2.sh"] }
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let stored = state.documents.get("MyDoc").unwrap();
+        assert_eq!(stored.attachments[0]["Name"], "v2.sh");
+    }
 }

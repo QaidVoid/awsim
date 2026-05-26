@@ -65,6 +65,13 @@ pub struct SsmDocument {
     pub status: String,
     pub document_version: String,
     pub created_date: u64,
+    /// Attachments uploaded with CreateDocument / UpdateDocument. AWS
+    /// expects entries of `{Key,Values[],Name}` and surfaces the count
+    /// on GetDocument / DescribeDocument as `AttachmentsInformation`.
+    pub attachments: Vec<serde_json::Value>,
+    /// Other documents this document declares a dependency on via the
+    /// `Requires` field. Each entry is `{Name,Version?,RequireType?,VersionName?}`.
+    pub requires: Vec<serde_json::Value>,
 }
 
 /// An SSM State Manager Association.
