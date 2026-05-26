@@ -145,3 +145,105 @@ impl ServiceHandler for WafService {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("wafv2", "us-east-1")
+    }
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+        fn noop_clone(_: *const ()) -> RawWaker {
+            noop_raw_waker()
+        }
+        fn noop(_: *const ()) {}
+        fn noop_raw_waker() -> RawWaker {
+            static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+        let waker = unsafe { Waker::from_raw(noop_raw_waker()) };
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = std::pin::pin!(f);
+        loop {
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(v) => return v,
+                Poll::Pending => {}
+            }
+        }
+    }
+
+    #[test]
+    fn create_ip_set_accepts_well_formed_ipv4_cidr() {
+        let svc = WafService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateIPSet",
+            json!({
+                "Name": "ok",
+                "Scope": "REGIONAL",
+                "IPAddressVersion": "IPV4",
+                "Addresses": ["10.0.0.0/8", "192.168.1.0/24"]
+            }),
+            &ctx,
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn create_ip_set_rejects_ipv6_in_ipv4_set() {
+        let svc = WafService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateIPSet",
+            json!({
+                "Name": "mix",
+                "Scope": "REGIONAL",
+                "IPAddressVersion": "IPV4",
+                "Addresses": ["2001:db8::/32"]
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "WAFInvalidParameterException");
+    }
+
+    #[test]
+    fn create_ip_set_rejects_oversize_prefix() {
+        let svc = WafService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateIPSet",
+            json!({
+                "Name": "big",
+                "Scope": "REGIONAL",
+                "IPAddressVersion": "IPV4",
+                "Addresses": ["10.0.0.0/64"]
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "WAFInvalidParameterException");
+    }
+
+    #[test]
+    fn create_ip_set_rejects_malformed_cidr() {
+        let svc = WafService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateIPSet",
+            json!({
+                "Name": "junk",
+                "Scope": "REGIONAL",
+                "IPAddressVersion": "IPV4",
+                "Addresses": ["not-a-cidr"]
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "WAFInvalidParameterException");
+    }
+}

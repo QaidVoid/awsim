@@ -13,6 +13,60 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
+/// Validate a CIDR block against the declared IPAddressVersion. AWS
+/// rejects mixed-version entries with WAFInvalidParameterException.
+fn validate_cidr(cidr: &str, version: &str) -> Result<(), AwsError> {
+    let (addr, mask) = cidr.split_once('/').ok_or_else(|| {
+        AwsError::bad_request(
+            "WAFInvalidParameterException",
+            format!("CIDR `{cidr}` must be `addr/prefix`."),
+        )
+    })?;
+    let prefix: u32 = mask.parse().map_err(|_| {
+        AwsError::bad_request(
+            "WAFInvalidParameterException",
+            format!("CIDR `{cidr}` prefix length must be numeric."),
+        )
+    })?;
+    match version {
+        "IPV4" => {
+            if prefix > 32 {
+                return Err(AwsError::bad_request(
+                    "WAFInvalidParameterException",
+                    format!("IPV4 prefix length {prefix} must be 0-32."),
+                ));
+            }
+            if addr.parse::<std::net::Ipv4Addr>().is_err() {
+                return Err(AwsError::bad_request(
+                    "WAFInvalidParameterException",
+                    format!("`{addr}` is not a valid IPv4 address."),
+                ));
+            }
+        }
+        "IPV6" => {
+            if prefix > 128 {
+                return Err(AwsError::bad_request(
+                    "WAFInvalidParameterException",
+                    format!("IPV6 prefix length {prefix} must be 0-128."),
+                ));
+            }
+            if addr.parse::<std::net::Ipv6Addr>().is_err() {
+                return Err(AwsError::bad_request(
+                    "WAFInvalidParameterException",
+                    format!("`{addr}` is not a valid IPv6 address."),
+                ));
+            }
+        }
+        _ => {
+            return Err(AwsError::bad_request(
+                "WAFInvalidParameterException",
+                format!("Unknown IPAddressVersion: {version}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // CreateIPSet
 // ---------------------------------------------------------------------------
@@ -65,6 +119,9 @@ pub fn create_ip_set(
                 .collect()
         })
         .unwrap_or_default();
+    for cidr in &addresses {
+        validate_cidr(cidr, &ip_address_version)?;
+    }
 
     let id = Uuid::new_v4().to_string();
     let arn = format!(
@@ -194,10 +251,14 @@ pub fn update_ip_set(
     })?;
 
     if let Some(addresses) = input["Addresses"].as_array() {
-        ip_set.addresses = addresses
+        let new_addrs: Vec<String> = addresses
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect();
+        for cidr in &new_addrs {
+            validate_cidr(cidr, &ip_set.ip_address_version)?;
+        }
+        ip_set.addresses = new_addrs;
     }
 
     let new_lock = Uuid::new_v4().to_string();
