@@ -27,6 +27,10 @@ pub struct Cluster {
     pub platform_version: String,
     pub tags: HashMap<String, String>,
     pub created_at: u64,
+    /// `[{ resources: ["secrets"], provider: { keyArn } }]`. Persisted
+    /// verbatim and replaced wholesale by AssociateEncryptionConfig.
+    #[serde(default)]
+    pub encryption_config: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

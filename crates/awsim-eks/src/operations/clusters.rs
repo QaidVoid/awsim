@@ -56,6 +56,10 @@ pub fn create_cluster(
             })
             .unwrap_or_default(),
         created_at: now_secs(),
+        encryption_config: input["encryptionConfig"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
     };
     state.clusters.insert(name.to_string(), cluster.clone());
     Ok(json!({ "cluster": serialize_cluster(&cluster) }))
@@ -153,7 +157,54 @@ pub(crate) fn serialize_cluster(c: &Cluster) -> Value {
         "certificateAuthority": c.certificate_authority,
         "platformVersion": c.platform_version,
         "tags": c.tags,
+        "encryptionConfig": c.encryption_config,
     })
+}
+
+/// `AssociateEncryptionConfig` replaces the cluster's encryptionConfig
+/// wholesale. AWS Smithy declares this as a separate API rather than a
+/// field on UpdateClusterConfig because the operation runs an
+/// asynchronous re-encryption job.
+pub fn associate_encryption_config(
+    state: &EksState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["name"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "name is required"))?;
+    let mut c = state.clusters.get_mut(name).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Cluster {name} not found"),
+        )
+    })?;
+    let cfg = input["encryptionConfig"]
+        .as_array()
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterException",
+                "encryptionConfig is required and must be an array.",
+            )
+        })?
+        .clone();
+    if cfg.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "encryptionConfig must contain at least one entry.",
+        ));
+    }
+    c.encryption_config = cfg;
+    Ok(json!({
+        "update": {
+            "id": uuid::Uuid::new_v4().to_string(),
+            "status": "InProgress",
+            "type": "AssociateEncryptionConfig",
+            "params": [],
+            "createdAt": now_secs(),
+            "errors": [],
+        }
+    }))
 }
 
 /// Validate an EKS cluster name against AWS's documented constraint:

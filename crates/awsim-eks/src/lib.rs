@@ -77,6 +77,12 @@ impl ServiceHandler for EksService {
             },
             RouteDefinition {
                 method: "POST",
+                path_pattern: "/clusters/{name}/encryption-config/associate",
+                operation: "AssociateEncryptionConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
                 path_pattern: "/clusters/{clusterName}/node-groups",
                 operation: "CreateNodegroup",
                 required_query_param: None,
@@ -161,6 +167,9 @@ impl ServiceHandler for EksService {
             "UpdateClusterConfig" => {
                 operations::clusters::update_cluster_config(&state, &input, ctx)
             }
+            "AssociateEncryptionConfig" => {
+                operations::clusters::associate_encryption_config(&state, &input, ctx)
+            }
             "CreateNodegroup" => operations::nodegroups::create_nodegroup(&state, &input, ctx),
             "DescribeNodegroup" => operations::nodegroups::describe_nodegroup(&state, &input, ctx),
             "DeleteNodegroup" => operations::nodegroups::delete_nodegroup(&state, &input, ctx),
@@ -182,5 +191,90 @@ impl ServiceHandler for EksService {
             "ListTagsForResource" => operations::tags::list_tags_for_resource(&state, &input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("eks", "us-east-1")
+    }
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+        fn noop_clone(_: *const ()) -> RawWaker {
+            noop_raw_waker()
+        }
+        fn noop(_: *const ()) {}
+        fn noop_raw_waker() -> RawWaker {
+            static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+        let waker = unsafe { Waker::from_raw(noop_raw_waker()) };
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = std::pin::pin!(f);
+        loop {
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(v) => return v,
+                Poll::Pending => {}
+            }
+        }
+    }
+
+    #[test]
+    fn associate_encryption_config_replaces_cluster_encryption_config() {
+        let svc = EksService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateCluster",
+            json!({
+                "name": "demo",
+                "roleArn": "arn:aws:iam::000000000000:role/eks",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        block_on(svc.handle(
+            "AssociateEncryptionConfig",
+            json!({
+                "name": "demo",
+                "encryptionConfig": [{
+                    "resources": ["secrets"],
+                    "provider": { "keyArn": "arn:aws:kms:us-east-1:000000000000:key/k" }
+                }]
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let desc =
+            block_on(svc.handle("DescribeCluster", json!({ "name": "demo" }), &ctx)).unwrap();
+        let cfg = desc["cluster"]["encryptionConfig"].as_array().unwrap();
+        assert_eq!(cfg.len(), 1);
+        assert_eq!(cfg[0]["resources"][0], "secrets");
+    }
+
+    #[test]
+    fn associate_encryption_config_rejects_empty_array() {
+        let svc = EksService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateCluster",
+            json!({ "name": "demo", "roleArn": "arn:aws:iam::000000000000:role/eks" }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let err = block_on(svc.handle(
+            "AssociateEncryptionConfig",
+            json!({ "name": "demo", "encryptionConfig": [] }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
     }
 }
