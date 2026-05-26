@@ -7,21 +7,11 @@ use crate::{
     state::{ElbState, Rule},
 };
 
-use super::listeners::parse_actions;
+use super::listeners::{listener_action_to_value, parse_actions};
 use super::{extract_string_list, opt_str, require_str};
 
 pub fn rule_to_value(r: &Rule) -> Value {
-    let actions: Vec<Value> = r
-        .actions
-        .iter()
-        .map(|a| {
-            let mut v = json!({ "Type": a.action_type });
-            if let Some(ref tg) = a.target_group_arn {
-                v["TargetGroupArn"] = json!(tg);
-            }
-            v
-        })
-        .collect();
+    let actions: Vec<Value> = r.actions.iter().map(listener_action_to_value).collect();
 
     json!({
         "RuleArn": r.arn,
@@ -66,7 +56,7 @@ pub fn create_rule(
         .cloned()
         .unwrap_or_default();
 
-    let actions = parse_actions(input, "Actions");
+    let actions = parse_actions(input, "Actions")?;
 
     let arn = rule_arn(
         &ctx.region,
@@ -117,7 +107,7 @@ pub fn modify_rule(state: &ElbState, input: &Value) -> Result<Value, AwsError> {
         rule.conditions = conditions.to_vec();
     }
 
-    let new_actions = parse_actions(input, "Actions");
+    let new_actions = parse_actions(input, "Actions")?;
     if !new_actions.is_empty() {
         rule.actions = new_actions;
     }

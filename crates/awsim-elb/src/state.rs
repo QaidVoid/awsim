@@ -76,6 +76,11 @@ pub struct Listener {
 pub struct ListenerAction {
     pub action_type: String,
     pub target_group_arn: Option<String>,
+    /// Per-type config blob (RedirectConfig / FixedResponseConfig /
+    /// AuthenticateCognitoConfig / AuthenticateOidcConfig / ForwardConfig)
+    /// stored verbatim so ModifyListener round-trips exactly what the
+    /// caller registered.
+    pub config: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]

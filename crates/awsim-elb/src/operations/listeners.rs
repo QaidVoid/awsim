@@ -13,16 +13,7 @@ pub fn listener_to_value(l: &Listener) -> Value {
     let actions: Vec<Value> = l
         .default_actions
         .iter()
-        .map(|a| {
-            let mut v = json!({ "Type": a.action_type });
-            if let Some(ref tg) = a.target_group_arn {
-                v["TargetGroupArn"] = json!(tg);
-                v["ForwardConfig"] = json!({
-                    "TargetGroups": [{ "TargetGroupArn": tg, "Weight": 1 }]
-                });
-            }
-            v
-        })
+        .map(listener_action_to_value)
         .collect();
 
     json!({
@@ -118,7 +109,7 @@ pub fn create_listener(
         }
     }
 
-    let default_actions = parse_actions(input, "DefaultActions");
+    let default_actions = parse_actions(input, "DefaultActions")?;
 
     let arn = listener_arn(&ctx.region, &ctx.account_id, &lb_name, &lb_rand);
 
@@ -201,7 +192,7 @@ pub fn modify_listener(state: &ElbState, input: &Value) -> Result<Value, AwsErro
         listener.protocol = proto.to_string();
     }
 
-    let new_actions = parse_actions(input, "DefaultActions");
+    let new_actions = parse_actions(input, "DefaultActions")?;
     if !new_actions.is_empty() {
         listener.default_actions = new_actions;
     }
@@ -335,7 +326,34 @@ pub fn remove_listener_certificates(state: &ElbState, input: &Value) -> Result<V
     Ok(json!({}))
 }
 
-pub fn parse_actions(input: &Value, key: &str) -> Vec<ListenerAction> {
+/// Serialize a single ListenerAction back to the AWS wire shape. Each
+/// per-type config field uses the documented key (RedirectConfig,
+/// FixedResponseConfig, etc.) so SDKs round-trip cleanly.
+pub fn listener_action_to_value(a: &ListenerAction) -> Value {
+    let mut v = json!({ "Type": a.action_type });
+    if let Some(ref tg) = a.target_group_arn {
+        v["TargetGroupArn"] = json!(tg);
+    }
+    if let Some(ref cfg) = a.config {
+        let key = match a.action_type.as_str() {
+            "redirect" => "RedirectConfig",
+            "fixed-response" => "FixedResponseConfig",
+            "authenticate-cognito" => "AuthenticateCognitoConfig",
+            "authenticate-oidc" => "AuthenticateOidcConfig",
+            _ => "ForwardConfig",
+        };
+        v[key] = cfg.clone();
+    } else if let Some(ref tg) = a.target_group_arn {
+        // Preserve the legacy single-target ForwardConfig echo so
+        // callers that don't supply ForwardConfig still see one back.
+        v["ForwardConfig"] = json!({
+            "TargetGroups": [{ "TargetGroupArn": tg, "Weight": 1 }]
+        });
+    }
+    v
+}
+
+pub fn parse_actions(input: &Value, key: &str) -> Result<Vec<ListenerAction>, AwsError> {
     let mut actions = Vec::new();
 
     if let Some(v) = input.get(key) {
@@ -359,18 +377,130 @@ pub fn parse_actions(input: &Value, key: &str) -> Vec<ListenerAction> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("forward")
                 .to_string();
+            if !matches!(
+                action_type.as_str(),
+                "forward"
+                    | "redirect"
+                    | "fixed-response"
+                    | "authenticate-cognito"
+                    | "authenticate-oidc"
+            ) {
+                return Err(awsim_core::AwsError::bad_request(
+                    "InvalidConfigurationRequestException",
+                    format!(
+                        "Action type `{action_type}` is not valid. Allowed: forward, \
+                         redirect, fixed-response, authenticate-cognito, authenticate-oidc."
+                    ),
+                ));
+            }
             let target_group_arn = item
                 .get("TargetGroupArn")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            // Pull the per-type config block. The action type tells us
+            // which key carries the typed payload; AWS requires it to
+            // be present (and shaped) for non-forward actions.
+            let config = match action_type.as_str() {
+                "redirect" => {
+                    let cfg = item.get("RedirectConfig").cloned().ok_or_else(|| {
+                        awsim_core::AwsError::bad_request(
+                            "InvalidConfigurationRequestException",
+                            "Action type `redirect` requires a RedirectConfig.",
+                        )
+                    })?;
+                    let status = cfg.get("StatusCode").and_then(Value::as_str).unwrap_or("");
+                    if !matches!(status, "HTTP_301" | "HTTP_302") {
+                        return Err(awsim_core::AwsError::bad_request(
+                            "InvalidConfigurationRequestException",
+                            format!(
+                                "RedirectConfig.StatusCode `{status}` must be HTTP_301 or HTTP_302."
+                            ),
+                        ));
+                    }
+                    Some(cfg)
+                }
+                "fixed-response" => {
+                    let cfg = item.get("FixedResponseConfig").cloned().ok_or_else(|| {
+                        awsim_core::AwsError::bad_request(
+                            "InvalidConfigurationRequestException",
+                            "Action type `fixed-response` requires a FixedResponseConfig.",
+                        )
+                    })?;
+                    let status = cfg.get("StatusCode").and_then(Value::as_str).unwrap_or("");
+                    if status.parse::<u16>().is_err() {
+                        return Err(awsim_core::AwsError::bad_request(
+                            "InvalidConfigurationRequestException",
+                            format!(
+                                "FixedResponseConfig.StatusCode `{status}` must be a numeric HTTP status."
+                            ),
+                        ));
+                    }
+                    Some(cfg)
+                }
+                "authenticate-cognito" => {
+                    let cfg = item
+                        .get("AuthenticateCognitoConfig")
+                        .cloned()
+                        .ok_or_else(|| {
+                            awsim_core::AwsError::bad_request(
+                                "InvalidConfigurationRequestException",
+                                "Action type `authenticate-cognito` requires AuthenticateCognitoConfig.",
+                            )
+                        })?;
+                    for required in ["UserPoolArn", "UserPoolClientId", "UserPoolDomain"] {
+                        if cfg
+                            .get(required)
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .is_none()
+                        {
+                            return Err(awsim_core::AwsError::bad_request(
+                                "InvalidConfigurationRequestException",
+                                format!("AuthenticateCognitoConfig.{required} is required."),
+                            ));
+                        }
+                    }
+                    Some(cfg)
+                }
+                "authenticate-oidc" => {
+                    let cfg = item.get("AuthenticateOidcConfig").cloned().ok_or_else(|| {
+                        awsim_core::AwsError::bad_request(
+                            "InvalidConfigurationRequestException",
+                            "Action type `authenticate-oidc` requires AuthenticateOidcConfig.",
+                        )
+                    })?;
+                    for required in [
+                        "Issuer",
+                        "AuthorizationEndpoint",
+                        "TokenEndpoint",
+                        "UserInfoEndpoint",
+                        "ClientId",
+                    ] {
+                        if cfg
+                            .get(required)
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .is_none()
+                        {
+                            return Err(awsim_core::AwsError::bad_request(
+                                "InvalidConfigurationRequestException",
+                                format!("AuthenticateOidcConfig.{required} is required."),
+                            ));
+                        }
+                    }
+                    Some(cfg)
+                }
+                _ => item.get("ForwardConfig").cloned(),
+            };
             actions.push(ListenerAction {
                 action_type,
                 target_group_arn,
+                config,
             });
         }
     }
 
-    actions
+    Ok(actions)
 }
 
 #[cfg(test)]
@@ -542,5 +672,76 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "ValidationError");
         assert!(err.message.contains("6081"));
+    }
+
+    #[test]
+    fn parses_redirect_action() {
+        let input = json!({
+            "DefaultActions": [{
+                "Type": "redirect",
+                "RedirectConfig": {
+                    "Protocol": "HTTPS",
+                    "Port": "443",
+                    "StatusCode": "HTTP_301"
+                }
+            }]
+        });
+        let actions = parse_actions(&input, "DefaultActions").unwrap();
+        assert_eq!(actions[0].action_type, "redirect");
+        assert_eq!(
+            actions[0].config.as_ref().unwrap()["StatusCode"],
+            "HTTP_301"
+        );
+    }
+
+    #[test]
+    fn rejects_redirect_bad_status_code() {
+        let input = json!({
+            "DefaultActions": [{
+                "Type": "redirect",
+                "RedirectConfig": { "StatusCode": "HTTP_307" }
+            }]
+        });
+        let err = parse_actions(&input, "DefaultActions").unwrap_err();
+        assert_eq!(err.code, "InvalidConfigurationRequestException");
+    }
+
+    #[test]
+    fn parses_fixed_response_action() {
+        let input = json!({
+            "DefaultActions": [{
+                "Type": "fixed-response",
+                "FixedResponseConfig": {
+                    "ContentType": "text/plain",
+                    "MessageBody": "Hello",
+                    "StatusCode": "200"
+                }
+            }]
+        });
+        let actions = parse_actions(&input, "DefaultActions").unwrap();
+        assert_eq!(actions[0].action_type, "fixed-response");
+    }
+
+    #[test]
+    fn rejects_authenticate_cognito_missing_pool_arn() {
+        let input = json!({
+            "DefaultActions": [{
+                "Type": "authenticate-cognito",
+                "AuthenticateCognitoConfig": {
+                    "UserPoolClientId": "abc",
+                    "UserPoolDomain": "d"
+                }
+            }]
+        });
+        let err = parse_actions(&input, "DefaultActions").unwrap_err();
+        assert_eq!(err.code, "InvalidConfigurationRequestException");
+        assert!(err.message.contains("UserPoolArn"));
+    }
+
+    #[test]
+    fn rejects_unknown_action_type() {
+        let input = json!({ "DefaultActions": [{ "Type": "send-postcard" }] });
+        let err = parse_actions(&input, "DefaultActions").unwrap_err();
+        assert_eq!(err.code, "InvalidConfigurationRequestException");
     }
 }
