@@ -61,6 +61,12 @@ pub struct Nodegroup {
     /// Optional remoteAccess config: `{ ec2SshKey, sourceSecurityGroups[] }`.
     #[serde(default)]
     pub remote_access: Option<serde_json::Value>,
+    /// Optional EC2 LaunchTemplate reference: `{ name OR id, version }`.
+    /// AWS requires exactly one of `name`/`id`; both is an error, and
+    /// neither is also an error when the launchTemplate block is
+    /// present.
+    #[serde(default)]
+    pub launch_template: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

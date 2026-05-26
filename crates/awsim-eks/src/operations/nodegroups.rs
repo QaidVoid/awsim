@@ -97,6 +97,35 @@ pub fn create_nodegroup(
         _ => None,
     };
 
+    // launchTemplate: exactly one of name/id must be present, version
+    // optional. Both-or-neither matches AWS's InvalidParameterException.
+    let launch_template = match input.get("launchTemplate") {
+        Some(v) if !v.is_null() => {
+            let obj = v.as_object().ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameterException",
+                    "launchTemplate must be an object.",
+                )
+            })?;
+            let has_name = obj
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.is_empty());
+            let has_id = obj
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.is_empty());
+            if has_name == has_id {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterException",
+                    "launchTemplate requires exactly one of name or id.",
+                ));
+            }
+            Some(v.clone())
+        }
+        _ => None,
+    };
+
     let arn = format!(
         "arn:aws:eks:{}:{}:nodegroup/{}/{}/{}",
         ctx.region,
@@ -147,6 +176,7 @@ pub fn create_nodegroup(
         labels,
         taints,
         remote_access,
+        launch_template,
     };
     state
         .nodegroups
@@ -231,6 +261,9 @@ fn serialize_nodegroup(ng: &Nodegroup) -> Value {
     if let Some(ref ra) = ng.remote_access {
         obj["remoteAccess"] = ra.clone();
     }
+    if let Some(ref lt) = ng.launch_template {
+        obj["launchTemplate"] = lt.clone();
+    }
     obj
 }
 
@@ -287,6 +320,33 @@ mod nodegroup_extras_tests {
         let resp = create_nodegroup(&state, &input, &ctx()).unwrap();
         let ng = &resp["nodegroup"];
         assert_eq!(ng["remoteAccess"]["ec2SshKey"], "my-key");
+    }
+
+    #[test]
+    fn persists_launch_template_with_id() {
+        let state = EksState::default();
+        let mut input = base_input();
+        input["launchTemplate"] = json!({ "id": "lt-aaa", "version": "1" });
+        let resp = create_nodegroup(&state, &input, &ctx()).unwrap();
+        assert_eq!(resp["nodegroup"]["launchTemplate"]["id"], "lt-aaa");
+    }
+
+    #[test]
+    fn rejects_launch_template_with_both_name_and_id() {
+        let state = EksState::default();
+        let mut input = base_input();
+        input["launchTemplate"] = json!({ "id": "lt-aaa", "name": "foo" });
+        let err = create_nodegroup(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn rejects_launch_template_with_neither_name_nor_id() {
+        let state = EksState::default();
+        let mut input = base_input();
+        input["launchTemplate"] = json!({ "version": "1" });
+        let err = create_nodegroup(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
     }
 
     #[test]
