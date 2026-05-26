@@ -23,12 +23,23 @@ fn ctx() -> RequestContext {
     RequestContext::new("logs", "us-east-1")
 }
 
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
 #[tokio::test]
 async fn put_then_restart_then_get_round_trips_events() {
     let dir = tmp_dir("round-trip");
     let group = "persist-group";
     let stream = "stream-1";
 
+    // PutLogEvents rejects timestamps outside the 14-day / 2-hour
+    // ingestion window, so anchor on the current clock and stagger by
+    // small offsets (in chronological order) to exercise persistence.
+    let base = now_ms();
     let snapshot = {
         let svc = CloudWatchLogsService::with_data_dir(&dir);
         svc.handle("CreateLogGroup", json!({ "logGroupName": group }), &ctx())
@@ -47,11 +58,11 @@ async fn put_then_restart_then_get_round_trips_events() {
                 "logGroupName": group,
                 "logStreamName": stream,
                 "logEvents": [
-                    { "timestamp": 1000u64, "message": "first" },
-                    { "timestamp": 2000u64, "message": "second" },
-                    { "timestamp": 3000u64, "message": "third" },
-                    { "timestamp": 4000u64, "message": "fourth" },
-                    { "timestamp": 5000u64, "message": "fifth" },
+                    { "timestamp": base - 5000, "message": "first" },
+                    { "timestamp": base - 4000, "message": "second" },
+                    { "timestamp": base - 3000, "message": "third" },
+                    { "timestamp": base - 2000, "message": "fourth" },
+                    { "timestamp": base - 1000, "message": "fifth" },
                 ],
             }),
             &ctx(),
@@ -84,11 +95,11 @@ async fn put_then_restart_then_get_round_trips_events() {
     let events = got["events"].as_array().expect("events array");
     assert_eq!(events.len(), 5);
     let want: Vec<(u64, &str)> = vec![
-        (1000, "first"),
-        (2000, "second"),
-        (3000, "third"),
-        (4000, "fourth"),
-        (5000, "fifth"),
+        (base - 5000, "first"),
+        (base - 4000, "second"),
+        (base - 3000, "third"),
+        (base - 2000, "fourth"),
+        (base - 1000, "fifth"),
     ];
     for (i, (ts, msg)) in want.into_iter().enumerate() {
         assert_eq!(events[i]["timestamp"].as_u64(), Some(ts), "ts at idx {i}");
@@ -120,7 +131,7 @@ async fn delete_log_stream_removes_persisted_events() {
         json!({
             "logGroupName": group,
             "logStreamName": stream,
-            "logEvents": [{ "timestamp": 1u64, "message": "x" }],
+            "logEvents": [{ "timestamp": now_ms(), "message": "x" }],
         }),
         &ctx(),
     )
@@ -183,7 +194,7 @@ async fn delete_log_group_removes_persisted_events() {
         json!({
             "logGroupName": group,
             "logStreamName": stream,
-            "logEvents": [{ "timestamp": 1u64, "message": "y" }],
+            "logEvents": [{ "timestamp": now_ms(), "message": "y" }],
         }),
         &ctx(),
     )
