@@ -44,6 +44,11 @@ pub struct ConfigurationSet {
     pub tags: HashMap<String, String>,
     pub sending_enabled: bool,
     pub reputation_metrics_enabled: bool,
+    /// Unix-epoch seconds when ReputationMetricsEnabled most recently
+    /// toggled from false -> true. AWS returns this as `LastFreshStart`
+    /// in GetConfigurationSet so monitoring tooling can scope reputation
+    /// metrics to the current "fresh" window.
+    pub reputation_last_fresh_start: Option<u64>,
     pub event_destinations: Vec<EventDestination>,
 }
 

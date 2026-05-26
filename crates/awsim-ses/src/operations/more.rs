@@ -227,10 +227,21 @@ pub fn create_configuration_set(
     let name = input["ConfigurationSetName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameter", "ConfigurationSetName is required")
     })?;
+    let sending_enabled = input["SendingOptions"]["SendingEnabled"]
+        .as_bool()
+        .unwrap_or(true);
+    let reputation_enabled = input["ReputationOptions"]["ReputationMetricsEnabled"]
+        .as_bool()
+        .unwrap_or(true);
     let mut cs = ConfigurationSet {
         name: name.to_string(),
-        sending_enabled: true,
-        reputation_metrics_enabled: true,
+        sending_enabled,
+        reputation_metrics_enabled: reputation_enabled,
+        reputation_last_fresh_start: if reputation_enabled {
+            Some(now())
+        } else {
+            None
+        },
         ..Default::default()
     };
     if let Some(t) = input["Tags"].as_array() {
@@ -241,6 +252,29 @@ pub fn create_configuration_set(
         }
     }
     state.configuration_sets.insert(name.to_string(), cs);
+    Ok(json!({}))
+}
+
+pub fn put_configuration_set_reputation_options(
+    state: &SesState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["ConfigurationSetName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "ConfigurationSetName is required")
+    })?;
+    let enabled = input["ReputationMetricsEnabled"].as_bool().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "ReputationMetricsEnabled is required")
+    })?;
+    let mut cs = state
+        .configuration_sets
+        .get_mut(name)
+        .ok_or_else(|| AwsError::not_found("NotFoundException", format!("Not found: {name}")))?;
+    let was_enabled = cs.reputation_metrics_enabled;
+    cs.reputation_metrics_enabled = enabled;
+    if enabled && !was_enabled {
+        cs.reputation_last_fresh_start = Some(now());
+    }
     Ok(json!({}))
 }
 
@@ -271,11 +305,17 @@ pub fn get_configuration_set(
         .iter()
         .map(|(k, v)| json!({ "Key": k, "Value": v }))
         .collect();
+    let mut reputation = json!({
+        "ReputationMetricsEnabled": cs.reputation_metrics_enabled,
+    });
+    if let Some(ts) = cs.reputation_last_fresh_start {
+        reputation["LastFreshStart"] = json!(ts);
+    }
     Ok(json!({
         "ConfigurationSetName": cs.name,
         "Tags": tags,
         "SendingOptions": { "SendingEnabled": cs.sending_enabled },
-        "ReputationOptions": { "ReputationMetricsEnabled": cs.reputation_metrics_enabled },
+        "ReputationOptions": reputation,
     }))
 }
 
@@ -951,4 +991,83 @@ pub fn get_blacklist_reports(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     Ok(json!({ "BlacklistReport": {} }))
+}
+
+#[cfg(test)]
+mod reputation_options_tests {
+    use super::*;
+
+    fn ctx() -> awsim_core::RequestContext {
+        awsim_core::RequestContext::new("ses", "us-east-1")
+    }
+
+    #[test]
+    fn create_configuration_set_persists_reputation_options() {
+        let state = SesState::default();
+        create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "ReputationOptions": { "ReputationMetricsEnabled": false },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let cs = state.configuration_sets.get("cs").unwrap();
+        assert!(!cs.reputation_metrics_enabled);
+        assert!(cs.reputation_last_fresh_start.is_none());
+    }
+
+    #[test]
+    fn put_configuration_set_reputation_options_sets_fresh_start_on_toggle_on() {
+        let state = SesState::default();
+        create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "ReputationOptions": { "ReputationMetricsEnabled": false },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        put_configuration_set_reputation_options(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "ReputationMetricsEnabled": true,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let cs = state.configuration_sets.get("cs").unwrap();
+        assert!(cs.reputation_metrics_enabled);
+        assert!(cs.reputation_last_fresh_start.is_some());
+    }
+
+    #[test]
+    fn put_configuration_set_reputation_options_returns_not_found_for_missing_set() {
+        let state = SesState::default();
+        let err = put_configuration_set_reputation_options(
+            &state,
+            &json!({
+                "ConfigurationSetName": "nope",
+                "ReputationMetricsEnabled": true,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotFoundException");
+    }
+
+    #[test]
+    fn get_configuration_set_surfaces_last_fresh_start() {
+        let state = SesState::default();
+        create_configuration_set(&state, &json!({ "ConfigurationSetName": "cs" }), &ctx()).unwrap();
+        let resp = get_configuration_set(&state, &json!({ "ConfigurationSetName": "cs" }), &ctx())
+            .unwrap();
+        assert!(
+            resp["ReputationOptions"].get("LastFreshStart").is_some(),
+            "LastFreshStart should appear when reputation is enabled"
+        );
+    }
 }
