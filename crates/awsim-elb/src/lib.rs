@@ -130,6 +130,9 @@ impl ServiceHandler for ElbService {
                 operations::metadata::describe_account_limits(&state, &input)
             }
             "DescribeSSLPolicies" => operations::metadata::describe_ssl_policies(&state, &input),
+            "DescribeLoadBalancerPolicies" => {
+                operations::metadata::describe_load_balancer_policies(&state, &input)
+            }
 
             _ => Err(AwsError::unknown_operation(operation)),
         }
