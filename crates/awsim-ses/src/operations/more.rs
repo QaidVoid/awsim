@@ -108,10 +108,47 @@ pub fn put_email_identity_dkim_attributes(
 }
 
 pub fn put_email_identity_mail_from_attributes(
-    _state: &SesState,
-    _input: &Value,
+    state: &SesState,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    let identity = input["EmailIdentity"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EmailIdentity is required"))?;
+    if !state.identities.contains_key(identity) {
+        return Err(AwsError::not_found(
+            "NotFoundException",
+            format!("Email identity not found: {identity}"),
+        ));
+    }
+    // BehaviorOnMxFailure: REJECT_MESSAGE | USE_DEFAULT_VALUE.
+    if let Some(behavior) = input["BehaviorOnMxFailure"].as_str()
+        && !matches!(behavior, "REJECT_MESSAGE" | "USE_DEFAULT_VALUE")
+    {
+        return Err(AwsError::bad_request(
+            "BadRequestException",
+            format!(
+                "BehaviorOnMxFailure `{behavior}` must be REJECT_MESSAGE or USE_DEFAULT_VALUE."
+            ),
+        ));
+    }
+    // MailFromDomain must end with the identity domain to be valid in
+    // real SES (it has to live under the identity). Empty / null
+    // values mean "remove MAIL FROM", which is allowed.
+    if let Some(mail_from) = input["MailFromDomain"].as_str()
+        && !mail_from.is_empty()
+    {
+        let identity_domain = identity.split_once('@').map(|(_, d)| d).unwrap_or(identity);
+        if !mail_from
+            .to_ascii_lowercase()
+            .ends_with(&identity_domain.to_ascii_lowercase())
+        {
+            return Err(AwsError::bad_request(
+                "BadRequestException",
+                format!("MailFromDomain `{mail_from}` must be a subdomain of `{identity_domain}`."),
+            ));
+        }
+    }
     Ok(json!({}))
 }
 
