@@ -94,4 +94,9 @@ pub struct Route53State {
     pub traffic_policies: DashMap<String, TrafficPolicy>,
     pub delegation_sets: DashMap<String, DelegationSet>,
     pub vpc_associations: DashMap<String, Vec<VpcAssociation>>,
+    /// Change submissions — map of bare change id (no `/change/`
+    /// prefix) -> unix-epoch seconds when submitted. GetChange uses
+    /// the elapsed time to walk `PENDING` -> `INSYNC` after a short
+    /// propagation window.
+    pub change_submissions: DashMap<String, u64>,
 }

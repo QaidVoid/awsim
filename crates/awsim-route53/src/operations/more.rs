@@ -55,7 +55,7 @@ fn now_iso() -> String {
 }
 
 pub fn get_change(
-    _state: &Arc<Route53State>,
+    state: &Arc<Route53State>,
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
@@ -63,16 +63,30 @@ pub fn get_change(
         .get("Id")
         .and_then(Value::as_str)
         .ok_or_else(|| AwsError::bad_request("InvalidInput", "Id is required"))?;
-    let normalized = if id.starts_with("/change/") {
-        id.to_string()
-    } else {
-        format!("/change/{id}")
+    let bare_id = id.strip_prefix("/change/").unwrap_or(id);
+    let normalized = format!("/change/{bare_id}");
+
+    // Walk PENDING -> INSYNC after a 30-second propagation window. The
+    // window is short enough that integration tests don't wait long,
+    // and long enough that callers polling immediately after a write
+    // observe the transition rather than seeing INSYNC straight away.
+    const PROPAGATION_WINDOW_SECS: u64 = 30;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let status = match state.change_submissions.get(bare_id) {
+        Some(submitted_at) if now.saturating_sub(*submitted_at) < PROPAGATION_WINDOW_SECS => {
+            "PENDING"
+        }
+        _ => "INSYNC",
     };
+
     Ok(json!({
         "__xml_root": "GetChangeResponse",
         "ChangeInfo": {
             "Id": normalized,
-            "Status": "INSYNC",
+            "Status": status,
             "SubmittedAt": now_iso(),
         }
     }))
@@ -476,4 +490,59 @@ pub fn disassociate_vpc_from_hosted_zone(
             "SubmittedAt": now_iso(),
         }
     }))
+}
+
+#[cfg(test)]
+mod get_change_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("route53", "us-east-1")
+    }
+
+    #[test]
+    fn unknown_change_id_returns_insync() {
+        let state = Arc::new(Route53State::default());
+        let resp = get_change(&state, &json!({ "Id": "missing-xyz" }), &ctx()).unwrap();
+        assert_eq!(resp["ChangeInfo"]["Status"], "INSYNC");
+    }
+
+    #[test]
+    fn fresh_submission_returns_pending() {
+        let state = Arc::new(Route53State::default());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        state.change_submissions.insert("c-fresh".to_string(), now);
+        let resp = get_change(&state, &json!({ "Id": "c-fresh" }), &ctx()).unwrap();
+        assert_eq!(resp["ChangeInfo"]["Status"], "PENDING");
+        assert_eq!(resp["ChangeInfo"]["Id"], "/change/c-fresh");
+    }
+
+    #[test]
+    fn aged_submission_returns_insync() {
+        let state = Arc::new(Route53State::default());
+        let stale = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .saturating_sub(120);
+        state.change_submissions.insert("c-old".to_string(), stale);
+        let resp = get_change(&state, &json!({ "Id": "c-old" }), &ctx()).unwrap();
+        assert_eq!(resp["ChangeInfo"]["Status"], "INSYNC");
+    }
+
+    #[test]
+    fn accepts_prefixed_change_id() {
+        let state = Arc::new(Route53State::default());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        state.change_submissions.insert("c-prefix".to_string(), now);
+        let resp = get_change(&state, &json!({ "Id": "/change/c-prefix" }), &ctx()).unwrap();
+        assert_eq!(resp["ChangeInfo"]["Status"], "PENDING");
+    }
 }

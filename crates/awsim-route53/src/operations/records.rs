@@ -204,11 +204,24 @@ pub fn change_resource_record_sets(
         }
     }
 
+    // Stamp the submission so GetChange can walk PENDING -> INSYNC
+    // after a short propagation window. The change id is bare here
+    // (no `/change/` prefix); GetChange strips that prefix before
+    // looking up.
+    let change_id = Uuid::new_v4().to_string();
+    state.change_submissions.insert(
+        change_id.clone(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    );
+
     Ok(json!({
         "__xml_root": "ChangeResourceRecordSetsResponse",
         "ChangeInfo": {
-            "Id": format!("/change/{}", Uuid::new_v4()),
-            "Status": "INSYNC",
+            "Id": format!("/change/{change_id}"),
+            "Status": "PENDING",
             "SubmittedAt": chrono_now(),
             "Comment": "",
         }
