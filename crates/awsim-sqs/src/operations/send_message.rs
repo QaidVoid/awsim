@@ -122,10 +122,27 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         None
     };
 
-    // FIFO deduplication check
+    // FIFO deduplication check. When DeduplicationScope=messageGroup
+    // (the per-group dedup mode) AWS scopes the dedup window to the
+    // group, so the same MessageDeduplicationId under different
+    // groups doesn't collide. The default `queue` scope keeps the
+    // legacy global key.
+    let dedup_scope_per_group = queue
+        .attributes
+        .get("DeduplicationScope")
+        .map(|v| v == "messageGroup")
+        .unwrap_or(false);
+    let dedup_key = |did: &str| -> String {
+        if dedup_scope_per_group {
+            let gid = group_id.as_deref().unwrap_or("");
+            format!("{gid}\0{did}")
+        } else {
+            did.to_string()
+        }
+    };
     if queue.is_fifo
         && let Some(ref did) = dedup_id
-        && let Some((expiry, existing_id)) = queue.dedup_cache.get(did)
+        && let Some((expiry, existing_id)) = queue.dedup_cache.get(&dedup_key(did))
         && now < *expiry
     {
         // Duplicate detected; return the original message ID
@@ -179,7 +196,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         let expiry = now + Duration::from_secs(300);
         queue
             .dedup_cache
-            .insert(did.clone(), (expiry, message_id.clone()));
+            .insert(dedup_key(did), (expiry, message_id.clone()));
     }
 
     let body_field = if let Some(bs) = state.body_store() {
