@@ -843,6 +843,57 @@ pub fn untag_resource(
 // RotateSecret
 // ---------------------------------------------------------------------------
 
+/// Accept either `rate(N unit)` (unit = minute|minutes|hour|hours|day|days)
+/// or `cron(...)` with the standard six-field expression. We don't
+/// evaluate the schedule — Secrets Manager keeps these as opaque
+/// strings until the next tick — but mismatched shapes get rejected at
+/// the API boundary the way real AWS does.
+fn validate_schedule_expression(expr: &str) -> Result<(), AwsError> {
+    if let Some(rest) = expr.strip_prefix("rate(").and_then(|s| s.strip_suffix(')')) {
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        if parts.len() != 2 {
+            return Err(error::invalid_parameter(format!(
+                "ScheduleExpression `{expr}` must be `rate(<value> <unit>)`."
+            )));
+        }
+        let value: u64 = parts[0].parse().map_err(|_| {
+            error::invalid_parameter(format!(
+                "ScheduleExpression `{expr}` value must be a positive integer."
+            ))
+        })?;
+        if value == 0 {
+            return Err(error::invalid_parameter(format!(
+                "ScheduleExpression `{expr}` value must be > 0."
+            )));
+        }
+        if !matches!(
+            parts[1],
+            "minute" | "minutes" | "hour" | "hours" | "day" | "days"
+        ) {
+            return Err(error::invalid_parameter(format!(
+                "ScheduleExpression `{expr}` unit must be one of \
+                 minute(s), hour(s), day(s)."
+            )));
+        }
+        return Ok(());
+    }
+    if let Some(rest) = expr.strip_prefix("cron(").and_then(|s| s.strip_suffix(')')) {
+        // EventBridge / SM cron uses six fields:
+        // minutes hours day-of-month month day-of-week year
+        let count = rest.split_whitespace().count();
+        if count != 6 {
+            return Err(error::invalid_parameter(format!(
+                "ScheduleExpression `{expr}` cron must have 6 fields (minute, hour, \
+                 day-of-month, month, day-of-week, year)."
+            )));
+        }
+        return Ok(());
+    }
+    Err(error::invalid_parameter(format!(
+        "ScheduleExpression `{expr}` must be a `rate(...)` or `cron(...)` expression."
+    )))
+}
+
 pub fn rotate_secret(
     state: &SecretsState,
     input: &Value,
@@ -866,10 +917,31 @@ pub fn rotate_secret(
     if let Some(lambda_arn) = input["RotationLambdaARN"].as_str() {
         secret.rotation_lambda_arn = Some(lambda_arn.to_string());
     }
-    if let Some(rules) = input["RotationRules"].as_object()
-        && let Some(days) = rules.get("AutomaticallyAfterDays").and_then(|v| v.as_u64())
-    {
-        secret.rotation_automatically_after_days = Some(days);
+    if let Some(rules) = input["RotationRules"].as_object() {
+        // AWS bounds AutomaticallyAfterDays at 1..=1000 and accepts
+        // either it or a ScheduleExpression (`rate(...)` / `cron(...)`)
+        // — not both. Reject the documented invalid shapes here so
+        // callers don't silently install rotations that AWS would have
+        // refused.
+        let after_days = rules.get("AutomaticallyAfterDays").and_then(|v| v.as_u64());
+        let schedule = rules.get("ScheduleExpression").and_then(|v| v.as_str());
+        if after_days.is_some() && schedule.is_some() {
+            return Err(error::invalid_parameter(
+                "RotationRules must specify either AutomaticallyAfterDays or \
+                 ScheduleExpression, not both.",
+            ));
+        }
+        if let Some(days) = after_days {
+            if !(1..=1000).contains(&days) {
+                return Err(error::invalid_parameter(format!(
+                    "RotationRules.AutomaticallyAfterDays {days} must be between 1 and 1000."
+                )));
+            }
+            secret.rotation_automatically_after_days = Some(days);
+        }
+        if let Some(expr) = schedule {
+            validate_schedule_expression(expr)?;
+        }
     }
     secret.rotation_enabled = true;
 
@@ -1917,5 +1989,60 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterException");
         assert!(err.message.contains("duplicates"));
+    }
+
+    #[test]
+    fn validate_schedule_expression_accepts_rate() {
+        validate_schedule_expression("rate(7 days)").unwrap();
+        validate_schedule_expression("rate(30 minutes)").unwrap();
+        validate_schedule_expression("rate(1 hour)").unwrap();
+    }
+
+    #[test]
+    fn validate_schedule_expression_accepts_cron_six_fields() {
+        validate_schedule_expression("cron(0 12 * * ? *)").unwrap();
+    }
+
+    #[test]
+    fn validate_schedule_expression_rejects_unknown_form() {
+        assert!(validate_schedule_expression("daily").is_err());
+        assert!(validate_schedule_expression("rate(0 days)").is_err());
+        assert!(validate_schedule_expression("rate(7 fortnights)").is_err());
+        assert!(validate_schedule_expression("cron(0 12 * * *)").is_err());
+    }
+
+    #[test]
+    fn rotate_secret_rejects_both_after_days_and_schedule() {
+        let state = SecretsState::default();
+        create_secret(&state, &json!({ "Name": "s", "SecretString": "v" }), &ctx()).unwrap();
+        let err = rotate_secret(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "RotationRules": {
+                    "AutomaticallyAfterDays": 7,
+                    "ScheduleExpression": "rate(7 days)",
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn rotate_secret_rejects_out_of_range_after_days() {
+        let state = SecretsState::default();
+        create_secret(&state, &json!({ "Name": "s", "SecretString": "v" }), &ctx()).unwrap();
+        let err = rotate_secret(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "RotationRules": { "AutomaticallyAfterDays": 0 }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
     }
 }
