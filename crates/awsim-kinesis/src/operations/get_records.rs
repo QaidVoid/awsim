@@ -50,20 +50,31 @@ pub fn handle(
         limit,
     )?;
 
-    let records: Vec<Value> = rows
-        .iter()
-        .map(|r| {
-            json!({
-                "SequenceNumber": format!("{:020}", r.seq),
-                "ApproximateArrivalTimestamp": r.timestamp_millis / 1000,
-                "Data": r.data,
-                "PartitionKey": r.partition_key,
-                "EncryptionType": "NONE",
-            })
-        })
-        .collect();
+    // AWS caps a single GetRecords response at 10 MB of record data;
+    // anything past that boundary spills into the next call. Stop
+    // including records once the running total would exceed the cap,
+    // and advance the cursor to the last record we actually included.
+    const KINESIS_GET_RECORDS_MAX_BYTES: usize = 10 * 1024 * 1024;
+    let mut bytes_so_far: usize = 0;
+    let mut last_included_seq: Option<u64> = None;
+    let mut records: Vec<Value> = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let record_bytes = r.data.len() + r.partition_key.len();
+        if !records.is_empty() && bytes_so_far + record_bytes > KINESIS_GET_RECORDS_MAX_BYTES {
+            break;
+        }
+        bytes_so_far += record_bytes;
+        last_included_seq = Some(r.seq as u64);
+        records.push(json!({
+            "SequenceNumber": format!("{:020}", r.seq),
+            "ApproximateArrivalTimestamp": r.timestamp_millis / 1000,
+            "Data": r.data,
+            "PartitionKey": r.partition_key,
+            "EncryptionType": "NONE",
+        }));
+    }
 
-    let new_position = rows.last().map(|r| r.seq as u64).unwrap_or(info.position);
+    let new_position = last_included_seq.unwrap_or(info.position);
 
     let next_iterator_info = ShardIteratorInfo {
         stream_name: info.stream_name.clone(),
