@@ -26,6 +26,31 @@ fn build_sm_arn(ctx: &RequestContext, name: &str) -> String {
     )
 }
 
+/// Validate `roleArn` shape when the caller supplies one. AWS only
+/// requires a roleArn for state machines that perform service
+/// integrations, and rejects malformed ARNs with InvalidParameter. An
+/// empty roleArn passes here so unit tests can construct machines
+/// without spinning up an IAM role.
+fn validate_role_arn(role_arn: &str) -> Result<(), AwsError> {
+    if role_arn.is_empty() {
+        return Ok(());
+    }
+    let parts: Vec<&str> = role_arn.splitn(6, ':').collect();
+    let shape_ok = parts.len() == 6
+        && parts[0] == "arn"
+        && (parts[1] == "aws" || parts[1].starts_with("aws-"))
+        && parts[2] == "iam"
+        && parts[3].is_empty()
+        && parts[5].starts_with("role/");
+    if !shape_ok {
+        return Err(AwsError::bad_request(
+            "InvalidParameter",
+            format!("roleArn `{role_arn}` is not a valid IAM role ARN."),
+        ));
+    }
+    Ok(())
+}
+
 fn sm_to_value(sm: &StateMachine) -> Value {
     let mut obj = json!({
         "stateMachineArn": sm.arn,
@@ -140,6 +165,7 @@ pub fn create_state_machine(
     })?;
 
     let role_arn = input["roleArn"].as_str().unwrap_or("").to_string();
+    validate_role_arn(&role_arn)?;
     let machine_type = input["type"].as_str().unwrap_or("STANDARD").to_string();
 
     match machine_type.as_str() {
@@ -312,6 +338,7 @@ pub fn update_state_machine(
     }
 
     if let Some(role_arn) = input["roleArn"].as_str() {
+        validate_role_arn(role_arn)?;
         sm.role_arn = role_arn.to_string();
     }
 

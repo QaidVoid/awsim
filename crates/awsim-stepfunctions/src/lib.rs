@@ -172,6 +172,39 @@ mod tests {
     }
 
     #[test]
+    fn test_create_state_machine_rejects_invalid_role_arn() {
+        let svc = StepFunctionsService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateStateMachine",
+            json!({
+                "name": "bad-role",
+                "definition": pass_definition(),
+                "roleArn": "not-an-arn"
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+    }
+
+    #[test]
+    fn test_create_state_machine_accepts_well_formed_role_arn() {
+        let svc = StepFunctionsService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateStateMachine",
+            json!({
+                "name": "good-role",
+                "definition": pass_definition(),
+                "roleArn": "arn:aws:iam::000000000000:role/StepRole"
+            }),
+            &ctx,
+        ))
+        .unwrap();
+    }
+
+    #[test]
     fn test_create_state_machine_rejects_kms_without_key_id() {
         let svc = StepFunctionsService::new();
         let ctx = ctx();
