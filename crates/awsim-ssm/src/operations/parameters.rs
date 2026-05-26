@@ -34,6 +34,85 @@ fn build_arn(ctx: &RequestContext, name: &str) -> String {
     )
 }
 
+/// AWS ParameterPolicy schema is a JSON array of `{Type,Version,Attributes}`
+/// objects. Allowed Types and their attribute shape are:
+/// - `Expiration` — Attributes.Timestamp (ISO-8601 instant)
+/// - `ExpirationNotification` — Attributes.Before + Unit=`Days`
+/// - `NoChangeNotification` — Attributes.After + Unit=`Days`
+///
+/// AWS rejects malformed JSON or unknown Types with ValidationException.
+fn parse_parameter_policies(raw: &str) -> Result<Vec<Value>, AwsError> {
+    let parsed: Value = serde_json::from_str(raw).map_err(|e| {
+        AwsError::bad_request(
+            "ValidationException",
+            format!("Policies must be a JSON array of policy objects: {e}"),
+        )
+    })?;
+    let arr = parsed.as_array().ok_or_else(|| {
+        AwsError::bad_request(
+            "ValidationException",
+            "Policies must be a JSON array of policy objects",
+        )
+    })?;
+    let mut out = Vec::with_capacity(arr.len());
+    for entry in arr {
+        let policy_type = entry["Type"].as_str().ok_or_else(|| {
+            AwsError::bad_request("ValidationException", "Policy.Type is required")
+        })?;
+        let attributes = &entry["Attributes"];
+        match policy_type {
+            "Expiration" => {
+                if attributes["Timestamp"].as_str().is_none() {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        "Expiration policy requires Attributes.Timestamp",
+                    ));
+                }
+            }
+            "ExpirationNotification" => {
+                if attributes["Before"].as_str().is_none() {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        "ExpirationNotification policy requires Attributes.Before",
+                    ));
+                }
+                if attributes["Unit"].as_str() != Some("Days") {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        "ExpirationNotification.Unit must be 'Days'",
+                    ));
+                }
+            }
+            "NoChangeNotification" => {
+                if attributes["After"].as_str().is_none() {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        "NoChangeNotification policy requires Attributes.After",
+                    ));
+                }
+                if attributes["Unit"].as_str() != Some("Days") {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        "NoChangeNotification.Unit must be 'Days'",
+                    ));
+                }
+            }
+            other => {
+                return Err(AwsError::bad_request(
+                    "ValidationException",
+                    format!(
+                        "Unsupported policy Type '{other}'; must be Expiration, ExpirationNotification, or NoChangeNotification"
+                    ),
+                ));
+            }
+        }
+        let mut normalized = entry.clone();
+        normalized["PolicyStatus"] = json!("Pending");
+        out.push(normalized);
+    }
+    Ok(out)
+}
+
 fn validate_param_type(param_type: &str) -> Result<(), AwsError> {
     match param_type {
         "String" | "StringList" | "SecureString" => Ok(()),
@@ -71,6 +150,9 @@ fn parameter_metadata(p: &Parameter) -> Value {
     });
     if let Some(ref k) = p.key_id {
         obj["KeyId"] = json!(k);
+    }
+    if !p.policies.is_empty() {
+        obj["Policies"] = json!(p.policies);
     }
     obj
 }
@@ -181,6 +263,23 @@ pub fn put_parameter(
         None
     };
 
+    // Policies are only valid on Advanced / Intelligent-Tiering, and
+    // come in as a JSON-stringified array of policy objects. Each entry
+    // must declare a Type known to AWS plus the required attributes for
+    // that type. Empty / missing => no policies.
+    let policy_text = input["Policies"].as_str().filter(|s| !s.is_empty());
+    let policies: Vec<Value> = if let Some(raw) = policy_text {
+        if !matches!(tier, "Advanced" | "Intelligent-Tiering") {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                "Parameter policies require Advanced or Intelligent-Tiering tier.",
+            ));
+        }
+        parse_parameter_policies(raw)?
+    } else {
+        Vec::new()
+    };
+
     let mut tags: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     if let Some(tag_list) = input["Tags"].as_array() {
         for tag in tag_list {
@@ -223,6 +322,8 @@ pub fn put_parameter(
 
         existing.tier = tier.to_string();
         existing.key_id = key_id;
+        existing.policies = policies;
+        existing.policy_text = policy_text.map(str::to_string);
         let version = existing.version;
         info!(name, version, "Updated parameter");
         return Ok(json!({ "Version": version, "Tier": tier }));
@@ -241,6 +342,8 @@ pub fn put_parameter(
         tier: tier.to_string(),
         labels: Vec::new(),
         key_id,
+        policies,
+        policy_text: policy_text.map(str::to_string),
     };
 
     info!(name, "Created parameter");
@@ -1298,5 +1401,136 @@ mod secure_string_key_id_tests {
             .map(|p| p["Name"].as_str().unwrap().to_string())
             .collect();
         assert_eq!(names, vec!["/b"]);
+    }
+}
+
+#[cfg(test)]
+mod parameter_policy_tests {
+    use super::*;
+
+    fn ctx() -> awsim_core::RequestContext {
+        awsim_core::RequestContext::new("ssm", "us-east-1")
+    }
+
+    fn policies(items: &[(&str, &str, &str, &str)]) -> String {
+        let arr: Vec<Value> = items
+            .iter()
+            .map(|(t, k, v, unit)| {
+                let mut attrs = serde_json::Map::new();
+                attrs.insert(k.to_string(), json!(v));
+                if !unit.is_empty() {
+                    attrs.insert("Unit".to_string(), json!(unit));
+                }
+                json!({
+                    "Type": t,
+                    "Version": "1.0",
+                    "Attributes": Value::Object(attrs),
+                })
+            })
+            .collect();
+        serde_json::to_string(&arr).unwrap()
+    }
+
+    #[test]
+    fn standard_tier_rejects_policies() {
+        let state = SsmState::default();
+        let err = put_parameter(
+            &state,
+            &json!({
+                "Name": "/p",
+                "Value": "v",
+                "Type": "String",
+                "Policies": policies(&[("Expiration", "Timestamp", "2099-01-01T00:00:00Z", "")]),
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("Advanced"));
+    }
+
+    #[test]
+    fn advanced_tier_persists_policies_and_marks_pending() {
+        let state = SsmState::default();
+        put_parameter(
+            &state,
+            &json!({
+                "Name": "/p",
+                "Value": "v",
+                "Type": "String",
+                "Tier": "Advanced",
+                "Policies": policies(&[
+                    ("Expiration", "Timestamp", "2099-01-01T00:00:00Z", ""),
+                    ("ExpirationNotification", "Before", "30", "Days"),
+                ]),
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let stored = state.parameters.get("/p").unwrap();
+        assert_eq!(stored.policies.len(), 2);
+        assert_eq!(stored.policies[0]["PolicyStatus"], "Pending");
+        assert_eq!(stored.policies[1]["Type"], "ExpirationNotification");
+    }
+
+    #[test]
+    fn unknown_policy_type_is_rejected() {
+        let state = SsmState::default();
+        let err = put_parameter(
+            &state,
+            &json!({
+                "Name": "/p",
+                "Value": "v",
+                "Type": "String",
+                "Tier": "Advanced",
+                "Policies": policies(&[("MysteryPolicy", "Foo", "bar", "")]),
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("MysteryPolicy"));
+    }
+
+    #[test]
+    fn expiration_requires_timestamp() {
+        let state = SsmState::default();
+        let raw = r#"[{"Type":"Expiration","Version":"1.0","Attributes":{}}]"#;
+        let err = put_parameter(
+            &state,
+            &json!({
+                "Name": "/p",
+                "Value": "v",
+                "Type": "String",
+                "Tier": "Advanced",
+                "Policies": raw,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("Timestamp"));
+    }
+
+    #[test]
+    fn describe_parameters_surfaces_policies() {
+        let state = SsmState::default();
+        put_parameter(
+            &state,
+            &json!({
+                "Name": "/p",
+                "Value": "v",
+                "Type": "String",
+                "Tier": "Advanced",
+                "Policies": policies(&[("NoChangeNotification", "After", "15", "Days")]),
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = describe_parameters(&state, &json!({}), &ctx()).unwrap();
+        let first = resp["Parameters"].as_array().unwrap().first().unwrap();
+        let pols = first["Policies"].as_array().unwrap();
+        assert_eq!(pols.len(), 1);
+        assert_eq!(pols[0]["Type"], "NoChangeNotification");
     }
 }

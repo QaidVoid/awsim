@@ -34,6 +34,13 @@ pub struct Parameter {
     /// defaults to `alias/aws/ssm` when the caller omits KeyId. Other
     /// parameter types must not carry a KeyId.
     pub key_id: Option<String>,
+    /// Stored ParameterPolicies JSON. AWS-only allowed on Advanced or
+    /// Intelligent-Tiering parameters; each entry has Type, Version,
+    /// Attributes and an evaluated PolicyStatus.
+    pub policies: Vec<serde_json::Value>,
+    /// Raw Policies string as supplied by the caller; AWS surfaces this
+    /// verbatim under `Policies` on GetParameter responses.
+    pub policy_text: Option<String>,
 }
 
 /// A stored SSM Run Command record (stub).
