@@ -504,12 +504,38 @@ pub fn label_parameter_version(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
 
-    let labels: Vec<String> = input["Labels"]
+    let raw_labels: Vec<String> = input["Labels"]
         .as_array()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Labels is required"))?
         .iter()
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
         .collect();
+
+    // AWS caps the request at 10 labels per call.
+    if raw_labels.len() > 10 {
+        return Err(AwsError::bad_request(
+            "ParameterVersionLabelLimitExceeded",
+            format!(
+                "A maximum of 10 labels may be supplied per LabelParameterVersion call \
+                 ({} supplied).",
+                raw_labels.len()
+            ),
+        ));
+    }
+
+    // Partition labels into accepted (passes shape checks) vs invalid
+    // (reported in `InvalidLabels`). AWS does not error the whole call
+    // when some labels are invalid; the caller is expected to inspect
+    // InvalidLabels.
+    let mut labels: Vec<String> = Vec::new();
+    let mut invalid: Vec<String> = Vec::new();
+    for label in &raw_labels {
+        if is_valid_label(label) {
+            labels.push(label.clone());
+        } else {
+            invalid.push(label.clone());
+        }
+    }
 
     let requested_version = input["ParameterVersion"].as_u64();
 
@@ -517,40 +543,217 @@ pub fn label_parameter_version(
         AwsError::bad_request("ParameterNotFound", format!("Parameter {name} not found"))
     })?;
 
-    // If a specific version is given, apply to history; otherwise apply to current
-    if let Some(ver) = requested_version {
-        if ver == param.version {
-            for label in &labels {
-                if !param.labels.contains(label) {
-                    param.labels.push(label.clone());
-                }
-            }
-        } else {
-            let found = param.history.iter_mut().find(|h| h.version == ver);
-            if let Some(h) = found {
-                for label in &labels {
-                    if !h.labels.contains(label) {
-                        h.labels.push(label.clone());
-                    }
-                }
-            } else {
+    // Determine the target version up front so we know where to attach
+    // labels and which other versions to strip them from.
+    let target_version = match requested_version {
+        Some(ver) => {
+            if ver != param.version && !param.history.iter().any(|h| h.version == ver) {
                 return Err(AwsError::bad_request(
                     "ParameterVersionNotFound",
                     format!("Version {ver} of parameter {name} not found"),
                 ));
             }
+            ver
         }
-    } else {
-        // Apply to current version
+        None => param.version,
+    };
+
+    // AWS allows a label to live on exactly one version of a parameter
+    // — calling LabelParameterVersion with the same label moves it from
+    // wherever it was before to the requested version. Strip the labels
+    // from every other version (current + history) before we add them
+    // to the target.
+    if param.version != target_version {
+        param.labels.retain(|l| !labels.contains(l));
+    }
+    for h in &mut param.history {
+        if h.version != target_version {
+            h.labels.retain(|l| !labels.contains(l));
+        }
+    }
+
+    if target_version == param.version {
         for label in &labels {
             if !param.labels.contains(label) {
                 param.labels.push(label.clone());
             }
         }
+    } else if let Some(h) = param
+        .history
+        .iter_mut()
+        .find(|h| h.version == target_version)
+    {
+        for label in &labels {
+            if !h.labels.contains(label) {
+                h.labels.push(label.clone());
+            }
+        }
     }
 
     Ok(json!({
-        "InvalidLabels": [],
-        "ParameterVersion": param.version,
+        "InvalidLabels": invalid,
+        "ParameterVersion": target_version,
     }))
+}
+
+/// Validate a Parameter Store label against AWS's documented constraints:
+///   * length 1..=100
+///   * `[A-Za-z0-9_.-]+` (no whitespace, no slashes)
+///   * may not start with `aws` (case-insensitive) or `ssm`
+///   * may not start with a digit, period, or hyphen
+fn is_valid_label(label: &str) -> bool {
+    if !(1..=100).contains(&label.len()) {
+        return false;
+    }
+    let lower = label.to_ascii_lowercase();
+    if lower.starts_with("aws") || lower.starts_with("ssm") {
+        return false;
+    }
+    let mut chars = label.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return false;
+    }
+    label
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
+
+#[cfg(test)]
+mod label_parameter_tests {
+    use super::*;
+
+    #[test]
+    fn valid_labels_pass() {
+        assert!(is_valid_label("prod"));
+        assert!(is_valid_label("blue-green"));
+        assert!(is_valid_label("Release_1.2"));
+        assert!(is_valid_label("_internal"));
+    }
+
+    #[test]
+    fn invalid_labels_rejected() {
+        assert!(!is_valid_label(""));
+        assert!(!is_valid_label("aws-reserved"));
+        assert!(!is_valid_label("AWS-Foo"));
+        assert!(!is_valid_label("ssm-thing"));
+        assert!(!is_valid_label("1prod"));
+        assert!(!is_valid_label("-prod"));
+        assert!(!is_valid_label("with space"));
+        assert!(!is_valid_label("with/slash"));
+    }
+
+    fn ctx() -> awsim_core::RequestContext {
+        awsim_core::RequestContext::new("ssm", "us-east-1")
+    }
+
+    fn make_param(state: &SsmState, name: &str, n_versions: u64) {
+        for i in 1..=n_versions {
+            put_parameter(
+                state,
+                &json!({
+                    "Name": name,
+                    "Value": format!("v{i}"),
+                    "Type": "String",
+                    "Overwrite": i > 1,
+                }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn label_attaches_to_current_version_when_no_version_specified() {
+        let state = SsmState::default();
+        make_param(&state, "p1", 2);
+        let resp =
+            label_parameter_version(&state, &json!({ "Name": "p1", "Labels": ["prod"] }), &ctx())
+                .unwrap();
+        assert_eq!(resp["ParameterVersion"], 2);
+        assert_eq!(resp["InvalidLabels"].as_array().unwrap().len(), 0);
+        assert!(
+            state
+                .parameters
+                .get("p1")
+                .unwrap()
+                .labels
+                .contains(&"prod".to_string())
+        );
+    }
+
+    #[test]
+    fn label_moves_between_versions() {
+        let state = SsmState::default();
+        make_param(&state, "p2", 3);
+        // Attach to version 2
+        label_parameter_version(
+            &state,
+            &json!({ "Name": "p2", "Labels": ["prod"], "ParameterVersion": 2 }),
+            &ctx(),
+        )
+        .unwrap();
+        // Now move it to the current version (3)
+        label_parameter_version(&state, &json!({ "Name": "p2", "Labels": ["prod"] }), &ctx())
+            .unwrap();
+        let p = state.parameters.get("p2").unwrap();
+        assert!(
+            p.labels.contains(&"prod".to_string()),
+            "label must end up on current version"
+        );
+        let v2 = p.history.iter().find(|h| h.version == 2).unwrap();
+        assert!(
+            !v2.labels.contains(&"prod".to_string()),
+            "label must be stripped from prior version"
+        );
+    }
+
+    #[test]
+    fn invalid_labels_returned_without_failing_call() {
+        let state = SsmState::default();
+        make_param(&state, "p3", 1);
+        let resp = label_parameter_version(
+            &state,
+            &json!({ "Name": "p3", "Labels": ["good", "aws-bad", "1bad"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let invalid = resp["InvalidLabels"].as_array().unwrap();
+        assert_eq!(invalid.len(), 2);
+        assert!(
+            state
+                .parameters
+                .get("p3")
+                .unwrap()
+                .labels
+                .contains(&"good".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_more_than_10_labels_per_call() {
+        let state = SsmState::default();
+        make_param(&state, "p4", 1);
+        let labels: Vec<String> = (0..11).map(|i| format!("l{i}")).collect();
+        let err =
+            label_parameter_version(&state, &json!({ "Name": "p4", "Labels": labels }), &ctx())
+                .unwrap_err();
+        assert_eq!(err.code, "ParameterVersionLabelLimitExceeded");
+    }
+
+    #[test]
+    fn unknown_version_returns_parameter_version_not_found() {
+        let state = SsmState::default();
+        make_param(&state, "p5", 1);
+        let err = label_parameter_version(
+            &state,
+            &json!({ "Name": "p5", "Labels": ["x"], "ParameterVersion": 99 }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ParameterVersionNotFound");
+    }
 }
