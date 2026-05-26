@@ -64,6 +64,28 @@ pub fn create_listener(
 
     let protocol = opt_str(input, "Protocol").unwrap_or("HTTP").to_string();
 
+    // AWS requires at least one Certificates[] entry when the listener
+    // terminates TLS. Surface the documented CertificateNotFound error
+    // up front so SDKs don't get a half-configured listener that fails
+    // at TLS handshake time.
+    if matches!(protocol.as_str(), "HTTPS" | "TLS") {
+        let has_cert = input
+            .get("Certificates")
+            .and_then(Value::as_array)
+            .is_some_and(|arr| {
+                arr.iter()
+                    .any(|c| c.get("CertificateArn").and_then(Value::as_str).is_some())
+            });
+        if !has_cert {
+            return Err(awsim_core::AwsError::bad_request(
+                "CertificateNotFound",
+                format!(
+                    "Listener protocol `{protocol}` requires at least one Certificates entry with a CertificateArn."
+                ),
+            ));
+        }
+    }
+
     let default_actions = parse_actions(input, "DefaultActions");
 
     let arn = listener_arn(&ctx.region, &ctx.account_id, &lb_name, &lb_rand);
@@ -317,4 +339,88 @@ pub fn parse_actions(input: &Value, key: &str) -> Vec<ListenerAction> {
     }
 
     actions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::LoadBalancer;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("elasticloadbalancing", "us-east-1")
+    }
+
+    fn state_with_lb() -> (ElbState, String) {
+        let state = ElbState::default();
+        let arn = "arn:aws:elasticloadbalancing:us-east-1:000000000000:loadbalancer/app/web/abc"
+            .to_string();
+        state.load_balancers.insert(
+            arn.clone(),
+            LoadBalancer {
+                arn: arn.clone(),
+                name: "web".to_string(),
+                dns_name: "web.elb".to_string(),
+                lb_type: "application".to_string(),
+                scheme: "internet-facing".to_string(),
+                state: "active".to_string(),
+                subnets: vec![],
+                security_groups: vec![],
+                tags: HashMap::new(),
+                created_at: "now".to_string(),
+                vpc_id: "vpc-test".to_string(),
+            },
+        );
+        (state, arn)
+    }
+
+    #[test]
+    fn create_listener_rejects_https_without_certificate() {
+        let (state, lb_arn) = state_with_lb();
+        let err = create_listener(
+            &state,
+            &json!({
+                "LoadBalancerArn": lb_arn,
+                "Protocol": "HTTPS",
+                "Port": 443,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "CertificateNotFound");
+    }
+
+    #[test]
+    fn create_listener_accepts_https_with_certificate() {
+        let (state, lb_arn) = state_with_lb();
+        create_listener(
+            &state,
+            &json!({
+                "LoadBalancerArn": lb_arn,
+                "Protocol": "HTTPS",
+                "Port": 443,
+                "Certificates": [{
+                    "CertificateArn": "arn:aws:acm:us-east-1:000000000000:certificate/x"
+                }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn create_listener_http_does_not_require_certificate() {
+        let (state, lb_arn) = state_with_lb();
+        create_listener(
+            &state,
+            &json!({
+                "LoadBalancerArn": lb_arn,
+                "Protocol": "HTTP",
+                "Port": 80,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
 }
