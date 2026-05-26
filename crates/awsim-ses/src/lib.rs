@@ -717,4 +717,31 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "BadRequestException");
     }
+
+    #[test]
+    fn put_suppressed_destination_round_trips_and_validates_reason() {
+        let svc = SesService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutSuppressedDestination",
+            json!({ "EmailAddress": "x@example.com", "Reason": "COMPLAINT" }),
+            &ctx,
+        ))
+        .unwrap();
+        let got = block_on(svc.handle(
+            "GetSuppressedDestination",
+            json!({ "EmailAddress": "x@example.com" }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(got["SuppressedDestination"]["Reason"], "COMPLAINT");
+
+        let err = block_on(svc.handle(
+            "PutSuppressedDestination",
+            json!({ "EmailAddress": "y@example.com", "Reason": "MANUAL" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
+    }
 }

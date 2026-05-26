@@ -412,6 +412,12 @@ pub fn put_suppressed_destination(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EmailAddress is required"))?;
     let reason = input["Reason"].as_str().unwrap_or("BOUNCE").to_string();
+    if !matches!(reason.as_str(), "BOUNCE" | "COMPLAINT") {
+        return Err(AwsError::bad_request(
+            "BadRequestException",
+            format!("Reason `{reason}` must be BOUNCE or COMPLAINT."),
+        ));
+    }
     state.suppressed_destinations.insert(
         email.to_string(),
         SuppressedDestination {
