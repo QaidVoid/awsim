@@ -392,7 +392,7 @@ pub fn put_secret_value(
 pub fn describe_secret(
     state: &SecretsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let secret_id = input["SecretId"]
         .as_str()
@@ -404,7 +404,13 @@ pub fn describe_secret(
         .get(&name)
         .ok_or_else(|| error::resource_not_found(secret_id))?;
 
-    Ok(secret_metadata(&secret))
+    let mut meta = secret_metadata(&secret);
+    meta["OwnerAccountId"] = json!(ctx.account_id);
+    meta["PrimaryRegion"] = json!(ctx.region);
+    // No cross-region replication state today; AWS returns an empty
+    // ReplicationStatus array for secrets without AddReplicaRegions.
+    meta["ReplicationStatus"] = json!([]);
+    Ok(meta)
 }
 
 // ---------------------------------------------------------------------------
@@ -1115,11 +1121,18 @@ pub fn list_secret_version_ids(
         .filter(|(_, v)| include_deprecated || !v.stages.is_empty())
         .map(|(vid, v)| {
             let stages: Vec<Value> = v.stages.iter().map(|s| json!(s)).collect();
-            json!({
+            let mut entry = json!({
                 "VersionId": vid,
                 "VersionStages": stages,
                 "CreatedDate": v.created_date,
-            })
+            });
+            if let Some(ts) = secret.last_accessed_date {
+                entry["LastAccessedDate"] = json!(ts);
+            }
+            if let Some(ts) = secret.last_rotated_date {
+                entry["LastRotatedDate"] = json!(ts);
+            }
+            entry
         })
         .collect();
 
