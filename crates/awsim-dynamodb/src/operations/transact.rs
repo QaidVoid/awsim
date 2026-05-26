@@ -186,6 +186,19 @@ pub fn transact_write_items(
         )));
     }
 
+    // AWS caps the total TransactWriteItems payload at 4 MB. Use the
+    // serialized JSON size of the TransactItems array as a reasonable
+    // proxy for the wire payload.
+    const TRANSACT_WRITE_MAX_PAYLOAD: usize = 4 * 1024 * 1024;
+    let payload_size = serde_json::to_vec(transact_items)
+        .map(|b| b.len())
+        .unwrap_or(0);
+    if payload_size > TRANSACT_WRITE_MAX_PAYLOAD {
+        return Err(AwsError::validation(format!(
+            "TransactWriteItems payload is {payload_size} bytes; maximum is {TRANSACT_WRITE_MAX_PAYLOAD}.",
+        )));
+    }
+
     // Translate each transact-item into a fully-resolved Action up front.
     // We do schema-dependent key extraction here while the in-memory
     // schema cache is in scope; the sqlite txn body just runs the actions.
