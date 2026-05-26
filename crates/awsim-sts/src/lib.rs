@@ -125,6 +125,9 @@ impl StsService {
 
         validate_role_arn(role_arn)?;
         validate_role_session_name(session_name)?;
+        if let Some(source_identity) = input["SourceIdentity"].as_str() {
+            validate_source_identity(source_identity)?;
+        }
         validate_session_tags(input)?;
         validate_session_policies(input)?;
 
@@ -318,10 +321,22 @@ impl StsService {
             .as_str()
             .ok_or_else(|| AwsError::validation("AccessKeyId is required"))?;
 
-        if key.len() < 16 {
+        // AWS access key IDs are 20 chars: prefix AKIA (long-lived) or
+        // ASIA (temporary STS-issued) followed by 16 uppercase
+        // alphanumerics.
+        let valid_prefix = key.starts_with("AKIA") || key.starts_with("ASIA");
+        let valid_shape = key.len() == 20
+            && valid_prefix
+            && key[4..]
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+        if !valid_shape {
             return Err(AwsError::bad_request(
-                "InvalidParameter",
-                "AccessKeyId must be at least 16 characters",
+                "InvalidParameterValue",
+                format!(
+                    "AccessKeyId `{key}` is not a valid AWS access key id; \
+                     expected AKIA/ASIA + 16 uppercase alphanumerics."
+                ),
             ));
         }
 
@@ -508,6 +523,18 @@ fn validate_role_session_name(name: &str) -> Result<(), AwsError> {
     if !(2..=64).contains(&name.len()) || !name.chars().all(is_iam_name_char) {
         return Err(AwsError::validation(format!(
             "1 validation error detected: Value '{name}' at 'roleSessionName' \
+             failed to satisfy constraint: Member must satisfy regular \
+             expression pattern: [\\w+=,.@-]{{2,64}}"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate `SourceIdentity` per Smithy: 2..=64 chars from `[\w+=,.@-]`.
+fn validate_source_identity(name: &str) -> Result<(), AwsError> {
+    if !(2..=64).contains(&name.len()) || !name.chars().all(is_iam_name_char) {
+        return Err(AwsError::validation(format!(
+            "1 validation error detected: Value '{name}' at 'sourceIdentity' \
              failed to satisfy constraint: Member must satisfy regular \
              expression pattern: [\\w+=,.@-]{{2,64}}"
         )));
@@ -1175,6 +1202,70 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn test_assume_role_rejects_invalid_source_identity() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                    "RoleSessionName": "session",
+                    "SourceIdentity": "has spaces!",
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("sourceIdentity"));
+    }
+
+    #[test]
+    fn test_assume_role_accepts_valid_source_identity() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        svc.assume_role(
+            &json!({
+                "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                "RoleSessionName": "session",
+                "SourceIdentity": "audit-bot.v2",
+            }),
+            &ctx,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_get_access_key_info_accepts_aws_format() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        svc.get_access_key_info(&json!({ "AccessKeyId": "AKIAIOSFODNN7EXAMPLE" }), &ctx)
+            .unwrap();
+        svc.get_access_key_info(&json!({ "AccessKeyId": "ASIA1234567890ABCDEF" }), &ctx)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_get_access_key_info_rejects_bad_format() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        // Wrong prefix.
+        assert!(
+            svc.get_access_key_info(&json!({ "AccessKeyId": "BKIA1234567890ABCDEF" }), &ctx)
+                .is_err()
+        );
+        // Wrong length.
+        assert!(
+            svc.get_access_key_info(&json!({ "AccessKeyId": "AKIA1234" }), &ctx)
+                .is_err()
+        );
+        // Lowercase chars in the body.
+        assert!(
+            svc.get_access_key_info(&json!({ "AccessKeyId": "AKIAabcdefghijklmnop" }), &ctx)
+                .is_err()
+        );
     }
 
     #[test]
