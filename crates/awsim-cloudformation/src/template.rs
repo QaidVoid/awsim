@@ -41,6 +41,30 @@ pub struct ParameterDef {
 }
 
 /// Parse a template body (JSON or YAML) and return the raw Value.
+/// Validate the `<vendor>::<service>::<resource>` shape that CFN uses
+/// for all resource types. Real CFN looks the type up against a
+/// registry; we accept any well-formed name under the documented
+/// vendor prefixes (`AWS`, `Custom`, `Alexa`).
+fn is_valid_resource_type(t: &str) -> bool {
+    // Custom resources are `Custom::<Name>` (single double-colon).
+    if let Some(rest) = t.strip_prefix("Custom::") {
+        return !rest.is_empty()
+            && rest
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
+    }
+    let parts: Vec<&str> = t.split("::").collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    if !matches!(parts[0], "AWS" | "Alexa") {
+        return false;
+    }
+    parts[1..]
+        .iter()
+        .all(|seg| !seg.is_empty() && seg.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
 pub fn parse_template_body(body: &str) -> Result<Value, AwsError> {
     let trimmed = body.trim();
 
@@ -144,6 +168,19 @@ pub fn validate_and_parse(
                 invalid_template(format!("Resource '{logical_id}' must have a 'Type' field"))
             })?
             .to_string();
+
+        // CFN resource type names follow `<vendor>::<service>::<resource>`
+        // where vendor is `AWS`, `Custom`, or `Alexa`. Anything outside
+        // that shape is a malformed template and AWS surfaces it as
+        // `ValidationError` (with the offending logical id). Catching it
+        // here is cheap and avoids letting nonsense flow through to the
+        // resource-provisioning event sink.
+        if !is_valid_resource_type(&resource_type) {
+            return Err(invalid_template(format!(
+                "Resource '{logical_id}' has unknown resource type '{resource_type}'. \
+                 Expected `AWS::<Service>::<Resource>`, `Custom::<Name>`, or `Alexa::<Service>::<Resource>`."
+            )));
+        }
 
         let properties = resource
             .get("Properties")
@@ -618,6 +655,31 @@ fn topological_sort(resources: Vec<ResourceDef>) -> Result<Vec<ResourceDef>, Str
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn validates_resource_type_format() {
+        assert!(is_valid_resource_type("AWS::S3::Bucket"));
+        assert!(is_valid_resource_type("AWS::EC2::VPC"));
+        assert!(is_valid_resource_type("Alexa::ASK::Skill"));
+        assert!(is_valid_resource_type("Custom::MyResource"));
+        assert!(!is_valid_resource_type(""));
+        assert!(!is_valid_resource_type("S3::Bucket"));
+        assert!(!is_valid_resource_type("AWS::"));
+        assert!(!is_valid_resource_type("AWS::S3"));
+        assert!(!is_valid_resource_type("Bogus::Service::Thing"));
+        assert!(!is_valid_resource_type("AWS::S3::Bucket::Extra"));
+    }
+
+    #[test]
+    fn rejects_unknown_resource_type_in_template() {
+        let body = r#"{
+            "Resources": {
+                "X": { "Type": "Bogus::Service::Thing" }
+            }
+        }"#;
+        let err = validate_and_parse(body, &HashMap::new()).unwrap_err();
+        assert!(err.message.contains("unknown resource type"));
+    }
 
     #[test]
     fn test_parse_json_template() {
