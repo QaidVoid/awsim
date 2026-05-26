@@ -134,7 +134,7 @@ pub fn create_user_pool(
     let now = now_epoch();
 
     // Parse policies from input
-    let policies = parse_password_policy(&input["Policies"]["PasswordPolicy"]);
+    let policies = parse_password_policy(&input["Policies"]["PasswordPolicy"])?;
 
     let mfa_configuration = input["MfaConfiguration"]
         .as_str()
@@ -318,7 +318,7 @@ pub fn update_user_pool(
     })?;
 
     if !input["Policies"]["PasswordPolicy"].is_null() {
-        pool.policies = parse_password_policy(&input["Policies"]["PasswordPolicy"]);
+        pool.policies = parse_password_policy(&input["Policies"]["PasswordPolicy"])?;
     }
 
     if let Some(mfa) = input["MfaConfiguration"].as_str() {
@@ -952,12 +952,32 @@ pub fn schema_attr_to_value(attr: &SchemaAttribute) -> Value {
     obj
 }
 
-fn parse_password_policy(v: &Value) -> PasswordPolicy {
+fn parse_password_policy(v: &Value) -> Result<PasswordPolicy, AwsError> {
     let default = PasswordPolicy::default();
-    PasswordPolicy {
-        minimum_length: v["MinimumLength"]
-            .as_u64()
-            .unwrap_or(default.minimum_length as u64) as u32,
+    let minimum_length = v["MinimumLength"]
+        .as_u64()
+        .unwrap_or(default.minimum_length as u64);
+    if !(6..=99).contains(&minimum_length) {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!(
+                "Policies.PasswordPolicy.MinimumLength must be between 6 and 99 (got {minimum_length})."
+            ),
+        ));
+    }
+    let temporary_password_validity_days = v["TemporaryPasswordValidityDays"]
+        .as_u64()
+        .unwrap_or(default.temporary_password_validity_days as u64);
+    if temporary_password_validity_days > 365 {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!(
+                "Policies.PasswordPolicy.TemporaryPasswordValidityDays must be at most 365 (got {temporary_password_validity_days})."
+            ),
+        ));
+    }
+    Ok(PasswordPolicy {
+        minimum_length: minimum_length as u32,
         require_lowercase: v["RequireLowercase"]
             .as_bool()
             .unwrap_or(default.require_lowercase),
@@ -970,11 +990,8 @@ fn parse_password_policy(v: &Value) -> PasswordPolicy {
         require_symbols: v["RequireSymbols"]
             .as_bool()
             .unwrap_or(default.require_symbols),
-        temporary_password_validity_days: v["TemporaryPasswordValidityDays"]
-            .as_u64()
-            .unwrap_or(default.temporary_password_validity_days as u64)
-            as u32,
-    }
+        temporary_password_validity_days: temporary_password_validity_days as u32,
+    })
 }
 
 fn parse_lambda_config(v: &Value) -> HashMap<String, String> {
