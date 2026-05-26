@@ -35,6 +35,15 @@ fn instance_to_value(i: &Instance) -> Value {
         "launchTime": i.launch_time,
         "reservationId": i.reservation_id,
         "tagSet": { "item": tags },
+        // Enhanced networking flags: AWS turns these on for the
+        // modern instance families that support them. Real AWS sets
+        // EnaSupport=true on Nitro-era types and `SriovNetSupport`
+        // (a string, not a bool) to `"simple"` on any instance that
+        // supports the older Intel 82599 VF driver. We treat the
+        // synthetic instances as Nitro by default so SDKs that key
+        // off the flag see the modern value.
+        "enaSupport": true,
+        "sriovNetSupport": "simple",
     })
 }
 
@@ -714,5 +723,18 @@ mod tests {
             describe_instance_attribute(&state, &json!({ "InstanceId": id, "Attribute": "magic" }))
                 .unwrap_err();
         assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn run_instances_surfaces_ena_and_sriov_flags() {
+        let state = Ec2State::default();
+        let resp = run_instances(
+            &state,
+            &json!({ "ImageId": "ami-12345678", "MinCount": 1, "MaxCount": 1 }),
+        )
+        .unwrap();
+        let inst = &resp["instancesSet"]["item"][0];
+        assert_eq!(inst["enaSupport"], true);
+        assert_eq!(inst["sriovNetSupport"], "simple");
     }
 }
