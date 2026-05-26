@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use dashmap::DashMap;
 
@@ -106,6 +106,13 @@ pub struct SesState {
     pub custom_verification_templates: DashMap<String, CustomVerificationTemplate>,
     pub identity_policies: DashMap<String, HashMap<String, String>>,
     pub identity_tags: DashMap<String, HashMap<String, String>>,
+    /// Account-level VDM attributes: stored verbatim and returned by
+    /// `GetAccount`. AWS shape:
+    /// `{ VdmEnabled: ENABLED|DISABLED, DashboardAttributes?: {...}, GuardianAttributes?: {...} }`.
+    pub account_vdm_attributes: Mutex<Option<serde_json::Value>>,
+    /// Account-level suppression attributes:
+    /// `{ SuppressedReasons: [BOUNCE | COMPLAINT] }`.
+    pub account_suppression_attributes: Mutex<Option<serde_json::Value>>,
     /// Outbound email persistence — populated by `SesService` on the
     /// first `get_state()` call so operations can write to it without
     /// holding a service handle.

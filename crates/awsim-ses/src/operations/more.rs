@@ -825,10 +825,48 @@ pub fn put_account_sending_attributes(
 }
 
 pub fn put_account_suppression_attributes(
-    _state: &SesState,
-    _input: &Value,
+    state: &SesState,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    let reasons = input["SuppressedReasons"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    for r in &reasons {
+        let s = r.as_str().unwrap_or("");
+        if !matches!(s, "BOUNCE" | "COMPLAINT") {
+            return Err(AwsError::bad_request(
+                "BadRequestException",
+                format!("SuppressedReasons entry `{s}` must be BOUNCE or COMPLAINT."),
+            ));
+        }
+    }
+    *state.account_suppression_attributes.lock().unwrap() =
+        Some(json!({ "SuppressedReasons": reasons }));
+    Ok(json!({}))
+}
+
+pub fn put_account_vdm_attributes(
+    state: &SesState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let vdm = input["VdmAttributes"].clone();
+    if !vdm.is_object() {
+        return Err(AwsError::bad_request(
+            "BadRequestException",
+            "VdmAttributes is required and must be an object.",
+        ));
+    }
+    let enabled = vdm["VdmEnabled"].as_str().unwrap_or("");
+    if !matches!(enabled, "ENABLED" | "DISABLED") {
+        return Err(AwsError::bad_request(
+            "BadRequestException",
+            "VdmAttributes.VdmEnabled must be ENABLED or DISABLED.",
+        ));
+    }
+    *state.account_vdm_attributes.lock().unwrap() = Some(vdm);
     Ok(json!({}))
 }
 

@@ -8,11 +8,17 @@ use crate::state::SesState;
 // ---------------------------------------------------------------------------
 
 pub fn get_account(
-    _state: &SesState,
+    state: &SesState,
     _input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    Ok(json!({
+    let suppression = state
+        .account_suppression_attributes
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| json!({ "SuppressedReasons": [] }));
+    let mut response = json!({
         "DedicatedIpAutoWarmupEnabled": false,
         "EnforcementStatus": "HEALTHY",
         "ProductionAccessEnabled": true,
@@ -22,13 +28,15 @@ pub fn get_account(
             "MaxSendRate": 14.0,
             "SentLast24Hours": 0.0
         },
-        "SuppressionAttributes": {
-            "SuppressedReasons": []
-        },
+        "SuppressionAttributes": suppression,
         "Details": {
             "MailType": "TRANSACTIONAL",
             "WebsiteURL": "https://awsim.local",
             "UseCaseDescription": "Local development emulator"
         }
-    }))
+    });
+    if let Some(vdm) = state.account_vdm_attributes.lock().unwrap().clone() {
+        response["VdmAttributes"] = vdm;
+    }
+    Ok(response)
 }

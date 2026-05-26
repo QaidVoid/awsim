@@ -259,6 +259,12 @@ impl ServiceHandler for SesService {
                 required_query_param: None,
             },
             RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/account/vdm",
+                operation: "PutAccountVdmAttributes",
+                required_query_param: None,
+            },
+            RouteDefinition {
                 method: "POST",
                 path_pattern: "/v2/email/configuration-sets",
                 operation: "CreateConfigurationSet",
@@ -544,6 +550,9 @@ impl ServiceHandler for SesService {
             "PutAccountDedicatedIpWarmupAttributes" => {
                 operations::more::put_account_dedicated_ip_warmup_attributes(&state, &input, ctx)
             }
+            "PutAccountVdmAttributes" => {
+                operations::more::put_account_vdm_attributes(&state, &input, ctx)
+            }
             "CreateConfigurationSet" => {
                 operations::more::create_configuration_set(&state, &input, ctx)
             }
@@ -620,5 +629,92 @@ impl ServiceHandler for SesService {
             "GetBlacklistReports" => operations::more::get_blacklist_reports(&state, &input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("ses", "us-east-1")
+    }
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+        fn noop_clone(_: *const ()) -> RawWaker {
+            noop_raw_waker()
+        }
+        fn noop(_: *const ()) {}
+        fn noop_raw_waker() -> RawWaker {
+            static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+        let waker = unsafe { Waker::from_raw(noop_raw_waker()) };
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = std::pin::pin!(f);
+        loop {
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(v) => return v,
+                Poll::Pending => {}
+            }
+        }
+    }
+
+    #[test]
+    fn put_then_get_account_round_trips_vdm_and_suppression() {
+        let svc = SesService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutAccountSuppressionAttributes",
+            json!({ "SuppressedReasons": ["BOUNCE"] }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "PutAccountVdmAttributes",
+            json!({
+                "VdmAttributes": {
+                    "VdmEnabled": "ENABLED",
+                    "DashboardAttributes": { "EngagementMetrics": "ENABLED" }
+                }
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let got = block_on(svc.handle("GetAccount", json!({}), &ctx)).unwrap();
+        assert_eq!(
+            got["SuppressionAttributes"]["SuppressedReasons"][0],
+            "BOUNCE"
+        );
+        assert_eq!(got["VdmAttributes"]["VdmEnabled"], "ENABLED");
+    }
+
+    #[test]
+    fn put_account_suppression_attributes_rejects_unknown_reason() {
+        let svc = SesService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "PutAccountSuppressionAttributes",
+            json!({ "SuppressedReasons": ["SPAM"] }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
+    }
+
+    #[test]
+    fn put_account_vdm_attributes_rejects_invalid_enabled() {
+        let svc = SesService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "PutAccountVdmAttributes",
+            json!({ "VdmAttributes": { "VdmEnabled": "MAYBE" } }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
     }
 }
