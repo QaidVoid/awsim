@@ -76,6 +76,8 @@ pub struct DbCluster {
     /// instance identifiers
     pub members: Vec<String>,
     pub created_at: String,
+    #[serde(default)]
+    pub vpc_security_groups: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

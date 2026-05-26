@@ -25,6 +25,10 @@ fn cluster_to_value(c: &DbCluster) -> Value {
             "DBInstanceIdentifier": m,
             "IsClusterWriter": true,
         })).collect::<Vec<_>>(),
+        "VpcSecurityGroups": c.vpc_security_groups.iter().map(|sg| json!({
+            "VpcSecurityGroupId": sg,
+            "Status": "active",
+        })).collect::<Vec<_>>(),
         "ClusterCreateTime": c.created_at,
     })
 }
@@ -61,6 +65,15 @@ pub fn create_db_cluster(
     let endpoint = cluster_endpoint(identifier, &ctx.region);
     let reader_endpoint = cluster_reader_endpoint(identifier, &ctx.region);
 
+    let vpc_security_groups: Vec<String> = input["VpcSecurityGroupIds"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let cluster = DbCluster {
         identifier: identifier.to_string(),
         arn: arn.clone(),
@@ -72,6 +85,7 @@ pub fn create_db_cluster(
         reader_endpoint,
         members: vec![],
         created_at: now_iso8601(),
+        vpc_security_groups,
     };
 
     let result = cluster_to_value(&cluster);
