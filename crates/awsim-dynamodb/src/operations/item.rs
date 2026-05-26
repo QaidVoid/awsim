@@ -32,7 +32,7 @@ fn fetch_existing(
 use super::reject_attrs_to_get_with_projection;
 use super::{
     build_consumed_capacity, get_expr_attr_names, get_expr_attr_values, opt_str,
-    read_capacity_units, require_str, write_capacity_units,
+    read_capacity_units, require_str, validate_expr_attr_values, write_capacity_units,
 };
 
 /// Build a `ConditionalCheckFailedException` matching the real DynamoDB shape:
@@ -288,6 +288,7 @@ pub fn put_item(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?.to_string();
+    validate_expr_attr_values(input)?;
 
     let item = parse_item(&input["Item"])
         .ok_or_else(|| AwsError::validation("Item is required and must be a map"))?;
@@ -457,6 +458,7 @@ pub fn delete_item(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?.to_string();
+    validate_expr_attr_values(input)?;
 
     let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 
@@ -541,6 +543,7 @@ pub fn update_item(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?.to_string();
+    validate_expr_attr_values(input)?;
 
     let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 

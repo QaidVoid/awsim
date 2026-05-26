@@ -16,7 +16,7 @@ use crate::{
 
 use super::{
     build_consumed_capacity, get_expr_attr_names, get_expr_attr_values, opt_str,
-    read_capacity_units, require_str,
+    read_capacity_units, require_str, validate_expr_attr_values,
 };
 use crate::operations::item::{estimate_item_bytes, item_to_json};
 
@@ -135,6 +135,7 @@ pub fn query(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?;
+    validate_expr_attr_values(input)?;
 
     // Schema still comes from the in-memory cache during stage 3 — table
     // metadata moves to SQLite in stage 4.
@@ -426,6 +427,7 @@ pub fn scan(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?;
+    validate_expr_attr_values(input)?;
 
     let table = state.tables.get(table_name).ok_or_else(|| {
         AwsError::service_not_found(

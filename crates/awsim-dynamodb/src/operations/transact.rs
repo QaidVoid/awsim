@@ -14,7 +14,7 @@ use crate::{
 use super::{
     get_expr_attr_names, get_expr_attr_values,
     item::{estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item},
-    opt_str, read_capacity_units, write_capacity_units,
+    opt_str, read_capacity_units, validate_expr_attr_values, write_capacity_units,
 };
 
 /// Decode a stored sqlite row into a `DynamoItem`. Returns `None` when
@@ -279,7 +279,10 @@ pub fn transact_write_items(
                     gsi: Box::new(sqlite_keys.gsi),
                     condition_expr: opt_str(put, "ConditionExpression").map(str::to_string),
                     expr_attr_names: get_expr_attr_names(put),
-                    expr_attr_values: get_expr_attr_values(put),
+                    expr_attr_values: {
+                        validate_expr_attr_values(put)?;
+                        get_expr_attr_values(put)
+                    },
                 },
             });
         } else if let Some(delete) = tx_item.get("Delete") {
@@ -311,7 +314,10 @@ pub fn transact_write_items(
                     sk,
                     condition_expr: opt_str(delete, "ConditionExpression").map(str::to_string),
                     expr_attr_names: get_expr_attr_names(delete),
-                    expr_attr_values: get_expr_attr_values(delete),
+                    expr_attr_values: {
+                        validate_expr_attr_values(delete)?;
+                        get_expr_attr_values(delete)
+                    },
                 },
             });
         } else if let Some(update) = tx_item.get("Update") {
@@ -348,7 +354,10 @@ pub fn transact_write_items(
                     update_expr,
                     condition_expr: opt_str(update, "ConditionExpression").map(str::to_string),
                     expr_attr_names: get_expr_attr_names(update),
-                    expr_attr_values: get_expr_attr_values(update),
+                    expr_attr_values: {
+                        validate_expr_attr_values(update)?;
+                        get_expr_attr_values(update)
+                    },
                     key,
                 },
             });
@@ -380,7 +389,10 @@ pub fn transact_write_items(
                     condition_expr: opt_str(condition_check, "ConditionExpression")
                         .map(str::to_string),
                     expr_attr_names: get_expr_attr_names(condition_check),
-                    expr_attr_values: get_expr_attr_values(condition_check),
+                    expr_attr_values: {
+                        validate_expr_attr_values(condition_check)?;
+                        get_expr_attr_values(condition_check)
+                    },
                 },
             });
         }
