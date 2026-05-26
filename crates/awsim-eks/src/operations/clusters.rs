@@ -30,6 +30,8 @@ pub fn create_cluster(
             format!("Cluster {name} already exists"),
         ));
     }
+    validate_cluster_logging(&input["logging"])?;
+
     let arn = format!(
         "arn:aws:eks:{}:{}:cluster/{}",
         ctx.region, ctx.account_id, name
@@ -123,6 +125,7 @@ pub fn update_cluster_config(
         )
     })?;
     if let Some(l) = input.get("logging") {
+        validate_cluster_logging(l)?;
         c.logging = l.clone();
     }
     if let Some(v) = input.get("resourcesVpcConfig") {
@@ -139,6 +142,40 @@ pub fn update_cluster_config(
         },
         "_region": ctx.region,
     }))
+}
+
+/// Validate `logging.clusterLogging[].types` against the documented
+/// EKS control-plane log enum: `api`, `audit`, `authenticator`,
+/// `controllerManager`, `scheduler`. AWS rejects unknown types with
+/// InvalidParameterException at CreateCluster / UpdateClusterConfig.
+fn validate_cluster_logging(value: &Value) -> Result<(), AwsError> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let Some(arr) = value.get("clusterLogging").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for entry in arr {
+        let Some(types) = entry.get("types").and_then(Value::as_array) else {
+            continue;
+        };
+        for t in types {
+            let s = t.as_str().unwrap_or("");
+            if !matches!(
+                s,
+                "api" | "audit" | "authenticator" | "controllerManager" | "scheduler"
+            ) {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterException",
+                    format!(
+                        "logging.clusterLogging.types `{s}` must be one of: \
+                         api, audit, authenticator, controllerManager, scheduler."
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn serialize_cluster(c: &Cluster) -> Value {
@@ -273,5 +310,67 @@ mod cluster_name_tests {
         assert!(validate_cluster_name("").is_err());
         let long = "a".repeat(101);
         assert!(validate_cluster_name(&long).is_err());
+    }
+}
+
+#[cfg(test)]
+mod cluster_logging_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("eks", "us-east-1")
+    }
+
+    fn base_input() -> Value {
+        json!({
+            "name": "c1",
+            "roleArn": "arn:aws:iam::000000000000:role/eks-cluster",
+            "resourcesVpcConfig": { "subnetIds": ["subnet-aaa"] },
+        })
+    }
+
+    #[test]
+    fn accepts_documented_log_types() {
+        let state = EksState::default();
+        let mut input = base_input();
+        input["logging"] = json!({
+            "clusterLogging": [
+                { "types": ["api", "audit", "controllerManager"], "enabled": true }
+            ]
+        });
+        create_cluster(&state, &input, &ctx()).unwrap();
+    }
+
+    #[test]
+    fn rejects_unknown_log_type() {
+        let state = EksState::default();
+        let mut input = base_input();
+        input["logging"] = json!({
+            "clusterLogging": [
+                { "types": ["bogus"], "enabled": true }
+            ]
+        });
+        let err = create_cluster(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn update_cluster_config_validates_logging() {
+        let state = EksState::default();
+        create_cluster(&state, &base_input(), &ctx()).unwrap();
+        let err = update_cluster_config(
+            &state,
+            &json!({
+                "name": "c1",
+                "logging": {
+                    "clusterLogging": [
+                        { "types": ["badtype"], "enabled": true }
+                    ]
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
     }
 }
