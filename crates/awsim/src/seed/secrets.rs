@@ -120,6 +120,7 @@ pub async fn seed(
                 kms_key_id: None,
                 last_rotated_date: None,
                 last_accessed_date: None,
+                replica_regions: Vec::new(),
             };
             if samples.len() < SAMPLE_LIMIT {
                 samples.push(json!({

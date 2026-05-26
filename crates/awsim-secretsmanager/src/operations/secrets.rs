@@ -151,6 +151,8 @@ pub fn create_secret(
     let mut versions = HashMap::new();
     versions.insert(version_id.clone(), version);
 
+    let replica_regions = parse_replica_regions(&input["AddReplicaRegions"], &ctx.region)?;
+
     let secret = Secret {
         arn: arn.clone(),
         name: name.to_string(),
@@ -167,16 +169,76 @@ pub fn create_secret(
         kms_key_id: input["KmsKeyId"].as_str().map(str::to_string),
         last_rotated_date: None,
         last_accessed_date: None,
+        replica_regions: replica_regions.clone(),
     };
 
     info!(name = %name, arn = %arn, "Created secret");
     state.secrets.insert(name.to_string(), secret);
 
-    Ok(json!({
+    let mut response = json!({
         "ARN": arn,
         "Name": name,
         "VersionId": version_id,
-    }))
+    });
+    if !replica_regions.is_empty() {
+        response["ReplicationStatus"] =
+            serde_json::Value::Array(replica_regions.iter().map(replica_status_value).collect());
+    }
+    Ok(response)
+}
+
+/// Parse the `AddReplicaRegions` array, rejecting entries that duplicate
+/// or target the primary region. AWS surfaces both via
+/// InvalidParameterException with distinct messages — we collapse to the
+/// same code, which is what the SDK already keys off.
+fn parse_replica_regions(
+    value: &Value,
+    primary_region: &str,
+) -> Result<Vec<crate::state::ReplicaRegion>, AwsError> {
+    let Some(arr) = value.as_array() else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for entry in arr {
+        let region = entry
+            .get("Region")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                error::invalid_parameter("AddReplicaRegions entry requires non-empty Region.")
+            })?;
+        if region == primary_region {
+            return Err(error::invalid_parameter(format!(
+                "AddReplicaRegions cannot include the primary region `{region}`."
+            )));
+        }
+        if !seen.insert(region.to_string()) {
+            return Err(error::invalid_parameter(format!(
+                "AddReplicaRegions duplicates region `{region}`."
+            )));
+        }
+        let kms_key_id = entry
+            .get("KmsKeyId")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        out.push(crate::state::ReplicaRegion {
+            region: region.to_string(),
+            kms_key_id,
+        });
+    }
+    Ok(out)
+}
+
+fn replica_status_value(r: &crate::state::ReplicaRegion) -> Value {
+    let mut obj = json!({
+        "Region": r.region,
+        "Status": "InSync",
+    });
+    if let Some(ref k) = r.kms_key_id {
+        obj["KmsKeyId"] = json!(k);
+    }
+    obj
 }
 
 // ---------------------------------------------------------------------------
@@ -407,9 +469,13 @@ pub fn describe_secret(
     let mut meta = secret_metadata(&secret);
     meta["OwnerAccountId"] = json!(ctx.account_id);
     meta["PrimaryRegion"] = json!(ctx.region);
-    // No cross-region replication state today; AWS returns an empty
-    // ReplicationStatus array for secrets without AddReplicaRegions.
-    meta["ReplicationStatus"] = json!([]);
+    meta["ReplicationStatus"] = Value::Array(
+        secret
+            .replica_regions
+            .iter()
+            .map(replica_status_value)
+            .collect(),
+    );
     Ok(meta)
 }
 
@@ -1787,5 +1853,69 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ResourceExistsException");
+    }
+
+    #[test]
+    fn create_secret_persists_add_replica_regions() {
+        let state = SecretsState::default();
+        let resp = create_secret(
+            &state,
+            &json!({
+                "Name": "s",
+                "SecretString": "v",
+                "AddReplicaRegions": [
+                    { "Region": "us-west-2" },
+                    { "Region": "eu-west-1", "KmsKeyId": "alias/replica" }
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let status = resp["ReplicationStatus"]
+            .as_array()
+            .expect("ReplicationStatus");
+        assert_eq!(status.len(), 2);
+        assert_eq!(status[1]["KmsKeyId"], "alias/replica");
+
+        let desc = describe_secret(&state, &json!({ "SecretId": "s" }), &ctx()).unwrap();
+        let dstatus = desc["ReplicationStatus"].as_array().unwrap();
+        assert_eq!(dstatus.len(), 2);
+    }
+
+    #[test]
+    fn create_secret_rejects_replica_in_primary_region() {
+        let state = SecretsState::default();
+        let err = create_secret(
+            &state,
+            &json!({
+                "Name": "s",
+                "SecretString": "v",
+                "AddReplicaRegions": [{ "Region": "us-east-1" }],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+        assert!(err.message.contains("primary"));
+    }
+
+    #[test]
+    fn create_secret_rejects_duplicate_replica_region() {
+        let state = SecretsState::default();
+        let err = create_secret(
+            &state,
+            &json!({
+                "Name": "s",
+                "SecretString": "v",
+                "AddReplicaRegions": [
+                    { "Region": "us-west-2" },
+                    { "Region": "us-west-2" }
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+        assert!(err.message.contains("duplicates"));
     }
 }

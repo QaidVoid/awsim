@@ -46,6 +46,19 @@ pub struct Secret {
     /// Unix epoch seconds — last time the secret value was retrieved
     /// (any GetSecretValue call). Surfaces in Describe / ListSecrets.
     pub last_accessed_date: Option<f64>,
+    /// Replica regions requested via CreateSecret.AddReplicaRegions /
+    /// ReplicateSecretToRegions. Each entry surfaces in DescribeSecret
+    /// as a `ReplicationStatus` row.
+    pub replica_regions: Vec<ReplicaRegion>,
+}
+
+/// A single replica entry. Replication itself is metadata-only today —
+/// no cross-region mirror is created — but storing the requested set is
+/// what most SDK round-trips care about.
+#[derive(Debug, Clone)]
+pub struct ReplicaRegion {
+    pub region: String,
+    pub kms_key_id: Option<String>,
 }
 
 /// Per-account/region Secrets Manager state.
