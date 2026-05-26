@@ -395,36 +395,31 @@ pub fn describe_parameters(
 ) -> Result<Value, AwsError> {
     let max_results = input["MaxResults"].as_u64().unwrap_or(50) as usize;
 
-    // Optional filters by Name or Type
-    let filters = input["Filters"].as_array();
+    // AWS exposes two filter-shape parameters. `Filters` (legacy) only
+    // accepts Name / Type / KeyId / Tag with Equals semantics, while
+    // `ParameterFilters` (newer) honors Option (Equals / BeginsWith /
+    // Contains / Recursive / OneLevel) across a wider key set. Honor
+    // both shapes — both can be supplied per AWS docs.
+    let legacy_filters = input["Filters"].as_array().cloned().unwrap_or_default();
+    let new_filters = input["ParameterFilters"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
 
     let mut params: Vec<Value> = state
         .parameters
         .iter()
         .filter(|entry| {
-            if let Some(filter_arr) = filters {
-                for f in filter_arr {
-                    let key = f["Key"].as_str().unwrap_or("");
-                    let values = f["Values"].as_array();
-                    match key {
-                        "Name" => {
-                            if let Some(vals) = values {
-                                let name = entry.key();
-                                if !vals.iter().any(|v| v.as_str() == Some(name.as_str())) {
-                                    return false;
-                                }
-                            }
-                        }
-                        "Type" => {
-                            if let Some(vals) = values {
-                                let ptype = &entry.value().param_type;
-                                if !vals.iter().any(|v| v.as_str() == Some(ptype.as_str())) {
-                                    return false;
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
+            let name = entry.key().as_str();
+            let p = entry.value();
+            for f in &legacy_filters {
+                if !legacy_filter_match(f, name, p) {
+                    return false;
+                }
+            }
+            for f in &new_filters {
+                if !parameter_filter_match(f, name, p) {
+                    return false;
                 }
             }
             true
@@ -441,6 +436,71 @@ pub fn describe_parameters(
     });
 
     Ok(json!({ "Parameters": params }))
+}
+
+/// Legacy `Filters[]` keys: Name / Type (KeyId / Tag pass-through since
+/// we don't persist them today).
+fn legacy_filter_match(f: &Value, name: &str, p: &Parameter) -> bool {
+    let key = f.get("Key").and_then(Value::as_str).unwrap_or("");
+    let values = f
+        .get("Values")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    match key {
+        "Name" => values.iter().any(|v| v == name),
+        "Type" => values.iter().any(|v| v == &p.param_type),
+        _ => true,
+    }
+}
+
+/// Newer `ParameterFilters[]` shape: { Key, Option, Values[] }. Option
+/// defaults to `Equals`; some keys accept `BeginsWith` / `Contains` and
+/// `Path` accepts `Recursive` / `OneLevel`.
+fn parameter_filter_match(f: &Value, name: &str, p: &Parameter) -> bool {
+    let key = f.get("Key").and_then(Value::as_str).unwrap_or("");
+    let option = f.get("Option").and_then(Value::as_str).unwrap_or("Equals");
+    let values: Vec<&str> = f
+        .get("Values")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let str_match = |field: &str| match option {
+        "Equals" => values.contains(&field),
+        "BeginsWith" => values.iter().any(|v| field.starts_with(v)),
+        "Contains" => values.iter().any(|v| field.contains(v)),
+        _ => true,
+    };
+    match key {
+        "Name" => str_match(name),
+        "Type" => str_match(&p.param_type),
+        "Tier" => str_match(&p.tier),
+        "DataType" => str_match("text"),
+        "Label" => values.iter().any(|v| p.labels.iter().any(|l| l == v)),
+        "Path" => {
+            // Path filter uses Option = Recursive | OneLevel; the
+            // Values list is the path prefix to match against.
+            let prefix = values.first().copied().unwrap_or("");
+            if !name.starts_with(prefix) {
+                return false;
+            }
+            if option == "OneLevel" {
+                // The remainder after `prefix/` must not contain another `/`.
+                let rest = name
+                    .strip_prefix(prefix)
+                    .unwrap_or("")
+                    .trim_start_matches('/');
+                !rest.contains('/')
+            } else {
+                true
+            }
+        }
+        _ => true,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -755,5 +815,116 @@ mod label_parameter_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ParameterVersionNotFound");
+    }
+}
+
+#[cfg(test)]
+mod describe_parameters_tests {
+    use super::*;
+
+    fn ctx() -> awsim_core::RequestContext {
+        awsim_core::RequestContext::new("ssm", "us-east-1")
+    }
+
+    fn seed(state: &SsmState) {
+        for (name, tier) in [
+            ("/prod/api/url", "Standard"),
+            ("/prod/api/key", "Advanced"),
+            ("/dev/api/url", "Standard"),
+        ] {
+            put_parameter(
+                state,
+                &json!({
+                    "Name": name,
+                    "Value": "v",
+                    "Type": "String",
+                    "Tier": tier,
+                }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+    }
+
+    fn names(resp: &Value) -> Vec<String> {
+        resp["Parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["Name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn parameter_filter_path_recursive_returns_full_subtree() {
+        let state = SsmState::default();
+        seed(&state);
+        let resp = describe_parameters(
+            &state,
+            &json!({
+                "ParameterFilters": [
+                    { "Key": "Path", "Option": "Recursive", "Values": ["/prod"] }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let ns = names(&resp);
+        assert_eq!(ns.len(), 2);
+        assert!(ns.iter().all(|n| n.starts_with("/prod")));
+    }
+
+    #[test]
+    fn parameter_filter_path_one_level_only_top_children() {
+        let state = SsmState::default();
+        seed(&state);
+        let resp = describe_parameters(
+            &state,
+            &json!({
+                "ParameterFilters": [
+                    { "Key": "Path", "Option": "OneLevel", "Values": ["/prod/api"] }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let ns = names(&resp);
+        assert_eq!(ns.len(), 2);
+    }
+
+    #[test]
+    fn parameter_filter_tier_equals() {
+        let state = SsmState::default();
+        seed(&state);
+        let resp = describe_parameters(
+            &state,
+            &json!({
+                "ParameterFilters": [
+                    { "Key": "Tier", "Option": "Equals", "Values": ["Advanced"] }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let ns = names(&resp);
+        assert_eq!(ns, vec!["/prod/api/key"]);
+    }
+
+    #[test]
+    fn parameter_filter_name_begins_with() {
+        let state = SsmState::default();
+        seed(&state);
+        let resp = describe_parameters(
+            &state,
+            &json!({
+                "ParameterFilters": [
+                    { "Key": "Name", "Option": "BeginsWith", "Values": ["/dev"] }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let ns = names(&resp);
+        assert_eq!(ns, vec!["/dev/api/url"]);
     }
 }
