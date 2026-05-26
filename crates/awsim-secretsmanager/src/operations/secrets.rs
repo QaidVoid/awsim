@@ -279,17 +279,17 @@ pub fn get_secret_value(
 
     let version_id = match (requested_version_id, requested_stage) {
         // Both supplied: AWS requires that the named version actually
-        // carries the named stage, otherwise it's a mismatch and the
-        // service returns ResourceNotFoundException rather than
-        // silently honouring one and dropping the other.
+        // carries the named stage. A mismatch surfaces as
+        // InvalidRequestException — the version exists, just not under
+        // the stage the caller asked for.
         (Some(vid), Some(stage)) => {
             let v = secret
                 .versions
                 .get(vid)
                 .ok_or_else(|| error::resource_not_found(vid))?;
             if !v.stages.iter().any(|s| s == stage) {
-                return Err(error::resource_not_found(&format!(
-                    "version {vid} does not carry stage {stage}"
+                return Err(error::invalid_request(format!(
+                    "VersionId {vid} does not carry VersionStage {stage}."
                 )));
             }
             vid.to_string()
