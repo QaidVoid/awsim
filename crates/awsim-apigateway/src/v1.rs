@@ -38,6 +38,16 @@ pub struct RestApi {
     pub created_date: u64,
     pub api_key_source: String,
     pub endpoint_types: Vec<String>,
+    /// Endpoints attached to this API when `endpoint_types` contains
+    /// `PRIVATE`; AWS requires interface VPC endpoint IDs to be
+    /// surfaced verbatim in describe responses.
+    pub vpc_endpoint_ids: Vec<String>,
+    /// Content types treated as binary on the request/response path.
+    /// Persisted as supplied and echoed back from GetRestApi.
+    pub binary_media_types: Vec<String>,
+    /// Smallest response body (in bytes) that triggers gzip; absent
+    /// disables compression.
+    pub minimum_compression_size: Option<u32>,
     /// Resource id -> Resource. Always contains a root `/` resource.
     pub resources: HashMap<String, Resource>,
     pub stages: HashMap<String, Stage>,
@@ -561,15 +571,24 @@ fn require_str<'a>(input: &'a Value, key: &str) -> Result<&'a str, AwsError> {
 }
 
 fn rest_api_to_json(api: &RestApi) -> Value {
-    json!({
+    let mut endpoint_cfg = json!({ "types": api.endpoint_types });
+    if !api.vpc_endpoint_ids.is_empty() {
+        endpoint_cfg["vpcEndpointIds"] = json!(api.vpc_endpoint_ids);
+    }
+    let mut obj = json!({
         "id": api.id,
         "name": api.name,
         "description": api.description,
         "createdDate": api.created_date,
         "version": api.version,
         "apiKeySource": api.api_key_source,
-        "endpointConfiguration": { "types": api.endpoint_types },
-    })
+        "endpointConfiguration": endpoint_cfg,
+        "binaryMediaTypes": api.binary_media_types,
+    });
+    if let Some(size) = api.minimum_compression_size {
+        obj["minimumCompressionSize"] = json!(size);
+    }
+    obj
 }
 
 fn resource_to_json(r: &Resource) -> Value {
@@ -686,6 +705,17 @@ fn create_rest_api(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aw
     let mut resources = HashMap::new();
     resources.insert(root.id.clone(), root);
 
+    let (endpoint_types, vpc_endpoint_ids) = parse_endpoint_configuration(input)?;
+    let binary_media_types = input["binaryMediaTypes"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let minimum_compression_size = input["minimumCompressionSize"].as_u64().map(|n| n as u32);
+
     let api = RestApi {
         id: id.clone(),
         name,
@@ -693,7 +723,10 @@ fn create_rest_api(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aw
         version: "2015-07-09".to_string(),
         created_date: now_epoch(),
         api_key_source: "HEADER".to_string(),
-        endpoint_types: vec!["REGIONAL".to_string()],
+        endpoint_types,
+        vpc_endpoint_ids,
+        binary_media_types,
+        minimum_compression_size,
         resources,
         stages: HashMap::new(),
         deployments: Vec::new(),
@@ -701,6 +734,60 @@ fn create_rest_api(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aw
     };
     state.apis.insert(id.clone(), api.clone());
     Ok(rest_api_to_json(&api))
+}
+
+/// Parse + validate `endpointConfiguration` on CreateRestApi /
+/// UpdateRestApi. AWS allows zero or more `types` from
+/// REGIONAL/EDGE/PRIVATE; PRIVATE is the only type that may carry
+/// `vpcEndpointIds`. Defaults to `["REGIONAL"]` when omitted.
+fn parse_endpoint_configuration(input: &Value) -> Result<(Vec<String>, Vec<String>), AwsError> {
+    let Some(cfg) = input.get("endpointConfiguration") else {
+        return Ok((vec!["REGIONAL".to_string()], Vec::new()));
+    };
+    if cfg.is_null() {
+        return Ok((vec!["REGIONAL".to_string()], Vec::new()));
+    }
+    let obj = cfg.as_object().ok_or_else(|| {
+        AwsError::bad_request(
+            "BadRequestException",
+            "endpointConfiguration must be an object.",
+        )
+    })?;
+    let types: Vec<String> = obj
+        .get("types")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_else(|| vec!["REGIONAL".to_string()]);
+    for ty in &types {
+        if !matches!(ty.as_str(), "REGIONAL" | "EDGE" | "PRIVATE") {
+            return Err(AwsError::bad_request(
+                "BadRequestException",
+                format!(
+                    "endpointConfiguration.types entry `{ty}` must be REGIONAL, EDGE, or PRIVATE."
+                ),
+            ));
+        }
+    }
+    let vpc_endpoint_ids: Vec<String> = obj
+        .get("vpcEndpointIds")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !vpc_endpoint_ids.is_empty() && !types.iter().any(|t| t == "PRIVATE") {
+        return Err(AwsError::bad_request(
+            "BadRequestException",
+            "endpointConfiguration.vpcEndpointIds is only allowed when types includes PRIVATE.",
+        ));
+    }
+    Ok((types, vpc_endpoint_ids))
 }
 
 fn get_rest_api(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
@@ -2004,6 +2091,77 @@ mod tests {
         let items = listed["items"].as_array().unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["name"], "demo");
+    }
+
+    #[tokio::test]
+    async fn create_rest_api_persists_binary_media_and_endpoint_config() {
+        let svc = ApiGatewayV1Service::new();
+        let created = svc
+            .handle(
+                "CreateRestApi",
+                json!({
+                    "name": "demo",
+                    "binaryMediaTypes": ["application/octet-stream", "image/*"],
+                    "minimumCompressionSize": 1024,
+                    "endpointConfiguration": {
+                        "types": ["PRIVATE"],
+                        "vpcEndpointIds": ["vpce-1234"],
+                    },
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+
+        let got = svc
+            .handle("GetRestApi", json!({"restapi_id": id}), &ctx())
+            .await
+            .unwrap();
+        assert_eq!(got["binaryMediaTypes"][0], "application/octet-stream");
+        assert_eq!(got["minimumCompressionSize"], 1024);
+        assert_eq!(got["endpointConfiguration"]["types"][0], "PRIVATE");
+        assert_eq!(
+            got["endpointConfiguration"]["vpcEndpointIds"][0],
+            "vpce-1234"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rest_api_rejects_invalid_endpoint_type() {
+        let svc = ApiGatewayV1Service::new();
+        let err = svc
+            .handle(
+                "CreateRestApi",
+                json!({
+                    "name": "bad",
+                    "endpointConfiguration": { "types": ["GLOBAL"] },
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
+    }
+
+    #[tokio::test]
+    async fn create_rest_api_rejects_vpc_endpoints_without_private_type() {
+        let svc = ApiGatewayV1Service::new();
+        let err = svc
+            .handle(
+                "CreateRestApi",
+                json!({
+                    "name": "bad",
+                    "endpointConfiguration": {
+                        "types": ["REGIONAL"],
+                        "vpcEndpointIds": ["vpce-1"],
+                    },
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
     }
 
     #[tokio::test]
