@@ -55,6 +55,11 @@ pub struct DbInstance {
     /// Provisioned storage throughput in MiB/s. Only valid on `gp3`.
     #[serde(default)]
     pub storage_throughput: Option<u32>,
+    /// AWS license model — one of `general-public-license`,
+    /// `license-included`, `bring-your-own-license`. Allowed values
+    /// depend on the engine.
+    #[serde(default)]
+    pub license_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

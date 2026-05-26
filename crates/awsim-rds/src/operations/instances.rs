@@ -44,7 +44,28 @@ fn instance_to_value(inst: &DbInstance) -> Value {
     if let Some(t) = inst.storage_throughput {
         obj["StorageThroughput"] = json!(t);
     }
+    if let Some(ref lm) = inst.license_model {
+        obj["LicenseModel"] = json!(lm);
+    }
     obj
+}
+
+/// Allowed license models per engine family. AWS rejects mismatches at
+/// CreateDBInstance/ModifyDBInstance with InvalidParameterCombination.
+fn allowed_license_models(engine: &str) -> &'static [&'static str] {
+    match engine {
+        "postgres" | "mysql" | "mariadb" | "docdb" | "neptune" => &["general-public-license"],
+        "sqlserver-ex" | "sqlserver-web" => &["license-included"],
+        "sqlserver-se" | "sqlserver-ee" => &["license-included", "bring-your-own-license"],
+        "oracle-ee" | "oracle-se" | "oracle-se1" | "oracle-se2" => {
+            &["bring-your-own-license", "license-included"]
+        }
+        _ => &[],
+    }
+}
+
+fn default_license_model(engine: &str) -> Option<&'static str> {
+    allowed_license_models(engine).first().copied()
 }
 
 pub fn create_db_instance(
@@ -111,6 +132,20 @@ pub fn create_db_instance(
         .unwrap_or_else(|| default_engine_version(engine))
         .to_string();
 
+    let license_model = match opt_str(input, "LicenseModel") {
+        Some(lm) => {
+            let allowed = allowed_license_models(engine);
+            if !allowed.contains(&lm) {
+                return Err(invalid_parameter(format!(
+                    "LicenseModel '{lm}' is not valid for engine '{engine}'; allowed: {}.",
+                    allowed.join(", "),
+                )));
+            }
+            Some(lm.to_string())
+        }
+        None => default_license_model(engine).map(str::to_string),
+    };
+
     let arn = instance_arn(&ctx.region, &ctx.account_id, identifier);
     let address = instance_endpoint(identifier, &ctx.region);
     let port = default_port(engine);
@@ -143,6 +178,7 @@ pub fn create_db_instance(
         created_at: now_iso8601(),
         iops,
         storage_throughput,
+        license_model,
     };
 
     let result = instance_to_value(&inst);
@@ -228,6 +264,17 @@ pub fn modify_db_instance(
     }
     if let Some(storage_type) = opt_str(input, "StorageType") {
         inst.storage_type = storage_type.to_string();
+    }
+    if let Some(lm) = opt_str(input, "LicenseModel") {
+        let allowed = allowed_license_models(&inst.engine);
+        if !allowed.contains(&lm) {
+            return Err(invalid_parameter(format!(
+                "LicenseModel '{lm}' is not valid for engine '{}'; allowed: {}.",
+                inst.engine,
+                allowed.join(", "),
+            )));
+        }
+        inst.license_model = Some(lm.to_string());
     }
 
     let result = instance_to_value(&inst);
@@ -430,6 +477,35 @@ mod create_db_instance_tests {
         input["StorageThroughput"] = json!(125);
         let err = create_db_instance(&state, &input, &ctx()).unwrap_err();
         assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn defaults_license_model_per_engine() {
+        let state = RdsState::default();
+        let resp = create_db_instance(&state, &base_input(), &ctx()).unwrap();
+        assert_eq!(resp["DBInstance"]["LicenseModel"], "general-public-license");
+    }
+
+    #[test]
+    fn rejects_license_model_not_valid_for_engine() {
+        let state = RdsState::default();
+        let mut input = base_input();
+        // postgres only allows general-public-license.
+        input["LicenseModel"] = json!("bring-your-own-license");
+        let err = create_db_instance(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+        assert!(err.message.contains("LicenseModel"));
+    }
+
+    #[test]
+    fn accepts_byol_for_sqlserver_se() {
+        let state = RdsState::default();
+        let mut input = base_input();
+        input["DBInstanceIdentifier"] = json!("sql-db");
+        input["Engine"] = json!("sqlserver-se");
+        input["LicenseModel"] = json!("bring-your-own-license");
+        let resp = create_db_instance(&state, &input, &ctx()).unwrap();
+        assert_eq!(resp["DBInstance"]["LicenseModel"], "bring-your-own-license");
     }
 
     #[test]
