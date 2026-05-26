@@ -129,6 +129,32 @@ pub fn put_targets(
             continue;
         }
 
+        let dead_letter_arn = match parse_dead_letter_config(&target_input["DeadLetterConfig"]) {
+            Ok(v) => v,
+            Err(msg) => {
+                failed_count += 1;
+                failed_entries.push(json!({
+                    "TargetId": id,
+                    "ErrorCode": "InvalidParameterValue",
+                    "ErrorMessage": msg,
+                }));
+                continue;
+            }
+        };
+
+        let retry_policy = match parse_retry_policy(&target_input["RetryPolicy"]) {
+            Ok(v) => v,
+            Err(msg) => {
+                failed_count += 1;
+                failed_entries.push(json!({
+                    "TargetId": id,
+                    "ErrorCode": "InvalidParameterValue",
+                    "ErrorMessage": msg,
+                }));
+                continue;
+            }
+        };
+
         let batch_parameters = match target_input.get("BatchParameters") {
             Some(v) if !v.is_null() => {
                 if !v.is_object() {
@@ -180,6 +206,8 @@ pub fn put_targets(
                 input_path,
                 input_transformer,
                 batch_parameters,
+                dead_letter_arn,
+                retry_policy,
             };
         } else {
             rule.targets.push(Target {
@@ -189,6 +217,8 @@ pub fn put_targets(
                 input_path,
                 input_transformer,
                 batch_parameters,
+                dead_letter_arn,
+                retry_policy,
             });
         }
     }
@@ -205,6 +235,61 @@ pub fn put_targets(
         "FailedEntryCount": failed_count,
         "FailedEntries": failed_entries,
     }))
+}
+
+/// Parse a `DeadLetterConfig` Value into an SQS ARN. EventBridge only
+/// accepts SQS queue ARNs here; cross-region or non-SQS ARNs are
+/// rejected at PutTargets with InvalidParameterValue.
+fn parse_dead_letter_config(value: &Value) -> Result<Option<String>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "DeadLetterConfig must be an object".to_string())?;
+    let Some(arn) = obj.get("Arn").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    if arn.is_empty() {
+        return Err("DeadLetterConfig.Arn must be non-empty".to_string());
+    }
+    if !arn.starts_with("arn:aws:sqs:") {
+        return Err(format!(
+            "DeadLetterConfig.Arn '{arn}' must be an SQS queue ARN"
+        ));
+    }
+    Ok(Some(arn.to_string()))
+}
+
+/// Parse a `RetryPolicy` Value. AWS bounds MaximumEventAgeInSeconds at
+/// 60..=86400 and MaximumRetryAttempts at 0..=185; outside-range values
+/// are rejected.
+fn parse_retry_policy(value: &Value) -> Result<Option<(u32, u32)>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "RetryPolicy must be an object".to_string())?;
+    let age = match obj.get("MaximumEventAgeInSeconds").and_then(Value::as_i64) {
+        Some(n) if !(60..=86_400).contains(&n) => {
+            return Err(format!(
+                "RetryPolicy.MaximumEventAgeInSeconds {n} must be between 60 and 86400"
+            ));
+        }
+        Some(n) => n as u32,
+        None => 86_400,
+    };
+    let attempts = match obj.get("MaximumRetryAttempts").and_then(Value::as_i64) {
+        Some(n) if !(0..=185).contains(&n) => {
+            return Err(format!(
+                "RetryPolicy.MaximumRetryAttempts {n} must be between 0 and 185"
+            ));
+        }
+        Some(n) => n as u32,
+        None => 185,
+    };
+    Ok(Some((age, attempts)))
 }
 
 /// Parse an `InputTransformer` Value into the internal struct,
@@ -367,5 +452,64 @@ fn target_to_json(target: &Target) -> Value {
     if let Some(bp) = &target.batch_parameters {
         obj["BatchParameters"] = bp.clone();
     }
+    if let Some(ref dlq) = target.dead_letter_arn {
+        obj["DeadLetterConfig"] = json!({ "Arn": dlq });
+    }
+    if let Some((age, attempts)) = target.retry_policy {
+        obj["RetryPolicy"] = json!({
+            "MaximumEventAgeInSeconds": age,
+            "MaximumRetryAttempts": attempts,
+        });
+    }
     obj
+}
+
+#[cfg(test)]
+mod dlq_retry_tests {
+    use super::*;
+
+    #[test]
+    fn parses_dead_letter_config_sqs_arn() {
+        let v = json!({ "Arn": "arn:aws:sqs:us-east-1:000000000000:dlq" });
+        assert_eq!(
+            parse_dead_letter_config(&v).unwrap().as_deref(),
+            Some("arn:aws:sqs:us-east-1:000000000000:dlq"),
+        );
+    }
+
+    #[test]
+    fn rejects_non_sqs_dlq_arn() {
+        let v = json!({ "Arn": "arn:aws:sns:us-east-1:000000000000:topic" });
+        let err = parse_dead_letter_config(&v).unwrap_err();
+        assert!(err.contains("SQS"));
+    }
+
+    #[test]
+    fn dlq_returns_none_when_absent() {
+        assert!(parse_dead_letter_config(&Value::Null).unwrap().is_none());
+    }
+
+    #[test]
+    fn parses_retry_policy_within_bounds() {
+        let v = json!({ "MaximumEventAgeInSeconds": 3600, "MaximumRetryAttempts": 5 });
+        assert_eq!(parse_retry_policy(&v).unwrap(), Some((3600, 5)));
+    }
+
+    #[test]
+    fn applies_retry_policy_defaults() {
+        let v = json!({});
+        assert_eq!(parse_retry_policy(&v).unwrap(), Some((86_400, 185)));
+    }
+
+    #[test]
+    fn rejects_retry_policy_age_below_minimum() {
+        let v = json!({ "MaximumEventAgeInSeconds": 30 });
+        assert!(parse_retry_policy(&v).is_err());
+    }
+
+    #[test]
+    fn rejects_retry_policy_attempts_above_maximum() {
+        let v = json!({ "MaximumRetryAttempts": 200 });
+        assert!(parse_retry_policy(&v).is_err());
+    }
 }

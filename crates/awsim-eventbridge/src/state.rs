@@ -18,6 +18,13 @@ pub struct Target {
     /// echoed back from ListTargetsByRule so SDKs that round-trip
     /// target configuration see the same shape they sent.
     pub batch_parameters: Option<serde_json::Value>,
+    /// SQS queue ARN where EventBridge would publish events the target
+    /// failed to deliver. Validated for shape at PutTargets; the actual
+    /// delivery path remains stubby (see NEW_PLAN §10.4).
+    pub dead_letter_arn: Option<String>,
+    /// Retry policy. `(MaximumEventAgeInSeconds, MaximumRetryAttempts)`
+    /// bounded by AWS at 60..=86400 and 0..=185 respectively.
+    pub retry_policy: Option<(u32, u32)>,
 }
 
 /// EventBridge `InputTransformer` shape — stored verbatim and applied
