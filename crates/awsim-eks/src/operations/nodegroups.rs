@@ -14,6 +14,34 @@ pub fn create_nodegroup(
     let name = input["nodegroupName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "nodegroupName is required")
     })?;
+
+    // AWS requires at least one subnet; the nodegroup launches its
+    // ASG into those subnets, so an empty list has no semantic.
+    let subnets: Vec<String> = input["subnets"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    if subnets.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "subnets is required and must contain at least one subnet id.",
+        ));
+    }
+
+    // AWS allows diskSize between 1 and 16_384 GiB. Anything else is
+    // a documented ValidationException.
+    let disk_size = input["diskSize"].as_u64().unwrap_or(20);
+    if !(1..=16_384).contains(&disk_size) {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!("diskSize must be between 1 and 16384 GiB (got {disk_size})."),
+        ));
+    }
+
     let arn = format!(
         "arn:aws:eks:{}:{}:nodegroup/{}/{}/{}",
         ctx.region,
@@ -40,14 +68,7 @@ pub fn create_nodegroup(
                     .collect()
             })
             .unwrap_or_else(|| vec!["t3.medium".to_string()]),
-        subnets: input["subnets"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default(),
+        subnets,
         ami_type: input["amiType"]
             .as_str()
             .unwrap_or("AL2_x86_64")
@@ -58,7 +79,7 @@ pub fn create_nodegroup(
             .as_str()
             .unwrap_or("1.29.0-20240101")
             .to_string(),
-        disk_size: input["diskSize"].as_u64().unwrap_or(20) as u32,
+        disk_size: disk_size as u32,
         tags: input["tags"]
             .as_object()
             .map(|m| {

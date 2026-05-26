@@ -259,6 +259,50 @@ mod tests {
     }
 
     #[test]
+    fn create_nodegroup_requires_subnets() {
+        let svc = EksService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateCluster",
+            json!({ "name": "c", "roleArn": "arn:aws:iam::000000000000:role/eks" }),
+            &ctx,
+        ))
+        .unwrap();
+        let err = block_on(svc.handle(
+            "CreateNodegroup",
+            json!({ "clusterName": "c", "nodegroupName": "ng" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+        assert!(err.message.contains("subnets"));
+    }
+
+    #[test]
+    fn create_nodegroup_rejects_oversize_disk() {
+        let svc = EksService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateCluster",
+            json!({ "name": "c", "roleArn": "arn:aws:iam::000000000000:role/eks" }),
+            &ctx,
+        ))
+        .unwrap();
+        let err = block_on(svc.handle(
+            "CreateNodegroup",
+            json!({
+                "clusterName": "c",
+                "nodegroupName": "ng",
+                "subnets": ["subnet-1"],
+                "diskSize": 1_000_000,
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
     fn associate_encryption_config_rejects_empty_array() {
         let svc = EksService::new();
         let ctx = ctx();
