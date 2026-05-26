@@ -244,6 +244,68 @@ mod tests {
     }
 
     #[test]
+    fn test_create_service_round_trips_load_balancers_and_deployment_config() {
+        let svc = EcsService::new();
+        let ctx = ctx();
+        block_on(svc.handle("CreateCluster", json!({ "clusterName": "deploy" }), &ctx)).unwrap();
+        let create = block_on(svc.handle(
+            "CreateService",
+            json!({
+                "cluster": "deploy",
+                "serviceName": "edge",
+                "taskDefinition": "edge:1",
+                "desiredCount": 3,
+                "launchType": "FARGATE",
+                "loadBalancers": [{
+                    "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/edge/abc",
+                    "containerName": "edge",
+                    "containerPort": 8080
+                }],
+                "deploymentConfiguration": {
+                    "minimumHealthyPercent": 50,
+                    "maximumPercent": 200
+                },
+                "deploymentController": { "type": "CODE_DEPLOY" },
+                "networkConfiguration": {
+                    "awsvpcConfiguration": {
+                        "subnets": ["subnet-1"],
+                        "assignPublicIp": "ENABLED"
+                    }
+                }
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let s = &create["service"];
+        assert_eq!(s["loadBalancers"][0]["containerName"], "edge");
+        assert_eq!(s["deploymentConfiguration"]["maximumPercent"], 200);
+        assert_eq!(s["deploymentController"]["type"], "CODE_DEPLOY");
+        assert_eq!(
+            s["networkConfiguration"]["awsvpcConfiguration"]["assignPublicIp"],
+            "ENABLED"
+        );
+    }
+
+    #[test]
+    fn test_create_service_rejects_invalid_deployment_controller_type() {
+        let svc = EcsService::new();
+        let ctx = ctx();
+        block_on(svc.handle("CreateCluster", json!({ "clusterName": "bad-dc" }), &ctx)).unwrap();
+        let err = block_on(svc.handle(
+            "CreateService",
+            json!({
+                "cluster": "bad-dc",
+                "serviceName": "x",
+                "taskDefinition": "x:1",
+                "deploymentController": { "type": "MAGIC" }
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
     fn test_describe_services() {
         let svc = EcsService::new();
         let ctx = ctx();

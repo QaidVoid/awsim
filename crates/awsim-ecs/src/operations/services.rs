@@ -6,7 +6,7 @@ use crate::operations::clusters::{now_epoch_str, resolve_cluster_name};
 use crate::state::{EcsState, Service};
 
 fn service_to_json(svc: &Service) -> Value {
-    json!({
+    let mut obj = json!({
         "serviceArn": svc.service_arn,
         "serviceName": svc.service_name,
         "clusterArn": svc.cluster_arn,
@@ -19,10 +19,17 @@ fn service_to_json(svc: &Service) -> Value {
         "createdAt": svc.created_at,
         "deployments": [],
         "events": [],
-        "loadBalancers": [],
+        "loadBalancers": svc.load_balancers,
         "serviceRegistries": [],
-        "networkConfiguration": null,
-    })
+        "networkConfiguration": svc.network_configuration.clone().unwrap_or(Value::Null),
+    });
+    if let Some(dc) = &svc.deployment_configuration {
+        obj["deploymentConfiguration"] = dc.clone();
+    }
+    if let Some(dc) = &svc.deployment_controller {
+        obj["deploymentController"] = dc.clone();
+    }
+    obj
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +61,37 @@ pub fn create_service(
     let desired_count = input["desiredCount"].as_i64().unwrap_or(1);
     let launch_type = input["launchType"].as_str().unwrap_or("EC2").to_string();
 
+    let load_balancers: Vec<Value> = input["loadBalancers"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    let deployment_configuration = match input.get("deploymentConfiguration") {
+        Some(v) if !v.is_null() => Some(v.clone()),
+        _ => None,
+    };
+
+    let deployment_controller = match input.get("deploymentController") {
+        Some(dc) if !dc.is_null() => {
+            let ty = dc["type"].as_str().unwrap_or("");
+            if !matches!(ty, "ECS" | "CODE_DEPLOY" | "EXTERNAL") {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterException",
+                    format!(
+                        "deploymentController.type `{ty}` must be ECS, CODE_DEPLOY, or EXTERNAL."
+                    ),
+                ));
+            }
+            Some(dc.clone())
+        }
+        _ => None,
+    };
+
+    let network_configuration = match input.get("networkConfiguration") {
+        Some(v) if !v.is_null() => Some(v.clone()),
+        _ => None,
+    };
+
     let mut cluster = state.clusters.get_mut(&cluster_name).ok_or_else(|| {
         AwsError::bad_request(
             "ClusterNotFoundException",
@@ -77,6 +115,10 @@ pub fn create_service(
         status: "ACTIVE".to_string(),
         launch_type,
         created_at: now_epoch_str(),
+        load_balancers,
+        deployment_configuration,
+        deployment_controller,
+        network_configuration,
     };
 
     info!(cluster = %cluster_name, service = %service_name, "Created ECS service");

@@ -26,6 +26,15 @@ pub struct Service {
     pub status: String,
     pub launch_type: String,
     pub created_at: String,
+    /// AWS ECS `loadBalancers[]` (one of `{targetGroupArn|loadBalancerName, containerName, containerPort}` per entry).
+    /// Persisted verbatim and echoed on describe.
+    pub load_balancers: Vec<Value>,
+    /// `{ minimumHealthyPercent, maximumPercent, deploymentCircuitBreaker, alarms }`.
+    pub deployment_configuration: Option<Value>,
+    /// `{ type: ECS|CODE_DEPLOY|EXTERNAL }`. Validated at CreateService.
+    pub deployment_controller: Option<Value>,
+    /// `{ awsvpcConfiguration: { subnets, securityGroups, assignPublicIp } }`.
+    pub network_configuration: Option<Value>,
 }
 
 /// An ECS cluster.
