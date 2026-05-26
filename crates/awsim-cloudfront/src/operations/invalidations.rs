@@ -76,6 +76,51 @@ pub fn create_invalidation(
         vec![]
     };
 
+    // AWS rejects invalidation batches > 3000 paths and any individual
+    // path that doesn't start with `/`. Wildcards (`*`) are allowed
+    // only at the end of a path; mid-path wildcards or empty entries
+    // come back as InvalidArgument.
+    const MAX_INVALIDATION_PATHS: usize = 3000;
+    if paths.len() > MAX_INVALIDATION_PATHS {
+        return Err(AwsError::bad_request(
+            "TooManyInvalidationsInProgress",
+            format!(
+                "An invalidation batch may contain at most {MAX_INVALIDATION_PATHS} paths \
+                 ({} supplied).",
+                paths.len()
+            ),
+        ));
+    }
+    if paths.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidArgument",
+            "InvalidationBatch.Paths must contain at least one entry.",
+        ));
+    }
+    for p in &paths {
+        if p.is_empty() {
+            return Err(AwsError::bad_request(
+                "InvalidArgument",
+                "Invalidation path may not be empty.",
+            ));
+        }
+        if !p.starts_with('/') {
+            return Err(AwsError::bad_request(
+                "InvalidArgument",
+                format!("Invalidation path `{p}` must begin with `/`."),
+            ));
+        }
+        // A `*` is only legal as the final character.
+        if let Some(idx) = p.find('*')
+            && idx + 1 != p.len()
+        {
+            return Err(AwsError::bad_request(
+                "InvalidArgument",
+                format!("Invalidation path `{p}` may only contain `*` at the end."),
+            ));
+        }
+    }
+
     let id = Uuid::new_v4().to_string();
     let inv = Invalidation {
         id: id.clone(),
@@ -137,4 +182,124 @@ pub fn list_invalidations(state: &CloudFrontState, dist_id: &str) -> Result<Valu
             "Items": { "InvalidationSummary": items }
         }
     }))
+}
+
+#[cfg(test)]
+mod invalidation_validation_tests {
+    use super::*;
+    use crate::state::{Distribution, DistributionConfig};
+
+    fn seed(state: &CloudFrontState) {
+        state.distributions.insert(
+            "d1".to_string(),
+            Distribution {
+                id: "d1".to_string(),
+                arn: "arn:aws:cloudfront::000000000000:distribution/d1".to_string(),
+                domain_name: "d1.cloudfront.net".to_string(),
+                status: "Deployed".to_string(),
+                config: DistributionConfig {
+                    origins: vec![],
+                    default_cache_behavior: serde_json::Value::Null,
+                    comment: String::new(),
+                    enabled: true,
+                    price_class: "PriceClass_All".to_string(),
+                    http_version: "http2".to_string(),
+                    is_ipv6_enabled: true,
+                },
+                created_at: String::new(),
+                tags: Default::default(),
+                etag: String::new(),
+            },
+        );
+    }
+
+    #[test]
+    fn accepts_well_formed_paths() {
+        let state = CloudFrontState::default();
+        seed(&state);
+        create_invalidation(
+            &state,
+            "d1",
+            &json!({
+                "InvalidationBatch": {
+                    "CallerReference": "ref",
+                    "Paths": { "Items": ["/index.html", "/static/*"] }
+                }
+            }),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_empty_paths_array() {
+        let state = CloudFrontState::default();
+        seed(&state);
+        let err = create_invalidation(
+            &state,
+            "d1",
+            &json!({
+                "InvalidationBatch": {
+                    "CallerReference": "ref",
+                    "Paths": { "Items": [] }
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgument");
+    }
+
+    #[test]
+    fn rejects_path_without_leading_slash() {
+        let state = CloudFrontState::default();
+        seed(&state);
+        let err = create_invalidation(
+            &state,
+            "d1",
+            &json!({
+                "InvalidationBatch": {
+                    "CallerReference": "ref",
+                    "Paths": { "Items": ["index.html"] }
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgument");
+    }
+
+    #[test]
+    fn rejects_mid_path_wildcard() {
+        let state = CloudFrontState::default();
+        seed(&state);
+        let err = create_invalidation(
+            &state,
+            "d1",
+            &json!({
+                "InvalidationBatch": {
+                    "CallerReference": "ref",
+                    "Paths": { "Items": ["/foo/*/bar"] }
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgument");
+    }
+
+    #[test]
+    fn rejects_over_3000_paths() {
+        let state = CloudFrontState::default();
+        seed(&state);
+        let many: Vec<String> = (0..3001).map(|i| format!("/p{i}")).collect();
+        let err = create_invalidation(
+            &state,
+            "d1",
+            &json!({
+                "InvalidationBatch": {
+                    "CallerReference": "ref",
+                    "Paths": { "Items": many }
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "TooManyInvalidationsInProgress");
+    }
 }
