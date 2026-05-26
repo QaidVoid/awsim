@@ -715,6 +715,16 @@ fn create_rest_api(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aw
         })
         .unwrap_or_default();
     let minimum_compression_size = input["minimumCompressionSize"].as_u64().map(|n| n as u32);
+    let api_key_source = input["apiKeySource"]
+        .as_str()
+        .unwrap_or("HEADER")
+        .to_string();
+    if !matches!(api_key_source.as_str(), "HEADER" | "AUTHORIZER") {
+        return Err(AwsError::bad_request(
+            "BadRequestException",
+            format!("apiKeySource `{api_key_source}` must be HEADER or AUTHORIZER."),
+        ));
+    }
 
     let api = RestApi {
         id: id.clone(),
@@ -722,7 +732,7 @@ fn create_rest_api(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aw
         description,
         version: "2015-07-09".to_string(),
         created_date: now_epoch(),
-        api_key_source: "HEADER".to_string(),
+        api_key_source,
         endpoint_types,
         vpc_endpoint_ids,
         binary_media_types,
