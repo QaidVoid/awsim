@@ -154,6 +154,24 @@ pub fn list_metrics(
     let filter_namespace = input.get("Namespace").and_then(Value::as_str);
     let filter_metric_name = input.get("MetricName").and_then(Value::as_str);
 
+    // Dimensions filter: AWS treats each entry as a required match on
+    // the metric's dimensions. An entry with only a Name matches any
+    // metric that carries that dimension; with Name+Value, the value
+    // must equal exactly.
+    let dim_filters: Vec<(String, Option<String>)> = input
+        .get("Dimensions")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|d| {
+                    let name = d.get("Name").and_then(Value::as_str)?.to_string();
+                    let value = d.get("Value").and_then(Value::as_str).map(str::to_string);
+                    Some((name, value))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let sqlite = require_sqlite(state)?;
     let rows = sqlite.list_metrics(
         &ctx.account_id,
@@ -164,6 +182,17 @@ pub fn list_metrics(
 
     let metrics: Vec<Value> = rows
         .into_iter()
+        .filter(|(_, _, dims)| {
+            if dim_filters.is_empty() {
+                return true;
+            }
+            let stored = json_to_dimensions(dims);
+            dim_filters.iter().all(|(name, value)| {
+                stored
+                    .iter()
+                    .any(|d| d.name == *name && value.as_ref().is_none_or(|v| d.value == *v))
+            })
+        })
         .map(|(ns, name, dims)| {
             json!({
                 "Namespace": ns,
@@ -351,4 +380,112 @@ pub(crate) fn datapoints_for_alarm(
         .into_iter()
         .map(|r| (r.value, json_to_dimensions(&r.dimensions_json), r.timestamp))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sqlite_store::SqliteStore;
+    use crate::state::CloudWatchState;
+    use std::sync::Arc;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("monitoring", "us-east-1")
+    }
+
+    fn fresh_state() -> Arc<CloudWatchState> {
+        let state = Arc::new(CloudWatchState::default());
+        let path = std::env::temp_dir().join(format!("awsim-cwm-list-{}.db", uuid::Uuid::new_v4()));
+        let sqlite = Arc::new(SqliteStore::open(path).unwrap());
+        state.set_sqlite(sqlite);
+        state
+    }
+
+    fn put_datum(
+        state: &Arc<CloudWatchState>,
+        ctx: &RequestContext,
+        namespace: &str,
+        name: &str,
+        dims: Value,
+    ) {
+        put_metric_data(
+            state,
+            &json!({
+                "Namespace": namespace,
+                "MetricData": [{
+                    "MetricName": name,
+                    "Value": 1.0,
+                    "Dimensions": dims,
+                }],
+            }),
+            ctx,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn list_metrics_filters_by_dimension_name_value() {
+        let state = fresh_state();
+        let ctx = ctx();
+        put_datum(
+            &state,
+            &ctx,
+            "App",
+            "Requests",
+            json!([{ "Name": "Service", "Value": "auth" }]),
+        );
+        put_datum(
+            &state,
+            &ctx,
+            "App",
+            "Requests",
+            json!([{ "Name": "Service", "Value": "billing" }]),
+        );
+
+        let resp = list_metrics(
+            &state,
+            &json!({
+                "Namespace": "App",
+                "Dimensions": [{ "Name": "Service", "Value": "auth" }],
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let metrics = resp["Metrics"].as_array().unwrap();
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0]["Dimensions"][0]["Value"], "auth");
+    }
+
+    #[test]
+    fn list_metrics_filters_by_dimension_name_only() {
+        let state = fresh_state();
+        let ctx = ctx();
+        put_datum(
+            &state,
+            &ctx,
+            "App",
+            "Latency",
+            json!([{ "Name": "Region", "Value": "us-east-1" }]),
+        );
+        put_datum(
+            &state,
+            &ctx,
+            "App",
+            "Latency",
+            json!([{ "Name": "InstanceId", "Value": "i-123" }]),
+        );
+
+        let resp = list_metrics(
+            &state,
+            &json!({
+                "Namespace": "App",
+                "Dimensions": [{ "Name": "Region" }],
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let metrics = resp["Metrics"].as_array().unwrap();
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0]["Dimensions"][0]["Name"], "Region");
+    }
 }
