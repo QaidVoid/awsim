@@ -98,13 +98,16 @@ fn user_summary(u: &BrokerUser) -> Value {
 }
 
 fn user_describe(u: &BrokerUser) -> Value {
+    // DescribeUser must never surface the password (plaintext or
+    // hashed). When an UpdateUser is in flight, return its requested
+    // state under `Pending`.
     json!({
         "BrokerId": u.broker_id,
         "Username": u.username,
         "ConsoleAccess": u.console_access,
         "Groups": u.groups,
         "ReplicationUser": u.replication_user,
-        "Pending": null,
+        "Pending": u.pending,
     })
 }
 
@@ -255,6 +258,11 @@ pub fn create_broker(
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
                 pending_change: None,
+                password_hash: u
+                    .get("Password")
+                    .and_then(|v| v.as_str())
+                    .map(hash_password),
+                pending: None,
             };
             state.users.insert(user_key(&id, &username), user);
         }
@@ -370,6 +378,10 @@ pub fn create_user(
             format!("User {username} already exists"),
         ));
     }
+    let password_hash = input
+        .get("Password")
+        .and_then(|v| v.as_str())
+        .map(hash_password);
     let u = BrokerUser {
         broker_id,
         username,
@@ -391,9 +403,20 @@ pub fn create_user(
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         pending_change: Some("CREATE".to_string()),
+        password_hash,
+        pending: None,
     };
     state.users.insert(key, u);
     Ok(json!({}))
+}
+
+/// SHA-256 hex digest. Lets us store + compare passwords without
+/// roundtripping the plaintext through state or describe responses.
+fn hash_password(password: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(password.as_bytes());
+    format!("{:x}", h.finalize())
 }
 
 pub fn describe_user(
@@ -456,14 +479,36 @@ pub fn update_user(
         .ok_or_else(|| {
             AwsError::not_found("NotFoundException", format!("User {username} not found"))
         })?;
-    if let Some(c) = input.get("ConsoleAccess").and_then(|v| v.as_bool()) {
-        u.console_access = c;
-    }
-    if let Some(g) = input.get("Groups").and_then(|v| v.as_array()) {
-        u.groups = g
-            .iter()
-            .filter_map(|x| x.as_str().map(String::from))
-            .collect();
+    // AWS persists UpdateUser as a pending change; the values stay
+    // visible under `Pending` until the broker is rebooted, at which
+    // point they replace the live values. Mirror that by writing the
+    // requested fields into `pending` rather than the live fields.
+    let console_access = input
+        .get("ConsoleAccess")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(u.console_access);
+    let groups = input
+        .get("Groups")
+        .and_then(|v| v.as_array())
+        .map(|g| {
+            g.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| u.groups.clone());
+    let replication_user = input
+        .get("ReplicationUser")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(u.replication_user);
+    u.pending = Some(json!({
+        "ConsoleAccess": console_access,
+        "Groups": groups,
+        "ReplicationUser": replication_user,
+    }));
+    // Password changes update the hash immediately but never surface
+    // back to the caller.
+    if let Some(p) = input.get("Password").and_then(|v| v.as_str()) {
+        u.password_hash = Some(hash_password(p));
     }
     u.pending_change = Some("UPDATE".to_string());
     Ok(json!({}))

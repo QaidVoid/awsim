@@ -348,4 +348,78 @@ mod tests {
         let err = block_on(svc.handle("CreateBroker", body, &ctx)).unwrap_err();
         assert_eq!(err.code, "ConflictException");
     }
+
+    fn make_broker_with_user(svc: &MqService, ctx: &RequestContext) -> String {
+        let r = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "secrets",
+                "EngineType": "ACTIVEMQ",
+                "EngineVersion": "5.18",
+                "HostInstanceType": "mq.t3.micro",
+                "Users": [{
+                    "Username": "alice",
+                    "ConsoleAccess": false,
+                    "Groups": ["g1"],
+                    "Password": "hunter2"
+                }]
+            }),
+            ctx,
+        ))
+        .unwrap();
+        r["BrokerId"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn describe_user_does_not_surface_password() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let id = make_broker_with_user(&svc, &ctx);
+        let desc = block_on(svc.handle(
+            "DescribeUser",
+            json!({ "BrokerId": id, "Username": "alice" }),
+            &ctx,
+        ))
+        .unwrap();
+        let serialized = desc.to_string();
+        assert!(
+            !serialized.contains("hunter2"),
+            "plaintext leaked: {serialized}"
+        );
+        assert!(
+            !serialized.contains("Password"),
+            "Password field must be absent: {serialized}"
+        );
+    }
+
+    #[test]
+    fn update_user_writes_to_pending_mirror() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let id = make_broker_with_user(&svc, &ctx);
+        block_on(svc.handle(
+            "UpdateUser",
+            json!({
+                "BrokerId": id,
+                "Username": "alice",
+                "ConsoleAccess": true,
+                "Groups": ["admins"],
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let desc = block_on(svc.handle(
+            "DescribeUser",
+            json!({ "BrokerId": id, "Username": "alice" }),
+            &ctx,
+        ))
+        .unwrap();
+        // Live values unchanged.
+        assert_eq!(desc["ConsoleAccess"], false);
+        assert_eq!(desc["Groups"][0], "g1");
+        // Pending mirror reflects the requested update.
+        let pending = desc["Pending"].as_object().expect("Pending populated");
+        assert_eq!(pending["ConsoleAccess"], true);
+        assert_eq!(pending["Groups"][0], "admins");
+    }
 }

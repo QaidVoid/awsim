@@ -38,6 +38,16 @@ pub struct BrokerUser {
     pub groups: Vec<String>,
     pub replication_user: bool,
     pub pending_change: Option<String>,
+    /// SHA-256 of the user-supplied password. Stored only so we can
+    /// validate password changes; DescribeUser must never surface it.
+    #[serde(default)]
+    pub password_hash: Option<String>,
+    /// In-flight UpdateUser payload. Cleared once the broker "reboots"
+    /// (the moment AWS applies the change). Stored verbatim as a
+    /// JSON object with the same fields a Describe response uses,
+    /// minus credentials.
+    #[serde(default)]
+    pub pending: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
