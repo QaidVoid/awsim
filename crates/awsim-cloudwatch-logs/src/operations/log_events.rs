@@ -56,11 +56,23 @@ pub fn put_log_events(
     })?;
 
     let ingestion_time = now_millis();
+    // AWS rejects events whose timestamp falls outside the documented
+    // ingestion window: older than 14 days or more than 2 hours in the
+    // future. Rejected entries are reported via rejectedLogEventsInfo
+    // and are not persisted. Indices here match the original input
+    // order so callers can correlate to their request.
+    const PAST_WINDOW_MS: u64 = 14 * 24 * 60 * 60 * 1000;
+    const FUTURE_WINDOW_MS: u64 = 2 * 60 * 60 * 1000;
+    let oldest_allowed = ingestion_time.saturating_sub(PAST_WINDOW_MS);
+    let newest_allowed = ingestion_time + FUTURE_WINDOW_MS;
+
     let mut new_events: Vec<LogEventRow> = Vec::with_capacity(log_events.len());
     let mut min_ts = u64::MAX;
     let mut max_ts = 0u64;
+    let mut too_old_end_idx: Option<usize> = None;
+    let mut too_new_start_idx: Option<usize> = None;
 
-    for ev in log_events {
+    for (idx, ev) in log_events.iter().enumerate() {
         let timestamp = ev["timestamp"].as_u64().ok_or_else(|| {
             AwsError::bad_request(
                 "InvalidParameterException",
@@ -73,6 +85,16 @@ pub fn put_log_events(
                 "each logEvent must have a message",
             )
         })?;
+        if timestamp < oldest_allowed {
+            too_old_end_idx = Some(idx);
+            continue;
+        }
+        if timestamp > newest_allowed {
+            if too_new_start_idx.is_none() {
+                too_new_start_idx = Some(idx);
+            }
+            continue;
+        }
         if timestamp < min_ts {
             min_ts = timestamp;
         }
@@ -125,7 +147,19 @@ pub fn put_log_events(
         "Put log events"
     );
 
-    Ok(json!({ "nextSequenceToken": seq_token.to_string() }))
+    let mut response = json!({ "nextSequenceToken": seq_token.to_string() });
+    if too_old_end_idx.is_some() || too_new_start_idx.is_some() {
+        let mut info = serde_json::Map::new();
+        if let Some(idx) = too_old_end_idx {
+            info.insert("tooOldLogEventEndIndex".to_string(), json!(idx));
+            info.insert("expiredLogEventEndIndex".to_string(), json!(idx));
+        }
+        if let Some(idx) = too_new_start_idx {
+            info.insert("tooNewLogEventStartIndex".to_string(), json!(idx));
+        }
+        response["rejectedLogEventsInfo"] = Value::Object(info);
+    }
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------

@@ -18,6 +18,10 @@ mod tests {
         RequestContext::new("logs", "us-east-1")
     }
 
+    fn now_ts() -> u64 {
+        super::state::now_millis()
+    }
+
     fn block_on<F: std::future::Future>(f: F) -> F::Output {
         use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
@@ -414,14 +418,15 @@ mod tests {
         let ctx = ctx();
         setup_group_and_stream(&svc, "/events/group", "events-stream");
 
+        let now = now_ts();
         let result = block_on(svc.handle(
             "PutLogEvents",
             json!({
                 "logGroupName": "/events/group",
                 "logStreamName": "events-stream",
                 "logEvents": [
-                    { "timestamp": 1000u64, "message": "first event" },
-                    { "timestamp": 2000u64, "message": "second event" },
+                    { "timestamp": now - 2000, "message": "first event" },
+                    { "timestamp": now - 1000, "message": "second event" },
                 ],
             }),
             &ctx,
@@ -449,15 +454,16 @@ mod tests {
         let ctx = ctx();
         setup_group_and_stream(&svc, "/time/group", "time-stream");
 
+        let now = now_ts();
         block_on(svc.handle(
             "PutLogEvents",
             json!({
                 "logGroupName": "/time/group",
                 "logStreamName": "time-stream",
                 "logEvents": [
-                    { "timestamp": 1000u64, "message": "before" },
-                    { "timestamp": 5000u64, "message": "during" },
-                    { "timestamp": 9000u64, "message": "after" },
+                    { "timestamp": now - 9000, "message": "before" },
+                    { "timestamp": now - 5000, "message": "during" },
+                    { "timestamp": now - 1000, "message": "after" },
                 ],
             }),
             &ctx,
@@ -469,8 +475,8 @@ mod tests {
             json!({
                 "logGroupName": "/time/group",
                 "logStreamName": "time-stream",
-                "startTime": 2000u64,
-                "endTime": 8000u64,
+                "startTime": now - 8000,
+                "endTime": now - 2000,
                 "startFromHead": true,
             }),
             &ctx,
@@ -487,15 +493,16 @@ mod tests {
         let ctx = ctx();
         setup_group_and_stream(&svc, "/filter/group", "filter-stream");
 
+        let now = now_ts();
         block_on(svc.handle(
             "PutLogEvents",
             json!({
                 "logGroupName": "/filter/group",
                 "logStreamName": "filter-stream",
                 "logEvents": [
-                    { "timestamp": 1000u64, "message": "ERROR something failed" },
-                    { "timestamp": 2000u64, "message": "INFO all good" },
-                    { "timestamp": 3000u64, "message": "ERROR another failure" },
+                    { "timestamp": now - 3000, "message": "ERROR something failed" },
+                    { "timestamp": now - 2000, "message": "INFO all good" },
+                    { "timestamp": now - 1000, "message": "ERROR another failure" },
                 ],
             }),
             &ctx,
@@ -520,14 +527,15 @@ mod tests {
         let ctx = ctx();
         setup_group_and_stream(&svc, "/filter2/group", "filter2-stream");
 
+        let now = now_ts();
         block_on(svc.handle(
             "PutLogEvents",
             json!({
                 "logGroupName": "/filter2/group",
                 "logStreamName": "filter2-stream",
                 "logEvents": [
-                    { "timestamp": 1000u64, "message": "msg1" },
-                    { "timestamp": 2000u64, "message": "msg2" },
+                    { "timestamp": now - 2000, "message": "msg1" },
+                    { "timestamp": now - 1000, "message": "msg2" },
                 ],
             }),
             &ctx,
@@ -549,17 +557,68 @@ mod tests {
     fn test_put_log_events_missing_group() {
         let svc = CloudWatchLogsService::new();
         let ctx = ctx();
+        let now = now_ts();
         let err = block_on(svc.handle(
             "PutLogEvents",
             json!({
                 "logGroupName": "/ghost",
                 "logStreamName": "stream",
-                "logEvents": [{ "timestamp": 1000u64, "message": "hi" }],
+                "logEvents": [{ "timestamp": now, "message": "hi" }],
             }),
             &ctx,
         ))
         .unwrap_err();
         assert_eq!(err.code, "ResourceNotFoundException");
+    }
+
+    #[test]
+    fn test_put_log_events_rejects_too_old_events() {
+        let svc = CloudWatchLogsService::new();
+        let ctx = ctx();
+        setup_group_and_stream(&svc, "/rej/group", "rej-stream");
+
+        let now = now_ts();
+        let too_old = now - (15 * 24 * 60 * 60 * 1000);
+        let result = block_on(svc.handle(
+            "PutLogEvents",
+            json!({
+                "logGroupName": "/rej/group",
+                "logStreamName": "rej-stream",
+                "logEvents": [
+                    { "timestamp": too_old, "message": "ancient" },
+                    { "timestamp": now - 1000, "message": "fresh" },
+                ],
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let rej = &result["rejectedLogEventsInfo"];
+        assert_eq!(rej["tooOldLogEventEndIndex"].as_u64(), Some(0));
+    }
+
+    #[test]
+    fn test_put_log_events_rejects_too_new_events() {
+        let svc = CloudWatchLogsService::new();
+        let ctx = ctx();
+        setup_group_and_stream(&svc, "/rej2/group", "rej2-stream");
+
+        let now = now_ts();
+        let too_future = now + (3 * 60 * 60 * 1000);
+        let result = block_on(svc.handle(
+            "PutLogEvents",
+            json!({
+                "logGroupName": "/rej2/group",
+                "logStreamName": "rej2-stream",
+                "logEvents": [
+                    { "timestamp": now - 1000, "message": "fresh" },
+                    { "timestamp": too_future, "message": "from the future" },
+                ],
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let rej = &result["rejectedLogEventsInfo"];
+        assert_eq!(rej["tooNewLogEventStartIndex"].as_u64(), Some(1));
     }
 
     #[test]
