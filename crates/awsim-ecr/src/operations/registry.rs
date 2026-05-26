@@ -169,6 +169,25 @@ pub fn put_registry_policy(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let policy = require_str(input, "policyText")?;
+    // Mirror SetRepositoryPolicy: registry-level policies must also
+    // be valid JSON objects with a Statement array.
+    let parsed: Value = serde_json::from_str(policy).map_err(|e| {
+        AwsError::bad_request(
+            "InvalidParameterException",
+            format!("policyText is not valid JSON: {e}"),
+        )
+    })?;
+    if !parsed.is_object()
+        || !parsed
+            .get("Statement")
+            .map(|s| s.is_array())
+            .unwrap_or(false)
+    {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "policyText must be a JSON object containing a Statement array.",
+        ));
+    }
     state
         .registry_policy
         .insert("default".to_string(), policy.to_string());

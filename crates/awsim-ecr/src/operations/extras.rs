@@ -132,6 +132,32 @@ pub fn set_repository_policy(
         AwsError::bad_request("InvalidParameterException", "policyText is required")
     })?;
 
+    // AWS rejects non-JSON or structurally-invalid policy documents
+    // up front with InvalidParameterException — the document must be a
+    // JSON object with a `Statement` array.
+    let parsed: Value = serde_json::from_str(policy_text).map_err(|e| {
+        AwsError::bad_request(
+            "InvalidParameterException",
+            format!("policyText is not valid JSON: {e}"),
+        )
+    })?;
+    if !parsed.is_object() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "policyText must be a JSON object.",
+        ));
+    }
+    if !parsed
+        .get("Statement")
+        .map(|s| s.is_array())
+        .unwrap_or(false)
+    {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "policyText must include a Statement array.",
+        ));
+    }
+
     let mut repo = state
         .repositories
         .get_mut(repo_name)
