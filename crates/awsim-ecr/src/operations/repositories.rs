@@ -16,7 +16,62 @@ pub fn now_epoch_str() -> String {
         .to_string()
 }
 
+/// Parse + validate the optional `encryptionConfiguration` on
+/// CreateRepository. AWS accepts `AES256` (default) or `KMS`; the
+/// latter requires `kmsKey` and rejects the field when type is AES256.
+fn parse_encryption_configuration(input: &Value) -> Result<(String, Option<String>), AwsError> {
+    let Some(cfg) = input.get("encryptionConfiguration") else {
+        return Ok(("AES256".to_string(), None));
+    };
+    if cfg.is_null() {
+        return Ok(("AES256".to_string(), None));
+    }
+    let obj = cfg.as_object().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "encryptionConfiguration must be an object.",
+        )
+    })?;
+    let ty = obj
+        .get("encryptionType")
+        .and_then(Value::as_str)
+        .unwrap_or("AES256")
+        .to_string();
+    let kms_key = obj
+        .get("kmsKey")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    match ty.as_str() {
+        "AES256" => {
+            if kms_key.is_some() {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterException",
+                    "encryptionConfiguration.kmsKey is not allowed when encryptionType is AES256.",
+                ));
+            }
+            Ok((ty, None))
+        }
+        "KMS" => {
+            if kms_key.as_deref().is_none_or(str::is_empty) {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterException",
+                    "encryptionConfiguration.kmsKey is required when encryptionType is KMS.",
+                ));
+            }
+            Ok((ty, kms_key))
+        }
+        other => Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!("encryptionConfiguration.encryptionType `{other}` must be AES256 or KMS."),
+        )),
+    }
+}
+
 pub fn repo_to_json(repo: &Repository) -> Value {
+    let mut encryption = json!({ "encryptionType": repo.encryption_type });
+    if let Some(key) = &repo.kms_key {
+        encryption["kmsKey"] = json!(key);
+    }
     json!({
         "repositoryName": repo.name,
         "repositoryArn": repo.arn,
@@ -27,9 +82,7 @@ pub fn repo_to_json(repo: &Repository) -> Value {
         "imageScanningConfiguration": {
             "scanOnPush": repo.scan_on_push
         },
-        "encryptionConfiguration": {
-            "encryptionType": "AES256"
-        }
+        "encryptionConfiguration": encryption,
     })
 }
 
@@ -90,6 +143,8 @@ pub fn create_repository(
         .as_bool()
         .unwrap_or(false);
 
+    let (encryption_type, kms_key) = parse_encryption_configuration(input)?;
+
     let repo = Repository {
         name: name.to_string(),
         arn: arn.clone(),
@@ -104,6 +159,8 @@ pub fn create_repository(
         lifecycle_policy_preview: None,
         repository_policy: None,
         scan_on_push,
+        encryption_type,
+        kms_key,
     };
 
     info!(repository = %name, "Created ECR repository");

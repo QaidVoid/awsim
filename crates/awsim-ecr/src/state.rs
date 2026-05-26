@@ -50,6 +50,11 @@ pub struct Repository {
     pub lifecycle_policy_preview: Option<String>,
     pub repository_policy: Option<String>,
     pub scan_on_push: bool,
+    /// `AES256` (default, AWS-managed) or `KMS` (customer-managed,
+    /// requires `kms_key`). Persisted at CreateRepository.
+    pub encryption_type: String,
+    /// KMS key ARN when `encryption_type == "KMS"`.
+    pub kms_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +167,8 @@ impl Snapshottable for EcrState {
                             image_size_in_bytes: i.image_size_in_bytes,
                         })
                         .collect(),
+                    encryption_type: Some(r.encryption_type.clone()),
+                    kms_key: r.kms_key.clone(),
                     layers: r
                         .layers
                         .iter()
@@ -227,6 +234,8 @@ impl Snapshottable for EcrState {
                 lifecycle_policy_preview: None,
                 repository_policy: rs.repository_policy,
                 scan_on_push: rs.scan_on_push,
+                encryption_type: rs.encryption_type.unwrap_or_else(|| "AES256".to_string()),
+                kms_key: rs.kms_key,
             };
 
             state.repositories.insert(rs.name, repo);
@@ -257,6 +266,10 @@ pub struct RepositorySnapshot {
     pub images: Vec<ImageSnapshot>,
     #[serde(default)]
     pub layers: Vec<LayerSnapshot>,
+    #[serde(default)]
+    pub encryption_type: Option<String>,
+    #[serde(default)]
+    pub kms_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

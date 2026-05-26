@@ -58,6 +58,62 @@ mod tests {
     }
 
     #[test]
+    fn test_create_repository_persists_kms_encryption_config() {
+        let svc = EcrService::new();
+        let ctx = ctx();
+        let result = block_on(svc.handle(
+            "CreateRepository",
+            json!({
+                "repositoryName": "kms-repo",
+                "encryptionConfiguration": {
+                    "encryptionType": "KMS",
+                    "kmsKey": "arn:aws:kms:us-east-1:000000000000:key/abc"
+                }
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let enc = &result["repository"]["encryptionConfiguration"];
+        assert_eq!(enc["encryptionType"], "KMS");
+        assert_eq!(enc["kmsKey"], "arn:aws:kms:us-east-1:000000000000:key/abc");
+    }
+
+    #[test]
+    fn test_create_repository_rejects_kms_without_key() {
+        let svc = EcrService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateRepository",
+            json!({
+                "repositoryName": "kms-bad",
+                "encryptionConfiguration": { "encryptionType": "KMS" }
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn test_create_repository_rejects_aes256_with_kms_key() {
+        let svc = EcrService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateRepository",
+            json!({
+                "repositoryName": "aes-with-key",
+                "encryptionConfiguration": {
+                    "encryptionType": "AES256",
+                    "kmsKey": "arn:aws:kms:us-east-1:000000000000:key/abc"
+                }
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
     fn test_create_repository_duplicate() {
         let svc = EcrService::new();
         let ctx = ctx();
