@@ -266,8 +266,29 @@ pub fn get_parameter(
         AwsError::bad_request("ParameterNotFound", format!("Parameter {name} not found"))
     })?;
 
+    let with_decryption = input["WithDecryption"].as_bool().unwrap_or(false);
+    if with_decryption && param.param_type == "SecureString" {
+        check_decrypt_eligibility(param.key_id.as_deref())?;
+    }
+
     debug!(name, "GetParameter");
     Ok(json!({ "Parameter": parameter_to_value(&param) }))
+}
+
+/// Surface an `InvalidKeyId` when the simulator's KMS-equivalent would
+/// fail decryption. We trigger the failure on any key identifier whose
+/// alias path contains the substring `disabled`, matching AWS's behavior
+/// of raising `InvalidKeyId` when the KMS key is missing, deleted, or
+/// disabled.
+fn check_decrypt_eligibility(key_id: Option<&str>) -> Result<(), AwsError> {
+    let Some(k) = key_id else { return Ok(()) };
+    if k.to_ascii_lowercase().contains("disabled") {
+        return Err(AwsError::bad_request(
+            "InvalidKeyId",
+            format!("KMS key '{k}' cannot be used to decrypt the parameter."),
+        ));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -283,13 +304,20 @@ pub fn get_parameters(
         .as_array()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Names is required"))?;
 
+    let with_decryption = input["WithDecryption"].as_bool().unwrap_or(false);
+
     let mut parameters: Vec<Value> = Vec::new();
     let mut invalid: Vec<Value> = Vec::new();
 
     for name_val in names {
         let name = name_val.as_str().unwrap_or("");
         match state.parameters.get(name) {
-            Some(p) => parameters.push(parameter_to_value(&p)),
+            Some(p) => {
+                if with_decryption && p.param_type == "SecureString" {
+                    check_decrypt_eligibility(p.key_id.as_deref())?;
+                }
+                parameters.push(parameter_to_value(&p));
+            }
             None => invalid.push(json!(name)),
         }
     }
@@ -1013,6 +1041,92 @@ mod secure_string_key_id_tests {
                 "Type": "String",
                 "KeyId": "alias/team-keys",
             }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidKeyId");
+    }
+
+    #[test]
+    fn with_decryption_raises_invalid_key_id_for_disabled_key() {
+        let state = SsmState::default();
+        put_parameter(
+            &state,
+            &json!({
+                "Name": "/secret/db",
+                "Value": "hunter2",
+                "Type": "SecureString",
+                "KeyId": "alias/disabled-key",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = get_parameter(
+            &state,
+            &json!({ "Name": "/secret/db", "WithDecryption": true }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidKeyId");
+    }
+
+    #[test]
+    fn with_decryption_passes_for_healthy_key() {
+        let state = SsmState::default();
+        put_parameter(
+            &state,
+            &json!({
+                "Name": "/secret/db",
+                "Value": "hunter2",
+                "Type": "SecureString",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = get_parameter(
+            &state,
+            &json!({ "Name": "/secret/db", "WithDecryption": true }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Parameter"]["Value"], "hunter2");
+    }
+
+    #[test]
+    fn without_decryption_skips_key_check() {
+        let state = SsmState::default();
+        put_parameter(
+            &state,
+            &json!({
+                "Name": "/secret/db",
+                "Value": "hunter2",
+                "Type": "SecureString",
+                "KeyId": "alias/disabled-key",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = get_parameter(&state, &json!({ "Name": "/secret/db" }), &ctx()).unwrap();
+        assert_eq!(resp["Parameter"]["Value"], "hunter2");
+    }
+
+    #[test]
+    fn get_parameters_bubbles_decrypt_failure() {
+        let state = SsmState::default();
+        put_parameter(
+            &state,
+            &json!({
+                "Name": "/secret/db",
+                "Value": "hunter2",
+                "Type": "SecureString",
+                "KeyId": "alias/disabled-key",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = get_parameters(
+            &state,
+            &json!({ "Names": ["/secret/db"], "WithDecryption": true }),
             &ctx(),
         )
         .unwrap_err();
