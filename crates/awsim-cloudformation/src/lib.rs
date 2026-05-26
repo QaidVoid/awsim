@@ -75,6 +75,9 @@ impl ServiceHandler for CloudFormationService {
             "GetTemplate" => operations::stacks::get_template(&state, &input),
             "GetTemplateSummary" => operations::stacks::get_template_summary(&state, &input),
             "ValidateTemplate" => operations::stacks::validate_template(&state, &input),
+            "UpdateTerminationProtection" => {
+                operations::stacks::update_termination_protection(&state, &input, ctx)
+            }
 
             // Exports / Imports
             "ListExports" => operations::stacks::list_exports(&state, &input),

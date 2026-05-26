@@ -139,6 +139,7 @@ pub fn create_change_set(
             created_at: now_iso8601(),
             updated_at: None,
             outputs: HashMap::new(),
+            termination_protection: false,
         };
         state.stacks.insert(stack_name.clone(), placeholder_stack);
     }

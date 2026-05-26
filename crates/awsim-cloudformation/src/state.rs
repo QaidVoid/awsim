@@ -25,6 +25,10 @@ pub struct Stack {
     pub created_at: String,
     pub updated_at: Option<String>,
     pub outputs: HashMap<String, StackOutput>,
+    /// When true, DeleteStack returns ValidationError until the caller
+    /// flips it off via UpdateTerminationProtection. Mirrors AWS's
+    /// stack-level safeguard against accidental deletes.
+    pub termination_protection: bool,
 }
 
 #[derive(Debug, Clone)]

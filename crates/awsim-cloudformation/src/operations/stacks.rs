@@ -55,6 +55,7 @@ fn stack_to_value(stack: &Stack) -> Value {
     if let Some(updated_at) = &stack.updated_at {
         result["LastUpdatedTime"] = Value::String(updated_at.clone());
     }
+    result["EnableTerminationProtection"] = json!(stack.termination_protection);
 
     result
 }
@@ -204,6 +205,10 @@ pub fn create_stack(
     let resources = build_resources(&parsed, &now);
     let events = build_events(&resources, &stack_id, &stack_name, &now);
 
+    let termination_protection = input["EnableTerminationProtection"]
+        .as_bool()
+        .unwrap_or(false);
+
     let stack = Stack {
         stack_id: stack_id.clone(),
         stack_name: stack_name.clone(),
@@ -218,6 +223,7 @@ pub fn create_stack(
         created_at: now,
         updated_at: None,
         outputs: HashMap::new(),
+        termination_protection,
     };
 
     // Emit one CreateResource event per resource so the background router
@@ -258,6 +264,17 @@ pub fn delete_stack(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let stack_name = require_str(input, "StackName")?;
+
+    if let Some(stack) = state.stacks.get(stack_name)
+        && stack.termination_protection
+    {
+        return Err(AwsError::bad_request(
+            "ValidationError",
+            format!(
+                "Stack [{stack_name}] cannot be deleted while TerminationProtection is enabled."
+            ),
+        ));
+    }
 
     if let Some((_, mut stack)) = state.stacks.remove(stack_name) {
         // Emit one DeleteResource event per resource before marking deleted.
@@ -617,6 +634,27 @@ pub fn untag_resource(state: &CloudFormationState, input: &Value) -> Result<Valu
     Ok(json!({}))
 }
 
+/// UpdateTerminationProtection toggles the stack-level deletion guard.
+/// AWS rejects unknown stacks with ValidationError, not NotFound.
+pub fn update_termination_protection(
+    state: &CloudFormationState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let stack_name = require_str(input, "StackName")?;
+    let enabled = input["EnableTerminationProtection"]
+        .as_bool()
+        .ok_or_else(|| missing_parameter("EnableTerminationProtection"))?;
+    let mut stack = state.stacks.get_mut(stack_name).ok_or_else(|| {
+        AwsError::bad_request(
+            "ValidationError",
+            format!("Stack [{stack_name}] does not exist."),
+        )
+    })?;
+    stack.termination_protection = enabled;
+    Ok(json!({ "StackId": stack.stack_id }))
+}
+
 /// SignalResource — accept and succeed silently.
 pub fn signal_resource(_state: &CloudFormationState, _input: &Value) -> Result<Value, AwsError> {
     Ok(json!({}))
@@ -662,4 +700,68 @@ pub fn validate_template(_state: &CloudFormationState, input: &Value) -> Result<
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod termination_protection_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("cloudformation", "us-east-1")
+    }
+
+    fn create(state: &CloudFormationState, protect: bool) {
+        let template = r#"{"Resources":{"R":{"Type":"AWS::S3::Bucket"}}}"#;
+        let mut input = json!({
+            "StackName": "s1",
+            "TemplateBody": template,
+        });
+        if protect {
+            input["EnableTerminationProtection"] = json!(true);
+        }
+        create_stack(state, &input, &ctx()).unwrap();
+    }
+
+    #[test]
+    fn delete_stack_blocked_when_termination_protection_on() {
+        let state = CloudFormationState::default();
+        create(&state, true);
+        let err = delete_stack(&state, &json!({ "StackName": "s1" }), &ctx()).unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+        assert!(err.message.contains("TerminationProtection"));
+    }
+
+    #[test]
+    fn delete_stack_succeeds_after_disabling_protection() {
+        let state = CloudFormationState::default();
+        create(&state, true);
+        update_termination_protection(
+            &state,
+            &json!({ "StackName": "s1", "EnableTerminationProtection": false }),
+            &ctx(),
+        )
+        .unwrap();
+        delete_stack(&state, &json!({ "StackName": "s1" }), &ctx()).unwrap();
+    }
+
+    #[test]
+    fn update_termination_protection_validates_unknown_stack() {
+        let state = CloudFormationState::default();
+        let err = update_termination_protection(
+            &state,
+            &json!({ "StackName": "missing", "EnableTerminationProtection": true }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    #[test]
+    fn describe_surfaces_enable_termination_protection() {
+        let state = CloudFormationState::default();
+        create(&state, true);
+        let resp = describe_stacks(&state, &json!({ "StackName": "s1" })).unwrap();
+        let stacks = &resp["Stacks"]["member"];
+        assert_eq!(stacks[0]["EnableTerminationProtection"], true);
+    }
 }
