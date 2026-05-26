@@ -185,6 +185,7 @@ fn decode_ciphertext_blob(blob_b64: &str) -> Result<(String, Vec<u8>), AwsError>
 // ---------------------------------------------------------------------------
 
 pub fn encrypt(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+    super::grants::validate_grant_tokens(state, input)?;
     let key_id_input = input["KeyId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
@@ -223,6 +224,7 @@ pub fn encrypt(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result
 // ---------------------------------------------------------------------------
 
 pub fn decrypt(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+    super::grants::validate_grant_tokens(state, input)?;
     let ciphertext_b64 = input["CiphertextBlob"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("CiphertextBlob"))?;
@@ -262,6 +264,7 @@ pub fn generate_data_key(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    super::grants::validate_grant_tokens(state, input)?;
     let key_id_input = input["KeyId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
@@ -352,6 +355,7 @@ pub fn re_encrypt(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    super::grants::validate_grant_tokens(state, input)?;
     let ciphertext_b64 = input["CiphertextBlob"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("CiphertextBlob"))?;

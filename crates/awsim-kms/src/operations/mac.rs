@@ -46,6 +46,7 @@ pub fn generate_mac(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    super::grants::validate_grant_tokens(state, input)?;
     let key_id_input = input["KeyId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
@@ -91,6 +92,7 @@ pub fn verify_mac(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    super::grants::validate_grant_tokens(state, input)?;
     let key_id_input = input["KeyId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;

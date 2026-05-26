@@ -47,6 +47,7 @@ fn signing_algorithm_matches_key_spec(algo: &str, key_spec: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 pub fn sign(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+    super::grants::validate_grant_tokens(state, input)?;
     let key_id_input = input["KeyId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
@@ -102,6 +103,7 @@ pub fn sign(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Va
 // ---------------------------------------------------------------------------
 
 pub fn verify(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+    super::grants::validate_grant_tokens(state, input)?;
     let key_id_input = input["KeyId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
@@ -210,6 +212,7 @@ pub fn generate_data_key_pair(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    super::grants::validate_grant_tokens(state, input)?;
     let key_id_input = input["KeyId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;

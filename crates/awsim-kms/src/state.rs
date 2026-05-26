@@ -11,6 +11,10 @@ pub struct KmsGrant {
     pub name: Option<String>,
     pub grantee_principal: String,
     pub operations: Vec<String>,
+    /// Unix-epoch seconds when the grant token was minted. AWS lets a
+    /// grant token authorize operations for 5 minutes after creation
+    /// (after which the underlying grant must be used by id instead).
+    pub token_created_at: u64,
 }
 
 /// A KMS key.

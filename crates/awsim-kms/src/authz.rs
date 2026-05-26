@@ -196,6 +196,7 @@ mod tests {
                 name: None,
                 grantee_principal: "arn:aws:iam::000000000000:user/alice".into(),
                 operations: vec!["Decrypt".into(), "DescribeKey".into()],
+                token_created_at: 0,
             },
         );
         let lookup = KmsGrantLookup::new(store);
