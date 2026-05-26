@@ -61,6 +61,68 @@ fn is_leap(year: u64) -> bool {
     (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
+/// Enforce AWS's routing-policy rules: at most one of the
+/// policy-specific fields may be present, and any policy-specific
+/// field requires a `SetIdentifier` to tie it back to the policy
+/// instance. Real AWS rejects mismatches with InvalidChangeBatch.
+fn validate_routing_policy(rs: &Value) -> Result<(), AwsError> {
+    let weight = rs.get("Weight").and_then(Value::as_i64);
+    let failover = rs.get("Failover").and_then(Value::as_str);
+    let region = rs.get("Region").and_then(Value::as_str);
+    let geo_location = rs.get("GeoLocation");
+    let geo_proximity = rs.get("GeoProximityLocation");
+    let multi_value = rs.get("MultiValueAnswer").and_then(Value::as_bool);
+
+    let set_count = [
+        weight.is_some(),
+        failover.is_some(),
+        region.is_some(),
+        geo_location.is_some(),
+        geo_proximity.is_some(),
+        multi_value.is_some(),
+    ]
+    .iter()
+    .filter(|x| **x)
+    .count();
+    if set_count > 1 {
+        return Err(AwsError::bad_request(
+            "InvalidChangeBatch",
+            "A ResourceRecordSet may specify only one routing policy: \
+             Weight, Failover, Region, GeoLocation, GeoProximityLocation, \
+             or MultiValueAnswer.",
+        ));
+    }
+    if set_count == 1
+        && rs
+            .get("SetIdentifier")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .is_none()
+    {
+        return Err(AwsError::bad_request(
+            "InvalidChangeBatch",
+            "Routing-policy records must also include a non-empty SetIdentifier.",
+        ));
+    }
+    if let Some(w) = weight
+        && !(0..=255).contains(&w)
+    {
+        return Err(AwsError::bad_request(
+            "InvalidChangeBatch",
+            format!("Weight {w} must be between 0 and 255."),
+        ));
+    }
+    if let Some(f) = failover
+        && !matches!(f, "PRIMARY" | "SECONDARY")
+    {
+        return Err(AwsError::bad_request(
+            "InvalidChangeBatch",
+            format!("Failover `{f}` must be PRIMARY or SECONDARY."),
+        ));
+    }
+    Ok(())
+}
+
 /// Parse a Change element from the XML-decoded input JSON.
 fn parse_record_set(rs: &Value) -> Result<ResourceRecordSet, AwsError> {
     let name = rs
@@ -74,6 +136,8 @@ fn parse_record_set(rs: &Value) -> Result<ResourceRecordSet, AwsError> {
         .ok_or_else(|| AwsError::bad_request("InvalidInput", "ResourceRecordSet.Type is required"))?
         .to_string();
     let ttl = rs.get("TTL").and_then(Value::as_u64);
+
+    validate_routing_policy(rs)?;
 
     // Resource records may be in ResourceRecords.ResourceRecord (array)
     let resource_records: Vec<String> = rs
@@ -280,4 +344,63 @@ pub fn list_resource_record_sets(
         "IsTruncated": false,
         "MaxItems": "300",
     }))
+}
+
+#[cfg(test)]
+mod routing_policy_tests {
+    use super::*;
+
+    fn rs(payload: serde_json::Value) -> serde_json::Value {
+        let mut base = json!({ "Name": "x.example.", "Type": "A" });
+        let obj = base.as_object_mut().unwrap();
+        for (k, v) in payload.as_object().unwrap() {
+            obj.insert(k.clone(), v.clone());
+        }
+        base
+    }
+
+    #[test]
+    fn simple_record_passes() {
+        validate_routing_policy(&rs(json!({}))).unwrap();
+    }
+
+    #[test]
+    fn weighted_requires_set_identifier() {
+        let err = validate_routing_policy(&rs(json!({ "Weight": 50 }))).unwrap_err();
+        assert_eq!(err.code, "InvalidChangeBatch");
+        assert!(err.message.contains("SetIdentifier"));
+    }
+
+    #[test]
+    fn weighted_with_set_identifier_passes() {
+        validate_routing_policy(&rs(json!({ "Weight": 50, "SetIdentifier": "v1" }))).unwrap();
+    }
+
+    #[test]
+    fn rejects_weight_out_of_range() {
+        let err = validate_routing_policy(&rs(json!({ "Weight": 999, "SetIdentifier": "v1" })))
+            .unwrap_err();
+        assert_eq!(err.code, "InvalidChangeBatch");
+    }
+
+    #[test]
+    fn multiple_policies_rejected() {
+        let err = validate_routing_policy(&rs(json!({
+            "Weight": 50,
+            "Failover": "PRIMARY",
+            "SetIdentifier": "v1",
+        })))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidChangeBatch");
+    }
+
+    #[test]
+    fn failover_must_be_primary_or_secondary() {
+        let err = validate_routing_policy(&rs(json!({
+            "Failover": "TERTIARY",
+            "SetIdentifier": "v1",
+        })))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidChangeBatch");
+    }
 }
