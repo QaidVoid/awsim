@@ -74,6 +74,10 @@ pub struct TaskDefinition {
     /// Per-task placementStrategy. Each entry is `{ type, field }`;
     /// `type` is one of `random`, `spread`, or `binpack`. Stored verbatim.
     pub placement_strategy: Vec<Value>,
+    /// Top-level `volumes` declared on the task definition (no real
+    /// mount — entries are stored verbatim so DescribeTaskDefinition
+    /// echoes the same shape the caller registered).
+    pub volumes: Vec<Value>,
 }
 
 /// A capacity provider.

@@ -17,6 +17,7 @@ fn task_def_to_json(td: &TaskDefinition) -> Value {
         "registeredAt": now_epoch_str(),
         "placementConstraints": td.placement_constraints,
         "placementStrategy": td.placement_strategy,
+        "volumes": td.volumes,
     });
     if let Some(ref cpu) = td.cpu {
         obj["cpu"] = json!(cpu);
@@ -155,6 +156,11 @@ pub fn register_task_definition(
         ));
     }
 
+    // Top-level volumes[] declared on the task definition. AWS persists
+    // these verbatim and echoes them on DescribeTaskDefinition. We don't
+    // create any real mount.
+    let volumes: Vec<Value> = input["volumes"].as_array().cloned().unwrap_or_default();
+
     // placementConstraints + placementStrategy. AWS rejects unknown
     // `type` values at RegisterTaskDefinition with ClientException, so
     // do the same here.
@@ -219,6 +225,7 @@ pub fn register_task_definition(
             memory: memory.clone(),
             placement_constraints: placement_constraints.clone(),
             placement_strategy: placement_strategy.clone(),
+            volumes: volumes.clone(),
         };
         revisions.push(td);
         rev
