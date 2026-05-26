@@ -14,6 +14,10 @@ pub struct Target {
     /// PutTargets but not yet applied at fan-out — see NEW_PLAN §10.4.
     #[allow(dead_code)]
     pub input_transformer: Option<InputTransformer>,
+    /// AWS Batch-specific submission overrides. Stored verbatim and
+    /// echoed back from ListTargetsByRule so SDKs that round-trip
+    /// target configuration see the same shape they sent.
+    pub batch_parameters: Option<serde_json::Value>,
 }
 
 /// EventBridge `InputTransformer` shape — stored verbatim and applied

@@ -129,6 +129,48 @@ pub fn put_targets(
             continue;
         }
 
+        let batch_parameters = match target_input.get("BatchParameters") {
+            Some(v) if !v.is_null() => {
+                if !v.is_object() {
+                    failed_count += 1;
+                    failed_entries.push(json!({
+                        "TargetId": id,
+                        "ErrorCode": "InvalidParameterValue",
+                        "ErrorMessage": "BatchParameters must be an object.",
+                    }));
+                    continue;
+                }
+                if v.get("JobDefinition")
+                    .and_then(|j| j.as_str())
+                    .filter(|s| !s.is_empty())
+                    .is_none()
+                {
+                    failed_count += 1;
+                    failed_entries.push(json!({
+                        "TargetId": id,
+                        "ErrorCode": "InvalidParameterValue",
+                        "ErrorMessage": "BatchParameters.JobDefinition is required.",
+                    }));
+                    continue;
+                }
+                if v.get("JobName")
+                    .and_then(|j| j.as_str())
+                    .filter(|s| !s.is_empty())
+                    .is_none()
+                {
+                    failed_count += 1;
+                    failed_entries.push(json!({
+                        "TargetId": id,
+                        "ErrorCode": "InvalidParameterValue",
+                        "ErrorMessage": "BatchParameters.JobName is required.",
+                    }));
+                    continue;
+                }
+                Some(v.clone())
+            }
+            _ => None,
+        };
+
         // Upsert: replace if same ID already exists
         if let Some(pos) = rule.targets.iter().position(|t| t.id == id) {
             rule.targets[pos] = Target {
@@ -137,6 +179,7 @@ pub fn put_targets(
                 input: input_val,
                 input_path,
                 input_transformer,
+                batch_parameters,
             };
         } else {
             rule.targets.push(Target {
@@ -145,6 +188,7 @@ pub fn put_targets(
                 input: input_val,
                 input_path,
                 input_transformer,
+                batch_parameters,
             });
         }
     }
@@ -319,6 +363,9 @@ fn target_to_json(target: &Target) -> Value {
     }
     if let Some(ip) = &target.input_path {
         obj["InputPath"] = Value::String(ip.clone());
+    }
+    if let Some(bp) = &target.batch_parameters {
+        obj["BatchParameters"] = bp.clone();
     }
     obj
 }

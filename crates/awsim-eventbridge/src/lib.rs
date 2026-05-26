@@ -421,6 +421,75 @@ mod tests {
     }
 
     #[test]
+    fn test_put_targets_persists_batch_parameters() {
+        let svc = EventBridgeService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutRule",
+            json!({ "Name": "batch-rule", "EventPattern": r#"{"source":["x"]}"#, "State": "ENABLED" }),
+            &ctx,
+        ))
+        .unwrap();
+        let put = block_on(svc.handle(
+            "PutTargets",
+            json!({
+                "Rule": "batch-rule",
+                "Targets": [{
+                    "Id": "t1",
+                    "Arn": "arn:aws:batch:us-east-1:000000000000:job-queue/default",
+                    "BatchParameters": {
+                        "JobDefinition": "arn:aws:batch:us-east-1:000000000000:job-definition/hello:1",
+                        "JobName": "hello",
+                        "ArrayProperties": { "Size": 4 },
+                    },
+                }],
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(put["FailedEntryCount"].as_u64().unwrap(), 0);
+
+        let list = block_on(svc.handle("ListTargetsByRule", json!({ "Rule": "batch-rule" }), &ctx))
+            .unwrap();
+        let target = &list["Targets"][0];
+        assert_eq!(target["Id"], "t1");
+        assert_eq!(target["BatchParameters"]["JobName"], "hello");
+        assert_eq!(target["BatchParameters"]["ArrayProperties"]["Size"], 4);
+    }
+
+    #[test]
+    fn test_put_targets_rejects_batch_parameters_missing_job_definition() {
+        let svc = EventBridgeService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutRule",
+            json!({ "Name": "batch-bad", "EventPattern": r#"{"source":["x"]}"#, "State": "ENABLED" }),
+            &ctx,
+        ))
+        .unwrap();
+        let put = block_on(svc.handle(
+            "PutTargets",
+            json!({
+                "Rule": "batch-bad",
+                "Targets": [{
+                    "Id": "t1",
+                    "Arn": "arn:aws:batch:us-east-1:000000000000:job-queue/default",
+                    "BatchParameters": { "JobName": "hello" },
+                }],
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(put["FailedEntryCount"].as_u64().unwrap(), 1);
+        assert!(
+            put["FailedEntries"][0]["ErrorMessage"]
+                .as_str()
+                .unwrap()
+                .contains("JobDefinition")
+        );
+    }
+
+    #[test]
     fn test_delete_rule_with_attached_targets_requires_force() {
         let svc = EventBridgeService::new();
         let ctx = ctx();
