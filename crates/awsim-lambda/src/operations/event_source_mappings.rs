@@ -73,6 +73,9 @@ fn mapping_to_value(m: &EventSourceMapping) -> Value {
     if let Some(fc) = &m.filter_criteria {
         obj.insert("FilterCriteria".into(), fc.clone());
     }
+    if let Some(max) = m.scaling_max_concurrency {
+        obj.insert("ScalingConfig".into(), json!({ "MaximumConcurrency": max }));
+    }
     if let Some(arn) = &m.destination_on_failure {
         obj.insert(
             "DestinationConfig".into(),
@@ -80,6 +83,30 @@ fn mapping_to_value(m: &EventSourceMapping) -> Value {
         );
     }
     out
+}
+
+/// Parse + validate `ScalingConfig.MaximumConcurrency`. AWS allows
+/// values in `[2, 1000]` for SQS event-source mappings.
+fn parse_scaling_max_concurrency(input: &Value) -> Result<Option<u32>, AwsError> {
+    let Some(value) = input
+        .get("ScalingConfig")
+        .and_then(|s| s.get("MaximumConcurrency"))
+    else {
+        return Ok(None);
+    };
+    let n = value.as_u64().ok_or_else(|| {
+        awsim_core::AwsError::bad_request(
+            "InvalidParameterValueException",
+            "ScalingConfig.MaximumConcurrency must be a number.",
+        )
+    })?;
+    if !(2..=1000).contains(&n) {
+        return Err(awsim_core::AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!("ScalingConfig.MaximumConcurrency must be between 2 and 1000 (got {n})."),
+        ));
+    }
+    Ok(Some(n as u32))
 }
 
 fn destination_on_failure_from(input: &Value) -> Option<String> {
@@ -150,6 +177,7 @@ pub fn create_event_source_mapping(
         last_processing_result: "No records processed".to_string(),
         shard_iterators: HashMap::new(),
         tags: opt_tags(input),
+        scaling_max_concurrency: parse_scaling_max_concurrency(input)?,
     };
 
     let result = mapping_to_value(&mapping);
@@ -222,6 +250,9 @@ pub fn update_event_source_mapping(
     }
     if input.get("FunctionResponseTypes").is_some() {
         m.function_response_types = opt_string_array(input, "FunctionResponseTypes");
+    }
+    if input.get("ScalingConfig").is_some() {
+        m.scaling_max_concurrency = parse_scaling_max_concurrency(input)?;
     }
     if let Some(fn_name) = opt_str(input, "FunctionName") {
         m.function_arn = if fn_name.starts_with("arn:") {

@@ -355,6 +355,10 @@ pub struct EventSourceMapping {
     pub shard_iterators: HashMap<String, String>,
     /// Tags attached via `TagResource` against the ESM ARN.
     pub tags: HashMap<String, String>,
+    /// `ScalingConfig.MaximumConcurrency`. Caps the number of
+    /// concurrent invocations Lambda will start for this event source
+    /// (SQS-only in AWS). AWS allows 2..=1000; `None` means no cap.
+    pub scaling_max_concurrency: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
