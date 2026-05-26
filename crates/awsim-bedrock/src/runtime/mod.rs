@@ -780,6 +780,49 @@ async fn try_embed_once(
 /// (`anthropic.claude-*`) to the proxy translator when a backend is
 /// configured; everything else still hits the canned fallback (will
 /// be expanded in subsequent commits).
+/// Validate `contentType` / `accept` per InvokeModel(WithResponseStream).
+/// AWS only accepts `application/json` for the request payload and for
+/// the non-streaming response. The streaming variant must accept the
+/// event-stream content type — anything else returns a 400 at the API
+/// boundary rather than a confusing decode failure deeper in.
+fn validate_invoke_content_types(input: &Value, streaming: bool) -> Result<(), AwsError> {
+    let content_type = input
+        .get("contentType")
+        .and_then(Value::as_str)
+        .unwrap_or("application/json");
+    if content_type != "application/json" {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("contentType `{content_type}` is not supported; expected application/json."),
+        ));
+    }
+    let default_accept = if streaming {
+        "application/vnd.amazon.eventstream"
+    } else {
+        "application/json"
+    };
+    let accept = input
+        .get("accept")
+        .and_then(Value::as_str)
+        .unwrap_or(default_accept);
+    let allowed: &[&str] = if streaming {
+        &["application/vnd.amazon.eventstream", "*/*"]
+    } else {
+        &["application/json", "*/*"]
+    };
+    if !allowed.contains(&accept) {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "accept `{accept}` is not supported for this operation; \
+                 expected one of: {}.",
+                allowed.join(", "),
+            ),
+        ));
+    }
+    Ok(())
+}
+
 pub async fn invoke_model(
     backends: Option<&BedrockBackends>,
     input: &Value,
@@ -788,6 +831,8 @@ pub async fn invoke_model(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelId is required"))?;
     debug!(model_id = %model_id, "InvokeModel");
+
+    validate_invoke_content_types(input, false)?;
 
     let body = extract_body(input)?;
 
@@ -833,6 +878,7 @@ pub async fn invoke_model_with_response_stream(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "modelId is required"))?;
     debug!(model_id = %model_id, "InvokeModelWithResponseStream");
+    validate_invoke_content_types(input, true)?;
     let body = extract_body(input)?;
 
     let Some(backends) = backends else {
@@ -1615,5 +1661,41 @@ data: [DONE]\n";
         assert_eq!(acc.tool_calls[0].name, "get_weather");
         assert_eq!(acc.tool_calls[0].arguments, "{\"city\":\"Kathmandu\"}");
         assert_eq!(acc.finish_reason.as_deref(), Some("tool_calls"));
+    }
+
+    #[test]
+    fn validate_invoke_content_types_default_passes() {
+        validate_invoke_content_types(&serde_json::json!({}), false).unwrap();
+    }
+
+    #[test]
+    fn validate_invoke_content_types_rejects_non_json_content_type() {
+        let err = validate_invoke_content_types(
+            &serde_json::json!({ "contentType": "application/xml" }),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("contentType"));
+    }
+
+    #[test]
+    fn validate_invoke_content_types_rejects_wrong_accept_for_streaming() {
+        let err = validate_invoke_content_types(
+            &serde_json::json!({ "accept": "application/json" }),
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("accept"));
+    }
+
+    #[test]
+    fn validate_invoke_content_types_streaming_accept_passes() {
+        validate_invoke_content_types(
+            &serde_json::json!({ "accept": "application/vnd.amazon.eventstream" }),
+            true,
+        )
+        .unwrap();
     }
 }
