@@ -71,6 +71,22 @@ impl ServiceHandler for Ec2Service {
         debug!(operation, "EC2 request");
         let state = self.get_state(ctx);
 
+        // AWS EC2 implements an opt-in dry-run: any mutating operation
+        // that receives DryRun=true must short-circuit with HTTP 412
+        // (DryRunOperation) before the state mutates. Read-only Describe*
+        // operations ignore the flag.
+        if !operation.starts_with("Describe")
+            && input.get("DryRun").and_then(Value::as_bool) == Some(true)
+        {
+            return Err(AwsError::precondition_failed(
+                "DryRunOperation",
+                format!(
+                    "Request would have succeeded, but DryRun flag is set. \
+                     Operation: {operation}."
+                ),
+            ));
+        }
+
         match operation {
             // VPCs
             "CreateVpc" => operations::vpcs::create_vpc(&state, &input),
@@ -172,5 +188,68 @@ impl ServiceHandler for Ec2Service {
 
             _ => Err(AwsError::unknown_operation(operation)),
         }
+    }
+}
+
+#[cfg(test)]
+mod dry_run_tests {
+    use super::*;
+    use awsim_core::ServiceHandler;
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("ec2", "us-east-1")
+    }
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+        fn noop_clone(_: *const ()) -> RawWaker {
+            noop_raw_waker()
+        }
+        fn noop(_: *const ()) {}
+        fn noop_raw_waker() -> RawWaker {
+            static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+        let waker = unsafe { Waker::from_raw(noop_raw_waker()) };
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = std::pin::pin!(f);
+        loop {
+            match fut.as_mut().poll(&mut cx) {
+                Poll::Ready(v) => return v,
+                Poll::Pending => {}
+            }
+        }
+    }
+
+    #[test]
+    fn write_op_with_dry_run_short_circuits_with_dryrunoperation() {
+        let svc = Ec2Service::new();
+        let err = block_on(svc.handle(
+            "RunInstances",
+            json!({ "ImageId": "ami-12345678", "MinCount": 1, "MaxCount": 1, "DryRun": true }),
+            &ctx(),
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "DryRunOperation");
+        assert_eq!(err.status.as_u16(), 412);
+    }
+
+    #[test]
+    fn read_op_ignores_dry_run() {
+        let svc = Ec2Service::new();
+        block_on(svc.handle("DescribeInstances", json!({ "DryRun": true }), &ctx())).unwrap();
+    }
+
+    #[test]
+    fn write_op_without_dry_run_still_runs() {
+        let svc = Ec2Service::new();
+        let resp = block_on(svc.handle(
+            "RunInstances",
+            json!({ "ImageId": "ami-12345678", "MinCount": 1, "MaxCount": 1 }),
+            &ctx(),
+        ))
+        .unwrap();
+        assert!(resp.get("instancesSet").is_some() || resp.get("InstancesSet").is_some());
     }
 }
