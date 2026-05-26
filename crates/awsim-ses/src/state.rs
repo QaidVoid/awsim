@@ -56,6 +56,11 @@ pub struct ConfigurationSet {
     pub tls_policy: Option<String>,
     /// Dedicated IP pool used for sends through this configuration set.
     pub sending_pool_name: Option<String>,
+    /// Per-configuration-set VDM options. AWS exposes
+    /// `DashboardOptions.EngagementMetrics` and
+    /// `GuardianOptions.OptimizedSharedDelivery`, each `ENABLED`/`DISABLED`.
+    pub vdm_dashboard_engagement_metrics: Option<String>,
+    pub vdm_guardian_optimized_shared_delivery: Option<String>,
 }
 
 #[derive(Debug, Clone)]

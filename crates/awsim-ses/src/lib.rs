@@ -301,6 +301,12 @@ impl ServiceHandler for SesService {
                 required_query_param: None,
             },
             RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v2/email/configuration-sets/{ConfigurationSetName}/vdm-options",
+                operation: "PutConfigurationSetVdmOptions",
+                required_query_param: None,
+            },
+            RouteDefinition {
                 method: "POST",
                 path_pattern: "/v2/email/configuration-sets/{ConfigurationSetName}/event-destinations",
                 operation: "CreateConfigurationSetEventDestination",
@@ -580,6 +586,9 @@ impl ServiceHandler for SesService {
             }
             "PutConfigurationSetDeliveryOptions" => {
                 operations::more::put_configuration_set_delivery_options(&state, &input, ctx)
+            }
+            "PutConfigurationSetVdmOptions" => {
+                operations::more::put_configuration_set_vdm_options(&state, &input, ctx)
             }
             "CreateConfigurationSetEventDestination" => {
                 operations::more::create_configuration_set_event_destination(&state, &input, ctx)

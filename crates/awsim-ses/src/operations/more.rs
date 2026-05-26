@@ -237,6 +237,10 @@ pub fn create_configuration_set(
     let sending_pool_name = input["DeliveryOptions"]["SendingPoolName"]
         .as_str()
         .map(str::to_string);
+    let vdm_dashboard_engagement_metrics =
+        parse_enabled_disabled(&input["VdmOptions"]["DashboardOptions"]["EngagementMetrics"])?;
+    let vdm_guardian_optimized_shared_delivery =
+        parse_enabled_disabled(&input["VdmOptions"]["GuardianOptions"]["OptimizedSharedDelivery"])?;
     let mut cs = ConfigurationSet {
         name: name.to_string(),
         sending_enabled,
@@ -248,6 +252,8 @@ pub fn create_configuration_set(
         },
         tls_policy,
         sending_pool_name,
+        vdm_dashboard_engagement_metrics,
+        vdm_guardian_optimized_shared_delivery,
         ..Default::default()
     };
     if let Some(t) = input["Tags"].as_array() {
@@ -259,6 +265,21 @@ pub fn create_configuration_set(
     }
     state.configuration_sets.insert(name.to_string(), cs);
     Ok(json!({}))
+}
+
+/// Validate an `ENABLED` / `DISABLED` field, returning `None` when the
+/// caller omitted it.
+fn parse_enabled_disabled(value: &Value) -> Result<Option<String>, AwsError> {
+    let Some(raw) = value.as_str() else {
+        return Ok(None);
+    };
+    match raw {
+        "ENABLED" | "DISABLED" => Ok(Some(raw.to_string())),
+        other => Err(AwsError::bad_request(
+            "InvalidParameter",
+            format!("Value '{other}' must be ENABLED or DISABLED"),
+        )),
+    }
 }
 
 /// Validate `DeliveryOptions.TlsPolicy` against the AWS enum. Returns
@@ -297,6 +318,28 @@ pub fn put_configuration_set_delivery_options(
         .ok_or_else(|| AwsError::not_found("NotFoundException", format!("Not found: {name}")))?;
     cs.tls_policy = tls_policy;
     cs.sending_pool_name = sending_pool_name;
+    Ok(json!({}))
+}
+
+/// PutConfigurationSetVdmOptions — replace VDM options for a set.
+pub fn put_configuration_set_vdm_options(
+    state: &SesState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["ConfigurationSetName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "ConfigurationSetName is required")
+    })?;
+    let dashboard =
+        parse_enabled_disabled(&input["VdmOptions"]["DashboardOptions"]["EngagementMetrics"])?;
+    let guardian =
+        parse_enabled_disabled(&input["VdmOptions"]["GuardianOptions"]["OptimizedSharedDelivery"])?;
+    let mut cs = state
+        .configuration_sets
+        .get_mut(name)
+        .ok_or_else(|| AwsError::not_found("NotFoundException", format!("Not found: {name}")))?;
+    cs.vdm_dashboard_engagement_metrics = dashboard;
+    cs.vdm_guardian_optimized_shared_delivery = guardian;
     Ok(json!({}))
 }
 
@@ -363,12 +406,26 @@ pub fn get_configuration_set(
     if let Some(ref pool) = cs.sending_pool_name {
         delivery.insert("SendingPoolName".to_string(), json!(pool));
     }
+    let mut vdm = serde_json::Map::new();
+    if let Some(ref m) = cs.vdm_dashboard_engagement_metrics {
+        vdm.insert(
+            "DashboardOptions".to_string(),
+            json!({ "EngagementMetrics": m }),
+        );
+    }
+    if let Some(ref g) = cs.vdm_guardian_optimized_shared_delivery {
+        vdm.insert(
+            "GuardianOptions".to_string(),
+            json!({ "OptimizedSharedDelivery": g }),
+        );
+    }
     Ok(json!({
         "ConfigurationSetName": cs.name,
         "Tags": tags,
         "SendingOptions": { "SendingEnabled": cs.sending_enabled },
         "ReputationOptions": reputation,
         "DeliveryOptions": Value::Object(delivery),
+        "VdmOptions": Value::Object(vdm),
     }))
 }
 
@@ -1212,5 +1269,100 @@ mod delivery_options_tests {
         let resp = get_configuration_set(&state, &json!({ "ConfigurationSetName": "cs" }), &ctx())
             .unwrap();
         assert_eq!(resp["DeliveryOptions"]["TlsPolicy"], "REQUIRE");
+    }
+}
+
+#[cfg(test)]
+mod vdm_options_tests {
+    use super::*;
+
+    fn ctx() -> awsim_core::RequestContext {
+        awsim_core::RequestContext::new("ses", "us-east-1")
+    }
+
+    #[test]
+    fn create_configuration_set_persists_vdm_options() {
+        let state = SesState::default();
+        create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "VdmOptions": {
+                    "DashboardOptions": { "EngagementMetrics": "ENABLED" },
+                    "GuardianOptions": { "OptimizedSharedDelivery": "DISABLED" },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let cs = state.configuration_sets.get("cs").unwrap();
+        assert_eq!(
+            cs.vdm_dashboard_engagement_metrics.as_deref(),
+            Some("ENABLED")
+        );
+        assert_eq!(
+            cs.vdm_guardian_optimized_shared_delivery.as_deref(),
+            Some("DISABLED")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_vdm_enum() {
+        let state = SesState::default();
+        let err = create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "VdmOptions": {
+                    "DashboardOptions": { "EngagementMetrics": "ON" },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+    }
+
+    #[test]
+    fn put_vdm_options_updates_existing_set() {
+        let state = SesState::default();
+        create_configuration_set(&state, &json!({ "ConfigurationSetName": "cs" }), &ctx()).unwrap();
+        put_configuration_set_vdm_options(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "VdmOptions": {
+                    "DashboardOptions": { "EngagementMetrics": "ENABLED" },
+                    "GuardianOptions": { "OptimizedSharedDelivery": "ENABLED" },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = get_configuration_set(&state, &json!({ "ConfigurationSetName": "cs" }), &ctx())
+            .unwrap();
+        assert_eq!(
+            resp["VdmOptions"]["DashboardOptions"]["EngagementMetrics"],
+            "ENABLED"
+        );
+        assert_eq!(
+            resp["VdmOptions"]["GuardianOptions"]["OptimizedSharedDelivery"],
+            "ENABLED"
+        );
+    }
+
+    #[test]
+    fn put_vdm_options_not_found_for_missing_set() {
+        let state = SesState::default();
+        let err = put_configuration_set_vdm_options(
+            &state,
+            &json!({
+                "ConfigurationSetName": "nope",
+                "VdmOptions": { "DashboardOptions": { "EngagementMetrics": "ENABLED" } },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotFoundException");
     }
 }
