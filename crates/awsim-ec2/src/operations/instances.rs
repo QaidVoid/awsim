@@ -154,6 +154,7 @@ pub fn run_instances(state: &Ec2State, input: &Value) -> Result<Value, AwsError>
     let count = max_count;
 
     let subnet_id = input["SubnetId"].as_str().map(|s| s.to_string());
+    let user_data = input["UserData"].as_str().map(str::to_string);
     let now = now_iso8601();
     let reservation_id = new_ec2_id("r");
 
@@ -184,6 +185,7 @@ pub fn run_instances(state: &Ec2State, input: &Value) -> Result<Value, AwsError>
             launch_time: now.clone(),
             reservation_id: reservation_id.clone(),
             tags: HashMap::new(),
+            user_data: user_data.clone(),
         };
 
         let val = instance_to_value(&instance);
@@ -387,6 +389,53 @@ pub fn terminate_instances(state: &Ec2State, input: &Value) -> Result<Value, Aws
         }
     }
     Ok(json!({ "instancesSet": { "item": terminated } }))
+}
+
+// ---------------------------------------------------------------------------
+// DescribeInstanceAttribute — surfaces a single instance attribute. AWS
+// returns each attribute under a top-level key matching its name; the
+// caller selects exactly one via the `Attribute` parameter.
+// ---------------------------------------------------------------------------
+
+pub fn describe_instance_attribute(state: &Ec2State, input: &Value) -> Result<Value, AwsError> {
+    let instance_id = input["InstanceId"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterValue", "InstanceId is required."))?;
+    let attribute = input["Attribute"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterValue", "Attribute is required."))?;
+    let instance = state.instances.get(instance_id).ok_or_else(|| {
+        AwsError::not_found(
+            "InvalidInstanceID.NotFound",
+            format!("Instance not found: {instance_id}"),
+        )
+    })?;
+
+    let mut response = json!({ "instanceId": instance.instance_id });
+    match attribute {
+        "userData" => {
+            response["userData"] = match &instance.user_data {
+                Some(s) => json!({ "value": s }),
+                None => Value::Null,
+            };
+        }
+        "instanceType" => {
+            response["instanceType"] = json!({ "value": instance.instance_type });
+        }
+        "disableApiTermination" => {
+            response["disableApiTermination"] = json!({ "value": false });
+        }
+        "rootDeviceName" => {
+            response["rootDeviceName"] = json!({ "value": "/dev/xvda" });
+        }
+        other => {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValue",
+                format!("Unsupported Attribute `{other}`."),
+            ));
+        }
+    }
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -598,5 +647,72 @@ mod tests {
         got_ids.sort();
         assert_eq!(got_ids, vec![id1]);
         let _ = id2;
+    }
+
+    #[test]
+    fn run_instances_persists_user_data_for_describe_instance_attribute() {
+        let (state, subnet_id) = state_with_subnet("10.0.0.0/16");
+        let resp = run_instances(
+            &state,
+            &json!({
+                "MinCount": 1,
+                "MaxCount": 1,
+                "SubnetId": subnet_id,
+                "UserData": "IyEvYmluL2Jhc2gKZWNobyBoaQ==",
+            }),
+        )
+        .unwrap();
+        let id = resp["instancesSet"]["item"][0]["instanceId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let attr = describe_instance_attribute(
+            &state,
+            &json!({ "InstanceId": id, "Attribute": "userData" }),
+        )
+        .unwrap();
+        assert_eq!(
+            attr["userData"]["value"],
+            json!("IyEvYmluL2Jhc2gKZWNobyBoaQ==")
+        );
+    }
+
+    #[test]
+    fn describe_instance_attribute_returns_null_when_user_data_absent() {
+        let (state, subnet_id) = state_with_subnet("10.0.0.0/16");
+        let resp = run_instances(
+            &state,
+            &json!({ "MinCount": 1, "MaxCount": 1, "SubnetId": subnet_id }),
+        )
+        .unwrap();
+        let id = resp["instancesSet"]["item"][0]["instanceId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let attr = describe_instance_attribute(
+            &state,
+            &json!({ "InstanceId": id, "Attribute": "userData" }),
+        )
+        .unwrap();
+        assert!(attr["userData"].is_null());
+    }
+
+    #[test]
+    fn describe_instance_attribute_rejects_unknown_attribute() {
+        let (state, subnet_id) = state_with_subnet("10.0.0.0/16");
+        let resp = run_instances(
+            &state,
+            &json!({ "MinCount": 1, "MaxCount": 1, "SubnetId": subnet_id }),
+        )
+        .unwrap();
+        let id = resp["instancesSet"]["item"][0]["instanceId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let err =
+            describe_instance_attribute(&state, &json!({ "InstanceId": id, "Attribute": "magic" }))
+                .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
     }
 }

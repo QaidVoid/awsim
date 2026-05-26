@@ -118,6 +118,9 @@ pub struct Instance {
     /// DescribeInstances groups them under one reservationSet entry.
     pub reservation_id: String,
     pub tags: HashMap<String, String>,
+    /// UserData blob supplied at launch. AWS persists it as base64 and
+    /// echoes it from `DescribeInstanceAttribute --attribute userData`.
+    pub user_data: Option<String>,
 }
 
 impl Instance {
