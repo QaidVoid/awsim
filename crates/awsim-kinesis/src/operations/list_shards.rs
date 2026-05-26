@@ -1,3 +1,4 @@
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -19,8 +20,20 @@ pub fn handle(
         )
     })?;
 
-    let shards: Vec<Value> = stream
-        .shards
+    // AWS caps MaxResults at 10_000 with a default of 100.
+    let max_results = cap_max_results(input["MaxResults"].as_i64(), 100, 10_000);
+    let next_token = input["NextToken"].as_str();
+
+    let mut shards = stream.shards.clone();
+    drop(stream);
+    // Stable ordering — AWS doesn't promise a particular ordering but
+    // pagination requires it.
+    shards.sort_by(|a, b| a.shard_id.cmp(&b.shard_id));
+
+    let page = paginate(shards, max_results, next_token, |s| s.shard_id.clone())?;
+
+    let shards: Vec<Value> = page
+        .items
         .iter()
         .map(|s| {
             let mut seq_range = json!({
@@ -40,8 +53,11 @@ pub fn handle(
         })
         .collect();
 
-    Ok(json!({
-        "Shards": shards,
-        "NextToken": Value::Null,
-    }))
+    let mut response = json!({ "Shards": shards });
+    if let Some(token) = page.next_token {
+        response["NextToken"] = json!(token);
+    } else {
+        response["NextToken"] = Value::Null;
+    }
+    Ok(response)
 }
