@@ -31,6 +31,27 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     // Expire inflight timeouts and re-queue them
     queue.tick();
 
+    // FIFO ReceiveRequestAttemptId: AWS replays the original batch for
+    // 5 minutes when the caller passes the same attempt id. Standard
+    // queues silently ignore the parameter, so we only check it on
+    // FIFO. Expire stale entries opportunistically so the cache stays
+    // small without a sweeper.
+    let attempt_id = input
+        .get("ReceiveRequestAttemptId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if queue.is_fifo {
+        let now_inst = Instant::now();
+        queue
+            .receive_attempt_cache
+            .retain(|_, (expiry, _)| *expiry > now_inst);
+        if let Some(ref aid) = attempt_id
+            && let Some((_, cached)) = queue.receive_attempt_cache.get(aid)
+        {
+            return Ok(cached.clone());
+        }
+    }
+
     // AWS caps inflight messages at 120000 for Standard queues and 20000
     // for FIFO queues; further Receive calls past the cap return
     // OverLimit so the producer can back off rather than silently piling
@@ -262,7 +283,20 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         }
     }
 
-    Ok(json!({ "Messages": messages_json }))
+    let response = json!({ "Messages": messages_json });
+
+    // Cache the response for the FIFO receive-idempotency window so a
+    // network retry replays the same batch.
+    if let Some(aid) = attempt_id
+        && let Some(mut q) = state.queues.get_mut(&queue_name)
+        && q.is_fifo
+    {
+        let expiry = Instant::now() + std::time::Duration::from_secs(300);
+        q.receive_attempt_cache
+            .insert(aid, (expiry, response.clone()));
+    }
+
+    Ok(response)
 }
 
 fn message_attribute_entry(ma: &crate::state::MessageAttribute) -> serde_json::Map<String, Value> {
@@ -366,5 +400,91 @@ mod tests {
             .expect("ApproximateFirstReceiveTimestamp present");
         let parsed: u128 = first_ts.parse().expect("ms timestamp is numeric");
         assert!(parsed > 0, "ApproximateFirstReceiveTimestamp must be > 0");
+    }
+
+    fn fifo_state() -> SqsState {
+        let state = SqsState::default();
+        let mut attrs = HashMap::new();
+        attrs.insert("FifoQueue".to_string(), "true".to_string());
+        attrs.insert("ContentBasedDeduplication".to_string(), "true".to_string());
+        let q = Queue::new(
+            "q.fifo".to_string(),
+            "http://localhost/queue/q.fifo".to_string(),
+            "arn:aws:sqs:us-east-1:000000000000:q.fifo".to_string(),
+            true,
+            "now".to_string(),
+            attrs,
+        );
+        state.queues.insert("q.fifo".to_string(), q);
+        state
+    }
+
+    #[test]
+    fn fifo_receive_request_attempt_id_replays_same_batch() {
+        let state = fifo_state();
+        let ctx = ctx();
+        for n in 0..3 {
+            send_message::handle(
+                &state,
+                &json!({
+                    "QueueUrl": "http://localhost/queue/q.fifo",
+                    "MessageBody": format!("msg-{n}"),
+                    "MessageGroupId": "g",
+                }),
+                &ctx,
+            )
+            .unwrap();
+        }
+
+        // First receive with an attempt id consumes messages and caches
+        // the response.
+        let resp1 = handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/q.fifo",
+                "MaxNumberOfMessages": 10,
+                "ReceiveRequestAttemptId": "retry-1",
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let bodies1: Vec<String> = resp1["Messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["Body"].as_str().unwrap().to_string())
+            .collect();
+        let receipts1: Vec<String> = resp1["Messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["ReceiptHandle"].as_str().unwrap().to_string())
+            .collect();
+
+        // Second receive with the same attempt id replays bit-for-bit.
+        let resp2 = handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/q.fifo",
+                "MaxNumberOfMessages": 10,
+                "ReceiveRequestAttemptId": "retry-1",
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let bodies2: Vec<String> = resp2["Messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["Body"].as_str().unwrap().to_string())
+            .collect();
+        let receipts2: Vec<String> = resp2["Messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["ReceiptHandle"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(bodies1, bodies2);
+        assert_eq!(receipts1, receipts2);
     }
 }

@@ -297,6 +297,7 @@ impl Snapshottable for SqsState {
                 is_fifo: qs.is_fifo,
                 created_at: qs.created_at,
                 dedup_cache,
+                receive_attempt_cache: HashMap::new(),
                 redrive_policy,
             };
             state.queues.insert(qs.name, queue);
@@ -340,6 +341,11 @@ pub struct Queue {
     pub created_at: String,
     /// FIFO dedup cache: dedup_id → (expiry Instant, message_id)
     pub dedup_cache: HashMap<String, (Instant, String)>,
+    /// FIFO ReceiveRequestAttemptId cache: attempt_id → (expiry Instant,
+    /// JSON response body to replay). AWS keeps 5 minutes of receive
+    /// idempotency so a network retry returns the same batch without
+    /// re-incrementing receive counts or releasing new messages.
+    pub receive_attempt_cache: HashMap<String, (Instant, serde_json::Value)>,
     /// Parsed RedrivePolicy, if configured.
     pub redrive_policy: Option<RedrivePolicy>,
 }
@@ -375,6 +381,7 @@ impl Queue {
             is_fifo,
             created_at,
             dedup_cache: HashMap::new(),
+            receive_attempt_cache: HashMap::new(),
             redrive_policy,
         }
     }
