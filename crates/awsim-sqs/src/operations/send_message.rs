@@ -51,6 +51,12 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     // Parse MessageAttributes
     let message_attributes = parse_message_attributes(&input["MessageAttributes"])?;
 
+    // AWSTraceHeader (X-Ray) is carried via MessageSystemAttributes and
+    // surfaced as a system attribute on ReceiveMessage, not a user
+    // message attribute. AWS only accepts the AWSTraceHeader key today;
+    // any other key returns InvalidParameterValue.
+    let trace_header = parse_aws_trace_header(&input["MessageSystemAttributes"])?;
+
     // FIFO-specific fields
     let group_id = if queue.is_fifo {
         Some(
@@ -179,6 +185,9 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         "0".to_string(),
     );
 
+    if let Some(th) = trace_header {
+        attributes.insert("AWSTraceHeader".to_string(), th);
+    }
     if let Some(ref gid) = group_id {
         attributes.insert("MessageGroupId".to_string(), gid.clone());
     }
@@ -420,6 +429,47 @@ fn parse_message_attributes(val: &Value) -> Result<HashMap<String, MessageAttrib
         );
     }
     Ok(map)
+}
+
+fn parse_aws_trace_header(val: &Value) -> Result<Option<String>, AwsError> {
+    let Some(obj) = val.as_object() else {
+        return Ok(None);
+    };
+    let mut trace = None;
+    for (k, v) in obj {
+        if k != "AWSTraceHeader" {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValue",
+                format!(
+                    "MessageSystemAttribute `{k}` is not supported; \
+                     only AWSTraceHeader is accepted."
+                ),
+            ));
+        }
+        let data_type = v["DataType"].as_str().ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterValue",
+                "MessageSystemAttribute `AWSTraceHeader` is missing DataType.",
+            )
+        })?;
+        if data_type != "String" {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValue",
+                format!(
+                    "MessageSystemAttribute `AWSTraceHeader` DataType `{data_type}` \
+                     is not supported; must be String."
+                ),
+            ));
+        }
+        let sv = v["StringValue"].as_str().ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterValue",
+                "MessageSystemAttribute `AWSTraceHeader` is missing StringValue.",
+            )
+        })?;
+        trace = Some(sv.to_string());
+    }
+    Ok(trace)
 }
 
 fn sequence_number() -> String {
@@ -738,6 +788,52 @@ mod tests {
             "k": { "DataType": "Binary" }, // no BinaryValue
         });
         let err = parse_message_attributes(&input).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn aws_trace_header_propagates_to_system_attributes() {
+        let state = standard_queue();
+        let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
+        handle(
+            &state,
+            &json!({
+                "QueueUrl": "http://localhost/queue/std",
+                "MessageBody": "hi",
+                "MessageSystemAttributes": {
+                    "AWSTraceHeader": {
+                        "DataType": "String",
+                        "StringValue": "Root=1-5759e988-bd862e3fe1be46a994272793",
+                    }
+                },
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let q = state.queues.get("std").unwrap();
+        let msg = q.messages.front().unwrap();
+        assert_eq!(
+            msg.attributes.get("AWSTraceHeader").map(String::as_str),
+            Some("Root=1-5759e988-bd862e3fe1be46a994272793"),
+        );
+    }
+
+    #[test]
+    fn parse_aws_trace_header_rejects_unknown_system_attribute() {
+        let input = json!({
+            "Bogus": { "DataType": "String", "StringValue": "v" },
+        });
+        let err = parse_aws_trace_header(&input).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+        assert!(err.message.contains("AWSTraceHeader"));
+    }
+
+    #[test]
+    fn parse_aws_trace_header_requires_string_data_type() {
+        let input = json!({
+            "AWSTraceHeader": { "DataType": "Binary", "BinaryValue": "AAA=" },
+        });
+        let err = parse_aws_trace_header(&input).unwrap_err();
         assert_eq!(err.code, "InvalidParameterValue");
     }
 
