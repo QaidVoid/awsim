@@ -238,6 +238,18 @@ pub fn list_nodegroups(
 }
 
 fn serialize_nodegroup(ng: &Nodegroup) -> Value {
+    // AWS surfaces `resources.autoScalingGroups[].name` so the caller
+    // can find the underlying EC2 ASG. The ASG name is derived from
+    // the nodegroup ARN suffix; we synthesize a stable id from the
+    // nodegroup id segment so the response shape matches without
+    // standing up a real ASG.
+    let asg_suffix = ng
+        .arn
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&ng.name);
+    let asg_name = format!("eks-{}-{}", ng.name, asg_suffix);
     let mut obj = json!({
         "nodegroupName": ng.name,
         "nodegroupArn": ng.arn,
@@ -257,6 +269,10 @@ fn serialize_nodegroup(ng: &Nodegroup) -> Value {
         "tags": ng.tags,
         "labels": ng.labels,
         "taints": ng.taints,
+        "resources": {
+            "autoScalingGroups": [{ "name": asg_name }],
+            "remoteAccessSecurityGroup": Value::Null,
+        },
     });
     if let Some(ref ra) = ng.remote_access {
         obj["remoteAccess"] = ra.clone();
@@ -347,6 +363,18 @@ mod nodegroup_extras_tests {
         input["launchTemplate"] = json!({ "version": "1" });
         let err = create_nodegroup(&state, &input, &ctx()).unwrap_err();
         assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn nodegroup_resources_include_synthetic_asg_name() {
+        let state = EksState::default();
+        let resp = create_nodegroup(&state, &base_input(), &ctx()).unwrap();
+        let asgs = resp["nodegroup"]["resources"]["autoScalingGroups"]
+            .as_array()
+            .expect("autoScalingGroups populated");
+        assert_eq!(asgs.len(), 1);
+        let name = asgs[0]["name"].as_str().unwrap();
+        assert!(name.starts_with("eks-ng1-"));
     }
 
     #[test]
