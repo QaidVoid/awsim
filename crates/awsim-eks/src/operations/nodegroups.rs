@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -41,6 +43,59 @@ pub fn create_nodegroup(
             format!("diskSize must be between 1 and 16384 GiB (got {disk_size})."),
         ));
     }
+
+    // Taints persist verbatim, but `effect` must be a Kubernetes-defined
+    // value. AWS rejects unknown effects with InvalidParameterException
+    // before persisting the nodegroup.
+    let taints: Vec<Value> = input["taints"].as_array().cloned().unwrap_or_default();
+    for t in &taints {
+        let effect = t.get("effect").and_then(Value::as_str).unwrap_or("");
+        if !matches!(effect, "NO_SCHEDULE" | "NO_EXECUTE" | "PREFER_NO_SCHEDULE") {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!(
+                    "taints.effect `{effect}` must be one of: \
+                     NO_SCHEDULE, NO_EXECUTE, PREFER_NO_SCHEDULE."
+                ),
+            ));
+        }
+    }
+
+    let labels: HashMap<String, String> = input["labels"]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // remoteAccess.sourceSecurityGroups requires ec2SshKey per AWS docs;
+    // accepting the SGs without an SSH key would silently drop them at
+    // launch.
+    let remote_access = match input.get("remoteAccess") {
+        Some(v) if !v.is_null() => {
+            let obj = v.as_object().ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameterException",
+                    "remoteAccess must be an object.",
+                )
+            })?;
+            let has_sgs = obj
+                .get("sourceSecurityGroups")
+                .and_then(Value::as_array)
+                .is_some_and(|a| !a.is_empty());
+            let ssh_key = obj.get("ec2SshKey").and_then(Value::as_str);
+            if has_sgs && ssh_key.is_none_or(str::is_empty) {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterException",
+                    "remoteAccess.sourceSecurityGroups requires ec2SshKey.",
+                ));
+            }
+            Some(v.clone())
+        }
+        _ => None,
+    };
 
     let arn = format!(
         "arn:aws:eks:{}:{}:nodegroup/{}/{}/{}",
@@ -89,6 +144,9 @@ pub fn create_nodegroup(
             })
             .unwrap_or_default(),
         created_at: now_secs(),
+        labels,
+        taints,
+        remote_access,
     };
     state
         .nodegroups
@@ -150,7 +208,7 @@ pub fn list_nodegroups(
 }
 
 fn serialize_nodegroup(ng: &Nodegroup) -> Value {
-    json!({
+    let mut obj = json!({
         "nodegroupName": ng.name,
         "nodegroupArn": ng.arn,
         "clusterName": ng.cluster_name,
@@ -167,5 +225,79 @@ fn serialize_nodegroup(ng: &Nodegroup) -> Value {
         "nodeRole": ng.node_role,
         "diskSize": ng.disk_size,
         "tags": ng.tags,
-    })
+        "labels": ng.labels,
+        "taints": ng.taints,
+    });
+    if let Some(ref ra) = ng.remote_access {
+        obj["remoteAccess"] = ra.clone();
+    }
+    obj
+}
+
+#[cfg(test)]
+mod nodegroup_extras_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("eks", "us-east-1")
+    }
+
+    fn base_input() -> Value {
+        json!({
+            "clusterName": "c1",
+            "nodegroupName": "ng1",
+            "subnets": ["subnet-aaa"],
+            "nodeRole": "arn:aws:iam::000000000000:role/eks-ng",
+        })
+    }
+
+    #[test]
+    fn persists_labels_and_taints() {
+        let state = EksState::default();
+        let mut input = base_input();
+        input["labels"] = json!({ "team": "platform" });
+        input["taints"] = json!([
+            { "key": "dedicated", "value": "gpu", "effect": "NO_SCHEDULE" }
+        ]);
+        let resp = create_nodegroup(&state, &input, &ctx()).unwrap();
+        let ng = &resp["nodegroup"];
+        assert_eq!(ng["labels"]["team"], "platform");
+        assert_eq!(ng["taints"][0]["effect"], "NO_SCHEDULE");
+    }
+
+    #[test]
+    fn rejects_taint_effect_outside_kubernetes_enum() {
+        let state = EksState::default();
+        let mut input = base_input();
+        input["taints"] = json!([
+            { "key": "k", "value": "v", "effect": "BOGUS" }
+        ]);
+        let err = create_nodegroup(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn persists_remote_access_with_ssh_key_and_sgs() {
+        let state = EksState::default();
+        let mut input = base_input();
+        input["remoteAccess"] = json!({
+            "ec2SshKey": "my-key",
+            "sourceSecurityGroups": ["sg-aaa"],
+        });
+        let resp = create_nodegroup(&state, &input, &ctx()).unwrap();
+        let ng = &resp["nodegroup"];
+        assert_eq!(ng["remoteAccess"]["ec2SshKey"], "my-key");
+    }
+
+    #[test]
+    fn rejects_remote_access_sgs_without_ssh_key() {
+        let state = EksState::default();
+        let mut input = base_input();
+        input["remoteAccess"] = json!({
+            "sourceSecurityGroups": ["sg-aaa"],
+        });
+        let err = create_nodegroup(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+        assert!(err.message.contains("ec2SshKey"));
+    }
 }

@@ -50,6 +50,17 @@ pub struct Nodegroup {
     pub disk_size: u32,
     pub tags: HashMap<String, String>,
     pub created_at: u64,
+    /// Free-form k/v labels applied to nodegroup pods. Persisted verbatim;
+    /// AWS only constrains label keys/values at the kubelet, not the API.
+    #[serde(default)]
+    pub labels: HashMap<String, String>,
+    /// Node taints. Each entry is `{ key, value, effect }`. `effect`
+    /// validated at CreateNodegroup against the kubernetes taint enum.
+    #[serde(default)]
+    pub taints: Vec<serde_json::Value>,
+    /// Optional remoteAccess config: `{ ec2SshKey, sourceSecurityGroups[] }`.
+    #[serde(default)]
+    pub remote_access: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
