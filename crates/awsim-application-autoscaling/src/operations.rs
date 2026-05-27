@@ -91,6 +91,43 @@ pub(crate) fn is_valid_dimension_for_namespace(ns: &str, dim: &str) -> bool {
     allowed_dimensions(ns).contains(&dim)
 }
 
+/// `TargetTrackingScalingPolicyConfiguration` invariants per AWS:
+///   * `TargetValue` must be strictly positive
+///   * `ScaleInCooldown` / `ScaleOutCooldown` (when present) must be `>= 0`
+///   * exactly one of `PredefinedMetricSpecification` or
+///     `CustomizedMetricSpecification` is supplied
+pub(crate) fn validate_target_tracking_config(cfg: &Value) -> Result<(), AwsError> {
+    let target_value = cfg
+        .get("TargetValue")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| AwsError::bad_request("ValidationException", "TargetValue is required"))?;
+    if target_value <= 0.0 || target_value.is_nan() {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("TargetValue `{target_value}` must be strictly positive."),
+        ));
+    }
+    for field in ["ScaleInCooldown", "ScaleOutCooldown"] {
+        if let Some(v) = cfg.get(field).and_then(Value::as_i64)
+            && v < 0
+        {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!("{field} `{v}` must be >= 0."),
+            ));
+        }
+    }
+    let has_predef = cfg.get("PredefinedMetricSpecification").is_some();
+    let has_custom = cfg.get("CustomizedMetricSpecification").is_some();
+    if has_predef == has_custom {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            "Exactly one of PredefinedMetricSpecification or CustomizedMetricSpecification is required.",
+        ));
+    }
+    Ok(())
+}
+
 /// Reject anything that isn't an IAM role ARN of the form
 /// `arn:<partition>:iam::<account>:role/<name-or-path/name>`. AWS
 /// strictly enforces the `iam`/`role/` shape; we mirror that so
@@ -384,6 +421,9 @@ pub fn put_scaling_policy(
             "Register the scalable target before attaching a policy",
         ));
     }
+    if let Some(cfg) = input.get("TargetTrackingScalingPolicyConfiguration") {
+        validate_target_tracking_config(cfg)?;
+    }
     let arn = format!(
         "arn:aws:autoscaling:{}:{}:scalingPolicy:{}:resource/{}/{}/{}:policyName/{}",
         ctx.region,
@@ -674,6 +714,112 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
         assert!(err.message.contains("service"));
+    }
+
+    fn setup_target(state: &AppAutoScalingState) {
+        register_scalable_target(
+            state,
+            &json!({
+                "ServiceNamespace": "ecs",
+                "ResourceId": "service/cluster/svc",
+                "ScalableDimension": "ecs:service:DesiredCount",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    fn put_with_config(state: &AppAutoScalingState, cfg: Value) -> Result<Value, AwsError> {
+        put_scaling_policy(
+            state,
+            &json!({
+                "PolicyName": "p",
+                "ServiceNamespace": "ecs",
+                "ResourceId": "service/cluster/svc",
+                "ScalableDimension": "ecs:service:DesiredCount",
+                "PolicyType": "TargetTrackingScaling",
+                "TargetTrackingScalingPolicyConfiguration": cfg,
+            }),
+            &ctx(),
+        )
+    }
+
+    #[test]
+    fn target_tracking_requires_positive_target_value() {
+        let state = AppAutoScalingState::default();
+        setup_target(&state);
+        let err = put_with_config(
+            &state,
+            json!({
+                "TargetValue": 0,
+                "PredefinedMetricSpecification": { "PredefinedMetricType": "ECSServiceAverageCPUUtilization" },
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+
+        let err = put_with_config(
+            &state,
+            json!({
+                "TargetValue": -1.5,
+                "PredefinedMetricSpecification": { "PredefinedMetricType": "ECSServiceAverageCPUUtilization" },
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn target_tracking_rejects_negative_cooldown() {
+        let state = AppAutoScalingState::default();
+        setup_target(&state);
+        let err = put_with_config(
+            &state,
+            json!({
+                "TargetValue": 50.0,
+                "ScaleInCooldown": -1,
+                "PredefinedMetricSpecification": { "PredefinedMetricType": "ECSServiceAverageCPUUtilization" },
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn target_tracking_requires_exactly_one_metric_spec() {
+        let state = AppAutoScalingState::default();
+        setup_target(&state);
+        // None.
+        let err = put_with_config(&state, json!({ "TargetValue": 50.0 })).unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+
+        // Both.
+        let err = put_with_config(
+            &state,
+            json!({
+                "TargetValue": 50.0,
+                "PredefinedMetricSpecification": { "PredefinedMetricType": "ECSServiceAverageCPUUtilization" },
+                "CustomizedMetricSpecification": { "MetricName": "Custom", "Namespace": "App", "Statistic": "Average" },
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn target_tracking_accepts_predefined_only() {
+        let state = AppAutoScalingState::default();
+        setup_target(&state);
+        put_with_config(
+            &state,
+            json!({
+                "TargetValue": 50.0,
+                "ScaleInCooldown": 60,
+                "ScaleOutCooldown": 60,
+                "PredefinedMetricSpecification": { "PredefinedMetricType": "ECSServiceAverageCPUUtilization" },
+            }),
+        )
+        .unwrap();
     }
 
     #[test]
