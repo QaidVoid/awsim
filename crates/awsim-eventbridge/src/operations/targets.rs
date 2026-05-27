@@ -464,6 +464,59 @@ fn target_to_json(target: &Target) -> Value {
     obj
 }
 
+/// Outcome of a single delivery attempt against an EventBridge target.
+/// Callers (the future delivery loop / tests) hand this back to
+/// `next_delivery_step` to decide what to do.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeliveryOutcome {
+    Success,
+    Failure,
+}
+
+/// What the dispatcher should do with a failed (or successful)
+/// delivery attempt. AWS retries up to `MaximumRetryAttempts` and
+/// caps the event's total age at `MaximumEventAgeInSeconds`; once
+/// either ceiling is reached, the event goes to the DLQ when
+/// configured or is dropped otherwise.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeliveryStep {
+    Done,
+    Retry { attempt_index: u32 },
+    SendToDeadLetter { dlq_arn: String },
+    Drop,
+}
+
+/// Decide the next step given the outcome of the most recent attempt.
+/// `attempts_so_far` counts attempts that already happened (including
+/// the one whose outcome is being reported), so the first call sees
+/// `attempts_so_far == 1`. `age_secs` is how long the event has been
+/// in flight overall.
+#[allow(dead_code)]
+pub fn next_delivery_step(
+    outcome: DeliveryOutcome,
+    target: &Target,
+    attempts_so_far: u32,
+    age_secs: u64,
+) -> DeliveryStep {
+    if outcome == DeliveryOutcome::Success {
+        return DeliveryStep::Done;
+    }
+    let (max_age, max_attempts) = target.retry_policy.unwrap_or((86_400, 185));
+    let age_exceeded = age_secs >= u64::from(max_age);
+    let attempts_exceeded = attempts_so_far > max_attempts;
+    if age_exceeded || attempts_exceeded {
+        return match target.dead_letter_arn.clone() {
+            Some(dlq_arn) => DeliveryStep::SendToDeadLetter { dlq_arn },
+            None => DeliveryStep::Drop,
+        };
+    }
+    DeliveryStep::Retry {
+        attempt_index: attempts_so_far,
+    }
+}
+
 #[cfg(test)]
 mod dlq_retry_tests {
     use super::*;
@@ -511,5 +564,66 @@ mod dlq_retry_tests {
     fn rejects_retry_policy_attempts_above_maximum() {
         let v = json!({ "MaximumRetryAttempts": 200 });
         assert!(parse_retry_policy(&v).is_err());
+    }
+
+    fn target_with(retry: Option<(u32, u32)>, dlq: Option<&str>) -> Target {
+        Target {
+            id: "t1".into(),
+            arn: "arn:aws:lambda:us-east-1:0:function:f".into(),
+            input: None,
+            input_path: None,
+            input_transformer: None,
+            batch_parameters: None,
+            dead_letter_arn: dlq.map(str::to_string),
+            retry_policy: retry,
+        }
+    }
+
+    #[test]
+    fn success_returns_done() {
+        let target = target_with(None, None);
+        assert_eq!(
+            next_delivery_step(DeliveryOutcome::Success, &target, 1, 0),
+            DeliveryStep::Done
+        );
+    }
+
+    #[test]
+    fn first_failure_under_caps_schedules_retry() {
+        let target = target_with(Some((3600, 5)), None);
+        assert_eq!(
+            next_delivery_step(DeliveryOutcome::Failure, &target, 1, 10),
+            DeliveryStep::Retry { attempt_index: 1 }
+        );
+    }
+
+    #[test]
+    fn exhausted_attempts_route_to_dead_letter_when_configured() {
+        let target = target_with(Some((3600, 3)), Some("arn:aws:sqs:us-east-1:0:dlq"));
+        let step = next_delivery_step(DeliveryOutcome::Failure, &target, 4, 10);
+        assert!(matches!(
+            step,
+            DeliveryStep::SendToDeadLetter { ref dlq_arn } if dlq_arn == "arn:aws:sqs:us-east-1:0:dlq"
+        ));
+    }
+
+    #[test]
+    fn exceeded_age_with_no_dlq_drops_event() {
+        let target = target_with(Some((30, 100)), None);
+        assert_eq!(
+            next_delivery_step(DeliveryOutcome::Failure, &target, 1, 60),
+            DeliveryStep::Drop
+        );
+    }
+
+    #[test]
+    fn no_retry_policy_uses_aws_defaults_for_cap() {
+        // AWS default: 185 attempts, 86 400 s. So one failure after
+        // a few seconds → still retry.
+        let target = target_with(None, None);
+        assert_eq!(
+            next_delivery_step(DeliveryOutcome::Failure, &target, 1, 60),
+            DeliveryStep::Retry { attempt_index: 1 }
+        );
     }
 }
