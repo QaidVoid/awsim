@@ -18,6 +18,11 @@ pub struct Task {
     /// We persist them merged so describe responses surface both at
     /// once.
     pub tags: Vec<(String, String)>,
+    /// ECS-managed attachments surfaced on describe. For `awsvpc`
+    /// tasks AWS attaches an `ElasticNetworkInterface` carrying
+    /// subnetId / networkInterfaceId / privateIPv4Address — the
+    /// simulator generates a synthetic ENI ID per task.
+    pub attachments: Vec<Value>,
 }
 
 /// A service running in a cluster.

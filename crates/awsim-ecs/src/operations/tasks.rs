@@ -21,10 +21,86 @@ fn task_to_json(task: &Task) -> Value {
         "group": task.group,
         "startedAt": task.started_at,
         "containers": [],
-        "attachments": [],
+        "attachments": task.attachments,
         "attributes": [],
         "tags": tags,
     })
+}
+
+/// Build the ECS `ElasticNetworkInterface` attachment record for an
+/// `awsvpc` task. The simulator doesn't model EC2 ENIs end-to-end,
+/// but every field AWS ships back on describe is here:
+///   - `id`: attachment uuid
+///   - `networkInterfaceId`: synthetic `eni-{12-hex}`
+///   - `subnetId`: pulled from `networkConfiguration.awsvpcConfiguration.subnets[0]`
+///   - `privateIPv4Address`: derived from the eni-id so the same call
+///     deterministically yields the same address
+///   - `securityGroups`: comma-joined input list (or empty)
+fn build_awsvpc_attachment(network_configuration: &Value) -> Value {
+    let aws_cfg = network_configuration
+        .get("awsvpcConfiguration")
+        .cloned()
+        .unwrap_or(Value::Null);
+
+    let subnet = aws_cfg
+        .get("subnets")
+        .and_then(Value::as_array)
+        .and_then(|arr| arr.first())
+        .and_then(Value::as_str)
+        .unwrap_or("subnet-awsim-default")
+        .to_string();
+
+    let security_groups = aws_cfg
+        .get("securityGroups")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+
+    let raw = Uuid::new_v4().to_string().replace('-', "");
+    let eni_id = format!("eni-{}", &raw[..12]);
+    // Derive a fake 10.0.x.y from the eni id so describe responses
+    // round-trip the same address for the same attachment id.
+    let bytes = raw.as_bytes();
+    let octet_a = (u32::from(bytes[0]) + u32::from(bytes[1])) % 256;
+    let octet_b = (u32::from(bytes[2]) + u32::from(bytes[3])) % 254 + 1;
+    let private_ip = format!("10.0.{octet_a}.{octet_b}");
+
+    let mut details = vec![
+        json!({"name": "subnetId", "value": subnet}),
+        json!({"name": "networkInterfaceId", "value": eni_id}),
+        json!({"name": "macAddress", "value": "0a:00:00:00:00:01"}),
+        json!({"name": "privateIPv4Address", "value": private_ip}),
+    ];
+    if !security_groups.is_empty() {
+        details.push(json!({"name": "securityGroups", "value": security_groups}));
+    }
+
+    json!({
+        "id": Uuid::new_v4().to_string(),
+        "type": "ElasticNetworkInterface",
+        "status": "ATTACHED",
+        "details": details,
+    })
+}
+
+/// Look up the network mode declared on a task definition by ARN.
+/// Returns `None` when the definition can't be resolved — RunTask
+/// falls back to "no awsvpc handling" in that case rather than
+/// rejecting the call.
+fn task_definition_network_mode(state: &EcsState, task_def_arn: &str) -> Option<String> {
+    for entry in state.task_definitions.iter() {
+        for td in entry.value().iter() {
+            if td.arn == task_def_arn {
+                return Some(td.network_mode.clone());
+            }
+        }
+    }
+    None
 }
 
 /// Pull tags off the matching `TaskDefinition` so `propagateTags=
@@ -109,6 +185,24 @@ pub fn run_task(state: &EcsState, input: &Value, ctx: &RequestContext) -> Result
         effective_tags = crate::operations::tags::merge_tags(&effective_tags, &managed);
     }
 
+    let network_mode = task_definition_network_mode(state, &task_def_arn);
+    let requires_network_config = network_mode.as_deref() == Some("awsvpc");
+    let network_configuration = input.get("networkConfiguration").cloned();
+    if requires_network_config {
+        let has_config = network_configuration
+            .as_ref()
+            .and_then(|nc| nc.get("awsvpcConfiguration"))
+            .and_then(|c| c.get("subnets").and_then(Value::as_array))
+            .is_some_and(|s| !s.is_empty());
+        if !has_config {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                "Tasks using the awsvpc network mode require \
+                 networkConfiguration.awsvpcConfiguration.subnets.",
+            ));
+        }
+    }
+
     let mut tasks = Vec::new();
 
     for _ in 0..count {
@@ -118,6 +212,13 @@ pub fn run_task(state: &EcsState, input: &Value, ctx: &RequestContext) -> Result
             ctx.region, ctx.account_id, cluster_name, task_id
         );
 
+        let attachments = if requires_network_config {
+            let nc = network_configuration.clone().unwrap_or(Value::Null);
+            vec![build_awsvpc_attachment(&nc)]
+        } else {
+            Vec::new()
+        };
+
         let task = Task {
             task_arn: task_arn.clone(),
             cluster_arn: cluster_arn.clone(),
@@ -126,6 +227,7 @@ pub fn run_task(state: &EcsState, input: &Value, ctx: &RequestContext) -> Result
             started_at: now_epoch_str(),
             group: "task-group".to_string(),
             tags: effective_tags.clone(),
+            attachments,
         };
 
         tasks.push(task_to_json(&task));
@@ -382,5 +484,96 @@ mod propagate_tags_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    fn register_awsvpc_def(state: &EcsState) {
+        register_task_definition(
+            state,
+            &json!({
+                "family": "web",
+                "containerDefinitions": [],
+                "networkMode": "awsvpc"
+            }),
+            &ctx(),
+            None,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn run_task_attaches_eni_for_awsvpc_network_mode() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        register_awsvpc_def(&state);
+
+        let resp = run_task(
+            &state,
+            &json!({
+                "cluster": "default",
+                "taskDefinition": "web",
+                "networkConfiguration": {
+                    "awsvpcConfiguration": {
+                        "subnets": ["subnet-aaa"],
+                        "securityGroups": ["sg-1", "sg-2"]
+                    }
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let attachments = resp["tasks"][0]["attachments"].as_array().unwrap();
+        assert_eq!(attachments.len(), 1);
+        let att = &attachments[0];
+        assert_eq!(att["type"], "ElasticNetworkInterface");
+        assert_eq!(att["status"], "ATTACHED");
+        let details = att["details"].as_array().unwrap();
+        let subnet = details.iter().find(|d| d["name"] == "subnetId").unwrap();
+        assert_eq!(subnet["value"], "subnet-aaa");
+        let eni = details
+            .iter()
+            .find(|d| d["name"] == "networkInterfaceId")
+            .unwrap();
+        assert!(eni["value"].as_str().unwrap().starts_with("eni-"));
+        let sg = details
+            .iter()
+            .find(|d| d["name"] == "securityGroups")
+            .unwrap();
+        assert_eq!(sg["value"], "sg-1,sg-2");
+    }
+
+    #[test]
+    fn run_task_rejects_awsvpc_without_network_configuration() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        register_awsvpc_def(&state);
+        let err = run_task(
+            &state,
+            &json!({ "cluster": "default", "taskDefinition": "web" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn run_task_bridge_mode_emits_empty_attachments() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        register_task_definition(
+            &state,
+            &json!({ "family": "web", "containerDefinitions": [] }),
+            &ctx(),
+            None,
+        )
+        .unwrap();
+        let resp = run_task(
+            &state,
+            &json!({ "cluster": "default", "taskDefinition": "web" }),
+            &ctx(),
+        )
+        .unwrap();
+        let attachments = resp["tasks"][0]["attachments"].as_array().unwrap();
+        assert!(attachments.is_empty());
     }
 }
