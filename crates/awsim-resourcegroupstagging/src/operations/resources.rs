@@ -47,11 +47,15 @@ pub fn get_resources(
         })
         .unwrap_or_default();
 
-    let page_size = input
-        .get("ResourcesPerPage")
-        .and_then(Value::as_u64)
-        .map(|n| n.clamp(1, 100) as usize)
-        .unwrap_or(50);
+    let page_size = match input.get("ResourcesPerPage").and_then(Value::as_i64) {
+        Some(n) if !(1..=100).contains(&n) => {
+            return Err(AwsError::validation(format!(
+                "ResourcesPerPage `{n}` must be in 1..=100."
+            )));
+        }
+        Some(n) => n as usize,
+        None => 50,
+    };
 
     let skip = decode_cursor(input.get("PaginationToken"))?;
 
@@ -276,6 +280,16 @@ mod tests {
         .unwrap();
         assert_eq!(page2["ResourceTagMappingList"].as_array().unwrap().len(), 1);
         assert_eq!(page2["PaginationToken"].as_str().unwrap(), "");
+    }
+
+    #[test]
+    fn rejects_resources_per_page_out_of_range() {
+        let state = populated();
+        for bad in [0i64, 101, 1000] {
+            let err =
+                get_resources(&state, &json!({ "ResourcesPerPage": bad }), &ctx()).unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input {bad}");
+        }
     }
 
     #[test]
