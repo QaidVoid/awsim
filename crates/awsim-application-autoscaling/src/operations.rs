@@ -41,6 +41,56 @@ pub(crate) fn is_valid_service_namespace(ns: &str) -> bool {
     SERVICE_NAMESPACES.contains(&ns)
 }
 
+/// Documented `ScalableDimension` values keyed by `ServiceNamespace`.
+/// AWS rejects mismatches with `ValidationException`; the emulator
+/// uses the same table so callers stay AWS-compatible.
+fn allowed_dimensions(ns: &str) -> &'static [&'static str] {
+    match ns {
+        "appstream" => &["appstream:fleet:DesiredCapacity"],
+        "cassandra" => &[
+            "cassandra:table:ReadCapacityUnits",
+            "cassandra:table:WriteCapacityUnits",
+        ],
+        "comprehend" => &[
+            "comprehend:document-classifier-endpoint:DesiredInferenceUnits",
+            "comprehend:entity-recognizer-endpoint:DesiredInferenceUnits",
+        ],
+        "custom-resource" => &["custom-resource:ResourceType:Property"],
+        "dynamodb" => &[
+            "dynamodb:table:ReadCapacityUnits",
+            "dynamodb:table:WriteCapacityUnits",
+            "dynamodb:index:ReadCapacityUnits",
+            "dynamodb:index:WriteCapacityUnits",
+        ],
+        "ec2" => &[
+            "ec2:spot-fleet-request:TargetCapacity",
+            "ec2:fleet:TargetCapacity",
+        ],
+        "ecs" => &["ecs:service:DesiredCount"],
+        "elasticache" => &[
+            "elasticache:replication-group:NodeGroups",
+            "elasticache:replication-group:Replicas",
+            "elasticache:cache-cluster:Nodes",
+        ],
+        "elasticmapreduce" => &["elasticmapreduce:instancegroup:InstanceCount"],
+        "kafka" => &["kafka:broker-storage:VolumeSize"],
+        "lambda" => &["lambda:function:ProvisionedConcurrency"],
+        "neptune" => &["neptune:cluster:ReadReplicaCount"],
+        "rds" => &["rds:cluster:ReadReplicaCount", "rds:cluster:Capacity"],
+        "sagemaker" => &[
+            "sagemaker:variant:DesiredInstanceCount",
+            "sagemaker:variant:DesiredProvisionedConcurrency",
+            "sagemaker:inference-component:DesiredCopyCount",
+        ],
+        "workspaces" => &["workspaces:workspacespool:DesiredUserSessions"],
+        _ => &[],
+    }
+}
+
+pub(crate) fn is_valid_dimension_for_namespace(ns: &str, dim: &str) -> bool {
+    allowed_dimensions(ns).contains(&dim)
+}
+
 fn require_str<'a>(input: &'a Value, key: &str) -> Result<&'a str, AwsError> {
     input
         .get(key)
@@ -109,6 +159,15 @@ pub fn register_scalable_target(
     }
     let rid = require_str(input, "ResourceId")?.to_string();
     let dim = require_str(input, "ScalableDimension")?.to_string();
+    if !is_valid_dimension_for_namespace(&ns, &dim) {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "ScalableDimension `{dim}` is not valid for ServiceNamespace `{ns}`; allowed: {:?}.",
+                allowed_dimensions(&ns),
+            ),
+        ));
+    }
     let key = target_key(&ns, &rid, &dim);
 
     let existing = state.targets.get(&key).map(|e| e.value().clone());
@@ -468,16 +527,55 @@ mod tests {
     fn register_accepts_documented_service_namespaces() {
         let state = AppAutoScalingState::default();
         for ns in SERVICE_NAMESPACES {
+            // Pick the first documented dimension for each namespace.
+            let dim = allowed_dimensions(ns)
+                .first()
+                .copied()
+                .unwrap_or_else(|| panic!("no dimension catalog for {ns}"));
             register_scalable_target(
                 &state,
                 &json!({
                     "ServiceNamespace": ns,
                     "ResourceId": "r",
-                    "ScalableDimension": "dim",
+                    "ScalableDimension": dim,
                 }),
                 &ctx(),
             )
             .unwrap_or_else(|e| panic!("namespace `{ns}` should be accepted: {e:?}"));
         }
+    }
+
+    #[test]
+    fn register_rejects_dimension_for_wrong_namespace() {
+        let state = AppAutoScalingState::default();
+        // ECS-only dimension on a Lambda target.
+        let err = register_scalable_target(
+            &state,
+            &json!({
+                "ServiceNamespace": "lambda",
+                "ResourceId": "function:foo",
+                "ScalableDimension": "ecs:service:DesiredCount",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("ecs:service:DesiredCount"));
+    }
+
+    #[test]
+    fn register_rejects_unknown_dimension() {
+        let state = AppAutoScalingState::default();
+        let err = register_scalable_target(
+            &state,
+            &json!({
+                "ServiceNamespace": "ecs",
+                "ResourceId": "service/c/s",
+                "ScalableDimension": "ecs:service:Pretend",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 }
