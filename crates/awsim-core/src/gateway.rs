@@ -885,7 +885,7 @@ fn verify_signature_for_request(
             "IncompleteSignatureException",
             "SigV4 verification failed: required header missing.",
         )),
-        crate::sigv4_verify::VerifyOutcome::SignatureMismatch => Err(AwsError::bad_request(
+        crate::sigv4_verify::VerifyOutcome::SignatureMismatch => Err(AwsError::forbidden(
             "SignatureDoesNotMatch",
             "The request signature we calculated does not match the signature you provided.",
         )),
@@ -940,7 +940,7 @@ fn verify_presigned_for_request(
             "IncompleteSignatureException",
             "Presigned URL is missing one of X-Amz-Algorithm / X-Amz-Credential / X-Amz-Date / X-Amz-SignedHeaders / X-Amz-Signature.",
         )),
-        crate::sigv4_verify::VerifyOutcome::SignatureMismatch => Err(AwsError::bad_request(
+        crate::sigv4_verify::VerifyOutcome::SignatureMismatch => Err(AwsError::forbidden(
             "SignatureDoesNotMatch",
             "The request signature we calculated does not match the signature you provided.",
         )),
@@ -1352,6 +1352,58 @@ mod tick_tests {
             // Far exceed the 50ms per-handler deadline.
             tokio::time::sleep(Duration::from_secs(60)).await;
         }
+    }
+
+    /// Stub principal lookup that returns a fixed secret for every
+    /// access key. Used by the presigned-URL verification test to
+    /// drive the request through the SignatureMismatch path.
+    struct FixedSecretLookup {
+        secret: String,
+    }
+
+    impl crate::authz::PrincipalLookup for FixedSecretLookup {
+        fn resolve_access_key(&self, _: &str) -> Option<crate::authz::ResolvedPrincipal> {
+            None
+        }
+        fn resolve_secret(&self, _: &str) -> Option<String> {
+            Some(self.secret.clone())
+        }
+    }
+
+    #[test]
+    fn presigned_url_tampering_surfaces_403_forbidden() {
+        use axum::http::HeaderValue;
+
+        let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+        let mut state = AppState::new("us-east-1".to_string(), "000000000000".to_string());
+        let mut authz = crate::authz::AuthzEngine::new(false);
+        authz.principal_lookup = Arc::new(FixedSecretLookup {
+            secret: secret.to_string(),
+        });
+        state.authz = Arc::new(authz);
+
+        // Hand-crafted presigned URL with a deliberately wrong
+        // signature. The verifier will recompute the expected signature
+        // against `secret`, get a different value, and reject.
+        let raw_query = "X-Amz-Algorithm=AWS4-HMAC-SHA256\
+&X-Amz-Credential=AKID%2F20260524%2Fus-east-1%2Fs3%2Faws4_request\
+&X-Amz-Date=20260524T120000Z\
+&X-Amz-Expires=900\
+&X-Amz-SignedHeaders=host\
+&X-Amz-Signature=00000000000000000000000000000000\
+00000000000000000000000000000000";
+        let uri: Uri = format!("/bucket/key?{raw_query}").parse().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("s3.amazonaws.com"));
+
+        let err = verify_presigned_for_request(&state, &headers, &Method::GET, &uri, "AKID")
+            .expect_err("tampered presigned URL must be rejected");
+        assert_eq!(err.code, "SignatureDoesNotMatch");
+        assert_eq!(
+            err.status,
+            StatusCode::FORBIDDEN,
+            "tampered presigned URL must surface as HTTP 403 (real AWS behaviour)"
+        );
     }
 
     #[tokio::test]
