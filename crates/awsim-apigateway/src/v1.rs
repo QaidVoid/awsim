@@ -503,6 +503,12 @@ impl ServiceHandler for ApiGatewayV1Service {
                 operation: "PutMethodResponse",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/restapis/{restapi_id}/stages/{stage_name}/exports/{export_type}",
+                operation: "GetExport",
+                required_query_param: None,
+            },
             // API keys
             RouteDefinition {
                 method: "POST",
@@ -615,6 +621,7 @@ impl ServiceHandler for ApiGatewayV1Service {
             "CreateRequestValidator" => create_request_validator(&state, &input),
             "DeleteRequestValidator" => delete_request_validator(&state, &input),
             "PutMethodResponse" => put_method_response(&state, &input),
+            "GetExport" => get_export(&state, &input),
             "DeleteAuthorizer" => delete_authorizer(&state, &input),
             "CreateApiKey" => create_api_key(&state, &input),
             "GetApiKey" => get_api_key(&state, &input),
@@ -1918,6 +1925,197 @@ fn validate_schema_inner(
     Ok(())
 }
 
+fn get_export(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let stage_name = require_str(input, "stage_name")?.to_string();
+    let export_type = require_str(input, "export_type")?.to_string();
+
+    let api = state.apis.get(&api_id).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("RestApi {api_id} not found"))
+    })?;
+    if !api.stages.contains_key(&stage_name) {
+        return Err(AwsError::not_found(
+            "NotFoundException",
+            format!("Stage {stage_name} not found"),
+        ));
+    }
+
+    let doc = match export_type.as_str() {
+        "swagger" => build_swagger(&api, &stage_name),
+        "oas30" | "openapi" => build_openapi3(&api, &stage_name),
+        other => {
+            return Err(AwsError::bad_request(
+                "BadRequestException",
+                format!("Unsupported export type '{other}'; expected swagger or oas30"),
+            ));
+        }
+    };
+    let body = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".into());
+    Ok(json!({
+        "contentType": "application/json",
+        "extensions": Value::Null,
+        "body": body,
+    }))
+}
+
+fn build_swagger(api: &RestApi, stage: &str) -> Value {
+    let mut paths = serde_json::Map::new();
+    for r in api.resources.values() {
+        let mut path_obj = serde_json::Map::new();
+        for (method_name, method) in &r.methods {
+            let mut op = json!({
+                "responses": method_responses_for_swagger(method),
+            });
+            if !method.request_models.is_empty() {
+                op["parameters"] = json!([
+                    {
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": { "$ref": format!("#/definitions/{}", method
+                            .request_models
+                            .values()
+                            .next()
+                            .map(String::as_str)
+                            .unwrap_or("Empty")) }
+                    }
+                ]);
+            }
+            path_obj.insert(method_name.to_lowercase(), op);
+        }
+        if !path_obj.is_empty() {
+            paths.insert(r.path.clone(), Value::Object(path_obj));
+        }
+    }
+    let definitions = swagger_definitions(api);
+    json!({
+        "swagger": "2.0",
+        "info": {
+            "title": api.name,
+            "version": api.version,
+            "description": api.description,
+        },
+        "host": format!("{}.execute-api.localhost", api.id),
+        "basePath": format!("/{stage}"),
+        "schemes": ["https"],
+        "paths": Value::Object(paths),
+        "definitions": definitions,
+    })
+}
+
+fn build_openapi3(api: &RestApi, stage: &str) -> Value {
+    let mut paths = serde_json::Map::new();
+    for r in api.resources.values() {
+        let mut path_obj = serde_json::Map::new();
+        for (method_name, method) in &r.methods {
+            let mut op = json!({
+                "responses": method_responses_for_oas3(method),
+            });
+            if !method.request_models.is_empty() {
+                let content: serde_json::Map<String, Value> = method
+                    .request_models
+                    .iter()
+                    .map(|(ct, model)| {
+                        (
+                            ct.clone(),
+                            json!({ "schema": { "$ref": format!("#/components/schemas/{model}") } }),
+                        )
+                    })
+                    .collect();
+                op["requestBody"] = json!({
+                    "required": true,
+                    "content": Value::Object(content),
+                });
+            }
+            path_obj.insert(method_name.to_lowercase(), op);
+        }
+        if !path_obj.is_empty() {
+            paths.insert(r.path.clone(), Value::Object(path_obj));
+        }
+    }
+    let schemas: serde_json::Map<String, Value> = api
+        .models
+        .iter()
+        .map(|(n, m)| (n.clone(), m.schema.clone()))
+        .collect();
+    json!({
+        "openapi": "3.0.1",
+        "info": {
+            "title": api.name,
+            "version": api.version,
+            "description": api.description,
+        },
+        "servers": [
+            { "url": format!("https://{}.execute-api.localhost/{stage}", api.id) }
+        ],
+        "paths": Value::Object(paths),
+        "components": { "schemas": Value::Object(schemas) },
+    })
+}
+
+fn method_responses_for_swagger(method: &Method) -> Value {
+    let mut out: serde_json::Map<String, Value> = serde_json::Map::new();
+    let statuses: std::collections::BTreeSet<&str> = method
+        .response_models
+        .keys()
+        .filter_map(|k| k.split_once('/').map(|(s, _)| s))
+        .collect();
+    let statuses: Vec<&str> = if statuses.is_empty() {
+        vec!["200"]
+    } else {
+        statuses.into_iter().collect()
+    };
+    for status in statuses {
+        let mut entry = json!({ "description": format!("status {status}") });
+        if let Some((_, model)) = method
+            .response_models
+            .iter()
+            .find(|(k, _)| k.starts_with(&format!("{status}/")))
+        {
+            entry["schema"] = json!({ "$ref": format!("#/definitions/{model}") });
+        }
+        out.insert(status.to_string(), entry);
+    }
+    Value::Object(out)
+}
+
+fn method_responses_for_oas3(method: &Method) -> Value {
+    let mut out: serde_json::Map<String, Value> = serde_json::Map::new();
+    let mut by_status: std::collections::BTreeMap<String, serde_json::Map<String, Value>> =
+        std::collections::BTreeMap::new();
+    for (key, model) in &method.response_models {
+        if let Some((status, ct)) = key.split_once('/') {
+            by_status.entry(status.to_string()).or_default().insert(
+                ct.to_string(),
+                json!({ "schema": { "$ref": format!("#/components/schemas/{model}") } }),
+            );
+        }
+    }
+    if by_status.is_empty() {
+        out.insert("200".into(), json!({ "description": "status 200" }));
+    } else {
+        for (status, content) in by_status {
+            out.insert(
+                status.clone(),
+                json!({
+                    "description": format!("status {status}"),
+                    "content": Value::Object(content),
+                }),
+            );
+        }
+    }
+    Value::Object(out)
+}
+
+fn swagger_definitions(api: &RestApi) -> Value {
+    let map: serde_json::Map<String, Value> = api
+        .models
+        .iter()
+        .map(|(n, m)| (n.clone(), m.schema.clone()))
+        .collect();
+    Value::Object(map)
+}
+
 /// Resolve a response payload model name from a method's
 /// `response_models` table using the response's status code and
 /// Content-Type. AWS picks the exact match first, then `*/*`, mirroring
@@ -2723,6 +2921,136 @@ mod tests {
             models: HashMap::new(),
             request_validators: HashMap::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn get_export_swagger_includes_paths_and_definitions() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        svc.handle(
+            "PutMethod",
+            json!({"restapi_id": api_id.clone(), "resource_id": root_id.clone(), "http_method": "GET"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "PutMethodResponse",
+            json!({
+                "restapi_id": api_id.clone(),
+                "resource_id": root_id,
+                "http_method": "GET",
+                "status_code": "200",
+                "responseModels": { "application/json": "Item" }
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "CreateModel",
+            json!({
+                "restapi_id": api_id.clone(),
+                "name": "Item",
+                "contentType": "application/json",
+                "schema": "{\"type\":\"object\"}"
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "CreateDeployment",
+            json!({"restapi_id": api_id.clone(), "stageName": "prod"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+
+        let resp = svc
+            .handle(
+                "GetExport",
+                json!({
+                    "restapi_id": api_id.clone(),
+                    "stage_name": "prod",
+                    "export_type": "swagger",
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp["contentType"], "application/json");
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["swagger"], "2.0");
+        assert_eq!(body["basePath"], "/prod");
+        assert!(body["paths"]["/"]["get"].is_object());
+        assert!(body["definitions"]["Item"].is_object());
+    }
+
+    #[tokio::test]
+    async fn get_export_oas30_emits_openapi_envelope() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        svc.handle(
+            "PutMethod",
+            json!({"restapi_id": api_id.clone(), "resource_id": root_id, "http_method": "GET"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "CreateDeployment",
+            json!({"restapi_id": api_id.clone(), "stageName": "prod"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        let resp = svc
+            .handle(
+                "GetExport",
+                json!({
+                    "restapi_id": api_id,
+                    "stage_name": "prod",
+                    "export_type": "oas30",
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert!(body["openapi"].as_str().unwrap().starts_with("3."));
+        assert!(
+            body["servers"][0]["url"]
+                .as_str()
+                .unwrap()
+                .contains("/prod")
+        );
+    }
+
+    #[tokio::test]
+    async fn get_export_rejects_unknown_type() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, _root_id) = make_api(&svc).await;
+        svc.handle(
+            "CreateDeployment",
+            json!({"restapi_id": api_id.clone(), "stageName": "prod"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        let err = svc
+            .handle(
+                "GetExport",
+                json!({
+                    "restapi_id": api_id,
+                    "stage_name": "prod",
+                    "export_type": "raml",
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
     }
 
     #[tokio::test]
