@@ -355,6 +355,78 @@ mod tests {
     }
 
     #[test]
+    fn start_date_and_end_date_round_trip() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "bounded",
+                "ScheduleExpression": "rate(5 minutes)",
+                "StartDate": "2026-06-01T00:00:00",
+                "EndDate": "2026-06-30T00:00:00",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let desc = block_on(svc.handle("GetSchedule", json!({ "Name": "bounded" }), &ctx)).unwrap();
+        assert_eq!(desc["StartDate"], json!("2026-06-01T00:00:00"));
+        assert_eq!(desc["EndDate"], json!("2026-06-30T00:00:00"));
+    }
+
+    #[test]
+    fn start_date_must_precede_end_date() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "inverted",
+                "ScheduleExpression": "rate(5 minutes)",
+                "StartDate": "2026-06-30T00:00:00",
+                "EndDate": "2026-06-01T00:00:00",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn start_date_rejects_malformed_timestamp() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        for bad in ["not-a-date", "2026-13-01T00:00:00", "2026-01-01 00:00:00"] {
+            let err = block_on(svc.handle(
+                "CreateSchedule",
+                json!({
+                    "Name": format!("bad-{}", bad.replace([' ', ':'], "_")),
+                    "ScheduleExpression": "rate(5 minutes)",
+                    "StartDate": bad,
+                    "Target": {
+                        "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                        "RoleArn": "arn:aws:iam::000000000000:role/r",
+                    },
+                    "FlexibleTimeWindow": { "Mode": "OFF" },
+                }),
+                &ctx,
+            ))
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input `{bad}`");
+        }
+    }
+
+    #[test]
     fn retry_policy_accepts_documented_bounds() {
         let svc = SchedulerService::new();
         let ctx = ctx();

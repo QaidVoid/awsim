@@ -32,6 +32,16 @@ pub struct Schedule {
     /// when the awsim-kms invoker lands.
     #[serde(default)]
     pub kms_key_arn: Option<String>,
+    /// Optional inclusive lower bound on when the runner is allowed
+    /// to fire. AWS stores the value as `yyyy-mm-ddTHH:MM:SS` (with
+    /// or without timezone suffix). The runner consults this once
+    /// the tick driver lands; until then the field is metadata that
+    /// round-trips via describe.
+    #[serde(default)]
+    pub start_date: Option<String>,
+    /// Optional inclusive upper bound on runner firing.
+    #[serde(default)]
+    pub end_date: Option<String>,
 }
 
 fn default_timezone() -> String {

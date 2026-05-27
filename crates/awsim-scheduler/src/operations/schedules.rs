@@ -111,6 +111,9 @@ pub fn create_schedule(
         }
         None => None,
     };
+    let start_date = parse_optional_iso_timestamp(input, "StartDate")?;
+    let end_date = parse_optional_iso_timestamp(input, "EndDate")?;
+    validate_start_before_end(start_date.as_deref(), end_date.as_deref())?;
 
     let key = format!("{group_name}/{name}");
     if state.schedules.contains_key(&key) {
@@ -139,6 +142,8 @@ pub fn create_schedule(
         schedule_expression_timezone,
         action_after_completion,
         kms_key_arn,
+        start_date,
+        end_date,
     };
 
     state.schedules.insert(key, schedule);
@@ -151,6 +156,83 @@ pub fn create_schedule(
             .insert(token, req_hash, result.clone());
     }
     Ok(result)
+}
+
+/// Parse an optional ISO-8601 timestamp from the request payload.
+/// Accepts the AWS-documented `yyyy-mm-ddTHH:MM:SS` form, optionally
+/// followed by `.<frac>` and a `Z` / `±HH:MM` timezone suffix.
+fn parse_optional_iso_timestamp(input: &Value, field: &str) -> Result<Option<String>, AwsError> {
+    let raw = match input.get(field).and_then(|v| v.as_str()) {
+        Some(s) => s.trim(),
+        None => return Ok(None),
+    };
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    validate_iso_timestamp(raw, field)?;
+    Ok(Some(raw.to_string()))
+}
+
+/// Validate an ISO-8601 timestamp string. The shape must be
+/// `yyyy-mm-ddTHH:MM:SS` followed by an optional `.<frac>` and an
+/// optional `Z` / `+HH:MM` / `-HH:MM` zone. AWS rejects anything
+/// else with `ValidationException`.
+fn validate_iso_timestamp(raw: &str, field: &str) -> Result<(), AwsError> {
+    let (date, rest) = raw.split_once('T').ok_or_else(|| iso_error(field, raw))?;
+    // Date: yyyy-mm-dd
+    let date_parts: Vec<&str> = date.split('-').collect();
+    if date_parts.len() != 3 {
+        return Err(iso_error(field, raw));
+    }
+    let year: u32 = date_parts[0].parse().map_err(|_| iso_error(field, raw))?;
+    let month: u32 = date_parts[1].parse().map_err(|_| iso_error(field, raw))?;
+    let day: u32 = date_parts[2].parse().map_err(|_| iso_error(field, raw))?;
+    if year < 1970 || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return Err(iso_error(field, raw));
+    }
+    // Time: HH:MM:SS optionally followed by .<frac> and Z/+HH:MM/-HH:MM
+    let time_core = rest
+        .trim_end_matches('Z')
+        .split_once('+')
+        .map(|(t, _)| t)
+        .unwrap_or(rest.trim_end_matches('Z'));
+    let time_core = match time_core.rfind('-') {
+        Some(idx) if idx > 0 => &time_core[..idx],
+        _ => time_core,
+    };
+    let time_no_frac = time_core.split('.').next().unwrap_or(time_core);
+    let time_parts: Vec<&str> = time_no_frac.split(':').collect();
+    if time_parts.len() != 3 {
+        return Err(iso_error(field, raw));
+    }
+    let hour: u32 = time_parts[0].parse().map_err(|_| iso_error(field, raw))?;
+    let minute: u32 = time_parts[1].parse().map_err(|_| iso_error(field, raw))?;
+    let second: u32 = time_parts[2].parse().map_err(|_| iso_error(field, raw))?;
+    if hour > 23 || minute > 59 || second > 59 {
+        return Err(iso_error(field, raw));
+    }
+    Ok(())
+}
+
+fn iso_error(field: &str, raw: &str) -> AwsError {
+    AwsError::bad_request(
+        "ValidationException",
+        format!("{field} `{raw}` must be an ISO-8601 `yyyy-mm-ddTHH:MM:SS` timestamp."),
+    )
+}
+
+/// Refuse a schedule whose `StartDate` is not strictly before
+/// `EndDate`. AWS surfaces the same check as `ValidationException`.
+fn validate_start_before_end(start: Option<&str>, end: Option<&str>) -> Result<(), AwsError> {
+    if let (Some(s), Some(e)) = (start, end)
+        && s >= e
+    {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("StartDate `{s}` must be strictly before EndDate `{e}`."),
+        ));
+    }
+    Ok(())
 }
 
 /// Validate `Target.RetryPolicy` per AWS bounds:
@@ -651,6 +733,12 @@ pub fn get_schedule(
     if let Some(ref k) = schedule.kms_key_arn {
         resp["KmsKeyArn"] = json!(k);
     }
+    if let Some(ref d) = schedule.start_date {
+        resp["StartDate"] = json!(d);
+    }
+    if let Some(ref d) = schedule.end_date {
+        resp["EndDate"] = json!(d);
+    }
     Ok(resp)
 }
 
@@ -778,6 +866,16 @@ pub fn update_schedule(
     if let Some(arn) = input["KmsKeyArn"].as_str() {
         validate_kms_key_arn(arn)?;
         schedule.kms_key_arn = Some(arn.to_string());
+    }
+    if input.get("StartDate").is_some() {
+        let new_start = parse_optional_iso_timestamp(input, "StartDate")?;
+        validate_start_before_end(new_start.as_deref(), schedule.end_date.as_deref())?;
+        schedule.start_date = new_start;
+    }
+    if input.get("EndDate").is_some() {
+        let new_end = parse_optional_iso_timestamp(input, "EndDate")?;
+        validate_start_before_end(schedule.start_date.as_deref(), new_end.as_deref())?;
+        schedule.end_date = new_end;
     }
     if let Some(action) = input["ActionAfterCompletion"].as_str() {
         if !matches!(action, "NONE" | "DELETE") {
