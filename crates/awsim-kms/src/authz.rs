@@ -33,6 +33,11 @@ impl GrantLookup for KmsGrantLookup {
         let Some(target_key_id) = extract_key_id(resource_arn) else {
             return false;
         };
+        // The current GrantLookup trait does not surface encryption
+        // context per call. Treat the call as carrying an empty context
+        // for constraint evaluation — grants with any constraints will
+        // require the IAM evaluator hook to be extended later.
+        let empty_ctx = std::collections::BTreeMap::new();
         for (_, state) in self.store.iter_all() {
             for entry in state.grants.iter() {
                 let grant = entry.value();
@@ -42,9 +47,13 @@ impl GrantLookup for KmsGrantLookup {
                 if grant.grantee_principal != principal_arn {
                     continue;
                 }
-                if grant.operations.iter().any(|o| o == op) {
-                    return true;
+                if !grant.operations.iter().any(|o| o == op) {
+                    continue;
                 }
+                if !crate::operations::grants::grant_constraints_match(grant, &empty_ctx) {
+                    continue;
+                }
+                return true;
             }
         }
         false
@@ -197,6 +206,8 @@ mod tests {
                 grantee_principal: "arn:aws:iam::000000000000:user/alice".into(),
                 operations: vec!["Decrypt".into(), "DescribeKey".into()],
                 token_created_at: 0,
+                encryption_context_equals: Default::default(),
+                encryption_context_subset: Default::default(),
             },
         );
         let lookup = KmsGrantLookup::new(store);

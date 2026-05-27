@@ -15,6 +15,14 @@ pub struct KmsGrant {
     /// grant token authorize operations for 5 minutes after creation
     /// (after which the underlying grant must be used by id instead).
     pub token_created_at: u64,
+    /// `Constraints.EncryptionContextEquals`: every key/value pair must
+    /// match the operation's encryption context exactly, and no extra
+    /// pairs may be present.
+    pub encryption_context_equals: std::collections::BTreeMap<String, String>,
+    /// `Constraints.EncryptionContextSubset`: every key/value pair must
+    /// be present in the operation's encryption context, but additional
+    /// pairs are allowed.
+    pub encryption_context_subset: std::collections::BTreeMap<String, String>,
 }
 
 /// A KMS key.

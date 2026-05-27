@@ -111,6 +111,10 @@ pub fn create_grant(
     let grant_id = Uuid::new_v4().to_string().replace('-', "");
     let grant_token = Uuid::new_v4().to_string();
 
+    let constraints = &input["Constraints"];
+    let encryption_context_equals = string_map(&constraints["EncryptionContextEquals"]);
+    let encryption_context_subset = string_map(&constraints["EncryptionContextSubset"]);
+
     let grant = KmsGrant {
         grant_id: grant_id.clone(),
         grant_token: grant_token.clone(),
@@ -119,6 +123,8 @@ pub fn create_grant(
         grantee_principal: grantee_principal.to_string(),
         operations,
         token_created_at: now_secs(),
+        encryption_context_equals,
+        encryption_context_subset,
     };
 
     state.grants.insert(grant_id.clone(), grant);
@@ -224,13 +230,79 @@ pub fn revoke_grant(
 // ---------------------------------------------------------------------------
 
 fn grant_to_value(grant: &KmsGrant) -> Value {
-    json!({
+    let mut constraints = serde_json::Map::new();
+    if !grant.encryption_context_equals.is_empty() {
+        constraints.insert(
+            "EncryptionContextEquals".to_string(),
+            map_to_value(&grant.encryption_context_equals),
+        );
+    }
+    if !grant.encryption_context_subset.is_empty() {
+        constraints.insert(
+            "EncryptionContextSubset".to_string(),
+            map_to_value(&grant.encryption_context_subset),
+        );
+    }
+    let mut obj = json!({
         "GrantId": grant.grant_id,
         "KeyId": grant.key_id,
         "GranteePrincipal": grant.grantee_principal,
         "Operations": grant.operations,
         "Name": grant.name,
-    })
+    });
+    if !constraints.is_empty() {
+        obj["Constraints"] = Value::Object(constraints);
+    }
+    obj
+}
+
+fn string_map(value: &Value) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    if let Some(obj) = value.as_object() {
+        for (k, v) in obj {
+            if let Some(s) = v.as_str() {
+                out.insert(k.clone(), s.to_string());
+            }
+        }
+    }
+    out
+}
+
+fn map_to_value(map: &std::collections::BTreeMap<String, String>) -> Value {
+    let mut obj = serde_json::Map::with_capacity(map.len());
+    for (k, v) in map {
+        obj.insert(k.clone(), Value::String(v.clone()));
+    }
+    Value::Object(obj)
+}
+
+/// Evaluate whether a grant's `EncryptionContextEquals` and
+/// `EncryptionContextSubset` constraints permit an operation that
+/// supplies the given encryption context. Both constraints must hold:
+///
+/// - `Equals`: every key/value pair must be present in the call's
+///   context, and the call must carry no extra keys.
+/// - `Subset`: every key/value pair in the constraint must be present
+///   in the call's context; extra keys are allowed.
+///
+/// Either constraint absent means "no restriction on that axis".
+pub fn grant_constraints_match(
+    grant: &KmsGrant,
+    request_context: &std::collections::BTreeMap<String, String>,
+) -> bool {
+    if !grant.encryption_context_equals.is_empty()
+        && grant.encryption_context_equals != *request_context
+    {
+        return false;
+    }
+    if !grant.encryption_context_subset.is_empty() {
+        for (k, v) in &grant.encryption_context_subset {
+            if request_context.get(k) != Some(v) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -252,6 +324,8 @@ mod grant_token_tests {
                 grantee_principal: "p".into(),
                 operations: vec![],
                 token_created_at: created_at,
+                encryption_context_equals: Default::default(),
+                encryption_context_subset: Default::default(),
             },
         );
     }
@@ -320,5 +394,99 @@ mod grant_token_tests {
         .unwrap();
         let token = resp["GrantToken"].as_str().unwrap();
         validate_grant_tokens(&state, &json!({ "GrantTokens": [token] })).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod grant_constraints_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn grant_with_constraints(equals: &[(&str, &str)], subset: &[(&str, &str)]) -> KmsGrant {
+        KmsGrant {
+            grant_id: "g1".into(),
+            grant_token: "t".into(),
+            key_id: "k1".into(),
+            name: None,
+            grantee_principal: "p".into(),
+            operations: vec![],
+            token_created_at: 0,
+            encryption_context_equals: equals
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+            encryption_context_subset: subset
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+        }
+    }
+
+    fn ctx_map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn unconstrained_grant_matches_any_context() {
+        let grant = grant_with_constraints(&[], &[]);
+        assert!(grant_constraints_match(&grant, &ctx_map(&[("a", "1")])));
+    }
+
+    #[test]
+    fn equals_requires_exact_pair_set() {
+        let grant = grant_with_constraints(&[("env", "prod"), ("team", "data")], &[]);
+        assert!(grant_constraints_match(
+            &grant,
+            &ctx_map(&[("env", "prod"), ("team", "data")])
+        ));
+        // Missing key → no match.
+        assert!(!grant_constraints_match(
+            &grant,
+            &ctx_map(&[("env", "prod")])
+        ));
+        // Extra key → no match (this is the Equals-vs-Subset distinction).
+        assert!(!grant_constraints_match(
+            &grant,
+            &ctx_map(&[("env", "prod"), ("team", "data"), ("extra", "x")])
+        ));
+        // Different value → no match.
+        assert!(!grant_constraints_match(
+            &grant,
+            &ctx_map(&[("env", "dev"), ("team", "data")])
+        ));
+    }
+
+    #[test]
+    fn subset_allows_extra_keys_but_requires_pairs() {
+        let grant = grant_with_constraints(&[], &[("env", "prod")]);
+        assert!(grant_constraints_match(
+            &grant,
+            &ctx_map(&[("env", "prod"), ("extra", "x")])
+        ));
+        // Missing required pair → no match.
+        assert!(!grant_constraints_match(
+            &grant,
+            &ctx_map(&[("extra", "x")])
+        ));
+        // Wrong value → no match.
+        assert!(!grant_constraints_match(
+            &grant,
+            &ctx_map(&[("env", "dev")])
+        ));
+    }
+
+    #[test]
+    fn equals_and_subset_must_both_pass_when_set() {
+        let grant = grant_with_constraints(&[("env", "prod")], &[("team", "data")]);
+        // Equals demands exactly {env=prod}; the team= pair makes the
+        // call's context not equal to {env=prod} even though it
+        // satisfies Subset.
+        assert!(!grant_constraints_match(
+            &grant,
+            &ctx_map(&[("env", "prod"), ("team", "data")])
+        ));
     }
 }
