@@ -1,5 +1,7 @@
+use awsim_core::idempotency::IdempotencyCache;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]
@@ -11,6 +13,11 @@ pub struct ServiceDiscoveryState {
     /// operation_id → tracked async operation; the emulator treats every
     /// operation as immediately SUCCESS so callers can poll once and move on.
     pub operations: DashMap<String, Operation>,
+    /// CreatorRequestId idempotency for `Create*` paths.
+    /// The cached value is the full successful response, so a
+    /// duplicate call returns byte-identical output without
+    /// re-running the work.
+    pub creator_request_cache: IdempotencyCache<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

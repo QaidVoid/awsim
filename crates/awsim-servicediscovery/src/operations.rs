@@ -43,6 +43,22 @@ fn service_arn(ctx: &RequestContext, id: &str) -> String {
     )
 }
 
+/// Stable string representation of the JSON request body used as the
+/// hash input for [`IdempotencyCache`] lookups. Two requests collide
+/// iff their canonical forms match exactly, so callers must normalize
+/// before hashing.
+fn canonical_request(input: &Value) -> String {
+    // serde_json sorts BTreeMap keys; round-tripping through a
+    // BTreeMap-backed serializer is the simplest way to get a stable
+    // form. We strip the CreatorRequestId itself so the hash captures
+    // request *contents* not the token.
+    let mut owned = input.clone();
+    if let Some(obj) = owned.as_object_mut() {
+        obj.remove("CreatorRequestId");
+    }
+    serde_json::to_string(&owned).unwrap_or_default()
+}
+
 fn record_operation(
     state: &ServiceDiscoveryState,
     op_type: &str,
@@ -105,6 +121,46 @@ fn inst_to_value(i: &Instance) -> Value {
 // ---------- Namespaces ----------
 
 fn create_namespace(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    ctx: &RequestContext,
+    namespace_type: &str,
+) -> Result<Value, AwsError> {
+    // CreatorRequestId idempotency: a duplicate call with the same
+    // token and same arguments replays the prior response; a token
+    // collision with different args raises
+    // `IdempotencyParameterMismatchException`. AWS scopes the cache
+    // per account-region but since this state struct is already per
+    // account-region in awsim, the per-state cache suffices.
+    if let Some(token) = input.get("CreatorRequestId").and_then(Value::as_str) {
+        let req_hash = awsim_core::idempotency::hash_request(&format!(
+            "create_namespace:{namespace_type}:{}",
+            canonical_request(input),
+        ));
+        if let Some(cached) = match state.creator_request_cache.lookup(token, req_hash) {
+            awsim_core::idempotency::Lookup::Hit(v) => Some(v),
+            awsim_core::idempotency::Lookup::Mismatch => {
+                return Err(AwsError::bad_request(
+                    "IdempotencyParameterMismatchException",
+                    format!(
+                        "CreatorRequestId `{token}` was already used with different arguments.",
+                    ),
+                ));
+            }
+            awsim_core::idempotency::Lookup::Miss => None,
+        } {
+            return Ok(cached);
+        }
+        let resp = create_namespace_inner(state, input, ctx, namespace_type)?;
+        state
+            .creator_request_cache
+            .insert(token, req_hash, resp.clone());
+        return Ok(resp);
+    }
+    create_namespace_inner(state, input, ctx, namespace_type)
+}
+
+fn create_namespace_inner(
     state: &ServiceDiscoveryState,
     input: &Value,
     ctx: &RequestContext,
@@ -225,6 +281,37 @@ pub fn list_namespaces(
 // ---------- Services ----------
 
 pub fn create_service(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    if let Some(token) = input.get("CreatorRequestId").and_then(Value::as_str) {
+        let req_hash = awsim_core::idempotency::hash_request(&format!(
+            "create_service:{}",
+            canonical_request(input),
+        ));
+        match state.creator_request_cache.lookup(token, req_hash) {
+            awsim_core::idempotency::Lookup::Hit(v) => return Ok(v),
+            awsim_core::idempotency::Lookup::Mismatch => {
+                return Err(AwsError::bad_request(
+                    "IdempotencyParameterMismatchException",
+                    format!(
+                        "CreatorRequestId `{token}` was already used with different arguments.",
+                    ),
+                ));
+            }
+            awsim_core::idempotency::Lookup::Miss => {}
+        }
+        let resp = create_service_inner(state, input, ctx)?;
+        state
+            .creator_request_cache
+            .insert(token, req_hash, resp.clone());
+        return Ok(resp);
+    }
+    create_service_inner(state, input, ctx)
+}
+
+fn create_service_inner(
     state: &ServiceDiscoveryState,
     input: &Value,
     ctx: &RequestContext,
@@ -1544,6 +1631,77 @@ mod revision_tests {
             &ctx(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn create_namespace_idempotency_replays_response() {
+        let state = ServiceDiscoveryState::default();
+        let r1 = create_http_namespace(
+            &state,
+            &json!({ "Name": "ns", "CreatorRequestId": "tok-1" }),
+            &ctx(),
+        )
+        .unwrap();
+        let r2 = create_http_namespace(
+            &state,
+            &json!({ "Name": "ns", "CreatorRequestId": "tok-1" }),
+            &ctx(),
+        )
+        .unwrap();
+        // Same OperationId on retry.
+        assert_eq!(r1["OperationId"], r2["OperationId"]);
+    }
+
+    #[test]
+    fn create_namespace_idempotency_mismatch_raises() {
+        let state = ServiceDiscoveryState::default();
+        create_http_namespace(
+            &state,
+            &json!({ "Name": "ns", "CreatorRequestId": "tok-2" }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = create_http_namespace(
+            &state,
+            &json!({ "Name": "different", "CreatorRequestId": "tok-2" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "IdempotencyParameterMismatchException");
+    }
+
+    #[test]
+    fn create_service_idempotency_replays_response() {
+        let (state, _svc_id, _ns_name) = fresh_service();
+        let ns_id = state
+            .services
+            .iter()
+            .next()
+            .map(|e| e.value().namespace_id.clone())
+            .unwrap();
+        let r1 = create_service(
+            &state,
+            &json!({
+                "Name": "svc-idem",
+                "NamespaceId": ns_id,
+                "Type": "HTTP",
+                "CreatorRequestId": "svc-tok-1",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let r2 = create_service(
+            &state,
+            &json!({
+                "Name": "svc-idem",
+                "NamespaceId": ns_id,
+                "Type": "HTTP",
+                "CreatorRequestId": "svc-tok-1",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(r1["Service"]["Id"], r2["Service"]["Id"]);
     }
 
     #[test]
