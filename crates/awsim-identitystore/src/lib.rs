@@ -221,6 +221,43 @@ fn validate_display_name(name: &str) -> Result<(), AwsError> {
     Ok(())
 }
 
+/// Enforce SCIM-style validation on a multi-valued contact attribute
+/// (`Emails`, `PhoneNumbers`, `Addresses`):
+///   * at most one entry may carry `Primary: true`
+///   * each entry's `Type` (if present) must be one of the documented
+///     values; case-sensitive per the SCIM core schema.
+fn validate_multivalued(
+    field: &str,
+    items: &[Value],
+    allowed_types: &[&str],
+) -> Result<(), AwsError> {
+    let mut primary_seen = false;
+    for entry in items {
+        if entry
+            .get("Primary")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            if primary_seen {
+                return Err(AwsError::bad_request(
+                    "ValidationException",
+                    format!("`{field}` has more than one entry marked Primary."),
+                ));
+            }
+            primary_seen = true;
+        }
+        if let Some(t) = entry.get("Type").and_then(|v| v.as_str())
+            && !allowed_types.contains(&t)
+        {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!("`{field}` Type `{t}` is not in {allowed_types:?}."),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn user_to_value(u: &IdUser) -> Value {
     json!({
         "IdentityStoreId": u.identity_store_id,
@@ -317,6 +354,19 @@ impl ServiceHandler for IdentityStoreService {
                 validate_user_name(&user_name)?;
                 if let Some(d) = input.get("DisplayName").and_then(|v| v.as_str()) {
                     validate_display_name(d)?;
+                }
+                if let Some(arr) = input.get("Emails").and_then(|v| v.as_array()) {
+                    validate_multivalued("Emails", arr, &["work", "home", "other"])?;
+                }
+                if let Some(arr) = input.get("PhoneNumbers").and_then(|v| v.as_array()) {
+                    validate_multivalued(
+                        "PhoneNumbers",
+                        arr,
+                        &["work", "home", "mobile", "fax", "pager", "other"],
+                    )?;
+                }
+                if let Some(arr) = input.get("Addresses").and_then(|v| v.as_array()) {
+                    validate_multivalued("Addresses", arr, &["work", "home", "other"])?;
                 }
                 let user_id = uuid::Uuid::new_v4().to_string();
                 let u = IdUser {
@@ -1219,5 +1269,80 @@ mod tests {
         ))
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_user_rejects_two_primary_emails() {
+        let svc = IdentityStoreService::new();
+        let err = block_on(svc.handle(
+            "CreateUser",
+            json!({
+                "IdentityStoreId": "d-1234567890",
+                "UserName": "x",
+                "Emails": [
+                    { "Value": "a@x", "Primary": true, "Type": "work" },
+                    { "Value": "b@x", "Primary": true, "Type": "home" },
+                ],
+            }),
+            &ctx(),
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_user_rejects_unknown_email_type() {
+        let svc = IdentityStoreService::new();
+        let err = block_on(svc.handle(
+            "CreateUser",
+            json!({
+                "IdentityStoreId": "d-1234567890",
+                "UserName": "x",
+                "Emails": [{ "Value": "a@x", "Type": "company" }],
+            }),
+            &ctx(),
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_user_rejects_unknown_phone_type() {
+        let svc = IdentityStoreService::new();
+        let err = block_on(svc.handle(
+            "CreateUser",
+            json!({
+                "IdentityStoreId": "d-1234567890",
+                "UserName": "x",
+                "PhoneNumbers": [{ "Value": "+1", "Type": "satellite" }],
+            }),
+            &ctx(),
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_user_accepts_one_primary_per_attribute() {
+        let svc = IdentityStoreService::new();
+        block_on(svc.handle(
+            "CreateUser",
+            json!({
+                "IdentityStoreId": "d-1234567890",
+                "UserName": "x",
+                "Emails": [
+                    { "Value": "a@x", "Primary": true, "Type": "work" },
+                    { "Value": "b@x", "Type": "home" },
+                ],
+                "PhoneNumbers": [
+                    { "Value": "+1", "Type": "mobile" },
+                ],
+                "Addresses": [
+                    { "Type": "home", "Primary": true },
+                ],
+            }),
+            &ctx(),
+        ))
+        .unwrap();
     }
 }
