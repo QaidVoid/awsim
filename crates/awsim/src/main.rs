@@ -112,6 +112,13 @@ struct Cli {
     #[arg(long, env = "AWSIM_DDB_WAL_CHECKPOINT_SECS")]
     ddb_wal_checkpoint_secs: Option<u64>,
 
+    /// Seconds the DynamoDB TTL sweeper waits after an item's TTL
+    /// expires before evicting it. Mirrors AWS's eventual-removal
+    /// slack so tests reading recently-expired items keep working.
+    /// Default 0 (evict the moment the TTL passes).
+    #[arg(long, env = "AWSIM_DDB_TTL_GRACE_SECS", default_value_t = 0)]
+    ddb_ttl_grace_secs: u64,
+
     /// Maximum concurrent in-flight HTTP requests. Requests above this cap
     /// are immediately rejected with 503 Service Unavailable instead of
     /// queuing — so a misbehaving client (e.g. one leaking connections
@@ -542,6 +549,7 @@ async fn async_main() -> Result<()> {
         cli.port,
         cli.max_blob_bytes,
         cli.ddb_wal_checkpoint_secs,
+        cli.ddb_ttl_grace_secs,
         Arc::clone(&bedrock_swap),
     );
 
@@ -2419,6 +2427,7 @@ fn register_services(
     port: u16,
     max_blob_bytes: Option<u64>,
     ddb_wal_checkpoint_secs: Option<u64>,
+    ddb_ttl_grace_secs: u64,
     bedrock_swap: awsim_bedrock::BedrockBackendsSwap,
 ) -> RegisteredServices {
     use std::sync::Arc;
@@ -2467,7 +2476,7 @@ fn register_services(
     // Background TTL sweeper — deletes items past their TTL once per
     // minute. Real DynamoDB allows up to ~48h slack; we're aggressive
     // since this is a dev tool and the sweep is cheap.
-    dynamodb.spawn_ttl_sweeper(60);
+    dynamodb.spawn_ttl_sweeper(60, ddb_ttl_grace_secs);
     // Background WAL checkpointer — the inline PASSIVE autocheckpoint
     // starves under a sustained write firehose (bulk imports), so the
     // `-wal` file and its mapped index grow unbounded. A periodic

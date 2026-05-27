@@ -106,8 +106,13 @@ impl DynamoDbService {
     /// AWS); we run every `interval_secs` (default 60) which is far
     /// more aggressive but cheap on a local emulator.
     ///
+    /// `grace_secs` defers eviction by that many seconds after an
+    /// item's TTL expires, mirroring AWS's eventual-removal slack so
+    /// tests / production workloads that briefly read expired items
+    /// keep working. `0` evicts the moment the TTL has passed.
+    ///
     /// Returns immediately. The task lives until the process exits.
-    pub fn spawn_ttl_sweeper(&self, interval_secs: u64) {
+    pub fn spawn_ttl_sweeper(&self, interval_secs: u64, grace_secs: u64) {
         let store = self.store.clone();
         let sqlite = Arc::clone(&self.sqlite);
         tokio::spawn(async move {
@@ -155,6 +160,7 @@ impl DynamoDbService {
                                 &table_name,
                                 &attr,
                                 now_secs,
+                                grace_secs,
                             )
                         })
                         .await;

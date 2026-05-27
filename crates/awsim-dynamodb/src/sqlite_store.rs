@@ -325,8 +325,17 @@ impl SqliteStore {
     }
 
     /// Delete every item in `table` whose attribute named
-    /// `ttl_attribute` is a number ≤ `now_secs`. Returns how many rows
-    /// were removed. Used by the TTL sweeper.
+    /// `ttl_attribute` is a number that fell at or before
+    /// `now_secs - grace_secs`. Returns how many rows were removed.
+    /// Used by the TTL sweeper.
+    ///
+    /// `grace_secs` mirrors AWS's "items are eventually removed"
+    /// guarantee — real DynamoDB takes up to ~48 hours to evict an
+    /// expired item, and tests / production workloads sometimes need
+    /// to read it back in that window. A configurable grace lets the
+    /// simulator behave the same: a value of 0 deletes the moment the
+    /// TTL has passed (the previous behaviour), a positive value
+    /// holds the item back that many seconds before eviction.
     ///
     /// We deserialise each item's attrs JSON to inspect the TTL field
     /// because it lives inside `attrs_json` (no per-attribute index).
@@ -339,7 +348,9 @@ impl SqliteStore {
         table: &str,
         ttl_attribute: &str,
         now_secs: i64,
+        grace_secs: u64,
     ) -> Result<u64, AwsError> {
+        let cutoff = now_secs.saturating_sub(grace_secs as i64);
         let mut victims: Vec<(String, String)> = Vec::new();
         self.scan_table(account, region, table, None, |pk, sk, attrs| {
             // DynamoDB attribute values are wire-shaped: { "N": "123" }.
@@ -348,7 +359,7 @@ impl SqliteStore {
                 .and_then(|v| v.get("N"))
                 .and_then(|n| n.as_str())
                 .and_then(|s| s.parse::<i64>().ok())
-                .map(|n| n <= now_secs)
+                .map(|n| n <= cutoff)
                 .unwrap_or(false);
             if expired {
                 victims.push((pk.to_string(), sk.to_string()));
@@ -1206,7 +1217,7 @@ mod tests {
 
         // Sweep at "now = 5000" — only "expired" qualifies.
         let removed = store
-            .delete_expired_items("a", "r", "t", "expires_at", 5000)
+            .delete_expired_items("a", "r", "t", "expires_at", 5000, 0)
             .unwrap();
         assert_eq!(removed, 1);
         assert_eq!(store.count_items("a", "r", "t").unwrap(), 2);
@@ -1247,10 +1258,50 @@ mod tests {
             )
             .unwrap();
         let removed = store
-            .delete_expired_items("a", "r", "t", "ghost_attr", 5000)
+            .delete_expired_items("a", "r", "t", "ghost_attr", 5000, 0)
             .unwrap();
         assert_eq!(removed, 0);
         assert_eq!(store.count_items("a", "r", "t").unwrap(), 1);
+    }
+
+    #[test]
+    fn delete_expired_items_honors_grace_window() {
+        let store = SqliteStore::in_memory().unwrap();
+        // Item expired 500 s before "now"; grace of 1000 s should keep
+        // it alive (cutoff = now - grace = 5000 - 1000 = 4000, and
+        // ttl=4500 > 4000 → not yet evicted). With no grace, ttl=4500
+        // < now=5000 → swept.
+        store
+            .put_item(
+                "a",
+                "r",
+                "t",
+                "p",
+                "soon",
+                &json!({"id": {"S": "soon"}, "expires_at": {"N": "4500"}}),
+                &empty_gsi(),
+            )
+            .unwrap();
+
+        let removed = store
+            .delete_expired_items("a", "r", "t", "expires_at", 5000, 1000)
+            .unwrap();
+        assert_eq!(removed, 0);
+        assert!(
+            store
+                .get_item("a", "r", "t", "p", "soon")
+                .unwrap()
+                .is_some(),
+            "item within grace window must remain"
+        );
+
+        // Bump "now" past ttl + grace (5500 > 4500 + 1000 = 5500): equal,
+        // so the boundary case still evicts (ttl + grace == now → ttl <=
+        // now - grace).
+        let removed = store
+            .delete_expired_items("a", "r", "t", "expires_at", 5500, 1000)
+            .unwrap();
+        assert_eq!(removed, 1);
     }
 
     #[test]
