@@ -12,10 +12,32 @@ use crate::{
 use super::{opt_str, parse_parameters, parse_tags, require_str};
 
 fn stack_to_value(stack: &Stack) -> Value {
+    // NoEcho parameters are masked at every projection: DescribeStacks,
+    // stack events, change-set descriptions. Re-parse the template once
+    // to discover the set of masked keys; the simulator describes
+    // infrequently enough that the cost is fine.
+    let no_echo_keys: std::collections::HashSet<String> =
+        match template::validate_and_parse(&stack.template_body, &stack.parameters) {
+            Ok(parsed) => parsed
+                .parameters
+                .iter()
+                .filter(|p| p.no_echo)
+                .map(|p| p.name.clone())
+                .collect(),
+            Err(_) => std::collections::HashSet::new(),
+        };
+
     let params: Vec<Value> = stack
         .parameters
         .iter()
-        .map(|(k, v)| json!({ "ParameterKey": k, "ParameterValue": v }))
+        .map(|(k, v)| {
+            let surface = if no_echo_keys.contains(k) {
+                "****".to_string()
+            } else {
+                v.clone()
+            };
+            json!({ "ParameterKey": k, "ParameterValue": surface })
+        })
         .collect();
 
     let tags: Vec<Value> = stack
@@ -582,13 +604,20 @@ pub fn get_template_summary(
             let mut obj = json!({
                 "ParameterKey": p.name,
                 "ParameterType": p.param_type,
-                "NoEcho": false,
+                "NoEcho": p.no_echo,
             });
             if let Some(desc) = &p.description {
                 obj["Description"] = Value::String(desc.clone());
             }
             if let Some(default) = &p.default {
-                obj["DefaultValue"] = Value::String(default.clone());
+                // NoEcho parameters mask the default the same way they
+                // mask the supplied value in stack events.
+                let surface = if p.no_echo {
+                    "****".to_string()
+                } else {
+                    default.clone()
+                };
+                obj["DefaultValue"] = Value::String(surface);
             }
             obj
         })

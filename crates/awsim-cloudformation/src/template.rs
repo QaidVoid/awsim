@@ -38,6 +38,28 @@ pub struct ParameterDef {
     pub param_type: String,
     pub default: Option<String>,
     pub description: Option<String>,
+    /// Numeric and string parameter bounds. CFN documents both
+    /// `MinValue`/`MaxValue` (for `Number` parameters) and
+    /// `MinLength`/`MaxLength` (for `String` parameters); we keep
+    /// each as `f64`/`usize` to mirror the spec.
+    pub min_length: Option<usize>,
+    pub max_length: Option<usize>,
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    /// Allowed enum values. When non-empty, every supplied value
+    /// must appear in this set (matched as a string).
+    pub allowed_values: Vec<String>,
+    /// Anchored regex the value must match. CFN evaluates this with
+    /// the same flavour as ECMAScript regex; we delegate to the
+    /// `regex` crate which is close enough for the simulator.
+    pub allowed_pattern: Option<String>,
+    /// Optional human-readable description surfaced in
+    /// `ValidationError.message` on a constraint violation.
+    pub constraint_description: Option<String>,
+    /// When true, the parameter value is treated as a secret: the
+    /// stack-event projection masks it as `****` rather than echoing
+    /// it back, matching AWS's NoEcho semantics.
+    pub no_echo: bool,
 }
 
 /// Parse a template body (JSON or YAML) and return the raw Value.
@@ -134,13 +156,19 @@ pub fn validate_and_parse(
     // Parse parameters
     let parameter_defs = parse_parameter_defs(&template);
 
-    // Build effective parameter map: defaults + supplied values
+    // Build effective parameter map: defaults + supplied values.
+    // Each value runs through the per-parameter constraint checks so
+    // a violation surfaces at CreateStack/UpdateStack time instead of
+    // bleeding into resource provisioning.
     let mut params: HashMap<String, Value> = HashMap::new();
     for pd in &parameter_defs {
-        if let Some(supplied) = supplied_params.get(&pd.name) {
-            params.insert(pd.name.clone(), Value::String(supplied.clone()));
-        } else if let Some(default) = &pd.default {
-            params.insert(pd.name.clone(), Value::String(default.clone()));
+        let effective: Option<String> = supplied_params
+            .get(&pd.name)
+            .cloned()
+            .or_else(|| pd.default.clone());
+        if let Some(v) = effective {
+            validate_parameter_value(pd, &v)?;
+            params.insert(pd.name.clone(), Value::String(v));
         }
     }
 
@@ -245,16 +273,145 @@ fn parse_parameter_defs(template: &Value) -> Vec<ParameterDef> {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
+            let allowed_values: Vec<String> = param
+                .get("AllowedValues")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| match v {
+                            Value::String(s) => Some(s.clone()),
+                            Value::Number(n) => Some(n.to_string()),
+                            Value::Bool(b) => Some(b.to_string()),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
             defs.push(ParameterDef {
                 name: name.clone(),
                 param_type,
                 default,
                 description,
+                min_length: param
+                    .get("MinLength")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize),
+                max_length: param
+                    .get("MaxLength")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize),
+                min_value: param.get("MinValue").and_then(|v| v.as_f64()),
+                max_value: param.get("MaxValue").and_then(|v| v.as_f64()),
+                allowed_values,
+                allowed_pattern: param
+                    .get("AllowedPattern")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                constraint_description: param
+                    .get("ConstraintDescription")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                no_echo: param
+                    .get("NoEcho")
+                    .and_then(|v| match v {
+                        Value::Bool(b) => Some(*b),
+                        Value::String(s) => Some(s.eq_ignore_ascii_case("true")),
+                        _ => None,
+                    })
+                    .unwrap_or(false),
             });
         }
     }
 
     defs
+}
+
+/// Validate a supplied parameter value against the constraints
+/// declared on `def`. Mirrors AWS's documented per-attribute checks:
+/// `AllowedValues` membership, `AllowedPattern` regex, length bounds
+/// for `String`/`CommaDelimitedList`, and numeric bounds for
+/// `Number`/`List<Number>`. Returns a `ValidationError` carrying
+/// `ConstraintDescription` when present, falling back to a generic
+/// message otherwise.
+pub fn validate_parameter_value(def: &ParameterDef, value: &str) -> Result<(), AwsError> {
+    let fail = |default_msg: String| -> AwsError {
+        let msg = def.constraint_description.clone().unwrap_or(default_msg);
+        AwsError::bad_request("ValidationError", msg)
+    };
+
+    if !def.allowed_values.is_empty() && !def.allowed_values.iter().any(|av| av == value) {
+        return Err(fail(format!(
+            "Parameter '{}' must be one of [{}]; got `{value}`.",
+            def.name,
+            def.allowed_values.join(", "),
+        )));
+    }
+
+    if let Some(min) = def.min_length
+        && value.len() < min
+    {
+        return Err(fail(format!(
+            "Parameter '{}' must be at least {min} characters long.",
+            def.name,
+        )));
+    }
+    if let Some(max) = def.max_length
+        && value.len() > max
+    {
+        return Err(fail(format!(
+            "Parameter '{}' must be at most {max} characters long.",
+            def.name,
+        )));
+    }
+
+    let numeric_type = matches!(def.param_type.as_str(), "Number" | "List<Number>");
+    if numeric_type && (def.min_value.is_some() || def.max_value.is_some()) {
+        let n: f64 = value.parse().map_err(|_| {
+            fail(format!(
+                "Parameter '{}' must be a number; got `{value}`.",
+                def.name,
+            ))
+        })?;
+        if let Some(min) = def.min_value
+            && n < min
+        {
+            return Err(fail(format!(
+                "Parameter '{}' must be >= {min}; got {n}.",
+                def.name,
+            )));
+        }
+        if let Some(max) = def.max_value
+            && n > max
+        {
+            return Err(fail(format!(
+                "Parameter '{}' must be <= {max}; got {n}.",
+                def.name,
+            )));
+        }
+    }
+
+    if let Some(ref pat) = def.allowed_pattern {
+        let anchored = if pat.starts_with('^') && pat.ends_with('$') {
+            pat.clone()
+        } else {
+            format!("^(?:{pat})$")
+        };
+        let re = regex::Regex::new(&anchored).map_err(|e| {
+            AwsError::bad_request(
+                "ValidationError",
+                format!("Parameter '{}' has invalid AllowedPattern: {e}", def.name,),
+            )
+        })?;
+        if !re.is_match(value) {
+            return Err(fail(format!(
+                "Parameter '{}' value `{value}` does not match pattern `{pat}`.",
+                def.name,
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 fn evaluate_conditions(template: &Value, params: &HashMap<String, Value>) -> HashMap<String, bool> {
@@ -828,5 +985,115 @@ mod base64_intrinsic_tests {
         let val = json!({ "Fn::Select": [0, { "Fn::GetAZs": "eu-central-1" }] });
         let got = resolve_value(&val, &HashMap::new(), &HashMap::new(), &HashMap::new());
         assert_eq!(got, json!("eu-central-1a"));
+    }
+}
+
+#[cfg(test)]
+mod parameter_constraint_tests {
+    use super::*;
+
+    fn def(name: &str) -> ParameterDef {
+        ParameterDef {
+            name: name.into(),
+            param_type: "String".into(),
+            default: None,
+            description: None,
+            min_length: None,
+            max_length: None,
+            min_value: None,
+            max_value: None,
+            allowed_values: Vec::new(),
+            allowed_pattern: None,
+            constraint_description: None,
+            no_echo: false,
+        }
+    }
+
+    #[test]
+    fn allowed_values_membership_enforced() {
+        let mut d = def("Env");
+        d.allowed_values = vec!["dev".into(), "prod".into()];
+        validate_parameter_value(&d, "dev").unwrap();
+        let err = validate_parameter_value(&d, "staging").unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    #[test]
+    fn min_length_and_max_length_bound_strings() {
+        let mut d = def("Token");
+        d.min_length = Some(4);
+        d.max_length = Some(8);
+        validate_parameter_value(&d, "abcd").unwrap();
+        validate_parameter_value(&d, "abcdefgh").unwrap();
+        assert!(validate_parameter_value(&d, "abc").is_err());
+        assert!(validate_parameter_value(&d, "abcdefghi").is_err());
+    }
+
+    #[test]
+    fn min_value_and_max_value_bound_numbers() {
+        let mut d = def("Port");
+        d.param_type = "Number".into();
+        d.min_value = Some(1024.0);
+        d.max_value = Some(65535.0);
+        validate_parameter_value(&d, "8080").unwrap();
+        assert!(validate_parameter_value(&d, "100").is_err());
+        assert!(validate_parameter_value(&d, "70000").is_err());
+        assert!(validate_parameter_value(&d, "not-a-number").is_err());
+    }
+
+    #[test]
+    fn allowed_pattern_regex_enforced() {
+        let mut d = def("Cidr");
+        d.allowed_pattern = Some(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}".into());
+        validate_parameter_value(&d, "10.0.0.0/16").unwrap();
+        let err = validate_parameter_value(&d, "not-a-cidr").unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    #[test]
+    fn constraint_description_overrides_default_message() {
+        let mut d = def("Env");
+        d.allowed_values = vec!["dev".into(), "prod".into()];
+        d.constraint_description = Some("Env must be dev or prod.".into());
+        let err = validate_parameter_value(&d, "x").unwrap_err();
+        assert_eq!(err.message, "Env must be dev or prod.");
+    }
+
+    #[test]
+    fn no_echo_flag_parsed_from_template() {
+        let body = r#"{
+          "Parameters": {
+            "DbPassword": { "Type": "String", "NoEcho": true, "Default": "hunter2" }
+          },
+          "Resources": {
+            "X": { "Type": "AWS::S3::Bucket" }
+          }
+        }"#;
+        let parsed = validate_and_parse(body, &HashMap::new()).unwrap();
+        let p = parsed
+            .parameters
+            .iter()
+            .find(|p| p.name == "DbPassword")
+            .unwrap();
+        assert!(p.no_echo);
+    }
+
+    #[test]
+    fn validate_and_parse_rejects_violation_on_supplied_value() {
+        let body = r#"{
+          "Parameters": {
+            "Env": {
+              "Type": "String",
+              "AllowedValues": ["dev", "prod"]
+            }
+          },
+          "Resources": {
+            "X": { "Type": "AWS::S3::Bucket" }
+          }
+        }"#;
+        let mut supplied = HashMap::new();
+        supplied.insert("Env".to_string(), "staging".to_string());
+        let err = validate_and_parse(body, &supplied).unwrap_err();
+        assert_eq!(err.code, "ValidationError");
     }
 }
