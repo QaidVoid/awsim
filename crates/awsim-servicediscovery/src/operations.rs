@@ -550,6 +550,38 @@ pub fn list_operations(
     Ok(json!({ "Operations": items }))
 }
 
+/// `UpdateService` — patch the mutable fields of an existing service.
+/// AWS accepts `Description`, `DnsConfig`, and `HealthCheckConfig`
+/// inside a wrapping `Service` object; anything else is silently
+/// dropped. Returns the operation id of the (eagerly-succeeded)
+/// update.
+pub fn update_service(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = require_str(input, "Id")?.to_string();
+    let patch = input.get("Service").cloned().unwrap_or_else(|| json!({}));
+    let mut svc = state
+        .services
+        .get_mut(&id)
+        .ok_or_else(|| AwsError::not_found("ServiceNotFound", format!("Service {id} not found")))?;
+    if let Some(d) = patch.get("Description").and_then(Value::as_str) {
+        svc.description = Some(d.to_string());
+    }
+    if let Some(d) = patch.get("DnsConfig") {
+        svc.dns_config = Some(d.clone());
+    }
+    if let Some(h) = patch.get("HealthCheckConfig") {
+        svc.health_check_config = Some(h.clone());
+    }
+    drop(svc);
+    let mut targets = HashMap::new();
+    targets.insert("SERVICE".to_string(), id);
+    let op_id = record_operation(state, "UPDATE_SERVICE", targets);
+    Ok(json!({ "OperationId": op_id }))
+}
+
 /// `UpdateInstanceCustomHealthStatus` — flip the custom health
 /// status of a registered instance. AWS rejects callers that target a
 /// service without `HealthCheckCustomConfig` set; the per-instance
@@ -718,6 +750,63 @@ mod revision_tests {
         )
         .unwrap();
         assert_eq!(resp["InstancesRevision"], 3);
+    }
+
+    #[test]
+    fn update_service_patches_mutable_fields() {
+        let (state, svc_id, _) = fresh_service();
+        update_service(
+            &state,
+            &json!({
+                "Id": svc_id.clone(),
+                "Service": {
+                    "Description": "new desc",
+                    "DnsConfig": { "DnsRecords": [{ "Type": "A", "TTL": 60 }] },
+                    "HealthCheckConfig": { "Type": "HTTP", "ResourcePath": "/healthz" },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let s = state.services.get(&svc_id).unwrap();
+        assert_eq!(s.description, Some("new desc".to_string()));
+        assert_eq!(s.dns_config.as_ref().unwrap()["DnsRecords"][0]["TTL"], 60);
+        assert_eq!(
+            s.health_check_config.as_ref().unwrap()["ResourcePath"],
+            "/healthz",
+        );
+    }
+
+    #[test]
+    fn update_service_ignores_immutable_fields() {
+        let (state, svc_id, _) = fresh_service();
+        let before = state.services.get(&svc_id).unwrap().name.clone();
+        update_service(
+            &state,
+            &json!({
+                "Id": svc_id.clone(),
+                "Service": { "Name": "ignored", "Type": "DNS" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let after = state.services.get(&svc_id).unwrap().clone();
+        assert_eq!(after.name, before);
+        // The initial fresh_service uses HTTP; Type must not flip.
+        assert_eq!(after.r#type, "HTTP");
+    }
+
+    #[test]
+    fn update_service_unknown_id_is_404() {
+        let state = ServiceDiscoveryState::default();
+        let err = update_service(
+            &state,
+            &json!({ "Id": "s-missing", "Service": { "Description": "x" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ServiceNotFound");
     }
 
     #[test]

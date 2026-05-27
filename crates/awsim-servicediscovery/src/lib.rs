@@ -163,6 +163,7 @@ impl ServiceHandler for ServiceDiscoveryService {
             "ListNamespaces" => operations::list_namespaces(&state, &input, ctx),
             "CreateService" => operations::create_service(&state, &input, ctx),
             "DeleteService" => operations::delete_service(&state, &input, ctx),
+            "UpdateService" => operations::update_service(&state, &input, ctx),
             "GetService" => operations::get_service(&state, &input, ctx),
             "ListServices" => operations::list_services(&state, &input, ctx),
             "RegisterInstance" => operations::register_instance(&state, &input, ctx),
