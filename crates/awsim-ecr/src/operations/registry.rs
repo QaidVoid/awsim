@@ -96,6 +96,9 @@ pub fn start_lifecycle_policy_preview(
                 format!("Lifecycle policy for repository '{repo_name}' not found"),
             )
         })?;
+    // Validate the policy up front — AWS rejects malformed previews
+    // the same way it rejects PutLifecyclePolicy.
+    crate::operations::extras::parse_lifecycle_policy(&preview)?;
     repo.lifecycle_policy_preview = Some(preview.clone());
 
     Ok(json!({
@@ -128,14 +131,41 @@ pub fn get_lifecycle_policy_preview(
             )
         })?;
 
+    let policy = crate::operations::extras::parse_lifecycle_policy(preview)?;
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let expired =
+        crate::operations::extras::evaluate_lifecycle_policy(&policy, &repo.images, now_secs);
+
+    let preview_results: Vec<Value> = expired
+        .iter()
+        .map(|(digest, priority, desc)| {
+            let img = repo.images.iter().find(|i| &i.image_digest == digest);
+            let tags = img
+                .and_then(|i| i.image_tag.clone())
+                .map(|t| vec![t])
+                .unwrap_or_default();
+            json!({
+                "imageTags": tags,
+                "imageDigest": digest,
+                "imagePushedAt": img.map(|i| i.pushed_at.as_str()).unwrap_or(""),
+                "action": { "type": "expire" },
+                "appliedRulePriority": priority,
+                "ruleDescription": desc,
+            })
+        })
+        .collect();
+
     Ok(json!({
         "registryId": ctx.account_id,
         "repositoryName": repo_name,
         "lifecyclePolicyText": preview,
         "status": "COMPLETE",
-        "previewResults": [],
+        "previewResults": preview_results,
         "summary": {
-            "expiringImageTotalCount": 0u32,
+            "expiringImageTotalCount": expired.len() as u32,
         },
     }))
 }

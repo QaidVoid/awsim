@@ -54,6 +54,8 @@ pub fn put_lifecycle_policy(
         )
     })?;
 
+    parse_lifecycle_policy(policy)?;
+
     let mut repo = state
         .repositories
         .get_mut(repo_name)
@@ -65,6 +67,285 @@ pub fn put_lifecycle_policy(
         "repositoryName": repo_name,
         "lifecyclePolicyText": policy,
     }))
+}
+
+/// Parsed representation of an ECR lifecycle policy. The DSL is a
+/// JSON object with a `rules[]` array; each entry describes which
+/// images to expire and the precedence among rules.
+#[derive(Debug, Clone)]
+pub(crate) struct LifecyclePolicy {
+    pub(crate) rules: Vec<LifecycleRule>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LifecycleRule {
+    pub(crate) priority: u32,
+    pub(crate) description: Option<String>,
+    pub(crate) tag_status: TagStatus,
+    pub(crate) tag_prefixes: Vec<String>,
+    pub(crate) tag_patterns: Vec<String>,
+    pub(crate) selection: LifecycleSelection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TagStatus {
+    Tagged,
+    Untagged,
+    Any,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum LifecycleSelection {
+    /// Keep at most `count` matching images; expire the rest, oldest first.
+    CountMoreThan { count: usize },
+    /// Expire any image older than `days` days.
+    SinceImagePushed { days: u32 },
+}
+
+/// Parse + validate a lifecycle policy text. AWS rejects malformed
+/// policies at PutLifecyclePolicy time with
+/// `InvalidParameterException`; mirror that so a typo doesn't sit
+/// quietly until the (future) scheduler tries to evaluate it.
+pub(crate) fn parse_lifecycle_policy(text: &str) -> Result<LifecyclePolicy, AwsError> {
+    let v: Value = serde_json::from_str(text).map_err(|e| {
+        AwsError::bad_request(
+            "InvalidParameterException",
+            format!("lifecyclePolicyText is not valid JSON: {e}"),
+        )
+    })?;
+    let rules = v.get("rules").and_then(Value::as_array).ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "lifecyclePolicyText must contain a `rules` array.",
+        )
+    })?;
+    if rules.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "lifecyclePolicyText.rules must contain at least one rule.",
+        ));
+    }
+    let mut parsed = Vec::with_capacity(rules.len());
+    for rule in rules {
+        parsed.push(parse_rule(rule)?);
+    }
+    // AWS evaluates rules in ascending priority order.
+    parsed.sort_by_key(|r| r.priority);
+    Ok(LifecyclePolicy { rules: parsed })
+}
+
+fn parse_rule(rule: &Value) -> Result<LifecycleRule, AwsError> {
+    let priority = rule
+        .get("rulePriority")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| invalid_lifecycle("rule.rulePriority is required"))?;
+    let description = rule
+        .get("description")
+        .and_then(Value::as_str)
+        .map(|s| s.to_string());
+
+    let selection_obj = rule
+        .get("selection")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid_lifecycle("rule.selection is required"))?;
+    let tag_status = match selection_obj
+        .get("tagStatus")
+        .and_then(Value::as_str)
+        .unwrap_or("any")
+    {
+        "tagged" => TagStatus::Tagged,
+        "untagged" => TagStatus::Untagged,
+        "any" => TagStatus::Any,
+        other => {
+            return Err(invalid_lifecycle(format!(
+                "tagStatus `{other}` must be tagged | untagged | any"
+            )));
+        }
+    };
+
+    let tag_prefixes: Vec<String> = selection_obj
+        .get("tagPrefixList")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let tag_patterns: Vec<String> = selection_obj
+        .get("tagPatternList")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    if matches!(tag_status, TagStatus::Tagged) && tag_prefixes.is_empty() && tag_patterns.is_empty()
+    {
+        return Err(invalid_lifecycle(
+            "tagStatus=tagged requires tagPrefixList or tagPatternList.",
+        ));
+    }
+    if !tag_prefixes.is_empty() && !tag_patterns.is_empty() {
+        return Err(invalid_lifecycle(
+            "tagPrefixList and tagPatternList are mutually exclusive.",
+        ));
+    }
+
+    let count_type = selection_obj
+        .get("countType")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_lifecycle("selection.countType is required"))?;
+    let count_number = selection_obj
+        .get("countNumber")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| invalid_lifecycle("selection.countNumber is required"))?;
+    let selection = match count_type {
+        "imageCountMoreThan" => LifecycleSelection::CountMoreThan {
+            count: count_number as usize,
+        },
+        "sinceImagePushed" => {
+            let unit = selection_obj
+                .get("countUnit")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    invalid_lifecycle("countType=sinceImagePushed requires countUnit=days")
+                })?;
+            if unit != "days" {
+                return Err(invalid_lifecycle("countUnit must be `days`"));
+            }
+            LifecycleSelection::SinceImagePushed {
+                days: count_number as u32,
+            }
+        }
+        other => {
+            return Err(invalid_lifecycle(format!(
+                "countType `{other}` must be imageCountMoreThan or sinceImagePushed"
+            )));
+        }
+    };
+
+    let action_type = rule
+        .get("action")
+        .and_then(|a| a.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("expire");
+    if action_type != "expire" {
+        return Err(invalid_lifecycle(format!(
+            "action.type `{action_type}` is not supported (must be `expire`)"
+        )));
+    }
+
+    Ok(LifecycleRule {
+        priority: priority as u32,
+        description,
+        tag_status,
+        tag_prefixes,
+        tag_patterns,
+        selection,
+    })
+}
+
+fn invalid_lifecycle(msg: impl Into<String>) -> AwsError {
+    AwsError::bad_request("InvalidParameterException", msg)
+}
+
+/// Evaluate a parsed lifecycle policy against a list of images. The
+/// scheduler hands the result to BatchDeleteImage. Output is the
+/// list of `(image_digest, matched_rule_priority, matched_rule_description)`
+/// triples — preserving order of evaluation so the trace is stable.
+pub(crate) fn evaluate_lifecycle_policy(
+    policy: &LifecyclePolicy,
+    images: &[crate::state::ContainerImage],
+    now_epoch_secs: u64,
+) -> Vec<(String, u32, Option<String>)> {
+    let mut expired: std::collections::BTreeMap<String, (u32, Option<String>)> =
+        std::collections::BTreeMap::new();
+    for rule in &policy.rules {
+        let mut matching: Vec<&crate::state::ContainerImage> = images
+            .iter()
+            .filter(|img| !expired.contains_key(&img.image_digest))
+            .filter(|img| rule_matches_tag(rule, img))
+            .collect();
+        match rule.selection {
+            LifecycleSelection::CountMoreThan { count } => {
+                // Keep newest `count`; expire the rest, oldest first.
+                matching.sort_by(|a, b| b.pushed_at.cmp(&a.pushed_at));
+                for img in matching.into_iter().skip(count) {
+                    expired.insert(
+                        img.image_digest.clone(),
+                        (rule.priority, rule.description.clone()),
+                    );
+                }
+            }
+            LifecycleSelection::SinceImagePushed { days } => {
+                let cutoff = now_epoch_secs.saturating_sub(u64::from(days) * 86_400);
+                for img in matching {
+                    let pushed: u64 = img.pushed_at.parse().unwrap_or(0);
+                    if pushed <= cutoff {
+                        expired.insert(
+                            img.image_digest.clone(),
+                            (rule.priority, rule.description.clone()),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    expired
+        .into_iter()
+        .map(|(digest, (priority, desc))| (digest, priority, desc))
+        .collect()
+}
+
+fn rule_matches_tag(rule: &LifecycleRule, image: &crate::state::ContainerImage) -> bool {
+    match rule.tag_status {
+        TagStatus::Any => true,
+        TagStatus::Untagged => image.image_tag.is_none(),
+        TagStatus::Tagged => {
+            let Some(tag) = image.image_tag.as_deref() else {
+                return false;
+            };
+            if !rule.tag_prefixes.is_empty() {
+                return rule.tag_prefixes.iter().any(|p| tag.starts_with(p));
+            }
+            if !rule.tag_patterns.is_empty() {
+                return rule.tag_patterns.iter().any(|p| pattern_matches(p, tag));
+            }
+            true
+        }
+    }
+}
+
+/// AWS lifecycle policy tagPatternList uses simple glob with `*`.
+fn pattern_matches(pattern: &str, tag: &str) -> bool {
+    if !pattern.contains('*') {
+        return pattern == tag;
+    }
+    let mut remaining = tag;
+    let parts: Vec<&str> = pattern.split('*').collect();
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if i == 0 {
+            if !remaining.starts_with(part) {
+                return false;
+            }
+            remaining = &remaining[part.len()..];
+        } else if i == parts.len() - 1 {
+            if !remaining.ends_with(part) {
+                return false;
+            }
+        } else {
+            match remaining.find(part) {
+                Some(idx) => remaining = &remaining[idx + part.len()..],
+                None => return false,
+            }
+        }
+    }
+    true
 }
 
 pub fn get_lifecycle_policy(
@@ -574,4 +855,171 @@ pub fn complete_layer_upload(
         "uploadId": upload_id,
         "layerDigest": layer_digest,
     }))
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use crate::state::ContainerImage;
+
+    fn image(digest: &str, tag: Option<&str>, pushed_at: u64) -> ContainerImage {
+        ContainerImage {
+            image_digest: digest.into(),
+            image_tag: tag.map(String::from),
+            image_manifest: "{}".into(),
+            pushed_at: pushed_at.to_string(),
+            image_size_in_bytes: 0,
+            image_manifest_media_type: None,
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_policy_json() {
+        let err = parse_lifecycle_policy("{not-json").unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn rejects_empty_rules() {
+        let err = parse_lifecycle_policy(r#"{"rules":[]}"#).unwrap_err();
+        assert!(err.message.contains("at least one rule"));
+    }
+
+    #[test]
+    fn rejects_tagged_without_prefix_or_pattern() {
+        let policy = r#"{
+            "rules": [{
+                "rulePriority": 1,
+                "selection": {
+                    "tagStatus": "tagged",
+                    "countType": "imageCountMoreThan",
+                    "countNumber": 5
+                },
+                "action": { "type": "expire" }
+            }]
+        }"#;
+        let err = parse_lifecycle_policy(policy).unwrap_err();
+        assert!(err.message.contains("tagPrefixList"), "{err:?}");
+    }
+
+    #[test]
+    fn rejects_unknown_count_type() {
+        let policy = r#"{
+            "rules": [{
+                "rulePriority": 1,
+                "selection": {
+                    "tagStatus": "any",
+                    "countType": "bogus",
+                    "countNumber": 1
+                },
+                "action": { "type": "expire" }
+            }]
+        }"#;
+        let err = parse_lifecycle_policy(policy).unwrap_err();
+        assert!(err.message.contains("countType"), "{err:?}");
+    }
+
+    #[test]
+    fn rules_sorted_by_priority() {
+        let policy = r#"{
+            "rules": [
+                { "rulePriority": 10, "selection": { "tagStatus": "untagged", "countType": "imageCountMoreThan", "countNumber": 5 }, "action": { "type": "expire" } },
+                { "rulePriority": 1,  "selection": { "tagStatus": "untagged", "countType": "imageCountMoreThan", "countNumber": 3 }, "action": { "type": "expire" } }
+            ]
+        }"#;
+        let parsed = parse_lifecycle_policy(policy).unwrap();
+        assert_eq!(parsed.rules[0].priority, 1);
+        assert_eq!(parsed.rules[1].priority, 10);
+    }
+
+    #[test]
+    fn count_more_than_keeps_newest_n() {
+        let policy = parse_lifecycle_policy(
+            r#"{
+                "rules": [{
+                    "rulePriority": 1,
+                    "description": "keep 2 untagged",
+                    "selection": {
+                        "tagStatus": "untagged",
+                        "countType": "imageCountMoreThan",
+                        "countNumber": 2
+                    },
+                    "action": { "type": "expire" }
+                }]
+            }"#,
+        )
+        .unwrap();
+        let images = vec![
+            image("sha:1", None, 100),
+            image("sha:2", None, 200),
+            image("sha:3", None, 300),
+            image("sha:4", None, 400),
+        ];
+        let expired = evaluate_lifecycle_policy(&policy, &images, 1_000);
+        let digests: Vec<_> = expired.iter().map(|(d, _, _)| d.as_str()).collect();
+        assert!(digests.contains(&"sha:1"));
+        assert!(digests.contains(&"sha:2"));
+        assert!(!digests.contains(&"sha:3"));
+        assert!(!digests.contains(&"sha:4"));
+    }
+
+    #[test]
+    fn since_image_pushed_expires_old_images() {
+        let policy = parse_lifecycle_policy(
+            r#"{
+                "rules": [{
+                    "rulePriority": 1,
+                    "selection": {
+                        "tagStatus": "any",
+                        "countType": "sinceImagePushed",
+                        "countUnit": "days",
+                        "countNumber": 1
+                    },
+                    "action": { "type": "expire" }
+                }]
+            }"#,
+        )
+        .unwrap();
+        let now = 2 * 86_400;
+        let images = vec![image("old", None, 0), image("recent", None, now - 60)];
+        let expired = evaluate_lifecycle_policy(&policy, &images, now);
+        let digests: Vec<_> = expired.iter().map(|(d, _, _)| d.as_str()).collect();
+        assert_eq!(digests, vec!["old"]);
+    }
+
+    #[test]
+    fn tag_prefix_list_selects_matching_tags() {
+        let policy = parse_lifecycle_policy(
+            r#"{
+                "rules": [{
+                    "rulePriority": 1,
+                    "selection": {
+                        "tagStatus": "tagged",
+                        "tagPrefixList": ["dev-"],
+                        "countType": "imageCountMoreThan",
+                        "countNumber": 0
+                    },
+                    "action": { "type": "expire" }
+                }]
+            }"#,
+        )
+        .unwrap();
+        let images = vec![
+            image("a", Some("dev-old"), 100),
+            image("b", Some("prod"), 200),
+        ];
+        let expired = evaluate_lifecycle_policy(&policy, &images, 1_000);
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].0, "a");
+    }
+
+    #[test]
+    fn pattern_matches_glob_with_star() {
+        assert!(pattern_matches("v1.*", "v1.0"));
+        assert!(pattern_matches("v1.*", "v1.99"));
+        assert!(!pattern_matches("v1.*", "v2.0"));
+        assert!(pattern_matches("*-dev", "feature-dev"));
+        assert!(pattern_matches("rel-*-prod", "rel-2024-prod"));
+        assert!(!pattern_matches("v1.*", "production-v1.0"));
+    }
 }
