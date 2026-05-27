@@ -91,6 +91,37 @@ pub(crate) fn is_valid_dimension_for_namespace(ns: &str, dim: &str) -> bool {
     allowed_dimensions(ns).contains(&dim)
 }
 
+/// Reject anything that isn't an IAM role ARN of the form
+/// `arn:<partition>:iam::<account>:role/<name-or-path/name>`. AWS
+/// strictly enforces the `iam`/`role/` shape; we mirror that so
+/// callers passing a function ARN or random string fail fast.
+pub(crate) fn validate_role_arn(arn: &str) -> Result<(), AwsError> {
+    let mut parts = arn.splitn(6, ':');
+    let arn_lit = parts.next();
+    let partition = parts.next();
+    let service = parts.next();
+    let region = parts.next();
+    let account = parts.next();
+    let resource = parts.next();
+    let shape_ok = arn_lit == Some("arn")
+        && partition.is_some_and(|p| !p.is_empty())
+        && service == Some("iam")
+        // IAM is global: the region segment is always empty.
+        && region == Some("")
+        && account.is_some_and(|a| a.len() == 12 && a.chars().all(|c| c.is_ascii_digit()))
+        && resource.is_some_and(|r| {
+            let trimmed = r.strip_prefix("role/").unwrap_or("");
+            !trimmed.is_empty()
+        });
+    if !shape_ok {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("RoleARN `{arn}` is not a valid IAM role ARN."),
+        ));
+    }
+    Ok(())
+}
+
 /// Per-namespace `ResourceId` shape check. AWS documents a distinct
 /// path-like format for each namespace (e.g. `service/cluster/name`
 /// for ECS); we accept the canonical prefix plus at least one segment
@@ -222,6 +253,9 @@ pub fn register_scalable_target(
     }
     let rid = require_str(input, "ResourceId")?.to_string();
     validate_resource_id(&ns, &rid)?;
+    if let Some(role) = input.get("RoleARN").and_then(Value::as_str) {
+        validate_role_arn(role)?;
+    }
     let dim = require_str(input, "ScalableDimension")?.to_string();
     if !is_valid_dimension_for_namespace(&ns, &dim) {
         return Err(AwsError::bad_request(
@@ -640,6 +674,49 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
         assert!(err.message.contains("service"));
+    }
+
+    #[test]
+    fn register_rejects_bad_role_arn() {
+        let state = AppAutoScalingState::default();
+        for bad in [
+            "not-an-arn",
+            "arn:aws:s3:::my-bucket",
+            "arn:aws:iam::123456789012:user/me",
+            // Account too short.
+            "arn:aws:iam::1234:role/r",
+            // Region must be empty for IAM.
+            "arn:aws:iam:us-east-1:123456789012:role/r",
+        ] {
+            let err = register_scalable_target(
+                &state,
+                &json!({
+                    "ServiceNamespace": "ecs",
+                    "ResourceId": "service/c/s",
+                    "ScalableDimension": "ecs:service:DesiredCount",
+                    "RoleARN": bad,
+                }),
+                &ctx(),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input {bad}");
+        }
+    }
+
+    #[test]
+    fn register_accepts_well_formed_role_arn() {
+        let state = AppAutoScalingState::default();
+        register_scalable_target(
+            &state,
+            &json!({
+                "ServiceNamespace": "ecs",
+                "ResourceId": "service/c/s",
+                "ScalableDimension": "ecs:service:DesiredCount",
+                "RoleARN": "arn:aws:iam::123456789012:role/aws-service-role/application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling",
+            }),
+            &ctx(),
+        )
+        .unwrap();
     }
 
     #[test]
