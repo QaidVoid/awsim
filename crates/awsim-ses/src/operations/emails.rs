@@ -166,6 +166,173 @@ pub fn send_templated_email(
     Ok(json!({ "MessageId": message_id }))
 }
 
+/// SendRawEmail (SES v1) — accept an RFC 2822 message and route it.
+/// Parses the raw MIME headers to pull out subject + recipients when
+/// the caller doesn't supply Destinations explicitly, and persists
+/// ConfigurationSetName / Tags from the request. `Source` falls back to
+/// the message's `From:` header. `ReturnPath` and `SourceArn` are
+/// recorded for downstream visibility but not used by the simulator.
+/// `RawMessage.Data` may be base64-encoded; we tolerate both forms.
+pub fn send_raw_email(
+    state: &SesState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let raw_data = input["RawMessage"]["Data"]
+        .as_str()
+        .or_else(|| input["RawMessage"]["data"].as_str())
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "RawMessage.Data is required"))?;
+    let raw = decode_raw_message(raw_data);
+    let headers = parse_rfc2822_headers(&raw);
+
+    let from = input["Source"]
+        .as_str()
+        .or_else(|| input["FromEmailAddress"].as_str())
+        .map(str::to_string)
+        .or_else(|| {
+            // Strip the optional display-name wrapper when pulling From
+            // from the parsed message ("Alice <alice@example.com>" →
+            // "alice@example.com").
+            headers
+                .get("from")
+                .map(|h| strip_display_name(h).to_string())
+        })
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameter",
+                "Source is required (or supply a From: header)",
+            )
+        })?;
+
+    // AWS treats Destinations[] as the union of To/Cc/Bcc when the
+    // caller passes them explicitly; otherwise pull from headers.
+    let explicit_destinations = address_list(&input["Destinations"]);
+    let (to, cc, bcc) = if explicit_destinations.is_empty() {
+        (
+            address_list_from_header(headers.get("to")),
+            address_list_from_header(headers.get("cc")),
+            address_list_from_header(headers.get("bcc")),
+        )
+    } else {
+        (explicit_destinations, Vec::new(), Vec::new())
+    };
+    if to.is_empty() && cc.is_empty() && bcc.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameter",
+            "At least one recipient address is required",
+        ));
+    }
+
+    let reply_to = address_list_from_header(headers.get("reply-to"));
+    let subject = headers.get("subject").cloned();
+    let configuration_set_name = input["ConfigurationSetName"].as_str().map(str::to_string);
+    let tags = parse_email_tags(input.get("Tags").or_else(|| input.get("EmailTags")));
+    // ReturnPath / SourceArn: AWS treats these as identity-routing hints
+    // (cross-account sending, bounce destination). We log them for
+    // observability; downstream simulator paths don't need them yet.
+    let return_path = input["ReturnPath"]
+        .as_str()
+        .or_else(|| headers.get("return-path").map(String::as_str));
+    let source_arn = input["SourceArn"].as_str();
+    if return_path.is_some() || source_arn.is_some() {
+        info!(
+            return_path = ?return_path,
+            source_arn = ?source_arn,
+            "SES: SendRawEmail received identity-routing hints"
+        );
+    }
+
+    let message_id = Uuid::new_v4().to_string();
+    let email = SentEmail {
+        message_id: message_id.clone(),
+        from,
+        to,
+        cc,
+        bcc,
+        reply_to,
+        subject,
+        body_text: None,
+        body_html: None,
+        raw: Some(raw),
+        sent_at: now_epoch(),
+        configuration_set_name,
+        tags,
+    };
+
+    info!(message_id = %message_id, "SES: raw email sent");
+    if let Some(store) = state.sqlite() {
+        store.put_email(&ctx.account_id, &ctx.region, &email)?;
+    }
+    Ok(json!({ "MessageId": message_id }))
+}
+
+/// Decode a RawMessage.Data field. AWS accepts both base64-encoded and
+/// already-decoded payloads; we attempt base64 first, then fall back to
+/// the original string when decoding fails or yields invalid UTF-8.
+fn decode_raw_message(raw: &str) -> String {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    if let Ok(bytes) = STANDARD.decode(raw.trim())
+        && let Ok(s) = String::from_utf8(bytes)
+    {
+        return s;
+    }
+    raw.to_string()
+}
+
+/// Parse RFC 2822 headers from the start of a raw message. Continuation
+/// lines (leading whitespace) are folded into the previous header's
+/// value. Header names are normalized to lowercase for lookup.
+fn parse_rfc2822_headers(raw: &str) -> std::collections::HashMap<String, String> {
+    let mut out: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut last_key: Option<String> = None;
+    for line in raw.lines() {
+        if line.is_empty() {
+            break; // end of headers
+        }
+        if line.starts_with(' ') || line.starts_with('\t') {
+            if let Some(k) = &last_key
+                && let Some(v) = out.get_mut(k)
+            {
+                v.push(' ');
+                v.push_str(line.trim());
+            }
+            continue;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            let key = name.trim().to_ascii_lowercase();
+            out.insert(key.clone(), value.trim().to_string());
+            last_key = Some(key);
+        }
+    }
+    out
+}
+
+/// Split a comma-separated address header into individual addresses,
+/// stripping display names and the angle-bracket wrapping AWS expects.
+fn address_list_from_header(header: Option<&String>) -> Vec<String> {
+    let Some(h) = header else { return Vec::new() };
+    h.split(',')
+        .filter_map(|raw| {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            Some(strip_display_name(trimmed).to_string())
+        })
+        .collect()
+}
+
+fn strip_display_name(raw: &str) -> &str {
+    if let Some(start) = raw.rfind('<')
+        && let Some(end) = raw.rfind('>')
+        && start < end
+    {
+        return &raw[start + 1..end];
+    }
+    raw
+}
+
 fn address_list(value: &Value) -> Vec<String> {
     value
         .as_array()
@@ -459,6 +626,93 @@ mod tls_policy_enforcement_tests {
     fn open_store() -> std::sync::Arc<crate::SqliteStore> {
         let path = std::env::temp_dir().join(format!("awsim-ses-cc-{}.db", uuid::Uuid::new_v4()));
         std::sync::Arc::new(crate::SqliteStore::open(path).unwrap())
+    }
+
+    #[test]
+    fn send_raw_email_parses_rfc2822_headers_when_destinations_absent() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store.clone());
+        let raw = "From: Alice <alice@example.com>\r\n\
+                   To: Bob <bob@example.com>, charlie@example.com\r\n\
+                   Cc: cc@example.com\r\n\
+                   Reply-To: alice-reply@example.com\r\n\
+                   Subject: Greetings\r\n\
+                   \r\n\
+                   Hello!";
+        send_raw_email(
+            &state,
+            &json!({
+                "RawMessage": { "Data": raw },
+                "ConfigurationSetName": "cs"
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let row = store.list_all().unwrap().into_iter().next().unwrap();
+        assert_eq!(row.email.from, "alice@example.com");
+        assert_eq!(row.email.to, vec!["bob@example.com", "charlie@example.com"]);
+        assert_eq!(row.email.cc, vec!["cc@example.com"]);
+        assert_eq!(row.email.reply_to, vec!["alice-reply@example.com"]);
+        assert_eq!(row.email.subject.as_deref(), Some("Greetings"));
+        assert_eq!(row.email.configuration_set_name.as_deref(), Some("cs"));
+        assert!(row.email.raw.as_deref().unwrap().contains("Hello!"));
+    }
+
+    #[test]
+    fn send_raw_email_accepts_explicit_destinations() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store.clone());
+        let raw = "Subject: Stand-in\r\n\r\nbody";
+        send_raw_email(
+            &state,
+            &json!({
+                "RawMessage": { "Data": raw },
+                "Source": "from@example.com",
+                "Destinations": ["explicit@example.com"],
+                "Tags": [{ "Name": "k", "Value": "v" }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let row = store.list_all().unwrap().into_iter().next().unwrap();
+        assert_eq!(row.email.from, "from@example.com");
+        assert_eq!(row.email.to, vec!["explicit@example.com"]);
+        assert_eq!(row.email.tags, vec![("k".to_string(), "v".to_string())]);
+    }
+
+    #[test]
+    fn send_raw_email_decodes_base64_payload() {
+        use base64::Engine;
+        use base64::engine::general_purpose::STANDARD;
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store.clone());
+        let raw = "From: alice@example.com\r\nTo: bob@example.com\r\nSubject: Encoded\r\n\r\nbody";
+        let encoded = STANDARD.encode(raw.as_bytes());
+        send_raw_email(
+            &state,
+            &json!({ "RawMessage": { "Data": encoded } }),
+            &ctx(),
+        )
+        .unwrap();
+        let row = store.list_all().unwrap().into_iter().next().unwrap();
+        assert_eq!(row.email.from, "alice@example.com");
+        assert_eq!(row.email.subject.as_deref(), Some("Encoded"));
+    }
+
+    #[test]
+    fn send_raw_email_folds_header_continuations() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store.clone());
+        let raw = "From: alice@example.com\r\n\
+                   To: a@example.com,\r\n\t b@example.com\r\n\
+                   Subject: Fold\r\n\r\nbody";
+        send_raw_email(&state, &json!({ "RawMessage": { "Data": raw } }), &ctx()).unwrap();
+        let row = store.list_all().unwrap().into_iter().next().unwrap();
+        assert_eq!(row.email.to, vec!["a@example.com", "b@example.com"]);
     }
 
     #[test]

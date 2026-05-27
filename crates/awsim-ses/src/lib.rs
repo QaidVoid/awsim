@@ -525,6 +525,7 @@ impl ServiceHandler for SesService {
         match operation {
             "SendEmail" => operations::emails::send_email(&state, &input, ctx),
             "SendTemplatedEmail" => operations::emails::send_templated_email(&state, &input, ctx),
+            "SendRawEmail" => operations::emails::send_raw_email(&state, &input, ctx),
             "SendBulkEmail" => operations::more::send_bulk_email(&state, &input, ctx),
             "SendCustomVerificationEmail" => {
                 operations::more::send_custom_verification_email(&state, &input, ctx)
