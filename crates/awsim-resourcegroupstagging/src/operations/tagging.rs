@@ -179,6 +179,36 @@ mod tests {
     }
 
     #[test]
+    fn tag_resources_rejects_out_of_charset_key() {
+        let state = registered(Q);
+        let err = tag_resources(
+            &state,
+            &json!({ "ResourceARNList": [Q], "Tags": { "fire\u{1f525}": "v" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(
+            err.code.contains("Validation") || err.code.contains("InvalidParameter"),
+            "expected validation exception, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn tag_resources_rejects_out_of_charset_value() {
+        let state = registered(Q);
+        let err = tag_resources(
+            &state,
+            &json!({ "ResourceARNList": [Q], "Tags": { "env": "\u{0007}beep" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(
+            err.code.contains("Validation") || err.code.contains("InvalidParameter"),
+            "expected validation exception, got {err:?}",
+        );
+    }
+
+    #[test]
     fn tag_resources_rejects_oversize_value() {
         let state = registered(Q);
         let big = "v".repeat(257);
