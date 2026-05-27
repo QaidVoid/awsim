@@ -72,6 +72,11 @@ fn ledger_arn(ctx: &RequestContext, name: &str) -> String {
 }
 
 fn ledger_to_value(l: &Ledger) -> Value {
+    // `EncryptionDescription` documents three fields. The emulator
+    // never simulates KMS key inaccessibility, so
+    // `InaccessibleKmsKeyDateTime` is always null. `EncryptionStatus`
+    // is `KMS_KEY_INACCESSIBLE` once we model that; for now we always
+    // report ENABLED.
     json!({
         "Name": l.name,
         "Arn": l.arn,
@@ -83,6 +88,7 @@ fn ledger_to_value(l: &Ledger) -> Value {
         "EncryptionDescription": {
             "KmsKeyArn": l.kms_key_arn,
             "EncryptionStatus": "ENABLED",
+            "InaccessibleKmsKeyDateTime": Value::Null,
         },
     })
 }
@@ -442,6 +448,36 @@ mod tests {
         ))
         .unwrap();
         block_on(svc.handle("DeleteLedger", json!({ "name": "audit" }), &ctx)).unwrap();
+    }
+
+    #[test]
+    fn update_ledger_accepts_kms_key_and_surfaces_encryption_description() {
+        let svc = QldbService::new();
+        let ctx = RequestContext::new("qldb", "us-east-1");
+        block_on(svc.handle(
+            "CreateLedger",
+            json!({ "Name": "kms-led", "PermissionsMode": "STANDARD", "DeletionProtection": false }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let kms_key = "arn:aws:kms:us-east-1:123456789012:key/abcdef01-2345-6789-abcd-ef0123456789";
+        let resp = block_on(svc.handle(
+            "UpdateLedger",
+            json!({ "name": "kms-led", "KmsKey": kms_key }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(resp["KmsKeyArn"], kms_key);
+        let enc = &resp["EncryptionDescription"];
+        assert_eq!(enc["KmsKeyArn"], kms_key);
+        assert_eq!(enc["EncryptionStatus"], "ENABLED");
+        assert!(
+            enc.get("InaccessibleKmsKeyDateTime")
+                .map(|v| v.is_null())
+                .unwrap_or(false),
+            "expected InaccessibleKmsKeyDateTime to be present as null, got {enc:?}",
+        );
     }
 
     #[test]
