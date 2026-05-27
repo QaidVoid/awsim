@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use awsim_core::pagination::{cap_max_results, decode_token, encode_token};
 use awsim_core::{
     AccountRegionStore, AwsError, Protocol, RequestContext, RouteDefinition, ServiceHandler,
 };
@@ -160,6 +161,34 @@ fn validate_user_name(name: &str) -> Result<(), AwsError> {
         ));
     }
     Ok(())
+}
+
+/// Identity Store pagination cap: AWS's documented MaxResults default
+/// and max for `ListUsers` / `ListGroups`.
+const LIST_DEFAULT_MAX: usize = 100;
+
+/// Encode a pagination cursor scoped to the calling identity store.
+/// The token carries `<store>|<id>` so a stolen cursor cannot be
+/// replayed against a different `IdentityStoreId`.
+fn encode_tenant_token(store: &str, marker: &str) -> String {
+    encode_token(&format!("{store}|{marker}"))
+}
+
+/// Decode a pagination cursor and refuse it when the embedded store
+/// doesn't match the request's `IdentityStoreId`. Returns the
+/// per-tenant marker on success.
+fn decode_tenant_token(store: &str, token: &str) -> Result<String, AwsError> {
+    let payload = decode_token(token)?;
+    let (scope, marker) = payload
+        .split_once('|')
+        .ok_or_else(|| AwsError::bad_request("ValidationException", "NextToken is malformed."))?;
+    if scope != store {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            "NextToken does not belong to this IdentityStoreId.",
+        ));
+    }
+    Ok(marker.to_string())
 }
 
 /// Group `DisplayName` cap: 1..=1024 chars per AWS docs. Optional on
@@ -362,14 +391,51 @@ impl ServiceHandler for IdentityStoreService {
                 Ok(json!({ "UserId": user_id, "IdentityStoreId": store }))
             }
             "ListUsers" => {
-                let store = require_str(&input, "IdentityStoreId")?;
-                let items: Vec<Value> = state
+                let store = require_str(&input, "IdentityStoreId")?.to_string();
+                validate_identity_store_id(&store)?;
+                let max = cap_max_results(
+                    input.get("MaxResults").and_then(|v| v.as_i64()),
+                    LIST_DEFAULT_MAX,
+                    LIST_DEFAULT_MAX,
+                );
+                let starting = match input.get("NextToken").and_then(|v| v.as_str()) {
+                    Some(t) => Some(decode_tenant_token(&store, t)?),
+                    None => None,
+                };
+                // Collect, sort by user_id (deterministic order so the
+                // cursor resumes correctly across requests).
+                let mut users: Vec<IdUser> = state
                     .users
                     .iter()
                     .filter(|e| e.value().identity_store_id == store)
-                    .map(|e| user_to_value(e.value()))
+                    .map(|e| e.value().clone())
                     .collect();
-                Ok(json!({ "Users": items }))
+                users.sort_by(|a, b| a.user_id.cmp(&b.user_id));
+                let start_idx = match starting {
+                    Some(marker) => users
+                        .iter()
+                        .position(|u| u.user_id >= marker)
+                        .unwrap_or(users.len()),
+                    None => 0,
+                };
+                let take = max.min(users.len().saturating_sub(start_idx));
+                let page_items: Vec<Value> = users[start_idx..start_idx + take]
+                    .iter()
+                    .map(user_to_value)
+                    .collect();
+                let next = if start_idx + take < users.len() {
+                    Some(encode_tenant_token(
+                        &store,
+                        &users[start_idx + take].user_id,
+                    ))
+                } else {
+                    None
+                };
+                let mut resp = json!({ "Users": page_items });
+                if let Some(t) = next {
+                    resp["NextToken"] = json!(t);
+                }
+                Ok(resp)
             }
             "UpdateUser" => {
                 let store = require_str(&input, "IdentityStoreId")?;
@@ -454,14 +520,49 @@ impl ServiceHandler for IdentityStoreService {
                 Ok(group_to_value(&g))
             }
             "ListGroups" => {
-                let store = require_str(&input, "IdentityStoreId")?;
-                let items: Vec<Value> = state
+                let store = require_str(&input, "IdentityStoreId")?.to_string();
+                validate_identity_store_id(&store)?;
+                let max = cap_max_results(
+                    input.get("MaxResults").and_then(|v| v.as_i64()),
+                    LIST_DEFAULT_MAX,
+                    LIST_DEFAULT_MAX,
+                );
+                let starting = match input.get("NextToken").and_then(|v| v.as_str()) {
+                    Some(t) => Some(decode_tenant_token(&store, t)?),
+                    None => None,
+                };
+                let mut groups: Vec<IdGroup> = state
                     .groups
                     .iter()
                     .filter(|e| e.value().identity_store_id == store)
-                    .map(|e| group_to_value(e.value()))
+                    .map(|e| e.value().clone())
                     .collect();
-                Ok(json!({ "Groups": items }))
+                groups.sort_by(|a, b| a.group_id.cmp(&b.group_id));
+                let start_idx = match starting {
+                    Some(marker) => groups
+                        .iter()
+                        .position(|g| g.group_id >= marker)
+                        .unwrap_or(groups.len()),
+                    None => 0,
+                };
+                let take = max.min(groups.len().saturating_sub(start_idx));
+                let page_items: Vec<Value> = groups[start_idx..start_idx + take]
+                    .iter()
+                    .map(group_to_value)
+                    .collect();
+                let next = if start_idx + take < groups.len() {
+                    Some(encode_tenant_token(
+                        &store,
+                        &groups[start_idx + take].group_id,
+                    ))
+                } else {
+                    None
+                };
+                let mut resp = json!({ "Groups": page_items });
+                if let Some(t) = next {
+                    resp["NextToken"] = json!(t);
+                }
+                Ok(resp)
             }
             "UpdateGroup" => {
                 let store = require_str(&input, "IdentityStoreId")?;
@@ -848,6 +949,83 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
         assert!(err.message.contains("whitespace"), "{}", err.message);
+    }
+
+    #[test]
+    fn list_users_paginates_deterministically_and_scopes_token() {
+        let svc = IdentityStoreService::new();
+        let ctx = RequestContext::new("identitystore", "us-east-1");
+        let store_a = "d-aaaaaaaaaa";
+        let store_b = "d-bbbbbbbbbb";
+        for i in 0..3 {
+            block_on(svc.handle(
+                "CreateUser",
+                json!({ "IdentityStoreId": store_a, "UserName": format!("u{i}") }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+        // Page 1: receive a NextToken pointing past the first entry.
+        let page1 = block_on(svc.handle(
+            "ListUsers",
+            json!({ "IdentityStoreId": store_a, "MaxResults": 1 }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(page1["Users"].as_array().unwrap().len(), 1);
+        let token = page1["NextToken"]
+            .as_str()
+            .expect("first page must hand back a NextToken")
+            .to_string();
+        // Page 2 against the same tenant works.
+        let page2 = block_on(svc.handle(
+            "ListUsers",
+            json!({ "IdentityStoreId": store_a, "MaxResults": 1, "NextToken": token.clone() }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(page2["Users"].as_array().unwrap().len(), 1);
+        // Same token replayed against a *different* IdentityStoreId
+        // must be rejected — that's the cross-tenant defence.
+        let err = block_on(svc.handle(
+            "ListUsers",
+            json!({ "IdentityStoreId": store_b, "MaxResults": 1, "NextToken": token }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("IdentityStoreId"), "{}", err.message);
+    }
+
+    #[test]
+    fn list_groups_paginates_with_stable_cursor() {
+        let svc = IdentityStoreService::new();
+        let ctx = RequestContext::new("identitystore", "us-east-1");
+        let store = "d-aaaaaaaaaa";
+        for i in 0..4 {
+            block_on(svc.handle(
+                "CreateGroup",
+                json!({ "IdentityStoreId": store, "DisplayName": format!("g{i}") }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+        let page1 = block_on(svc.handle(
+            "ListGroups",
+            json!({ "IdentityStoreId": store, "MaxResults": 2 }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(page1["Groups"].as_array().unwrap().len(), 2);
+        let token = page1["NextToken"].as_str().unwrap().to_string();
+        let page2 = block_on(svc.handle(
+            "ListGroups",
+            json!({ "IdentityStoreId": store, "MaxResults": 2, "NextToken": token }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(page2["Groups"].as_array().unwrap().len(), 2);
+        assert!(page2.get("NextToken").is_none());
     }
 
     #[test]
