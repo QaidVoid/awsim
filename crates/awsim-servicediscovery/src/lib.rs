@@ -171,6 +171,9 @@ impl ServiceHandler for ServiceDiscoveryService {
             "GetInstance" => operations::get_instance(&state, &input, ctx),
             "ListInstances" => operations::list_instances(&state, &input, ctx),
             "DiscoverInstances" => operations::discover_instances(&state, &input, ctx),
+            "GetInstancesHealthStatus" => {
+                operations::get_instances_health_status(&state, &input, ctx)
+            }
             "UpdateInstanceCustomHealthStatus" => {
                 operations::update_instance_custom_health_status(&state, &input, ctx)
             }

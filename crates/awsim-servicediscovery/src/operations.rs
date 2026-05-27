@@ -748,6 +748,85 @@ fn match_str(f: &OperationFilter, actual: Option<&String>) -> bool {
     }
 }
 
+/// `GetInstancesHealthStatus` — report each instance's current health
+/// status (`HEALTHY` | `UNHEALTHY` | `UNKNOWN`). The emulator has no
+/// health-check prober, so every registered instance reports
+/// `HEALTHY`. Paginates with a numeric `NextToken` offset and honors
+/// `MaxResults` (1..=100, default 100).
+pub fn get_instances_health_status(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let service_id = require_str(input, "ServiceId")?.to_string();
+    if !state.services.contains_key(&service_id) {
+        return Err(AwsError::not_found(
+            "ServiceNotFound",
+            format!("Service {service_id} not found"),
+        ));
+    }
+
+    let max_results = match input.get("MaxResults").and_then(Value::as_i64) {
+        Some(n) if !(1..=100).contains(&n) => {
+            return Err(AwsError::bad_request(
+                "InvalidInput",
+                format!("MaxResults `{n}` must be in 1..=100."),
+            ));
+        }
+        Some(n) => n as usize,
+        None => 100,
+    };
+    let start_offset = match input.get("NextToken").and_then(Value::as_str) {
+        Some(s) => s.parse::<usize>().map_err(|_| {
+            AwsError::bad_request(
+                "InvalidInput",
+                format!("NextToken `{s}` is not a valid offset."),
+            )
+        })?,
+        None => 0,
+    };
+
+    // Caller can narrow to a subset of instance ids.
+    let filter: Option<Vec<String>> = input.get("Instances").and_then(Value::as_array).map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    });
+
+    let mut ids: Vec<String> = state
+        .instances
+        .iter()
+        .filter(|e| e.value().service_id == service_id)
+        .filter(|e| {
+            filter
+                .as_ref()
+                .is_none_or(|f| f.iter().any(|i| i == &e.value().id))
+        })
+        .map(|e| e.value().id.clone())
+        .collect();
+    ids.sort();
+
+    let total = ids.len();
+    if start_offset > total {
+        return Err(AwsError::bad_request(
+            "InvalidInput",
+            format!("NextToken `{start_offset}` is past the end of the result set."),
+        ));
+    }
+    let end = (start_offset + max_results).min(total);
+    let page = &ids[start_offset..end];
+
+    let mut status = serde_json::Map::new();
+    for id in page {
+        status.insert(id.clone(), Value::String("HEALTHY".into()));
+    }
+    let mut resp = json!({ "Status": status });
+    if end < total {
+        resp["NextToken"] = Value::String(end.to_string());
+    }
+    Ok(resp)
+}
+
 /// `UpdateService` — patch the mutable fields of an existing service.
 /// AWS accepts `Description`, `DnsConfig`, and `HealthCheckConfig`
 /// inside a wrapping `Service` object; anything else is silently
@@ -948,6 +1027,89 @@ mod revision_tests {
         )
         .unwrap();
         assert_eq!(resp["InstancesRevision"], 3);
+    }
+
+    #[test]
+    fn get_instances_health_status_paginates() {
+        let (state, svc_id, _) = fresh_service();
+        for i in 0..7 {
+            register_instance(
+                &state,
+                &json!({ "ServiceId": svc_id, "InstanceId": format!("i{i:02}"), "Attributes": {} }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+
+        let page1 = get_instances_health_status(
+            &state,
+            &json!({ "ServiceId": svc_id, "MaxResults": 3 }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(page1["Status"].as_object().unwrap().len(), 3);
+        let token = page1["NextToken"].as_str().unwrap().to_string();
+
+        let page2 = get_instances_health_status(
+            &state,
+            &json!({ "ServiceId": svc_id, "MaxResults": 3, "NextToken": token }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(page2["Status"].as_object().unwrap().len(), 3);
+        let token = page2["NextToken"].as_str().unwrap().to_string();
+
+        let page3 = get_instances_health_status(
+            &state,
+            &json!({ "ServiceId": svc_id, "MaxResults": 3, "NextToken": token }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(page3["Status"].as_object().unwrap().len(), 1);
+        assert!(page3.get("NextToken").is_none());
+
+        // No overlap across pages.
+        let mut all: Vec<String> = page1["Status"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        all.extend(page2["Status"].as_object().unwrap().keys().cloned());
+        all.extend(page3["Status"].as_object().unwrap().keys().cloned());
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), 7);
+    }
+
+    #[test]
+    fn get_instances_health_status_narrows_to_subset() {
+        let (state, svc_id, _) = fresh_service();
+        for i in 0..3 {
+            register_instance(
+                &state,
+                &json!({ "ServiceId": svc_id, "InstanceId": format!("i{i}"), "Attributes": {} }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        let resp = get_instances_health_status(
+            &state,
+            &json!({ "ServiceId": svc_id, "Instances": ["i1", "missing"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let status = resp["Status"].as_object().unwrap();
+        assert_eq!(status.len(), 1);
+        assert_eq!(status["i1"], "HEALTHY");
+    }
+
+    #[test]
+    fn get_instances_health_status_unknown_service_is_404() {
+        let state = ServiceDiscoveryState::default();
+        let err = get_instances_health_status(&state, &json!({ "ServiceId": "s-missing" }), &ctx())
+            .unwrap_err();
+        assert_eq!(err.code, "ServiceNotFound");
     }
 
     #[test]
