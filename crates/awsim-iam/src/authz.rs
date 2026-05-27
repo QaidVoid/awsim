@@ -354,3 +354,133 @@ mod last_used_tests {
         assert!(state.access_key_last_used.is_empty());
     }
 }
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+    use crate::state::{AccessKey, IamState, Policy, User};
+    use awsim_core::AccountRegionStore;
+    use awsim_core::authz::AuthzEngine;
+    use awsim_core::router::RequestContext;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    const KEY: &str = "AKIATESTBOUND0001";
+    const BOUNDARY_ARN: &str = "arn:aws:iam::000000000000:policy/Boundary";
+
+    fn policy_doc(allow_action: &str) -> String {
+        format!(
+            r#"{{"Version":"2012-10-17","Statement":[{{"Effect":"Allow","Action":"{allow_action}","Resource":"*"}}]}}"#
+        )
+    }
+
+    fn make_store(
+        identity_action: &str,
+        boundary_action: Option<&str>,
+    ) -> AccountRegionStore<IamState> {
+        let store: AccountRegionStore<IamState> = AccountRegionStore::default();
+        let state = store.get("000000000000", "us-east-1");
+
+        let mut inline = HashMap::new();
+        inline.insert("inline".to_string(), policy_doc(identity_action));
+
+        let user = User {
+            user_name: "alice".into(),
+            user_id: "AIDATESTBOUND00000A".into(),
+            arn: "arn:aws:iam::000000000000:user/alice".into(),
+            path: "/".into(),
+            create_date: "1970-01-01T00:00:00Z".into(),
+            access_keys: vec![AccessKey {
+                access_key_id: KEY.into(),
+                secret_access_key: "secret".into(),
+                status: "Active".into(),
+                create_date: "1970-01-01T00:00:00Z".into(),
+            }],
+            attached_policies: vec![],
+            inline_policies: inline,
+            groups: vec![],
+            tags: HashMap::new(),
+            mfa_devices: vec![],
+            ssh_public_keys: vec![],
+            password_last_used: None,
+        };
+        state.users.insert("alice".to_string(), user);
+
+        if let Some(action) = boundary_action {
+            state.policies.insert(
+                BOUNDARY_ARN.to_string(),
+                Policy {
+                    policy_name: "Boundary".into(),
+                    policy_id: "ANPATESTBOUND0000A".into(),
+                    arn: BOUNDARY_ARN.into(),
+                    path: "/".into(),
+                    description: None,
+                    policy_document: policy_doc(action),
+                    create_date: "1970-01-01T00:00:00Z".into(),
+                    update_date: "1970-01-01T00:00:00Z".into(),
+                    attachment_count: 1,
+                    versions: vec![],
+                    default_version_id: "v1".into(),
+                    tags: HashMap::new(),
+                },
+            );
+            state
+                .user_permissions_boundaries
+                .insert("alice".to_string(), BOUNDARY_ARN.to_string());
+        }
+
+        store
+    }
+
+    fn engine_for(store: AccountRegionStore<IamState>) -> AuthzEngine {
+        let mut engine = AuthzEngine::new(true);
+        engine.principal_lookup = Arc::new(IamPrincipalLookup::new(store));
+        engine
+    }
+
+    fn ctx() -> RequestContext {
+        let mut c = RequestContext::new("kms", "us-east-1");
+        c.access_key = Some(KEY.into());
+        c
+    }
+
+    #[test]
+    fn boundary_denies_when_action_outside_cap() {
+        let store = make_store("kms:Decrypt", Some("s3:GetObject"));
+        let engine = engine_for(store);
+        let err = engine
+            .check(
+                &ctx(),
+                "kms:Decrypt",
+                "arn:aws:kms:us-east-1:000000000000:key/abc",
+            )
+            .expect_err("boundary should deny outside its allow set");
+        assert_eq!(err.code, "AccessDenied");
+    }
+
+    #[test]
+    fn boundary_allows_when_action_inside_cap() {
+        let store = make_store("kms:Decrypt", Some("kms:Decrypt"));
+        let engine = engine_for(store);
+        engine
+            .check(
+                &ctx(),
+                "kms:Decrypt",
+                "arn:aws:kms:us-east-1:000000000000:key/abc",
+            )
+            .expect("boundary covers identity allow");
+    }
+
+    #[test]
+    fn no_boundary_falls_back_to_identity_policy() {
+        let store = make_store("kms:Decrypt", None);
+        let engine = engine_for(store);
+        engine
+            .check(
+                &ctx(),
+                "kms:Decrypt",
+                "arn:aws:kms:us-east-1:000000000000:key/abc",
+            )
+            .expect("no boundary, identity allow is sufficient");
+    }
+}
