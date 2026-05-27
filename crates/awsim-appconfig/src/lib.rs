@@ -241,6 +241,13 @@ impl ServiceHandler for AppConfigService {
             "ListDeploymentStrategies" => {
                 operations::strategies::list_strategies(&state, &input, ctx)
             }
+            "GetDeploymentStrategy" => operations::strategies::get_strategy(&state, &input, ctx),
+            "UpdateDeploymentStrategy" => {
+                operations::strategies::update_strategy(&state, &input, ctx)
+            }
+            "DeleteDeploymentStrategy" => {
+                operations::strategies::delete_strategy(&state, &input, ctx)
+            }
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
