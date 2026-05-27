@@ -253,6 +253,100 @@ pub fn put_retention_policy(
 }
 
 // ---------------------------------------------------------------------------
+// AssociateKmsKey / DisassociateKmsKey
+// ---------------------------------------------------------------------------
+
+/// True when the resource identifier targets the account-level
+/// "query result" scope (`<accountId>:query-result` or the literal
+/// `query-result`). AWS distinguishes log-group encryption from
+/// query-result encryption via this identifier.
+fn is_query_result_scope(resource_identifier: &str) -> bool {
+    resource_identifier == "query-result"
+        || resource_identifier
+            .rsplit_once(':')
+            .map(|(_, tail)| tail == "query-result")
+            .unwrap_or(false)
+}
+
+/// `AssociateKmsKey`. AWS routes the assignment by the optional
+/// `resourceIdentifier`: when it names a query-result scope, the key
+/// encrypts query results at the account level; otherwise it pairs
+/// with the named log group. Callers must pass at least one target.
+pub fn associate_kms_key(
+    state: &LogsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let kms_key_id = input["kmsKeyId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "kmsKeyId is required")
+    })?;
+    if !kms_key_id.contains("arn:aws:kms:") {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "kmsKeyId must be a KMS key ARN.",
+        ));
+    }
+
+    let resource_identifier = input["resourceIdentifier"].as_str();
+    let log_group_name = input["logGroupName"].as_str();
+
+    match (resource_identifier, log_group_name) {
+        (Some(rid), _) if is_query_result_scope(rid) => {
+            *state.query_result_kms_key_id.lock().unwrap() = Some(kms_key_id.to_string());
+            Ok(json!({}))
+        }
+        (_, Some(name)) => {
+            let mut group = state.log_groups.get_mut(name).ok_or_else(|| {
+                AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("Log group not found: {name}"),
+                )
+            })?;
+            group.kms_key_id = Some(kms_key_id.to_string());
+            Ok(json!({}))
+        }
+        _ => Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "Either logGroupName or a query-result resourceIdentifier is required.",
+        )),
+    }
+}
+
+/// `DisassociateKmsKey`. Same routing rules as `AssociateKmsKey`: a
+/// query-result `resourceIdentifier` clears the account-level key;
+/// otherwise the named log group's `kmsKeyId` is cleared. No-op
+/// against a log group with no key set (matches AWS).
+pub fn disassociate_kms_key(
+    state: &LogsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let resource_identifier = input["resourceIdentifier"].as_str();
+    let log_group_name = input["logGroupName"].as_str();
+
+    match (resource_identifier, log_group_name) {
+        (Some(rid), _) if is_query_result_scope(rid) => {
+            *state.query_result_kms_key_id.lock().unwrap() = None;
+            Ok(json!({}))
+        }
+        (_, Some(name)) => {
+            let mut group = state.log_groups.get_mut(name).ok_or_else(|| {
+                AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("Log group not found: {name}"),
+                )
+            })?;
+            group.kms_key_id = None;
+            Ok(json!({}))
+        }
+        _ => Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "Either logGroupName or a query-result resourceIdentifier is required.",
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DeleteRetentionPolicy
 // ---------------------------------------------------------------------------
 
@@ -463,5 +557,107 @@ mod deletion_protection_tests {
         create_log_group(&state, &json!({ "logGroupName": "g" }), &ctx()).unwrap();
         delete_log_group(&state, &json!({ "logGroupName": "g" }), &ctx()).unwrap();
         assert!(state.log_groups.get("g").is_none());
+    }
+
+    #[test]
+    fn associate_kms_key_targets_log_group_when_no_query_result_id() {
+        let state = fresh_state();
+        create_log_group(&state, &json!({ "logGroupName": "g" }), &ctx()).unwrap();
+        associate_kms_key(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "kmsKeyId": "arn:aws:kms:us-east-1:000000000000:key/abc",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let group = state.log_groups.get("g").unwrap();
+        assert_eq!(
+            group.kms_key_id.as_deref(),
+            Some("arn:aws:kms:us-east-1:000000000000:key/abc")
+        );
+        // Account-level query-result key untouched.
+        assert!(state.query_result_kms_key_id.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn associate_kms_key_targets_query_result_via_resource_identifier() {
+        let state = fresh_state();
+        associate_kms_key(
+            &state,
+            &json!({
+                "kmsKeyId": "arn:aws:kms:us-east-1:000000000000:key/qr",
+                "resourceIdentifier": "000000000000:query-result",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // Account-level key set.
+        assert_eq!(
+            state.query_result_kms_key_id.lock().unwrap().as_deref(),
+            Some("arn:aws:kms:us-east-1:000000000000:key/qr")
+        );
+        // No log group exists; the call must succeed without one
+        // because the resourceIdentifier routed past the log-group
+        // path.
+    }
+
+    #[test]
+    fn disassociate_kms_key_clears_log_group_only() {
+        let state = fresh_state();
+        create_log_group(&state, &json!({ "logGroupName": "g" }), &ctx()).unwrap();
+        associate_kms_key(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "kmsKeyId": "arn:aws:kms:us-east-1:000000000000:key/abc",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        associate_kms_key(
+            &state,
+            &json!({
+                "kmsKeyId": "arn:aws:kms:us-east-1:000000000000:key/qr",
+                "resourceIdentifier": "query-result",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // Disassociating the log group must not clear the query-result key.
+        disassociate_kms_key(&state, &json!({ "logGroupName": "g" }), &ctx()).unwrap();
+        assert!(state.log_groups.get("g").unwrap().kms_key_id.is_none());
+        assert!(state.query_result_kms_key_id.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn associate_kms_key_requires_at_least_one_target() {
+        let state = fresh_state();
+        let err = associate_kms_key(
+            &state,
+            &json!({
+                "kmsKeyId": "arn:aws:kms:us-east-1:000000000000:key/abc",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn associate_kms_key_rejects_non_kms_arn() {
+        let state = fresh_state();
+        create_log_group(&state, &json!({ "logGroupName": "g" }), &ctx()).unwrap();
+        let err = associate_kms_key(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "kmsKeyId": "not-an-arn",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
     }
 }

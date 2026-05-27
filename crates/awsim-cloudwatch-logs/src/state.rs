@@ -147,6 +147,13 @@ pub struct LogsState {
     /// service on first `get_state` so per-region stores all see the
     /// same database.
     pub sqlite: OnceLock<Arc<crate::SqliteStore>>,
+    /// `AssociateKmsKey` with `resourceIdentifier = <acc>:query-result`
+    /// scopes the KMS key to Logs Insights query result encryption at
+    /// the account level rather than per-log-group. AWS surfaces it
+    /// on `DescribeAccountPolicies` and uses it when callers fetch
+    /// query results. The mutex protects assignment under the rare
+    /// concurrent Associate/Disassociate race.
+    pub query_result_kms_key_id: std::sync::Mutex<Option<String>>,
 }
 
 impl LogsState {

@@ -147,6 +147,8 @@ impl ServiceHandler for CloudWatchLogsService {
             "DescribeLogGroups" => log_groups::describe_log_groups(&state, &input, ctx),
             "PutRetentionPolicy" => log_groups::put_retention_policy(&state, &input, ctx),
             "DeleteRetentionPolicy" => log_groups::delete_retention_policy(&state, &input, ctx),
+            "AssociateKmsKey" => log_groups::associate_kms_key(&state, &input, ctx),
+            "DisassociateKmsKey" => log_groups::disassociate_kms_key(&state, &input, ctx),
             "TagLogGroup" => log_groups::tag_log_group(&state, &input, ctx),
             "UntagLogGroup" => log_groups::untag_log_group(&state, &input, ctx),
             "ListTagsLogGroup" => log_groups::list_tags_log_group(&state, &input, ctx),
