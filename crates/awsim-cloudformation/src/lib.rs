@@ -78,6 +78,8 @@ impl ServiceHandler for CloudFormationService {
             "UpdateTerminationProtection" => {
                 operations::stacks::update_termination_protection(&state, &input, ctx)
             }
+            "SetStackPolicy" => operations::stacks::set_stack_policy(&state, &input),
+            "GetStackPolicy" => operations::stacks::get_stack_policy(&state, &input),
 
             // Exports / Imports
             "ListExports" => operations::stacks::list_exports(&state, &input),

@@ -257,6 +257,7 @@ pub fn create_change_set(
             termination_protection: false,
             notification_arns: Vec::new(),
             on_failure: "ROLLBACK".to_string(),
+            stack_policy_body: None,
         };
         state.stacks.insert(stack_name.clone(), placeholder_stack);
     }
@@ -527,6 +528,7 @@ mod change_set_diff_tests {
                 termination_protection: false,
                 notification_arns: Vec::new(),
                 on_failure: "ROLLBACK".to_string(),
+                stack_policy_body: None,
             },
         );
 
@@ -602,6 +604,7 @@ mod change_set_diff_tests {
                 termination_protection: false,
                 notification_arns: Vec::new(),
                 on_failure: "ROLLBACK".to_string(),
+                stack_policy_body: None,
             },
         );
 
@@ -678,6 +681,7 @@ mod change_set_diff_tests {
                 termination_protection: false,
                 notification_arns: Vec::new(),
                 on_failure: "ROLLBACK".to_string(),
+                stack_policy_body: None,
             },
         );
 

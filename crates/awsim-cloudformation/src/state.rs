@@ -38,6 +38,10 @@ pub struct Stack {
     /// stored verbatim for describe round-trip and consulted by the
     /// rollback path when (future) failures are wired up.
     pub on_failure: String,
+    /// Optional stack policy document (JSON). When set, UpdateStack
+    /// evaluates each resource change against it and blocks updates
+    /// the policy denies. AWS surfaces this as `ValidationError`.
+    pub stack_policy_body: Option<String>,
 }
 
 #[derive(Debug, Clone)]

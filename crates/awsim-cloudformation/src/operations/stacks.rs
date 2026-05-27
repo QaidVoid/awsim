@@ -200,6 +200,151 @@ fn parse_notification_arns(input: &Value) -> Result<Vec<String>, AwsError> {
     Ok(arns)
 }
 
+/// Parse + validate `StackPolicyBody` from a CreateStack /
+/// UpdateStack / SetStackPolicy input. The body must be JSON; CFN
+/// uses an IAM-flavoured Statement[] schema. We validate the JSON
+/// shape but don't bind it to a typed model — the policy evaluator
+/// reads it back ad hoc so missing optional fields stay missing.
+fn parse_stack_policy(input: &Value) -> Result<Option<String>, AwsError> {
+    let Some(raw) = input.get("StackPolicyBody").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let parsed: Value = serde_json::from_str(raw).map_err(|e| {
+        AwsError::bad_request(
+            "ValidationError",
+            format!("StackPolicyBody is not valid JSON: {e}"),
+        )
+    })?;
+    if !parsed.is_object() {
+        return Err(AwsError::bad_request(
+            "ValidationError",
+            "StackPolicyBody must be a JSON object.",
+        ));
+    }
+    Ok(Some(raw.to_string()))
+}
+
+/// Evaluate the stored stack policy against a list of resource
+/// changes. Returns `Err` on the first statement that denies one of
+/// the changes. The policy schema mirrors AWS:
+/// ```json
+/// {
+///   "Statement": [{
+///     "Effect": "Deny",
+///     "Action": "Update:*",
+///     "Resource": "LogicalResourceId/Critical*"
+///   }]
+/// }
+/// ```
+/// Action wildcards: `Update:Modify`, `Update:Replace`,
+/// `Update:Delete`, `Update:*`, `*`. Resource patterns are glob-style
+/// against the logical id with `*` as the wildcard char. Allow
+/// statements are treated as overrides over a default-deny, matching
+/// CFN's evaluation semantics — but only when at least one Deny
+/// applies. Stacks without a policy treat every update as allowed.
+fn evaluate_stack_policy(
+    policy_body: &str,
+    change_action: &str,
+    logical_id: &str,
+) -> Result<(), AwsError> {
+    let policy: Value = serde_json::from_str(policy_body).map_err(|e| {
+        AwsError::bad_request(
+            "ValidationError",
+            format!("Stored stack policy is not valid JSON: {e}"),
+        )
+    })?;
+    let Some(statements) = policy.get("Statement").and_then(Value::as_array) else {
+        return Ok(());
+    };
+
+    let mut explicit_allow = false;
+    let mut explicit_deny = false;
+    for stmt in statements {
+        let effect = stmt.get("Effect").and_then(Value::as_str).unwrap_or("Deny");
+        let action = stmt.get("Action").and_then(Value::as_str).unwrap_or("*");
+        let resource = stmt.get("Resource").and_then(Value::as_str).unwrap_or("*");
+        if !action_matches(action, change_action) {
+            continue;
+        }
+        if !resource_matches(resource, logical_id) {
+            continue;
+        }
+        match effect {
+            "Allow" => explicit_allow = true,
+            "Deny" => explicit_deny = true,
+            _ => {}
+        }
+    }
+    if explicit_deny && !explicit_allow {
+        return Err(AwsError::bad_request(
+            "ValidationError",
+            format!("Stack policy denies {change_action} on resource {logical_id}."),
+        ));
+    }
+    Ok(())
+}
+
+fn action_matches(pattern: &str, action: &str) -> bool {
+    if pattern == "*" || pattern == action {
+        return true;
+    }
+    // `Update:*` matches any `Update:Foo`.
+    if let Some(prefix) = pattern.strip_suffix(":*")
+        && let Some(act_prefix) = action.split(':').next()
+    {
+        return prefix == act_prefix;
+    }
+    false
+}
+
+fn resource_matches(pattern: &str, logical_id: &str) -> bool {
+    // Patterns are either bare globs like `Critical*` or prefixed
+    // `LogicalResourceId/Critical*` per AWS's documented syntax.
+    let stripped = pattern
+        .strip_prefix("LogicalResourceId/")
+        .unwrap_or(pattern);
+    glob_matches(stripped, logical_id)
+}
+
+fn glob_matches(pattern: &str, value: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return value.starts_with(prefix);
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return value.ends_with(suffix);
+    }
+    pattern == value
+}
+
+pub fn set_stack_policy(state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
+    let stack_name = require_str(input, "StackName")?;
+    let mut stack = state
+        .stacks
+        .get_mut(stack_name)
+        .ok_or_else(|| stack_not_found(stack_name))?;
+    let body = parse_stack_policy(input)?;
+    stack.stack_policy_body = body;
+    Ok(json!({}))
+}
+
+pub fn get_stack_policy(state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
+    let stack_name = require_str(input, "StackName")?;
+    let stack = state
+        .stacks
+        .get(stack_name)
+        .ok_or_else(|| stack_not_found(stack_name))?;
+    Ok(match stack.stack_policy_body.as_ref() {
+        Some(body) => json!({ "StackPolicyBody": body }),
+        None => json!({}),
+    })
+}
+
 /// Parse + validate `OnFailure`. CFN documents three values
 /// (`DO_NOTHING`, `ROLLBACK`, `DELETE`) and also accepts
 /// `DisableRollback=true` as a synonym for `DO_NOTHING`. The two
@@ -441,6 +586,7 @@ pub fn create_stack(
         .unwrap_or(false);
     let notification_arns = parse_notification_arns(input)?;
     let on_failure = parse_on_failure(input)?;
+    let stack_policy_body = parse_stack_policy(input)?;
 
     let stack = Stack {
         stack_id: stack_id.clone(),
@@ -459,6 +605,7 @@ pub fn create_stack(
         termination_protection,
         notification_arns: notification_arns.clone(),
         on_failure,
+        stack_policy_body,
     };
 
     publish_stack_event_notifications(
@@ -608,6 +755,39 @@ pub fn update_stack(
 
     // Validate new template
     let parsed = template::validate_and_parse(&template_body, &effective_params)?;
+
+    // Stack policy enforcement: when the stack has a policy attached,
+    // diff every resource on the way in and confirm the policy allows
+    // each change. AWS evaluates this *before* any state mutation, so
+    // a denial blocks the update entirely.
+    if let Some(ref policy) = stack.stack_policy_body {
+        let prior_parsed =
+            template::validate_and_parse(&stack.template_body, &stack.parameters).ok();
+        let prior_resources: Vec<&template::ResourceDef> = prior_parsed
+            .as_ref()
+            .map(|p| p.resources.iter().collect())
+            .unwrap_or_default();
+        for r in &parsed.resources {
+            let prior = prior_resources
+                .iter()
+                .find(|er| er.logical_id == r.logical_id);
+            let change_action = match prior {
+                Some(prior) if prior.properties == r.properties => continue,
+                Some(_) => "Update:Modify",
+                None => continue, // Adds are not stack-policy gated.
+            };
+            evaluate_stack_policy(policy, change_action, &r.logical_id)?;
+        }
+        for prior in &prior_resources {
+            if !parsed
+                .resources
+                .iter()
+                .any(|r| r.logical_id == prior.logical_id)
+            {
+                evaluate_stack_policy(policy, "Update:Delete", &prior.logical_id)?;
+            }
+        }
+    }
 
     let now = now_iso8601();
     let resources = build_resources(&parsed, &now);
@@ -1416,5 +1596,117 @@ mod capabilities_tests {
         .unwrap();
         let described = describe_stacks(&state, &json!({"StackName": "s"})).unwrap();
         assert_eq!(described["Stacks"]["member"][0]["DisableRollback"], true);
+    }
+
+    const TEMPLATE_V1: &str = r#"{
+      "Resources": {
+        "Critical": {
+          "Type": "AWS::S3::Bucket",
+          "Properties": { "BucketName": "old" }
+        }
+      }
+    }"#;
+    const TEMPLATE_V2: &str = r#"{
+      "Resources": {
+        "Critical": {
+          "Type": "AWS::S3::Bucket",
+          "Properties": { "BucketName": "new" }
+        }
+      }
+    }"#;
+    const DENY_POLICY: &str = r#"{
+      "Statement": [
+        {
+          "Effect": "Deny",
+          "Action": "Update:*",
+          "Principal": "*",
+          "Resource": "LogicalResourceId/Critical*"
+        }
+      ]
+    }"#;
+
+    #[test]
+    fn set_stack_policy_persists_body() {
+        let state = CloudFormationState::default();
+        create_stack(
+            &state,
+            &json!({"StackName": "s", "TemplateBody": MINIMAL_TEMPLATE}),
+            &ctx(),
+        )
+        .unwrap();
+        set_stack_policy(
+            &state,
+            &json!({"StackName": "s", "StackPolicyBody": DENY_POLICY}),
+        )
+        .unwrap();
+        let out = get_stack_policy(&state, &json!({"StackName": "s"})).unwrap();
+        assert!(out["StackPolicyBody"].as_str().is_some());
+    }
+
+    #[test]
+    fn update_stack_blocked_by_deny_policy() {
+        let state = CloudFormationState::default();
+        create_stack(
+            &state,
+            &json!({
+                "StackName": "s",
+                "TemplateBody": TEMPLATE_V1,
+                "StackPolicyBody": DENY_POLICY,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = update_stack(
+            &state,
+            &json!({"StackName": "s", "TemplateBody": TEMPLATE_V2}),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+        assert!(err.message.contains("Critical"), "{err:?}");
+    }
+
+    #[test]
+    fn update_stack_allowed_when_policy_excludes_resource() {
+        let policy = r#"{
+          "Statement": [{
+            "Effect": "Deny",
+            "Action": "Update:*",
+            "Resource": "LogicalResourceId/Other*"
+          }]
+        }"#;
+        let state = CloudFormationState::default();
+        create_stack(
+            &state,
+            &json!({
+                "StackName": "s",
+                "TemplateBody": TEMPLATE_V1,
+                "StackPolicyBody": policy,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        update_stack(
+            &state,
+            &json!({"StackName": "s", "TemplateBody": TEMPLATE_V2}),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn stack_policy_must_be_valid_json_object() {
+        let state = CloudFormationState::default();
+        let err = create_stack(
+            &state,
+            &json!({
+                "StackName": "s",
+                "TemplateBody": MINIMAL_TEMPLATE,
+                "StackPolicyBody": "not-json",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
     }
 }
