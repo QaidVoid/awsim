@@ -15,6 +15,8 @@ pub struct RdsState {
     pub snapshots: DashMap<String, DbSnapshot>,
     /// cluster identifier → Vec<DbClusterEndpoint>
     pub cluster_endpoints: DashMap<String, Vec<DbClusterEndpoint>>,
+    /// (engine, version) → DbCustomEngineVersion
+    pub custom_engine_versions: DashMap<(String, String), DbCustomEngineVersion>,
 }
 
 /// Serializable snapshot of `RdsState`.
@@ -27,6 +29,29 @@ pub struct RdsStateSnapshot {
     pub tags: Vec<(String, HashMap<String, String>)>,
     pub snapshots: Vec<DbSnapshot>,
     pub cluster_endpoints: Vec<DbClusterEndpoint>,
+    #[serde(default)]
+    pub custom_engine_versions: Vec<DbCustomEngineVersion>,
+}
+
+/// A customer-supplied RDS engine version. AWS allows operators to
+/// register a custom build of the supported engines (e.g.
+/// `custom-oracle-ee`); AWSim mirrors the surface so SDK clients can
+/// round-trip the lifecycle through `pending-validation` ->
+/// `available` -> `inactive` even though there is no underlying AMI
+/// to actually validate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbCustomEngineVersion {
+    pub engine: String,
+    pub engine_version: String,
+    pub db_engine_version_arn: String,
+    /// `pending-validation` -> `available` -> `inactive` (when
+    /// `ModifyCustomDBEngineVersion` flips status).
+    pub status: String,
+    pub description: String,
+    pub database_installation_files_s3_bucket_name: Option<String>,
+    pub database_installation_files_s3_prefix: Option<String>,
+    pub kms_key_id: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

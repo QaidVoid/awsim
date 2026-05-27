@@ -129,10 +129,19 @@ impl ServiceHandler for RdsService {
 
             // Engine versions / orderable options
             "DescribeDBEngineVersions" => {
-                operations::engine_versions::describe_db_engine_versions(&input)
+                operations::engine_versions::describe_db_engine_versions(&state, &input)
             }
             "DescribeOrderableDBInstanceOptions" => {
                 operations::engine_versions::describe_orderable_db_instance_options(&input)
+            }
+            "CreateCustomDBEngineVersion" => {
+                operations::engine_versions::create_custom_db_engine_version(&state, &input, ctx)
+            }
+            "ModifyCustomDBEngineVersion" => {
+                operations::engine_versions::modify_custom_db_engine_version(&state, &input, ctx)
+            }
+            "DeleteCustomDBEngineVersion" => {
+                operations::engine_versions::delete_custom_db_engine_version(&state, &input, ctx)
             }
 
             // Snapshots
@@ -197,6 +206,12 @@ impl ServiceHandler for RdsService {
                     .iter()
                     .flat_map(|e| e.value().clone()),
             );
+            snapshot.custom_engine_versions.extend(
+                state
+                    .custom_engine_versions
+                    .iter()
+                    .map(|e| e.value().clone()),
+            );
         }
 
         serde_json::to_vec(&snapshot).ok()
@@ -247,6 +262,10 @@ impl ServiceHandler for RdsService {
                 .entry(ep.cluster_identifier.clone())
                 .or_default()
                 .push(ep);
+        }
+        for cev in snapshot.custom_engine_versions {
+            let key = (cev.engine.clone(), cev.engine_version.clone());
+            state.custom_engine_versions.insert(key, cev);
         }
 
         Ok(())

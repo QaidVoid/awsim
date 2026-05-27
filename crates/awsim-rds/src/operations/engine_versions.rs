@@ -1,12 +1,23 @@
-use awsim_core::AwsError;
+use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-use super::opt_str;
+use super::{opt_str, require_str};
+use crate::error::invalid_parameter;
+use crate::ids::now_iso8601;
+use crate::state::{DbCustomEngineVersion, RdsState};
 
 /// DescribeDBEngineVersions — return hardcoded engine versions for postgres, mysql, mariadb.
-pub fn describe_db_engine_versions(input: &Value) -> Result<Value, AwsError> {
+///
+/// Custom engine versions registered via [`create_custom_db_engine_version`]
+/// are merged into the result so callers polling for a fresh CEV's
+/// lifecycle see it transition into `available`.
+pub fn describe_db_engine_versions(state: &RdsState, input: &Value) -> Result<Value, AwsError> {
     let filter_engine = opt_str(input, "Engine");
     let filter_version = opt_str(input, "EngineVersion");
+    let include_all = input
+        .get("IncludeAll")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let all_versions: Vec<Value> = vec![
         // PostgreSQL
@@ -135,8 +146,36 @@ pub fn describe_db_engine_versions(input: &Value) -> Result<Value, AwsError> {
         })
         .collect();
 
+    // Append every custom engine version we've registered, filtered the
+    // same way as the built-ins. `IncludeAll=true` surfaces `inactive`
+    // CEVs that AWS would otherwise hide.
+    let custom: Vec<Value> = state
+        .custom_engine_versions
+        .iter()
+        .map(|entry| custom_engine_version_to_value(entry.value()))
+        .filter(|v| {
+            if !include_all && v["Status"].as_str() == Some("inactive") {
+                return false;
+            }
+            if let Some(eng) = filter_engine
+                && v["Engine"].as_str().unwrap_or("") != eng
+            {
+                return false;
+            }
+            if let Some(ver) = filter_version
+                && v["EngineVersion"].as_str().unwrap_or("") != ver
+            {
+                return false;
+            }
+            true
+        })
+        .collect();
+
+    let mut merged = versions;
+    merged.extend(custom);
+
     Ok(json!({
-        "DBEngineVersions": { "DBEngineVersion": versions },
+        "DBEngineVersions": { "DBEngineVersion": merged },
         "Marker": null,
     }))
 }
@@ -197,4 +236,346 @@ pub fn describe_orderable_db_instance_options(input: &Value) -> Result<Value, Aw
         "OrderableDBInstanceOptions": { "OrderableDBInstanceOption": options },
         "Marker": null,
     }))
+}
+
+/// Customer-allowed engine families for a CEV. Real AWS supports
+/// Oracle and SQL Server custom builds; we accept the same surface
+/// at the API boundary so SDK clients exercise unchanged.
+const CUSTOM_ENGINE_FAMILIES: &[&str] = &[
+    "custom-oracle-ee",
+    "custom-oracle-se2",
+    "custom-sqlserver-ee",
+    "custom-sqlserver-se",
+    "custom-sqlserver-web",
+];
+
+fn custom_engine_version_arn(region: &str, account: &str, engine: &str, version: &str) -> String {
+    format!("arn:aws:rds:{region}:{account}:engine-version:{engine}:{version}")
+}
+
+fn custom_engine_version_to_value(cev: &DbCustomEngineVersion) -> Value {
+    let mut obj = json!({
+        "Engine": cev.engine,
+        "EngineVersion": cev.engine_version,
+        "DBEngineVersionArn": cev.db_engine_version_arn,
+        "DBEngineVersionDescription": cev.description,
+        "DBParameterGroupFamily": format!("{}-{}", cev.engine, cev.engine_version),
+        "Status": cev.status,
+        "CreateTime": cev.created_at,
+        "SupportsParallelQuery": false,
+        "SupportsGlobalDatabases": false,
+        "SupportsBabelfish": false,
+        "ValidUpgradeTarget": { "member": [] },
+        "SupportedFeatureNames": { "member": [] },
+    });
+    if let Some(ref b) = cev.database_installation_files_s3_bucket_name {
+        obj["DatabaseInstallationFilesS3BucketName"] = json!(b);
+    }
+    if let Some(ref p) = cev.database_installation_files_s3_prefix {
+        obj["DatabaseInstallationFilesS3Prefix"] = json!(p);
+    }
+    if let Some(ref k) = cev.kms_key_id {
+        obj["KMSKeyId"] = json!(k);
+    }
+    obj
+}
+
+/// `CreateCustomDBEngineVersion`. AWS validates the underlying
+/// installation media asynchronously and surfaces the lifecycle
+/// (`pending-validation` -> `available`). AWSim collapses the
+/// validation step (we have no AMI to inspect) and goes straight
+/// to `available` so SDK callers polling `DescribeDBEngineVersions`
+/// see a terminal status without simulating wall-clock delay.
+pub fn create_custom_db_engine_version(
+    state: &RdsState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let engine = require_str(input, "Engine")?;
+    let engine_version = require_str(input, "EngineVersion")?;
+    if !CUSTOM_ENGINE_FAMILIES.contains(&engine) {
+        return Err(invalid_parameter(format!(
+            "Engine `{engine}` is not a custom engine family. Use one of: {}.",
+            CUSTOM_ENGINE_FAMILIES.join(", ")
+        )));
+    }
+    let key = (engine.to_string(), engine_version.to_string());
+    if state.custom_engine_versions.contains_key(&key) {
+        return Err(AwsError::bad_request(
+            "CustomDBEngineVersionAlreadyExistsFault",
+            format!("Custom engine version `{engine}` `{engine_version}` already exists."),
+        ));
+    }
+
+    let arn = custom_engine_version_arn(&ctx.region, &ctx.account_id, engine, engine_version);
+    let cev = DbCustomEngineVersion {
+        engine: engine.to_string(),
+        engine_version: engine_version.to_string(),
+        db_engine_version_arn: arn,
+        // AWS goes through `pending-validation` first. AWSim has
+        // nothing to validate, so we record the steady-state value
+        // directly; callers that poll see `available` on the first
+        // describe.
+        status: "available".to_string(),
+        description: opt_str(input, "Description").unwrap_or("").to_string(),
+        database_installation_files_s3_bucket_name: opt_str(
+            input,
+            "DatabaseInstallationFilesS3BucketName",
+        )
+        .map(str::to_string),
+        database_installation_files_s3_prefix: opt_str(input, "DatabaseInstallationFilesS3Prefix")
+            .map(str::to_string),
+        kms_key_id: opt_str(input, "KMSKeyId").map(str::to_string),
+        created_at: now_iso8601(),
+    };
+    let result = custom_engine_version_to_value(&cev);
+    state.custom_engine_versions.insert(key, cev);
+    Ok(result)
+}
+
+/// `ModifyCustomDBEngineVersion` flips `Status` between `available`
+/// and `inactive`. AWS uses `inactive` to prevent further use without
+/// deleting the registration outright.
+pub fn modify_custom_db_engine_version(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let engine = require_str(input, "Engine")?;
+    let engine_version = require_str(input, "EngineVersion")?;
+    let status = require_str(input, "Status")?;
+    if !matches!(status, "available" | "inactive") {
+        return Err(invalid_parameter(
+            "Status must be `available` or `inactive`.",
+        ));
+    }
+    let key = (engine.to_string(), engine_version.to_string());
+    let mut cev = state.custom_engine_versions.get_mut(&key).ok_or_else(|| {
+        AwsError::not_found(
+            "CustomDBEngineVersionNotFoundFault",
+            format!("Custom engine version `{engine}` `{engine_version}` does not exist."),
+        )
+    })?;
+    cev.status = status.to_string();
+    if let Some(desc) = opt_str(input, "Description") {
+        cev.description = desc.to_string();
+    }
+    Ok(custom_engine_version_to_value(&cev))
+}
+
+/// `DeleteCustomDBEngineVersion` drops the registration. Real AWS
+/// requires the CEV to be in `inactive` first; we mirror that so
+/// clients exercising the lifecycle hit the same gate.
+pub fn delete_custom_db_engine_version(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let engine = require_str(input, "Engine")?;
+    let engine_version = require_str(input, "EngineVersion")?;
+    let key = (engine.to_string(), engine_version.to_string());
+    let existing = state.custom_engine_versions.get(&key).ok_or_else(|| {
+        AwsError::not_found(
+            "CustomDBEngineVersionNotFoundFault",
+            format!("Custom engine version `{engine}` `{engine_version}` does not exist."),
+        )
+    })?;
+    if existing.status != "inactive" {
+        return Err(AwsError::bad_request(
+            "InvalidCustomDBEngineVersionStateFault",
+            format!(
+                "Custom engine version `{engine}` `{engine_version}` must be in \
+                 `inactive` status before deletion (current: `{}`).",
+                existing.status
+            ),
+        ));
+    }
+    let result = custom_engine_version_to_value(&existing);
+    drop(existing);
+    state.custom_engine_versions.remove(&key);
+    Ok(result)
+}
+
+#[cfg(test)]
+mod custom_engine_version_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("rds", "us-east-1")
+    }
+
+    #[test]
+    fn create_reaches_available_immediately() {
+        let state = RdsState::default();
+        let resp = create_custom_db_engine_version(
+            &state,
+            &json!({
+                "Engine": "custom-oracle-ee",
+                "EngineVersion": "19.cdb_cev1",
+                "Description": "Custom Oracle 19c",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Status"], json!("available"));
+        assert!(
+            resp["DBEngineVersionArn"]
+                .as_str()
+                .unwrap()
+                .contains("engine-version:custom-oracle-ee:19.cdb_cev1"),
+            "ARN should reference the engine + version: {resp}"
+        );
+    }
+
+    #[test]
+    fn create_rejects_non_custom_engine() {
+        let state = RdsState::default();
+        let err = create_custom_db_engine_version(
+            &state,
+            &json!({
+                "Engine": "postgres",
+                "EngineVersion": "16.1",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn duplicate_cev_is_rejected() {
+        let state = RdsState::default();
+        create_custom_db_engine_version(
+            &state,
+            &json!({
+                "Engine": "custom-sqlserver-se",
+                "EngineVersion": "15.00.4322.2.cev1",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = create_custom_db_engine_version(
+            &state,
+            &json!({
+                "Engine": "custom-sqlserver-se",
+                "EngineVersion": "15.00.4322.2.cev1",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "CustomDBEngineVersionAlreadyExistsFault");
+    }
+
+    #[test]
+    fn describe_includes_active_cev_by_default() {
+        let state = RdsState::default();
+        create_custom_db_engine_version(
+            &state,
+            &json!({
+                "Engine": "custom-oracle-ee",
+                "EngineVersion": "19.cdb_cev1",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp =
+            describe_db_engine_versions(&state, &json!({ "Engine": "custom-oracle-ee" })).unwrap();
+        let entries = resp["DBEngineVersions"]["DBEngineVersion"]
+            .as_array()
+            .unwrap();
+        assert!(entries.iter().any(|v| v["EngineVersion"] == "19.cdb_cev1"));
+    }
+
+    #[test]
+    fn describe_excludes_inactive_cev_unless_include_all_set() {
+        let state = RdsState::default();
+        create_custom_db_engine_version(
+            &state,
+            &json!({
+                "Engine": "custom-oracle-ee",
+                "EngineVersion": "19.cdb_cev1",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        modify_custom_db_engine_version(
+            &state,
+            &json!({
+                "Engine": "custom-oracle-ee",
+                "EngineVersion": "19.cdb_cev1",
+                "Status": "inactive",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let hidden =
+            describe_db_engine_versions(&state, &json!({ "Engine": "custom-oracle-ee" })).unwrap();
+        assert!(
+            hidden["DBEngineVersions"]["DBEngineVersion"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+
+        let shown = describe_db_engine_versions(
+            &state,
+            &json!({ "Engine": "custom-oracle-ee", "IncludeAll": true }),
+        )
+        .unwrap();
+        assert_eq!(
+            shown["DBEngineVersions"]["DBEngineVersion"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn delete_requires_inactive_status() {
+        let state = RdsState::default();
+        create_custom_db_engine_version(
+            &state,
+            &json!({
+                "Engine": "custom-sqlserver-ee",
+                "EngineVersion": "15.00.cev1",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // available -> delete is rejected
+        let err = delete_custom_db_engine_version(
+            &state,
+            &json!({
+                "Engine": "custom-sqlserver-ee",
+                "EngineVersion": "15.00.cev1",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidCustomDBEngineVersionStateFault");
+
+        // inactive -> delete works
+        modify_custom_db_engine_version(
+            &state,
+            &json!({
+                "Engine": "custom-sqlserver-ee",
+                "EngineVersion": "15.00.cev1",
+                "Status": "inactive",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        delete_custom_db_engine_version(
+            &state,
+            &json!({
+                "Engine": "custom-sqlserver-ee",
+                "EngineVersion": "15.00.cev1",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(state.custom_engine_versions.is_empty());
+    }
 }
