@@ -82,6 +82,59 @@ impl SesService {
         state
     }
 
+    /// AWS lets a sender call SendEmail with a `SourceArn` that lives
+    /// in another account, but only when the target identity's
+    /// resource policy grants `ses:SendEmail` to the caller. Mirror
+    /// that: parse the ARN, locate the foreign-account identity, walk
+    /// its identity policies, and reject with `AccessDenied` when no
+    /// statement allows the action. Same-account ARNs and missing
+    /// `SourceArn` pass through.
+    fn enforce_cross_account_source_arn(
+        &self,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Result<(), AwsError> {
+        let Some(source_arn) = input.get("SourceArn").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        if source_arn.is_empty() {
+            return Ok(());
+        }
+        let Some(parsed) = parse_ses_identity_arn(source_arn) else {
+            return Err(AwsError::bad_request(
+                "InvalidParameter",
+                format!("SourceArn `{source_arn}` is not a valid SES identity ARN."),
+            ));
+        };
+        if parsed.account == ctx.account_id {
+            return Ok(());
+        }
+        let foreign = self.store.get(&parsed.account, &parsed.region);
+        let policies = foreign
+            .identity_policies
+            .get(&parsed.identity)
+            .map(|m| m.clone())
+            .unwrap_or_default();
+        if policies.is_empty() {
+            return Err(AwsError::access_denied_for(
+                "ses:SendEmail",
+                &ctx.account_id,
+                source_arn,
+            ));
+        }
+        let allowed = policies
+            .values()
+            .any(|doc| identity_policy_allows_send(doc));
+        if !allowed {
+            return Err(AwsError::access_denied_for(
+                "ses:SendEmail",
+                &ctx.account_id,
+                source_arn,
+            ));
+        }
+        Ok(())
+    }
+
     /// Snapshot every sent email across all accounts/regions, newest
     /// first. Reads straight from SQLite — survives restarts.
     pub fn list_sent_emails(&self) -> Vec<(String, String, SentEmail)> {
@@ -522,6 +575,21 @@ impl ServiceHandler for SesService {
         debug!(operation, "SES request");
         let state = self.get_state(ctx);
 
+        // Cross-account SourceArn check applies to every send shape.
+        // The lookup against another account's identity policy only
+        // happens once per request, so doing it at dispatch keeps the
+        // per-handler signatures clean.
+        if matches!(
+            operation,
+            "SendEmail"
+                | "SendTemplatedEmail"
+                | "SendRawEmail"
+                | "SendBulkEmail"
+                | "SendBulkTemplatedEmail"
+        ) {
+            self.enforce_cross_account_source_arn(&input, ctx)?;
+        }
+
         match operation {
             "SendEmail" => operations::emails::send_email(&state, &input, ctx),
             "SendTemplatedEmail" => operations::emails::send_templated_email(&state, &input, ctx),
@@ -694,6 +762,70 @@ impl ServiceHandler for SesService {
     }
 }
 
+struct ParsedSesArn {
+    account: String,
+    region: String,
+    identity: String,
+}
+
+fn parse_ses_identity_arn(arn: &str) -> Option<ParsedSesArn> {
+    // Format: arn:aws:ses:{region}:{account}:identity/{identity}
+    let rest = arn.strip_prefix("arn:aws:ses:")?;
+    let parts: Vec<&str> = rest.splitn(3, ':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let region = parts[0];
+    let account = parts[1];
+    let resource = parts[2];
+    let identity = resource.strip_prefix("identity/")?;
+    Some(ParsedSesArn {
+        account: account.to_string(),
+        region: region.to_string(),
+        identity: identity.to_string(),
+    })
+}
+
+fn identity_policy_allows_send(policy_json: &str) -> bool {
+    let Ok(doc): Result<Value, _> = serde_json::from_str(policy_json) else {
+        return false;
+    };
+    let statements = match doc.get("Statement") {
+        Some(Value::Array(arr)) => arr.clone(),
+        Some(stmt @ Value::Object(_)) => vec![stmt.clone()],
+        _ => return false,
+    };
+    for stmt in statements {
+        if stmt.get("Effect").and_then(Value::as_str) != Some("Allow") {
+            continue;
+        }
+        let actions: Vec<String> = match stmt.get("Action") {
+            Some(Value::String(s)) => vec![s.clone()],
+            Some(Value::Array(arr)) => arr
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect(),
+            _ => continue,
+        };
+        for action in actions {
+            if action_matches_send(&action) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn action_matches_send(action: &str) -> bool {
+    if action == "*" || action == "ses:*" {
+        return true;
+    }
+    matches!(
+        action,
+        "ses:SendEmail" | "ses:SendRawEmail" | "ses:SendBulkTemplatedEmail"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -805,5 +937,131 @@ mod tests {
         ))
         .unwrap_err();
         assert_eq!(err.code, "BadRequestException");
+    }
+
+    #[test]
+    fn parse_ses_identity_arn_handles_valid_shape() {
+        let parsed =
+            parse_ses_identity_arn("arn:aws:ses:us-east-1:222222222222:identity/example.com")
+                .unwrap();
+        assert_eq!(parsed.account, "222222222222");
+        assert_eq!(parsed.region, "us-east-1");
+        assert_eq!(parsed.identity, "example.com");
+    }
+
+    #[test]
+    fn parse_ses_identity_arn_rejects_malformed() {
+        assert!(parse_ses_identity_arn("not-an-arn").is_none());
+        assert!(parse_ses_identity_arn("arn:aws:ses:us-east-1:222:other/x").is_none());
+    }
+
+    #[test]
+    fn identity_policy_allows_send_when_statement_grants_send() {
+        let doc = r#"{
+            "Version":"2012-10-17",
+            "Statement":[{
+                "Effect":"Allow",
+                "Principal":{"AWS":"*"},
+                "Action":"ses:SendEmail",
+                "Resource":"*"
+            }]
+        }"#;
+        assert!(identity_policy_allows_send(doc));
+    }
+
+    #[test]
+    fn identity_policy_allows_send_respects_wildcards() {
+        let doc = r#"{"Statement":[{"Effect":"Allow","Action":"ses:*"}]}"#;
+        assert!(identity_policy_allows_send(doc));
+        let doc = r#"{"Statement":[{"Effect":"Allow","Action":"*"}]}"#;
+        assert!(identity_policy_allows_send(doc));
+    }
+
+    #[test]
+    fn identity_policy_denies_when_no_matching_action() {
+        let doc = r#"{"Statement":[{"Effect":"Allow","Action":"ses:GetIdentity"}]}"#;
+        assert!(!identity_policy_allows_send(doc));
+    }
+
+    #[test]
+    fn cross_account_source_arn_without_policy_is_rejected() {
+        let svc = SesService::new();
+        let cross_ctx = RequestContext::new("ses", "us-east-1");
+        let err = svc
+            .enforce_cross_account_source_arn(
+                &json!({
+                    "SourceArn": "arn:aws:ses:us-east-1:222222222222:identity/foreign.com"
+                }),
+                &cross_ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "AccessDenied");
+    }
+
+    #[test]
+    fn cross_account_source_arn_with_grant_is_allowed() {
+        let svc = SesService::new();
+        let foreign = svc.store.get("222222222222", "us-east-1");
+        let mut policies = std::collections::HashMap::new();
+        policies.insert(
+            "grant".to_string(),
+            r#"{"Statement":[{"Effect":"Allow","Action":"ses:SendEmail"}]}"#.to_string(),
+        );
+        foreign
+            .identity_policies
+            .insert("foreign.com".to_string(), policies);
+        svc.enforce_cross_account_source_arn(
+            &json!({
+                "SourceArn": "arn:aws:ses:us-east-1:222222222222:identity/foreign.com"
+            }),
+            &RequestContext::new("ses", "us-east-1"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn cross_account_source_arn_with_unrelated_policy_is_rejected() {
+        let svc = SesService::new();
+        let foreign = svc.store.get("222222222222", "us-east-1");
+        let mut policies = std::collections::HashMap::new();
+        policies.insert(
+            "metrics".to_string(),
+            r#"{"Statement":[{"Effect":"Allow","Action":"ses:GetIdentity"}]}"#.to_string(),
+        );
+        foreign
+            .identity_policies
+            .insert("foreign.com".to_string(), policies);
+        let err = svc
+            .enforce_cross_account_source_arn(
+                &json!({
+                    "SourceArn": "arn:aws:ses:us-east-1:222222222222:identity/foreign.com"
+                }),
+                &RequestContext::new("ses", "us-east-1"),
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "AccessDenied");
+    }
+
+    #[test]
+    fn same_account_source_arn_passes_through() {
+        let svc = SesService::new();
+        let local_ctx = RequestContext::new("ses", "us-east-1");
+        svc.enforce_cross_account_source_arn(
+            &json!({
+                "SourceArn": format!("arn:aws:ses:us-east-1:{}:identity/example.com", local_ctx.account_id)
+            }),
+            &local_ctx,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn missing_source_arn_passes_through() {
+        let svc = SesService::new();
+        svc.enforce_cross_account_source_arn(
+            &json!({ "FromEmailAddress": "a@b.com" }),
+            &RequestContext::new("ses", "us-east-1"),
+        )
+        .unwrap();
     }
 }
