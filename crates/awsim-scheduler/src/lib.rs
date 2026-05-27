@@ -355,6 +355,70 @@ mod tests {
     }
 
     #[test]
+    fn tag_resource_rejects_reserved_aws_prefix() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "tagged",
+                "ScheduleExpression": "rate(5 minutes)",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let arn = created["ScheduleArn"].as_str().unwrap().to_string();
+        let err = block_on(svc.handle(
+            "TagResource",
+            json!({
+                "ResourceArn": arn,
+                "Tags": { "aws:reserved": "no" },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn tag_resource_rejects_too_many_tags() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "tagged-too-many",
+                "ScheduleExpression": "rate(5 minutes)",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let arn = created["ScheduleArn"].as_str().unwrap().to_string();
+        // 51 tags blows past the AWS-documented 50-tag cap.
+        let mut tags = serde_json::Map::new();
+        for i in 0..51 {
+            tags.insert(format!("k{i}"), json!(format!("v{i}")));
+        }
+        let err = block_on(svc.handle(
+            "TagResource",
+            json!({ "ResourceArn": arn, "Tags": tags }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
     fn start_date_and_end_date_round_trip() {
         let svc = SchedulerService::new();
         let ctx = ctx();
