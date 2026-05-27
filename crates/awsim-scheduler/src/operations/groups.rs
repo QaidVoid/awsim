@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -86,14 +87,26 @@ pub fn get_schedule_group(
 
 pub fn list_schedule_groups(
     state: &SchedulerState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let list: Vec<Value> = state
+    let max = cap_max_results(
+        input.get("MaxResults").and_then(|v| v.as_i64()),
+        super::schedules::LIST_DEFAULT_MAX,
+        super::schedules::LIST_DEFAULT_MAX,
+    );
+    let next_token = input.get("NextToken").and_then(|v| v.as_str());
+    let mut groups: Vec<ScheduleGroup> = state
         .schedule_groups
         .iter()
-        .map(|e| {
-            let g = e.value();
+        .map(|e| e.value().clone())
+        .collect();
+    groups.sort_by(|a, b| a.name.cmp(&b.name));
+    let page = paginate(groups, max, next_token, |g| g.name.clone())?;
+    let items: Vec<Value> = page
+        .items
+        .iter()
+        .map(|g| {
             json!({
                 "Arn": g.arn,
                 "Name": g.name,
@@ -103,8 +116,11 @@ pub fn list_schedule_groups(
             })
         })
         .collect();
-
-    Ok(json!({ "ScheduleGroups": list }))
+    let mut resp = json!({ "ScheduleGroups": items });
+    if let Some(t) = page.next_token {
+        resp["NextToken"] = json!(t);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------

@@ -355,6 +355,58 @@ mod tests {
     }
 
     #[test]
+    fn list_schedules_paginates_with_next_token() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        for i in 0..3 {
+            block_on(svc.handle(
+                "CreateSchedule",
+                json!({
+                    "Name": format!("p-{i}"),
+                    "ScheduleExpression": "rate(1 hour)",
+                    "Target": {
+                        "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                        "RoleArn": "arn:aws:iam::000000000000:role/r",
+                    },
+                    "FlexibleTimeWindow": { "Mode": "OFF" },
+                }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+        let page1 =
+            block_on(svc.handle("ListSchedules", json!({ "MaxResults": 1 }), &ctx)).unwrap();
+        assert_eq!(page1["Schedules"].as_array().unwrap().len(), 1);
+        let token = page1["NextToken"].as_str().unwrap().to_string();
+        let page2 = block_on(svc.handle(
+            "ListSchedules",
+            json!({ "MaxResults": 5, "NextToken": token }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(page2["Schedules"].as_array().unwrap().len(), 2);
+        assert!(page2.get("NextToken").is_none());
+    }
+
+    #[test]
+    fn list_schedule_groups_paginates_with_next_token() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        for i in 0..3 {
+            block_on(svc.handle(
+                "CreateScheduleGroup",
+                json!({ "Name": format!("g-{i}") }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+        let page1 =
+            block_on(svc.handle("ListScheduleGroups", json!({ "MaxResults": 2 }), &ctx)).unwrap();
+        assert_eq!(page1["ScheduleGroups"].as_array().unwrap().len(), 2);
+        assert!(page1["NextToken"].as_str().is_some());
+    }
+
+    #[test]
     fn create_schedule_rejects_malformed_name() {
         let svc = SchedulerService::new();
         let ctx = ctx();

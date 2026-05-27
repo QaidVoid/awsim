@@ -1,6 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use awsim_core::idempotency::{Lookup, hash_request, validate_token};
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -532,25 +533,43 @@ pub fn get_schedule(
 // ListSchedules
 // ---------------------------------------------------------------------------
 
+/// AWS Scheduler default + max page size for ListSchedules /
+/// ListScheduleGroups.
+pub(crate) const LIST_DEFAULT_MAX: usize = 100;
+
 pub fn list_schedules(
     state: &SchedulerState,
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let group_filter = input["GroupName"].as_str();
+    let max = cap_max_results(
+        input.get("MaxResults").and_then(|v| v.as_i64()),
+        LIST_DEFAULT_MAX,
+        LIST_DEFAULT_MAX,
+    );
+    let next_token = input.get("NextToken").and_then(|v| v.as_str());
 
-    let list: Vec<Value> = state
+    let mut schedules: Vec<Schedule> = state
         .schedules
         .iter()
-        .filter(|e| {
-            if let Some(g) = group_filter {
-                e.value().group_name == g
-            } else {
-                true
-            }
-        })
-        .map(|e| {
-            let s = e.value();
+        .filter(|e| group_filter.is_none_or(|g| e.value().group_name == g))
+        .map(|e| e.value().clone())
+        .collect();
+    // Sort by `<group>/<name>` so the marker cursor resumes
+    // deterministically even after deletes within a group.
+    schedules.sort_by(|a, b| {
+        a.group_name
+            .cmp(&b.group_name)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    let page = paginate(schedules, max, next_token, |s| {
+        format!("{}/{}", s.group_name, s.name)
+    })?;
+    let items: Vec<Value> = page
+        .items
+        .iter()
+        .map(|s| {
             json!({
                 "Arn": s.arn,
                 "Name": s.name,
@@ -565,8 +584,11 @@ pub fn list_schedules(
             })
         })
         .collect();
-
-    Ok(json!({ "Schedules": list }))
+    let mut resp = json!({ "Schedules": items });
+    if let Some(t) = page.next_token {
+        resp["NextToken"] = json!(t);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------
