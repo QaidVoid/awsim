@@ -549,6 +549,21 @@ async fn process_request(
         }
     }
 
+    // 1d. Auth hook: record the access key's usage for
+    // `GetAccessKeyLastUsed`. AWS slides the timestamp on every
+    // successful authenticated call; the principal-lookup default impl
+    // is a no-op so non-IAM lookups (tests, Cognito identity) skip the
+    // bookkeeping silently.
+    if let Some(key) = access_key.as_deref()
+        && !key.is_empty()
+        && !state.authz.is_admin_access_key(key)
+    {
+        state
+            .authz
+            .principal_lookup
+            .record_access_key_used(key, &service_name, &region);
+    }
+
     // 2. Find the service handler
     let mut handler = state.services.get(&service_name).ok_or_else(|| {
         let protocol = protocol::detect_protocol(headers, body).unwrap_or(Protocol::RestJson1);

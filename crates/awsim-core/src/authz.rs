@@ -50,6 +50,14 @@ pub trait PrincipalLookup: Send + Sync {
     fn resolve_secret(&self, _access_key: &str) -> Option<String> {
         None
     }
+
+    /// Record that a successful resolution just happened. AWS exposes
+    /// this through `GetAccessKeyLastUsed`; the gateway hooks it after
+    /// every authenticated request so callers see the timestamp slide
+    /// forward without an explicit IAM API call. The default is a
+    /// no-op so existing implementations (and tests) don't need to
+    /// supply one.
+    fn record_access_key_used(&self, _access_key: &str, _service: &str, _region: &str) {}
 }
 
 pub trait ResourcePolicyLookup: Send + Sync {

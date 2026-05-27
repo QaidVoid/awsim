@@ -134,6 +134,75 @@ impl PrincipalLookup for IamPrincipalLookup {
         }
         None
     }
+
+    fn record_access_key_used(&self, access_key: &str, service: &str, region: &str) {
+        use crate::state::AccessKeyLastUsed;
+        let now = chrono_now_iso8601();
+        for (_, state) in self.store.iter_all() {
+            // Cheap pre-check: skip states that don't own the key.
+            let owns = state.users.iter().any(|e| {
+                e.value()
+                    .access_keys
+                    .iter()
+                    .any(|k| k.access_key_id == access_key)
+            });
+            if !owns {
+                continue;
+            }
+            state.access_key_last_used.insert(
+                access_key.to_string(),
+                AccessKeyLastUsed {
+                    last_used_date: Some(now.clone()),
+                    service_name: service.to_string(),
+                    region: region.to_string(),
+                },
+            );
+            return;
+        }
+    }
+}
+
+fn chrono_now_iso8601() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Cheap ISO-8601 second-resolution formatter. Avoids pulling in
+    // chrono just for this hook.
+    let mut s = secs as i64;
+    let sec = s % 60;
+    s /= 60;
+    let min = s % 60;
+    s /= 60;
+    let hour = s % 24;
+    let mut days = s / 24;
+    let (mut year, mut month, mut day) = (1970, 1, 1);
+    while days > 0 {
+        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+        let dpy = if leap { 366 } else { 365 };
+        if days >= dpy {
+            days -= dpy;
+            year += 1;
+            continue;
+        }
+        let months = if leap {
+            [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        } else {
+            [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        };
+        for m in &months {
+            if days >= *m {
+                days -= *m;
+                month += 1;
+            } else {
+                break;
+            }
+        }
+        day = (days + 1) as i32;
+        break;
+    }
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
 }
 
 fn find_user_with_key(state: &IamState, access_key: &str) -> Option<crate::state::User> {
@@ -224,4 +293,64 @@ pub fn _ensure_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<IamPrincipalLookup>();
     assert_send_sync::<Arc<IamPrincipalLookup>>();
+}
+
+#[cfg(test)]
+mod last_used_tests {
+    use super::*;
+    use crate::state::{AccessKey, IamState, User};
+    use awsim_core::AccountRegionStore;
+    use awsim_core::authz::PrincipalLookup;
+    use std::collections::HashMap;
+
+    fn make_store_with_user(key_id: &str) -> AccountRegionStore<IamState> {
+        let store: AccountRegionStore<IamState> = AccountRegionStore::default();
+        let state = store.get("000000000000", "us-east-1");
+        let user = User {
+            user_name: "alice".into(),
+            user_id: "AIDATEST00000000000A".into(),
+            arn: "arn:aws:iam::000000000000:user/alice".into(),
+            path: "/".into(),
+            create_date: "1970-01-01T00:00:00Z".into(),
+            access_keys: vec![AccessKey {
+                access_key_id: key_id.into(),
+                secret_access_key: "secret".into(),
+                status: "Active".into(),
+                create_date: "1970-01-01T00:00:00Z".into(),
+            }],
+            attached_policies: vec![],
+            inline_policies: HashMap::new(),
+            groups: vec![],
+            tags: HashMap::new(),
+            mfa_devices: vec![],
+            ssh_public_keys: vec![],
+            password_last_used: None,
+        };
+        state.users.insert("alice".to_string(), user);
+        store
+    }
+
+    #[test]
+    fn record_access_key_used_sets_service_region_and_date() {
+        let key = "AKIATEST";
+        let store = make_store_with_user(key);
+        let lookup = IamPrincipalLookup::new(store.clone());
+        lookup.record_access_key_used(key, "kms", "us-east-1");
+        let state = store.get("000000000000", "us-east-1");
+        let row = state.access_key_last_used.get(key).unwrap();
+        assert_eq!(row.value().service_name, "kms");
+        assert_eq!(row.value().region, "us-east-1");
+        let date = row.value().last_used_date.clone().unwrap();
+        assert!(date.ends_with('Z'));
+        assert!(date.len() >= 19);
+    }
+
+    #[test]
+    fn record_access_key_used_ignores_unknown_keys() {
+        let store: AccountRegionStore<IamState> = AccountRegionStore::default();
+        let lookup = IamPrincipalLookup::new(store.clone());
+        lookup.record_access_key_used("AKIAUNKNOWN", "s3", "us-east-1");
+        let state = store.get("000000000000", "us-east-1");
+        assert!(state.access_key_last_used.is_empty());
+    }
 }
