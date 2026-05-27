@@ -339,6 +339,24 @@ pub fn publish_batch(
         ));
     }
 
+    // FIFO topics enable per-entry dedup. ContentBasedDeduplication
+    // hashes the Message payload; an explicit MessageDeduplicationId
+    // wins over CBD when both are present.
+    let topic_is_fifo = state
+        .topics
+        .get(topic_arn)
+        .map(|t| t.is_fifo)
+        .unwrap_or(false);
+    let cbd_enabled = state
+        .topics
+        .get(topic_arn)
+        .and_then(|t| {
+            t.attributes
+                .get("ContentBasedDeduplication")
+                .map(|v| v == "true")
+        })
+        .unwrap_or(false);
+
     let mut successful: Vec<Value> = Vec::new();
     let mut failed: Vec<Value> = Vec::new();
 
@@ -356,6 +374,20 @@ pub fn publish_batch(
                 }));
             }
             Some(msg) => {
+                let dedup_key = if topic_is_fifo {
+                    fifo_dedup_key(entry, msg, cbd_enabled)
+                } else {
+                    None
+                };
+                if let Some(ref key) = dedup_key
+                    && let Some(existing) = lookup_fifo_dedup(state, topic_arn, key)
+                {
+                    successful.push(json!({
+                        "Id": id,
+                        "MessageId": existing,
+                    }));
+                    continue;
+                }
                 let message_id = Uuid::new_v4().to_string();
                 let subject = entry["Subject"].as_str().map(str::to_string);
                 let message_attributes = match parse_message_attributes(entry) {
@@ -411,6 +443,10 @@ pub fn publish_batch(
                 );
 
                 let _ = published;
+
+                if let Some(key) = dedup_key {
+                    record_fifo_dedup(state, topic_arn, &key, &message_id);
+                }
 
                 successful.push(json!({
                     "Id": id,
@@ -523,6 +559,55 @@ fn parse_message_attributes(input: &Value) -> Result<HashMap<String, MessageAttr
     Ok(result)
 }
 
+/// Compute the FIFO dedup key for a single batch entry. Returns `None`
+/// when neither an explicit `MessageDeduplicationId` nor
+/// content-based dedup applies — the caller should treat the entry as
+/// non-deduplicating.
+fn fifo_dedup_key(entry: &Value, message: &str, cbd_enabled: bool) -> Option<String> {
+    if let Some(id) = entry["MessageDeduplicationId"].as_str()
+        && !id.is_empty()
+    {
+        return Some(format!("id:{id}"));
+    }
+    if cbd_enabled {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(message.as_bytes());
+        return Some(format!("sha256:{:x}", h.finalize()));
+    }
+    None
+}
+
+const FIFO_DEDUP_TTL_SECS: u64 = 300;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Look up a recent dedup decision, evicting expired entries on the way
+/// past. Returns the original MessageId when the entry is still within
+/// the 5-minute window.
+fn lookup_fifo_dedup(state: &SnsState, topic_arn: &str, key: &str) -> Option<String> {
+    let cache_key = format!("{topic_arn}|{key}");
+    let entry = state.fifo_dedup_cache.get(&cache_key)?.clone();
+    let now = now_secs();
+    if now.saturating_sub(entry.1) > FIFO_DEDUP_TTL_SECS {
+        state.fifo_dedup_cache.remove(&cache_key);
+        return None;
+    }
+    Some(entry.0)
+}
+
+fn record_fifo_dedup(state: &SnsState, topic_arn: &str, key: &str, message_id: &str) {
+    let cache_key = format!("{topic_arn}|{key}");
+    state
+        .fifo_dedup_cache
+        .insert(cache_key, (message_id.to_string(), now_secs()));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -591,5 +676,131 @@ mod tests {
         let v = wrap(json!({ "DataType": "Binary", "BinaryValue": "!!!not-base64!!!" }));
         let err = parse_message_attributes(&v).unwrap_err();
         assert!(err.message.contains("not valid base64"));
+    }
+
+    fn ctx_us() -> RequestContext {
+        RequestContext::new("sns", "us-east-1")
+    }
+
+    fn make_fifo_topic(state: &SnsState, arn: &str, cbd: bool) {
+        let mut attrs = std::collections::HashMap::new();
+        attrs.insert(
+            "ContentBasedDeduplication".to_string(),
+            if cbd { "true" } else { "false" }.to_string(),
+        );
+        attrs.insert("FifoTopic".to_string(), "true".to_string());
+        state.topics.insert(
+            arn.to_string(),
+            crate::state::Topic {
+                arn: arn.to_string(),
+                name: arn.rsplit(':').next().unwrap().to_string(),
+                attributes: attrs,
+                tags: Default::default(),
+                is_fifo: true,
+                subscription_arns: Vec::new(),
+                created_at: "1970-01-01T00:00:00Z".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn publish_batch_reuses_message_id_for_explicit_dedup_id() {
+        let state = SnsState::default();
+        let topic = "arn:aws:sns:us-east-1:000000000000:orders.fifo";
+        make_fifo_topic(&state, topic, false);
+        let resp1 = publish_batch(
+            &state,
+            &json!({
+                "TopicArn": topic,
+                "PublishBatchRequestEntries": [
+                    {
+                        "Id": "e1",
+                        "Message": "first",
+                        "MessageGroupId": "g1",
+                        "MessageDeduplicationId": "DUP",
+                    }
+                ]
+            }),
+            &ctx_us(),
+        )
+        .unwrap();
+        let first_id = resp1["Successful"][0]["MessageId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let resp2 = publish_batch(
+            &state,
+            &json!({
+                "TopicArn": topic,
+                "PublishBatchRequestEntries": [
+                    {
+                        "Id": "e2",
+                        "Message": "different body",
+                        "MessageGroupId": "g1",
+                        "MessageDeduplicationId": "DUP",
+                    }
+                ]
+            }),
+            &ctx_us(),
+        )
+        .unwrap();
+        let second_id = resp2["Successful"][0]["MessageId"].as_str().unwrap();
+        assert_eq!(second_id, first_id);
+    }
+
+    #[test]
+    fn publish_batch_content_based_dedup_matches_identical_payload() {
+        let state = SnsState::default();
+        let topic = "arn:aws:sns:us-east-1:000000000000:orders.fifo";
+        make_fifo_topic(&state, topic, true);
+        let resp = publish_batch(
+            &state,
+            &json!({
+                "TopicArn": topic,
+                "PublishBatchRequestEntries": [
+                    {"Id": "a", "Message": "same", "MessageGroupId": "g1"},
+                    {"Id": "b", "Message": "same", "MessageGroupId": "g1"},
+                    {"Id": "c", "Message": "different", "MessageGroupId": "g1"}
+                ]
+            }),
+            &ctx_us(),
+        )
+        .unwrap();
+        let successes = resp["Successful"].as_array().unwrap();
+        assert_eq!(successes.len(), 3);
+        assert_eq!(successes[0]["MessageId"], successes[1]["MessageId"]);
+        assert_ne!(successes[0]["MessageId"], successes[2]["MessageId"]);
+    }
+
+    #[test]
+    fn publish_batch_does_not_dedup_on_non_fifo_topic() {
+        let state = SnsState::default();
+        let topic = "arn:aws:sns:us-east-1:000000000000:standard";
+        state.topics.insert(
+            topic.to_string(),
+            crate::state::Topic {
+                arn: topic.to_string(),
+                name: "standard".into(),
+                attributes: Default::default(),
+                tags: Default::default(),
+                is_fifo: false,
+                subscription_arns: Vec::new(),
+                created_at: "1970-01-01T00:00:00Z".to_string(),
+            },
+        );
+        let resp = publish_batch(
+            &state,
+            &json!({
+                "TopicArn": topic,
+                "PublishBatchRequestEntries": [
+                    {"Id": "a", "Message": "same"},
+                    {"Id": "b", "Message": "same"}
+                ]
+            }),
+            &ctx_us(),
+        )
+        .unwrap();
+        let successes = resp["Successful"].as_array().unwrap();
+        assert_ne!(successes[0]["MessageId"], successes[1]["MessageId"]);
     }
 }

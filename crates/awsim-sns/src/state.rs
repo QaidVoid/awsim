@@ -144,6 +144,10 @@ pub struct SnsState {
     pub sandbox_numbers: DashMap<String, SandboxPhoneNumber>,
     /// Topic ARN → JSON policy string for data protection.
     pub data_protection_policies: DashMap<String, String>,
+    /// Recent FIFO dedup decisions. Key is `<topic_arn>|<dedup_value>`,
+    /// value is `(message_id, unix_epoch_seconds_inserted)`. Entries
+    /// expire after 5 minutes per the AWS SNS dedup window.
+    pub fifo_dedup_cache: DashMap<String, (String, u64)>,
 }
 
 impl SnsState {
