@@ -125,6 +125,87 @@ pub(crate) fn validate_target_tracking_config(cfg: &Value) -> Result<(), AwsErro
             "Exactly one of PredefinedMetricSpecification or CustomizedMetricSpecification is required.",
         ));
     }
+    if let Some(custom) = cfg.get("CustomizedMetricSpecification") {
+        validate_customized_metric_spec(custom)?;
+    }
+    Ok(())
+}
+
+/// AWS-documented allowed statistics for
+/// `CustomizedMetricSpecification.Statistic`. `Average` is the
+/// default when callers omit it.
+const ALLOWED_METRIC_STATISTICS: &[&str] = &["Average", "Minimum", "Maximum", "SampleCount", "Sum"];
+
+/// Validate the shape of a `CustomizedMetricSpecification`. The
+/// `Metrics` (compound expression) form is mutually exclusive with the
+/// single-metric form; we enforce that exactly one is supplied.
+pub(crate) fn validate_customized_metric_spec(spec: &Value) -> Result<(), AwsError> {
+    let has_metrics = spec.get("Metrics").is_some();
+    let has_single = spec.get("MetricName").is_some()
+        || spec.get("Namespace").is_some()
+        || spec.get("Statistic").is_some();
+    if has_metrics && has_single {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            "CustomizedMetricSpecification cannot mix Metrics with the single-metric fields.",
+        ));
+    }
+    if !has_metrics {
+        // Single-metric form: MetricName, Namespace, Statistic
+        // required; Unit optional; Dimensions optional list of
+        // {Name, Value}.
+        for required in ["MetricName", "Namespace"] {
+            let s = spec
+                .get(required)
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty());
+            if s.is_none() {
+                return Err(AwsError::bad_request(
+                    "ValidationException",
+                    format!("CustomizedMetricSpecification.{required} is required."),
+                ));
+            }
+        }
+        let stat = spec
+            .get("Statistic")
+            .and_then(Value::as_str)
+            .unwrap_or("Average");
+        if !ALLOWED_METRIC_STATISTICS.contains(&stat) {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!(
+                    "CustomizedMetricSpecification.Statistic `{stat}` must be one of {ALLOWED_METRIC_STATISTICS:?}.",
+                ),
+            ));
+        }
+        if let Some(dims) = spec.get("Dimensions").and_then(Value::as_array) {
+            if dims.len() > 30 {
+                return Err(AwsError::bad_request(
+                    "ValidationException",
+                    format!(
+                        "CustomizedMetricSpecification.Dimensions has {} entries; the maximum is 30.",
+                        dims.len()
+                    ),
+                ));
+            }
+            for d in dims {
+                let n = d
+                    .get("Name")
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty());
+                let v = d
+                    .get("Value")
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty());
+                if n.is_none() || v.is_none() {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        "Each Dimension requires non-empty Name and Value.",
+                    ));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -890,6 +971,95 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn customized_metric_requires_name_namespace_statistic() {
+        let state = AppAutoScalingState::default();
+        setup_target(&state);
+        // Missing MetricName.
+        let err = put_with_config(
+            &state,
+            json!({
+                "TargetValue": 50.0,
+                "CustomizedMetricSpecification": { "Namespace": "App", "Statistic": "Average" },
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+
+        // Unknown Statistic.
+        let err = put_with_config(
+            &state,
+            json!({
+                "TargetValue": 50.0,
+                "CustomizedMetricSpecification": {
+                    "MetricName": "M", "Namespace": "App", "Statistic": "p99",
+                },
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn customized_metric_dimensions_must_have_name_and_value() {
+        let state = AppAutoScalingState::default();
+        setup_target(&state);
+        let err = put_with_config(
+            &state,
+            json!({
+                "TargetValue": 50.0,
+                "CustomizedMetricSpecification": {
+                    "MetricName": "M", "Namespace": "App", "Statistic": "Average",
+                    "Dimensions": [{ "Name": "" }],
+                },
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn customized_metric_rejects_mixing_metrics_and_single() {
+        let state = AppAutoScalingState::default();
+        setup_target(&state);
+        let err = put_with_config(
+            &state,
+            json!({
+                "TargetValue": 50.0,
+                "CustomizedMetricSpecification": {
+                    "MetricName": "M",
+                    "Namespace": "App",
+                    "Statistic": "Average",
+                    "Metrics": [],
+                },
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn customized_metric_accepts_well_formed_single_spec() {
+        let state = AppAutoScalingState::default();
+        setup_target(&state);
+        put_with_config(
+            &state,
+            json!({
+                "TargetValue": 50.0,
+                "CustomizedMetricSpecification": {
+                    "MetricName": "RequestLatency",
+                    "Namespace": "App/web",
+                    "Statistic": "Average",
+                    "Unit": "Milliseconds",
+                    "Dimensions": [
+                        { "Name": "Stage", "Value": "prod" },
+                    ],
+                },
+            }),
+        )
+        .unwrap();
     }
 
     fn put_with_step_config(state: &AppAutoScalingState, cfg: Value) -> Result<Value, AwsError> {
