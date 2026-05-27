@@ -798,12 +798,42 @@ pub fn describe_scheduled_actions(
 
 pub fn describe_scaling_activities(
     _state: &AppAutoScalingState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    // The emulator never executes scaling actions, so the activity log is
-    // always empty. Returning an empty list matches what `aws application-autoscaling`
-    // SDK clients expect for newly-registered targets.
+    // ServiceNamespace is required by AWS and must be in the allowlist.
+    let ns = require_str(input, "ServiceNamespace")?;
+    if !is_valid_service_namespace(ns) {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("ServiceNamespace `{ns}` is not one of the documented values."),
+        ));
+    }
+    // ScalableDimension is optional but must match the namespace's
+    // dimension catalog when supplied.
+    if let Some(dim) = input.get("ScalableDimension").and_then(Value::as_str)
+        && !is_valid_dimension_for_namespace(ns, dim)
+    {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("ScalableDimension `{dim}` is not valid for ServiceNamespace `{ns}`."),
+        ));
+    }
+    // ResourceId is optional but must match the namespace's
+    // documented shape when supplied.
+    if let Some(rid) = input.get("ResourceId").and_then(Value::as_str) {
+        validate_resource_id(ns, rid)?;
+    }
+    // IncludeNotScaledActivities is a documented flag; accept but
+    // ignore (no activities to filter against in the emulator).
+    let _ = input
+        .get("IncludeNotScaledActivities")
+        .and_then(Value::as_bool);
+
+    // The emulator never executes scaling actions, so the activity
+    // log is always empty. Returning an empty list matches what
+    // `aws application-autoscaling` SDK clients expect for
+    // newly-registered targets.
     Ok(json!({ "ScalingActivities": [] }))
 }
 
@@ -972,6 +1002,62 @@ mod tests {
                 "PredefinedMetricSpecification": { "PredefinedMetricType": "ECSServiceAverageCPUUtilization" },
                 "CustomizedMetricSpecification": { "MetricName": "Custom", "Namespace": "App", "Statistic": "Average" },
             }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn describe_activities_requires_service_namespace() {
+        let state = AppAutoScalingState::default();
+        let err = describe_scaling_activities(&state, &json!({}), &ctx()).unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn describe_activities_accepts_documented_filters() {
+        let state = AppAutoScalingState::default();
+        // ResourceId / ScalableDimension / IncludeNotScaledActivities
+        // all accepted; result is empty for the emulator.
+        let resp = describe_scaling_activities(
+            &state,
+            &json!({
+                "ServiceNamespace": "ecs",
+                "ResourceId": "service/cluster/svc",
+                "ScalableDimension": "ecs:service:DesiredCount",
+                "IncludeNotScaledActivities": true,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(resp["ScalingActivities"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn describe_activities_validates_resource_id_shape() {
+        let state = AppAutoScalingState::default();
+        let err = describe_scaling_activities(
+            &state,
+            &json!({
+                "ServiceNamespace": "ecs",
+                "ResourceId": "definitely-not-ecs",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn describe_activities_validates_dimension_for_namespace() {
+        let state = AppAutoScalingState::default();
+        let err = describe_scaling_activities(
+            &state,
+            &json!({
+                "ServiceNamespace": "ecs",
+                "ScalableDimension": "lambda:function:ProvisionedConcurrency",
+            }),
+            &ctx(),
         )
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
