@@ -1272,6 +1272,38 @@ mod tests {
     }
 
     #[test]
+    fn user_and_group_ids_are_uuid_v4_strings() {
+        // AWS-parity expectation: ids come from `uuid::Uuid::new_v4()`,
+        // which seeds itself from the OS RNG (effectively
+        // `rand::rngs::OsRng`), so callers cannot predict the next id.
+        // We assert the surface shape (UUID v4 textual form) rather
+        // than the entropy source directly.
+        let svc = IdentityStoreService::new();
+        let u = block_on(svc.handle(
+            "CreateUser",
+            json!({ "IdentityStoreId": "d-1234567890", "UserName": "u" }),
+            &ctx(),
+        ))
+        .unwrap();
+        let user_id = u["UserId"].as_str().unwrap();
+        let parsed = uuid::Uuid::parse_str(user_id).unwrap();
+        assert_eq!(parsed.get_version_num(), 4, "user id must be UUIDv4");
+
+        let g = block_on(svc.handle(
+            "CreateGroup",
+            json!({ "IdentityStoreId": "d-1234567890", "DisplayName": "g" }),
+            &ctx(),
+        ))
+        .unwrap();
+        let group_id = g["GroupId"].as_str().unwrap();
+        assert_eq!(
+            uuid::Uuid::parse_str(group_id).unwrap().get_version_num(),
+            4,
+            "group id must be UUIDv4",
+        );
+    }
+
+    #[test]
     fn create_user_rejects_two_primary_emails() {
         let svc = IdentityStoreService::new();
         let err = block_on(svc.handle(
