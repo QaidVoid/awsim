@@ -31,14 +31,18 @@ pub fn get_resources(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let tag_filters = parse_tag_filters(input.get("TagFilters"));
+    let tag_filters = parse_tag_filters(input.get("TagFilters"))?;
+    // ResourceTypeFilters: AWS matches case-sensitively against the
+    // canonical service / `service:resource-type` form. Trim only —
+    // do not lowercase, because callers that pass `ec2:Instance`
+    // expect a different match set than `ec2:instance`.
     let type_filters: Vec<String> = input
         .get("ResourceTypeFilters")
         .and_then(Value::as_array)
         .map(|arr| {
             arr.iter()
                 .filter_map(|v| v.as_str())
-                .map(str::to_lowercase)
+                .map(str::to_string)
                 .collect()
         })
         .unwrap_or_default();
@@ -101,26 +105,42 @@ struct TagFilter {
     values: Vec<String>,
 }
 
-fn parse_tag_filters(value: Option<&Value>) -> Vec<TagFilter> {
+fn parse_tag_filters(value: Option<&Value>) -> Result<Vec<TagFilter>, AwsError> {
     let Some(arr) = value.and_then(Value::as_array) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    arr.iter()
-        .filter_map(|f| {
-            let key = f.get("Key").and_then(Value::as_str)?.to_string();
-            let values = f
-                .get("Values")
-                .and_then(Value::as_array)
-                .map(|v| {
-                    v.iter()
-                        .filter_map(|x| x.as_str())
-                        .map(String::from)
-                        .collect()
-                })
-                .unwrap_or_default();
-            Some(TagFilter { key, values })
-        })
-        .collect()
+    let mut out = Vec::with_capacity(arr.len());
+    for f in arr {
+        let Some(key) = f.get("Key").and_then(Value::as_str) else {
+            continue;
+        };
+        let values: Vec<String> = f
+            .get("Values")
+            .and_then(Value::as_array)
+            .map(|v| {
+                v.iter()
+                    .filter_map(|x| x.as_str())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        // AWS caps TagFilter.Values at 256 per filter and treats
+        // missing/empty `Values` as "match any tag with this key" —
+        // the latter is encoded by leaving the vector empty so
+        // `matches_tag_filters` short-circuits.
+        if values.len() > 256 {
+            return Err(AwsError::validation(format!(
+                "TagFilter.Values for key `{}` has {} entries; the maximum is 256.",
+                key,
+                values.len()
+            )));
+        }
+        out.push(TagFilter {
+            key: key.to_string(),
+            values,
+        });
+    }
+    Ok(out)
 }
 
 fn matches_tag_filters(tags: &BTreeMap<String, String>, filters: &[TagFilter]) -> bool {
@@ -130,9 +150,10 @@ fn matches_tag_filters(tags: &BTreeMap<String, String>, filters: &[TagFilter]) -
     })
 }
 
-/// `ResourceTypeFilters` are documented as `service` or `service:resourceType`,
-/// matched case-insensitively against the ARN. We parse the third segment of
-/// the ARN as the service and the fifth as the resource type.
+/// `ResourceTypeFilters` are documented as `service` or
+/// `service:resourceType`, matched **case-sensitively** against the
+/// ARN's canonical service (segment 2) and resource type (the head
+/// of segment 5 before any `/` or `:`).
 fn matches_type_filters(arn: &str, filters: &[String]) -> bool {
     if filters.is_empty() {
         return true;
@@ -141,17 +162,13 @@ fn matches_type_filters(arn: &str, filters: &[String]) -> bool {
     if parts.len() < 6 {
         return false;
     }
-    let service = parts[2].to_lowercase();
-    let resource_segment = parts[5].to_lowercase();
-    let resource_type = resource_segment
-        .split(['/', ':'])
-        .next()
-        .unwrap_or("")
-        .to_string();
+    let service = parts[2];
+    let resource_segment = parts[5];
+    let resource_type = resource_segment.split(['/', ':']).next().unwrap_or("");
 
     filters.iter().any(|f| match f.split_once(':') {
         Some((svc, rt)) => svc == service && rt == resource_type,
-        None => f == &service,
+        None => f == service,
     })
 }
 
@@ -259,5 +276,60 @@ mod tests {
         .unwrap();
         assert_eq!(page2["ResourceTagMappingList"].as_array().unwrap().len(), 1);
         assert_eq!(page2["PaginationToken"].as_str().unwrap(), "");
+    }
+
+    #[test]
+    fn resource_type_filters_are_case_sensitive() {
+        let state = populated();
+        // `S3` (uppercase) must not match `s3` ARNs — real AWS is
+        // case-sensitive on canonical service names.
+        let resp =
+            get_resources(&state, &json!({ "ResourceTypeFilters": ["S3"] }), &ctx()).unwrap();
+        assert!(
+            resp["ResourceTagMappingList"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn tag_filter_values_capped_at_256() {
+        let state = populated();
+        let too_many: Vec<String> = (0..257).map(|i| format!("v{i}")).collect();
+        let err = get_resources(
+            &state,
+            &json!({ "TagFilters": [{ "Key": "Env", "Values": too_many }] }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("256"), "{}", err.message);
+    }
+
+    #[test]
+    fn tag_filter_with_empty_values_matches_any_value_for_key() {
+        let state = populated();
+        // No Values means "any value for the key" — bucket-a has
+        // `Env=prod`, bucket-b has `Env=dev`; both match.
+        let resp = get_resources(
+            &state,
+            &json!({ "TagFilters": [{ "Key": "Env", "Values": [] }] }),
+            &ctx(),
+        )
+        .unwrap();
+        let arns: Vec<String> = resp["ResourceTagMappingList"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["ResourceARN"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            arns,
+            vec![
+                "arn:aws:s3:::bucket-a".to_string(),
+                "arn:aws:s3:::bucket-b".to_string(),
+            ]
+        );
     }
 }
