@@ -766,6 +766,93 @@ pub fn update_maintenance_window_task(
     }))
 }
 
+/// Deterministic mini-catalog of synthetic patches AWSim hands back
+/// from Patch Manager queries. The shape mirrors what real Systems
+/// Manager returns from `DescribeInstancePatches`: each entry has a
+/// vendor-style `KBId`, a `Title`, a `Classification`
+/// (SecurityUpdates / CriticalUpdates / ServicePacks / Updates), and
+/// a `Severity` (Critical / Important / Moderate / Low).
+///
+/// Tests and SDK clients reading these don't need real CVE data —
+/// they need predictable shapes so dashboards and compliance
+/// reporting paths exercise correctly. The catalog is intentionally
+/// small so the per-instance state (assigned via a deterministic
+/// hash) is easy to reason about.
+const SYNTHETIC_PATCHES: &[(&str, &str, &str, &str)] = &[
+    (
+        "KB5034441",
+        "Security Update for Windows Server 2022 (KB5034441)",
+        "SecurityUpdates",
+        "Critical",
+    ),
+    (
+        "KB5036561",
+        "2024-04 Cumulative Update for Windows Server (KB5036561)",
+        "CriticalUpdates",
+        "Important",
+    ),
+    (
+        "KB5037780",
+        "Servicing Stack Update for Windows Server 2022 (KB5037780)",
+        "ServicePacks",
+        "Moderate",
+    ),
+    (
+        "KB5040434",
+        "Update for Microsoft Defender Antivirus (KB5040434)",
+        "Updates",
+        "Low",
+    ),
+    (
+        "KB5042098",
+        ".NET Framework Cumulative Update (KB5042098)",
+        "SecurityUpdates",
+        "Important",
+    ),
+];
+
+/// Deterministic per-instance patch state: each instance gets a
+/// stable mix of Installed / Missing / NotApplicable so subsequent
+/// describe calls return the same answer, and so the InstancePatchStates
+/// counts add up across `Installed + Missing + NotApplicable = total`.
+fn synthetic_patch_state(instance_id: &str, kb_id: &str) -> &'static str {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    instance_id.hash(&mut h);
+    kb_id.hash(&mut h);
+    match h.finish() % 5 {
+        // Bias toward "Installed" so reports look like a fleet that's
+        // mostly patched — easier for tests to assert "InstalledCount
+        // > 0" without needing exact counts.
+        0 => "Missing",
+        1 => "NotApplicable",
+        _ => "Installed",
+    }
+}
+
+/// Resolve a synthetic patch list for one instance. Returns
+/// `(state, kb_id, title, classification, severity)` per patch so the
+/// caller can shape it into either DescribeInstancePatches or the
+/// per-state aggregates that DescribeInstancePatchStates surfaces.
+fn instance_patch_findings(
+    instance_id: &str,
+) -> Vec<(
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+)> {
+    SYNTHETIC_PATCHES
+        .iter()
+        .map(|(kb, title, class, sev)| {
+            let state = synthetic_patch_state(instance_id, kb);
+            (state, *kb, *title, *class, *sev)
+        })
+        .collect()
+}
+
 pub fn describe_instance_patches(
     _state: &SsmState,
     input: &Value,
@@ -774,8 +861,21 @@ pub fn describe_instance_patches(
     let instance_id = input["InstanceId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "InstanceId is required"))?;
-    let _ = instance_id;
-    Ok(json!({ "Patches": [] }))
+    let findings = instance_patch_findings(instance_id);
+    let patches: Vec<Value> = findings
+        .into_iter()
+        .map(|(state, kb, title, class, sev)| {
+            json!({
+                "KBId": kb,
+                "Title": title,
+                "Classification": class,
+                "Severity": sev,
+                "State": state,
+                "InstalledTime": 0,
+            })
+        })
+        .collect();
+    Ok(json!({ "Patches": patches }))
 }
 
 pub fn describe_instance_patch_states(
@@ -788,6 +888,18 @@ pub fn describe_instance_patch_states(
         .into_iter()
         .filter_map(|v| v.as_str().map(String::from))
         .map(|id| {
+            let findings = instance_patch_findings(&id);
+            let mut installed = 0u32;
+            let mut missing = 0u32;
+            let mut not_applicable = 0u32;
+            for (state, ..) in findings {
+                match state {
+                    "Installed" => installed += 1,
+                    "Missing" => missing += 1,
+                    "NotApplicable" => not_applicable += 1,
+                    _ => {}
+                }
+            }
             json!({
                 "InstanceId": id,
                 "PatchGroup": "default",
@@ -795,10 +907,10 @@ pub fn describe_instance_patch_states(
                 "OperationStartTime": 0,
                 "OperationEndTime": 0,
                 "Operation": "Scan",
-                "InstalledCount": 0,
-                "MissingCount": 0,
+                "InstalledCount": installed,
+                "MissingCount": missing,
                 "FailedCount": 0,
-                "NotApplicableCount": 0,
+                "NotApplicableCount": not_applicable,
             })
         })
         .collect();
@@ -810,7 +922,19 @@ pub fn describe_available_patches(
     _input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    Ok(json!({ "Patches": [] }))
+    let patches: Vec<Value> = SYNTHETIC_PATCHES
+        .iter()
+        .map(|(kb, title, class, sev)| {
+            json!({
+                "Id": kb,
+                "KbNumber": kb,
+                "Title": title,
+                "Classification": class,
+                "Severity": sev,
+            })
+        })
+        .collect();
+    Ok(json!({ "Patches": patches }))
 }
 
 pub fn describe_patch_groups(
@@ -1325,5 +1449,77 @@ mod target_tests {
         )
         .unwrap();
         assert!(resp["WindowIdentities"].as_array().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod patch_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("ssm", "us-east-1")
+    }
+
+    #[test]
+    fn describe_instance_patches_returns_catalog_entries() {
+        let state = SsmState::default();
+        let resp = describe_instance_patches(
+            &state,
+            &json!({ "InstanceId": "i-aaaaaaaaaaaaaaaaa" }),
+            &ctx(),
+        )
+        .unwrap();
+        let patches = resp["Patches"].as_array().unwrap();
+        assert_eq!(patches.len(), SYNTHETIC_PATCHES.len());
+        // Every entry must carry the AWS-documented shape so downstream
+        // SDK clients deserialise cleanly.
+        for p in patches {
+            for k in ["KBId", "Title", "Classification", "Severity", "State"] {
+                assert!(p.get(k).is_some(), "missing {k} on {p}");
+            }
+        }
+    }
+
+    #[test]
+    fn describe_instance_patches_is_deterministic_per_instance() {
+        let state = SsmState::default();
+        let a = describe_instance_patches(&state, &json!({ "InstanceId": "i-stable-1" }), &ctx())
+            .unwrap();
+        let b = describe_instance_patches(&state, &json!({ "InstanceId": "i-stable-1" }), &ctx())
+            .unwrap();
+        assert_eq!(a, b, "repeated scan must return the same finding set");
+    }
+
+    #[test]
+    fn describe_instance_patch_states_counts_add_up() {
+        let state = SsmState::default();
+        let resp = describe_instance_patch_states(
+            &state,
+            &json!({ "InstanceIds": ["i-fleet-1", "i-fleet-2"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let states = resp["InstancePatchStates"].as_array().unwrap();
+        assert_eq!(states.len(), 2);
+        for s in states {
+            let installed = s["InstalledCount"].as_u64().unwrap();
+            let missing = s["MissingCount"].as_u64().unwrap();
+            let not_applicable = s["NotApplicableCount"].as_u64().unwrap();
+            let failed = s["FailedCount"].as_u64().unwrap();
+            assert_eq!(
+                installed + missing + not_applicable + failed,
+                SYNTHETIC_PATCHES.len() as u64,
+                "per-instance counts must partition the synthetic catalog: {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn describe_available_patches_returns_catalog() {
+        let state = SsmState::default();
+        let resp = describe_available_patches(&state, &json!({}), &ctx()).unwrap();
+        let patches = resp["Patches"].as_array().unwrap();
+        assert_eq!(patches.len(), SYNTHETIC_PATCHES.len());
+        assert!(patches.iter().all(|p| p["Id"].as_str().is_some()));
     }
 }
