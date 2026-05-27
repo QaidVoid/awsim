@@ -28,6 +28,32 @@ pub struct Broker {
     pub security_groups: Vec<String>,
     pub subnet_ids: Vec<String>,
     pub tags: std::collections::HashMap<String, String>,
+    /// `EncryptionOptions` echoed back on Describe. AWS accepts a
+    /// `KmsKeyId` (any string with the documented ARN shape) plus a
+    /// `UseAwsOwnedKey` boolean; we store the raw JSON so future
+    /// fields round-trip without a struct migration.
+    #[serde(default)]
+    pub encryption_options: Option<serde_json::Value>,
+    /// Logs config (`{ "General": bool, "Audit": bool }`). AWS only
+    /// allows Audit on ActiveMQ.
+    #[serde(default)]
+    pub logs: Option<serde_json::Value>,
+    /// `MaintenanceWindowStartTime` echoed on Describe.
+    #[serde(default)]
+    pub maintenance_window_start_time: Option<serde_json::Value>,
+    /// LDAP config — required when `AuthenticationStrategy=LDAP`.
+    #[serde(default)]
+    pub ldap_server_metadata: Option<serde_json::Value>,
+    /// Initial Configuration reference: `{ "Id": "c-...", "Revision": 1 }`.
+    /// AWS pins a configuration revision at create time; later
+    /// `UpdateBroker` calls bump it.
+    #[serde(default)]
+    pub configuration: Option<serde_json::Value>,
+    /// Cross-region read-replica posture (`NONE` | `CRDR`). AWS only
+    /// supports it on RabbitMQ today; we just echo the configured
+    /// value.
+    #[serde(default)]
+    pub data_replication_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

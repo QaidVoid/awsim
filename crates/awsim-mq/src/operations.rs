@@ -64,7 +64,7 @@ fn broker_summary(b: &Broker) -> Value {
 }
 
 fn broker_describe(b: &Broker, users: Vec<Value>) -> Value {
-    json!({
+    let mut obj = json!({
         "BrokerId": b.broker_id,
         "BrokerArn": b.broker_arn,
         "BrokerName": b.broker_name,
@@ -87,7 +87,26 @@ fn broker_describe(b: &Broker, users: Vec<Value>) -> Value {
         "SubnetIds": b.subnet_ids,
         "Tags": b.tags,
         "Users": users,
-    })
+    });
+    if let Some(ref v) = b.encryption_options {
+        obj["EncryptionOptions"] = v.clone();
+    }
+    if let Some(ref v) = b.logs {
+        obj["Logs"] = v.clone();
+    }
+    if let Some(ref v) = b.maintenance_window_start_time {
+        obj["MaintenanceWindowStartTime"] = v.clone();
+    }
+    if let Some(ref v) = b.ldap_server_metadata {
+        obj["LdapServerMetadata"] = v.clone();
+    }
+    if let Some(ref v) = b.configuration {
+        obj["Configurations"] = json!({ "Current": v });
+    }
+    if let Some(ref v) = b.data_replication_mode {
+        obj["DataReplicationMode"] = json!(v);
+    }
+    obj
 }
 
 fn user_summary(u: &BrokerUser) -> Value {
@@ -226,6 +245,15 @@ pub fn create_broker(
             })
             .unwrap_or_default(),
         tags,
+        encryption_options: input.get("EncryptionOptions").cloned(),
+        logs: input.get("Logs").cloned(),
+        maintenance_window_start_time: input.get("MaintenanceWindowStartTime").cloned(),
+        ldap_server_metadata: input.get("LdapServerMetadata").cloned(),
+        configuration: input.get("Configuration").cloned(),
+        data_replication_mode: input
+            .get("DataReplicationMode")
+            .and_then(|v| v.as_str())
+            .map(String::from),
     };
     let result = json!({ "BrokerId": id, "BrokerArn": b.broker_arn });
     state.brokers.insert(id.clone(), b);

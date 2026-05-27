@@ -422,4 +422,48 @@ mod tests {
         assert_eq!(pending["ConsoleAccess"], true);
         assert_eq!(pending["Groups"][0], "admins");
     }
+
+    #[test]
+    fn create_broker_persists_full_config_surface() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let r = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "full-cfg",
+                "EngineType": "ACTIVEMQ",
+                "EngineVersion": "5.18",
+                "HostInstanceType": "mq.m5.large",
+                "DeploymentMode": "SINGLE_INSTANCE",
+                "EncryptionOptions": {
+                    "KmsKeyId": "arn:aws:kms:us-east-1:000000000000:key/abc",
+                    "UseAwsOwnedKey": false,
+                },
+                "Logs": { "General": true, "Audit": true },
+                "MaintenanceWindowStartTime": {
+                    "DayOfWeek": "SUNDAY",
+                    "TimeOfDay": "05:00",
+                    "TimeZone": "UTC",
+                },
+                "Configuration": { "Id": "c-abc", "Revision": 1 },
+                "DataReplicationMode": "NONE",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let id = r["BrokerId"].as_str().unwrap().to_string();
+
+        let desc = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id }), &ctx)).unwrap();
+        assert_eq!(
+            desc["EncryptionOptions"]["KmsKeyId"],
+            json!("arn:aws:kms:us-east-1:000000000000:key/abc")
+        );
+        assert_eq!(desc["Logs"]["Audit"], json!(true));
+        assert_eq!(
+            desc["MaintenanceWindowStartTime"]["DayOfWeek"],
+            json!("SUNDAY")
+        );
+        assert_eq!(desc["Configurations"]["Current"]["Id"], json!("c-abc"));
+        assert_eq!(desc["DataReplicationMode"], json!("NONE"));
+    }
 }
