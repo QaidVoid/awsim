@@ -12,6 +12,12 @@ pub struct Task {
     pub status: String,
     pub started_at: String,
     pub group: String,
+    /// Final tag set applied to the task. AWS records two flavours:
+    /// caller-supplied tags from RunTask/StartTask + RunTask plus the
+    /// ECS-managed tags AWS attaches when `enableECSManagedTags=true`.
+    /// We persist them merged so describe responses surface both at
+    /// once.
+    pub tags: Vec<(String, String)>,
 }
 
 /// A service running in a cluster.
@@ -35,6 +41,16 @@ pub struct Service {
     pub deployment_controller: Option<Value>,
     /// `{ awsvpcConfiguration: { subnets, securityGroups, assignPublicIp } }`.
     pub network_configuration: Option<Value>,
+    /// Tags supplied by the caller on CreateService. AWS may propagate
+    /// these to tasks at RunTask time based on `propagateTags`.
+    pub tags: Vec<(String, String)>,
+    /// `propagateTags`: AWS accepts `TASK_DEFINITION` or `SERVICE` —
+    /// when set, RunTask copies the matching source's tags onto each
+    /// task. Empty means no propagation.
+    pub propagate_tags: Option<String>,
+    /// Mirrors `enableECSManagedTags`: when true RunTask layers the
+    /// AWS-managed `aws:ecs:*` tags onto each task it spins up.
+    pub enable_ecs_managed_tags: bool,
 }
 
 /// An ECS cluster.
@@ -78,6 +94,10 @@ pub struct TaskDefinition {
     /// mount — entries are stored verbatim so DescribeTaskDefinition
     /// echoes the same shape the caller registered).
     pub volumes: Vec<Value>,
+    /// Tags supplied at `RegisterTaskDefinition`. Surfaced by
+    /// DescribeTaskDefinition and copied onto each task when a
+    /// service or RunTask call sets `propagateTags=TASK_DEFINITION`.
+    pub tags: Vec<(String, String)>,
 }
 
 /// A capacity provider.

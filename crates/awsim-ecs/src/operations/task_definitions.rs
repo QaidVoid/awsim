@@ -226,6 +226,7 @@ pub fn register_task_definition(
             placement_constraints: placement_constraints.clone(),
             placement_strategy: placement_strategy.clone(),
             volumes: volumes.clone(),
+            tags: crate::operations::tags::parse_tags(input.get("tags")),
         };
         revisions.push(td);
         rev

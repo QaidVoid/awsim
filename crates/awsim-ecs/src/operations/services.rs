@@ -6,6 +6,11 @@ use crate::operations::clusters::{now_epoch_str, resolve_cluster_name};
 use crate::state::{EcsState, Service};
 
 fn service_to_json(svc: &Service) -> Value {
+    let tags: Vec<Value> = svc
+        .tags
+        .iter()
+        .map(|(k, v)| json!({ "key": k, "value": v }))
+        .collect();
     let mut obj = json!({
         "serviceArn": svc.service_arn,
         "serviceName": svc.service_name,
@@ -22,12 +27,17 @@ fn service_to_json(svc: &Service) -> Value {
         "loadBalancers": svc.load_balancers,
         "serviceRegistries": [],
         "networkConfiguration": svc.network_configuration.clone().unwrap_or(Value::Null),
+        "tags": tags,
+        "enableECSManagedTags": svc.enable_ecs_managed_tags,
     });
     if let Some(dc) = &svc.deployment_configuration {
         obj["deploymentConfiguration"] = dc.clone();
     }
     if let Some(dc) = &svc.deployment_controller {
         obj["deploymentController"] = dc.clone();
+    }
+    if let Some(p) = &svc.propagate_tags {
+        obj["propagateTags"] = json!(p);
     }
     obj
 }
@@ -105,6 +115,18 @@ pub fn create_service(
         ctx.region, ctx.account_id, cluster_name, service_name
     );
 
+    let tags = crate::operations::tags::parse_tags(input.get("tags"));
+    let propagate_tags = input["propagateTags"].as_str().map(str::to_string);
+    if let Some(ref p) = propagate_tags
+        && !matches!(p.as_str(), "TASK_DEFINITION" | "SERVICE" | "NONE")
+    {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!("propagateTags '{p}' must be one of TASK_DEFINITION, SERVICE, NONE."),
+        ));
+    }
+    let enable_ecs_managed_tags = input["enableECSManagedTags"].as_bool().unwrap_or(false);
+
     let service = Service {
         service_name: service_name.clone(),
         service_arn: service_arn.clone(),
@@ -119,6 +141,9 @@ pub fn create_service(
         deployment_configuration,
         deployment_controller,
         network_configuration,
+        tags,
+        propagate_tags,
+        enable_ecs_managed_tags,
     };
 
     info!(cluster = %cluster_name, service = %service_name, "Created ECS service");

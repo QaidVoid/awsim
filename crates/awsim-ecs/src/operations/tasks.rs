@@ -7,6 +7,11 @@ use crate::operations::clusters::{now_epoch_str, resolve_cluster_name};
 use crate::state::{EcsState, Task};
 
 fn task_to_json(task: &Task) -> Value {
+    let tags: Vec<Value> = task
+        .tags
+        .iter()
+        .map(|(k, v)| json!({ "key": k, "value": v }))
+        .collect();
     json!({
         "taskArn": task.task_arn,
         "clusterArn": task.cluster_arn,
@@ -18,7 +23,22 @@ fn task_to_json(task: &Task) -> Value {
         "containers": [],
         "attachments": [],
         "attributes": [],
+        "tags": tags,
     })
+}
+
+/// Pull tags off the matching `TaskDefinition` so `propagateTags=
+/// TASK_DEFINITION` can copy them onto each spawned task. Falls back
+/// to an empty list when the definition is unknown.
+fn task_definition_tags(state: &EcsState, task_def_arn: &str) -> Vec<(String, String)> {
+    for entry in state.task_definitions.iter() {
+        for td in entry.value().iter() {
+            if td.arn == task_def_arn {
+                return td.tags.clone();
+            }
+        }
+    }
+    Vec::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +87,28 @@ pub fn run_task(state: &EcsState, input: &Value, ctx: &RequestContext) -> Result
         }
     };
 
+    let propagate_tags = input["propagateTags"].as_str().map(str::to_string);
+    if let Some(ref p) = propagate_tags
+        && !matches!(p.as_str(), "TASK_DEFINITION" | "SERVICE" | "NONE")
+    {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!("propagateTags '{p}' must be one of TASK_DEFINITION, SERVICE, NONE."),
+        ));
+    }
+    let enable_ecs_managed_tags = input["enableECSManagedTags"].as_bool().unwrap_or(false);
+    let caller_tags = crate::operations::tags::parse_tags(input.get("tags"));
+    let task_def_tags = task_definition_tags(state, &task_def_arn);
+    let propagated = match propagate_tags.as_deref() {
+        Some("TASK_DEFINITION") => task_def_tags,
+        _ => Vec::new(),
+    };
+    let mut effective_tags = crate::operations::tags::merge_tags(&propagated, &caller_tags);
+    if enable_ecs_managed_tags {
+        let managed = crate::operations::tags::ecs_managed_tags(&cluster_name, None);
+        effective_tags = crate::operations::tags::merge_tags(&effective_tags, &managed);
+    }
+
     let mut tasks = Vec::new();
 
     for _ in 0..count {
@@ -83,6 +125,7 @@ pub fn run_task(state: &EcsState, input: &Value, ctx: &RequestContext) -> Result
             status: "RUNNING".to_string(),
             started_at: now_epoch_str(),
             group: "task-group".to_string(),
+            tags: effective_tags.clone(),
         };
 
         tasks.push(task_to_json(&task));
@@ -240,4 +283,101 @@ pub fn list_tasks(
         .collect();
 
     Ok(json!({ "taskArns": arns }))
+}
+
+#[cfg(test)]
+mod propagate_tags_tests {
+    use super::*;
+    use crate::operations::clusters::create_cluster;
+    use crate::operations::task_definitions::register_task_definition;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("ecs", "us-east-1")
+    }
+
+    #[test]
+    fn run_task_propagates_task_definition_tags_when_enabled() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        register_task_definition(
+            &state,
+            &json!({
+                "family": "web",
+                "containerDefinitions": [],
+                "tags": [
+                    { "key": "team", "value": "data" },
+                    { "key": "env", "value": "prod" }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = run_task(
+            &state,
+            &json!({
+                "cluster": "default",
+                "taskDefinition": "web",
+                "propagateTags": "TASK_DEFINITION",
+                "tags": [{ "key": "team", "value": "override" }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let tags = resp["tasks"][0]["tags"].as_array().unwrap();
+        let env = tags.iter().find(|t| t["key"] == "env").unwrap();
+        assert_eq!(env["value"], "prod");
+        // Caller override wins on key collision.
+        let team = tags.iter().find(|t| t["key"] == "team").unwrap();
+        assert_eq!(team["value"], "override");
+    }
+
+    #[test]
+    fn run_task_attaches_ecs_managed_tags_when_enabled() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        register_task_definition(
+            &state,
+            &json!({ "family": "web", "containerDefinitions": [] }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = run_task(
+            &state,
+            &json!({
+                "cluster": "default",
+                "taskDefinition": "web",
+                "enableECSManagedTags": true,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let tags = resp["tasks"][0]["tags"].as_array().unwrap();
+        assert!(
+            tags.iter()
+                .any(|t| t["key"] == "aws:ecs:clusterName" && t["value"] == "default")
+        );
+    }
+
+    #[test]
+    fn run_task_rejects_invalid_propagate_tags() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        register_task_definition(
+            &state,
+            &json!({ "family": "web", "containerDefinitions": [] }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = run_task(
+            &state,
+            &json!({
+                "cluster": "default",
+                "taskDefinition": "web",
+                "propagateTags": "MYSTERY"
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
 }
