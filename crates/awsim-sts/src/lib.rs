@@ -833,6 +833,32 @@ fn evaluate_trust_policy(
         awsim_iam_policy::ContextValue::String(ctx.account_id.clone()),
     );
 
+    // Session tags flow into trust policies as
+    // `aws:RequestTag/<TagKey>` plus the `aws:TagKeys` list, matching
+    // AWS's condition variables for tag-aware AssumeRole.
+    if let Some(tags) = input.get("Tags").and_then(Value::as_array) {
+        let mut keys: Vec<String> = Vec::new();
+        for entry in tags {
+            let Some(key) = entry.get("Key").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(value) = entry.get("Value").and_then(Value::as_str) else {
+                continue;
+            };
+            context.insert(
+                format!("aws:RequestTag/{key}"),
+                awsim_iam_policy::ContextValue::String(value.to_string()),
+            );
+            keys.push(key.to_string());
+        }
+        if !keys.is_empty() {
+            context.insert(
+                "aws:TagKeys".to_string(),
+                awsim_iam_policy::ContextValue::StringList(keys),
+            );
+        }
+    }
+
     let req = awsim_iam_policy::AuthzRequest {
         principal_arn: &principal_arn,
         principal_account: &ctx.account_id,
@@ -1865,6 +1891,74 @@ mod tests {
             )
             .unwrap();
         assert!(resp["Credentials"]["AccessKeyId"].as_str().is_some());
+    }
+
+    const TRUST_POLICY_REQUIRES_SESSION_TAG: &str = r#"{
+        "Version":"2012-10-17",
+        "Statement":[{
+            "Effect":"Allow",
+            "Principal":{"AWS":"arn:aws:iam::000000000000:root"},
+            "Action":"sts:AssumeRole",
+            "Condition":{
+                "StringEquals":{"aws:RequestTag/team":"data"}
+            }
+        }]
+    }"#;
+
+    #[test]
+    fn assume_role_rejects_when_required_session_tag_missing() {
+        let svc = StsService::new();
+        svc.set_trust_policy_resolver(Arc::new(StaticResolver(Some(
+            TRUST_POLICY_REQUIRES_SESSION_TAG,
+        ))));
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/TagOnly",
+                    "RoleSessionName": "session",
+                }),
+                &make_ctx(),
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "AccessDenied");
+    }
+
+    #[test]
+    fn assume_role_accepts_matching_session_tag() {
+        let svc = StsService::new();
+        svc.set_trust_policy_resolver(Arc::new(StaticResolver(Some(
+            TRUST_POLICY_REQUIRES_SESSION_TAG,
+        ))));
+        let resp = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/TagOnly",
+                    "RoleSessionName": "session",
+                    "Tags": [{ "Key": "team", "Value": "data" }]
+                }),
+                &make_ctx(),
+            )
+            .unwrap();
+        assert!(resp["Credentials"]["AccessKeyId"].as_str().is_some());
+    }
+
+    #[test]
+    fn assume_role_rejects_mismatched_session_tag() {
+        let svc = StsService::new();
+        svc.set_trust_policy_resolver(Arc::new(StaticResolver(Some(
+            TRUST_POLICY_REQUIRES_SESSION_TAG,
+        ))));
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/TagOnly",
+                    "RoleSessionName": "session",
+                    "Tags": [{ "Key": "team", "Value": "infra" }]
+                }),
+                &make_ctx(),
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "AccessDenied");
     }
 
     const TRUST_POLICY_REQUIRES_MFA: &str = r#"{
