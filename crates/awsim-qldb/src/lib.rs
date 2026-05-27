@@ -336,7 +336,7 @@ impl ServiceHandler for QldbService {
                     )
                 })?;
                 if l.deletion_protection {
-                    return Err(AwsError::bad_request(
+                    return Err(AwsError::precondition_failed(
                         "ResourcePreconditionNotMetException",
                         "Disable DeletionProtection before deleting the ledger",
                     ));
@@ -469,6 +469,26 @@ mod tests {
         ))
         .unwrap();
         block_on(svc.handle("DeleteLedger", json!({ "name": "audit" }), &ctx)).unwrap();
+    }
+
+    #[test]
+    fn deletion_protection_returns_412() {
+        let svc = QldbService::new();
+        let ctx = RequestContext::new("qldb", "us-east-1");
+        block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "p412",
+                "PermissionsMode": "STANDARD",
+                "DeletionProtection": true,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let err =
+            block_on(svc.handle("DeleteLedger", json!({ "name": "p412" }), &ctx)).unwrap_err();
+        assert_eq!(err.code, "ResourcePreconditionNotMetException");
+        assert_eq!(err.status.as_u16(), 412);
     }
 
     #[test]
