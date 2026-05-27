@@ -60,3 +60,45 @@ pub fn extract_string_list(input: &Value, key: &str) -> Vec<String> {
     }
     out
 }
+
+#[cfg(test)]
+mod member_parser_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn extract_string_list_tolerates_sparse_member_indices() {
+        let input = json!({
+            "Subnets": { "member": { "3": "subnet-c", "1": "subnet-a", "10": "subnet-j" } }
+        });
+        assert_eq!(
+            extract_string_list(&input, "Subnets"),
+            vec!["subnet-a", "subnet-c", "subnet-j"]
+        );
+    }
+
+    #[test]
+    fn extract_string_list_sorts_numerically_not_lexically() {
+        let input = json!({
+            "Subnets": { "member": { "2": "two", "10": "ten", "1": "one" } }
+        });
+        assert_eq!(
+            extract_string_list(&input, "Subnets"),
+            vec!["one", "two", "ten"]
+        );
+    }
+
+    #[test]
+    fn extract_string_list_handles_direct_numeric_keys_without_member_wrapper() {
+        let input = json!({
+            "Subnets": { "1": "a", "2": "b" }
+        });
+        assert_eq!(extract_string_list(&input, "Subnets"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn extract_string_list_accepts_plain_array_too() {
+        let input = json!({ "Subnets": ["a", "b", "c"] });
+        assert_eq!(extract_string_list(&input, "Subnets"), vec!["a", "b", "c"]);
+    }
+}

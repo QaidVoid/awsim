@@ -4,7 +4,10 @@ use serde_json::{Value, json};
 
 use crate::{error::resource_not_found, state::ElbState};
 
-/// Parse tags from `Tags.member.N` or `Tags` array.
+/// Parse tags from `Tags.member.N` or `Tags` array. AWS's `member.N`
+/// shape is sparse-tolerant: callers may skip indices, and the parser
+/// must still order results by N so duplicate keys resolve
+/// deterministically.
 fn parse_tags(input: &Value) -> Vec<(String, String)> {
     let mut tags = Vec::new();
 
@@ -12,13 +15,14 @@ fn parse_tags(input: &Value) -> Vec<(String, String)> {
         let items: Vec<&Value> = match t {
             Value::Array(arr) => arr.iter().collect(),
             Value::Object(map) => {
-                if let Some(Value::Object(m)) = map.get("member") {
-                    m.values().collect()
+                let inner = if let Some(Value::Object(m)) = map.get("member") {
+                    m
                 } else {
-                    let mut pairs: Vec<_> = map.iter().collect();
-                    pairs.sort_by_key(|(k, _)| k.parse::<u64>().unwrap_or(u64::MAX));
-                    pairs.into_iter().map(|(_, v)| v).collect()
-                }
+                    map
+                };
+                let mut pairs: Vec<_> = inner.iter().collect();
+                pairs.sort_by_key(|(k, _)| k.parse::<u64>().unwrap_or(u64::MAX));
+                pairs.into_iter().map(|(_, v)| v).collect()
             }
             _ => vec![],
         };
@@ -113,4 +117,42 @@ pub fn describe_tags(state: &ElbState, input: &Value) -> Result<Value, AwsError>
             "member": descriptions
         }
     }))
+}
+
+#[cfg(test)]
+mod parse_tags_tests {
+    use super::*;
+
+    #[test]
+    fn sparse_member_indices_preserve_n_ordering() {
+        let input = json!({
+            "Tags": { "member": {
+                "10": { "Key": "z", "Value": "10" },
+                "1":  { "Key": "a", "Value": "1" },
+                "3":  { "Key": "m", "Value": "3" }
+            } }
+        });
+        let parsed = parse_tags(&input);
+        assert_eq!(
+            parsed,
+            vec![
+                ("a".to_string(), "1".to_string()),
+                ("m".to_string(), "3".to_string()),
+                ("z".to_string(), "10".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_numeric_keys_without_member_wrapper() {
+        let input = json!({
+            "Tags": {
+                "2": { "Key": "b", "Value": "2" },
+                "1": { "Key": "a", "Value": "1" }
+            }
+        });
+        let parsed = parse_tags(&input);
+        assert_eq!(parsed[0].0, "a");
+        assert_eq!(parsed[1].0, "b");
+    }
 }
