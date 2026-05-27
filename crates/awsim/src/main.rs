@@ -2538,7 +2538,10 @@ fn register_services(
     let logs_clone = Arc::clone(&logs_arc);
     state.register(logs_arc, vec![]);
 
-    let eventbridge = Arc::new(awsim_eventbridge::EventBridgeService::new());
+    let eb_iam_lookup: Arc<dyn awsim_core::PrincipalLookup> =
+        Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store.clone()));
+    let eventbridge =
+        Arc::new(awsim_eventbridge::EventBridgeService::new().with_iam_lookup(eb_iam_lookup));
     state.register(eventbridge, vec![]);
 
     let kms = Arc::new(awsim_kms::KmsService::new());

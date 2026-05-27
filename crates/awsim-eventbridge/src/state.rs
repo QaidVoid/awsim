@@ -25,6 +25,10 @@ pub struct Target {
     /// Retry policy. `(MaximumEventAgeInSeconds, MaximumRetryAttempts)`
     /// bounded by AWS at 60..=86400 and 0..=185 respectively.
     pub retry_policy: Option<(u32, u32)>,
+    /// IAM role EventBridge assumes when invoking this target. AWS
+    /// validates the shape at PutTargets and, for cross-account
+    /// ARNs, that the role actually exists in the target account.
+    pub role_arn: Option<String>,
 }
 
 /// EventBridge `InputTransformer` shape — stored verbatim and applied

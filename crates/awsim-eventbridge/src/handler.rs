@@ -1,4 +1,8 @@
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
+use std::sync::Arc;
+
+use awsim_core::{
+    AccountRegionStore, AwsError, PrincipalLookup, Protocol, RequestContext, ServiceHandler,
+};
 use serde_json::Value;
 use tracing::debug;
 
@@ -11,13 +15,25 @@ use crate::state::EventBridgeState;
 /// The EventBridge service handler.
 pub struct EventBridgeService {
     store: AccountRegionStore<EventBridgeState>,
+    /// IAM principal lookup used to validate cross-account `RoleArn`s
+    /// at PutTargets. `None` keeps PutTargets working in standalone
+    /// test setups that don't wire IAM state.
+    iam_lookup: Option<Arc<dyn PrincipalLookup>>,
 }
 
 impl EventBridgeService {
     pub fn new() -> Self {
         Self {
             store: AccountRegionStore::new(),
+            iam_lookup: None,
         }
+    }
+
+    /// Plug in the IAM principal lookup so PutTargets can verify that
+    /// a cross-account `RoleArn` actually points at an existing role.
+    pub fn with_iam_lookup(mut self, lookup: Arc<dyn PrincipalLookup>) -> Self {
+        self.iam_lookup = Some(lookup);
+        self
     }
 }
 
@@ -67,7 +83,7 @@ impl ServiceHandler for EventBridgeService {
             "DisableRule" => rules::disable_rule(&state, &input, ctx),
 
             // Targets
-            "PutTargets" => targets::put_targets(&state, &input, ctx),
+            "PutTargets" => targets::put_targets(&state, &input, ctx, self.iam_lookup.as_deref()),
             "RemoveTargets" => targets::remove_targets(&state, &input, ctx),
             "ListTargetsByRule" => targets::list_targets_by_rule(&state, &input, ctx),
 

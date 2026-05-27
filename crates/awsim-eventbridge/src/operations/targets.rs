@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, PrincipalLookup, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
 
@@ -13,6 +13,7 @@ pub fn put_targets(
     state: &EventBridgeState,
     input: &Value,
     ctx: &RequestContext,
+    iam_lookup: Option<&dyn PrincipalLookup>,
 ) -> Result<Value, AwsError> {
     let rule_name = input["Rule"]
         .as_str()
@@ -155,6 +156,20 @@ pub fn put_targets(
             }
         };
 
+        let role_arn =
+            match parse_role_arn(target_input.get("RoleArn"), &ctx.account_id, iam_lookup) {
+                Ok(v) => v,
+                Err(msg) => {
+                    failed_count += 1;
+                    failed_entries.push(json!({
+                        "TargetId": id,
+                        "ErrorCode": "ValidationException",
+                        "ErrorMessage": msg,
+                    }));
+                    continue;
+                }
+            };
+
         let batch_parameters = match target_input.get("BatchParameters") {
             Some(v) if !v.is_null() => {
                 if !v.is_object() {
@@ -208,6 +223,7 @@ pub fn put_targets(
                 batch_parameters,
                 dead_letter_arn,
                 retry_policy,
+                role_arn,
             };
         } else {
             rule.targets.push(Target {
@@ -219,6 +235,7 @@ pub fn put_targets(
                 batch_parameters,
                 dead_letter_arn,
                 retry_policy,
+                role_arn,
             });
         }
     }
@@ -290,6 +307,57 @@ fn parse_retry_policy(value: &Value) -> Result<Option<(u32, u32)>, String> {
         None => 185,
     };
     Ok(Some((age, attempts)))
+}
+
+/// Parse a target's `RoleArn` and, when the caller wired an IAM
+/// principal lookup, validate that cross-account roles actually
+/// exist. The ARN must be `arn:aws:iam::{12-digit-account}:role/...`;
+/// same-account ARNs skip the lookup so PutTargets keeps working in
+/// test setups that don't wire IAM state.
+fn parse_role_arn(
+    value: Option<&Value>,
+    caller_account: &str,
+    iam_lookup: Option<&dyn PrincipalLookup>,
+) -> Result<Option<String>, String> {
+    let Some(v) = value else { return Ok(None) };
+    if v.is_null() {
+        return Ok(None);
+    }
+    let Some(arn) = v.as_str() else {
+        return Err("RoleArn must be a string".to_string());
+    };
+    if arn.is_empty() {
+        return Ok(None);
+    }
+    let Some(account) = parse_iam_role_arn(arn) else {
+        return Err(format!(
+            "RoleArn `{arn}` must be an IAM role ARN of the form arn:aws:iam::<account>:role/<name>"
+        ));
+    };
+    if account != caller_account
+        && let Some(lookup) = iam_lookup
+        && lookup.resolve_arn(arn).is_none()
+    {
+        return Err(format!(
+            "RoleArn `{arn}` does not exist in account {account}"
+        ));
+    }
+    Ok(Some(arn.to_string()))
+}
+
+/// Returns the account-ID slice when `arn` is well-formed
+/// `arn:aws:iam::{12-digit-account}:role/<name>`.
+fn parse_iam_role_arn(arn: &str) -> Option<&str> {
+    let rest = arn.strip_prefix("arn:aws:iam::")?;
+    let (account, tail) = rest.split_once(':')?;
+    if account.len() != 12 || !account.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let name = tail.strip_prefix("role/")?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(account)
 }
 
 /// Parse an `InputTransformer` Value into the internal struct,
@@ -461,6 +529,9 @@ fn target_to_json(target: &Target) -> Value {
             "MaximumRetryAttempts": attempts,
         });
     }
+    if let Some(ref role) = target.role_arn {
+        obj["RoleArn"] = Value::String(role.clone());
+    }
     obj
 }
 
@@ -576,6 +647,7 @@ mod dlq_retry_tests {
             batch_parameters: None,
             dead_letter_arn: dlq.map(str::to_string),
             retry_policy: retry,
+            role_arn: None,
         }
     }
 
@@ -624,6 +696,118 @@ mod dlq_retry_tests {
         assert_eq!(
             next_delivery_step(DeliveryOutcome::Failure, &target, 1, 60),
             DeliveryStep::Retry { attempt_index: 1 }
+        );
+    }
+}
+
+#[cfg(test)]
+mod role_arn_tests {
+    use super::*;
+    use awsim_core::ResolvedPrincipal;
+    use std::collections::HashSet;
+
+    /// Minimal `PrincipalLookup` stub: knows about a fixed set of role
+    /// ARNs and returns `Some` for them, `None` for everything else.
+    struct StubLookup {
+        roles: HashSet<String>,
+    }
+
+    impl PrincipalLookup for StubLookup {
+        fn resolve_access_key(&self, _key: &str) -> Option<ResolvedPrincipal> {
+            None
+        }
+
+        fn resolve_arn(&self, arn: &str) -> Option<ResolvedPrincipal> {
+            if !self.roles.contains(arn) {
+                return None;
+            }
+            Some(ResolvedPrincipal {
+                arn: arn.to_string(),
+                account: "999999999999".into(),
+                identity_policies: vec![],
+                permissions_boundary: None,
+                is_root: false,
+                tags: std::collections::HashMap::new(),
+                session_policy: None,
+            })
+        }
+    }
+
+    fn lookup(roles: &[&str]) -> StubLookup {
+        StubLookup {
+            roles: roles.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn returns_none_when_role_arn_absent() {
+        assert!(
+            parse_role_arn(None, "000000000000", None)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn returns_none_for_empty_string() {
+        assert!(
+            parse_role_arn(Some(&Value::String(String::new())), "000000000000", None)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_role_arn() {
+        let arn = Value::String("arn:aws:iam::000000000000:user/bob".into());
+        let err = parse_role_arn(Some(&arn), "000000000000", None).unwrap_err();
+        assert!(err.contains("IAM role ARN"));
+    }
+
+    #[test]
+    fn rejects_short_account_id() {
+        let arn = Value::String("arn:aws:iam::123:role/foo".into());
+        assert!(parse_role_arn(Some(&arn), "000000000000", None).is_err());
+    }
+
+    #[test]
+    fn same_account_skips_iam_lookup() {
+        // No lookup wired, but same-account ARN should still succeed.
+        let arn = Value::String("arn:aws:iam::000000000000:role/foo".into());
+        assert_eq!(
+            parse_role_arn(Some(&arn), "000000000000", None).unwrap(),
+            Some("arn:aws:iam::000000000000:role/foo".to_string()),
+        );
+    }
+
+    #[test]
+    fn cross_account_role_rejected_when_lookup_finds_nothing() {
+        let arn = Value::String("arn:aws:iam::999999999999:role/foo".into());
+        let l = lookup(&[]);
+        let err = parse_role_arn(Some(&arn), "000000000000", Some(&l)).unwrap_err();
+        assert!(err.contains("does not exist"));
+    }
+
+    #[test]
+    fn cross_account_role_accepted_when_lookup_resolves() {
+        let role = "arn:aws:iam::999999999999:role/foo";
+        let arn = Value::String(role.into());
+        let l = lookup(&[role]);
+        assert_eq!(
+            parse_role_arn(Some(&arn), "000000000000", Some(&l)).unwrap(),
+            Some(role.to_string()),
+        );
+    }
+
+    #[test]
+    fn cross_account_role_without_lookup_passes_through() {
+        // PutTargets must keep working when IAM isn't wired (test setups,
+        // standalone usage). Shape-validated ARN persists as-is.
+        let role = "arn:aws:iam::999999999999:role/foo";
+        let arn = Value::String(role.into());
+        assert_eq!(
+            parse_role_arn(Some(&arn), "000000000000", None).unwrap(),
+            Some(role.to_string()),
         );
     }
 }
