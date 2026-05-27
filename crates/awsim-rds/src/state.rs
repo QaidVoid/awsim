@@ -94,6 +94,16 @@ pub struct DbInstance {
     /// no changes are pending.
     #[serde(default)]
     pub pending_modified_values: HashMap<String, serde_json::Value>,
+    /// Identifier of the source instance when this row is a read
+    /// replica. AWS exposes it as `ReadReplicaSourceDBInstanceIdentifier`
+    /// on describe.
+    #[serde(default)]
+    pub read_replica_source_db_instance_identifier: Option<String>,
+    /// Identifiers of read replicas pointed at this instance. AWS
+    /// surfaces this on the source so callers can fan out a delete
+    /// across the replica tree.
+    #[serde(default)]
+    pub read_replica_db_instance_identifiers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

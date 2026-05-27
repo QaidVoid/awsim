@@ -68,6 +68,12 @@ fn instance_to_value(inst: &DbInstance) -> Value {
         obj["PendingModifiedValues"] =
             serde_json::to_value(&inst.pending_modified_values).unwrap_or_else(|_| json!({}));
     }
+    if let Some(ref src) = inst.read_replica_source_db_instance_identifier {
+        obj["ReadReplicaSourceDBInstanceIdentifier"] = json!(src);
+    }
+    if !inst.read_replica_db_instance_identifiers.is_empty() {
+        obj["ReadReplicaDBInstanceIdentifiers"] = json!(inst.read_replica_db_instance_identifiers);
+    }
     obj
 }
 
@@ -331,6 +337,8 @@ pub fn create_db_instance(
         enabled_cloudwatch_logs_exports,
         preferred_maintenance_window,
         pending_modified_values: std::collections::HashMap::new(),
+        read_replica_source_db_instance_identifier: None,
+        read_replica_db_instance_identifiers: Vec::new(),
     };
 
     let result = instance_to_value(&inst);
@@ -352,9 +360,37 @@ pub fn delete_db_instance(
         .ok_or_else(|| db_instance_not_found(identifier))?
         .clone();
 
+    // Match AWS: a source with attached read replicas refuses
+    // DeleteDBInstance until each replica is deleted (or promoted)
+    // first. The error mirrors the documented `InvalidDBInstanceState`.
+    if !inst.read_replica_db_instance_identifiers.is_empty() {
+        return Err(invalid_db_instance_state(
+            identifier,
+            &format!(
+                "{} has {} read replica(s); delete or promote them before \
+                 deleting the source.",
+                identifier,
+                inst.read_replica_db_instance_identifiers.len(),
+            ),
+        ));
+    }
+
+    let source = inst.read_replica_source_db_instance_identifier.clone();
+
     let result = instance_to_value(&inst);
     drop(inst);
     state.instances.remove(identifier);
+
+    // Unlink this replica from its source's child list. We do this
+    // *after* the remove so the read-replica delete is fully
+    // observable when DescribeDBInstances next reads the source.
+    if let Some(ref src) = source
+        && let Some(mut src_inst) = state.instances.get_mut(src)
+    {
+        src_inst
+            .read_replica_db_instance_identifiers
+            .retain(|id| id != identifier);
+    }
 
     Ok(json!({ "DBInstance": result }))
 }
@@ -388,6 +424,98 @@ pub fn describe_db_instances(
         "DBInstances": { "DBInstance": items },
         "Marker": null,
     }))
+}
+
+/// Create a new DB instance that follows another instance as a read
+/// replica. AWS's `CreateDBInstanceReadReplica` clones most of the
+/// source's surface (engine, class, storage type) and stamps a
+/// `ReadReplicaSourceDBInstanceIdentifier` on the new row. The
+/// source instance's `ReadReplicaDBInstanceIdentifiers` is updated
+/// to include the new replica so describe surfaces it.
+pub fn create_db_instance_read_replica(
+    state: &RdsState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identifier = require_str(input, "DBInstanceIdentifier")?;
+    validate_db_identifier(identifier)?;
+    let source_identifier = require_str(input, "SourceDBInstanceIdentifier")?;
+
+    if state.instances.contains_key(identifier) {
+        return Err(db_instance_already_exists(identifier));
+    }
+
+    // Clone the source's surface up front; the source must exist and
+    // must not itself be a replica (AWS rejects cascading replicas
+    // with InvalidDBInstanceState).
+    let source = state
+        .instances
+        .get(source_identifier)
+        .ok_or_else(|| db_instance_not_found(source_identifier))?
+        .clone();
+    if source.read_replica_source_db_instance_identifier.is_some() {
+        return Err(invalid_db_instance_state(
+            source_identifier,
+            "Read replicas cannot themselves serve as the source of another \
+             read replica.",
+        ));
+    }
+
+    // The replica inherits the source's engine, class, storage, etc.,
+    // but takes a fresh ARN/endpoint and an optional instance-class
+    // override.
+    let instance_class = opt_str(input, "DBInstanceClass")
+        .unwrap_or(&source.instance_class)
+        .to_string();
+    let arn = instance_arn(&ctx.region, &ctx.account_id, identifier);
+    let address = instance_endpoint(identifier, &ctx.region);
+    let port = default_port(&source.engine);
+
+    let replica = DbInstance {
+        identifier: identifier.to_string(),
+        arn: arn.clone(),
+        instance_class,
+        engine: source.engine.clone(),
+        engine_version: source.engine_version.clone(),
+        status: "available".to_string(),
+        master_username: source.master_username.clone(),
+        allocated_storage: source.allocated_storage,
+        endpoint: Some(DbEndpoint { address, port }),
+        subnet_group_name: source.subnet_group_name.clone(),
+        vpc_security_groups: source.vpc_security_groups.clone(),
+        multi_az: false,
+        publicly_accessible: opt_bool(input, "PubliclyAccessible").unwrap_or(false),
+        storage_type: source.storage_type.clone(),
+        cluster_identifier: None,
+        created_at: now_iso8601(),
+        iops: source.iops,
+        storage_throughput: source.storage_throughput,
+        license_model: source.license_model.clone(),
+        copy_tags_to_snapshot: opt_bool(input, "CopyTagsToSnapshot")
+            .unwrap_or(source.copy_tags_to_snapshot),
+        kms_key_id: opt_str(input, "KmsKeyId")
+            .map(str::to_string)
+            .or(source.kms_key_id.clone()),
+        monitoring_interval: source.monitoring_interval,
+        monitoring_role_arn: source.monitoring_role_arn.clone(),
+        enabled_cloudwatch_logs_exports: source.enabled_cloudwatch_logs_exports.clone(),
+        preferred_maintenance_window: Some(DEFAULT_MAINTENANCE_WINDOW.to_string()),
+        pending_modified_values: std::collections::HashMap::new(),
+        read_replica_source_db_instance_identifier: Some(source_identifier.to_string()),
+        read_replica_db_instance_identifiers: Vec::new(),
+    };
+
+    let result = instance_to_value(&replica);
+    state.instances.insert(identifier.to_string(), replica);
+
+    // Push the replica identifier onto the source's list so describes
+    // of the source surface it.
+    if let Some(mut src) = state.instances.get_mut(source_identifier) {
+        src.read_replica_db_instance_identifiers
+            .push(identifier.to_string());
+    }
+
+    Ok(json!({ "DBInstance": result }))
 }
 
 pub fn modify_db_instance(
@@ -897,6 +1025,99 @@ mod modify_db_instance_tests {
             resp["DBInstance"]["PreferredMaintenanceWindow"],
             json!("sat:10:00-sat:10:30")
         );
+    }
+
+    #[test]
+    fn create_read_replica_links_source_and_replica() {
+        let state = RdsState::default();
+        seed(&state);
+        let resp = create_db_instance_read_replica(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "prod-db-ro",
+                "SourceDBInstanceIdentifier": "prod-db",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // The new replica exposes the source on describe.
+        assert_eq!(
+            resp["DBInstance"]["ReadReplicaSourceDBInstanceIdentifier"],
+            json!("prod-db")
+        );
+        // The source's child list now includes the replica.
+        let src = state.instances.get("prod-db").unwrap();
+        assert_eq!(src.read_replica_db_instance_identifiers, vec!["prod-db-ro"]);
+    }
+
+    #[test]
+    fn delete_replica_unlinks_from_source() {
+        let state = RdsState::default();
+        seed(&state);
+        create_db_instance_read_replica(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "prod-db-ro",
+                "SourceDBInstanceIdentifier": "prod-db",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        delete_db_instance(
+            &state,
+            &json!({ "DBInstanceIdentifier": "prod-db-ro" }),
+            &ctx(),
+        )
+        .unwrap();
+        let src = state.instances.get("prod-db").unwrap();
+        assert!(src.read_replica_db_instance_identifiers.is_empty());
+    }
+
+    #[test]
+    fn delete_source_with_attached_replicas_is_rejected() {
+        let state = RdsState::default();
+        seed(&state);
+        create_db_instance_read_replica(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "prod-db-ro",
+                "SourceDBInstanceIdentifier": "prod-db",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = delete_db_instance(
+            &state,
+            &json!({ "DBInstanceIdentifier": "prod-db" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidDBInstanceState");
+    }
+
+    #[test]
+    fn replica_of_replica_is_rejected() {
+        let state = RdsState::default();
+        seed(&state);
+        create_db_instance_read_replica(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "prod-db-ro",
+                "SourceDBInstanceIdentifier": "prod-db",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = create_db_instance_read_replica(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "prod-db-ro-ro",
+                "SourceDBInstanceIdentifier": "prod-db-ro",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidDBInstanceState");
     }
 
     #[test]

@@ -79,6 +79,9 @@ impl ServiceHandler for RdsService {
         match operation {
             // DB Instances
             "CreateDBInstance" => operations::instances::create_db_instance(&state, &input, ctx),
+            "CreateDBInstanceReadReplica" => {
+                operations::instances::create_db_instance_read_replica(&state, &input, ctx)
+            }
             "DeleteDBInstance" => operations::instances::delete_db_instance(&state, &input, ctx),
             "DescribeDBInstances" => {
                 operations::instances::describe_db_instances(&state, &input, ctx)
