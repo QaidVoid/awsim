@@ -55,6 +55,31 @@ pub fn put_log_events(
         )
     })?;
 
+    // AWS validates `sequenceToken` strictly when the caller supplies
+    // one: a mismatch returns InvalidSequenceTokenException carrying
+    // the expected token. Modern SDKs (>= 2021) omit the field and the
+    // server-side enforcement is skipped — match that behaviour by
+    // only validating when the caller passed something non-empty.
+    let supplied_token = input["sequenceToken"].as_str().filter(|s| !s.is_empty());
+    if let Some(token) = supplied_token {
+        let expected = stream
+            .upload_sequence_token
+            .load(std::sync::atomic::Ordering::SeqCst)
+            .to_string();
+        if token != expected {
+            let mut err = AwsError::bad_request(
+                "InvalidSequenceTokenException",
+                format!(
+                    "The given sequenceToken `{token}` is invalid. The next expected token is `{expected}`."
+                ),
+            );
+            let mut extras = serde_json::Map::new();
+            extras.insert("expectedSequenceToken".to_string(), Value::String(expected));
+            err.extras = Some(Box::new(extras));
+            return Err(err);
+        }
+    }
+
     let ingestion_time = now_millis();
     // AWS rejects events whose timestamp falls outside the documented
     // ingestion window: older than 14 days or more than 2 hours in the
@@ -371,4 +396,84 @@ fn parse_offset(token: &str) -> usize {
     }
     let body = token.split_once('/').map(|(_, rest)| rest).unwrap_or(token);
     body.parse::<usize>().unwrap_or(0)
+}
+
+#[cfg(test)]
+mod sequence_token_tests {
+    use super::*;
+    use crate::SqliteStore;
+    use crate::state::LogGroup;
+    use std::sync::Arc;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("logs", "us-east-1")
+    }
+
+    fn fresh_state() -> LogsState {
+        let dir =
+            std::env::temp_dir().join(format!("awsim-logs-seqtoken-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("logs.db");
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(SqliteStore::open(path).unwrap());
+        let state = LogsState::default();
+        state.set_sqlite(store);
+        state
+    }
+
+    fn seed_stream(state: &LogsState) {
+        let group = LogGroup::new(
+            "g".to_string(),
+            "arn:aws:logs:us-east-1:000000000000:log-group:g".to_string(),
+            std::collections::HashMap::new(),
+        );
+        state.log_groups.insert("g".to_string(), group);
+        let group = state.log_groups.get("g").unwrap();
+        group.streams.insert(
+            "s".to_string(),
+            crate::state::LogStream::new(
+                "s".to_string(),
+                "arn:aws:logs:us-east-1:000000000000:log-group:g:log-stream:s".to_string(),
+            ),
+        );
+    }
+
+    fn make_input(token: Option<&str>) -> Value {
+        let mut input = json!({
+            "logGroupName": "g",
+            "logStreamName": "s",
+            "logEvents": [ { "timestamp": now_millis(), "message": "hello" } ],
+        });
+        if let Some(t) = token {
+            input["sequenceToken"] = json!(t);
+        }
+        input
+    }
+
+    #[test]
+    fn omitted_token_passes_through() {
+        let state = fresh_state();
+        seed_stream(&state);
+        put_log_events(&state, &make_input(None), &ctx()).unwrap();
+    }
+
+    #[test]
+    fn matching_token_succeeds() {
+        let state = fresh_state();
+        seed_stream(&state);
+        // Initial token == "1".
+        put_log_events(&state, &make_input(Some("1")), &ctx()).unwrap();
+    }
+
+    #[test]
+    fn mismatched_token_returns_invalid_sequence_token() {
+        let state = fresh_state();
+        seed_stream(&state);
+        let err = put_log_events(&state, &make_input(Some("999")), &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidSequenceTokenException");
+        let extras = err.extras.unwrap();
+        assert_eq!(
+            extras.get("expectedSequenceToken").and_then(|v| v.as_str()),
+            Some("1")
+        );
+    }
 }
