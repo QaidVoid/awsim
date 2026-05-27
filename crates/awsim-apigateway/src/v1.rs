@@ -53,6 +53,31 @@ pub struct RestApi {
     pub stages: HashMap<String, Stage>,
     pub deployments: Vec<Deployment>,
     pub authorizers: HashMap<String, Authorizer>,
+    /// Models registered on this API, keyed by name. Each model owns a
+    /// JSON Schema used to validate request bodies bound via a method's
+    /// `requestModels` and a `requestValidatorId` that opts in to body
+    /// validation.
+    pub models: HashMap<String, Model>,
+    /// Request validators registered on this API. AWS keys them by an
+    /// opaque id; we store the validator's name plus the two boolean
+    /// switches that decide whether body / parameter checks fire.
+    pub request_validators: HashMap<String, RequestValidator>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Model {
+    pub name: String,
+    pub content_type: String,
+    pub schema: serde_json::Value,
+    pub description: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RequestValidator {
+    pub id: String,
+    pub name: String,
+    pub validate_request_body: bool,
+    pub validate_request_parameters: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -441,6 +466,37 @@ impl ServiceHandler for ApiGatewayV1Service {
                 operation: "DeleteAuthorizer",
                 required_query_param: None,
             },
+            // Models + request validators
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/restapis/{restapi_id}/models",
+                operation: "CreateModel",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/restapis/{restapi_id}/models/{model_name}",
+                operation: "GetModel",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/restapis/{restapi_id}/models/{model_name}",
+                operation: "DeleteModel",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/restapis/{restapi_id}/requestvalidators",
+                operation: "CreateRequestValidator",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/restapis/{restapi_id}/requestvalidators/{requestvalidator_id}",
+                operation: "DeleteRequestValidator",
+                required_query_param: None,
+            },
             // API keys
             RouteDefinition {
                 method: "POST",
@@ -547,6 +603,11 @@ impl ServiceHandler for ApiGatewayV1Service {
             "DeleteDeployment" => delete_deployment(&state, &input),
             "GetAuthorizers" => get_authorizers(&state, &input),
             "CreateAuthorizer" => create_authorizer(&state, &input),
+            "CreateModel" => create_model(&state, &input),
+            "GetModel" => get_model(&state, &input),
+            "DeleteModel" => delete_model(&state, &input),
+            "CreateRequestValidator" => create_request_validator(&state, &input),
+            "DeleteRequestValidator" => delete_request_validator(&state, &input),
             "DeleteAuthorizer" => delete_authorizer(&state, &input),
             "CreateApiKey" => create_api_key(&state, &input),
             "GetApiKey" => get_api_key(&state, &input),
@@ -849,6 +910,8 @@ fn create_rest_api(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aw
         stages: HashMap::new(),
         deployments: Vec::new(),
         authorizers: HashMap::new(),
+        models: HashMap::new(),
+        request_validators: HashMap::new(),
     };
     state.apis.insert(id.clone(), api.clone());
     Ok(rest_api_to_json(&api))
@@ -1651,6 +1714,220 @@ fn delete_authorizer(state: &ApiGatewayV1State, input: &Value) -> Result<Value, 
     })
 }
 
+// --- Models + request validators ----------------------------------------
+
+fn create_model(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let name = require_str(input, "name")?.to_string();
+    let content_type = input["contentType"]
+        .as_str()
+        .unwrap_or("application/json")
+        .to_string();
+    let description = input["description"].as_str().unwrap_or("").to_string();
+    let schema_value = match &input["schema"] {
+        Value::String(s) if !s.is_empty() => serde_json::from_str::<Value>(s).map_err(|e| {
+            AwsError::bad_request(
+                "BadRequestException",
+                format!("Model schema must be a JSON Schema string: {e}"),
+            )
+        })?,
+        Value::Object(_) | Value::Array(_) => input["schema"].clone(),
+        Value::String(_) | Value::Null => json!({ "type": "object" }),
+        other => other.clone(),
+    };
+    with_api_mut(state, &api_id, |api| {
+        if api.models.contains_key(&name) {
+            return Err(AwsError::conflict(
+                "ConflictException",
+                format!("Model {name} already exists"),
+            ));
+        }
+        let model = Model {
+            name: name.clone(),
+            content_type: content_type.clone(),
+            schema: schema_value.clone(),
+            description: description.clone(),
+        };
+        let json = model_to_json(&model);
+        api.models.insert(name, model);
+        Ok(json)
+    })
+}
+
+fn get_model(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let name = require_str(input, "model_name")?.to_string();
+    let api = state.apis.get(&api_id).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("RestApi {api_id} not found"))
+    })?;
+    api.models
+        .get(&name)
+        .map(model_to_json)
+        .ok_or_else(|| AwsError::not_found("NotFoundException", format!("Model {name} not found")))
+}
+
+fn delete_model(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let name = require_str(input, "model_name")?.to_string();
+    with_api_mut(state, &api_id, |api| {
+        if api.models.remove(&name).is_none() {
+            return Err(AwsError::not_found(
+                "NotFoundException",
+                format!("Model {name} not found"),
+            ));
+        }
+        Ok(json!({}))
+    })
+}
+
+fn create_request_validator(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let name = input["name"].as_str().unwrap_or("").to_string();
+    let validate_body = input["validateRequestBody"].as_bool().unwrap_or(false);
+    let validate_params = input["validateRequestParameters"]
+        .as_bool()
+        .unwrap_or(false);
+    with_api_mut(state, &api_id, |api| {
+        let validator = RequestValidator {
+            id: short_id(),
+            name,
+            validate_request_body: validate_body,
+            validate_request_parameters: validate_params,
+        };
+        let json = request_validator_to_json(&validator);
+        api.request_validators
+            .insert(validator.id.clone(), validator);
+        Ok(json)
+    })
+}
+
+fn delete_request_validator(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let validator_id = require_str(input, "requestvalidator_id")?.to_string();
+    with_api_mut(state, &api_id, |api| {
+        if api.request_validators.remove(&validator_id).is_none() {
+            return Err(AwsError::not_found(
+                "NotFoundException",
+                format!("Request validator {validator_id} not found"),
+            ));
+        }
+        Ok(json!({}))
+    })
+}
+
+fn model_to_json(m: &Model) -> Value {
+    json!({
+        "id": m.name,
+        "name": m.name,
+        "description": m.description,
+        "contentType": m.content_type,
+        "schema": serde_json::to_string(&m.schema).unwrap_or_else(|_| "{}".into()),
+    })
+}
+
+fn request_validator_to_json(v: &RequestValidator) -> Value {
+    json!({
+        "id": v.id,
+        "name": v.name,
+        "validateRequestBody": v.validate_request_body,
+        "validateRequestParameters": v.validate_request_parameters,
+    })
+}
+
+/// Validate a request body against a model's JSON Schema. Supports the
+/// subset AWS commonly emits in generated SDK examples — `type`,
+/// `required`, `properties`, `items`, `enum`, plus min/max for strings
+/// and numbers. Returns a human-readable error pointing at the first
+/// constraint that failed.
+pub fn validate_against_schema(
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    validate_schema_inner(schema, value, "$")
+}
+
+fn validate_schema_inner(
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+    path: &str,
+) -> Result<(), String> {
+    if let Some(type_field) = schema.get("type").and_then(|v| v.as_str()) {
+        check_type(type_field, value, path)?;
+    }
+    if let Some(enum_values) = schema.get("enum").and_then(|v| v.as_array())
+        && !enum_values.iter().any(|e| e == value)
+    {
+        return Err(format!("{path} must be one of {enum_values:?}"));
+    }
+    if let Some(props) = schema.get("properties").and_then(|v| v.as_object())
+        && let Some(obj) = value.as_object()
+    {
+        for (k, sub_schema) in props {
+            if let Some(sub_value) = obj.get(k) {
+                validate_schema_inner(sub_schema, sub_value, &format!("{path}.{k}"))?;
+            }
+        }
+    }
+    if let Some(required) = schema.get("required").and_then(|v| v.as_array())
+        && let Some(obj) = value.as_object()
+    {
+        for r in required.iter().filter_map(|v| v.as_str()) {
+            if !obj.contains_key(r) {
+                return Err(format!("{path}.{r} is required"));
+            }
+        }
+    }
+    if let Some(items) = schema.get("items")
+        && let Some(arr) = value.as_array()
+    {
+        for (i, item) in arr.iter().enumerate() {
+            validate_schema_inner(items, item, &format!("{path}[{i}]"))?;
+        }
+    }
+    if let Some(min) = schema.get("minLength").and_then(|v| v.as_u64())
+        && let Some(s) = value.as_str()
+        && (s.len() as u64) < min
+    {
+        return Err(format!("{path} must be at least {min} characters"));
+    }
+    if let Some(max) = schema.get("maxLength").and_then(|v| v.as_u64())
+        && let Some(s) = value.as_str()
+        && (s.len() as u64) > max
+    {
+        return Err(format!("{path} must be at most {max} characters"));
+    }
+    if let Some(min) = schema.get("minimum").and_then(|v| v.as_f64())
+        && let Some(n) = value.as_f64()
+        && n < min
+    {
+        return Err(format!("{path} must be >= {min}"));
+    }
+    if let Some(max) = schema.get("maximum").and_then(|v| v.as_f64())
+        && let Some(n) = value.as_f64()
+        && n > max
+    {
+        return Err(format!("{path} must be <= {max}"));
+    }
+    Ok(())
+}
+
+fn check_type(type_field: &str, value: &serde_json::Value, path: &str) -> Result<(), String> {
+    let ok = match type_field {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "number" => value.is_number(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => return Ok(()),
+    };
+    if !ok {
+        return Err(format!("{path} must be of type {type_field}"));
+    }
+    Ok(())
+}
+
 // --- API keys + usage plans ---------------------------------------------
 
 fn api_key_to_json(k: &ApiKey) -> Value {
@@ -2376,7 +2653,114 @@ mod tests {
             stages: HashMap::new(),
             deployments: vec![],
             authorizers: HashMap::new(),
+            models: HashMap::new(),
+            request_validators: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn validate_schema_accepts_well_formed_object() {
+        let schema = json!({
+            "type": "object",
+            "required": ["name", "qty"],
+            "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "qty": { "type": "integer", "minimum": 1, "maximum": 100 },
+                "status": { "type": "string", "enum": ["new", "shipped"] }
+            }
+        });
+        let value = json!({ "name": "Widget", "qty": 5, "status": "new" });
+        assert!(validate_against_schema(&schema, &value).is_ok());
+    }
+
+    #[test]
+    fn validate_schema_rejects_wrong_type() {
+        let schema = json!({ "type": "object", "properties": { "qty": { "type": "integer" } } });
+        let value = json!({ "qty": "five" });
+        let err = validate_against_schema(&schema, &value).unwrap_err();
+        assert!(err.contains("$.qty"));
+        assert!(err.contains("integer"));
+    }
+
+    #[test]
+    fn validate_schema_enforces_required() {
+        let schema = json!({
+            "type": "object",
+            "required": ["name"],
+            "properties": { "name": { "type": "string" } }
+        });
+        let value = json!({});
+        let err = validate_against_schema(&schema, &value).unwrap_err();
+        assert!(err.contains("name is required"));
+    }
+
+    #[test]
+    fn validate_schema_enforces_min_max_and_enum() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "qty": { "type": "integer", "minimum": 1, "maximum": 5 },
+                "name": { "type": "string", "minLength": 2 },
+                "status": { "type": "string", "enum": ["a", "b"] }
+            }
+        });
+        assert!(validate_against_schema(&schema, &json!({ "qty": 0 })).is_err());
+        assert!(validate_against_schema(&schema, &json!({ "qty": 9 })).is_err());
+        assert!(validate_against_schema(&schema, &json!({ "name": "x" })).is_err());
+        assert!(validate_against_schema(&schema, &json!({ "status": "c" })).is_err());
+    }
+
+    #[tokio::test]
+    async fn create_model_round_trips_through_handler() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, _root_id) = make_api(&svc).await;
+        let schema_str = r#"{"type":"object","required":["name"]}"#;
+        let resp = svc
+            .handle(
+                "CreateModel",
+                json!({
+                    "restapi_id": api_id.clone(),
+                    "name": "Item",
+                    "contentType": "application/json",
+                    "schema": schema_str,
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp["name"], "Item");
+        let got = svc
+            .handle(
+                "GetModel",
+                json!({ "restapi_id": api_id, "model_name": "Item" }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(got["contentType"], "application/json");
+        assert!(got["schema"].as_str().unwrap().contains("required"));
+    }
+
+    #[tokio::test]
+    async fn create_request_validator_round_trips() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, _root_id) = make_api(&svc).await;
+        let resp = svc
+            .handle(
+                "CreateRequestValidator",
+                json!({
+                    "restapi_id": api_id,
+                    "name": "BodyOnly",
+                    "validateRequestBody": true,
+                    "validateRequestParameters": false,
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp["name"], "BodyOnly");
+        assert_eq!(resp["validateRequestBody"], true);
+        assert!(resp["id"].as_str().is_some());
     }
 
     #[test]
