@@ -435,10 +435,19 @@ impl InterpreterContext {
             .cloned()
             .unwrap_or_else(|| vec![items.clone()]);
 
+        // ItemSelector (Map 2.0) reshapes each item into the payload the
+        // iterator receives. AWS evaluates ItemSelector keys ending in
+        // `.$` against the raw item, mirroring Parameters. Absent
+        // selector falls through to the bare item.
+        let item_selector = state.get("ItemSelector").cloned();
         let iter_def_str = iterator_def.to_string();
         let mut outputs: Vec<Value> = Vec::with_capacity(item_array.len());
         for item in &item_array {
-            let item_result = execute(&iter_def_str, &item.to_string(), &self.start_time);
+            let effective = match &item_selector {
+                Some(sel) if !sel.is_null() => apply_parameters(sel, item),
+                _ => item.clone(),
+            };
+            let item_result = execute(&iter_def_str, &effective.to_string(), &self.start_time);
             if item_result.status == "FAILED" {
                 return Err(StateFailed {
                     error: item_result.error.unwrap_or_default(),
@@ -1408,6 +1417,60 @@ mod tests {
         let b = out["b"].as_str().unwrap();
         assert_eq!(a.len(), 36);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn map_item_selector_reshapes_each_item_with_jsonpath() {
+        let def = r#"{
+            "StartAt": "ForEach",
+            "States": {
+                "ForEach": {
+                    "Type": "Map",
+                    "End": true,
+                    "ItemsPath": "$",
+                    "ItemSelector": {
+                        "id.$": "$.userId",
+                        "label": "constant"
+                    },
+                    "Iterator": {
+                        "StartAt": "Echo",
+                        "States": { "Echo": { "Type": "Pass", "End": true } }
+                    }
+                }
+            }
+        }"#;
+        let input = r#"[ { "userId": 1, "drop": true }, { "userId": 2 } ]"#;
+        let result = run(def, input);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(
+            out,
+            json!([
+                { "id": 1, "label": "constant" },
+                { "id": 2, "label": "constant" }
+            ])
+        );
+    }
+
+    #[test]
+    fn map_without_item_selector_passes_raw_item_through() {
+        let def = r#"{
+            "StartAt": "ForEach",
+            "States": {
+                "ForEach": {
+                    "Type": "Map",
+                    "End": true,
+                    "ItemsPath": "$",
+                    "Iterator": {
+                        "StartAt": "Echo",
+                        "States": { "Echo": { "Type": "Pass", "End": true } }
+                    }
+                }
+            }
+        }"#;
+        let result = run(def, r#"[{"a":1}, {"a":2}]"#);
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out, json!([{"a":1}, {"a":2}]));
     }
 
     #[test]
