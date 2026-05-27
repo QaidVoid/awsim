@@ -135,6 +135,10 @@ pub struct Authorizer {
     /// Cognito User Pool ARNs the authorizer trusts. Populated for
     /// COGNITO_USER_POOLS authorizers; ignored for the others.
     pub provider_arns: Vec<String>,
+    /// Regex applied to the resolved identity (TOKEN authorizers) before
+    /// invoking the Lambda. A non-matching value yields 401 without
+    /// invoking the upstream, matching AWS's pre-flight validation.
+    pub identity_validation_expression: Option<String>,
 }
 
 /// API key as stored. The `value` is the bearer string the SDK sends in
@@ -670,7 +674,7 @@ fn deployment_to_json(d: &Deployment) -> Value {
 }
 
 fn authorizer_to_json(a: &Authorizer) -> Value {
-    json!({
+    let mut obj = json!({
         "id": a.id,
         "name": a.name,
         "type": a.r#type,
@@ -679,7 +683,11 @@ fn authorizer_to_json(a: &Authorizer) -> Value {
         "identitySource": a.identity_source,
         "authorizerResultTtlInSeconds": a.result_ttl_in_seconds,
         "providerARNs": a.provider_arns,
-    })
+    });
+    if let Some(ref expr) = a.identity_validation_expression {
+        obj["identityValidationExpression"] = json!(expr);
+    }
+    obj
 }
 
 fn get_rest_apis(state: &ApiGatewayV1State) -> Value {
@@ -1389,6 +1397,18 @@ fn create_authorizer(state: &ApiGatewayV1State, input: &Value) -> Result<Value, 
                 .collect()
         })
         .unwrap_or_default();
+    let identity_validation_expression = input["identityValidationExpression"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if let Some(ref expr) = identity_validation_expression {
+        regex::Regex::new(expr).map_err(|e| {
+            AwsError::bad_request(
+                "BadRequestException",
+                format!("identityValidationExpression `{expr}` is not a valid regex: {e}"),
+            )
+        })?;
+    }
 
     with_api_mut(state, &api_id, |api| {
         let authorizer = Authorizer {
@@ -1400,6 +1420,7 @@ fn create_authorizer(state: &ApiGatewayV1State, input: &Value) -> Result<Value, 
             identity_source,
             result_ttl_in_seconds,
             provider_arns,
+            identity_validation_expression,
         };
         let json = authorizer_to_json(&authorizer);
         api.authorizers.insert(authorizer.id.clone(), authorizer);

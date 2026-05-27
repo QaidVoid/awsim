@@ -170,6 +170,20 @@ pub fn evaluate(
         }
     };
 
+    // identityValidationExpression is a TOKEN-authorizer pre-flight
+    // check: AWS rejects the request with 401 before invoking the
+    // Lambda if the identity does not match the configured regex.
+    if AuthorizerKind::from_authorizer(authorizer) == AuthorizerKind::Token
+        && let Some(ref pattern) = authorizer.identity_validation_expression
+        && let Ok(re) = regex::Regex::new(pattern)
+        && !re.is_match(&identity)
+    {
+        return AuthorizationStep::Unauthorized(format!(
+            "Identity does not match identityValidationExpression for authorizer {}",
+            authorizer.id
+        ));
+    }
+
     let cache_key = format!("{}:{identity}", authorizer.id);
     if let Some(outcome) = cache.get(&cache_key) {
         return AuthorizationStep::Allowed(outcome);
@@ -215,7 +229,7 @@ pub fn evaluate(
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AuthorizerKind {
     Cognito,
     Token,
@@ -463,6 +477,7 @@ mod tests {
             identity_source: identity_source.into(),
             result_ttl_in_seconds: ttl,
             provider_arns: Vec::new(),
+            identity_validation_expression: None,
         }
     }
 
@@ -689,5 +704,43 @@ mod tests {
         let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
         let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).unwrap());
         format!("{header}.{payload}.")
+    }
+
+    #[test]
+    fn identity_validation_expression_blocks_non_matching_token() {
+        let mut authorizers = HashMap::new();
+        let mut a = auth("TOKEN", 300, "method.request.header.Authorization");
+        a.identity_validation_expression = Some("^Bearer [A-Za-z0-9._-]+$".into());
+        authorizers.insert("auth1".into(), a);
+        let mut headers = HashMap::new();
+        headers.insert("authorization".into(), "not-a-bearer".into());
+        let step = evaluate_t(&method_with_authorizer("CUSTOM"), &authorizers, headers);
+        assert!(matches!(step, AuthorizationStep::Unauthorized(_)));
+    }
+
+    #[test]
+    fn identity_validation_expression_passes_matching_token() {
+        let mut authorizers = HashMap::new();
+        let mut a = auth("TOKEN", 300, "method.request.header.Authorization");
+        a.identity_validation_expression = Some("^Bearer [A-Za-z0-9._-]+$".into());
+        authorizers.insert("auth1".into(), a);
+        let mut headers = HashMap::new();
+        headers.insert("authorization".into(), "Bearer abc.def".into());
+        let step = evaluate_t(&method_with_authorizer("CUSTOM"), &authorizers, headers);
+        assert!(matches!(step, AuthorizationStep::InvokeLambda(_)));
+    }
+
+    #[test]
+    fn identity_validation_expression_skipped_for_request_authorizer() {
+        let mut authorizers = HashMap::new();
+        let mut a = auth("REQUEST", 300, "method.request.header.X-Token");
+        // Even a strict regex is ignored on REQUEST authorizers — AWS
+        // only consults it for the legacy TOKEN type.
+        a.identity_validation_expression = Some("^impossible$".into());
+        authorizers.insert("auth1".into(), a);
+        let mut headers = HashMap::new();
+        headers.insert("x-token".into(), "anything".into());
+        let step = evaluate_t(&method_with_authorizer("CUSTOM"), &authorizers, headers);
+        assert!(matches!(step, AuthorizationStep::InvokeLambda(_)));
     }
 }
