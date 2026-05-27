@@ -167,6 +167,136 @@ pub fn send_templated_email(
     Ok(json!({ "MessageId": message_id }))
 }
 
+/// SendBulkTemplatedEmail (SES v1) — render a single template to many
+/// destinations. Each `Destinations[]` entry can carry its own
+/// `ReplacementTemplateData` that overrides the request-level
+/// `DefaultTemplateData`. The response surfaces a per-destination
+/// status row, matching the AWS shape `{ "Status": [{...}] }`.
+pub fn send_bulk_templated_email(
+    state: &SesState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let from = input["Source"]
+        .as_str()
+        .or_else(|| input["FromEmailAddress"].as_str())
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Source is required"))?
+        .to_string();
+
+    let template_name = input["Template"]
+        .as_str()
+        .or_else(|| input["TemplateName"].as_str())
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Template is required"))?;
+    let template = state.templates.get(template_name).ok_or_else(|| {
+        AwsError::not_found(
+            "TemplateDoesNotExist",
+            format!("Template not found: {template_name}"),
+        )
+    })?;
+
+    let default_data: Value = input["DefaultTemplateData"]
+        .as_str()
+        .map(|s| serde_json::from_str(s).unwrap_or(Value::Null))
+        .unwrap_or(Value::Null);
+
+    let configuration_set_name = input["ConfigurationSetName"].as_str().map(str::to_string);
+    enforce_configuration_set(state, configuration_set_name.as_deref(), input)?;
+    let reply_to = address_list(&input["ReplyToAddresses"]);
+    let request_tags = parse_email_tags(input.get("DefaultTags").or_else(|| input.get("Tags")));
+
+    let destinations = input["Destinations"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    let mut statuses: Vec<Value> = Vec::with_capacity(destinations.len());
+    for dest in destinations {
+        let to = address_list(&dest["Destination"]["ToAddresses"]);
+        let cc = address_list(&dest["Destination"]["CcAddresses"]);
+        let bcc = address_list(&dest["Destination"]["BccAddresses"]);
+        if to.is_empty() && cc.is_empty() && bcc.is_empty() {
+            statuses.push(json!({
+                "Status": "MessageRejected",
+                "Error": "At least one recipient address is required",
+            }));
+            continue;
+        }
+
+        let replacement_data: Value = dest["ReplacementTemplateData"]
+            .as_str()
+            .map(|s| serde_json::from_str(s).unwrap_or(Value::Null))
+            .unwrap_or(Value::Null);
+        let merged = merge_template_data(&default_data, &replacement_data);
+
+        let subject = template
+            .subject
+            .as_deref()
+            .map(|s| render_template(s, &merged));
+        let body_text = template
+            .text
+            .as_deref()
+            .map(|s| render_template(s, &merged));
+        let body_html = template
+            .html
+            .as_deref()
+            .map(|s| render_template(s, &merged));
+
+        // Merge ReplacementTags over the request-level DefaultTags.
+        let mut tags = request_tags.clone();
+        let replacement_tags = parse_email_tags(Some(&dest["ReplacementTags"]));
+        for (k, v) in replacement_tags {
+            if let Some(existing) = tags.iter_mut().find(|(name, _)| *name == k) {
+                existing.1 = v;
+            } else {
+                tags.push((k, v));
+            }
+        }
+
+        let message_id = Uuid::new_v4().to_string();
+        let email = SentEmail {
+            message_id: message_id.clone(),
+            from: from.clone(),
+            to,
+            cc,
+            bcc,
+            reply_to: reply_to.clone(),
+            subject,
+            body_text,
+            body_html,
+            raw: None,
+            sent_at: now_epoch(),
+            configuration_set_name: configuration_set_name.clone(),
+            tags,
+        };
+
+        if let Some(store) = state.sqlite() {
+            store.put_email(&ctx.account_id, &ctx.region, &email)?;
+        }
+        statuses.push(json!({ "Status": "Success", "MessageId": message_id }));
+    }
+
+    Ok(json!({ "Status": statuses }))
+}
+
+/// Merge per-destination `ReplacementTemplateData` over the request's
+/// `DefaultTemplateData`. AWS treats both as flat JSON objects of
+/// scalar values; replacement keys win when both sides define the same
+/// name.
+fn merge_template_data(default: &Value, replacement: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    if let Some(obj) = default.as_object() {
+        for (k, v) in obj {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    if let Some(obj) = replacement.as_object() {
+        for (k, v) in obj {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    Value::Object(out)
+}
+
 /// SendRawEmail (SES v1) — accept an RFC 2822 message and route it.
 /// Parses the raw MIME headers to pull out subject + recipients when
 /// the caller doesn't supply Destinations explicitly, and persists
@@ -648,6 +778,110 @@ mod tls_policy_enforcement_tests {
     fn open_store() -> std::sync::Arc<crate::SqliteStore> {
         let path = std::env::temp_dir().join(format!("awsim-ses-cc-{}.db", uuid::Uuid::new_v4()));
         std::sync::Arc::new(crate::SqliteStore::open(path).unwrap())
+    }
+
+    #[test]
+    fn send_bulk_templated_email_merges_replacement_data_per_destination() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store.clone());
+        crate::operations::templates::create_email_template(
+            &state,
+            &json!({
+                "TemplateName": "promo",
+                "TemplateContent": {
+                    "Subject": "Hi {{name}}",
+                    "Text": "Code {{code}} for {{name}}.",
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let resp = send_bulk_templated_email(
+            &state,
+            &json!({
+                "Source": "alice@example.com",
+                "Template": "promo",
+                "DefaultTemplateData": "{\"name\":\"friend\",\"code\":\"SAVE10\"}",
+                "Destinations": [
+                    {
+                        "Destination": { "ToAddresses": ["a@example.com"] },
+                        "ReplacementTemplateData": "{\"name\":\"Alex\"}"
+                    },
+                    {
+                        "Destination": { "ToAddresses": ["b@example.com"] },
+                        "ReplacementTemplateData": "{\"code\":\"VIP\"}"
+                    }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let statuses = resp["Status"].as_array().unwrap();
+        assert_eq!(statuses.len(), 2);
+        assert!(statuses.iter().all(|s| s["Status"] == "Success"));
+
+        let rows = store.list_all().unwrap();
+        assert_eq!(rows.len(), 2);
+        let by_to: std::collections::HashMap<_, _> = rows
+            .iter()
+            .map(|r| (r.email.to[0].clone(), &r.email))
+            .collect();
+        assert_eq!(by_to["a@example.com"].subject.as_deref(), Some("Hi Alex"));
+        assert_eq!(
+            by_to["a@example.com"].body_text.as_deref(),
+            Some("Code SAVE10 for Alex.")
+        );
+        assert_eq!(by_to["b@example.com"].subject.as_deref(), Some("Hi friend"));
+        assert_eq!(
+            by_to["b@example.com"].body_text.as_deref(),
+            Some("Code VIP for friend.")
+        );
+    }
+
+    #[test]
+    fn send_bulk_templated_email_rejects_destination_without_recipients() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store);
+        crate::operations::templates::create_email_template(
+            &state,
+            &json!({ "TemplateName": "t", "TemplateContent": { "Subject": "x" } }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = send_bulk_templated_email(
+            &state,
+            &json!({
+                "Source": "a@example.com",
+                "Template": "t",
+                "Destinations": [ { "Destination": {} } ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let statuses = resp["Status"].as_array().unwrap();
+        assert_eq!(statuses[0]["Status"], "MessageRejected");
+    }
+
+    #[test]
+    fn send_bulk_templated_email_returns_not_found_for_missing_template() {
+        let state = SesState::default();
+        let err = send_bulk_templated_email(
+            &state,
+            &json!({
+                "Source": "a@example.com",
+                "Template": "missing",
+                "Destinations": [
+                    { "Destination": { "ToAddresses": ["b@example.com"] } }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "TemplateDoesNotExist");
     }
 
     #[test]
