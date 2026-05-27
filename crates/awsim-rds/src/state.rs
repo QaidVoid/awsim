@@ -80,6 +80,20 @@ pub struct DbInstance {
     /// e.g. ["error","slowquery"] for MySQL or ["postgresql"] for PG.
     #[serde(default)]
     pub enabled_cloudwatch_logs_exports: Vec<String>,
+    /// Weekly maintenance window in the AWS-documented format
+    /// `ddd:hh24:mi-ddd:hh24:mi`. AWS assigns a default (30-minute
+    /// window in the region's "off-hours" block) if the caller does
+    /// not specify one; we mirror that by stamping `sun:05:00-sun:05:30`
+    /// when omitted.
+    #[serde(default)]
+    pub preferred_maintenance_window: Option<String>,
+    /// `ModifyDBInstance` with `ApplyImmediately=false` (the default for
+    /// destructive changes) stages the diff here until the next
+    /// maintenance window applies it. AWS returns the staged set on
+    /// `DescribeDBInstances.PendingModifiedValues`; an empty map means
+    /// no changes are pending.
+    #[serde(default)]
+    pub pending_modified_values: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

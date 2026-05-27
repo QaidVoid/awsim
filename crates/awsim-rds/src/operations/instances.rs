@@ -61,8 +61,80 @@ fn instance_to_value(inst: &DbInstance) -> Value {
         obj["MonitoringRoleArn"] = json!(role);
     }
     obj["EnabledCloudwatchLogsExports"] = json!(inst.enabled_cloudwatch_logs_exports);
+    if let Some(ref window) = inst.preferred_maintenance_window {
+        obj["PreferredMaintenanceWindow"] = json!(window);
+    }
+    if !inst.pending_modified_values.is_empty() {
+        obj["PendingModifiedValues"] =
+            serde_json::to_value(&inst.pending_modified_values).unwrap_or_else(|_| json!({}));
+    }
     obj
 }
+
+/// Validate the AWS preferred-maintenance-window format
+/// `ddd:hh24:mi-ddd:hh24:mi` (e.g. `sun:05:00-sun:06:00`). AWS
+/// additionally requires the window to be at least 30 minutes wide;
+/// we enforce shape and field ranges but skip the duration check
+/// since clients almost universally pass the AWS-default 30-minute
+/// shape.
+fn validate_maintenance_window(s: &str) -> Result<(), AwsError> {
+    let (start, end) = s.split_once('-').ok_or_else(|| {
+        invalid_parameter(format!(
+            "PreferredMaintenanceWindow `{s}` must be in `ddd:hh24:mi-ddd:hh24:mi` form."
+        ))
+    })?;
+    parse_window_anchor(start, s)?;
+    parse_window_anchor(end, s)?;
+    Ok(())
+}
+
+fn parse_window_anchor(anchor: &str, original: &str) -> Result<(), AwsError> {
+    let parts: Vec<&str> = anchor.split(':').collect();
+    if parts.len() != 3 {
+        return Err(invalid_parameter(format!(
+            "PreferredMaintenanceWindow `{original}` anchor `{anchor}` must be \
+             `ddd:hh:mm`."
+        )));
+    }
+    if !matches!(
+        parts[0],
+        "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"
+    ) {
+        return Err(invalid_parameter(format!(
+            "PreferredMaintenanceWindow `{original}` day-of-week `{}` must be one of \
+             mon/tue/wed/thu/fri/sat/sun.",
+            parts[0]
+        )));
+    }
+    let hour: u32 = parts[1].parse().map_err(|_| {
+        invalid_parameter(format!(
+            "PreferredMaintenanceWindow `{original}` hour `{}` must be 00..=23.",
+            parts[1]
+        ))
+    })?;
+    if hour > 23 {
+        return Err(invalid_parameter(format!(
+            "PreferredMaintenanceWindow `{original}` hour `{hour}` must be 00..=23."
+        )));
+    }
+    let minute: u32 = parts[2].parse().map_err(|_| {
+        invalid_parameter(format!(
+            "PreferredMaintenanceWindow `{original}` minute `{}` must be 00..=59.",
+            parts[2]
+        ))
+    })?;
+    if minute > 59 {
+        return Err(invalid_parameter(format!(
+            "PreferredMaintenanceWindow `{original}` minute `{minute}` must be 00..=59."
+        )));
+    }
+    Ok(())
+}
+
+/// Default 30-minute window AWS assigns when the caller omits the
+/// field. Real AWS stamps a region-specific off-hours window; we use
+/// a fixed Sunday 05:00 UTC slot so tests are deterministic.
+const DEFAULT_MAINTENANCE_WINDOW: &str = "sun:05:00-sun:05:30";
 
 /// Allowed license models per engine family. AWS rejects mismatches at
 /// CreateDBInstance/ModifyDBInstance with InvalidParameterCombination.
@@ -224,6 +296,14 @@ pub fn create_db_instance(
         validate_log_export(engine, log_type)?;
     }
 
+    let preferred_maintenance_window = match opt_str(input, "PreferredMaintenanceWindow") {
+        Some(w) => {
+            validate_maintenance_window(w)?;
+            Some(w.to_string())
+        }
+        None => Some(DEFAULT_MAINTENANCE_WINDOW.to_string()),
+    };
+
     let inst = DbInstance {
         identifier: identifier.to_string(),
         arn: arn.clone(),
@@ -249,6 +329,8 @@ pub fn create_db_instance(
         monitoring_interval,
         monitoring_role_arn,
         enabled_cloudwatch_logs_exports,
+        preferred_maintenance_window,
+        pending_modified_values: std::collections::HashMap::new(),
     };
 
     let result = instance_to_value(&inst);
@@ -320,31 +402,83 @@ pub fn modify_db_instance(
         .get_mut(identifier)
         .ok_or_else(|| db_instance_not_found(identifier))?;
 
-    if let Some(class) = opt_str(input, "DBInstanceClass") {
-        inst.instance_class = class.to_string();
+    // PreferredMaintenanceWindow applies immediately on real AWS — it
+    // controls *when* future changes flush, so staging it under
+    // PendingModifiedValues would be self-defeating. Validate shape
+    // up-front so a bad string surfaces InvalidParameterValue rather
+    // than silently corrupting the schedule.
+    if let Some(window) = opt_str(input, "PreferredMaintenanceWindow") {
+        validate_maintenance_window(window)?;
+        inst.preferred_maintenance_window = Some(window.to_string());
     }
-    if let Some(storage) = opt_u32(input, "AllocatedStorage") {
-        inst.allocated_storage = storage;
-    }
-    if let Some(multi_az) = opt_bool(input, "MultiAZ") {
-        inst.multi_az = multi_az;
-    }
-    if let Some(publicly_accessible) = opt_bool(input, "PubliclyAccessible") {
-        inst.publicly_accessible = publicly_accessible;
-    }
-    if let Some(storage_type) = opt_str(input, "StorageType") {
-        inst.storage_type = storage_type.to_string();
-    }
-    if let Some(lm) = opt_str(input, "LicenseModel") {
-        let allowed = allowed_license_models(&inst.engine);
-        if !allowed.contains(&lm) {
-            return Err(invalid_parameter(format!(
-                "LicenseModel '{lm}' is not valid for engine '{}'; allowed: {}.",
-                inst.engine,
-                allowed.join(", "),
-            )));
+
+    let apply_immediately = opt_bool(input, "ApplyImmediately").unwrap_or(false);
+
+    // Validate LicenseModel before deciding the apply path so a bad
+    // value surfaces as InvalidParameterValue regardless of timing.
+    let validated_license_model = match opt_str(input, "LicenseModel") {
+        Some(lm) => {
+            let allowed = allowed_license_models(&inst.engine);
+            if !allowed.contains(&lm) {
+                return Err(invalid_parameter(format!(
+                    "LicenseModel '{lm}' is not valid for engine '{}'; allowed: {}.",
+                    inst.engine,
+                    allowed.join(", "),
+                )));
+            }
+            Some(lm.to_string())
         }
-        inst.license_model = Some(lm.to_string());
+        None => None,
+    };
+
+    if apply_immediately {
+        if let Some(class) = opt_str(input, "DBInstanceClass") {
+            inst.instance_class = class.to_string();
+        }
+        if let Some(storage) = opt_u32(input, "AllocatedStorage") {
+            inst.allocated_storage = storage;
+        }
+        if let Some(multi_az) = opt_bool(input, "MultiAZ") {
+            inst.multi_az = multi_az;
+        }
+        if let Some(publicly_accessible) = opt_bool(input, "PubliclyAccessible") {
+            inst.publicly_accessible = publicly_accessible;
+        }
+        if let Some(storage_type) = opt_str(input, "StorageType") {
+            inst.storage_type = storage_type.to_string();
+        }
+        if let Some(lm) = validated_license_model {
+            inst.license_model = Some(lm);
+        }
+        inst.pending_modified_values.clear();
+    } else {
+        // Stage the diff. AWS shape: PendingModifiedValues echoes the
+        // requested *new* values; the live config keeps the current
+        // ones until the next maintenance window applies them.
+        if let Some(class) = opt_str(input, "DBInstanceClass") {
+            inst.pending_modified_values
+                .insert("DBInstanceClass".to_string(), json!(class));
+        }
+        if let Some(storage) = opt_u32(input, "AllocatedStorage") {
+            inst.pending_modified_values
+                .insert("AllocatedStorage".to_string(), json!(storage));
+        }
+        if let Some(multi_az) = opt_bool(input, "MultiAZ") {
+            inst.pending_modified_values
+                .insert("MultiAZ".to_string(), json!(multi_az));
+        }
+        if let Some(publicly_accessible) = opt_bool(input, "PubliclyAccessible") {
+            inst.pending_modified_values
+                .insert("PubliclyAccessible".to_string(), json!(publicly_accessible));
+        }
+        if let Some(storage_type) = opt_str(input, "StorageType") {
+            inst.pending_modified_values
+                .insert("StorageType".to_string(), json!(storage_type));
+        }
+        if let Some(lm) = validated_license_model {
+            inst.pending_modified_values
+                .insert("LicenseModel".to_string(), json!(lm));
+        }
     }
 
     let result = instance_to_value(&inst);
@@ -637,5 +771,147 @@ mod create_db_instance_tests {
         let err = create_db_instance(&state, &input, &ctx()).unwrap_err();
         assert_eq!(err.code, "InvalidParameterValue");
         assert!(err.message.contains("slowquery"));
+    }
+
+    #[test]
+    fn stamps_default_maintenance_window_when_omitted() {
+        let state = RdsState::default();
+        let resp = create_db_instance(&state, &base_input(), &ctx()).unwrap();
+        assert_eq!(
+            resp["DBInstance"]["PreferredMaintenanceWindow"],
+            json!(DEFAULT_MAINTENANCE_WINDOW)
+        );
+    }
+
+    #[test]
+    fn accepts_custom_maintenance_window() {
+        let state = RdsState::default();
+        let mut input = base_input();
+        input["PreferredMaintenanceWindow"] = json!("tue:03:30-tue:04:00");
+        let resp = create_db_instance(&state, &input, &ctx()).unwrap();
+        assert_eq!(
+            resp["DBInstance"]["PreferredMaintenanceWindow"],
+            json!("tue:03:30-tue:04:00")
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_maintenance_window() {
+        for bad in [
+            "garbage",
+            "sun:99:00-sun:09:30",
+            "sun:05:00-funday:06:00",
+            "sun:05:00",
+        ] {
+            let state = RdsState::default();
+            let mut input = base_input();
+            input["PreferredMaintenanceWindow"] = json!(bad);
+            let err = create_db_instance(&state, &input, &ctx()).unwrap_err();
+            assert_eq!(err.code, "InvalidParameterValue", "input `{bad}`");
+        }
+    }
+}
+
+#[cfg(test)]
+mod modify_db_instance_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("rds", "us-east-1")
+    }
+
+    fn seed(state: &RdsState) {
+        let input = json!({
+            "DBInstanceIdentifier": "prod-db",
+            "DBInstanceClass": "db.t3.micro",
+            "Engine": "postgres",
+            "MasterUsername": "admin",
+            "MasterUserPassword": "secret123",
+        });
+        create_db_instance(state, &input, &ctx()).unwrap();
+    }
+
+    #[test]
+    fn apply_immediately_false_stages_diff_under_pending_modified_values() {
+        let state = RdsState::default();
+        seed(&state);
+        let resp = modify_db_instance(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "prod-db",
+                "DBInstanceClass": "db.t3.large",
+                "AllocatedStorage": 200,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // Live config still reflects the original class until the
+        // window applies; the new class lives under PendingModifiedValues.
+        assert_eq!(resp["DBInstance"]["DBInstanceClass"], json!("db.t3.micro"));
+        assert_eq!(resp["DBInstance"]["AllocatedStorage"], json!(20));
+        assert_eq!(
+            resp["DBInstance"]["PendingModifiedValues"]["DBInstanceClass"],
+            json!("db.t3.large")
+        );
+        assert_eq!(
+            resp["DBInstance"]["PendingModifiedValues"]["AllocatedStorage"],
+            json!(200)
+        );
+    }
+
+    #[test]
+    fn apply_immediately_true_flushes_live_and_clears_pending() {
+        let state = RdsState::default();
+        seed(&state);
+        let resp = modify_db_instance(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "prod-db",
+                "DBInstanceClass": "db.t3.large",
+                "ApplyImmediately": true,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["DBInstance"]["DBInstanceClass"], json!("db.t3.large"));
+        assert!(
+            resp["DBInstance"].get("PendingModifiedValues").is_none(),
+            "PendingModifiedValues should be omitted when no diff is staged: {resp}"
+        );
+    }
+
+    #[test]
+    fn modify_maintenance_window_applies_immediately() {
+        let state = RdsState::default();
+        seed(&state);
+        let resp = modify_db_instance(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "prod-db",
+                "PreferredMaintenanceWindow": "sat:10:00-sat:10:30",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(
+            resp["DBInstance"]["PreferredMaintenanceWindow"],
+            json!("sat:10:00-sat:10:30")
+        );
+    }
+
+    #[test]
+    fn modify_rejects_malformed_maintenance_window() {
+        let state = RdsState::default();
+        seed(&state);
+        let err = modify_db_instance(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "prod-db",
+                "PreferredMaintenanceWindow": "sometime",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
     }
 }
