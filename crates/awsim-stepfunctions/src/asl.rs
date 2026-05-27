@@ -374,6 +374,25 @@ impl InterpreterContext {
             }),
         );
 
+        // TimeoutSeconds: a Task with a non-positive deadline trips
+        // States.Timeout right away. The simulator also honors an opt-in
+        // `_simulateTimeout` marker in the input so tests can exercise
+        // Retry+Catch behavior without real wall-clock waits. Real AWS
+        // raises States.Timeout when the configured deadline lapses; in
+        // either case the resulting error feeds the Retry/Catch
+        // evaluation in `run_state`.
+        let timeout = state.get("TimeoutSeconds").and_then(Value::as_i64);
+        let simulate_timeout = input
+            .get("_simulateTimeout")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if simulate_timeout || matches!(timeout, Some(s) if s <= 0) {
+            return Err(StateFailed {
+                error: "States.Timeout".to_string(),
+                cause: "Task timed out before producing a result".to_string(),
+            });
+        }
+
         // `.async` integrations return immediately with a minimal
         // acknowledgement; the simulator never blocks waiting on the
         // downstream service. Other integration modes echo the input as
@@ -1464,6 +1483,76 @@ mod tests {
         let b = out["b"].as_str().unwrap();
         assert_eq!(a.len(), 36);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn task_timeout_propagates_to_retry_and_catch() {
+        // Retry says "retry once on States.Timeout"; the Task always
+        // times out, so after one retry the failure should hit Catch
+        // and route to the handler state.
+        let def = r#"{
+            "StartAt": "MaybeFail",
+            "States": {
+                "MaybeFail": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::lambda:invoke",
+                    "TimeoutSeconds": 0,
+                    "Retry": [
+                        { "ErrorEquals": ["States.Timeout"], "MaxAttempts": 2 }
+                    ],
+                    "Catch": [
+                        { "ErrorEquals": ["States.Timeout"], "Next": "Recover" }
+                    ],
+                    "End": true
+                },
+                "Recover": { "Type": "Pass", "Result": "recovered", "End": true }
+            }
+        }"#;
+        let result = run(def, "{}");
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out, json!("recovered"));
+        let retries = result
+            .history
+            .iter()
+            .filter(|e| e.event_type == "StateRetrying")
+            .count();
+        assert_eq!(retries, 2, "should retry exactly MaxAttempts times");
+    }
+
+    #[test]
+    fn task_timeout_without_catch_surfaces_states_timeout() {
+        let def = r#"{
+            "StartAt": "Slow",
+            "States": {
+                "Slow": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::lambda:invoke",
+                    "TimeoutSeconds": 0,
+                    "End": true
+                }
+            }
+        }"#;
+        let result = run(def, "{}");
+        assert_eq!(result.status, "FAILED");
+        assert_eq!(result.error.as_deref(), Some("States.Timeout"));
+    }
+
+    #[test]
+    fn task_simulate_timeout_marker_triggers_states_timeout() {
+        let def = r#"{
+            "StartAt": "MaybeFail",
+            "States": {
+                "MaybeFail": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::lambda:invoke",
+                    "End": true
+                }
+            }
+        }"#;
+        let result = run(def, r#"{"_simulateTimeout": true}"#);
+        assert_eq!(result.status, "FAILED");
+        assert_eq!(result.error.as_deref(), Some("States.Timeout"));
     }
 
     #[test]
