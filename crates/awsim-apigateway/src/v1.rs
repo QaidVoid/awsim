@@ -1908,7 +1908,7 @@ pub fn proxy_request(
 
     Some(V1ProxyMatch {
         integration_type: integration.r#type.clone(),
-        integration_uri: integration.uri.clone(),
+        integration_uri: interpolate_stage_variables(&integration.uri, &stage_vars),
         event,
         matched_resource_path: resource.path.clone(),
         integration: integration.clone(),
@@ -1919,6 +1919,45 @@ pub fn proxy_request(
         request_context,
         authorization,
     })
+}
+
+/// Replace `${stageVariables.foo}` and `$stageVariables.foo` occurrences
+/// with the named stage variable. AWS does this substitution before
+/// dispatching to the integration; missing variables collapse to an
+/// empty string, matching AWS's behavior of failing-soft when a stage
+/// variable is not defined.
+pub fn interpolate_stage_variables(template: &str, stage_vars: &HashMap<String, String>) -> String {
+    let mut out = template.to_string();
+    // ${stageVariables.foo}
+    while let Some(start) = out.find("${stageVariables.") {
+        let after = start + "${stageVariables.".len();
+        let Some(rel_end) = out[after..].find('}') else {
+            break;
+        };
+        let end = after + rel_end;
+        let key = &out[after..end];
+        let value = stage_vars.get(key).cloned().unwrap_or_default();
+        out.replace_range(start..=end, &value);
+    }
+    // $stageVariables.foo (only when the next char would terminate an identifier)
+    let mut search = 0;
+    while let Some(found) = out[search..].find("$stageVariables.") {
+        let start = search + found;
+        let after = start + "$stageVariables.".len();
+        let key_end = out[after..]
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .map(|n| after + n)
+            .unwrap_or(out.len());
+        if key_end == after {
+            search = after;
+            continue;
+        }
+        let key = out[after..key_end].to_string();
+        let value = stage_vars.get(&key).cloned().unwrap_or_default();
+        out.replace_range(start..key_end, &value);
+        search = start + value.len();
+    }
+    out
 }
 
 fn json_string_map(v: &Value) -> HashMap<String, String> {
@@ -2039,6 +2078,25 @@ fn parse_query_params(qs: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interpolate_stage_variables_handles_braced_and_unbraced() {
+        let mut vars = HashMap::new();
+        vars.insert("host".to_string(), "api.example.com".to_string());
+        vars.insert("path".to_string(), "v1".to_string());
+        assert_eq!(
+            interpolate_stage_variables("https://${stageVariables.host}/x", &vars),
+            "https://api.example.com/x"
+        );
+        assert_eq!(
+            interpolate_stage_variables("$stageVariables.path/items", &vars),
+            "v1/items"
+        );
+        assert_eq!(
+            interpolate_stage_variables("$stageVariables.missing/end", &vars),
+            "/end"
+        );
+    }
 
     fn ctx() -> RequestContext {
         RequestContext {
@@ -2675,6 +2733,64 @@ mod tests {
             Some("live")
         );
         assert_eq!(m.event["stageVariables"]["env"], "live");
+    }
+
+    #[tokio::test]
+    async fn proxy_match_interpolates_stage_variables_into_integration_uri() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        svc.handle(
+            "PutMethod",
+            json!({"restapi_id": api_id.clone(), "resource_id": root_id.clone(), "http_method": "GET"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "PutIntegration",
+            json!({
+                "restapi_id": api_id.clone(),
+                "resource_id": root_id,
+                "http_method": "GET",
+                "type": "HTTP",
+                "uri": "https://${stageVariables.host}/items/$stageVariables.path",
+                "integrationHttpMethod": "GET"
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "CreateDeployment",
+            json!({"restapi_id": api_id.clone(), "stageName": "prod"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        {
+            let store = svc.store.get("000000000000", "us-east-1");
+            let mut entry = store.apis.get_mut(&api_id).unwrap();
+            let stage = entry.value_mut().stages.get_mut("prod").unwrap();
+            stage
+                .variables
+                .insert("host".into(), "api.example.com".into());
+            stage.variables.insert("path".into(), "v2".into());
+        }
+        let store = svc.store.get("000000000000", "us-east-1");
+        let m = proxy_request(
+            &store,
+            &api_id,
+            "prod",
+            "GET",
+            "/",
+            "",
+            &HashMap::new(),
+            &[],
+            "000000000000",
+            "us-east-1",
+        )
+        .expect("match");
+        assert_eq!(m.integration_uri, "https://api.example.com/items/v2");
     }
 
     #[tokio::test]
