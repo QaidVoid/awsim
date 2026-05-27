@@ -282,6 +282,78 @@ mod tests {
     }
 
     #[test]
+    fn universal_target_arn_accepts_documented_service_action() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "sqs-send",
+                "ScheduleExpression": "rate(1 minute)",
+                "Target": {
+                    "Arn": "arn:aws:scheduler:::aws-sdk:sqs:sendMessage",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn target_arn_rejects_malformed_universal() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        for bad in [
+            // missing aws-sdk prefix
+            "arn:aws:scheduler:::custom:sqs:sendMessage",
+            // empty service
+            "arn:aws:scheduler:::aws-sdk::sendMessage",
+            // service has uppercase
+            "arn:aws:scheduler:::aws-sdk:SQS:sendMessage",
+            // empty action
+            "arn:aws:scheduler:::aws-sdk:sqs:",
+            // action starts with digit
+            "arn:aws:scheduler:::aws-sdk:sqs:1send",
+        ] {
+            let err = block_on(svc.handle(
+                "CreateSchedule",
+                json!({
+                    "Name": format!("bad-{}", &bad.split(':').next_back().unwrap_or("x")),
+                    "ScheduleExpression": "rate(1 minute)",
+                    "Target": { "Arn": bad, "RoleArn": "arn:aws:iam::000000000000:role/r" },
+                    "FlexibleTimeWindow": { "Mode": "OFF" },
+                }),
+                &ctx,
+            ))
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input `{bad}`");
+        }
+    }
+
+    #[test]
+    fn target_arn_rejects_missing_arn_prefix() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "no-arn",
+                "ScheduleExpression": "rate(1 minute)",
+                "Target": {
+                    "Arn": "lambda:function:foo",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
     fn client_token_replay_returns_cached_schedule_arn() {
         let svc = SchedulerService::new();
         let ctx = ctx();

@@ -66,6 +66,7 @@ pub fn create_schedule(
             "Target is required",
         ));
     }
+    validate_target_arn(&target)?;
 
     let group_name = input["GroupName"].as_str().unwrap_or("default").to_string();
 
@@ -113,6 +114,88 @@ pub fn create_schedule(
             .insert(token, req_hash, result.clone());
     }
     Ok(result)
+}
+
+/// Validate the `Target.Arn` shape. AWS Scheduler accepts two
+/// flavours:
+///
+/// 1. **Templated service target** — a normal AWS resource ARN
+///    (`arn:aws:<service>:<region>:<account>:<resource>`). We
+///    sanity-check the prefix and segment count but don't enforce a
+///    service catalog.
+/// 2. **Universal target** — `arn:aws:scheduler:::aws-sdk:<service>:<action>`.
+///    The middle region/account/resource-type segments are empty by
+///    convention and `<service>:<action>` is required to be a non-empty
+///    lowercase-letter pair. AWS rejects invalid `service:action`
+///    combinations with `ValidationException`.
+fn validate_target_arn(target: &Value) -> Result<(), AwsError> {
+    let arn = target
+        .get("Arn")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AwsError::bad_request("ValidationException", "Target.Arn is required"))?;
+    if !arn.starts_with("arn:") {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("Target.Arn `{arn}` must start with `arn:`."),
+        ));
+    }
+    // Universal target: arn:aws:scheduler:::aws-sdk:<service>:<action>
+    if let Some(tail) = arn.strip_prefix("arn:aws:scheduler:::") {
+        let parts: Vec<&str> = tail.splitn(3, ':').collect();
+        if parts.len() != 3 || parts[0] != "aws-sdk" {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!(
+                    "Universal target `{arn}` must be \
+                     `arn:aws:scheduler:::aws-sdk:<service>:<action>`."
+                ),
+            ));
+        }
+        let service = parts[1];
+        let action = parts[2];
+        let service_ok = !service.is_empty()
+            && service
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !service_ok {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!(
+                    "Universal target `{arn}` has an invalid service `{service}`; \
+                     must be lowercase letters / digits / `-`."
+                ),
+            ));
+        }
+        // Actions are camelCase: at least one letter, no whitespace.
+        let action_ok = !action.is_empty()
+            && action.chars().all(|c| c.is_ascii_alphanumeric())
+            && action
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic());
+        if !action_ok {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!(
+                    "Universal target `{arn}` has an invalid action `{action}`; \
+                     must be camelCase alphanumerics starting with a letter."
+                ),
+            ));
+        }
+        return Ok(());
+    }
+    // Templated target: standard 6-segment ARN.
+    let segs: Vec<&str> = arn.split(':').collect();
+    if segs.len() < 6 || segs[0] != "arn" || segs[1].is_empty() || segs[2].is_empty() {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "Target.Arn `{arn}` must have the AWS-standard shape \
+                 `arn:<partition>:<service>:<region>:<account>:<resource>`."
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Hashable canonical representation of `CreateSchedule`'s body for
@@ -275,6 +358,7 @@ pub fn update_schedule(
         schedule.schedule_expression = expr.to_string();
     }
     if !input["Target"].is_null() {
+        validate_target_arn(&input["Target"])?;
         schedule.target = input["Target"].clone();
     }
     if let Some(s) = input["State"].as_str() {
