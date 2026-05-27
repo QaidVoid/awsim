@@ -16,6 +16,14 @@ pub struct Schedule {
     pub state: String,
     pub created_at: u64,
     pub last_modified_at: u64,
+    /// IANA timezone (`Continent/City`, or `UTC`/`GMT`/`Etc/*` aliases).
+    /// AWS defaults to `UTC` when the field is absent on the request.
+    #[serde(default = "default_timezone")]
+    pub schedule_expression_timezone: String,
+}
+
+fn default_timezone() -> String {
+    "UTC".to_string()
 }
 
 /// A Schedule Group.

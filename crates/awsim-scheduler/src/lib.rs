@@ -282,6 +282,79 @@ mod tests {
     }
 
     #[test]
+    fn create_schedule_defaults_timezone_to_utc() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "tz-default",
+                "ScheduleExpression": "rate(5 minutes)",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let desc =
+            block_on(svc.handle("GetSchedule", json!({ "Name": "tz-default" }), &ctx)).unwrap();
+        assert_eq!(desc["ScheduleExpressionTimezone"], json!("UTC"));
+    }
+
+    #[test]
+    fn create_schedule_accepts_iana_timezone() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "tz-iana",
+                "ScheduleExpression": "cron(0 9 * * ? *)",
+                "ScheduleExpressionTimezone": "America/New_York",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let desc = block_on(svc.handle("GetSchedule", json!({ "Name": "tz-iana" }), &ctx)).unwrap();
+        assert_eq!(
+            desc["ScheduleExpressionTimezone"],
+            json!("America/New_York")
+        );
+    }
+
+    #[test]
+    fn create_schedule_rejects_malformed_timezone() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        for bad in ["nope", "lower/case", "America/", "/New_York", "1Foo/Bar"] {
+            let err = block_on(svc.handle(
+                "CreateSchedule",
+                json!({
+                    "Name": format!("tz-bad-{}", bad.replace('/', "-")),
+                    "ScheduleExpression": "rate(1 minute)",
+                    "ScheduleExpressionTimezone": bad,
+                    "Target": {
+                        "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                        "RoleArn": "arn:aws:iam::000000000000:role/r",
+                    },
+                    "FlexibleTimeWindow": { "Mode": "OFF" },
+                }),
+                &ctx,
+            ))
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input `{bad}`");
+        }
+    }
+
+    #[test]
     fn universal_target_arn_accepts_documented_service_action() {
         let svc = SchedulerService::new();
         let ctx = ctx();

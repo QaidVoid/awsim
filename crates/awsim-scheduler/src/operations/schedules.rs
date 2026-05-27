@@ -77,6 +77,7 @@ pub fn create_schedule(
     } else {
         flexible_time_window
     };
+    let schedule_expression_timezone = resolve_timezone(input)?;
 
     let key = format!("{group_name}/{name}");
     if state.schedules.contains_key(&key) {
@@ -102,6 +103,7 @@ pub fn create_schedule(
         state: schedule_state,
         created_at: now,
         last_modified_at: now,
+        schedule_expression_timezone,
     };
 
     state.schedules.insert(key, schedule);
@@ -114,6 +116,69 @@ pub fn create_schedule(
             .insert(token, req_hash, result.clone());
     }
     Ok(result)
+}
+
+/// Resolve `ScheduleExpressionTimezone` from the request, falling
+/// back to UTC when the field is absent. The validator accepts the
+/// IANA `Continent/City` form, the `UTC` / `GMT` shorthand, and the
+/// `Etc/*` aliases. AWS rejects anything else with
+/// `ValidationException`.
+fn resolve_timezone(input: &Value) -> Result<String, AwsError> {
+    let tz = match input
+        .get("ScheduleExpressionTimezone")
+        .and_then(|v| v.as_str())
+    {
+        Some(t) => t.trim(),
+        None => return Ok("UTC".to_string()),
+    };
+    if tz.is_empty() {
+        return Ok("UTC".to_string());
+    }
+    // Tolerate `UTC` / `GMT` shorthand and the `Etc/*` family that
+    // share a flat single-component form.
+    if matches!(tz, "UTC" | "GMT") {
+        return Ok(tz.to_string());
+    }
+    // IANA shape: one or more `<segment>/<segment>` blocks where
+    // each segment is `[A-Za-z][A-Za-z0-9_+-]*`. We accept any
+    // string matching that pattern and don't require a curated
+    // catalogue: AWSim isn't a real cron daemon, so the timezone is
+    // metadata the runner could consume later but isn't actually
+    // honoured at fire time.
+    let parts: Vec<&str> = tz.split('/').collect();
+    if parts.len() < 2 || parts.iter().any(|p| p.is_empty()) {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "ScheduleExpressionTimezone `{tz}` must be an IANA `Region/City` \
+                 identifier (or `UTC`/`GMT`)."
+            ),
+        ));
+    }
+    // IANA tzdata entries capitalise each segment: `America/New_York`,
+    // `Etc/UTC`, `America/Argentina/Buenos_Aires`. Rejecting
+    // lowercase-first segments catches the most common typos.
+    let segment_ok = |s: &&str| -> bool {
+        let mut chars = s.chars();
+        let first = match chars.next() {
+            Some(c) => c,
+            None => return false,
+        };
+        if !first.is_ascii_uppercase() {
+            return false;
+        }
+        chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-'))
+    };
+    if !parts.iter().all(segment_ok) {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "ScheduleExpressionTimezone `{tz}` segments must match \
+                 `[A-Za-z][A-Za-z0-9_+-]*`."
+            ),
+        ));
+    }
+    Ok(tz.to_string())
 }
 
 /// Validate the `Target.Arn` shape. AWS Scheduler accepts two
@@ -256,6 +321,7 @@ pub fn get_schedule(
         "Name": schedule.name,
         "GroupName": schedule.group_name,
         "ScheduleExpression": schedule.schedule_expression,
+        "ScheduleExpressionTimezone": schedule.schedule_expression_timezone,
         "Target": schedule.target,
         "FlexibleTimeWindow": schedule.flexible_time_window,
         "State": schedule.state,
@@ -356,6 +422,11 @@ pub fn update_schedule(
 
     if let Some(expr) = input["ScheduleExpression"].as_str() {
         schedule.schedule_expression = expr.to_string();
+    }
+    if input.get("ScheduleExpressionTimezone").is_some() {
+        // Re-resolve on every update so a malformed value rejects
+        // before we touch the live record.
+        schedule.schedule_expression_timezone = resolve_timezone(input)?;
     }
     if !input["Target"].is_null() {
         validate_target_arn(&input["Target"])?;
