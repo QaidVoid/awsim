@@ -20,7 +20,7 @@
 
 use crate::error::AwsError;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Default TTL for idempotency tokens (24 hours). Override per
@@ -168,6 +168,81 @@ impl<V: Clone> Default for IdempotencyCache<V> {
     }
 }
 
+/// Idempotency cache scoped per `(account_id, region)`.
+///
+/// AWS idempotency tokens are namespaced to the account that issued
+/// the request: two accounts using the same `ClientToken` on the
+/// same operation must not collide, and a token minted in one
+/// region must not satisfy a retry sent to another. This wrapper
+/// lazily creates a fresh [`IdempotencyCache`] per scope on first
+/// touch so every service consuming idempotent creates can simply
+/// keep an `AccountRegionIdempotencyCache` field and call
+/// [`Self::scope`] from the handler.
+///
+/// The TTL set on construction applies to every scope.
+/// Outer-map type alias kept readable for the `Mutex` wrapper; the
+/// raw form trips clippy's `type_complexity` lint.
+type ScopeMap<V> = HashMap<(String, String), Arc<IdempotencyCache<V>>>;
+
+#[derive(Debug)]
+pub struct AccountRegionIdempotencyCache<V: Clone> {
+    inner: Mutex<ScopeMap<V>>,
+    ttl: Duration,
+}
+
+impl<V: Clone> AccountRegionIdempotencyCache<V> {
+    /// Create a per-scope cache with the default 24h TTL.
+    pub fn new() -> Self {
+        Self::with_ttl(DEFAULT_TTL)
+    }
+
+    /// Create a per-scope cache with a service-specific TTL.
+    pub fn with_ttl(ttl: Duration) -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+            ttl,
+        }
+    }
+
+    /// Return the underlying cache for `(account_id, region)`,
+    /// creating it on first touch. Callers can then drive
+    /// [`IdempotencyCache::lookup_or_insert`] / `lookup` / `insert`
+    /// against the returned handle.
+    pub fn scope(&self, account_id: &str, region: &str) -> Arc<IdempotencyCache<V>> {
+        let key = (account_id.to_string(), region.to_string());
+        let mut g = self.inner.lock().unwrap();
+        g.entry(key)
+            .or_insert_with(|| Arc::new(IdempotencyCache::with_ttl(self.ttl)))
+            .clone()
+    }
+
+    /// Drop expired entries across every scope. Call from the tick
+    /// loop. Empty scopes are kept (the lazy `scope` call is cheap
+    /// either way; the overhead of churning the outer map under load
+    /// is not worth the byte savings).
+    pub fn sweep(&self) {
+        let scopes: Vec<Arc<IdempotencyCache<V>>> =
+            self.inner.lock().unwrap().values().cloned().collect();
+        for s in scopes {
+            s.sweep();
+        }
+    }
+
+    /// Total number of cached entries across every scope. Surfaced
+    /// for diagnostics / tests.
+    pub fn total_len(&self) -> usize {
+        let scopes: Vec<Arc<IdempotencyCache<V>>> =
+            self.inner.lock().unwrap().values().cloned().collect();
+        scopes.iter().map(|s| s.len()).sum()
+    }
+}
+
+impl<V: Clone> Default for AccountRegionIdempotencyCache<V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Validate a client-supplied idempotency token.
 ///
 /// AWS tokens are 1-64 visible ASCII characters (the documented
@@ -304,6 +379,54 @@ mod tests {
             .lookup_or_insert("tok", 1, || Ok("ok".to_string()))
             .unwrap();
         assert_eq!(result, "ok");
+    }
+
+    #[test]
+    fn account_region_cache_isolates_scopes() {
+        let cache: AccountRegionIdempotencyCache<String> = AccountRegionIdempotencyCache::new();
+        let a = cache.scope("111111111111", "us-east-1");
+        let b = cache.scope("222222222222", "us-east-1");
+        a.insert("tok", 1, "alice".to_string());
+        // Same token in a different account is a miss, not a hit on
+        // alice's cached result.
+        assert!(matches!(b.lookup("tok", 1), Lookup::Miss));
+        assert!(matches!(a.lookup("tok", 1), Lookup::Hit(ref v) if v == "alice"));
+    }
+
+    #[test]
+    fn account_region_cache_isolates_regions() {
+        let cache: AccountRegionIdempotencyCache<String> = AccountRegionIdempotencyCache::new();
+        let east = cache.scope("111111111111", "us-east-1");
+        let west = cache.scope("111111111111", "us-west-2");
+        east.insert("tok", 7, "east-only".to_string());
+        assert!(matches!(west.lookup("tok", 7), Lookup::Miss));
+    }
+
+    #[test]
+    fn account_region_cache_returns_same_handle_per_scope() {
+        let cache: AccountRegionIdempotencyCache<String> = AccountRegionIdempotencyCache::new();
+        let first = cache.scope("111111111111", "us-east-1");
+        first.insert("tok", 1, "v".into());
+        let second = cache.scope("111111111111", "us-east-1");
+        // Repeated scope() returns a clone of the same Arc, so
+        // entries inserted via `first` are visible via `second`.
+        assert!(matches!(second.lookup("tok", 1), Lookup::Hit(ref v) if v == "v"));
+    }
+
+    #[test]
+    fn account_region_cache_sweep_clears_every_scope() {
+        let cache: AccountRegionIdempotencyCache<String> =
+            AccountRegionIdempotencyCache::with_ttl(Duration::from_millis(5));
+        cache
+            .scope("a", "us-east-1")
+            .insert("t1", 1, "x".to_string());
+        cache
+            .scope("b", "us-west-2")
+            .insert("t2", 2, "y".to_string());
+        assert_eq!(cache.total_len(), 2);
+        sleep(Duration::from_millis(20));
+        cache.sweep();
+        assert_eq!(cache.total_len(), 0);
     }
 
     #[test]
