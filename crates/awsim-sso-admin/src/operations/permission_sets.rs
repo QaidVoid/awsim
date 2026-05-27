@@ -27,6 +27,9 @@ pub fn create_permission_set(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("ValidationException", "InstanceArn is required"))?;
 
+    let session_duration = input["SessionDuration"].as_str().unwrap_or("PT1H");
+    validate_session_duration(session_duration)?;
+
     let id = format!("ps-{}", uuid::Uuid::new_v4().simple());
     let arn = format!("{instance_arn}/permissionSet/{id}");
 
@@ -34,10 +37,7 @@ pub fn create_permission_set(
         arn: arn.clone(),
         name: name.clone(),
         description: input["Description"].as_str().unwrap_or("").to_string(),
-        session_duration: input["SessionDuration"]
-            .as_str()
-            .unwrap_or("PT1H")
-            .to_string(),
+        session_duration: session_duration.to_string(),
         relay_state: input["RelayState"].as_str().unwrap_or("").to_string(),
         created_at: now_secs(),
         managed_policies: vec![],
@@ -52,7 +52,7 @@ pub fn create_permission_set(
             "PermissionSetArn": arn,
             "Description": input["Description"].as_str().unwrap_or(""),
             "CreatedDate": 0,
-            "SessionDuration": input["SessionDuration"].as_str().unwrap_or("PT1H"),
+            "SessionDuration": session_duration,
             "RelayState": input["RelayState"].as_str().unwrap_or(""),
         }
     }))
@@ -132,6 +132,7 @@ pub fn update_permission_set(
         ps.description = d.to_string();
     }
     if let Some(s) = input["SessionDuration"].as_str() {
+        validate_session_duration(s)?;
         ps.session_duration = s.to_string();
     }
     if let Some(r) = input["RelayState"].as_str() {
@@ -236,6 +237,72 @@ pub fn put_inline_policy(
     Ok(json!({}))
 }
 
+/// Parse `SessionDuration` as an ISO 8601 duration of the form
+/// `PT[<n>H][<n>M][<n>S]` and check that it lands inside
+/// `PT1H..=PT12H`. AWS rejects anything else with
+/// `ValidationException`.
+fn validate_session_duration(s: &str) -> Result<(), AwsError> {
+    let body = s.strip_prefix("PT").ok_or_else(|| {
+        AwsError::bad_request(
+            "ValidationException",
+            format!("SessionDuration `{s}` must be ISO 8601 (e.g. PT1H)."),
+        )
+    })?;
+    let mut total_secs: u64 = 0;
+    let mut acc: u64 = 0;
+    let mut units_seen = 0u8;
+    for c in body.chars() {
+        if let Some(d) = c.to_digit(10) {
+            acc = acc
+                .checked_mul(10)
+                .and_then(|x| x.checked_add(d as u64))
+                .ok_or_else(|| {
+                    AwsError::bad_request(
+                        "ValidationException",
+                        format!("SessionDuration `{s}` overflows."),
+                    )
+                })?;
+        } else {
+            let unit_secs: u64 = match c {
+                'H' => 3600,
+                'M' => 60,
+                'S' => 1,
+                _ => {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        format!("SessionDuration `{s}` has unsupported designator `{c}`."),
+                    ));
+                }
+            };
+            total_secs = total_secs
+                .checked_add(acc.saturating_mul(unit_secs))
+                .ok_or_else(|| {
+                    AwsError::bad_request(
+                        "ValidationException",
+                        format!("SessionDuration `{s}` overflows."),
+                    )
+                })?;
+            acc = 0;
+            units_seen += 1;
+        }
+    }
+    if acc != 0 || units_seen == 0 {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("SessionDuration `{s}` must end with H, M, or S designators."),
+        ));
+    }
+    if !(3600..=43200).contains(&total_secs) {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "SessionDuration `{s}` is outside the PT1H..=PT12H range ({total_secs} seconds).",
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// AWS documents `PermissionSet.Name` as matching `[\w+=,.@-]+`
 /// (word-chars plus the punctuation listed) with length 1-32. The
 /// character class is ASCII-only in AWS's regex flavour.
@@ -315,6 +382,52 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, "ValidationException", "input {bad:?}");
         }
+    }
+
+    #[test]
+    fn session_duration_accepts_pt1h_to_pt12h() {
+        for ok in ["PT1H", "PT12H", "PT1H30M", "PT11H59M59S", "PT3600S"] {
+            assert!(
+                validate_session_duration(ok).is_ok(),
+                "expected `{ok}` to validate",
+            );
+        }
+    }
+
+    #[test]
+    fn session_duration_rejects_out_of_range() {
+        for bad in ["PT0H", "PT59M", "PT13H", "PT12H1M", "PT43201S"] {
+            assert!(
+                validate_session_duration(bad).is_err(),
+                "expected `{bad}` to fail",
+            );
+        }
+    }
+
+    #[test]
+    fn session_duration_rejects_malformed() {
+        for bad in ["", "1H", "PT", "PT1", "PT1X", "P1H", "PT-1H"] {
+            assert!(
+                validate_session_duration(bad).is_err(),
+                "expected `{bad}` to fail",
+            );
+        }
+    }
+
+    #[test]
+    fn create_rejects_bad_session_duration() {
+        let state = SsoAdminState::default();
+        let err = create_permission_set(
+            &state,
+            &json!({
+                "Name": "ok",
+                "InstanceArn": instance_arn(),
+                "SessionDuration": "PT13H",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 
     #[test]
