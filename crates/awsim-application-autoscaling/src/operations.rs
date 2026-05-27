@@ -680,9 +680,13 @@ pub fn describe_scaling_policies(
             {
                 return false;
             }
+            // AWS-parity: `PolicyNames` accepts both short policy
+            // names and full PolicyARNs interchangeably. Match a
+            // policy when the filter list is empty or its name *or*
+            // ARN appears in the filter.
             if let Some(ns) = &names
                 && !ns.is_empty()
-                && !ns.iter().any(|n| n == &p.policy_name)
+                && !ns.iter().any(|n| n == &p.policy_name || n == &p.policy_arn)
             {
                 return false;
             }
@@ -971,6 +975,48 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn describe_policies_accepts_both_names_and_arns() {
+        let state = AppAutoScalingState::default();
+        setup_target(&state);
+        let resp = put_with_config(
+            &state,
+            json!({
+                "TargetValue": 50.0,
+                "PredefinedMetricSpecification": { "PredefinedMetricType": "ECSServiceAverageCPUUtilization" },
+            }),
+        )
+        .unwrap();
+        let arn = resp["PolicyARN"].as_str().unwrap().to_string();
+
+        // Filter by short name.
+        let by_name = describe_scaling_policies(
+            &state,
+            &json!({ "ServiceNamespace": "ecs", "PolicyNames": ["p"] }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(by_name["ScalingPolicies"].as_array().unwrap().len(), 1);
+
+        // Filter by ARN -> same hit.
+        let by_arn = describe_scaling_policies(
+            &state,
+            &json!({ "ServiceNamespace": "ecs", "PolicyNames": [arn] }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(by_arn["ScalingPolicies"].as_array().unwrap().len(), 1);
+
+        // Unknown value -> empty.
+        let empty = describe_scaling_policies(
+            &state,
+            &json!({ "ServiceNamespace": "ecs", "PolicyNames": ["does-not-exist"] }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(empty["ScalingPolicies"].as_array().unwrap().is_empty());
     }
 
     #[test]
