@@ -110,6 +110,41 @@ struct StateFailed {
     cause: String,
 }
 
+/// The service integration mode encoded in a Task `Resource` ARN suffix.
+/// AWS Step Functions reads four shapes:
+/// - request-response (default, no suffix)
+/// - `.sync` / `.sync:2` (wait until the called job reaches a terminal state)
+/// - `.waitForTaskToken` (pause until SendTaskSuccess/Failure)
+/// - `.async` (fire-and-forget; return immediately)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskIntegration {
+    RequestResponse,
+    Sync,
+    WaitForTaskToken,
+    Async,
+}
+
+impl TaskIntegration {
+    fn from_resource(resource: &str) -> Self {
+        let suffix = resource.rsplit_once('.').map(|(_, s)| s).unwrap_or("");
+        match suffix {
+            "waitForTaskToken" => Self::WaitForTaskToken,
+            "async" => Self::Async,
+            "sync" | "sync:2" => Self::Sync,
+            _ => Self::RequestResponse,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::RequestResponse => "request-response",
+            Self::Sync => "sync",
+            Self::WaitForTaskToken => "waitForTaskToken",
+            Self::Async => "async",
+        }
+    }
+}
+
 struct InterpreterContext {
     states: Value,
     history: Vec<HistoryEvent>,
@@ -327,22 +362,34 @@ impl InterpreterContext {
         input: Value,
     ) -> Result<(Value, StateTransition), StateFailed> {
         let resource = state["Resource"].as_str().unwrap_or("unknown");
+        let integration = TaskIntegration::from_resource(resource);
 
         self.push_event(
             "TaskStateEntered",
             json!({
                 "name": state_name,
                 "resource": resource,
+                "integration": integration.label(),
                 "input": input,
             }),
         );
 
-        // Mock output: echo input back (no actual Lambda invocation).
-        // ResultSelector + ResultPath are applied by run_state.
-        let mock_output = input.clone();
+        // `.async` integrations return immediately with a minimal
+        // acknowledgement; the simulator never blocks waiting on the
+        // downstream service. Other integration modes echo the input as
+        // the mock result so callers can keep authoring real state
+        // machine definitions without changing the test surface.
+        let mock_output = match integration {
+            TaskIntegration::Async => json!({ "Status": "Accepted", "StatusCode": 202 }),
+            _ => input.clone(),
+        };
 
+        let event = match integration {
+            TaskIntegration::Async => "TaskSubmitted",
+            _ => "TaskSucceeded",
+        };
         self.push_event(
-            "TaskSucceeded",
+            event,
             json!({
                 "name": state_name,
                 "resource": resource,
@@ -1417,6 +1464,48 @@ mod tests {
         let b = out["b"].as_str().unwrap();
         assert_eq!(a.len(), 36);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn async_task_suffix_returns_immediate_acknowledgement() {
+        let def = r#"{
+            "StartAt": "Notify",
+            "States": {
+                "Notify": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::sns:publish.async",
+                    "End": true
+                }
+            }
+        }"#;
+        let result = run(def, r#"{"topic":"x","message":"hi"}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out, json!({ "Status": "Accepted", "StatusCode": 202 }));
+        assert!(
+            result
+                .history
+                .iter()
+                .any(|e| e.event_type == "TaskSubmitted"),
+            "should emit TaskSubmitted for .async integrations"
+        );
+    }
+
+    #[test]
+    fn task_without_suffix_still_echoes_input() {
+        let def = r#"{
+            "StartAt": "Echo",
+            "States": {
+                "Echo": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::lambda:invoke",
+                    "End": true
+                }
+            }
+        }"#;
+        let result = run(def, r#"{"k":1}"#);
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out, json!({ "k": 1 }));
     }
 
     #[test]
