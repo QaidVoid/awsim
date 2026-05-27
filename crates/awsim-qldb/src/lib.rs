@@ -29,6 +29,21 @@ pub struct Ledger {
     pub deletion_protection: bool,
     pub kms_key_arn: Option<String>,
     pub tags: HashMap<String, String>,
+    /// `EncryptionStatus` field of the documented
+    /// `EncryptionDescription` block. Persisted on the model so a
+    /// future tick driver can flip it to `KMS_KEY_INACCESSIBLE` /
+    /// `UPDATING` without rebuilding the structure on every read.
+    #[serde(default = "default_encryption_status")]
+    pub encryption_status: String,
+    /// Epoch seconds when the KMS key first became inaccessible.
+    /// `None` while the key is reachable; surfaced as JSON null on
+    /// the API response.
+    #[serde(default)]
+    pub inaccessible_kms_key_date_time: Option<f64>,
+}
+
+fn default_encryption_status() -> String {
+    "ENABLED".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,10 +88,14 @@ fn ledger_arn(ctx: &RequestContext, name: &str) -> String {
 
 fn ledger_to_value(l: &Ledger) -> Value {
     // `EncryptionDescription` documents three fields. The emulator
-    // never simulates KMS key inaccessibility, so
-    // `InaccessibleKmsKeyDateTime` is always null. `EncryptionStatus`
-    // is `KMS_KEY_INACCESSIBLE` once we model that; for now we always
-    // report ENABLED.
+    // never simulates KMS key inaccessibility on its own, but the
+    // status and inaccessible-date are persisted on the model so a
+    // future tick driver can mutate them without changing the wire
+    // shape.
+    let inaccessible = match l.inaccessible_kms_key_date_time {
+        Some(t) => json!(t),
+        None => Value::Null,
+    };
     json!({
         "Name": l.name,
         "Arn": l.arn,
@@ -87,8 +106,8 @@ fn ledger_to_value(l: &Ledger) -> Value {
         "KmsKeyArn": l.kms_key_arn,
         "EncryptionDescription": {
             "KmsKeyArn": l.kms_key_arn,
-            "EncryptionStatus": "ENABLED",
-            "InaccessibleKmsKeyDateTime": Value::Null,
+            "EncryptionStatus": l.encryption_status,
+            "InaccessibleKmsKeyDateTime": inaccessible,
         },
     })
 }
@@ -242,6 +261,8 @@ impl ServiceHandler for QldbService {
                         .and_then(|v| v.as_str())
                         .map(String::from),
                     tags,
+                    encryption_status: default_encryption_status(),
+                    inaccessible_kms_key_date_time: None,
                 };
                 let result = ledger_to_value(&l);
                 state.ledgers.insert(name, l);
