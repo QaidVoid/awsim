@@ -51,6 +51,25 @@ pub fn handle(
         ));
     }
 
+    // AWS caps on-demand streams to 50 per account+region. Surface
+    // `LimitExceededException` (the documented code) once that bound is
+    // hit so callers don't silently overshoot the limit they'd get in
+    // production.
+    const ON_DEMAND_STREAM_LIMIT: usize = 50;
+    if stream_mode == "ON_DEMAND" {
+        let on_demand_count = state
+            .streams
+            .iter()
+            .filter(|e| e.value().stream_mode == "ON_DEMAND")
+            .count();
+        if on_demand_count >= ON_DEMAND_STREAM_LIMIT {
+            return Err(AwsError::bad_request(
+                "LimitExceededException",
+                format!("Account has reached the {ON_DEMAND_STREAM_LIMIT} on-demand stream limit."),
+            ));
+        }
+    }
+
     let arn = format!(
         "arn:aws:kinesis:{}:{}:stream/{}",
         ctx.region, ctx.account_id, stream_name
@@ -134,5 +153,36 @@ mod create_stream_validation_tests {
         assert!(validate_stream_name("").is_err());
         let long = "a".repeat(129);
         assert!(validate_stream_name(&long).is_err());
+    }
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("kinesis", "us-east-1")
+    }
+
+    fn make(name: &str, mode: &str) -> Value {
+        json!({
+            "StreamName": name,
+            "StreamModeDetails": { "StreamMode": mode }
+        })
+    }
+
+    #[test]
+    fn on_demand_limit_rejects_fifty_first_stream() {
+        let state = KinesisState::default();
+        for i in 0..50 {
+            handle(&state, &make(&format!("s{i}"), "ON_DEMAND"), &ctx()).unwrap();
+        }
+        let err = handle(&state, &make("overflow", "ON_DEMAND"), &ctx()).unwrap_err();
+        assert_eq!(err.code, "LimitExceededException");
+    }
+
+    #[test]
+    fn provisioned_streams_do_not_count_against_on_demand_cap() {
+        let state = KinesisState::default();
+        for i in 0..50 {
+            handle(&state, &make(&format!("p{i}"), "PROVISIONED"), &ctx()).unwrap();
+        }
+        // Still allowed because no on-demand streams exist yet.
+        handle(&state, &make("first-on-demand", "ON_DEMAND"), &ctx()).unwrap();
     }
 }
