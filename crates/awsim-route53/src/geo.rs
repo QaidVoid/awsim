@@ -5,7 +5,7 @@
 //! 3166-2 subdivision codes. `ListGeoLocations` returns every entry
 //! AWS recognizes; this module is the data table behind that.
 //!
-//! Names are kept ASCII-only — a few official names contain non-ASCII
+//! Names are kept ASCII-only: a few official names contain non-ASCII
 //! characters (e.g. Cote d'Ivoire, Aland Islands) which are
 //! transliterated here.
 

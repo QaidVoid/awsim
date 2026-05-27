@@ -241,7 +241,7 @@ pub fn get_geo_location(
     }))
 }
 
-/// `ListGeoLocations` — return the full catalog: every continent, every
+/// `ListGeoLocations`: return the full catalog. Every continent, every
 /// ISO 3166-1 alpha-2 country, and every US ISO 3166-2 subdivision AWS
 /// recognizes for geolocation routing. Ordering follows AWS's: rows
 /// without a country sort first (continent-only), then country rows by
