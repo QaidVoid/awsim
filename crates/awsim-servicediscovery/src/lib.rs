@@ -170,6 +170,9 @@ impl ServiceHandler for ServiceDiscoveryService {
             "GetInstance" => operations::get_instance(&state, &input, ctx),
             "ListInstances" => operations::list_instances(&state, &input, ctx),
             "DiscoverInstances" => operations::discover_instances(&state, &input, ctx),
+            "UpdateInstanceCustomHealthStatus" => {
+                operations::update_instance_custom_health_status(&state, &input, ctx)
+            }
             "GetOperation" => operations::get_operation(&state, &input, ctx),
             "ListOperations" => operations::list_operations(&state, &input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),

@@ -550,6 +550,49 @@ pub fn list_operations(
     Ok(json!({ "Operations": items }))
 }
 
+/// `UpdateInstanceCustomHealthStatus` — flip the custom health
+/// status of a registered instance. AWS rejects callers that target a
+/// service without `HealthCheckCustomConfig` set; the per-instance
+/// flag is otherwise opaque to the emulator (no readers act on it),
+/// so we validate and return ok.
+pub fn update_instance_custom_health_status(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let service_id = require_str(input, "ServiceId")?.to_string();
+    let instance_id = require_str(input, "InstanceId")?.to_string();
+    let status = require_str(input, "Status")?;
+    if !matches!(status, "HEALTHY" | "UNHEALTHY") {
+        return Err(AwsError::bad_request(
+            "InvalidInput",
+            format!("Status `{status}` must be HEALTHY or UNHEALTHY."),
+        ));
+    }
+
+    let svc = state.services.get(&service_id).ok_or_else(|| {
+        AwsError::not_found("ServiceNotFound", format!("Service {service_id} not found"))
+    })?;
+    if svc.health_check_custom_config.is_none() {
+        return Err(AwsError::bad_request(
+            "CustomHealthNotFound",
+            format!(
+                "Service `{service_id}` does not have HealthCheckCustomConfig; UpdateInstanceCustomHealthStatus rejected.",
+            ),
+        ));
+    }
+    if !state
+        .instances
+        .contains_key(&instance_key(&service_id, &instance_id))
+    {
+        return Err(AwsError::not_found(
+            "InstanceNotFound",
+            format!("Instance {instance_id} not found"),
+        ));
+    }
+    Ok(json!({}))
+}
+
 /// Reserved `AWS_*` attribute keys that `RegisterInstance` accepts.
 /// Anything not in this list but starting with the `AWS_` prefix is
 /// rejected with `InvalidInput`; custom (non-`AWS_`) keys are allowed
@@ -675,6 +718,75 @@ mod revision_tests {
         )
         .unwrap();
         assert_eq!(resp["InstancesRevision"], 3);
+    }
+
+    #[test]
+    fn update_custom_health_rejected_without_config() {
+        let (state, svc_id, _) = fresh_service();
+        register_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i1", "Attributes": {} }),
+            &ctx(),
+        )
+        .unwrap();
+        // Service has no HealthCheckCustomConfig -> reject.
+        let err = update_instance_custom_health_status(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i1", "Status": "HEALTHY" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "CustomHealthNotFound");
+    }
+
+    #[test]
+    fn update_custom_health_ok_when_config_present() {
+        let state = ServiceDiscoveryState::default();
+        let ns = create_http_namespace(&state, &json!({ "Name": "ns" }), &ctx()).unwrap();
+        let ns_id = state
+            .operations
+            .get(ns["OperationId"].as_str().unwrap())
+            .unwrap()
+            .targets
+            .get("NAMESPACE")
+            .cloned()
+            .unwrap();
+        let svc = create_service(
+            &state,
+            &json!({
+                "Name": "svc",
+                "NamespaceId": ns_id,
+                "Type": "HTTP",
+                "HealthCheckCustomConfig": { "FailureThreshold": 1 },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let svc_id = svc["Service"]["Id"].as_str().unwrap().to_string();
+        register_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i1", "Attributes": {} }),
+            &ctx(),
+        )
+        .unwrap();
+        update_instance_custom_health_status(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i1", "Status": "UNHEALTHY" }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn update_custom_health_rejects_bad_status() {
+        let (state, svc_id, _) = fresh_service();
+        let err = update_instance_custom_health_status(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i1", "Status": "MAYBE" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidInput");
     }
 
     #[test]
