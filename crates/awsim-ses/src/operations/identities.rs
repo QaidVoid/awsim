@@ -47,6 +47,7 @@ pub fn create_email_identity(
         dkim_domain_signing_selector: None,
         dkim_domain_signing_private_key: None,
         dkim_next_signing_key_length: Some("RSA_2048_BIT".to_string()),
+        dkim_tokens: Vec::new(),
         mail_from_domain: None,
         mail_from_behavior_on_mx_failure: None,
         configuration_set_name: None,

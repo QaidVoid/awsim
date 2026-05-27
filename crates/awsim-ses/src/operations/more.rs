@@ -197,6 +197,136 @@ pub fn put_email_identity_dkim_signing_attributes(
     Ok(json!({ "DkimStatus": entry.dkim_status, "DkimTokens": [] }))
 }
 
+/// Generate the three CNAME-style DKIM tokens for a domain identity and
+/// move the verification status into the `Pending` slot. AWS responds
+/// with the freshly issued tokens; calling this again refreshes them.
+pub fn verify_domain_dkim(
+    state: &SesState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let domain = input["Domain"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Domain is required"))?;
+    let mut entry = state.identities.get_mut(domain).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("Identity not found: {domain}"))
+    })?;
+    let tokens = generate_dkim_tokens();
+    entry.dkim_tokens = tokens.clone();
+    entry.dkim_status = Some("Pending".to_string());
+    entry.dkim_signing_enabled = true;
+    Ok(json!({ "DkimTokens": tokens }))
+}
+
+/// Return the DKIM attributes for one or more identities. AWS shape:
+/// `DkimAttributes: { "<identity>": { DkimEnabled, DkimVerificationStatus, DkimTokens } }`.
+pub fn get_identity_dkim_attributes(
+    state: &SesState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identities = input["Identities"].as_array().cloned().unwrap_or_default();
+    let mut attrs = serde_json::Map::new();
+    for identity_value in identities {
+        let Some(name) = identity_value.as_str() else {
+            continue;
+        };
+        if let Some(entry) = state.identities.get(name) {
+            attrs.insert(
+                name.to_string(),
+                json!({
+                    "DkimEnabled": entry.dkim_signing_enabled,
+                    "DkimVerificationStatus": entry
+                        .dkim_status
+                        .as_deref()
+                        .unwrap_or("NotStarted"),
+                    "DkimTokens": entry.dkim_tokens,
+                }),
+            );
+        }
+    }
+    Ok(json!({ "DkimAttributes": Value::Object(attrs) }))
+}
+
+/// Toggle whether SES signs outbound mail for the identity with DKIM.
+pub fn set_identity_dkim_enabled(
+    state: &SesState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identity = input["Identity"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Identity is required"))?;
+    let enabled = input["DkimEnabled"]
+        .as_bool()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DkimEnabled is required"))?;
+    let mut entry = state.identities.get_mut(identity).ok_or_else(|| {
+        AwsError::not_found(
+            "NotFoundException",
+            format!("Identity not found: {identity}"),
+        )
+    })?;
+    entry.dkim_signing_enabled = enabled;
+    Ok(json!({}))
+}
+
+/// Awsim-specific helper that drives the DKIM verification state
+/// machine deterministically. Useful for tests and operator scripts
+/// that need to flip `Pending` to `Success` (DNS records published)
+/// or `Failed` (DNS check timed out) without waiting on a real tick.
+pub fn set_identity_dkim_verification(
+    state: &SesState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identity = input["Identity"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Identity is required"))?;
+    let status = input["DkimVerificationStatus"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameter", "DkimVerificationStatus is required")
+    })?;
+    if !matches!(
+        status,
+        "NotStarted" | "Pending" | "Success" | "Failed" | "TemporaryFailure"
+    ) {
+        return Err(AwsError::bad_request(
+            "InvalidParameter",
+            format!(
+                "DkimVerificationStatus '{status}' must be one of NotStarted, Pending, Success, Failed, TemporaryFailure"
+            ),
+        ));
+    }
+    let mut entry = state.identities.get_mut(identity).ok_or_else(|| {
+        AwsError::not_found(
+            "NotFoundException",
+            format!("Identity not found: {identity}"),
+        )
+    })?;
+    // Pending → Success requires tokens to have been issued; otherwise
+    // AWS leaves the status untouched (we mirror that contract).
+    if status == "Success" && entry.dkim_tokens.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameter",
+            "Cannot mark identity Success before VerifyDomainDkim issued tokens",
+        ));
+    }
+    entry.dkim_status = Some(status.to_string());
+    Ok(json!({}))
+}
+
+fn generate_dkim_tokens() -> Vec<String> {
+    (0..3)
+        .map(|_| {
+            uuid::Uuid::new_v4()
+                .simple()
+                .to_string()
+                .chars()
+                .take(32)
+                .collect::<String>()
+        })
+        .collect()
+}
+
 pub fn put_email_identity_mail_from_attributes(
     state: &SesState,
     input: &Value,
@@ -1391,6 +1521,116 @@ mod delivery_options_tests {
         let resp = get_configuration_set(&state, &json!({ "ConfigurationSetName": "cs" }), &ctx())
             .unwrap();
         assert_eq!(resp["DeliveryOptions"]["TlsPolicy"], "REQUIRE");
+    }
+}
+
+#[cfg(test)]
+mod dkim_verification_state_machine_tests {
+    use super::*;
+    use crate::operations::identities::create_email_identity;
+
+    fn ctx() -> awsim_core::RequestContext {
+        awsim_core::RequestContext::new("ses", "us-east-1")
+    }
+
+    #[test]
+    fn verify_domain_dkim_issues_tokens_and_pending_status() {
+        let state = SesState::default();
+        create_email_identity(&state, &json!({ "EmailIdentity": "example.com" }), &ctx()).unwrap();
+        let resp = verify_domain_dkim(&state, &json!({ "Domain": "example.com" }), &ctx()).unwrap();
+        let tokens = resp["DkimTokens"].as_array().unwrap();
+        assert_eq!(tokens.len(), 3);
+        assert!(tokens.iter().all(|t| t.as_str().unwrap().len() == 32));
+        let entry = state.identities.get("example.com").unwrap();
+        assert_eq!(entry.dkim_status.as_deref(), Some("Pending"));
+        assert_eq!(entry.dkim_tokens.len(), 3);
+    }
+
+    #[test]
+    fn pending_transitions_to_success_only_after_tokens_issued() {
+        let state = SesState::default();
+        create_email_identity(&state, &json!({ "EmailIdentity": "example.com" }), &ctx()).unwrap();
+        let err = set_identity_dkim_verification(
+            &state,
+            &json!({ "Identity": "example.com", "DkimVerificationStatus": "Success" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+
+        verify_domain_dkim(&state, &json!({ "Domain": "example.com" }), &ctx()).unwrap();
+        set_identity_dkim_verification(
+            &state,
+            &json!({ "Identity": "example.com", "DkimVerificationStatus": "Success" }),
+            &ctx(),
+        )
+        .unwrap();
+        let entry = state.identities.get("example.com").unwrap();
+        assert_eq!(entry.dkim_status.as_deref(), Some("Success"));
+    }
+
+    #[test]
+    fn pending_transitions_to_failed_or_temporary_failure() {
+        let state = SesState::default();
+        create_email_identity(&state, &json!({ "EmailIdentity": "example.com" }), &ctx()).unwrap();
+        verify_domain_dkim(&state, &json!({ "Domain": "example.com" }), &ctx()).unwrap();
+        for status in ["Failed", "TemporaryFailure", "Pending", "NotStarted"] {
+            set_identity_dkim_verification(
+                &state,
+                &json!({ "Identity": "example.com", "DkimVerificationStatus": status }),
+                &ctx(),
+            )
+            .unwrap();
+            let entry = state.identities.get("example.com").unwrap();
+            assert_eq!(entry.dkim_status.as_deref(), Some(status));
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_verification_status() {
+        let state = SesState::default();
+        create_email_identity(&state, &json!({ "EmailIdentity": "example.com" }), &ctx()).unwrap();
+        let err = set_identity_dkim_verification(
+            &state,
+            &json!({ "Identity": "example.com", "DkimVerificationStatus": "Maybe" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+    }
+
+    #[test]
+    fn get_identity_dkim_attributes_surfaces_state_and_tokens() {
+        let state = SesState::default();
+        create_email_identity(&state, &json!({ "EmailIdentity": "example.com" }), &ctx()).unwrap();
+        verify_domain_dkim(&state, &json!({ "Domain": "example.com" }), &ctx()).unwrap();
+        let resp = get_identity_dkim_attributes(
+            &state,
+            &json!({ "Identities": ["example.com", "missing.com"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let attrs = resp["DkimAttributes"].as_object().unwrap();
+        assert!(attrs.contains_key("example.com"));
+        assert!(!attrs.contains_key("missing.com"));
+        let row = &attrs["example.com"];
+        assert_eq!(row["DkimEnabled"], true);
+        assert_eq!(row["DkimVerificationStatus"], "Pending");
+        assert_eq!(row["DkimTokens"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn set_identity_dkim_enabled_toggles_signing() {
+        let state = SesState::default();
+        create_email_identity(&state, &json!({ "EmailIdentity": "example.com" }), &ctx()).unwrap();
+        set_identity_dkim_enabled(
+            &state,
+            &json!({ "Identity": "example.com", "DkimEnabled": false }),
+            &ctx(),
+        )
+        .unwrap();
+        let entry = state.identities.get("example.com").unwrap();
+        assert!(!entry.dkim_signing_enabled);
     }
 }
 

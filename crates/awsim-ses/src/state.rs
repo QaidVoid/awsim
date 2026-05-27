@@ -39,6 +39,11 @@ pub struct EmailIdentity {
     /// Stored verbatim from BYODKIM input; never read back by GetEmailIdentity.
     pub dkim_domain_signing_private_key: Option<String>,
     pub dkim_next_signing_key_length: Option<String>,
+    /// CNAME-style DKIM tokens published when a domain identity is run
+    /// through VerifyDomainDkim. AWS returns up to three tokens that
+    /// the operator adds as CNAME records before verification flips
+    /// from `Pending` to `Success`.
+    pub dkim_tokens: Vec<String>,
     /// MAIL FROM configuration. AWS stores both the custom domain and
     /// the behavior to apply when the MX lookup fails.
     pub mail_from_domain: Option<String>,

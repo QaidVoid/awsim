@@ -530,6 +530,16 @@ impl ServiceHandler for SesService {
             "SendBulkTemplatedEmail" => {
                 operations::emails::send_bulk_templated_email(&state, &input, ctx)
             }
+            "VerifyDomainDkim" => operations::more::verify_domain_dkim(&state, &input, ctx),
+            "GetIdentityDkimAttributes" => {
+                operations::more::get_identity_dkim_attributes(&state, &input, ctx)
+            }
+            "SetIdentityDkimEnabled" => {
+                operations::more::set_identity_dkim_enabled(&state, &input, ctx)
+            }
+            "SetIdentityDkimVerification" => {
+                operations::more::set_identity_dkim_verification(&state, &input, ctx)
+            }
             "SendCustomVerificationEmail" => {
                 operations::more::send_custom_verification_email(&state, &input, ctx)
             }
