@@ -355,6 +355,92 @@ mod tests {
     }
 
     #[test]
+    fn flexible_time_window_accepts_flexible_mode_with_window() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "ftw-flex",
+                "ScheduleExpression": "rate(1 hour)",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "FLEXIBLE", "MaximumWindowInMinutes": 15 },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn flexible_time_window_requires_window_minutes_when_flexible() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "ftw-missing",
+                "ScheduleExpression": "rate(1 hour)",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "FLEXIBLE" },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("MaximumWindowInMinutes"));
+    }
+
+    #[test]
+    fn flexible_time_window_rejects_minutes_with_off_mode() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "ftw-off-with-mins",
+                "ScheduleExpression": "rate(1 hour)",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF", "MaximumWindowInMinutes": 10 },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn flexible_time_window_rejects_window_outside_documented_range() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        for bad in [0, 1441] {
+            let err = block_on(svc.handle(
+                "CreateSchedule",
+                json!({
+                    "Name": format!("ftw-{bad}"),
+                    "ScheduleExpression": "rate(1 hour)",
+                    "Target": {
+                        "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                        "RoleArn": "arn:aws:iam::000000000000:role/r",
+                    },
+                    "FlexibleTimeWindow": { "Mode": "FLEXIBLE", "MaximumWindowInMinutes": bad },
+                }),
+                &ctx,
+            ))
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input {bad}");
+        }
+    }
+
+    #[test]
     fn universal_target_arn_accepts_documented_service_action() {
         let svc = SchedulerService::new();
         let ctx = ctx();

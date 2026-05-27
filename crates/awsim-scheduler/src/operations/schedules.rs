@@ -77,6 +77,7 @@ pub fn create_schedule(
     } else {
         flexible_time_window
     };
+    validate_flexible_time_window(&flexible_time_window)?;
     let schedule_expression_timezone = resolve_timezone(input)?;
 
     let key = format!("{group_name}/{name}");
@@ -116,6 +117,38 @@ pub fn create_schedule(
             .insert(token, req_hash, result.clone());
     }
     Ok(result)
+}
+
+/// Validate the `FlexibleTimeWindow` block. AWS requires:
+///
+/// - `Mode` is one of `OFF` / `FLEXIBLE`.
+/// - When `Mode=FLEXIBLE`, `MaximumWindowInMinutes` is required and
+///   must be within 1..=1440 (one day).
+/// - When `Mode=OFF`, `MaximumWindowInMinutes` must be absent.
+fn validate_flexible_time_window(value: &Value) -> Result<(), AwsError> {
+    let mode = value.get("Mode").and_then(|v| v.as_str()).unwrap_or("OFF");
+    if !matches!(mode, "OFF" | "FLEXIBLE") {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("FlexibleTimeWindow.Mode `{mode}` must be `OFF` or `FLEXIBLE`."),
+        ));
+    }
+    let max_window = value.get("MaximumWindowInMinutes").and_then(|v| v.as_i64());
+    match (mode, max_window) {
+        ("FLEXIBLE", None) => Err(AwsError::bad_request(
+            "ValidationException",
+            "FlexibleTimeWindow.MaximumWindowInMinutes is required when Mode is FLEXIBLE.",
+        )),
+        ("FLEXIBLE", Some(n)) if !(1..=1440).contains(&n) => Err(AwsError::bad_request(
+            "ValidationException",
+            format!("FlexibleTimeWindow.MaximumWindowInMinutes `{n}` must be in 1..=1440."),
+        )),
+        ("OFF", Some(_)) => Err(AwsError::bad_request(
+            "ValidationException",
+            "FlexibleTimeWindow.MaximumWindowInMinutes must be omitted when Mode is OFF.",
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Resolve `ScheduleExpressionTimezone` from the request, falling
@@ -436,6 +469,7 @@ pub fn update_schedule(
         schedule.state = s.to_string();
     }
     if !input["FlexibleTimeWindow"].is_null() {
+        validate_flexible_time_window(&input["FlexibleTimeWindow"])?;
         schedule.flexible_time_window = input["FlexibleTimeWindow"].clone();
     }
     schedule.last_modified_at = now_secs();
