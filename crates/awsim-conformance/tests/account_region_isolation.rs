@@ -113,3 +113,185 @@ async fn secretsmanager_is_account_region_scoped() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn sns_is_account_region_scoped() {
+    let svc = awsim_sns::SnsService::new();
+    // SNS GetTopicAttributes is keyed by ARN. The same topic name in
+    // two accounts/regions produces different ARNs, so a hit in the
+    // wrong slot would only happen if the underlying store was
+    // shared. Cross both axes use the seed account's ARN to keep the
+    // describe step independent of the local ctx.
+    svc.handle(
+        "CreateTopic",
+        json!({"Name": "tenant-topic"}),
+        &ctx(svc.service_name(), ACCT_A, "us-east-1"),
+    )
+    .await
+    .unwrap();
+    let seed_arn = format!("arn:aws:sns:us-east-1:{ACCT_A}:tenant-topic");
+    let cross_account = svc
+        .handle(
+            "GetTopicAttributes",
+            json!({"TopicArn": seed_arn}),
+            &ctx(svc.service_name(), ACCT_B, "us-east-1"),
+        )
+        .await;
+    assert!(
+        cross_account.is_err(),
+        "SNS leaked topic across accounts: {cross_account:?}"
+    );
+    let cross_region = svc
+        .handle(
+            "GetTopicAttributes",
+            json!({"TopicArn": seed_arn}),
+            &ctx(svc.service_name(), ACCT_A, "eu-west-1"),
+        )
+        .await;
+    assert!(
+        cross_region.is_err(),
+        "SNS leaked topic across regions: {cross_region:?}"
+    );
+}
+
+#[tokio::test]
+async fn kms_is_account_region_scoped() {
+    let svc = awsim_kms::KmsService::new();
+    // CreateKey returns a synthetic KeyId; describing it from a
+    // different (account, region) must miss.
+    let created = svc
+        .handle(
+            "CreateKey",
+            json!({}),
+            &ctx(svc.service_name(), ACCT_A, "us-east-1"),
+        )
+        .await
+        .unwrap();
+    let key_id = created["KeyMetadata"]["KeyId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let cross_account = svc
+        .handle(
+            "DescribeKey",
+            json!({"KeyId": key_id.clone()}),
+            &ctx(svc.service_name(), ACCT_B, "us-east-1"),
+        )
+        .await;
+    assert!(
+        cross_account.is_err(),
+        "KMS leaked key across accounts: {cross_account:?}"
+    );
+    let cross_region = svc
+        .handle(
+            "DescribeKey",
+            json!({"KeyId": key_id}),
+            &ctx(svc.service_name(), ACCT_A, "eu-west-1"),
+        )
+        .await;
+    assert!(
+        cross_region.is_err(),
+        "KMS leaked key across regions: {cross_region:?}"
+    );
+}
+
+#[tokio::test]
+async fn eventbridge_is_account_region_scoped() {
+    let svc = awsim_eventbridge::EventBridgeService::new();
+    assert_isolated(
+        &svc,
+        "CreateEventBus",
+        json!({"Name": "tenant-bus"}),
+        "DescribeEventBus",
+        json!({"Name": "tenant-bus"}),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn kinesis_is_account_region_scoped() {
+    let svc = awsim_kinesis::KinesisService::new();
+    assert_isolated(
+        &svc,
+        "CreateStream",
+        json!({"StreamName": "tenant-stream", "ShardCount": 1}),
+        "DescribeStream",
+        json!({"StreamName": "tenant-stream"}),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn cloudwatch_logs_is_account_region_scoped() {
+    let svc = awsim_cloudwatch_logs::CloudWatchLogsService::new();
+    // CWLogs CreateLogGroup is success-only; lookups happen via
+    // DescribeLogGroups with a prefix filter. The cross-account
+    // / cross-region calls must return an empty list — a non-empty
+    // hit means the store was shared.
+    svc.handle(
+        "CreateLogGroup",
+        json!({"logGroupName": "tenant-lg"}),
+        &ctx(svc.service_name(), ACCT_A, "us-east-1"),
+    )
+    .await
+    .unwrap();
+    let cross_account = svc
+        .handle(
+            "DescribeLogGroups",
+            json!({"logGroupNamePrefix": "tenant-lg"}),
+            &ctx(svc.service_name(), ACCT_B, "us-east-1"),
+        )
+        .await
+        .unwrap();
+    assert!(
+        cross_account["logGroups"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(true),
+        "CW Logs leaked group across accounts: {cross_account}"
+    );
+    let cross_region = svc
+        .handle(
+            "DescribeLogGroups",
+            json!({"logGroupNamePrefix": "tenant-lg"}),
+            &ctx(svc.service_name(), ACCT_A, "eu-west-1"),
+        )
+        .await
+        .unwrap();
+    assert!(
+        cross_region["logGroups"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(true),
+        "CW Logs leaked group across regions: {cross_region}"
+    );
+}
+
+#[tokio::test]
+async fn eks_is_account_region_scoped() {
+    let svc = awsim_eks::EksService::new();
+    assert_isolated(
+        &svc,
+        "CreateCluster",
+        json!({
+            "name": "tenant-cluster",
+            "roleArn": "arn:aws:iam::111111111111:role/eks",
+        }),
+        "DescribeCluster",
+        json!({"name": "tenant-cluster"}),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn ssm_is_account_region_scoped() {
+    let svc = awsim_ssm::SsmService::new();
+    assert_isolated(
+        &svc,
+        "PutParameter",
+        json!({"Name": "tenant-param", "Value": "v", "Type": "String"}),
+        "GetParameter",
+        json!({"Name": "tenant-param"}),
+    )
+    .await;
+}
