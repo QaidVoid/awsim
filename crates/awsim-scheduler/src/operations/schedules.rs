@@ -89,6 +89,8 @@ pub fn create_schedule(
         ));
     }
     validate_target_arn(&target)?;
+    validate_retry_policy(&target)?;
+    validate_dead_letter_config(&target)?;
 
     let group_name = input["GroupName"].as_str().unwrap_or("default").to_string();
     validate_scheduler_name(&group_name, "GroupName")?;
@@ -149,6 +151,75 @@ pub fn create_schedule(
             .insert(token, req_hash, result.clone());
     }
     Ok(result)
+}
+
+/// Validate `Target.RetryPolicy` per AWS bounds:
+/// - `MaximumEventAgeInSeconds`: 60..=86400 (1 minute to 1 day).
+/// - `MaximumRetryAttempts`: 0..=185.
+///
+/// Both fields are optional; the policy itself is also optional. AWS
+/// rejects each out-of-range value with `ValidationException`.
+fn validate_retry_policy(target: &Value) -> Result<(), AwsError> {
+    let policy = match target.get("RetryPolicy") {
+        Some(v) if !v.is_null() => v,
+        _ => return Ok(()),
+    };
+    if let Some(age) = policy
+        .get("MaximumEventAgeInSeconds")
+        .and_then(|v| v.as_i64())
+        && !(60..=86400).contains(&age)
+    {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("RetryPolicy.MaximumEventAgeInSeconds `{age}` must be in 60..=86400."),
+        ));
+    }
+    if let Some(attempts) = policy.get("MaximumRetryAttempts").and_then(|v| v.as_i64())
+        && !(0..=185).contains(&attempts)
+    {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("RetryPolicy.MaximumRetryAttempts `{attempts}` must be in 0..=185."),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate `Target.DeadLetterConfig.Arn`. AWS requires an SQS queue
+/// ARN: `arn:<partition>:sqs:<region>:<account>:<queue-name>`.
+fn validate_dead_letter_config(target: &Value) -> Result<(), AwsError> {
+    let dlq = match target.get("DeadLetterConfig") {
+        Some(v) if !v.is_null() => v,
+        _ => return Ok(()),
+    };
+    let arn = match dlq.get("Arn").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        // DeadLetterConfig with no Arn is a no-op on AWS too.
+        None => return Ok(()),
+    };
+    let segs: Vec<&str> = arn.split(':').collect();
+    if segs.len() < 6 || segs[0] != "arn" || segs[2] != "sqs" {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "DeadLetterConfig.Arn `{arn}` must be an SQS queue ARN: \
+                 `arn:<partition>:sqs:<region>:<account>:<queue-name>`."
+            ),
+        ));
+    }
+    if segs[3].is_empty() {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("DeadLetterConfig.Arn `{arn}` must include a region segment."),
+        ));
+    }
+    if segs[5].is_empty() {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("DeadLetterConfig.Arn `{arn}` must include a queue name."),
+        ));
+    }
+    Ok(())
 }
 
 /// Validate a customer-managed KMS key ARN as accepted by Scheduler's
@@ -724,6 +795,8 @@ pub fn update_schedule(
     }
     if !input["Target"].is_null() {
         validate_target_arn(&input["Target"])?;
+        validate_retry_policy(&input["Target"])?;
+        validate_dead_letter_config(&input["Target"])?;
         schedule.target = input["Target"].clone();
     }
     if let Some(s) = input["State"].as_str() {

@@ -355,6 +355,105 @@ mod tests {
     }
 
     #[test]
+    fn retry_policy_accepts_documented_bounds() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "with-retry",
+                "ScheduleExpression": "rate(5 minutes)",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                    "RetryPolicy": {
+                        "MaximumEventAgeInSeconds": 3600,
+                        "MaximumRetryAttempts": 5,
+                    },
+                    "DeadLetterConfig": {
+                        "Arn": "arn:aws:sqs:us-east-1:000000000000:dlq",
+                    },
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn retry_policy_rejects_out_of_range_age() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        for bad in [0i64, 59, 86_401, 100_000] {
+            let err = block_on(svc.handle(
+                "CreateSchedule",
+                json!({
+                    "Name": format!("retry-age-{bad}"),
+                    "ScheduleExpression": "rate(5 minutes)",
+                    "Target": {
+                        "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                        "RoleArn": "arn:aws:iam::000000000000:role/r",
+                        "RetryPolicy": { "MaximumEventAgeInSeconds": bad },
+                    },
+                    "FlexibleTimeWindow": { "Mode": "OFF" },
+                }),
+                &ctx,
+            ))
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input {bad}");
+        }
+    }
+
+    #[test]
+    fn retry_policy_rejects_out_of_range_attempts() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        for bad in [-1i64, 186, 1000] {
+            let err = block_on(svc.handle(
+                "CreateSchedule",
+                json!({
+                    "Name": format!("retry-att-{}", bad.unsigned_abs()),
+                    "ScheduleExpression": "rate(5 minutes)",
+                    "Target": {
+                        "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                        "RoleArn": "arn:aws:iam::000000000000:role/r",
+                        "RetryPolicy": { "MaximumRetryAttempts": bad },
+                    },
+                    "FlexibleTimeWindow": { "Mode": "OFF" },
+                }),
+                &ctx,
+            ))
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input {bad}");
+        }
+    }
+
+    #[test]
+    fn dead_letter_config_rejects_non_sqs_arn() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "bad-dlq",
+                "ScheduleExpression": "rate(5 minutes)",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                    "DeadLetterConfig": {
+                        "Arn": "arn:aws:sns:us-east-1:000000000000:topic"
+                    },
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
     fn kms_key_arn_persisted_when_well_formed() {
         let svc = SchedulerService::new();
         let ctx = ctx();
