@@ -7,11 +7,18 @@ use serde_json::{Value, json};
 
 use crate::state::TaggingState;
 
-/// Per-call paging cursor — opaque to the caller, base64-encoded JSON for us.
+/// Per-call paging cursor — opaque to the caller, base64-encoded JSON
+/// for us. We carry the last ARN that was returned so the next call
+/// resumes by skipping everything `<= last_arn`. Encoding the ARN
+/// (rather than an integer offset) makes pagination stable across
+/// inserts/deletes that happen between calls — if a resource is
+/// added before the cursor, the next page still picks up where the
+/// previous one left off.
 #[derive(Debug, Serialize, Deserialize)]
 struct Cursor {
-    /// Number of results already returned.
-    skipped: usize,
+    /// Last ARN delivered on the previous page. Empty string when
+    /// starting fresh.
+    last_arn: String,
 }
 
 /// `GetResources` — list tagged resources, optionally filtered by tag.
@@ -57,49 +64,70 @@ pub fn get_resources(
         None => 50,
     };
 
-    let skip = decode_cursor(input.get("PaginationToken"))?;
+    let last_arn = decode_cursor(input.get("PaginationToken"))?;
 
-    // Stable ordering — sort ARNs alphabetically so cursors are deterministic.
-    let mut all: Vec<(String, BTreeMap<String, String>)> = state
+    // Collect into a BTreeMap so iteration is in ARN order; cloning
+    // entries also drops the per-shard DashMap reads before we start
+    // the (potentially long) page walk, satisfying the "per-call
+    // read lock only" requirement.
+    let snapshot: BTreeMap<String, BTreeMap<String, String>> = state
         .resources
         .iter()
         .map(|e| (e.key().clone(), e.value().clone()))
         .collect();
-    all.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let matching: Vec<(String, BTreeMap<String, String>)> = all
-        .into_iter()
-        .filter(|(arn, tags)| {
-            matches_type_filters(arn, &type_filters) && matches_tag_filters(tags, &tag_filters)
-        })
-        .collect();
+    // Resume strictly after `last_arn`. An empty marker (`""` < every
+    // real ARN) means "start from the first key". Filtering happens
+    // *after* the cursor advance so a tag/type filter that excludes
+    // everything on the current page still advances the cursor.
+    let mut page: Vec<(String, BTreeMap<String, String>)> = Vec::with_capacity(page_size);
+    let mut walked_arn: Option<String> = None;
+    for (arn, tags) in snapshot.range::<String, _>((
+        std::ops::Bound::Excluded(&last_arn),
+        std::ops::Bound::Unbounded,
+    )) {
+        walked_arn = Some(arn.clone());
+        if !matches_type_filters(arn, &type_filters) || !matches_tag_filters(tags, &tag_filters) {
+            continue;
+        }
+        page.push((arn.clone(), tags.clone()));
+        if page.len() >= page_size {
+            break;
+        }
+    }
 
-    let total = matching.len();
-    let page: Vec<Value> = matching
-        .into_iter()
-        .skip(skip)
-        .take(page_size)
+    let mappings: Vec<Value> = page
+        .iter()
         .map(|(arn, tags)| {
             json!({
                 "ResourceARN": arn,
                 "Tags": tags
-                    .into_iter()
+                    .iter()
                     .map(|(k, v)| json!({"Key": k, "Value": v}))
                     .collect::<Vec<_>>(),
             })
         })
         .collect();
 
-    let returned = page.len();
-    let next_token = if skip + returned < total {
-        encode_cursor(skip + returned)
-    } else {
-        String::new()
+    // Hand back a cursor only when there is more to walk after the
+    // last ARN we touched (filtered or otherwise). When `walked_arn`
+    // is None we exhausted the entire map without seeing a single
+    // entry — there is no next page either way.
+    let next_token = match walked_arn {
+        Some(last)
+            if snapshot
+                .range::<String, _>((std::ops::Bound::Excluded(&last), std::ops::Bound::Unbounded))
+                .next()
+                .is_some() =>
+        {
+            encode_cursor(&last)
+        }
+        _ => String::new(),
     };
 
     Ok(json!({
         "PaginationToken": next_token,
-        "ResourceTagMappingList": page,
+        "ResourceTagMappingList": mappings,
     }))
 }
 
@@ -176,24 +204,27 @@ fn matches_type_filters(arn: &str, filters: &[String]) -> bool {
     })
 }
 
-fn encode_cursor(skipped: usize) -> String {
-    let payload = serde_json::to_vec(&Cursor { skipped }).unwrap_or_default();
+fn encode_cursor(last_arn: &str) -> String {
+    let payload = serde_json::to_vec(&Cursor {
+        last_arn: last_arn.to_string(),
+    })
+    .unwrap_or_default();
     base64::engine::general_purpose::STANDARD.encode(payload)
 }
 
-fn decode_cursor(value: Option<&Value>) -> Result<usize, AwsError> {
+fn decode_cursor(value: Option<&Value>) -> Result<String, AwsError> {
     let Some(s) = value.and_then(Value::as_str) else {
-        return Ok(0);
+        return Ok(String::new());
     };
     if s.is_empty() {
-        return Ok(0);
+        return Ok(String::new());
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(s)
         .map_err(|_| AwsError::validation("PaginationToken is not valid base64"))?;
     let cursor: Cursor = serde_json::from_slice(&bytes)
         .map_err(|_| AwsError::validation("PaginationToken is malformed"))?;
-    Ok(cursor.skipped)
+    Ok(cursor.last_arn)
 }
 
 #[cfg(test)]
@@ -280,6 +311,57 @@ mod tests {
         .unwrap();
         assert_eq!(page2["ResourceTagMappingList"].as_array().unwrap().len(), 1);
         assert_eq!(page2["PaginationToken"].as_str().unwrap(), "");
+    }
+
+    #[test]
+    fn pagination_survives_inserts_between_pages() {
+        let state = populated();
+        // Page 1: two entries.
+        let page1 = get_resources(&state, &json!({ "ResourcesPerPage": 2 }), &ctx()).unwrap();
+        let arns1: Vec<String> = page1["ResourceTagMappingList"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["ResourceARN"].as_str().unwrap().to_string())
+            .collect();
+        let token = page1["PaginationToken"].as_str().unwrap().to_string();
+        assert!(!token.is_empty());
+
+        // Inject a new resource *before* the cursor (ARN-wise) so an
+        // offset-based cursor would skip it onto page 2 and produce a
+        // duplicate / miss. A real AWS marker-based cursor doesn't
+        // double-count it.
+        state
+            .resources
+            .insert("arn:aws:s3:::aaa-injected".into(), BTreeMap::new());
+
+        let page2 = get_resources(
+            &state,
+            &json!({ "ResourcesPerPage": 5, "PaginationToken": token }),
+            &ctx(),
+        )
+        .unwrap();
+        let arns2: Vec<String> = page2["ResourceTagMappingList"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["ResourceARN"].as_str().unwrap().to_string())
+            .collect();
+
+        // No ARN appears on both pages.
+        for arn in &arns2 {
+            assert!(
+                !arns1.contains(arn),
+                "{arn} appeared on both pages — cursor is not stable",
+            );
+        }
+        // The injected ARN sorts before the page-1 head, so it must
+        // NOT show up on page 2 — that's the whole point of the
+        // marker-based design.
+        assert!(
+            !arns2.contains(&"arn:aws:s3:::aaa-injected".to_string()),
+            "page 2 should not surface an entry that sorts before page 1's head",
+        );
     }
 
     #[test]
