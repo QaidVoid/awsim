@@ -140,3 +140,111 @@ pub fn list_tags_for_resource(
         }
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::HostedZone;
+    use std::collections::HashMap;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("route53", "us-east-1")
+    }
+
+    fn state_with_zone(zone_id: &str) -> Arc<Route53State> {
+        let state = Arc::new(Route53State::default());
+        state.hosted_zones.insert(
+            format!("/hostedzone/{zone_id}"),
+            HostedZone {
+                id: format!("/hostedzone/{zone_id}"),
+                name: "example.com.".into(),
+                caller_reference: "cr".into(),
+                record_sets: Vec::new(),
+                tags: HashMap::new(),
+                created_at: "2026-05-28T00:00:00Z".into(),
+                private_zone: false,
+                vpcs: Vec::new(),
+                comment: None,
+            },
+        );
+        state
+    }
+
+    #[test]
+    fn change_tags_rejects_aws_prefix_on_add() {
+        let state = state_with_zone("z1");
+        let err = change_tags_for_resource(
+            &state,
+            &json!({
+                "ResourceType": "hostedzone",
+                "ResourceId": "z1",
+                "AddTags": { "Tag": [{ "Key": "aws:internal", "Value": "v" }] },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(
+            err.code.contains("Validation") || err.code.contains("InvalidParameter"),
+            "expected validation, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn change_tags_rejects_aws_prefix_on_remove() {
+        let state = state_with_zone("z1");
+        let err = change_tags_for_resource(
+            &state,
+            &json!({
+                "ResourceType": "hostedzone",
+                "ResourceId": "z1",
+                "RemoveTagKeys": { "Key": ["aws:internal"] },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(
+            err.code.contains("Validation") || err.code.contains("InvalidParameter"),
+            "expected validation, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn change_tags_rejects_out_of_charset_key() {
+        let state = state_with_zone("z1");
+        let err = change_tags_for_resource(
+            &state,
+            &json!({
+                "ResourceType": "hostedzone",
+                "ResourceId": "z1",
+                "AddTags": { "Tag": [{ "Key": "fire\u{1f525}", "Value": "v" }] },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(
+            err.code.contains("Validation") || err.code.contains("InvalidParameter"),
+            "expected validation, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn change_tags_accepts_and_persists_well_formed() {
+        let state = state_with_zone("z1");
+        change_tags_for_resource(
+            &state,
+            &json!({
+                "ResourceType": "hostedzone",
+                "ResourceId": "z1",
+                "AddTags": { "Tag": [
+                    { "Key": "env", "Value": "prod" },
+                    { "Key": "team", "Value": "data" },
+                ] },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let zone = state.hosted_zones.get("/hostedzone/z1").unwrap();
+        assert_eq!(zone.tags.get("env"), Some(&"prod".to_string()));
+        assert_eq!(zone.tags.get("team"), Some(&"data".to_string()));
+    }
+}
