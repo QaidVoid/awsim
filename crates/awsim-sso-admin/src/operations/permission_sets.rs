@@ -21,6 +21,7 @@ pub fn create_permission_set(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("ValidationException", "Name is required"))?
         .to_string();
+    validate_permission_set_name(&name)?;
 
     let instance_arn = input["InstanceArn"]
         .as_str()
@@ -233,4 +234,106 @@ pub fn put_inline_policy(
     ps.inline_policy = policy.to_string();
 
     Ok(json!({}))
+}
+
+/// AWS documents `PermissionSet.Name` as matching `[\w+=,.@-]+`
+/// (word-chars plus the punctuation listed) with length 1-32. The
+/// character class is ASCII-only in AWS's regex flavour.
+fn validate_permission_set_name(name: &str) -> Result<(), AwsError> {
+    if name.is_empty() || name.len() > 32 {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "PermissionSet Name must be 1-32 characters; got {}.",
+                name.len()
+            ),
+        ));
+    }
+    let ok =
+        |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '=' | ',' | '.' | '@' | '-');
+    if !name.chars().all(ok) {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("PermissionSet Name '{name}' must match `[\\w+=,.@-]+`.",),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("sso", "us-east-1")
+    }
+
+    fn instance_arn() -> &'static str {
+        "arn:aws:sso:::instance/ssoins-1234567890abcdef"
+    }
+
+    #[test]
+    fn create_rejects_empty_name() {
+        let state = SsoAdminState::default();
+        let err = create_permission_set(
+            &state,
+            &json!({ "Name": "", "InstanceArn": instance_arn() }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_rejects_name_over_32_chars() {
+        let state = SsoAdminState::default();
+        let too_long = "a".repeat(33);
+        let err = create_permission_set(
+            &state,
+            &json!({ "Name": too_long, "InstanceArn": instance_arn() }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_rejects_name_with_invalid_chars() {
+        let state = SsoAdminState::default();
+        for bad in [
+            "has space",
+            "tab\there",
+            "slash/no",
+            "colon:no",
+            "fire\u{1f525}",
+        ] {
+            let err = create_permission_set(
+                &state,
+                &json!({ "Name": bad, "InstanceArn": instance_arn() }),
+                &ctx(),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input {bad:?}");
+        }
+    }
+
+    #[test]
+    fn create_accepts_documented_charset_at_bounds() {
+        let state = SsoAdminState::default();
+        // Use every allowed punctuation char at least once and stay inside 32 chars.
+        create_permission_set(
+            &state,
+            &json!({ "Name": "a_b+c=d,e.f@g-h", "InstanceArn": instance_arn() }),
+            &ctx(),
+        )
+        .unwrap();
+        // Exactly 32 chars: still ok.
+        let max = "a".repeat(32);
+        create_permission_set(
+            &state,
+            &json!({ "Name": max, "InstanceArn": instance_arn() }),
+            &ctx(),
+        )
+        .unwrap();
+    }
 }
