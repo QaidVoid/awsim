@@ -18,3 +18,4 @@ tracing = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 regex = { workspace = true }
+flate2 = "1"

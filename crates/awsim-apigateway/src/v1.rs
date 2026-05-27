@@ -2096,9 +2096,115 @@ fn parse_query_params(qs: &str) -> Value {
     }
 }
 
+/// Result of evaluating an API Gateway response against the per-API
+/// `minimumCompressionSize` setting. AWS gzips the response body only
+/// when all of (a) the API configures a non-negative size, (b) the body
+/// is at least that many bytes, and (c) the caller's `Accept-Encoding`
+/// header contains `gzip`. Otherwise the body passes through untouched.
+pub struct CompressedResponse {
+    pub body: Vec<u8>,
+    pub content_encoding: Option<&'static str>,
+}
+
+pub fn maybe_compress_response(
+    api: &RestApi,
+    body: &[u8],
+    accept_encoding: Option<&str>,
+) -> CompressedResponse {
+    let Some(min) = api.minimum_compression_size else {
+        return passthrough(body);
+    };
+    if body.len() < min as usize {
+        return passthrough(body);
+    }
+    if !accept_encoding
+        .unwrap_or("")
+        .split(',')
+        .any(|enc| enc.trim().eq_ignore_ascii_case("gzip"))
+    {
+        return passthrough(body);
+    }
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+    let mut enc = GzEncoder::new(Vec::with_capacity(body.len()), Compression::default());
+    if enc.write_all(body).is_err() {
+        return passthrough(body);
+    }
+    match enc.finish() {
+        Ok(out) => CompressedResponse {
+            body: out,
+            content_encoding: Some("gzip"),
+        },
+        Err(_) => passthrough(body),
+    }
+}
+
+fn passthrough(body: &[u8]) -> CompressedResponse {
+    CompressedResponse {
+        body: body.to_vec(),
+        content_encoding: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rest_api_with_compression(min: Option<u32>) -> RestApi {
+        RestApi {
+            id: "api1".into(),
+            name: "n".into(),
+            description: String::new(),
+            version: String::new(),
+            created_date: 0,
+            api_key_source: "HEADER".into(),
+            endpoint_types: vec![],
+            vpc_endpoint_ids: vec![],
+            binary_media_types: vec![],
+            minimum_compression_size: min,
+            resources: HashMap::new(),
+            stages: HashMap::new(),
+            deployments: vec![],
+            authorizers: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn maybe_compress_gzips_when_threshold_met_and_accept_encoding_supports_gzip() {
+        let api = rest_api_with_compression(Some(8));
+        let body = b"abcdefghij".repeat(20);
+        let out = maybe_compress_response(&api, &body, Some("gzip, deflate"));
+        assert_eq!(out.content_encoding, Some("gzip"));
+        assert!(out.body.len() < body.len());
+        assert_eq!(&out.body[..2], &[0x1f, 0x8b]);
+    }
+
+    #[test]
+    fn maybe_compress_skips_when_body_smaller_than_threshold() {
+        let api = rest_api_with_compression(Some(1024));
+        let body = b"hi".to_vec();
+        let out = maybe_compress_response(&api, &body, Some("gzip"));
+        assert!(out.content_encoding.is_none());
+        assert_eq!(out.body, body);
+    }
+
+    #[test]
+    fn maybe_compress_skips_when_client_does_not_accept_gzip() {
+        let api = rest_api_with_compression(Some(8));
+        let body = b"abcdefghij".repeat(20);
+        let out = maybe_compress_response(&api, &body, Some("br"));
+        assert!(out.content_encoding.is_none());
+        assert_eq!(out.body, body);
+    }
+
+    #[test]
+    fn maybe_compress_skips_when_min_compression_size_unset() {
+        let api = rest_api_with_compression(None);
+        let body = b"abcdefghij".repeat(50);
+        let out = maybe_compress_response(&api, &body, Some("gzip"));
+        assert!(out.content_encoding.is_none());
+    }
 
     #[test]
     fn interpolate_stage_variables_handles_braced_and_unbraced() {
