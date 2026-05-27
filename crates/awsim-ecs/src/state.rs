@@ -98,6 +98,13 @@ pub struct TaskDefinition {
     /// DescribeTaskDefinition and copied onto each task when a
     /// service or RunTask call sets `propagateTags=TASK_DEFINITION`.
     pub tags: Vec<(String, String)>,
+    /// IAM role tasks assume to call AWS APIs. ECS validates the ARN
+    /// shape, and—when the caller wires an IAM principal lookup—that
+    /// cross-account roles actually exist.
+    pub task_role_arn: Option<String>,
+    /// IAM role the ECS agent itself uses (image pulls, log writes).
+    /// Validated the same way as `taskRoleArn`.
+    pub execution_role_arn: Option<String>,
 }
 
 /// A capacity provider.

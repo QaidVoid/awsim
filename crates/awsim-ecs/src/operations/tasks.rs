@@ -310,6 +310,7 @@ mod propagate_tags_tests {
                 ]
             }),
             &ctx(),
+            None,
         )
         .unwrap();
         let resp = run_task(
@@ -339,6 +340,7 @@ mod propagate_tags_tests {
             &state,
             &json!({ "family": "web", "containerDefinitions": [] }),
             &ctx(),
+            None,
         )
         .unwrap();
         let resp = run_task(
@@ -366,6 +368,7 @@ mod propagate_tags_tests {
             &state,
             &json!({ "family": "web", "containerDefinitions": [] }),
             &ctx(),
+            None,
         )
         .unwrap();
         let err = run_task(

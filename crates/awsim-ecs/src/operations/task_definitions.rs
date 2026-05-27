@@ -25,7 +25,71 @@ fn task_def_to_json(td: &TaskDefinition) -> Value {
     if let Some(ref mem) = td.memory {
         obj["memory"] = json!(mem);
     }
+    if let Some(ref role) = td.task_role_arn {
+        obj["taskRoleArn"] = json!(role);
+    }
+    if let Some(ref role) = td.execution_role_arn {
+        obj["executionRoleArn"] = json!(role);
+    }
     obj
+}
+
+/// Validate an IAM role ARN supplied to RegisterTaskDefinition.
+/// Same shape rules as awsim-eventbridge's PutTargets RoleArn: must
+/// be `arn:aws:iam::{12 digits}:role/{name}`. When the caller wired
+/// an IAM lookup, cross-account ARNs must additionally resolve to a
+/// real role so a typo doesn't sail through to RunTask.
+fn validate_task_role_arn(
+    value: Option<&Value>,
+    field: &str,
+    ctx: &RequestContext,
+    iam_lookup: Option<&dyn awsim_core::PrincipalLookup>,
+) -> Result<Option<String>, AwsError> {
+    let Some(v) = value else { return Ok(None) };
+    if v.is_null() {
+        return Ok(None);
+    }
+    let Some(arn) = v.as_str() else {
+        return Err(AwsError::bad_request(
+            "ClientException",
+            format!("{field} must be a string."),
+        ));
+    };
+    if arn.is_empty() {
+        return Ok(None);
+    }
+    let Some(account) = parse_iam_role_arn(arn) else {
+        return Err(AwsError::bad_request(
+            "ClientException",
+            format!(
+                "{field} `{arn}` must be an IAM role ARN \
+                 (arn:aws:iam::<account>:role/<name>)."
+            ),
+        ));
+    };
+    if account != ctx.account_id
+        && let Some(lookup) = iam_lookup
+        && lookup.resolve_arn(arn).is_none()
+    {
+        return Err(AwsError::bad_request(
+            "ClientException",
+            format!("{field} `{arn}` does not exist in account {account}."),
+        ));
+    }
+    Ok(Some(arn.to_string()))
+}
+
+fn parse_iam_role_arn(arn: &str) -> Option<&str> {
+    let rest = arn.strip_prefix("arn:aws:iam::")?;
+    let (account, tail) = rest.split_once(':')?;
+    if account.len() != 12 || !account.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let name = tail.strip_prefix("role/")?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(account)
 }
 
 /// AWS Fargate cpu/memory pair allowlist. Each cpu value maps to the
@@ -109,6 +173,7 @@ pub fn register_task_definition(
     state: &EcsState,
     input: &Value,
     ctx: &RequestContext,
+    iam_lookup: Option<&dyn awsim_core::PrincipalLookup>,
 ) -> Result<Value, AwsError> {
     let family = input["family"]
         .as_str()
@@ -206,6 +271,15 @@ pub fn register_task_definition(
         validate_fargate_cpu_memory(cpu_str, mem_str)?;
     }
 
+    let task_role_arn =
+        validate_task_role_arn(input.get("taskRoleArn"), "taskRoleArn", ctx, iam_lookup)?;
+    let execution_role_arn = validate_task_role_arn(
+        input.get("executionRoleArn"),
+        "executionRoleArn",
+        ctx,
+        iam_lookup,
+    )?;
+
     let revision = {
         let mut revisions = state.task_definitions.entry(family.clone()).or_default();
         let rev = revisions.len() as u32 + 1;
@@ -227,6 +301,8 @@ pub fn register_task_definition(
             placement_strategy: placement_strategy.clone(),
             volumes: volumes.clone(),
             tags: crate::operations::tags::parse_tags(input.get("tags")),
+            task_role_arn: task_role_arn.clone(),
+            execution_role_arn: execution_role_arn.clone(),
         };
         revisions.push(td);
         rev
@@ -436,7 +512,7 @@ mod placement_tests {
         input["placementConstraints"] = json!([{ "type": "memberOf", "expression": "attribute:ecs.instance-type == t3.medium" }]);
         input["placementStrategy"] =
             json!([{ "type": "spread", "field": "attribute:ecs.availability-zone" }]);
-        let resp = register_task_definition(&state, &input, &ctx()).unwrap();
+        let resp = register_task_definition(&state, &input, &ctx(), None).unwrap();
         let td = &resp["taskDefinition"];
         assert_eq!(td["placementConstraints"][0]["type"], "memberOf");
         assert_eq!(td["placementStrategy"][0]["type"], "spread");
@@ -447,7 +523,7 @@ mod placement_tests {
         let state = EcsState::default();
         let mut input = base_input();
         input["placementConstraints"] = json!([{ "type": "bogus" }]);
-        let err = register_task_definition(&state, &input, &ctx()).unwrap_err();
+        let err = register_task_definition(&state, &input, &ctx(), None).unwrap_err();
         assert_eq!(err.code, "ClientException");
     }
 
@@ -456,7 +532,79 @@ mod placement_tests {
         let state = EcsState::default();
         let mut input = base_input();
         input["placementStrategy"] = json!([{ "type": "bogus" }]);
-        let err = register_task_definition(&state, &input, &ctx()).unwrap_err();
+        let err = register_task_definition(&state, &input, &ctx(), None).unwrap_err();
         assert_eq!(err.code, "ClientException");
+    }
+
+    #[test]
+    fn rejects_malformed_task_role_arn() {
+        let state = EcsState::default();
+        let mut input = base_input();
+        input["taskRoleArn"] = json!("arn:aws:iam::000000000000:user/bob");
+        let err = register_task_definition(&state, &input, &ctx(), None).unwrap_err();
+        assert!(err.message.contains("IAM role"), "{err:?}");
+    }
+
+    #[test]
+    fn accepts_well_formed_same_account_role_without_lookup() {
+        let state = EcsState::default();
+        let mut input = base_input();
+        input["taskRoleArn"] = json!("arn:aws:iam::000000000000:role/task");
+        input["executionRoleArn"] = json!("arn:aws:iam::000000000000:role/exec");
+        let resp = register_task_definition(&state, &input, &ctx(), None).unwrap();
+        let td = &resp["taskDefinition"];
+        assert_eq!(td["taskRoleArn"], "arn:aws:iam::000000000000:role/task");
+        assert_eq!(
+            td["executionRoleArn"],
+            "arn:aws:iam::000000000000:role/exec"
+        );
+    }
+
+    struct StubLookup {
+        known: std::collections::HashSet<String>,
+    }
+    impl awsim_core::PrincipalLookup for StubLookup {
+        fn resolve_access_key(&self, _: &str) -> Option<awsim_core::ResolvedPrincipal> {
+            None
+        }
+        fn resolve_arn(&self, arn: &str) -> Option<awsim_core::ResolvedPrincipal> {
+            if self.known.contains(arn) {
+                Some(awsim_core::ResolvedPrincipal {
+                    arn: arn.into(),
+                    account: "999999999999".into(),
+                    identity_policies: vec![],
+                    permissions_boundary: None,
+                    is_root: false,
+                    tags: std::collections::HashMap::new(),
+                    session_policy: None,
+                })
+            } else {
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_cross_account_role_when_lookup_finds_nothing() {
+        let state = EcsState::default();
+        let mut input = base_input();
+        input["taskRoleArn"] = json!("arn:aws:iam::999999999999:role/foreign");
+        let lookup = StubLookup {
+            known: std::collections::HashSet::new(),
+        };
+        let err = register_task_definition(&state, &input, &ctx(), Some(&lookup)).unwrap_err();
+        assert!(err.message.contains("does not exist"), "{err:?}");
+    }
+
+    #[test]
+    fn accepts_cross_account_role_when_lookup_resolves() {
+        let state = EcsState::default();
+        let mut input = base_input();
+        let role = "arn:aws:iam::999999999999:role/foreign".to_string();
+        input["taskRoleArn"] = json!(role);
+        let mut known = std::collections::HashSet::new();
+        known.insert(role.clone());
+        let lookup = StubLookup { known };
+        register_task_definition(&state, &input, &ctx(), Some(&lookup)).unwrap();
     }
 }

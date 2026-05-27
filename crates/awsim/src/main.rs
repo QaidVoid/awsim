@@ -2616,7 +2616,9 @@ fn register_services(
     let ecr_clone = Arc::clone(&ecr);
     state.register(ecr, vec![]);
 
-    let ecs = Arc::new(awsim_ecs::EcsService::new());
+    let ecs_iam_lookup: Arc<dyn awsim_core::PrincipalLookup> =
+        Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store.clone()));
+    let ecs = Arc::new(awsim_ecs::EcsService::new().with_iam_lookup(ecs_iam_lookup));
     state.register(ecs, vec![]);
 
     let ec2 = Arc::new(awsim_ec2::Ec2Service::new());

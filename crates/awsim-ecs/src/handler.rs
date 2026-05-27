@@ -1,4 +1,8 @@
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
+use std::sync::Arc;
+
+use awsim_core::{
+    AccountRegionStore, AwsError, PrincipalLookup, Protocol, RequestContext, ServiceHandler,
+};
 use serde_json::Value;
 use tracing::debug;
 
@@ -8,13 +12,25 @@ use crate::state::EcsState;
 /// The ECS service handler.
 pub struct EcsService {
     store: AccountRegionStore<EcsState>,
+    /// IAM principal lookup used to validate `taskRoleArn` /
+    /// `executionRoleArn` at RegisterTaskDefinition. `None` keeps the
+    /// service working in standalone test setups that don't wire IAM.
+    iam_lookup: Option<Arc<dyn PrincipalLookup>>,
 }
 
 impl EcsService {
     pub fn new() -> Self {
         Self {
             store: AccountRegionStore::new(),
+            iam_lookup: None,
         }
+    }
+
+    /// Plug in the IAM principal lookup so task / execution role ARNs
+    /// are verified against the IAM store at registration time.
+    pub fn with_iam_lookup(mut self, lookup: Arc<dyn PrincipalLookup>) -> Self {
+        self.iam_lookup = Some(lookup);
+        self
     }
 }
 
@@ -56,9 +72,12 @@ impl ServiceHandler for EcsService {
             "ListClusters" => clusters::list_clusters(&state, &input, ctx),
 
             // Task Definitions
-            "RegisterTaskDefinition" => {
-                task_definitions::register_task_definition(&state, &input, ctx)
-            }
+            "RegisterTaskDefinition" => task_definitions::register_task_definition(
+                &state,
+                &input,
+                ctx,
+                self.iam_lookup.as_deref(),
+            ),
             "DeregisterTaskDefinition" => {
                 task_definitions::deregister_task_definition(&state, &input, ctx)
             }
