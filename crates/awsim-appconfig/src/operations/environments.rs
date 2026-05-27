@@ -42,6 +42,12 @@ pub fn create_environment(
         .and_then(|v| v.as_str())
         .ok_or_else(|| AwsError::bad_request("BadRequestException", "Name is required"))?
         .to_string();
+    let monitors = input
+        .get("Monitors")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    validate_monitors(&monitors)?;
     let id = new_short_id();
     let e = Environment {
         id: id.clone(),
@@ -52,15 +58,48 @@ pub fn create_environment(
             .and_then(|v| v.as_str())
             .map(String::from),
         state: "ReadyForDeployment".to_string(),
-        monitors: input
-            .get("Monitors")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default(),
+        monitors,
     };
     let result = env_to_value(&e);
     state.environments.insert(env_key(&app_id, &id), e);
     Ok(result)
+}
+
+/// AWS AppConfig environments accept up to 5 `Monitors`; each
+/// `AlarmArn` must look like a CloudWatch alarm ARN
+/// (`arn:<partition>:cloudwatch:<region>:<account>:alarm:<name>`).
+fn validate_monitors(monitors: &[Value]) -> Result<(), AwsError> {
+    if monitors.len() > 5 {
+        return Err(AwsError::bad_request(
+            "BadRequestException",
+            format!(
+                "Environment Monitors has {} entries; the maximum is 5.",
+                monitors.len(),
+            ),
+        ));
+    }
+    for m in monitors {
+        let arn = m.get("AlarmArn").and_then(Value::as_str).ok_or_else(|| {
+            AwsError::bad_request("BadRequestException", "Monitor.AlarmArn is required")
+        })?;
+        // Format: arn:<partition>:cloudwatch:<region>:<account>:alarm:<name>
+        let parts: Vec<&str> = arn.splitn(7, ':').collect();
+        let shape_ok = parts.len() == 7
+            && parts[0] == "arn"
+            && !parts[1].is_empty()
+            && parts[2] == "cloudwatch"
+            && !parts[3].is_empty()
+            && !parts[4].is_empty()
+            && parts[5] == "alarm"
+            && !parts[6].is_empty();
+        if !shape_ok {
+            return Err(AwsError::bad_request(
+                "BadRequestException",
+                format!("AlarmArn `{arn}` is not a valid CloudWatch alarm ARN."),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn get_environment(
@@ -120,4 +159,77 @@ pub fn delete_environment(
             )
         })?;
     Ok(json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::applications::create_application;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("appconfig", "us-east-1")
+    }
+
+    fn alarm_arn(name: &str) -> String {
+        format!("arn:aws:cloudwatch:us-east-1:123456789012:alarm:{name}")
+    }
+
+    fn setup() -> (AppConfigState, String) {
+        let state = AppConfigState::default();
+        let app = create_application(&state, &json!({ "Name": "a" }), &ctx()).unwrap();
+        (state, app["Id"].as_str().unwrap().to_string())
+    }
+
+    #[test]
+    fn create_environment_accepts_up_to_five_monitors() {
+        let (state, app_id) = setup();
+        let monitors: Vec<Value> = (0..5)
+            .map(|i| json!({ "AlarmArn": alarm_arn(&format!("a{i}")) }))
+            .collect();
+        create_environment(
+            &state,
+            &json!({ "ApplicationId": app_id, "Name": "env", "Monitors": monitors }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn create_environment_rejects_six_monitors() {
+        let (state, app_id) = setup();
+        let monitors: Vec<Value> = (0..6)
+            .map(|i| json!({ "AlarmArn": alarm_arn(&format!("a{i}")) }))
+            .collect();
+        let err = create_environment(
+            &state,
+            &json!({ "ApplicationId": app_id, "Name": "env", "Monitors": monitors }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
+        assert!(err.message.contains("maximum is 5"));
+    }
+
+    #[test]
+    fn create_environment_rejects_bad_alarm_arn() {
+        let (state, app_id) = setup();
+        for bad in [
+            "not-an-arn",
+            "arn:aws:s3:::my-bucket",
+            "arn:aws:cloudwatch:us-east-1:123456789012:metricalarm:name",
+            "arn:aws:cloudwatch::123456789012:alarm:name",
+        ] {
+            let err = create_environment(
+                &state,
+                &json!({
+                    "ApplicationId": app_id,
+                    "Name": "env",
+                    "Monitors": [{ "AlarmArn": bad }],
+                }),
+                &ctx(),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "BadRequestException", "input {bad}");
+        }
+    }
 }
