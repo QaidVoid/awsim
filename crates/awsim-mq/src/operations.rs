@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::idempotency::{Lookup, hash_request, validate_token};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -135,6 +136,29 @@ pub fn create_broker(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    // CreatorRequestId honored per spec 0009: replays within 24h
+    // return the cached response; a different request body under the
+    // same token surfaces IdempotencyParameterMismatchException.
+    let creator_token = input
+        .get("CreatorRequestId")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    if let Some(ref token) = creator_token {
+        validate_token(token)?;
+        let req_hash = hash_request(&canonical_create_broker_body(input));
+        match state.creator_request_cache.lookup(token, req_hash) {
+            Lookup::Hit(v) => return Ok(v),
+            Lookup::Mismatch => {
+                return Err(AwsError::bad_request(
+                    "IdempotencyParameterMismatchException",
+                    "Request parameters do not match those used in a prior CreateBroker call \
+                     with the same CreatorRequestId.",
+                ));
+            }
+            Lookup::Miss => {}
+        }
+    }
+
     let id = new_id();
     let name = require_str(input, "BrokerName")?.to_string();
     validate_broker_name(&name)?;
@@ -295,7 +319,53 @@ pub fn create_broker(
             state.users.insert(user_key(&id, &username), user);
         }
     }
+
+    // Persist the cached response so a CreatorRequestId replay returns
+    // the same payload (the original BrokerId/Arn) instead of creating
+    // a second broker.
+    if let Some(token) = creator_token {
+        let req_hash = hash_request(&canonical_create_broker_body(input));
+        state
+            .creator_request_cache
+            .insert(token, req_hash, result.clone());
+    }
     Ok(result)
+}
+
+/// Build the canonical body we hash for `CreatorRequestId` lookup.
+/// AWS compares the *request* parameters, not the response; the
+/// canonical form omits the `CreatorRequestId` itself (so the same
+/// token + matching body still hashes the same) but keeps every
+/// other field as-is. Object key order is normalised because
+/// `serde_json::Value` hashes via its `Hash` impl, which walks
+/// `Map<String, Value>` in insertion order.
+fn canonical_create_broker_body(input: &Value) -> Value {
+    let mut clone = input.clone();
+    if let Some(obj) = clone.as_object_mut() {
+        obj.remove("CreatorRequestId");
+    }
+    // Canonicalise to a sorted-by-key BTreeMap so two callers that
+    // serialise the same logical body but with different key order
+    // still produce the same hash.
+    fn canonicalise(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let mut sorted: std::collections::BTreeMap<&str, Value> =
+                    std::collections::BTreeMap::new();
+                for (k, v) in map {
+                    sorted.insert(k.as_str(), canonicalise(v));
+                }
+                let mut out = serde_json::Map::new();
+                for (k, v) in sorted {
+                    out.insert(k.to_string(), v);
+                }
+                Value::Object(out)
+            }
+            Value::Array(arr) => Value::Array(arr.iter().map(canonicalise).collect()),
+            other => other.clone(),
+        }
+    }
+    canonicalise(&clone)
 }
 
 pub fn describe_broker(

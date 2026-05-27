@@ -440,6 +440,96 @@ mod tests {
     }
 
     #[test]
+    fn creator_request_id_replays_cached_response() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let first = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "idemp-broker",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+                "HostInstanceType": "mq.m5.large",
+                "CreatorRequestId": "token-abc",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let id_first = first["BrokerId"].as_str().unwrap().to_string();
+
+        // Same token + same body must return the cached payload, not
+        // a fresh broker.
+        let second = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "idemp-broker",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+                "HostInstanceType": "mq.m5.large",
+                "CreatorRequestId": "token-abc",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(second["BrokerId"], json!(id_first));
+        // Only one broker should exist in state.
+        let listed = block_on(svc.handle("ListBrokers", json!({}), &ctx)).unwrap();
+        assert_eq!(listed["BrokerSummaries"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn creator_request_id_mismatch_raises_idempotency_exception() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "first",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+                "HostInstanceType": "mq.m5.large",
+                "CreatorRequestId": "token-xyz",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let err = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "different",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+                "HostInstanceType": "mq.m5.large",
+                "CreatorRequestId": "token-xyz",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "IdempotencyParameterMismatchException");
+    }
+
+    #[test]
+    fn creator_request_id_rejects_invalid_token_shape() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        // 65-char token violates the 64-char ClientToken cap.
+        let bad = "a".repeat(65);
+        let err = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "bad-token",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+                "HostInstanceType": "mq.m5.large",
+                "CreatorRequestId": bad,
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
     fn update_configuration_bumps_revision_and_validates_engine_data() {
         use base64::Engine as _;
         let svc = MqService::new();

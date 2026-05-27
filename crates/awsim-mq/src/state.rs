@@ -1,5 +1,10 @@
+use awsim_core::idempotency::IdempotencyCache;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+/// MQ honors `CreatorRequestId` for 24 hours per AWS.
+const CREATOR_REQUEST_ID_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug, Default)]
 pub struct MqState {
@@ -7,6 +12,22 @@ pub struct MqState {
     /// (broker_id, username) keyed.
     pub users: DashMap<String, BrokerUser>,
     pub configurations: DashMap<String, Configuration>,
+    /// `CreatorRequestId` cache keyed by token. A replay within
+    /// `CREATOR_REQUEST_ID_TTL` returns the cached response payload;
+    /// the same token with a different request body surfaces
+    /// `IdempotencyParameterMismatchException`. The cache lives per
+    /// `(account_id, region)` because the surrounding `MqState`
+    /// already is.
+    pub creator_request_cache: IdempotencyCacheValue,
+}
+
+/// Type alias kept short so the field declaration stays readable.
+pub type IdempotencyCacheValue = IdempotencyCache<serde_json::Value>;
+
+/// MQ's TTL for `CreatorRequestId` replays. Re-exported so service
+/// code that needs the constant doesn't reach into the module.
+pub fn creator_request_id_ttl() -> Duration {
+    CREATOR_REQUEST_ID_TTL
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
