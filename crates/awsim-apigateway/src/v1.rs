@@ -116,6 +116,19 @@ pub struct Stage {
     pub created_date: u64,
     pub last_updated_date: u64,
     pub variables: HashMap<String, String>,
+    /// Canary release configuration. When set, a configurable
+    /// percentage of requests routes to `deployment_id` while picking
+    /// up the override stage variables; the rest hit the stage's
+    /// primary deployment.
+    pub canary_settings: Option<CanarySettings>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CanarySettings {
+    pub deployment_id: String,
+    pub percent_traffic: f64,
+    pub stage_variable_overrides: HashMap<String, String>,
+    pub use_stage_cache: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -681,7 +694,7 @@ pub fn apply_response_content_handling(body: &[u8], content_handling: Option<&st
 }
 
 fn stage_to_json(s: &Stage) -> Value {
-    json!({
+    let mut obj = json!({
         "stageName": s.stage_name,
         "deploymentId": s.deployment_id,
         "description": s.description,
@@ -689,7 +702,16 @@ fn stage_to_json(s: &Stage) -> Value {
         "createdDate": s.created_date,
         "lastUpdatedDate": s.last_updated_date,
         "variables": s.variables,
-    })
+    });
+    if let Some(ref c) = s.canary_settings {
+        obj["canarySettings"] = json!({
+            "deploymentId": c.deployment_id,
+            "percentTraffic": c.percent_traffic,
+            "stageVariableOverrides": c.stage_variable_overrides,
+            "useStageCache": c.use_stage_cache,
+        });
+    }
+    obj
 }
 
 fn deployment_to_json(d: &Deployment) -> Value {
@@ -954,6 +976,7 @@ fn create_deployment(state: &ApiGatewayV1State, input: &Value) -> Result<Value, 
                 created_date: now_epoch(),
                 last_updated_date: now_epoch(),
                 variables: HashMap::new(),
+                canary_settings: None,
             },
         );
     }
@@ -1344,12 +1367,21 @@ fn create_stage(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsEr
                 .collect()
         })
         .unwrap_or_default();
+    let canary_settings = parse_canary_settings(&input["canarySettings"])?;
 
     with_api_mut(state, &api_id, |api| {
         if !api.deployments.iter().any(|d| d.id == deployment_id) {
             return Err(AwsError::not_found(
                 "NotFoundException",
                 format!("Deployment {deployment_id} not found"),
+            ));
+        }
+        if let Some(ref c) = canary_settings
+            && !api.deployments.iter().any(|d| d.id == c.deployment_id)
+        {
+            return Err(AwsError::not_found(
+                "NotFoundException",
+                format!("Canary deployment {} not found", c.deployment_id),
             ));
         }
         if api.stages.contains_key(&stage_name) {
@@ -1366,11 +1398,82 @@ fn create_stage(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsEr
             created_date: now_epoch(),
             last_updated_date: now_epoch(),
             variables,
+            canary_settings,
         };
         let json = stage_to_json(&stage);
         api.stages.insert(stage_name, stage);
         Ok(json)
     })
+}
+
+fn parse_canary_settings(input: &Value) -> Result<Option<CanarySettings>, AwsError> {
+    if input.is_null() {
+        return Ok(None);
+    }
+    let deployment_id = input["deploymentId"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "BadRequestException",
+                "canarySettings.deploymentId is required",
+            )
+        })?
+        .to_string();
+    let percent_traffic = input["percentTraffic"].as_f64().unwrap_or(0.0);
+    if !(0.0..=100.0).contains(&percent_traffic) {
+        return Err(AwsError::bad_request(
+            "BadRequestException",
+            format!("canarySettings.percentTraffic '{percent_traffic}' must be between 0 and 100"),
+        ));
+    }
+    let stage_variable_overrides = input["stageVariableOverrides"]
+        .as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let use_stage_cache = input["useStageCache"].as_bool().unwrap_or(false);
+    Ok(Some(CanarySettings {
+        deployment_id,
+        percent_traffic,
+        stage_variable_overrides,
+        use_stage_cache,
+    }))
+}
+
+/// Decide whether a request hits the canary deployment. AWS distributes
+/// traffic based on `percentTraffic` — we hash the seed (typically the
+/// request id) to a deterministic [0, 100) bucket so the same request
+/// id always resolves to the same deployment.
+pub fn route_to_canary(canary: &CanarySettings, seed: &str) -> bool {
+    if canary.percent_traffic >= 100.0 {
+        return true;
+    }
+    if canary.percent_traffic <= 0.0 {
+        return false;
+    }
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in seed.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let bucket = (hash % 10_000) as f64 / 100.0;
+    bucket < canary.percent_traffic
+}
+
+/// Merge canary stage variable overrides over the base map, returning
+/// the effective stage variables for a canary-routed request.
+pub fn canary_stage_variables(
+    base: &HashMap<String, String>,
+    canary: &CanarySettings,
+) -> HashMap<String, String> {
+    let mut out = base.clone();
+    for (k, v) in &canary.stage_variable_overrides {
+        out.insert(k.clone(), v.clone());
+    }
+    out
 }
 
 fn delete_stage(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
@@ -2208,6 +2311,147 @@ mod tests {
             deployments: vec![],
             authorizers: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn route_to_canary_handles_edge_percentages() {
+        let mut c = CanarySettings {
+            deployment_id: "d2".into(),
+            percent_traffic: 0.0,
+            stage_variable_overrides: HashMap::new(),
+            use_stage_cache: false,
+        };
+        assert!(!route_to_canary(&c, "request-1"));
+        c.percent_traffic = 100.0;
+        assert!(route_to_canary(&c, "request-1"));
+    }
+
+    #[test]
+    fn route_to_canary_is_deterministic_per_seed() {
+        let c = CanarySettings {
+            deployment_id: "d2".into(),
+            percent_traffic: 50.0,
+            stage_variable_overrides: HashMap::new(),
+            use_stage_cache: false,
+        };
+        let a = route_to_canary(&c, "req-A");
+        let b = route_to_canary(&c, "req-A");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn route_to_canary_distribution_matches_percent() {
+        let c = CanarySettings {
+            deployment_id: "d2".into(),
+            percent_traffic: 25.0,
+            stage_variable_overrides: HashMap::new(),
+            use_stage_cache: false,
+        };
+        let n = 10_000;
+        let canary_hits = (0..n)
+            .filter(|i| route_to_canary(&c, &format!("req-{i}")))
+            .count();
+        let ratio = canary_hits as f64 / n as f64 * 100.0;
+        // Within a 5% tolerance of the configured 25%.
+        assert!(
+            (20.0..=30.0).contains(&ratio),
+            "expected ~25% canary, got {ratio}%"
+        );
+    }
+
+    #[test]
+    fn canary_stage_variables_overlays_overrides() {
+        let mut base = HashMap::new();
+        base.insert("env".into(), "prod".into());
+        base.insert("region".into(), "us-east-1".into());
+        let mut overrides = HashMap::new();
+        overrides.insert("env".into(), "canary".into());
+        let c = CanarySettings {
+            deployment_id: "d2".into(),
+            percent_traffic: 10.0,
+            stage_variable_overrides: overrides,
+            use_stage_cache: false,
+        };
+        let merged = canary_stage_variables(&base, &c);
+        assert_eq!(merged.get("env").map(String::as_str), Some("canary"));
+        assert_eq!(merged.get("region").map(String::as_str), Some("us-east-1"));
+    }
+
+    #[tokio::test]
+    async fn create_stage_persists_canary_settings() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, _root_id) = make_api(&svc).await;
+        let dep = svc
+            .handle(
+                "CreateDeployment",
+                json!({"restapi_id": api_id.clone()}),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let dep_id = dep["id"].as_str().unwrap().to_string();
+        let dep2 = svc
+            .handle(
+                "CreateDeployment",
+                json!({"restapi_id": api_id.clone()}),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let dep2_id = dep2["id"].as_str().unwrap().to_string();
+        let stage = svc
+            .handle(
+                "CreateStage",
+                json!({
+                    "restapi_id": api_id,
+                    "stageName": "prod",
+                    "deploymentId": dep_id,
+                    "canarySettings": {
+                        "deploymentId": dep2_id.clone(),
+                        "percentTraffic": 25.0,
+                        "stageVariableOverrides": { "env": "canary" },
+                        "useStageCache": false,
+                    }
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stage["canarySettings"]["deploymentId"], dep2_id);
+        assert_eq!(stage["canarySettings"]["percentTraffic"], 25.0);
+        assert_eq!(
+            stage["canarySettings"]["stageVariableOverrides"]["env"],
+            "canary"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_stage_rejects_invalid_canary_percent() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, _root_id) = make_api(&svc).await;
+        let dep = svc
+            .handle(
+                "CreateDeployment",
+                json!({"restapi_id": api_id.clone()}),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let dep_id = dep["id"].as_str().unwrap().to_string();
+        let err = svc
+            .handle(
+                "CreateStage",
+                json!({
+                    "restapi_id": api_id,
+                    "stageName": "bad",
+                    "deploymentId": dep_id.clone(),
+                    "canarySettings": { "deploymentId": dep_id, "percentTraffic": 150.0 }
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
     }
 
     #[test]
