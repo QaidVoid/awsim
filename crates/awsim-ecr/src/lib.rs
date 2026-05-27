@@ -1,9 +1,11 @@
+pub mod authz;
 pub mod error;
 mod handler;
 mod operations;
 pub mod routes;
-mod state;
+pub mod state;
 
+pub use authz::EcrResourcePolicyLookup;
 pub use handler::EcrService;
 pub use routes::router;
 

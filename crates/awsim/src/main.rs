@@ -541,6 +541,7 @@ async fn async_main() -> Result<()> {
         ses_service,
         sts_sessions,
         sns_store,
+        ecr_store,
     ) = register_services(
         &mut state,
         &cli.account_id,
@@ -649,6 +650,10 @@ async fn async_main() -> Result<()> {
             Arc::new(awsim_lambda::LambdaResourcePolicyLookup::new(
                 lambda_store.clone(),
             )),
+        );
+        authz.resource_policy_lookups.insert(
+            "ecr".to_string(),
+            Arc::new(awsim_ecr::EcrResourcePolicyLookup::new(ecr_store.clone())),
         );
         authz.scp_lookup = Some(Arc::new(awsim_organizations::OrganizationsScpLookup::new(
             organizations_store,
@@ -2294,6 +2299,7 @@ type RegisteredServices = (
     Arc<awsim_ses::SesService>,
     Arc<awsim_sts::StsSessionStore>,
     awsim_core::AccountRegionStore<awsim_sns::state::SnsState>,
+    awsim_core::AccountRegionStore<awsim_ecr::state::EcrState>,
 );
 
 /// Register all services and return handles needed by the router:
@@ -2615,6 +2621,7 @@ fn register_services(
     };
     let ecr = Arc::new(ecr.with_port(port));
     let ecr_clone = Arc::clone(&ecr);
+    let ecr_store = ecr.store();
     state.register(ecr, vec![]);
 
     // Cloud Map / Service Discovery is registered alongside its
@@ -2897,6 +2904,7 @@ fn register_services(
         ses_service,
         sts_sessions,
         sns_store,
+        ecr_store,
     )
 }
 
