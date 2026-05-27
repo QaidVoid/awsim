@@ -15,6 +15,32 @@ fn now_secs() -> f64 {
         .as_secs_f64()
 }
 
+/// AWS Application Auto Scaling supports a closed set of
+/// `ServiceNamespace` values. Anything outside this list is rejected
+/// with `ValidationException` at `RegisterScalableTarget` time so
+/// downstream lookups can assume a known namespace.
+pub const SERVICE_NAMESPACES: &[&str] = &[
+    "appstream",
+    "cassandra",
+    "comprehend",
+    "custom-resource",
+    "dynamodb",
+    "ec2",
+    "ecs",
+    "elasticache",
+    "elasticmapreduce",
+    "kafka",
+    "lambda",
+    "neptune",
+    "rds",
+    "sagemaker",
+    "workspaces",
+];
+
+pub(crate) fn is_valid_service_namespace(ns: &str) -> bool {
+    SERVICE_NAMESPACES.contains(&ns)
+}
+
 fn require_str<'a>(input: &'a Value, key: &str) -> Result<&'a str, AwsError> {
     input
         .get(key)
@@ -72,6 +98,15 @@ pub fn register_scalable_target(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let ns = require_str(input, "ServiceNamespace")?.to_string();
+    if !is_valid_service_namespace(&ns) {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "ServiceNamespace `{ns}` is not one of the documented values: {:?}.",
+                SERVICE_NAMESPACES
+            ),
+        ));
+    }
     let rid = require_str(input, "ResourceId")?.to_string();
     let dim = require_str(input, "ScalableDimension")?.to_string();
     let key = target_key(&ns, &rid, &dim);
@@ -402,4 +437,47 @@ pub fn describe_scaling_activities(
     // always empty. Returning an empty list matches what `aws application-autoscaling`
     // SDK clients expect for newly-registered targets.
     Ok(json!({ "ScalingActivities": [] }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("application-autoscaling", "us-east-1")
+    }
+
+    #[test]
+    fn register_rejects_unknown_service_namespace() {
+        let state = AppAutoScalingState::default();
+        let err = register_scalable_target(
+            &state,
+            &json!({
+                "ServiceNamespace": "not-real",
+                "ResourceId": "table/foo",
+                "ScalableDimension": "dynamodb:table:ReadCapacityUnits",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("not-real"));
+    }
+
+    #[test]
+    fn register_accepts_documented_service_namespaces() {
+        let state = AppAutoScalingState::default();
+        for ns in SERVICE_NAMESPACES {
+            register_scalable_target(
+                &state,
+                &json!({
+                    "ServiceNamespace": ns,
+                    "ResourceId": "r",
+                    "ScalableDimension": "dim",
+                }),
+                &ctx(),
+            )
+            .unwrap_or_else(|e| panic!("namespace `{ns}` should be accepted: {e:?}"));
+        }
+    }
 }
