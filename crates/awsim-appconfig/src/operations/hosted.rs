@@ -83,7 +83,36 @@ pub fn create_hosted_version(
     state
         .hosted_versions
         .insert(hosted_key(&app_id, &pid, version), h);
+    prune_hosted_versions(state, &app_id, &pid);
     Ok(result)
+}
+
+/// AWS AppConfig keeps at most 100 hosted versions per
+/// `(ApplicationId, ConfigurationProfileId)`. After a successful
+/// create, drop the oldest entries until the count is back inside the
+/// cap so the next create never trips the limit.
+const HOSTED_VERSION_CAP: usize = 100;
+
+fn prune_hosted_versions(state: &AppConfigState, app_id: &str, profile_id: &str) {
+    let mut versions: Vec<u32> = state
+        .hosted_versions
+        .iter()
+        .filter(|e| {
+            let h = e.value();
+            h.application_id == app_id && h.configuration_profile_id == profile_id
+        })
+        .map(|e| e.value().version_number)
+        .collect();
+    if versions.len() <= HOSTED_VERSION_CAP {
+        return;
+    }
+    versions.sort();
+    let to_drop = versions.len() - HOSTED_VERSION_CAP;
+    for v in versions.into_iter().take(to_drop) {
+        state
+            .hosted_versions
+            .remove(&hosted_key(app_id, profile_id, v));
+    }
 }
 
 pub fn get_hosted_version(
@@ -113,4 +142,67 @@ pub fn get_hosted_version(
             )
         })?;
     Ok(version_to_value(&h))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::applications::create_application;
+    use crate::operations::profiles::create_profile;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("appconfig", "us-east-1")
+    }
+
+    fn setup() -> (AppConfigState, String, String) {
+        let state = AppConfigState::default();
+        let app = create_application(&state, &json!({ "Name": "app" }), &ctx()).unwrap();
+        let app_id = app["Id"].as_str().unwrap().to_string();
+        let prof = create_profile(
+            &state,
+            &json!({
+                "ApplicationId": app_id,
+                "Name": "p",
+                "LocationUri": "hosted",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let profile_id = prof["Id"].as_str().unwrap().to_string();
+        (state, app_id, profile_id)
+    }
+
+    #[test]
+    fn hosted_versions_pruned_at_100_cap() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+        let (state, app_id, profile_id) = setup();
+        for _ in 0..101 {
+            create_hosted_version(
+                &state,
+                &json!({
+                    "ApplicationId": app_id,
+                    "ConfigurationProfileId": profile_id,
+                    "Content": B64.encode(b"{}"),
+                    "ContentType": "application/json",
+                }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        // Only the 100 most recent versions survive.
+        let kept: Vec<u32> = state
+            .hosted_versions
+            .iter()
+            .filter(|e| {
+                let h = e.value();
+                h.application_id == app_id && h.configuration_profile_id == profile_id
+            })
+            .map(|e| e.value().version_number)
+            .collect();
+        assert_eq!(kept.len(), 100);
+        let min = kept.iter().copied().min().unwrap();
+        let max = kept.iter().copied().max().unwrap();
+        assert_eq!(max, 101);
+        assert_eq!(min, 2, "oldest (version 1) should have been evicted");
+    }
 }
