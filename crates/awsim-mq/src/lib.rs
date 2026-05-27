@@ -739,6 +739,96 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_round_trips_pending_broker_changes() {
+        // Seed a broker, stage UpdateBroker, snapshot, restore into a
+        // fresh service, and assert the pending mirror survived.
+        let seed = MqService::new();
+        let ctx = ctx();
+        let r = block_on(seed.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "snap-broker",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+                "HostInstanceType": "mq.t3.micro",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let id = r["BrokerId"].as_str().unwrap().to_string();
+        block_on(seed.handle(
+            "UpdateBroker",
+            json!({
+                "BrokerId": id.clone(),
+                "HostInstanceType": "mq.m5.large",
+                "AutoMinorVersionUpgrade": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let bytes = seed.snapshot().expect("snapshot must succeed");
+        let target = MqService::new();
+        target.restore(&bytes).expect("restore must succeed");
+
+        let desc =
+            block_on(target.handle("DescribeBroker", json!({ "BrokerId": id.clone() }), &ctx))
+                .unwrap();
+        // Pending mirror survived the round trip.
+        assert_eq!(desc["PendingHostInstanceType"], json!("mq.m5.large"));
+        assert_eq!(desc["PendingAutoMinorVersionUpgrade"], json!(false));
+        // Live config unchanged — the reboot hasn't fired yet on the
+        // restored instance either.
+        assert_eq!(desc["HostInstanceType"], json!("mq.t3.micro"));
+    }
+
+    #[test]
+    fn snapshot_round_trips_configuration_revisions() {
+        use base64::Engine as _;
+        let seed = MqService::new();
+        let ctx = ctx();
+        let c = block_on(seed.handle(
+            "CreateConfiguration",
+            json!({
+                "Name": "rmq-cfg",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let id = c["Id"].as_str().unwrap().to_string();
+        let payload =
+            base64::engine::general_purpose::STANDARD.encode(b"queue.mirroring = exactly\n");
+        block_on(seed.handle(
+            "UpdateConfiguration",
+            json!({
+                "ConfigurationId": id.clone(),
+                "Data": payload.clone(),
+                "Description": "rev2",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let bytes = seed.snapshot().expect("snapshot must succeed");
+        let target = MqService::new();
+        target.restore(&bytes).expect("restore must succeed");
+
+        let rev2 = block_on(target.handle(
+            "DescribeConfigurationRevision",
+            json!({
+                "ConfigurationId": id,
+                "ConfigurationRevision": "2",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(rev2["Data"], json!(payload));
+        assert_eq!(rev2["Description"], json!("rev2"));
+    }
+
+    #[test]
     fn update_broker_stages_pending_until_reboot() {
         let svc = MqService::new();
         let ctx = ctx();
