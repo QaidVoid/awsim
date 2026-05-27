@@ -172,13 +172,38 @@ fn make_user(
     })
 }
 
+/// Parse `UserAttributes` (or similar) in either of the two shapes
+/// Cognito clients have produced over time:
+///
+/// 1. JSON array: `[{Name, Value}, ...]` — the standard json-1.1 shape.
+/// 2. Indexed object: `{"1": {Name, Value}, "5": {...}}` or
+///    `{"member.1": {...}, "member.5": {...}}` — what older AWS query
+///    serializers emit when forced through a json bridge. Indices may
+///    be sparse; entries are gathered in ascending numeric order so
+///    "last write wins" behaves the same as for the array form.
+///
+/// Any entry missing `Name` or `Value` (string) is silently dropped,
+/// matching the array-form behavior.
 fn parse_user_attributes(input: &Value, key: &str) -> HashMap<String, String> {
     let mut attrs = HashMap::new();
-    if let Some(arr) = input[key].as_array() {
-        for attr in arr {
-            if let (Some(k), Some(v)) = (attr["Name"].as_str(), attr["Value"].as_str()) {
-                attrs.insert(k.to_string(), v.to_string());
+    let entries: Vec<&Value> = match &input[key] {
+        Value::Array(arr) => arr.iter().collect(),
+        Value::Object(obj) => {
+            let mut indexed: Vec<(u64, &Value)> = Vec::with_capacity(obj.len());
+            for (k, v) in obj {
+                let idx_str = k.strip_prefix("member.").unwrap_or(k.as_str());
+                if let Ok(idx) = idx_str.parse::<u64>() {
+                    indexed.push((idx, v));
+                }
             }
+            indexed.sort_by_key(|(i, _)| *i);
+            indexed.into_iter().map(|(_, v)| v).collect()
+        }
+        _ => Vec::new(),
+    };
+    for attr in entries {
+        if let (Some(k), Some(v)) = (attr["Name"].as_str(), attr["Value"].as_str()) {
+            attrs.insert(k.to_string(), v.to_string());
         }
     }
     attrs
@@ -2021,6 +2046,61 @@ mod tests {
     fn missing_timestamp_treated_as_expired() {
         // Legacy snapshot codes have no issued time; fail closed.
         assert!(!code_still_valid(None));
+    }
+
+    #[test]
+    fn user_attributes_parser_handles_array_form() {
+        let input = serde_json::json!({
+            "UserAttributes": [
+                { "Name": "email", "Value": "a@b" },
+                { "Name": "name", "Value": "Ada" },
+            ]
+        });
+        let got = parse_user_attributes(&input, "UserAttributes");
+        assert_eq!(got.get("email").map(String::as_str), Some("a@b"));
+        assert_eq!(got.get("name").map(String::as_str), Some("Ada"));
+    }
+
+    #[test]
+    fn user_attributes_parser_accepts_sparse_numeric_indices() {
+        let input = serde_json::json!({
+            "UserAttributes": {
+                "1": { "Name": "email", "Value": "a@b" },
+                "5": { "Name": "name", "Value": "Ada" },
+            }
+        });
+        let got = parse_user_attributes(&input, "UserAttributes");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got.get("email").map(String::as_str), Some("a@b"));
+        assert_eq!(got.get("name").map(String::as_str), Some("Ada"));
+    }
+
+    #[test]
+    fn user_attributes_parser_accepts_member_dot_n_keys() {
+        let input = serde_json::json!({
+            "UserAttributes": {
+                "member.2": { "Name": "email", "Value": "later@x" },
+                "member.1": { "Name": "email", "Value": "first@x" },
+                "member.7": { "Name": "name", "Value": "Ada" },
+            }
+        });
+        let got = parse_user_attributes(&input, "UserAttributes");
+        // member.2 sorts after member.1 so its email wins.
+        assert_eq!(got.get("email").map(String::as_str), Some("later@x"));
+        assert_eq!(got.get("name").map(String::as_str), Some("Ada"));
+    }
+
+    #[test]
+    fn user_attributes_parser_skips_non_numeric_object_keys() {
+        let input = serde_json::json!({
+            "UserAttributes": {
+                "garbage": { "Name": "email", "Value": "ignored@x" },
+                "3": { "Name": "name", "Value": "Ada" },
+            }
+        });
+        let got = parse_user_attributes(&input, "UserAttributes");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got.get("name").map(String::as_str), Some("Ada"));
     }
 
     fn fixture_user() -> CognitoUser {
