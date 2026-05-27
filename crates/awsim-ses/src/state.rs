@@ -18,6 +18,9 @@ pub struct SentEmail {
     pub raw: Option<String>,
     pub sent_at: u64,
     pub configuration_set_name: Option<String>,
+    /// EmailTags supplied by the caller. AWS persists them for event
+    /// destination dimensions and bounce/complaint reports.
+    pub tags: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]

@@ -87,6 +87,23 @@ fn value_to_plain(v: &Value) -> String {
     }
 }
 
+/// Parse EmailTags input ([{Name, Value}, ...]) into a flat name/value
+/// vector. Entries missing either field are dropped. Empty input yields
+/// an empty vector.
+fn parse_email_tags(tags: Option<&Value>) -> Vec<(String, String)> {
+    tags.and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| {
+                    let name = t.get("Name").and_then(|v| v.as_str())?;
+                    let value = t.get("Value").and_then(|v| v.as_str())?;
+                    Some((name.to_string(), value.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Returns true when EmailTags carry the `aws-ses-disable-tls` marker
 /// with a truthy value, used by the simulator to model a recipient MTA
 /// without TLS support.
@@ -251,6 +268,8 @@ pub fn send_email(
 
     let message_id = Uuid::new_v4().to_string();
 
+    let tags = parse_email_tags(input.get("EmailTags"));
+
     let email = SentEmail {
         message_id: message_id.clone(),
         from,
@@ -264,6 +283,7 @@ pub fn send_email(
         raw,
         sent_at: now_epoch(),
         configuration_set_name,
+        tags,
     };
 
     info!(message_id = %message_id, "SES: email sent");
@@ -344,6 +364,41 @@ mod tls_policy_enforcement_tests {
         .unwrap();
         let resp = send_email(&state, &send_input("cs", true), &ctx()).unwrap();
         assert!(resp["MessageId"].is_string());
+    }
+
+    #[test]
+    fn send_email_persists_configuration_set_and_tags() {
+        let state = SesState::default();
+        let path = std::env::temp_dir().join(format!("awsim-ses-tags-{}.db", uuid::Uuid::new_v4()));
+        let store = std::sync::Arc::new(crate::SqliteStore::open(path).unwrap());
+        state.set_sqlite(store.clone());
+        crate::operations::more::create_configuration_set(
+            &state,
+            &json!({ "ConfigurationSetName": "cs" }),
+            &ctx(),
+        )
+        .unwrap();
+        let input = json!({
+            "FromEmailAddress": "sender@example.com",
+            "Destination": { "ToAddresses": ["recipient@example.com"] },
+            "Content": { "Simple": { "Subject": { "Data": "hi" }, "Body": { "Text": { "Data": "hi" } } } },
+            "ConfigurationSetName": "cs",
+            "EmailTags": [
+                { "Name": "campaign", "Value": "spring" },
+                { "Name": "env", "Value": "prod" }
+            ],
+        });
+        send_email(&state, &input, &ctx()).unwrap();
+        let rows = store.list_all().unwrap();
+        let row = rows.first().expect("at least one email row");
+        assert_eq!(row.email.configuration_set_name.as_deref(), Some("cs"));
+        assert_eq!(row.email.tags.len(), 2);
+        assert!(
+            row.email
+                .tags
+                .iter()
+                .any(|(k, v)| k == "campaign" && v == "spring")
+        );
     }
 
     #[test]

@@ -56,6 +56,7 @@ pub fn send_bulk_email(
             raw: None,
             sent_at: now(),
             configuration_set_name: None,
+            tags: vec![],
         };
         if let Some(store) = state.sqlite() {
             store.put_email(&ctx.account_id, &ctx.region, &email)?;
@@ -92,6 +93,7 @@ pub fn send_custom_verification_email(
         raw: None,
         sent_at: now(),
         configuration_set_name: None,
+        tags: vec![],
     };
     if let Some(store) = state.sqlite() {
         store.put_email(&ctx.account_id, &ctx.region, &entry)?;
