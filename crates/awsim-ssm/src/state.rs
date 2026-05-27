@@ -135,7 +135,7 @@ pub struct SsmAutomationExecution {
     pub end_time: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SsmSession {
     pub session_id: String,
     pub target: String,
@@ -144,6 +144,20 @@ pub struct SsmSession {
     pub start_date: u64,
     pub end_date: Option<u64>,
     pub owner: String,
+    /// Reason recorded when the session ended. AWS sets it explicitly
+    /// for `TerminateSession`, and to a system string when timed out.
+    pub reason: Option<String>,
+    /// Session log output destinations as configured via SessionManager
+    /// preferences. AWS exposes `OutputUrl.S3OutputUrl` and
+    /// `OutputUrl.CloudWatchOutputUrl` on DescribeSessions History rows.
+    pub s3_output_url: Option<String>,
+    pub cloudwatch_output_url: Option<String>,
+    /// DocumentVersion + Parameters supplied to StartSession.
+    pub document_version: Option<String>,
+    pub parameters: Option<serde_json::Value>,
+    /// Maximum session duration in seconds (capped at 60 * 60 * 24 by
+    /// real AWS; we store whatever the caller supplies).
+    pub max_session_duration: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
