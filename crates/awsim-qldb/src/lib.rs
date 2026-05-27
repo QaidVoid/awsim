@@ -206,12 +206,21 @@ impl ServiceHandler for QldbService {
                             .collect()
                     })
                     .unwrap_or_default();
+                let permissions_mode = require_str(&input, "PermissionsMode")?.to_string();
+                if !matches!(permissions_mode.as_str(), "ALLOW_ALL" | "STANDARD") {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        format!(
+                            "PermissionsMode `{permissions_mode}` must be ALLOW_ALL or STANDARD.",
+                        ),
+                    ));
+                }
                 let l = Ledger {
                     name: name.clone(),
                     arn: ledger_arn(ctx, &name),
                     state: "ACTIVE".to_string(),
                     creation_date_time: now(),
-                    permissions_mode: require_str(&input, "PermissionsMode")?.to_string(),
+                    permissions_mode,
                     deletion_protection: input
                         .get("DeletionProtection")
                         .and_then(|v| v.as_bool())
@@ -405,5 +414,36 @@ mod tests {
         ))
         .unwrap();
         block_on(svc.handle("DeleteLedger", json!({ "name": "audit" }), &ctx)).unwrap();
+    }
+
+    #[test]
+    fn create_ledger_rejects_unknown_permissions_mode() {
+        let svc = QldbService::new();
+        let ctx = RequestContext::new("qldb", "us-east-1");
+        let err = block_on(svc.handle(
+            "CreateLedger",
+            json!({ "Name": "x", "PermissionsMode": "WIDE_OPEN" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_ledger_accepts_documented_permissions_modes() {
+        let svc = QldbService::new();
+        let ctx = RequestContext::new("qldb", "us-east-1");
+        for mode in ["ALLOW_ALL", "STANDARD"] {
+            block_on(svc.handle(
+                "CreateLedger",
+                json!({
+                    "Name": format!("ledger-{mode}"),
+                    "PermissionsMode": mode,
+                    "DeletionProtection": false,
+                }),
+                &ctx,
+            ))
+            .unwrap();
+        }
     }
 }
