@@ -120,6 +120,46 @@ fn event_to_value(e: &StackEvent) -> Value {
 }
 
 /// Build resources from parsed template, without actually creating them.
+/// Merge stack-level tags with resource-level tags into a flat
+/// `Vec<{Key, Value}>` in the shape downstream services already
+/// understand. AWS gives precedence to the resource declaration when
+/// the same key appears on both, so per-template overrides win over
+/// stack defaults.
+///
+/// `properties` is the raw resource Properties block (we look for the
+/// CloudFormation-standard `Tags` array of `{Key, Value}` entries).
+pub fn effective_resource_tags(
+    stack_tags: &HashMap<String, String>,
+    properties: &Value,
+) -> Vec<Value> {
+    let mut merged: Vec<(String, String)> = stack_tags
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    merged.sort_by(|a, b| a.0.cmp(&b.0));
+
+    if let Some(arr) = properties.get("Tags").and_then(Value::as_array) {
+        for tag in arr {
+            let Some(key) = tag.get("Key").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(value) = tag.get("Value").and_then(Value::as_str) else {
+                continue;
+            };
+            if let Some(existing) = merged.iter_mut().find(|(k, _)| k == key) {
+                existing.1 = value.to_string();
+            } else {
+                merged.push((key.to_string(), value.to_string()));
+            }
+        }
+    }
+
+    merged
+        .into_iter()
+        .map(|(k, v)| json!({"Key": k, "Value": v}))
+        .collect()
+}
+
 fn build_resources(parsed: &template::ParsedTemplate, now: &str) -> Vec<StackResource> {
     parsed
         .resources
@@ -314,7 +354,9 @@ pub fn create_stack(
     };
 
     // Emit one CreateResource event per resource so the background router
-    // can provision each resource in the appropriate service.
+    // can provision each resource in the appropriate service. Stack
+    // tags are merged into each resource's tag set so downstream
+    // services see them as if they were declared on the resource.
     if let Some(ref bus) = ctx.event_bus {
         for resource in &stack.resources {
             // Find the matching parsed resource to get its properties.
@@ -324,6 +366,8 @@ pub fn create_stack(
                 .find(|r| r.logical_id == resource.logical_resource_id)
                 .map(|r| r.properties.clone())
                 .unwrap_or(Value::Object(serde_json::Map::new()));
+
+            let effective_tags = effective_resource_tags(&stack.tags, &properties);
 
             bus.publish(InternalEvent {
                 source: "cloudformation".to_string(),
@@ -335,6 +379,8 @@ pub fn create_stack(
                     "logicalId": resource.logical_resource_id,
                     "resourceType": resource.resource_type,
                     "properties": properties,
+                    "stackTags": stack.tags,
+                    "effectiveTags": effective_tags,
                 }),
             });
         }
@@ -943,5 +989,62 @@ mod capabilities_tests {
         .unwrap_err();
         assert_eq!(err.code, "InsufficientCapabilitiesException");
         assert!(err.message.contains("CAPABILITY_AUTO_EXPAND"));
+    }
+
+    #[test]
+    fn effective_tags_merge_stack_and_resource_with_resource_override() {
+        let mut stack_tags = HashMap::new();
+        stack_tags.insert("env".to_string(), "stack-prod".to_string());
+        stack_tags.insert("owner".to_string(), "stack-team".to_string());
+
+        let properties = json!({
+            "Tags": [
+                { "Key": "env", "Value": "resource-override" },
+                { "Key": "extra", "Value": "from-resource" }
+            ]
+        });
+
+        let merged = effective_resource_tags(&stack_tags, &properties);
+        // Stack `owner` survives, resource `env` overrides, `extra` is new.
+        assert!(
+            merged
+                .iter()
+                .any(|t| t["Key"] == "owner" && t["Value"] == "stack-team")
+        );
+        assert!(
+            merged
+                .iter()
+                .any(|t| t["Key"] == "env" && t["Value"] == "resource-override")
+        );
+        assert!(
+            merged
+                .iter()
+                .any(|t| t["Key"] == "extra" && t["Value"] == "from-resource")
+        );
+    }
+
+    #[test]
+    fn effective_tags_with_no_resource_tags_carry_stack_tags() {
+        let mut stack_tags = HashMap::new();
+        stack_tags.insert("env".to_string(), "prod".to_string());
+        let merged = effective_resource_tags(&stack_tags, &json!({}));
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0]["Key"], "env");
+        assert_eq!(merged[0]["Value"], "prod");
+    }
+
+    #[test]
+    fn effective_tags_skips_malformed_resource_tag_entries() {
+        let stack_tags = HashMap::new();
+        let properties = json!({
+            "Tags": [
+                { "Key": "good", "Value": "v" },
+                { "Key": "missing-value" },
+                { "Value": "missing-key" }
+            ]
+        });
+        let merged = effective_resource_tags(&stack_tags, &properties);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0]["Key"], "good");
     }
 }
