@@ -340,6 +340,102 @@ pub fn batch_get_repository_scanning_configuration(
     }))
 }
 
+/// AWS-documented upstream registry types for pull-through cache
+/// rules. New entries arrive over time (most recent additions:
+/// `ecr-public`, `github-container-registry`); keep this in lockstep
+/// with the public CFN docs.
+const PULL_THROUGH_REGISTRY_KINDS: &[&str] = &[
+    "ecr",
+    "ecr-public",
+    "docker-hub",
+    "quay",
+    "k8s",
+    "github-container-registry",
+    "azure-container-registry",
+    "gitlab-container-registry",
+];
+
+/// Validate the `upstreamRegistryUrl` (and optional `upstreamRegistry`
+/// enum) supplied to CreatePullThroughCacheRule. AWS rejects calls
+/// that point at an unknown upstream with `ValidationException`; the
+/// simulator mirrors that so a typo doesn't sail through and resolve
+/// to a no-op layer fetch later.
+fn validate_pull_through_upstream(url: &str, kind: Option<&str>) -> Result<(), AwsError> {
+    if let Some(kind) = kind
+        && !PULL_THROUGH_REGISTRY_KINDS.contains(&kind)
+    {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "upstreamRegistry `{kind}` must be one of: {}.",
+                PULL_THROUGH_REGISTRY_KINDS.join(", "),
+            ),
+        ));
+    }
+
+    let inferred = infer_pull_through_kind(url).ok_or_else(|| {
+        AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "upstreamRegistryUrl `{url}` is not a recognised public registry. \
+                 Expected one of: public.ecr.aws, docker.io / registry-1.docker.io, \
+                 quay.io, registry.k8s.io, ghcr.io, *.azurecr.io, registry.gitlab.com, \
+                 or <account>.dkr.ecr.<region>.amazonaws.com."
+            ),
+        )
+    })?;
+
+    if let Some(kind) = kind
+        && kind != inferred
+    {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "upstreamRegistry `{kind}` does not match the upstreamRegistryUrl \
+                 (inferred `{inferred}` from `{url}`)."
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Infer the upstreamRegistry kind from the URL. Returns `None` for
+/// URLs that don't match any AWS-documented upstream.
+fn infer_pull_through_kind(url: &str) -> Option<&'static str> {
+    let normalized = url.to_ascii_lowercase();
+    let host = normalized
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let host = host.split('/').next().unwrap_or(host);
+    let host = host.to_string();
+    if host == "public.ecr.aws" {
+        return Some("ecr-public");
+    }
+    if host == "docker.io" || host == "registry-1.docker.io" || host == "index.docker.io" {
+        return Some("docker-hub");
+    }
+    if host == "quay.io" {
+        return Some("quay");
+    }
+    if host == "registry.k8s.io" || host == "k8s.gcr.io" {
+        return Some("k8s");
+    }
+    if host == "ghcr.io" {
+        return Some("github-container-registry");
+    }
+    if host.ends_with(".azurecr.io") {
+        return Some("azure-container-registry");
+    }
+    if host == "registry.gitlab.com" {
+        return Some("gitlab-container-registry");
+    }
+    // Cross-account ECR: <account>.dkr.ecr.<region>.amazonaws.com
+    if host.ends_with(".amazonaws.com") && host.contains(".dkr.ecr.") {
+        return Some("ecr");
+    }
+    None
+}
+
 pub fn create_pull_through_cache_rule(
     state: &EcrState,
     input: &Value,
@@ -356,6 +452,7 @@ pub fn create_pull_through_cache_rule(
     }
 
     let upstream_registry = input["upstreamRegistry"].as_str().map(|s| s.to_string());
+    validate_pull_through_upstream(&upstream, upstream_registry.as_deref())?;
     let credential_arn = input["credentialArn"].as_str().map(|s| s.to_string());
     let created_at = now_epoch_str();
 
@@ -470,4 +567,94 @@ pub fn put_account_setting(
         "name": name,
         "value": value,
     }))
+}
+
+#[cfg(test)]
+mod pull_through_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("ecr", "us-east-1")
+    }
+
+    #[test]
+    fn create_rejects_unknown_upstream_url() {
+        let state = EcrState::default();
+        let err = create_pull_through_cache_rule(
+            &state,
+            &json!({
+                "ecrRepositoryPrefix": "mirror",
+                "upstreamRegistryUrl": "https://my-mirror.example.com",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_rejects_unknown_upstream_kind() {
+        let state = EcrState::default();
+        let err = create_pull_through_cache_rule(
+            &state,
+            &json!({
+                "ecrRepositoryPrefix": "mirror",
+                "upstreamRegistryUrl": "public.ecr.aws",
+                "upstreamRegistry": "mystery",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_rejects_url_kind_mismatch() {
+        let state = EcrState::default();
+        let err = create_pull_through_cache_rule(
+            &state,
+            &json!({
+                "ecrRepositoryPrefix": "mirror",
+                "upstreamRegistryUrl": "public.ecr.aws",
+                "upstreamRegistry": "docker-hub",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("inferred"), "{err:?}");
+    }
+
+    #[test]
+    fn create_accepts_each_documented_upstream() {
+        for (url, kind) in [
+            ("public.ecr.aws", "ecr-public"),
+            ("https://docker.io", "docker-hub"),
+            ("quay.io", "quay"),
+            ("registry.k8s.io", "k8s"),
+            ("ghcr.io", "github-container-registry"),
+            ("myorg.azurecr.io", "azure-container-registry"),
+            ("registry.gitlab.com", "gitlab-container-registry"),
+            ("000000000000.dkr.ecr.us-east-1.amazonaws.com", "ecr"),
+        ] {
+            let state = EcrState::default();
+            create_pull_through_cache_rule(
+                &state,
+                &json!({
+                    "ecrRepositoryPrefix": format!("mirror-{kind}"),
+                    "upstreamRegistryUrl": url,
+                    "upstreamRegistry": kind,
+                }),
+                &ctx(),
+            )
+            .unwrap_or_else(|e| panic!("upstream `{url}` / `{kind}` rejected: {e:?}"));
+        }
+    }
+
+    #[test]
+    fn infer_pull_through_kind_normalizes_scheme_and_case() {
+        assert_eq!(
+            infer_pull_through_kind("HTTPS://PUBLIC.ECR.AWS/some/path"),
+            Some("ecr-public")
+        );
+    }
 }
