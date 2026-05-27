@@ -24,6 +24,14 @@ pub struct Schedule {
     /// one-shot `at(...)` schedules once they fire.
     #[serde(default = "default_action_after_completion")]
     pub action_after_completion: String,
+    /// Optional customer-managed KMS key ARN used to encrypt the
+    /// persisted `Target.Input`. AWS validates the ARN shape at
+    /// schedule-creation time and uses the key when reading the
+    /// stored Input back on tick fires. AWSim records the ARN and
+    /// echoes it on describe; the actual encryption hook is wired
+    /// when the awsim-kms invoker lands.
+    #[serde(default)]
+    pub kms_key_arn: Option<String>,
 }
 
 fn default_timezone() -> String {

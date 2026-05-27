@@ -355,6 +355,67 @@ mod tests {
     }
 
     #[test]
+    fn kms_key_arn_persisted_when_well_formed() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "encrypted",
+                "ScheduleExpression": "rate(5 minutes)",
+                "KmsKeyArn": "arn:aws:kms:us-east-1:000000000000:key/abc-123",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let desc =
+            block_on(svc.handle("GetSchedule", json!({ "Name": "encrypted" }), &ctx)).unwrap();
+        assert_eq!(
+            desc["KmsKeyArn"],
+            json!("arn:aws:kms:us-east-1:000000000000:key/abc-123")
+        );
+    }
+
+    #[test]
+    fn kms_key_arn_rejects_malformed_shapes() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        for bad in [
+            "not-an-arn",
+            // wrong service
+            "arn:aws:s3:us-east-1:000000000000:key/abc",
+            // missing region
+            "arn:aws:kms::000000000000:key/abc",
+            // wrong resource type
+            "arn:aws:kms:us-east-1:000000000000:alias/foo",
+            // missing key id
+            "arn:aws:kms:us-east-1:000000000000:key/",
+        ] {
+            let err = block_on(svc.handle(
+                "CreateSchedule",
+                json!({
+                    "Name": format!("k-{}", &bad[..5.min(bad.len())]),
+                    "ScheduleExpression": "rate(5 minutes)",
+                    "KmsKeyArn": bad,
+                    "Target": {
+                        "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                        "RoleArn": "arn:aws:iam::000000000000:role/r",
+                    },
+                    "FlexibleTimeWindow": { "Mode": "OFF" },
+                }),
+                &ctx,
+            ))
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input `{bad}`");
+        }
+    }
+
+    #[test]
     fn list_schedules_paginates_with_next_token() {
         let svc = SchedulerService::new();
         let ctx = ctx();

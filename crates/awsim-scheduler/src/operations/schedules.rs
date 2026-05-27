@@ -102,6 +102,13 @@ pub fn create_schedule(
     };
     validate_flexible_time_window(&flexible_time_window)?;
     let schedule_expression_timezone = resolve_timezone(input)?;
+    let kms_key_arn = match input.get("KmsKeyArn").and_then(|v| v.as_str()) {
+        Some(arn) => {
+            validate_kms_key_arn(arn)?;
+            Some(arn.to_string())
+        }
+        None => None,
+    };
 
     let key = format!("{group_name}/{name}");
     if state.schedules.contains_key(&key) {
@@ -129,6 +136,7 @@ pub fn create_schedule(
         last_modified_at: now,
         schedule_expression_timezone,
         action_after_completion,
+        kms_key_arn,
     };
 
     state.schedules.insert(key, schedule);
@@ -141,6 +149,48 @@ pub fn create_schedule(
             .insert(token, req_hash, result.clone());
     }
     Ok(result)
+}
+
+/// Validate a customer-managed KMS key ARN as accepted by Scheduler's
+/// `KmsKeyArn`. AWS requires the partition-aware
+/// `arn:<partition>:kms:<region>:<account>:key/<key-id>` shape with a
+/// non-empty region (KMS keys are regional) and a `key/<id>` resource
+/// segment. We do not enforce the partition matches the gateway's
+/// context — multi-partition deployments may legitimately mix.
+fn validate_kms_key_arn(arn: &str) -> Result<(), AwsError> {
+    let segs: Vec<&str> = arn.split(':').collect();
+    if segs.len() < 6 || segs[0] != "arn" {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "KmsKeyArn `{arn}` must be of the form \
+                 `arn:<partition>:kms:<region>:<account>:key/<id>`."
+            ),
+        ));
+    }
+    if segs[2] != "kms" {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("KmsKeyArn `{arn}` must reference the `kms` service."),
+        ));
+    }
+    if segs[3].is_empty() {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("KmsKeyArn `{arn}` must include a region segment."),
+        ));
+    }
+    // Reassemble the resource portion (everything after the 5th
+    // colon) so `key/abc-123` round-trips even when the key id
+    // itself contains another `:` (rare but legal in alias ARNs).
+    let resource = segs[5..].join(":");
+    if !resource.starts_with("key/") || resource.len() <= "key/".len() {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("KmsKeyArn `{arn}` must end with a `key/<id>` resource."),
+        ));
+    }
+    Ok(())
 }
 
 /// AWS Scheduler name regex: `^[0-9a-zA-Z-_.]{1,64}$`. Used for both
@@ -514,7 +564,7 @@ pub fn get_schedule(
         )
     })?;
 
-    Ok(json!({
+    let mut resp = json!({
         "Arn": schedule.arn,
         "Name": schedule.name,
         "GroupName": schedule.group_name,
@@ -526,7 +576,11 @@ pub fn get_schedule(
         "ActionAfterCompletion": schedule.action_after_completion,
         "CreationDate": schedule.created_at,
         "LastModificationDate": schedule.last_modified_at,
-    }))
+    });
+    if let Some(ref k) = schedule.kms_key_arn {
+        resp["KmsKeyArn"] = json!(k);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -649,6 +703,10 @@ pub fn update_schedule(
             ));
         }
         schedule.schedule_expression = expr.to_string();
+    }
+    if let Some(arn) = input["KmsKeyArn"].as_str() {
+        validate_kms_key_arn(arn)?;
+        schedule.kms_key_arn = Some(arn.to_string());
     }
     if let Some(action) = input["ActionAfterCompletion"].as_str() {
         if !matches!(action, "NONE" | "DELETE") {
