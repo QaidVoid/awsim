@@ -2,6 +2,7 @@ pub mod authz;
 pub mod error;
 pub mod filter;
 mod handler;
+pub mod http_envelope;
 mod operations;
 pub mod state;
 
