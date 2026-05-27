@@ -107,6 +107,77 @@ fn require_str<'a>(input: &'a Value, key: &str) -> Result<&'a str, AwsError> {
         .ok_or_else(|| AwsError::bad_request("ValidationException", format!("{key} is required")))
 }
 
+/// IdentityStoreId regex per AWS: `^d-[0-9a-f]{10}$`. AWS rejects
+/// other shapes (legacy `i-*` identifiers, garbage, etc.) at every
+/// API boundary with `ValidationException`.
+fn validate_identity_store_id(id: &str) -> Result<(), AwsError> {
+    if id.len() != 12 {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "IdentityStoreId `{id}` must be 12 characters: `d-` + 10 lowercase hex digits."
+            ),
+        ));
+    }
+    let mut chars = id.chars();
+    let (Some('d'), Some('-')) = (chars.next(), chars.next()) else {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("IdentityStoreId `{id}` must start with `d-`."),
+        ));
+    };
+    if !chars.all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("IdentityStoreId `{id}` must use lowercase hex after `d-`."),
+        ));
+    }
+    Ok(())
+}
+
+/// AWS's documented bounds on `UserName`: required, 1..=128 chars,
+/// no leading/trailing whitespace, no control characters.
+fn validate_user_name(name: &str) -> Result<(), AwsError> {
+    if name.is_empty() || name.len() > 128 {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "UserName must be 1..=128 characters; got {} chars.",
+                name.chars().count()
+            ),
+        ));
+    }
+    if name.trim() != name {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            "UserName must not have leading or trailing whitespace.",
+        ));
+    }
+    if name.chars().any(|c| c.is_control()) {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            "UserName must not contain control characters.",
+        ));
+    }
+    Ok(())
+}
+
+/// Group `DisplayName` cap: 1..=1024 chars per AWS docs. Optional on
+/// User and required on Group; callers pass the relevant required
+/// flag separately.
+fn validate_display_name(name: &str) -> Result<(), AwsError> {
+    if name.is_empty() || name.len() > 1024 {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "DisplayName must be 1..=1024 characters; got {} chars.",
+                name.chars().count()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn user_to_value(u: &IdUser) -> Value {
     json!({
         "IdentityStoreId": u.identity_store_id,
@@ -198,7 +269,12 @@ impl ServiceHandler for IdentityStoreService {
         match operation {
             "CreateUser" => {
                 let store = require_str(&input, "IdentityStoreId")?.to_string();
+                validate_identity_store_id(&store)?;
                 let user_name = require_str(&input, "UserName")?.to_string();
+                validate_user_name(&user_name)?;
+                if let Some(d) = input.get("DisplayName").and_then(|v| v.as_str()) {
+                    validate_display_name(d)?;
+                }
                 let user_id = uuid::Uuid::new_v4().to_string();
                 let u = IdUser {
                     identity_store_id: store.clone(),
@@ -347,7 +423,9 @@ impl ServiceHandler for IdentityStoreService {
             }
             "CreateGroup" => {
                 let store = require_str(&input, "IdentityStoreId")?.to_string();
+                validate_identity_store_id(&store)?;
                 let display_name = require_str(&input, "DisplayName")?.to_string();
+                validate_display_name(&display_name)?;
                 let group_id = uuid::Uuid::new_v4().to_string();
                 let g = IdGroup {
                     identity_store_id: store.clone(),
@@ -587,7 +665,7 @@ mod tests {
         let ctx = ctx();
         let u = block_on(svc.handle(
             "CreateUser",
-            json!({ "IdentityStoreId": "d-12345", "UserName": "alice@example.com" }),
+            json!({ "IdentityStoreId": "d-1234567890", "UserName": "alice@example.com" }),
             &ctx,
         ))
         .unwrap();
@@ -595,7 +673,7 @@ mod tests {
 
         let g = block_on(svc.handle(
             "CreateGroup",
-            json!({ "IdentityStoreId": "d-12345", "DisplayName": "engineers" }),
+            json!({ "IdentityStoreId": "d-1234567890", "DisplayName": "engineers" }),
             &ctx,
         ))
         .unwrap();
@@ -604,7 +682,7 @@ mod tests {
         let ms = block_on(svc.handle(
             "CreateGroupMembership",
             json!({
-                "IdentityStoreId": "d-12345",
+                "IdentityStoreId": "d-1234567890",
                 "GroupId": group_id,
                 "MemberId": { "UserId": user_id }
             }),
@@ -616,7 +694,7 @@ mod tests {
         let memberships = block_on(svc.handle(
             "ListGroupMembershipsForMember",
             json!({
-                "IdentityStoreId": "d-12345",
+                "IdentityStoreId": "d-1234567890",
                 "MemberId": { "UserId": user_id }
             }),
             &ctx,
@@ -627,13 +705,13 @@ mod tests {
         // Deleting a user removes their memberships
         block_on(svc.handle(
             "DeleteUser",
-            json!({ "IdentityStoreId": "d-12345", "UserId": user_id }),
+            json!({ "IdentityStoreId": "d-1234567890", "UserId": user_id }),
             &ctx,
         ))
         .unwrap();
         let after = block_on(svc.handle(
             "ListGroupMemberships",
-            json!({ "IdentityStoreId": "d-12345", "GroupId": group_id }),
+            json!({ "IdentityStoreId": "d-1234567890", "GroupId": group_id }),
             &ctx,
         ))
         .unwrap();
@@ -646,14 +724,14 @@ mod tests {
         let ctx = ctx();
         let u = block_on(svc.handle(
             "CreateUser",
-            json!({ "IdentityStoreId": "d-1", "UserName": "bob" }),
+            json!({ "IdentityStoreId": "d-0123456789", "UserName": "bob" }),
             &ctx,
         ))
         .unwrap();
         let r = block_on(svc.handle(
             "GetUserId",
             json!({
-                "IdentityStoreId": "d-1",
+                "IdentityStoreId": "d-0123456789",
                 "AlternateIdentifier": {
                     "UniqueAttribute": { "AttributePath": "userName", "AttributeValue": "bob" }
                 }
@@ -662,5 +740,62 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(r["UserId"], u["UserId"]);
+    }
+
+    #[test]
+    fn create_user_rejects_malformed_identity_store_id() {
+        let svc = IdentityStoreService::new();
+        let ctx = RequestContext::new("identitystore", "us-east-1");
+        for bad in ["d-12345", "x-1234567890", "d-123456789G", "garbage"] {
+            let err = block_on(svc.handle(
+                "CreateUser",
+                json!({ "IdentityStoreId": bad, "UserName": "alice" }),
+                &ctx,
+            ))
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input `{bad}`");
+        }
+    }
+
+    #[test]
+    fn create_user_rejects_oversized_user_name() {
+        let svc = IdentityStoreService::new();
+        let ctx = RequestContext::new("identitystore", "us-east-1");
+        let long = "a".repeat(129);
+        let err = block_on(svc.handle(
+            "CreateUser",
+            json!({ "IdentityStoreId": "d-0123456789", "UserName": long }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_user_rejects_whitespace_padded_user_name() {
+        let svc = IdentityStoreService::new();
+        let ctx = RequestContext::new("identitystore", "us-east-1");
+        let err = block_on(svc.handle(
+            "CreateUser",
+            json!({ "IdentityStoreId": "d-0123456789", "UserName": " alice " }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("whitespace"), "{}", err.message);
+    }
+
+    #[test]
+    fn create_group_rejects_oversized_display_name() {
+        let svc = IdentityStoreService::new();
+        let ctx = RequestContext::new("identitystore", "us-east-1");
+        let long = "g".repeat(1025);
+        let err = block_on(svc.handle(
+            "CreateGroup",
+            json!({ "IdentityStoreId": "d-0123456789", "DisplayName": long }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 }
