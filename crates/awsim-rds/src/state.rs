@@ -127,6 +127,37 @@ pub struct DbCluster {
     pub created_at: String,
     #[serde(default)]
     pub vpc_security_groups: Vec<String>,
+    /// Database Activity Stream status. AWS exposes the four-state
+    /// machine on `DescribeDBClusters.ActivityStreamStatus`:
+    /// `stopped` -> `starting` -> `started` -> `stopping` ->
+    /// `stopped`. We collapse the transient states for the synthetic
+    /// case (no real Kinesis consumer to wait on) and leap straight
+    /// to the steady-state value.
+    #[serde(default = "default_activity_stream_status")]
+    pub activity_stream_status: String,
+    /// Optional Kinesis stream that buffers Activity Stream events.
+    /// AWS picks the name when the activity stream starts; we
+    /// derive it from the cluster identifier.
+    #[serde(default)]
+    pub activity_stream_kinesis_stream_name: Option<String>,
+    /// Activity Stream KMS key configured by the caller on
+    /// `StartActivityStream`.
+    #[serde(default)]
+    pub activity_stream_kms_key_id: Option<String>,
+    /// `sync` or `async`. AWS defaults to `async` when omitted.
+    #[serde(default)]
+    pub activity_stream_mode: Option<String>,
+    /// Aurora MySQL clusters surface `BacktrackWindow` (seconds
+    /// AWS retains for rewind) and `LatestBacktrackTime` (the
+    /// oldest point currently backtrack-eligible). We persist the
+    /// configured window; the latest time is derived from the
+    /// configured retention and cluster age on every describe.
+    #[serde(default)]
+    pub backtrack_window: Option<u64>,
+}
+
+fn default_activity_stream_status() -> String {
+    "stopped".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

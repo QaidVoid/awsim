@@ -95,6 +95,10 @@ impl ServiceHandler for RdsService {
             "CreateDBCluster" => operations::clusters::create_db_cluster(&state, &input, ctx),
             "DeleteDBCluster" => operations::clusters::delete_db_cluster(&state, &input, ctx),
             "DescribeDBClusters" => operations::clusters::describe_db_clusters(&state, &input, ctx),
+            "StartActivityStream" => {
+                operations::clusters::start_activity_stream(&state, &input, ctx)
+            }
+            "StopActivityStream" => operations::clusters::stop_activity_stream(&state, &input, ctx),
 
             // DB Subnet Groups
             "CreateDBSubnetGroup" => {
