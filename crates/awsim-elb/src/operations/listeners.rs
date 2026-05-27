@@ -490,7 +490,13 @@ pub fn parse_actions(input: &Value, key: &str) -> Result<Vec<ListenerAction>, Aw
                     }
                     Some(cfg)
                 }
-                _ => item.get("ForwardConfig").cloned(),
+                _ => {
+                    let cfg = item.get("ForwardConfig").cloned();
+                    if let Some(ref c) = cfg {
+                        validate_forward_target_groups(c)?;
+                    }
+                    cfg
+                }
             };
             actions.push(ListenerAction {
                 action_type,
@@ -501,6 +507,112 @@ pub fn parse_actions(input: &Value, key: &str) -> Result<Vec<ListenerAction>, Aw
     }
 
     Ok(actions)
+}
+
+/// Validate the `TargetGroups` array of a `forward` action's
+/// `ForwardConfig`. AWS rejects:
+/// - Negative weights (each entry must be `0..=999`).
+/// - An all-zero or empty target-group list: a weight sum of 0 cannot
+///   distribute any traffic.
+fn validate_forward_target_groups(cfg: &Value) -> Result<(), awsim_core::AwsError> {
+    let Some(items) = collect_target_groups(cfg) else {
+        return Ok(());
+    };
+    if items.is_empty() {
+        return Err(awsim_core::AwsError::bad_request(
+            "InvalidConfigurationRequestException",
+            "ForwardConfig.TargetGroups must contain at least one target group.",
+        ));
+    }
+    let mut total: u64 = 0;
+    for item in &items {
+        let weight = parse_weight(item)?;
+        total = total.saturating_add(u64::from(weight));
+    }
+    if total == 0 {
+        return Err(awsim_core::AwsError::bad_request(
+            "InvalidConfigurationRequestException",
+            "ForwardConfig.TargetGroups must include at least one target group with a non-zero weight.",
+        ));
+    }
+    Ok(())
+}
+
+fn collect_target_groups(cfg: &Value) -> Option<Vec<Value>> {
+    let tg = cfg.get("TargetGroups")?;
+    let items: Vec<Value> = match tg {
+        Value::Array(arr) => arr.clone(),
+        Value::Object(map) => {
+            let inner = if let Some(Value::Object(m)) = map.get("member") {
+                m
+            } else {
+                map
+            };
+            let mut pairs: Vec<_> = inner.iter().collect();
+            pairs.sort_by_key(|(k, _)| k.parse::<u64>().unwrap_or(u64::MAX));
+            pairs.into_iter().map(|(_, v)| v.clone()).collect()
+        }
+        _ => return None,
+    };
+    Some(items)
+}
+
+fn parse_weight(item: &Value) -> Result<u32, awsim_core::AwsError> {
+    let weight = match item.get("Weight") {
+        Some(Value::Number(n)) => n.as_i64(),
+        Some(Value::String(s)) => s.parse::<i64>().ok(),
+        None => return Ok(1),
+        _ => None,
+    };
+    let Some(w) = weight else {
+        return Err(awsim_core::AwsError::bad_request(
+            "InvalidConfigurationRequestException",
+            "TargetGroupTuple.Weight must be an integer.",
+        ));
+    };
+    if !(0..=999).contains(&w) {
+        return Err(awsim_core::AwsError::bad_request(
+            "InvalidConfigurationRequestException",
+            format!("TargetGroupTuple.Weight `{w}` must be between 0 and 999."),
+        ));
+    }
+    Ok(w as u32)
+}
+
+/// Pick a target group ARN from a forward action's `ForwardConfig`
+/// using a per-call counter. AWS Application Load Balancer distributes
+/// traffic across the listed target groups in proportion to their
+/// weights; we model that as a deterministic counter modulo the total
+/// weight sum so callers (tests, simulated proxies) get repeatable
+/// behavior. Returns `None` when the action isn't a weighted forward
+/// or all weights are zero.
+///
+/// Wired into the simulator's proxy path once cross-service ALB
+/// dispatch is implemented; until then it's exercised by the unit
+/// tests below.
+#[allow(dead_code)]
+pub fn pick_weighted_target_group(forward_config: &Value, counter: u64) -> Option<String> {
+    let items = collect_target_groups(forward_config)?;
+    let weights: Vec<(String, u32)> = items
+        .iter()
+        .filter_map(|item| {
+            let arn = item.get("TargetGroupArn").and_then(Value::as_str)?;
+            let weight = parse_weight(item).ok()?;
+            Some((arn.to_string(), weight))
+        })
+        .collect();
+    let total: u64 = weights.iter().map(|(_, w)| u64::from(*w)).sum();
+    if total == 0 {
+        return None;
+    }
+    let mut tick = counter % total;
+    for (arn, w) in weights {
+        if tick < u64::from(w) {
+            return Some(arn);
+        }
+        tick -= u64::from(w);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -743,5 +855,86 @@ mod tests {
         let input = json!({ "DefaultActions": [{ "Type": "send-postcard" }] });
         let err = parse_actions(&input, "DefaultActions").unwrap_err();
         assert_eq!(err.code, "InvalidConfigurationRequestException");
+    }
+
+    #[test]
+    fn forward_action_rejects_all_zero_weights() {
+        let input = json!({
+            "DefaultActions": [{
+                "Type": "forward",
+                "ForwardConfig": {
+                    "TargetGroups": [
+                        { "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/a/1", "Weight": 0 },
+                        { "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/b/2", "Weight": 0 }
+                    ]
+                }
+            }]
+        });
+        let err = parse_actions(&input, "DefaultActions").unwrap_err();
+        assert_eq!(err.code, "InvalidConfigurationRequestException");
+        assert!(err.message.contains("non-zero"));
+    }
+
+    #[test]
+    fn forward_action_rejects_weight_out_of_range() {
+        let input = json!({
+            "DefaultActions": [{
+                "Type": "forward",
+                "ForwardConfig": {
+                    "TargetGroups": [
+                        { "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/a/1", "Weight": 1000 }
+                    ]
+                }
+            }]
+        });
+        let err = parse_actions(&input, "DefaultActions").unwrap_err();
+        assert_eq!(err.code, "InvalidConfigurationRequestException");
+    }
+
+    #[test]
+    fn forward_action_accepts_mixed_weights() {
+        let input = json!({
+            "DefaultActions": [{
+                "Type": "forward",
+                "ForwardConfig": {
+                    "TargetGroups": [
+                        { "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/a/1", "Weight": 1 },
+                        { "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/b/2", "Weight": 0 }
+                    ]
+                }
+            }]
+        });
+        let actions = parse_actions(&input, "DefaultActions").unwrap();
+        assert_eq!(actions.len(), 1);
+    }
+
+    #[test]
+    fn pick_weighted_target_group_distributes_per_weight() {
+        let cfg = json!({
+            "TargetGroups": [
+                { "TargetGroupArn": "tg-a", "Weight": 1 },
+                { "TargetGroupArn": "tg-b", "Weight": 3 }
+            ]
+        });
+        let total = 4_u64;
+        let mut counts = std::collections::HashMap::new();
+        for i in 0..(4 * total) {
+            let pick = pick_weighted_target_group(&cfg, i).unwrap();
+            *counts.entry(pick).or_insert(0u64) += 1;
+        }
+        // 4:1 split over 16 picks → tg-a=4, tg-b=12
+        assert_eq!(counts["tg-a"], 4);
+        assert_eq!(counts["tg-b"], 12);
+    }
+
+    #[test]
+    fn pick_weighted_target_group_returns_none_when_total_zero() {
+        let cfg = json!({
+            "TargetGroups": [
+                { "TargetGroupArn": "tg-a", "Weight": 0 },
+                { "TargetGroupArn": "tg-b", "Weight": 0 }
+            ]
+        });
+        assert!(pick_weighted_target_group(&cfg, 0).is_none());
     }
 }
