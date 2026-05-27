@@ -184,7 +184,7 @@ pub fn delete_namespace(
     let id = require_str(input, "Id")?.to_string();
     if state.services.iter().any(|e| e.value().namespace_id == id) {
         return Err(AwsError::bad_request(
-            "ResourceInUse",
+            "ResourceInUseException",
             "Namespace still has services attached",
         ));
     }
@@ -284,7 +284,7 @@ pub fn delete_service(
     let id = require_str(input, "Id")?;
     if state.instances.iter().any(|e| e.value().service_id == id) {
         return Err(AwsError::bad_request(
-            "ResourceInUse",
+            "ResourceInUseException",
             "Service still has registered instances",
         ));
     }

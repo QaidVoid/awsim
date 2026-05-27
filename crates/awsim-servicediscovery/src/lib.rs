@@ -300,6 +300,35 @@ mod tests {
         .unwrap();
         let err =
             block_on(svc.handle("DeleteNamespace", json!({ "Id": ns_id }), &ctx)).unwrap_err();
-        assert_eq!(err.code, "ResourceInUse");
+        assert_eq!(err.code, "ResourceInUseException");
+    }
+
+    #[test]
+    fn delete_service_with_instances_returns_resource_in_use_exception() {
+        let svc = ServiceDiscoveryService::new();
+        let ctx = ctx();
+        block_on(svc.handle("CreateHttpNamespace", json!({ "Name": "ns" }), &ctx)).unwrap();
+        let ns_id = block_on(svc.handle("ListNamespaces", json!({}), &ctx)).unwrap()["Namespaces"]
+            [0]["Id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let svc_id = block_on(svc.handle(
+            "CreateService",
+            json!({ "Name": "s", "NamespaceId": ns_id }),
+            &ctx,
+        ))
+        .unwrap()["Service"]["Id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        block_on(svc.handle(
+            "RegisterInstance",
+            json!({ "ServiceId": svc_id, "InstanceId": "i1", "Attributes": {} }),
+            &ctx,
+        ))
+        .unwrap();
+        let err = block_on(svc.handle("DeleteService", json!({ "Id": svc_id }), &ctx)).unwrap_err();
+        assert_eq!(err.code, "ResourceInUseException");
     }
 }
