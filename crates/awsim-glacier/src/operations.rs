@@ -60,6 +60,26 @@ fn require_str<'a>(input: &'a Value, key: &str) -> Result<&'a str, AwsError> {
     })
 }
 
+/// Resolve the path-style `accountId` against the caller. Glacier's
+/// REST paths embed an account id, and AWS lets callers pass `-` as a
+/// stand-in for "my own account". Anything else has to match the
+/// signing account exactly; a mismatched id is rejected with
+/// `AccessDeniedException`, matching real Glacier. Absent / `-`
+/// silently maps to `ctx.account_id`.
+fn resolve_account_id(input: &Value, ctx: &RequestContext) -> Result<(), AwsError> {
+    match input.get("accountId").and_then(Value::as_str) {
+        None | Some("-") => Ok(()),
+        Some(id) if id == ctx.account_id => Ok(()),
+        Some(other) => Err(AwsError::forbidden(
+            "AccessDeniedException",
+            format!(
+                "Account id `{other}` in the path does not match the signing account `{}`.",
+                ctx.account_id
+            ),
+        )),
+    }
+}
+
 fn vault_arn(ctx: &RequestContext, vault: &str) -> String {
     format!(
         "arn:aws:glacier:{}:{}:vaults/{}",
@@ -100,6 +120,7 @@ pub fn create_vault(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    resolve_account_id(input, ctx)?;
     let vault = require_str(input, "vaultName")?.to_string();
     if state.vaults.contains_key(&vault) {
         // Glacier returns 201 + Location header on either fresh or pre-existing
@@ -123,8 +144,9 @@ pub fn create_vault(
 pub fn describe_vault(
     state: &GlacierState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    resolve_account_id(input, ctx)?;
     let vault = require_str(input, "vaultName")?;
     let v = state.vaults.get(vault).ok_or_else(|| {
         AwsError::not_found(
@@ -137,9 +159,10 @@ pub fn describe_vault(
 
 pub fn list_vaults(
     state: &GlacierState,
-    _input: &Value,
-    _ctx: &RequestContext,
+    input: &Value,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    resolve_account_id(input, ctx)?;
     let items: Vec<Value> = state
         .vaults
         .iter()
@@ -151,8 +174,9 @@ pub fn list_vaults(
 pub fn delete_vault(
     state: &GlacierState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    resolve_account_id(input, ctx)?;
     let vault = require_str(input, "vaultName")?;
     let v = state.vaults.get(vault).ok_or_else(|| {
         AwsError::not_found(
@@ -174,9 +198,10 @@ pub fn delete_vault(
 pub fn upload_archive(
     state: &GlacierState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     use sha2::{Digest, Sha256};
+    resolve_account_id(input, ctx)?;
     let vault = require_str(input, "vaultName")?.to_string();
     let _ = state.vaults.get(&vault).ok_or_else(|| {
         AwsError::not_found(
@@ -224,8 +249,9 @@ pub fn upload_archive(
 pub fn delete_archive(
     state: &GlacierState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    resolve_account_id(input, ctx)?;
     let vault = require_str(input, "vaultName")?.to_string();
     let archive_id = require_str(input, "archiveId")?.to_string();
     let (_, a) = state
@@ -249,8 +275,9 @@ pub fn delete_archive(
 pub fn initiate_job(
     state: &GlacierState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    resolve_account_id(input, ctx)?;
     let vault = require_str(input, "vaultName")?.to_string();
     let _ = state.vaults.get(&vault).ok_or_else(|| {
         AwsError::not_found(
@@ -306,8 +333,9 @@ pub fn initiate_job(
 pub fn describe_job(
     state: &GlacierState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    resolve_account_id(input, ctx)?;
     let vault = require_str(input, "vaultName")?;
     let job_id = require_str(input, "jobId")?;
     let j = state.jobs.get(&job_key(vault, job_id)).ok_or_else(|| {
@@ -322,8 +350,9 @@ pub fn describe_job(
 pub fn list_jobs(
     state: &GlacierState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    resolve_account_id(input, ctx)?;
     let vault = require_str(input, "vaultName")?;
     let items: Vec<Value> = state
         .jobs
@@ -337,8 +366,9 @@ pub fn list_jobs(
 pub fn set_vault_notifications(
     state: &GlacierState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    resolve_account_id(input, ctx)?;
     let vault = require_str(input, "vaultName")?;
     let mut v = state.vaults.get_mut(vault).ok_or_else(|| {
         AwsError::not_found(
@@ -366,8 +396,9 @@ pub fn set_vault_notifications(
 pub fn get_vault_notifications(
     state: &GlacierState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    resolve_account_id(input, ctx)?;
     let vault = require_str(input, "vaultName")?;
     let v = state.vaults.get(vault).ok_or_else(|| {
         AwsError::not_found(
@@ -386,8 +417,9 @@ pub fn get_vault_notifications(
 pub fn delete_vault_notifications(
     state: &GlacierState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    resolve_account_id(input, ctx)?;
     let vault = require_str(input, "vaultName")?;
     let mut v = state.vaults.get_mut(vault).ok_or_else(|| {
         AwsError::not_found(
@@ -398,4 +430,64 @@ pub fn delete_vault_notifications(
     v.notification_topic = None;
     v.notification_events.clear();
     Ok(json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("glacier", "us-east-1")
+    }
+
+    fn state_with_vault(name: &str) -> GlacierState {
+        let state = GlacierState::default();
+        create_vault(&state, &json!({ "vaultName": name }), &ctx()).unwrap();
+        state
+    }
+
+    #[test]
+    fn dash_account_id_is_honored() {
+        let state = state_with_vault("v1");
+        // A `-` in the path should be treated as the caller's account.
+        let v = describe_vault(
+            &state,
+            &json!({ "accountId": "-", "vaultName": "v1" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(v["VaultName"], "v1");
+    }
+
+    #[test]
+    fn absent_account_id_falls_back_to_caller() {
+        let state = state_with_vault("v1");
+        let v = describe_vault(&state, &json!({ "vaultName": "v1" }), &ctx()).unwrap();
+        assert_eq!(v["VaultName"], "v1");
+    }
+
+    #[test]
+    fn matching_account_id_is_accepted() {
+        let state = state_with_vault("v1");
+        let c = ctx();
+        let v = describe_vault(
+            &state,
+            &json!({ "accountId": c.account_id.clone(), "vaultName": "v1" }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(v["VaultName"], "v1");
+    }
+
+    #[test]
+    fn mismatched_account_id_is_rejected() {
+        let state = state_with_vault("v1");
+        let err = describe_vault(
+            &state,
+            &json!({ "accountId": "999999999999", "vaultName": "v1" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AccessDeniedException");
+    }
 }
