@@ -128,6 +128,89 @@ pub(crate) fn validate_target_tracking_config(cfg: &Value) -> Result<(), AwsErro
     Ok(())
 }
 
+/// `StepScalingPolicyConfiguration` invariants per AWS:
+///   * `AdjustmentType` is one of `ChangeInCapacity`,
+///     `PercentChangeInCapacity`, `ExactCapacity`
+///   * `MetricAggregationType` (if present) is `Average`, `Minimum`,
+///     `Maximum`
+///   * `MinAdjustmentMagnitude` (if present) is `>= 0` and only valid
+///     for `PercentChangeInCapacity`
+///   * `StepAdjustments` ranges (`MetricIntervalLowerBound` /
+///     `MetricIntervalUpperBound`) do not overlap
+pub(crate) fn validate_step_scaling_config(cfg: &Value) -> Result<(), AwsError> {
+    let adjustment_type = cfg
+        .get("AdjustmentType")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AwsError::bad_request("ValidationException", "AdjustmentType is required")
+        })?;
+    if !matches!(
+        adjustment_type,
+        "ChangeInCapacity" | "PercentChangeInCapacity" | "ExactCapacity"
+    ) {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("AdjustmentType `{adjustment_type}` is not a documented value."),
+        ));
+    }
+    if let Some(agg) = cfg.get("MetricAggregationType").and_then(Value::as_str)
+        && !matches!(agg, "Average" | "Minimum" | "Maximum")
+    {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("MetricAggregationType `{agg}` is not a documented value."),
+        ));
+    }
+    if let Some(min_mag) = cfg.get("MinAdjustmentMagnitude").and_then(Value::as_i64) {
+        if min_mag < 0 {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!("MinAdjustmentMagnitude `{min_mag}` must be >= 0."),
+            ));
+        }
+        if adjustment_type != "PercentChangeInCapacity" {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                "MinAdjustmentMagnitude only applies to PercentChangeInCapacity.",
+            ));
+        }
+    }
+    if let Some(steps) = cfg.get("StepAdjustments").and_then(Value::as_array) {
+        // Collect [lower, upper) intervals, sorted by lower bound.
+        // Unbounded sides extend to +/- infinity.
+        let mut intervals: Vec<(f64, f64)> = Vec::with_capacity(steps.len());
+        for s in steps {
+            let lo = s
+                .get("MetricIntervalLowerBound")
+                .and_then(Value::as_f64)
+                .unwrap_or(f64::NEG_INFINITY);
+            let hi = s
+                .get("MetricIntervalUpperBound")
+                .and_then(Value::as_f64)
+                .unwrap_or(f64::INFINITY);
+            if lo > hi || lo.is_nan() || hi.is_nan() {
+                return Err(AwsError::bad_request(
+                    "ValidationException",
+                    format!("StepAdjustment lower bound {lo} exceeds upper bound {hi}."),
+                ));
+            }
+            intervals.push((lo, hi));
+        }
+        intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        for pair in intervals.windows(2) {
+            // Overlap iff the next interval's lower bound is strictly
+            // below the previous interval's upper bound.
+            if pair[1].0 < pair[0].1 {
+                return Err(AwsError::bad_request(
+                    "ValidationException",
+                    "StepAdjustments contain overlapping ranges.",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Reject anything that isn't an IAM role ARN of the form
 /// `arn:<partition>:iam::<account>:role/<name-or-path/name>`. AWS
 /// strictly enforces the `iam`/`role/` shape; we mirror that so
@@ -423,6 +506,9 @@ pub fn put_scaling_policy(
     }
     if let Some(cfg) = input.get("TargetTrackingScalingPolicyConfiguration") {
         validate_target_tracking_config(cfg)?;
+    }
+    if let Some(cfg) = input.get("StepScalingPolicyConfiguration") {
+        validate_step_scaling_config(cfg)?;
     }
     let arn = format!(
         "arn:aws:autoscaling:{}:{}:scalingPolicy:{}:resource/{}/{}/{}:policyName/{}",
@@ -804,6 +890,82 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    fn put_with_step_config(state: &AppAutoScalingState, cfg: Value) -> Result<Value, AwsError> {
+        put_scaling_policy(
+            state,
+            &json!({
+                "PolicyName": "step-p",
+                "ServiceNamespace": "ecs",
+                "ResourceId": "service/cluster/svc",
+                "ScalableDimension": "ecs:service:DesiredCount",
+                "PolicyType": "StepScaling",
+                "StepScalingPolicyConfiguration": cfg,
+            }),
+            &ctx(),
+        )
+    }
+
+    #[test]
+    fn step_scaling_requires_known_adjustment_type() {
+        let state = AppAutoScalingState::default();
+        setup_target(&state);
+        let err =
+            put_with_step_config(&state, json!({ "AdjustmentType": "OopsType" })).unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn step_scaling_rejects_min_adjustment_with_change_in_capacity() {
+        let state = AppAutoScalingState::default();
+        setup_target(&state);
+        let err = put_with_step_config(
+            &state,
+            json!({
+                "AdjustmentType": "ChangeInCapacity",
+                "MinAdjustmentMagnitude": 5,
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn step_scaling_rejects_overlapping_steps() {
+        let state = AppAutoScalingState::default();
+        setup_target(&state);
+        let err = put_with_step_config(
+            &state,
+            json!({
+                "AdjustmentType": "ChangeInCapacity",
+                "StepAdjustments": [
+                    { "MetricIntervalLowerBound": 0, "MetricIntervalUpperBound": 10, "ScalingAdjustment": 1 },
+                    { "MetricIntervalLowerBound": 5, "MetricIntervalUpperBound": 15, "ScalingAdjustment": 2 },
+                ],
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn step_scaling_accepts_adjacent_steps() {
+        let state = AppAutoScalingState::default();
+        setup_target(&state);
+        put_with_step_config(
+            &state,
+            json!({
+                "AdjustmentType": "PercentChangeInCapacity",
+                "MetricAggregationType": "Average",
+                "MinAdjustmentMagnitude": 1,
+                "StepAdjustments": [
+                    { "MetricIntervalLowerBound": 0, "MetricIntervalUpperBound": 10, "ScalingAdjustment": 1 },
+                    { "MetricIntervalLowerBound": 10, "MetricIntervalUpperBound": 20, "ScalingAdjustment": 2 },
+                ],
+            }),
+        )
+        .unwrap();
     }
 
     #[test]
