@@ -653,6 +653,92 @@ mod tests {
     }
 
     #[test]
+    fn describe_broker_emits_logs_summary_and_actions_required() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let r = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "logs-amq",
+                "EngineType": "ACTIVEMQ",
+                "EngineVersion": "5.18",
+                "HostInstanceType": "mq.m5.large",
+                "Logs": { "General": true, "Audit": true },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let id = r["BrokerId"].as_str().unwrap().to_string();
+
+        let desc = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id.clone() }), &ctx))
+            .unwrap();
+        // LogsSummary is derived per the AWS-documented log-group
+        // convention `/aws/amazonmq/{broker-id}/{general|audit}`.
+        assert_eq!(desc["LogsSummary"]["General"], json!(true));
+        assert_eq!(desc["LogsSummary"]["Audit"], json!(true));
+        assert_eq!(
+            desc["LogsSummary"]["GeneralLogGroup"],
+            json!(format!("/aws/amazonmq/{id}/general"))
+        );
+        assert_eq!(
+            desc["LogsSummary"]["AuditLogGroup"],
+            json!(format!("/aws/amazonmq/{id}/audit"))
+        );
+        // ActionsRequired must always be present (empty when healthy)
+        // so SDK clients can iterate without nil-checking.
+        assert_eq!(desc["ActionsRequired"], json!([]));
+    }
+
+    #[test]
+    fn describe_broker_strips_audit_log_group_for_rabbitmq() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        // RabbitMQ doesn't support audit logs even when the caller
+        // sets Audit=true; the summary must reflect the actual AWS
+        // capability, not the request payload.
+        let r = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "logs-rmq",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+                "HostInstanceType": "mq.m5.large",
+                "Logs": { "General": true, "Audit": true },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let id = r["BrokerId"].as_str().unwrap();
+        let desc = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id }), &ctx)).unwrap();
+        assert_eq!(desc["LogsSummary"]["Audit"], json!(false));
+        assert!(desc["LogsSummary"].get("AuditLogGroup").is_none());
+    }
+
+    #[test]
+    fn describe_broker_emits_actions_required_when_no_logs() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let r = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "no-logs",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+                "HostInstanceType": "mq.m5.large",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let id = r["BrokerId"].as_str().unwrap();
+        let desc = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id }), &ctx)).unwrap();
+        // ActionsRequired present even without a Logs config.
+        assert_eq!(desc["ActionsRequired"], json!([]));
+        // LogsSummary derives only when Logs is configured; absent is
+        // valid AWS behaviour for a broker created without logging.
+        assert!(desc.get("LogsSummary").is_none());
+    }
+
+    #[test]
     fn create_broker_persists_full_config_surface() {
         let svc = MqService::new();
         let ctx = ctx();

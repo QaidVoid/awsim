@@ -94,10 +94,16 @@ fn broker_describe(b: &Broker, users: Vec<Value>) -> Value {
     }
     if let Some(ref v) = b.logs {
         obj["Logs"] = v.clone();
+        obj["LogsSummary"] = derive_logs_summary(v, &b.engine_type, &b.broker_id);
     }
     if let Some(ref v) = b.maintenance_window_start_time {
         obj["MaintenanceWindowStartTime"] = v.clone();
     }
+    // AWS always emits an `ActionsRequired` array on DescribeBroker —
+    // an empty one when the broker is healthy. Surfacing it
+    // unconditionally lets SDK clients iterate the field without a
+    // None check.
+    obj["ActionsRequired"] = json!([]);
     if let Some(ref v) = b.ldap_server_metadata {
         obj["LdapServerMetadata"] = v.clone();
     }
@@ -108,6 +114,32 @@ fn broker_describe(b: &Broker, users: Vec<Value>) -> Value {
         obj["DataReplicationMode"] = json!(v);
     }
     obj
+}
+
+/// Derive the `LogsSummary` shape from the broker's stored `Logs`
+/// config. AWS populates `GeneralLogGroup` / `AuditLogGroup` only
+/// when the corresponding toggle is true; the log-group name follows
+/// the AWS-documented `/aws/amazonmq/{broker-id}/general` /
+/// `/aws/amazonmq/{broker-id}/audit` convention. `Audit` only
+/// applies to ActiveMQ; we surface it for that engine.
+fn derive_logs_summary(logs: &Value, engine_type: &str, broker_id: &str) -> Value {
+    let general = logs
+        .get("General")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let audit =
+        logs.get("Audit").and_then(|v| v.as_bool()).unwrap_or(false) && engine_type == "ACTIVEMQ";
+    let mut summary = json!({
+        "General": general,
+        "Audit": audit,
+    });
+    if general {
+        summary["GeneralLogGroup"] = json!(format!("/aws/amazonmq/{broker_id}/general"));
+    }
+    if audit {
+        summary["AuditLogGroup"] = json!(format!("/aws/amazonmq/{broker_id}/audit"));
+    }
+    summary
 }
 
 fn user_summary(u: &BrokerUser) -> Value {
