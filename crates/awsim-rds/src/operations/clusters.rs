@@ -6,7 +6,7 @@ use crate::{
     ids::{
         cluster_arn, cluster_endpoint, cluster_reader_endpoint, default_engine_version, now_iso8601,
     },
-    state::{DbCluster, RdsState},
+    state::{DbCluster, DbGlobalCluster, DbGlobalClusterMember, RdsState},
 };
 
 use super::{opt_str, require_str};
@@ -273,6 +273,206 @@ fn cluster_identifier_from_arn(arn: &str) -> Option<String> {
     Some(parts[5].to_string())
 }
 
+fn global_cluster_arn(account: &str, identifier: &str) -> String {
+    // AWS global cluster ARNs intentionally omit the region segment:
+    // `arn:aws:rds::<account>:global-cluster:<id>`.
+    format!("arn:aws:rds::{account}:global-cluster:{identifier}")
+}
+
+fn global_cluster_to_value(c: &DbGlobalCluster) -> Value {
+    json!({
+        "GlobalClusterIdentifier": c.identifier,
+        "GlobalClusterArn": c.arn,
+        "Engine": c.engine,
+        "EngineVersion": c.engine_version,
+        "Status": c.status,
+        "StorageEncrypted": c.storage_encrypted,
+        "DeletionProtection": c.deletion_protection,
+        "DatabaseName": c.database_name,
+        "ClusterCreateTime": c.created_at,
+        "GlobalClusterMembers": c.members.iter().map(|m| json!({
+            "DBClusterArn": m.db_cluster_arn,
+            "Readers": [],
+            "IsWriter": m.role == "primary",
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// Create a new Aurora global cluster. The caller may pre-attach a
+/// source cluster via `SourceDBClusterIdentifier`; that cluster
+/// becomes the primary member. Without a source the global cluster
+/// exists with no members until `CreateDBCluster --GlobalClusterIdentifier`
+/// or `RemoveFromGlobalCluster` shapes the membership.
+pub fn create_global_cluster(
+    state: &RdsState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identifier = require_str(input, "GlobalClusterIdentifier")?;
+    if state.global_clusters.contains_key(identifier) {
+        return Err(AwsError::bad_request(
+            "GlobalClusterAlreadyExistsFault",
+            format!("Global cluster `{identifier}` already exists."),
+        ));
+    }
+
+    let source = opt_str(input, "SourceDBClusterIdentifier").map(String::from);
+    let mut members = Vec::new();
+    let mut engine: Option<String> = opt_str(input, "Engine").map(String::from);
+    let mut engine_version: Option<String> = opt_str(input, "EngineVersion").map(String::from);
+    if let Some(ref src) = source {
+        let src_cluster = state
+            .clusters
+            .get(src)
+            .ok_or_else(|| db_cluster_not_found(src))?;
+        members.push(DbGlobalClusterMember {
+            db_cluster_arn: src_cluster.arn.clone(),
+            region: ctx.region.clone(),
+            role: "primary".to_string(),
+        });
+        engine = engine.or_else(|| Some(src_cluster.engine.clone()));
+        engine_version = engine_version.or_else(|| Some(src_cluster.engine_version.clone()));
+    }
+
+    let engine = engine.ok_or_else(|| {
+        invalid_parameter("Engine is required when SourceDBClusterIdentifier is not specified.")
+    })?;
+    if !matches!(
+        engine.as_str(),
+        "aurora" | "aurora-mysql" | "aurora-postgresql"
+    ) {
+        return Err(invalid_parameter(format!(
+            "GlobalCluster engine `{engine}` must be aurora-mysql or aurora-postgresql."
+        )));
+    }
+    let engine_version =
+        engine_version.unwrap_or_else(|| default_engine_version(&engine).to_string());
+
+    let cluster = DbGlobalCluster {
+        identifier: identifier.to_string(),
+        arn: global_cluster_arn(&ctx.account_id, identifier),
+        engine,
+        engine_version,
+        status: "available".to_string(),
+        storage_encrypted: input
+            .get("StorageEncrypted")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        deletion_protection: input
+            .get("DeletionProtection")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        database_name: opt_str(input, "DatabaseName").map(String::from),
+        members,
+        created_at: now_iso8601(),
+    };
+    let result = global_cluster_to_value(&cluster);
+    state
+        .global_clusters
+        .insert(identifier.to_string(), cluster);
+    Ok(json!({ "GlobalCluster": result }))
+}
+
+/// Delete an Aurora global cluster. AWS refuses to delete a global
+/// cluster that still has members or has DeletionProtection enabled;
+/// we mirror both gates.
+pub fn delete_global_cluster(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identifier = require_str(input, "GlobalClusterIdentifier")?;
+    let cluster = state
+        .global_clusters
+        .get(identifier)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "GlobalClusterNotFoundFault",
+                format!("Global cluster `{identifier}` does not exist."),
+            )
+        })?
+        .clone();
+    if cluster.deletion_protection {
+        return Err(AwsError::bad_request(
+            "InvalidGlobalClusterStateFault",
+            format!(
+                "Global cluster `{identifier}` has DeletionProtection enabled; \
+                 disable it before deleting."
+            ),
+        ));
+    }
+    if !cluster.members.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidGlobalClusterStateFault",
+            format!(
+                "Global cluster `{identifier}` still has {} member cluster(s); \
+                 remove them with RemoveFromGlobalCluster first.",
+                cluster.members.len()
+            ),
+        ));
+    }
+    state.global_clusters.remove(identifier);
+    Ok(json!({ "GlobalCluster": global_cluster_to_value(&cluster) }))
+}
+
+/// Detach a member cluster from the global cluster. The primary
+/// member can be removed but only if it is the last member (matches
+/// AWS — removing the writer while secondaries exist leaves an
+/// orphaned read-only fleet).
+pub fn remove_from_global_cluster(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identifier = require_str(input, "GlobalClusterIdentifier")?;
+    let db_cluster_arn = require_str(input, "DbClusterIdentifier")?;
+    let mut cluster = state.global_clusters.get_mut(identifier).ok_or_else(|| {
+        AwsError::not_found(
+            "GlobalClusterNotFoundFault",
+            format!("Global cluster `{identifier}` does not exist."),
+        )
+    })?;
+    let idx = cluster
+        .members
+        .iter()
+        .position(|m| m.db_cluster_arn == db_cluster_arn)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "GlobalClusterMemberNotFoundFault",
+                format!(
+                    "Global cluster `{identifier}` has no member matching \
+                     `{db_cluster_arn}`."
+                ),
+            )
+        })?;
+    if cluster.members[idx].role == "primary" && cluster.members.len() > 1 {
+        return Err(AwsError::bad_request(
+            "InvalidGlobalClusterStateFault",
+            "Cannot remove the primary member while secondary members remain.",
+        ));
+    }
+    cluster.members.remove(idx);
+    Ok(json!({ "GlobalCluster": global_cluster_to_value(&cluster) }))
+}
+
+pub fn describe_global_clusters(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let filter = opt_str(input, "GlobalClusterIdentifier");
+    let items: Vec<Value> = state
+        .global_clusters
+        .iter()
+        .filter(|e| filter.is_none_or(|f| e.value().identifier == f))
+        .map(|e| global_cluster_to_value(e.value()))
+        .collect();
+    Ok(json!({
+        "GlobalClusters": { "GlobalCluster": items },
+        "Marker": null,
+    }))
+}
+
 pub fn describe_db_clusters(
     state: &RdsState,
     input: &Value,
@@ -480,6 +680,157 @@ mod cluster_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn create_global_cluster_with_source_pre_attaches_primary() {
+        let state = RdsState::default();
+        let arn = seed(&state, "aurora-mysql");
+        let resp = create_global_cluster(
+            &state,
+            &json!({
+                "GlobalClusterIdentifier": "gc-1",
+                "SourceDBClusterIdentifier": "prod-cluster",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let members = resp["GlobalCluster"]["GlobalClusterMembers"]
+            .as_array()
+            .unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0]["DBClusterArn"], json!(arn));
+        assert_eq!(members[0]["IsWriter"], json!(true));
+    }
+
+    #[test]
+    fn create_global_cluster_without_source_requires_engine() {
+        let state = RdsState::default();
+        let err = create_global_cluster(
+            &state,
+            &json!({ "GlobalClusterIdentifier": "gc-no-engine" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn create_global_cluster_rejects_non_aurora_engine() {
+        let state = RdsState::default();
+        let err = create_global_cluster(
+            &state,
+            &json!({
+                "GlobalClusterIdentifier": "gc-mysql",
+                "Engine": "mysql",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn delete_global_cluster_refuses_when_members_attached() {
+        let state = RdsState::default();
+        seed(&state, "aurora-mysql");
+        create_global_cluster(
+            &state,
+            &json!({
+                "GlobalClusterIdentifier": "gc-2",
+                "SourceDBClusterIdentifier": "prod-cluster",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = delete_global_cluster(
+            &state,
+            &json!({ "GlobalClusterIdentifier": "gc-2" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidGlobalClusterStateFault");
+    }
+
+    #[test]
+    fn delete_global_cluster_refuses_when_deletion_protected() {
+        let state = RdsState::default();
+        create_global_cluster(
+            &state,
+            &json!({
+                "GlobalClusterIdentifier": "gc-protected",
+                "Engine": "aurora-mysql",
+                "DeletionProtection": true,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = delete_global_cluster(
+            &state,
+            &json!({ "GlobalClusterIdentifier": "gc-protected" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidGlobalClusterStateFault");
+    }
+
+    #[test]
+    fn remove_from_global_cluster_unlinks_member() {
+        let state = RdsState::default();
+        let arn = seed(&state, "aurora-mysql");
+        create_global_cluster(
+            &state,
+            &json!({
+                "GlobalClusterIdentifier": "gc-3",
+                "SourceDBClusterIdentifier": "prod-cluster",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = remove_from_global_cluster(
+            &state,
+            &json!({
+                "GlobalClusterIdentifier": "gc-3",
+                "DbClusterIdentifier": arn,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let members = resp["GlobalCluster"]["GlobalClusterMembers"]
+            .as_array()
+            .unwrap();
+        assert!(members.is_empty());
+        // Now delete is allowed.
+        delete_global_cluster(
+            &state,
+            &json!({ "GlobalClusterIdentifier": "gc-3" }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn describe_global_clusters_round_trips_members() {
+        let state = RdsState::default();
+        seed(&state, "aurora-postgresql");
+        create_global_cluster(
+            &state,
+            &json!({
+                "GlobalClusterIdentifier": "gc-pg",
+                "SourceDBClusterIdentifier": "prod-cluster",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = describe_global_clusters(
+            &state,
+            &json!({ "GlobalClusterIdentifier": "gc-pg" }),
+            &ctx(),
+        )
+        .unwrap();
+        let items = resp["GlobalClusters"]["GlobalCluster"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["Engine"], json!("aurora-postgresql"));
     }
 
     #[test]

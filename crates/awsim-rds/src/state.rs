@@ -17,6 +17,13 @@ pub struct RdsState {
     pub cluster_endpoints: DashMap<String, Vec<DbClusterEndpoint>>,
     /// (engine, version) → DbCustomEngineVersion
     pub custom_engine_versions: DashMap<(String, String), DbCustomEngineVersion>,
+    /// `GlobalClusterIdentifier` → `DbGlobalCluster`. Aurora global
+    /// clusters span regions, so the store lives in every region's
+    /// state and the cluster's `members[]` carries each member's
+    /// region. AWS clients always reach the global control plane
+    /// through the primary region; we don't index by region for that
+    /// reason.
+    pub global_clusters: DashMap<String, DbGlobalCluster>,
 }
 
 /// Serializable snapshot of `RdsState`.
@@ -31,6 +38,40 @@ pub struct RdsStateSnapshot {
     pub cluster_endpoints: Vec<DbClusterEndpoint>,
     #[serde(default)]
     pub custom_engine_versions: Vec<DbCustomEngineVersion>,
+    #[serde(default)]
+    pub global_clusters: Vec<DbGlobalCluster>,
+}
+
+/// One regional member of an Aurora global cluster. A global cluster
+/// has exactly one `primary` member (the writer region) and zero or
+/// more `secondary` members (read-only replicas in other regions).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbGlobalClusterMember {
+    pub db_cluster_arn: String,
+    pub region: String,
+    /// `primary` or `secondary` — AWS exposes this via the
+    /// `IsWriter` boolean on `GlobalClusterMember.IsWriter`.
+    pub role: String,
+}
+
+/// An Aurora global cluster. AWS exposes it as `arn:aws:rds::<acc>:
+/// global-cluster:<id>` (note the empty region segment — global
+/// clusters are accountregion-scoped).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbGlobalCluster {
+    pub identifier: String,
+    pub arn: String,
+    pub engine: String,
+    pub engine_version: String,
+    /// `creating` / `available` / `modifying` / `deleting`. AWSim
+    /// transitions straight to `available` after `CreateGlobalCluster`
+    /// since there is no propagation step to wait on.
+    pub status: String,
+    pub storage_encrypted: bool,
+    pub deletion_protection: bool,
+    pub database_name: Option<String>,
+    pub members: Vec<DbGlobalClusterMember>,
+    pub created_at: String,
 }
 
 /// A customer-supplied RDS engine version. AWS allows operators to

@@ -99,6 +99,18 @@ impl ServiceHandler for RdsService {
                 operations::clusters::start_activity_stream(&state, &input, ctx)
             }
             "StopActivityStream" => operations::clusters::stop_activity_stream(&state, &input, ctx),
+            "CreateGlobalCluster" => {
+                operations::clusters::create_global_cluster(&state, &input, ctx)
+            }
+            "DeleteGlobalCluster" => {
+                operations::clusters::delete_global_cluster(&state, &input, ctx)
+            }
+            "RemoveFromGlobalCluster" => {
+                operations::clusters::remove_from_global_cluster(&state, &input, ctx)
+            }
+            "DescribeGlobalClusters" => {
+                operations::clusters::describe_global_clusters(&state, &input, ctx)
+            }
 
             // DB Subnet Groups
             "CreateDBSubnetGroup" => {
@@ -212,6 +224,9 @@ impl ServiceHandler for RdsService {
                     .iter()
                     .map(|e| e.value().clone()),
             );
+            snapshot
+                .global_clusters
+                .extend(state.global_clusters.iter().map(|e| e.value().clone()));
         }
 
         serde_json::to_vec(&snapshot).ok()
@@ -266,6 +281,9 @@ impl ServiceHandler for RdsService {
         for cev in snapshot.custom_engine_versions {
             let key = (cev.engine.clone(), cev.engine_version.clone());
             state.custom_engine_versions.insert(key, cev);
+        }
+        for gc in snapshot.global_clusters {
+            state.global_clusters.insert(gc.identifier.clone(), gc);
         }
 
         Ok(())
