@@ -355,6 +355,86 @@ mod tests {
     }
 
     #[test]
+    fn at_expression_with_delete_action_round_trips() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "one-shot",
+                "ScheduleExpression": "at(2030-01-15T09:30:00)",
+                "ActionAfterCompletion": "DELETE",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let desc =
+            block_on(svc.handle("GetSchedule", json!({ "Name": "one-shot" }), &ctx)).unwrap();
+        assert_eq!(desc["ActionAfterCompletion"], json!("DELETE"));
+        assert_eq!(desc["ScheduleExpression"], json!("at(2030-01-15T09:30:00)"));
+    }
+
+    #[test]
+    fn delete_action_rejected_for_recurring_expression() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "bad-delete",
+                "ScheduleExpression": "rate(5 minutes)",
+                "ActionAfterCompletion": "DELETE",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("at(..."), "{}", err.message);
+    }
+
+    #[test]
+    fn schedule_expression_rejects_malformed_forms() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        for bad in [
+            "garbage",
+            "at(not-a-date)",
+            "at(2030-13-01T00:00:00)", // month 13
+            "at(2030-01-32T00:00:00)", // day 32
+            "at(2030-01-01T25:00:00)", // hour 25
+            "rate(0 minutes)",
+            "rate(5 fortnights)",
+            "cron(only 4 fields here)",
+        ] {
+            let err = block_on(svc.handle(
+                "CreateSchedule",
+                json!({
+                    "Name": format!("bad-expr-{}", &bad[..5.min(bad.len())]),
+                    "ScheduleExpression": bad,
+                    "Target": {
+                        "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                        "RoleArn": "arn:aws:iam::000000000000:role/r",
+                    },
+                    "FlexibleTimeWindow": { "Mode": "OFF" },
+                }),
+                &ctx,
+            ))
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input `{bad}`");
+        }
+    }
+
+    #[test]
     fn flexible_time_window_accepts_flexible_mode_with_window() {
         let svc = SchedulerService::new();
         let ctx = ctx();

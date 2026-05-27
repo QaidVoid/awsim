@@ -58,6 +58,26 @@ pub fn create_schedule(
             AwsError::bad_request("ValidationException", "ScheduleExpression is required")
         })?
         .to_string();
+    let is_one_shot = validate_schedule_expression(&schedule_expression)?;
+    let action_after_completion = input
+        .get("ActionAfterCompletion")
+        .and_then(|v| v.as_str())
+        .unwrap_or("NONE")
+        .to_string();
+    if !matches!(action_after_completion.as_str(), "NONE" | "DELETE") {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "ActionAfterCompletion `{action_after_completion}` must be `NONE` or `DELETE`."
+            ),
+        ));
+    }
+    if action_after_completion == "DELETE" && !is_one_shot {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            "ActionAfterCompletion=DELETE requires a one-shot `at(...)` ScheduleExpression.",
+        ));
+    }
 
     let target = input["Target"].clone();
     if target.is_null() {
@@ -105,6 +125,7 @@ pub fn create_schedule(
         created_at: now,
         last_modified_at: now,
         schedule_expression_timezone,
+        action_after_completion,
     };
 
     state.schedules.insert(key, schedule);
@@ -117,6 +138,121 @@ pub fn create_schedule(
             .insert(token, req_hash, result.clone());
     }
     Ok(result)
+}
+
+/// Validate the AWS-documented `ScheduleExpression` shapes and
+/// return `true` when the expression is a one-shot `at(...)`. AWS
+/// accepts:
+///
+/// - `at(yyyy-mm-ddTHH:MM:SS)` — one-shot, fires once at the given
+///   wall time in the schedule's `ScheduleExpressionTimezone`.
+/// - `rate(N <unit>)` where `<unit>` is `minute`/`minutes`/`hour`/
+///   `hours`/`day`/`days` and `N >= 1`.
+/// - `cron(<6 fields>)` — minute hour DOM month DOW year.
+fn validate_schedule_expression(expr: &str) -> Result<bool, AwsError> {
+    if let Some(body) = expr.strip_prefix("at(").and_then(|s| s.strip_suffix(')')) {
+        validate_at_timestamp(body)?;
+        return Ok(true);
+    }
+    if let Some(rest) = expr.strip_prefix("rate(").and_then(|s| s.strip_suffix(')')) {
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        if parts.len() != 2 {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!("ScheduleExpression `{expr}` must be `rate(<value> <unit>)`."),
+            ));
+        }
+        let value: u64 = parts[0].parse().map_err(|_| {
+            AwsError::bad_request(
+                "ValidationException",
+                format!("ScheduleExpression `{expr}` value must be a positive integer."),
+            )
+        })?;
+        if value == 0 {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!("ScheduleExpression `{expr}` value must be > 0."),
+            ));
+        }
+        if !matches!(
+            parts[1],
+            "minute" | "minutes" | "hour" | "hours" | "day" | "days"
+        ) {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!("ScheduleExpression `{expr}` unit must be minute(s) / hour(s) / day(s)."),
+            ));
+        }
+        return Ok(false);
+    }
+    if let Some(rest) = expr.strip_prefix("cron(").and_then(|s| s.strip_suffix(')')) {
+        if rest.split_whitespace().count() != 6 {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!(
+                    "ScheduleExpression `{expr}` cron must have 6 fields: \
+                     `minute hour day-of-month month day-of-week year`."
+                ),
+            ));
+        }
+        return Ok(false);
+    }
+    Err(AwsError::bad_request(
+        "ValidationException",
+        format!("ScheduleExpression `{expr}` must be `rate(...)`, `cron(...)`, or `at(...)`."),
+    ))
+}
+
+/// Validate the `at(...)` timestamp shape: `yyyy-mm-ddTHH:MM:SS`.
+/// No timezone suffix — the schedule's `ScheduleExpressionTimezone`
+/// supplies that.
+fn validate_at_timestamp(body: &str) -> Result<(), AwsError> {
+    let (date, time) = body.split_once('T').ok_or_else(|| {
+        AwsError::bad_request(
+            "ValidationException",
+            format!("ScheduleExpression `at({body})` must be `at(yyyy-mm-ddTHH:MM:SS)`."),
+        )
+    })?;
+    let date_parts: Vec<&str> = date.split('-').collect();
+    let time_parts: Vec<&str> = time.split(':').collect();
+    if date_parts.len() != 3 || time_parts.len() != 3 {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("ScheduleExpression `at({body})` must be `at(yyyy-mm-ddTHH:MM:SS)`."),
+        ));
+    }
+    let year: u32 = date_parts[0]
+        .parse()
+        .map_err(|_| invalid_at(body, "year is not a number"))?;
+    let month: u32 = date_parts[1]
+        .parse()
+        .map_err(|_| invalid_at(body, "month is not a number"))?;
+    let day: u32 = date_parts[2]
+        .parse()
+        .map_err(|_| invalid_at(body, "day is not a number"))?;
+    if year < 1970 || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return Err(invalid_at(body, "date is out of range"));
+    }
+    let hour: u32 = time_parts[0]
+        .parse()
+        .map_err(|_| invalid_at(body, "hour is not a number"))?;
+    let minute: u32 = time_parts[1]
+        .parse()
+        .map_err(|_| invalid_at(body, "minute is not a number"))?;
+    let second: u32 = time_parts[2]
+        .parse()
+        .map_err(|_| invalid_at(body, "second is not a number"))?;
+    if hour > 23 || minute > 59 || second > 59 {
+        return Err(invalid_at(body, "time is out of range"));
+    }
+    Ok(())
+}
+
+fn invalid_at(body: &str, reason: &str) -> AwsError {
+    AwsError::bad_request(
+        "ValidationException",
+        format!("ScheduleExpression `at({body})` is invalid: {reason}."),
+    )
 }
 
 /// Validate the `FlexibleTimeWindow` block. AWS requires:
@@ -358,6 +494,7 @@ pub fn get_schedule(
         "Target": schedule.target,
         "FlexibleTimeWindow": schedule.flexible_time_window,
         "State": schedule.state,
+        "ActionAfterCompletion": schedule.action_after_completion,
         "CreationDate": schedule.created_at,
         "LastModificationDate": schedule.last_modified_at,
     }))
@@ -454,7 +591,23 @@ pub fn update_schedule(
     })?;
 
     if let Some(expr) = input["ScheduleExpression"].as_str() {
+        let is_one_shot = validate_schedule_expression(expr)?;
+        if schedule.action_after_completion == "DELETE" && !is_one_shot {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                "ActionAfterCompletion=DELETE requires a one-shot `at(...)` ScheduleExpression.",
+            ));
+        }
         schedule.schedule_expression = expr.to_string();
+    }
+    if let Some(action) = input["ActionAfterCompletion"].as_str() {
+        if !matches!(action, "NONE" | "DELETE") {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!("ActionAfterCompletion `{action}` must be `NONE` or `DELETE`."),
+            ));
+        }
+        schedule.action_after_completion = action.to_string();
     }
     if input.get("ScheduleExpressionTimezone").is_some() {
         // Re-resolve on every update so a malformed value rejects

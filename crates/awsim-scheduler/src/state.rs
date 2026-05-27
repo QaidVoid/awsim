@@ -20,10 +20,18 @@ pub struct Schedule {
     /// AWS defaults to `UTC` when the field is absent on the request.
     #[serde(default = "default_timezone")]
     pub schedule_expression_timezone: String,
+    /// `NONE` (default) or `DELETE`. AWS uses `DELETE` to clean up
+    /// one-shot `at(...)` schedules once they fire.
+    #[serde(default = "default_action_after_completion")]
+    pub action_after_completion: String,
 }
 
 fn default_timezone() -> String {
     "UTC".to_string()
+}
+
+fn default_action_after_completion() -> String {
+    "NONE".to_string()
 }
 
 /// A Schedule Group.
