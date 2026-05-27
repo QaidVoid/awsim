@@ -160,6 +160,18 @@ impl ServiceHandler for MqService {
                 operation: "DescribeConfiguration",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v1/configurations/{ConfigurationId}",
+                operation: "UpdateConfiguration",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v1/configurations/{ConfigurationId}/revisions/{ConfigurationRevision}",
+                operation: "DescribeConfigurationRevision",
+                required_query_param: None,
+            },
         ]
     }
 
@@ -184,7 +196,11 @@ impl ServiceHandler for MqService {
             "DeleteUser" => operations::delete_user(&state, &input, ctx),
             "UpdateUser" => operations::update_user(&state, &input, ctx),
             "CreateConfiguration" => operations::create_configuration(&state, &input, ctx),
+            "UpdateConfiguration" => operations::update_configuration(&state, &input, ctx),
             "DescribeConfiguration" => operations::describe_configuration(&state, &input, ctx),
+            "DescribeConfigurationRevision" => {
+                operations::describe_configuration_revision(&state, &input, ctx)
+            }
             "ListConfigurations" => operations::list_configurations(&state, &input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),
         }
@@ -421,6 +437,129 @@ mod tests {
         let pending = desc["Pending"].as_object().expect("Pending populated");
         assert_eq!(pending["ConsoleAccess"], true);
         assert_eq!(pending["Groups"][0], "admins");
+    }
+
+    #[test]
+    fn update_configuration_bumps_revision_and_validates_engine_data() {
+        use base64::Engine as _;
+        let svc = MqService::new();
+        let ctx = ctx();
+
+        // Create an ActiveMQ configuration. Revision starts at 1 with
+        // an empty payload — UpdateConfiguration is the first call
+        // that supplies bytes.
+        let c = block_on(svc.handle(
+            "CreateConfiguration",
+            json!({
+                "Name": "mq-config",
+                "EngineType": "ACTIVEMQ",
+                "EngineVersion": "5.18",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let id = c["Id"].as_str().unwrap().to_string();
+        assert_eq!(c["LatestRevision"]["Revision"], json!(1));
+
+        // ActiveMQ payload must start with `<broker>` — anything else
+        // is rejected. The validator runs on the decoded bytes.
+        let activemq_payload =
+            base64::engine::general_purpose::STANDARD.encode(b"<broker xmlns=\"...\"></broker>");
+        let resp = block_on(svc.handle(
+            "UpdateConfiguration",
+            json!({
+                "ConfigurationId": id.clone(),
+                "Data": activemq_payload.clone(),
+                "Description": "rev2",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(resp["LatestRevision"]["Revision"], json!(2));
+        assert_eq!(resp["LatestRevision"]["Description"], json!("rev2"));
+
+        // Wrong shape (cuttlefish syntax against ActiveMQ) -> 400.
+        let cuttlefish =
+            base64::engine::general_purpose::STANDARD.encode(b"queue.mirroring = exactly\n");
+        let err = block_on(svc.handle(
+            "UpdateConfiguration",
+            json!({
+                "ConfigurationId": id.clone(),
+                "Data": cuttlefish,
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
+        assert!(
+            err.message.contains("<broker"),
+            "validator must explain the expected shape: {}",
+            err.message
+        );
+
+        // Revision 1 + 2 should both be reachable; revision 99 should 404.
+        let r1 = block_on(svc.handle(
+            "DescribeConfigurationRevision",
+            json!({
+                "ConfigurationId": id.clone(),
+                "ConfigurationRevision": "1",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert!(r1["Data"].as_str().unwrap().is_empty());
+
+        let r2 = block_on(svc.handle(
+            "DescribeConfigurationRevision",
+            json!({
+                "ConfigurationId": id.clone(),
+                "ConfigurationRevision": "2",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(r2["Data"], json!(activemq_payload));
+
+        let err = block_on(svc.handle(
+            "DescribeConfigurationRevision",
+            json!({
+                "ConfigurationId": id,
+                "ConfigurationRevision": "99",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "NotFoundException");
+    }
+
+    #[test]
+    fn update_configuration_rejects_xml_on_rabbitmq() {
+        use base64::Engine as _;
+        let svc = MqService::new();
+        let ctx = ctx();
+
+        let c = block_on(svc.handle(
+            "CreateConfiguration",
+            json!({
+                "Name": "rmq-config",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let id = c["Id"].as_str().unwrap().to_string();
+
+        // ActiveMQ XML payload posted to a RabbitMQ configuration is
+        // a hard reject.
+        let xml = base64::engine::general_purpose::STANDARD.encode(b"<broker></broker>");
+        let err = block_on(svc.handle(
+            "UpdateConfiguration",
+            json!({ "ConfigurationId": id, "Data": xml }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
     }
 
     #[test]

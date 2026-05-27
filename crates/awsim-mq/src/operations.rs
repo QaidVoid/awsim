@@ -548,6 +548,11 @@ pub fn create_configuration(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let id = uuid::Uuid::new_v4().to_string();
+    let created = now();
+    let description = input
+        .get("Description")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     let c = Configuration {
         configuration_id: id.clone(),
         configuration_arn: config_arn(ctx, &id),
@@ -559,21 +564,181 @@ pub fn create_configuration(
             .and_then(|v| v.as_str())
             .unwrap_or("SIMPLE")
             .to_string(),
-        created: now(),
+        created,
         latest_revision: 1,
-        description: input
-            .get("Description")
-            .and_then(|v| v.as_str())
-            .map(String::from),
+        description: description.clone(),
+        revisions: vec![crate::state::ConfigurationRevision {
+            revision: 1,
+            created,
+            description,
+            data: String::new(),
+        }],
     };
     let result = json!({
         "Id": c.configuration_id,
         "Arn": c.configuration_arn,
         "Name": c.name,
         "Created": c.created,
+        "LatestRevision": {
+            "Revision": c.latest_revision,
+            "Created": c.created,
+            "Description": c.description,
+        },
     });
     state.configurations.insert(id, c);
     Ok(result)
+}
+
+/// Engine-specific config-data validation. AWS rejects ActiveMQ
+/// payloads that don't start with the `<broker>` root element and
+/// RabbitMQ payloads that don't parse as cuttlefish-style INI. We
+/// can't ship a full cuttlefish/XML parser here, so we apply a
+/// lightweight signature check on the decoded bytes.
+fn validate_configuration_data(engine_type: &str, decoded: &[u8]) -> Result<(), AwsError> {
+    let text = std::str::from_utf8(decoded).map_err(|_| {
+        AwsError::bad_request(
+            "BadRequestException",
+            "Configuration data must decode to UTF-8 text.",
+        )
+    })?;
+    match engine_type {
+        "ACTIVEMQ" if !text.trim_start().starts_with("<broker") => {
+            return Err(AwsError::bad_request(
+                "BadRequestException",
+                "ActiveMQ configuration must begin with a `<broker ...>` root element.",
+            ));
+        }
+        "RABBITMQ" => {
+            // RabbitMQ cuttlefish style: lines of `key = value` (with
+            // comments / blank lines allowed). Reject when every
+            // non-blank line looks XML-shaped — i.e., it's an ActiveMQ
+            // payload misrouted onto a RabbitMQ configuration.
+            let non_blank: Vec<&str> = text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .collect();
+            if non_blank.is_empty() {
+                return Err(AwsError::bad_request(
+                    "BadRequestException",
+                    "RabbitMQ configuration must contain at least one `key = value` directive.",
+                ));
+            }
+            if non_blank.iter().all(|l| l.starts_with('<')) {
+                return Err(AwsError::bad_request(
+                    "BadRequestException",
+                    "RabbitMQ configuration must use cuttlefish (`key = value`) syntax, not XML.",
+                ));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// `UpdateConfiguration`. AWS bumps `Revision`, persists the new
+/// payload, and returns `LatestRevision` so callers (and CloudFormation)
+/// can pin a broker to the new revision.
+pub fn update_configuration(
+    state: &MqState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = require_str(input, "ConfigurationId")?;
+    let data = require_str(input, "Data")?.to_string();
+    let description = input
+        .get("Description")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let engine_type = state
+        .configurations
+        .get(id)
+        .map(|c| c.engine_type.clone())
+        .ok_or_else(|| {
+            AwsError::not_found("NotFoundException", format!("Configuration {id} not found"))
+        })?;
+    let decoded = base64_decode(&data)?;
+    validate_configuration_data(&engine_type, &decoded)?;
+
+    let mut c = state.configurations.get_mut(id).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("Configuration {id} not found"))
+    })?;
+    let new_revision = c.latest_revision + 1;
+    let created = now();
+    c.latest_revision = new_revision;
+    c.description = description.clone();
+    c.revisions.push(crate::state::ConfigurationRevision {
+        revision: new_revision,
+        created,
+        description: description.clone(),
+        data,
+    });
+
+    Ok(json!({
+        "Id": c.configuration_id,
+        "Arn": c.configuration_arn,
+        "Name": c.name,
+        "Created": c.created,
+        "LatestRevision": {
+            "Revision": new_revision,
+            "Created": created,
+            "Description": description,
+        },
+        // AWS returns a `Warnings` array when the engine validator
+        // flagged anything non-fatal. We don't run a real validator,
+        // so the field is always empty but present for shape parity.
+        "Warnings": [],
+    }))
+}
+
+/// `DescribeConfigurationRevision`. AWS lets callers fetch a
+/// historical revision by id; we walk the in-memory history.
+pub fn describe_configuration_revision(
+    state: &MqState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = require_str(input, "ConfigurationId")?;
+    let requested: u32 = require_str(input, "ConfigurationRevision")?
+        .parse()
+        .map_err(|_| {
+            AwsError::bad_request(
+                "BadRequestException",
+                "ConfigurationRevision must be a positive integer.",
+            )
+        })?;
+    let c = state.configurations.get(id).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("Configuration {id} not found"))
+    })?;
+    let rev = c
+        .revisions
+        .iter()
+        .find(|r| r.revision == requested)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Configuration {id} has no revision {requested}"),
+            )
+        })?;
+    Ok(json!({
+        "ConfigurationId": c.configuration_id,
+        "Created": rev.created,
+        "Description": rev.description,
+        "Data": rev.data,
+    }))
+}
+
+fn base64_decode(s: &str) -> Result<Vec<u8>, AwsError> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .map_err(|_| {
+            AwsError::bad_request(
+                "BadRequestException",
+                "Configuration Data must be valid base64.",
+            )
+        })
 }
 
 pub fn describe_configuration(

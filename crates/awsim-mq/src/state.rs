@@ -87,6 +87,25 @@ pub struct Configuration {
     pub created: f64,
     pub latest_revision: u32,
     pub description: Option<String>,
+    /// Per-revision history. Index `N-1` is revision `N`. AWS retains
+    /// every revision indefinitely so callers can roll a broker back
+    /// to an earlier config; we mirror that.
+    #[serde(default)]
+    pub revisions: Vec<ConfigurationRevision>,
+}
+
+/// A single revision of a `Configuration`. AWS stores the broker's
+/// XML/JSON config bytes under `Data` (base64-encoded) plus the
+/// optional `Description` for the revision.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigurationRevision {
+    pub revision: u32,
+    pub created: f64,
+    pub description: Option<String>,
+    /// Base64-encoded config payload from `UpdateConfiguration.Data`.
+    /// Always set; revision 1 (created via `CreateConfiguration`) gets
+    /// an empty string until the caller first `UpdateConfiguration`s.
+    pub data: String,
 }
 
 pub fn user_key(broker_id: &str, username: &str) -> String {
