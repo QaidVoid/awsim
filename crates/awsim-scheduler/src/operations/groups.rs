@@ -25,6 +25,7 @@ pub fn create_schedule_group(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("ValidationException", "Name is required"))?
         .to_string();
+    super::schedules::validate_scheduler_name(&name, "Name")?;
 
     if state.schedule_groups.contains_key(&name) {
         return Err(AwsError::conflict(

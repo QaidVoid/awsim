@@ -355,6 +355,67 @@ mod tests {
     }
 
     #[test]
+    fn create_schedule_rejects_malformed_name() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        let too_long = "a".repeat(65);
+        for bad in [
+            "",
+            "with space",
+            "with/slash",
+            "with*star",
+            too_long.as_str(),
+        ] {
+            let err = block_on(svc.handle(
+                "CreateSchedule",
+                json!({
+                    "Name": bad,
+                    "ScheduleExpression": "rate(1 hour)",
+                    "Target": {
+                        "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                        "RoleArn": "arn:aws:iam::000000000000:role/r",
+                    },
+                    "FlexibleTimeWindow": { "Mode": "OFF" },
+                }),
+                &ctx,
+            ))
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input `{bad}`");
+        }
+    }
+
+    #[test]
+    fn create_schedule_group_rejects_malformed_name() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        let err =
+            block_on(svc.handle("CreateScheduleGroup", json!({ "Name": "bad group!" }), &ctx))
+                .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_schedule_accepts_dotted_name() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        // Allowed: alphanumerics + `-_.`
+        block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "deploy.daily-cron_v1",
+                "ScheduleExpression": "rate(1 hour)",
+                "Target": {
+                    "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                    "RoleArn": "arn:aws:iam::000000000000:role/r",
+                },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+    }
+
+    #[test]
     fn at_expression_with_delete_action_round_trips() {
         let svc = SchedulerService::new();
         let ctx = ctx();

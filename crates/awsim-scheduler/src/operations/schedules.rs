@@ -51,6 +51,7 @@ pub fn create_schedule(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("ValidationException", "Name is required"))?
         .to_string();
+    validate_scheduler_name(&name, "Name")?;
 
     let schedule_expression = input["ScheduleExpression"]
         .as_str()
@@ -89,6 +90,7 @@ pub fn create_schedule(
     validate_target_arn(&target)?;
 
     let group_name = input["GroupName"].as_str().unwrap_or("default").to_string();
+    validate_scheduler_name(&group_name, "GroupName")?;
 
     let schedule_state = input["State"].as_str().unwrap_or("ENABLED").to_string();
     let flexible_time_window = input["FlexibleTimeWindow"].clone();
@@ -138,6 +140,32 @@ pub fn create_schedule(
             .insert(token, req_hash, result.clone());
     }
     Ok(result)
+}
+
+/// AWS Scheduler name regex: `^[0-9a-zA-Z-_.]{1,64}$`. Used for both
+/// `Name` (Schedule) and `GroupName` (Schedule + ScheduleGroup). The
+/// `field` argument names the parameter so the error message points
+/// at the right input.
+pub(crate) fn validate_scheduler_name(value: &str, field: &str) -> Result<(), AwsError> {
+    if !(1..=64).contains(&value.len()) {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "{field} `{value}` must be 1..=64 characters; got {} chars.",
+                value.chars().count()
+            ),
+        ));
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("{field} `{value}` must match `^[0-9a-zA-Z-_.]+$` (letters / digits / `-_.`)."),
+        ));
+    }
+    Ok(())
 }
 
 /// Validate the AWS-documented `ScheduleExpression` shapes and
