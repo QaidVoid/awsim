@@ -306,6 +306,15 @@ pub fn put_metric_filter(
         .as_array()
         .cloned()
         .unwrap_or_default();
+    if metric_transformations.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "metricTransformations must contain at least one transformation.",
+        ));
+    }
+    for t in &metric_transformations {
+        validate_metric_transformation(t)?;
+    }
 
     require_log_group(state, log_group_name)?;
 
@@ -324,6 +333,150 @@ pub fn put_metric_filter(
     );
 
     Ok(json!({}))
+}
+
+/// AWS-documented CloudWatch `Unit` enum values for a metric.
+/// `None` is the documented default. A typo here is one of the
+/// quietest ways to break alarms downstream, so reject up front.
+const METRIC_UNITS: &[&str] = &[
+    "Seconds",
+    "Microseconds",
+    "Milliseconds",
+    "Bytes",
+    "Kilobytes",
+    "Megabytes",
+    "Gigabytes",
+    "Terabytes",
+    "Bits",
+    "Kilobits",
+    "Megabits",
+    "Gigabits",
+    "Terabits",
+    "Percent",
+    "Count",
+    "Bytes/Second",
+    "Kilobytes/Second",
+    "Megabytes/Second",
+    "Gigabytes/Second",
+    "Terabytes/Second",
+    "Bits/Second",
+    "Kilobits/Second",
+    "Megabits/Second",
+    "Gigabits/Second",
+    "Terabits/Second",
+    "Count/Second",
+    "None",
+];
+
+/// Validate a single entry of `metricTransformations[]`. AWS bounds
+/// `dimensions` at 3 entries, the metric `unit` to the documented
+/// enum, and rejects `defaultValue` that doesn't parse as a number.
+/// `incrementBy` (an alias of `metricValue=1`) is implied when
+/// `metricValue` is the literal `"1"`.
+fn validate_metric_transformation(t: &Value) -> Result<(), AwsError> {
+    let obj = t.as_object().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "metricTransformations[] entries must be objects.",
+        )
+    })?;
+    let metric_name = obj
+        .get("metricName")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterException",
+                "metricTransformations[].metricName is required.",
+            )
+        })?;
+    if metric_name.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "metricTransformations[].metricName must not be empty.",
+        ));
+    }
+    let metric_namespace = obj
+        .get("metricNamespace")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterException",
+                "metricTransformations[].metricNamespace is required.",
+            )
+        })?;
+    if metric_namespace.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "metricTransformations[].metricNamespace must not be empty.",
+        ));
+    }
+    let metric_value = obj
+        .get("metricValue")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterException",
+                "metricTransformations[].metricValue is required.",
+            )
+        })?;
+    if metric_value.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "metricTransformations[].metricValue must not be empty.",
+        ));
+    }
+    if let Some(unit) = obj.get("unit") {
+        let u = unit.as_str().ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterException",
+                "metricTransformations[].unit must be a string.",
+            )
+        })?;
+        if !METRIC_UNITS.contains(&u) {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!("metricTransformations[].unit `{u}` is not a valid CloudWatch unit."),
+            ));
+        }
+    }
+    if let Some(dv) = obj.get("defaultValue")
+        && !dv.is_null()
+        && dv.as_f64().is_none()
+    {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "metricTransformations[].defaultValue must be a number.",
+        ));
+    }
+    if let Some(dims) = obj.get("dimensions") {
+        let map = dims.as_object().ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterException",
+                "metricTransformations[].dimensions must be a map of string to string.",
+            )
+        })?;
+        if map.len() > 3 {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                "metricTransformations[].dimensions accepts at most 3 entries.",
+            ));
+        }
+        for (k, v) in map {
+            if k.is_empty() {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterException",
+                    "metricTransformations[].dimensions has an empty key.",
+                ));
+            }
+            if v.as_str().is_none() {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterException",
+                    "metricTransformations[].dimensions values must be strings.",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -691,5 +844,160 @@ mod subscription_filter_tests {
             resp["subscriptionFilters"][0]["roleArn"],
             "arn:aws:iam::000000000000:role/cwlogs"
         );
+    }
+}
+
+#[cfg(test)]
+mod metric_transformation_tests {
+    use super::*;
+    use crate::state::LogsState;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("logs", "us-east-1")
+    }
+
+    fn state_with_group() -> LogsState {
+        let state = LogsState::default();
+        crate::operations::log_groups::create_log_group(
+            &state,
+            &json!({ "logGroupName": "g" }),
+            &ctx(),
+        )
+        .unwrap();
+        state
+    }
+
+    fn valid_xform() -> Value {
+        json!({
+            "metricName": "ErrorCount",
+            "metricNamespace": "MyApp",
+            "metricValue": "1",
+            "defaultValue": 0,
+            "unit": "Count",
+            "dimensions": { "Service": "$.svc" }
+        })
+    }
+
+    #[test]
+    fn accepts_well_formed_transformation() {
+        let state = state_with_group();
+        put_metric_filter(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "filterName": "f",
+                "filterPattern": "ERROR",
+                "metricTransformations": [valid_xform()],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_empty_transformations_array() {
+        let state = state_with_group();
+        let err = put_metric_filter(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "filterName": "f",
+                "filterPattern": "ERROR",
+                "metricTransformations": [],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn rejects_missing_metric_name() {
+        let state = state_with_group();
+        let mut x = valid_xform();
+        x.as_object_mut().unwrap().remove("metricName");
+        let err = put_metric_filter(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "filterName": "f",
+                "metricTransformations": [x],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("metricName"), "{err:?}");
+    }
+
+    #[test]
+    fn rejects_unknown_unit() {
+        let state = state_with_group();
+        let mut x = valid_xform();
+        x["unit"] = json!("Watts");
+        let err = put_metric_filter(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "filterName": "f",
+                "metricTransformations": [x],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("unit"), "{err:?}");
+    }
+
+    #[test]
+    fn rejects_more_than_three_dimensions() {
+        let state = state_with_group();
+        let mut x = valid_xform();
+        x["dimensions"] = json!({"a": "1", "b": "2", "c": "3", "d": "4"});
+        let err = put_metric_filter(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "filterName": "f",
+                "metricTransformations": [x],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("3"), "{err:?}");
+    }
+
+    #[test]
+    fn rejects_non_number_default_value() {
+        let state = state_with_group();
+        let mut x = valid_xform();
+        x["defaultValue"] = json!("not-a-number");
+        let err = put_metric_filter(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "filterName": "f",
+                "metricTransformations": [x],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("defaultValue"), "{err:?}");
+    }
+
+    #[test]
+    fn dimensions_must_be_object_of_strings() {
+        let state = state_with_group();
+        let mut x = valid_xform();
+        x["dimensions"] = json!({"k": 42});
+        let err = put_metric_filter(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "filterName": "f",
+                "metricTransformations": [x],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("string"), "{err:?}");
     }
 }
