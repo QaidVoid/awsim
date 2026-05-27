@@ -88,3 +88,109 @@ async fn dynamodb_round_trip_preserves_tables() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn sns_round_trip_preserves_topics() {
+    let seed = awsim_sns::SnsService::new();
+    let target = awsim_sns::SnsService::new();
+    round_trip(
+        &seed,
+        &target,
+        ("CreateTopic", json!({"Name": "restored-topic"})),
+        (
+            "GetTopicAttributes",
+            json!({"TopicArn": "arn:aws:sns:us-east-1:000000000000:restored-topic"}),
+        ),
+        "Attributes",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn cloudwatch_logs_round_trip_preserves_log_groups() {
+    let seed = awsim_cloudwatch_logs::CloudWatchLogsService::new();
+    let target = awsim_cloudwatch_logs::CloudWatchLogsService::new();
+    let c = ctx(seed.service_name());
+    seed.handle("CreateLogGroup", json!({"logGroupName": "restored-lg"}), &c)
+        .await
+        .unwrap();
+    let bytes = seed.snapshot().expect("CloudWatch Logs supports snapshot");
+    target.restore(&bytes).expect("restore must succeed");
+    let resp = target
+        .handle(
+            "DescribeLogGroups",
+            json!({"logGroupNamePrefix": "restored-lg"}),
+            &c,
+        )
+        .await
+        .unwrap();
+    let groups = resp["logGroups"]
+        .as_array()
+        .expect("logGroups array present");
+    assert!(
+        groups
+            .iter()
+            .any(|g| g["logGroupName"].as_str() == Some("restored-lg")),
+        "restored log group missing: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn acm_round_trip_preserves_certificates() {
+    let seed = awsim_acm::AcmService::new();
+    let target = awsim_acm::AcmService::new();
+    let c = ctx(seed.service_name());
+    let issued = seed
+        .handle(
+            "RequestCertificate",
+            json!({"DomainName": "example.com"}),
+            &c,
+        )
+        .await
+        .unwrap();
+    let arn = issued["CertificateArn"].as_str().unwrap().to_string();
+    let bytes = seed.snapshot().expect("ACM supports snapshot");
+    target.restore(&bytes).expect("restore must succeed");
+    let resp = target
+        .handle(
+            "DescribeCertificate",
+            json!({"CertificateArn": arn.clone()}),
+            &c,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp["Certificate"]["CertificateArn"].as_str(),
+        Some(arn.as_str())
+    );
+}
+
+#[tokio::test]
+async fn lambda_round_trip_preserves_functions() {
+    let seed = awsim_lambda::LambdaService::new();
+    let target = awsim_lambda::LambdaService::new();
+    let c = ctx(seed.service_name());
+    seed.handle(
+        "CreateFunction",
+        json!({
+            "FunctionName": "restored-fn",
+            "Role": "arn:aws:iam::000000000000:role/lambda",
+            "Runtime": "provided.al2",
+            "Handler": "index.handler",
+            "Code": {"ZipFile": "AAAA"},
+        }),
+        &c,
+    )
+    .await
+    .unwrap();
+    let bytes = seed.snapshot().expect("Lambda supports snapshot");
+    target.restore(&bytes).expect("restore must succeed");
+    let resp = target
+        .handle("GetFunction", json!({"FunctionName": "restored-fn"}), &c)
+        .await
+        .unwrap();
+    assert_eq!(
+        resp["Configuration"]["FunctionName"].as_str(),
+        Some("restored-fn")
+    );
+}
