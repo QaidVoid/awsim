@@ -470,14 +470,60 @@ pub fn discover_instances(
     let namespace_name = require_str(input, "NamespaceName")?;
     let service_name = require_str(input, "ServiceName")?;
 
-    // Resolve namespace by name → id, then service by name + namespace_id.
+    // AWS bounds MaxResults to 1..=100. Default is 100.
+    let max_results = match input.get("MaxResults").and_then(Value::as_i64) {
+        Some(n) if !(1..=100).contains(&n) => {
+            return Err(AwsError::bad_request(
+                "InvalidInput",
+                format!("MaxResults `{n}` must be in 1..=100."),
+            ));
+        }
+        Some(n) => n as usize,
+        None => 100,
+    };
+
+    // HealthStatus filter: HEALTHY (default) | UNHEALTHY | ALL |
+    // HEALTHY_OR_ELSE_ALL. The emulator treats every instance as
+    // HEALTHY (no health-check prober yet), so the practical
+    // distinction is: ALL/HEALTHY/HEALTHY_OR_ELSE_ALL include them;
+    // UNHEALTHY filters them out.
+    let health_status = input
+        .get("HealthStatus")
+        .and_then(Value::as_str)
+        .unwrap_or("HEALTHY");
+    let include_healthy = match health_status {
+        "HEALTHY" | "ALL" | "HEALTHY_OR_ELSE_ALL" => true,
+        "UNHEALTHY" => false,
+        other => {
+            return Err(AwsError::bad_request(
+                "InvalidInput",
+                format!(
+                    "HealthStatus `{other}` must be HEALTHY, UNHEALTHY, ALL, or HEALTHY_OR_ELSE_ALL.",
+                ),
+            ));
+        }
+    };
+
+    // OptionalParameters is an attribute key/value map; an instance
+    // matches if it carries every (k, v) pair in the filter. AWS uses
+    // this to narrow to a subset of instances by tag-like attributes.
+    let optional_params: HashMap<String, String> = input
+        .get("OptionalParameters")
+        .and_then(Value::as_object)
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let ns = state
         .namespaces
         .iter()
         .find(|e| e.value().name == namespace_name)
         .map(|e| e.value().clone());
     let Some(ns) = ns else {
-        return Ok(json!({ "Instances": [] }));
+        return Ok(json!({ "Instances": [], "InstancesRevision": 0 }));
     };
     let svc = state
         .services
@@ -488,13 +534,26 @@ pub fn discover_instances(
         })
         .map(|e| e.value().clone());
     let Some(svc) = svc else {
-        return Ok(json!({ "Instances": [] }));
+        return Ok(json!({ "Instances": [], "InstancesRevision": 0 }));
     };
+
+    if !include_healthy {
+        // All emulator instances are HEALTHY; UNHEALTHY filter yields
+        // an empty list without scanning.
+        return Ok(json!({ "Instances": [], "InstancesRevision": svc.instances_revision }));
+    }
 
     let items: Vec<Value> = state
         .instances
         .iter()
         .filter(|e| e.value().service_id == svc.id)
+        .filter(|e| {
+            let inst = e.value();
+            optional_params
+                .iter()
+                .all(|(k, v)| inst.attributes.get(k).map(String::as_str) == Some(v.as_str()))
+        })
+        .take(max_results)
         .map(|e| {
             let i = e.value();
             json!({
@@ -889,6 +948,93 @@ mod revision_tests {
         )
         .unwrap();
         assert_eq!(resp["InstancesRevision"], 3);
+    }
+
+    #[test]
+    fn discover_instances_respects_max_results_and_filters() {
+        let (state, svc_id, ns_name) = fresh_service();
+        for i in 0..5 {
+            register_instance(
+                &state,
+                &json!({
+                    "ServiceId": svc_id,
+                    "InstanceId": format!("i{i}"),
+                    "Attributes": { "tier": if i < 3 { "blue" } else { "green" } },
+                }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+
+        // MaxResults caps the page.
+        let resp = discover_instances(
+            &state,
+            &json!({ "NamespaceName": ns_name, "ServiceName": "svc", "MaxResults": 2 }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Instances"].as_array().unwrap().len(), 2);
+
+        // OptionalParameters narrows by attribute equality.
+        let resp = discover_instances(
+            &state,
+            &json!({
+                "NamespaceName": ns_name,
+                "ServiceName": "svc",
+                "OptionalParameters": { "tier": "green" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Instances"].as_array().unwrap().len(), 2);
+
+        // HealthStatus=UNHEALTHY yields empty in this emulator.
+        let resp = discover_instances(
+            &state,
+            &json!({
+                "NamespaceName": ns_name,
+                "ServiceName": "svc",
+                "HealthStatus": "UNHEALTHY",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(resp["Instances"].as_array().unwrap().is_empty());
+
+        // HealthStatus=ALL behaves like HEALTHY here.
+        let resp = discover_instances(
+            &state,
+            &json!({
+                "NamespaceName": ns_name,
+                "ServiceName": "svc",
+                "HealthStatus": "ALL",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Instances"].as_array().unwrap().len(), 5);
+
+        // Invalid HealthStatus -> InvalidInput.
+        let err = discover_instances(
+            &state,
+            &json!({
+                "NamespaceName": ns_name,
+                "ServiceName": "svc",
+                "HealthStatus": "MAYBE",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidInput");
+
+        // MaxResults out of range -> InvalidInput.
+        let err = discover_instances(
+            &state,
+            &json!({ "NamespaceName": ns_name, "ServiceName": "svc", "MaxResults": 0 }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidInput");
     }
 
     #[test]
