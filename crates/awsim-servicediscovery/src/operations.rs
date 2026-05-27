@@ -149,6 +149,22 @@ pub fn create_private_dns_namespace(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    // Private DNS namespaces must carry a real `Vpc` id. AWS expects a
+    // string of the form `vpc-XXXXXXXX` (8-17 hex chars after the
+    // prefix); anything else fails validation up-front.
+    let vpc = input
+        .get("Vpc")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AwsError::bad_request("InvalidInput", "Vpc is required"))?;
+    let body = vpc
+        .strip_prefix("vpc-")
+        .ok_or_else(|| AwsError::bad_request("InvalidInput", "Vpc must start with 'vpc-'."))?;
+    if !(8..=17).contains(&body.len()) || !body.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(AwsError::bad_request(
+            "InvalidInput",
+            format!("Vpc '{vpc}' is not a valid VPC identifier."),
+        ));
+    }
     create_namespace(state, input, ctx, "DNS_PRIVATE")
 }
 
@@ -625,5 +641,46 @@ mod revision_tests {
         )
         .unwrap();
         assert_eq!(resp["InstancesRevision"], 3);
+    }
+
+    #[test]
+    fn create_private_dns_namespace_requires_valid_vpc() {
+        let state = ServiceDiscoveryState::default();
+        // Missing Vpc.
+        let err =
+            create_private_dns_namespace(&state, &json!({ "Name": "ns" }), &ctx()).unwrap_err();
+        assert!(err.message.contains("Vpc"));
+
+        // Wrong prefix.
+        let err = create_private_dns_namespace(
+            &state,
+            &json!({ "Name": "ns", "Vpc": "subnet-12345678" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(err.message.to_lowercase().contains("vpc"));
+
+        // Too short body.
+        let err =
+            create_private_dns_namespace(&state, &json!({ "Name": "ns", "Vpc": "vpc-12" }), &ctx())
+                .unwrap_err();
+        assert_eq!(err.code, "InvalidInput");
+
+        // Non-hex body.
+        let err = create_private_dns_namespace(
+            &state,
+            &json!({ "Name": "ns", "Vpc": "vpc-zzzzzzzz" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidInput");
+
+        // Well-formed VPC: accepted.
+        create_private_dns_namespace(
+            &state,
+            &json!({ "Name": "ns", "Vpc": "vpc-0123abcd" }),
+            &ctx(),
+        )
+        .unwrap();
     }
 }
