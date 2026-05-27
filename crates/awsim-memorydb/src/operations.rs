@@ -82,6 +82,24 @@ pub fn create_cluster(
             format!("Cluster {name} already exists"),
         ));
     }
+    // AWS MemoryDB caps NumShards at 1..=500 and NumReplicasPerShard
+    // at 0..=5. Reject anything outside before allocating state.
+    if let Some(n) = input.get("NumShards").and_then(Value::as_i64)
+        && !(1..=500).contains(&n)
+    {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!("NumShards `{n}` must be in 1..=500."),
+        ));
+    }
+    if let Some(n) = input.get("NumReplicasPerShard").and_then(Value::as_i64)
+        && !(0..=5).contains(&n)
+    {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!("NumReplicasPerShard `{n}` must be in 0..=5."),
+        ));
+    }
     let node_type = require_str(input, "NodeType")?.to_string();
     let acl_name = require_str(input, "ACLName")?.to_string();
     let arn_str = arn(ctx, "cluster", &name);
@@ -530,4 +548,70 @@ pub fn delete_snapshot(
         )
     })?;
     Ok(json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("memorydb", "us-east-1")
+    }
+
+    #[test]
+    fn create_cluster_rejects_num_shards_out_of_range() {
+        let state = MemoryDbState::default();
+        for bad in [0i64, 501, -1] {
+            let err = create_cluster(
+                &state,
+                &json!({
+                    "ClusterName": format!("c{bad}"),
+                    "NodeType": "db.r6g.large",
+                    "ACLName": "open-access",
+                    "NumShards": bad,
+                }),
+                &ctx(),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
+        }
+    }
+
+    #[test]
+    fn create_cluster_rejects_num_replicas_out_of_range() {
+        let state = MemoryDbState::default();
+        for bad in [-1i64, 6, 100] {
+            let err = create_cluster(
+                &state,
+                &json!({
+                    "ClusterName": format!("c{bad}"),
+                    "NodeType": "db.r6g.large",
+                    "ACLName": "open-access",
+                    "NumReplicasPerShard": bad,
+                }),
+                &ctx(),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
+        }
+    }
+
+    #[test]
+    fn create_cluster_accepts_documented_bounds() {
+        let state = MemoryDbState::default();
+        for (i, (shards, replicas)) in [(1i64, 0i64), (500, 5), (250, 3)].iter().enumerate() {
+            create_cluster(
+                &state,
+                &json!({
+                    "ClusterName": format!("c{i}"),
+                    "NodeType": "db.r6g.large",
+                    "ACLName": "open-access",
+                    "NumShards": shards,
+                    "NumReplicasPerShard": replicas,
+                }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+    }
 }
