@@ -17,9 +17,16 @@ pub struct ExecResult {
     pub history: Vec<HistoryEvent>,
 }
 
-/// Walk through the ASL starting from StartAt.
-pub fn execute(definition: &str, input: &str, start_time: &str) -> ExecResult {
-    execute_typed(definition, input, start_time, false)
+/// Like [`execute_typed`] but seeds the AWS States context object so
+/// child scopes (Map iterations, Parallel branches) can read identifiers
+/// like `$$.Map.Item.Index` from their Parameters / ItemSelector blocks.
+pub fn execute_with_context(
+    definition: &str,
+    input: &str,
+    start_time: &str,
+    context: Value,
+) -> ExecResult {
+    execute_typed_with_context(definition, input, start_time, false, context)
 }
 
 /// Same as [`execute`], but flags whether the state machine is EXPRESS
@@ -30,6 +37,16 @@ pub fn execute_typed(
     input: &str,
     start_time: &str,
     is_express: bool,
+) -> ExecResult {
+    execute_typed_with_context(definition, input, start_time, is_express, Value::Null)
+}
+
+fn execute_typed_with_context(
+    definition: &str,
+    input: &str,
+    start_time: &str,
+    is_express: bool,
+    context: Value,
 ) -> ExecResult {
     let def: Value = match serde_json::from_str(definition) {
         Ok(v) => v,
@@ -53,6 +70,7 @@ pub fn execute_typed(
         start_time: start_time.to_string(),
         is_express,
         simulated_wait_secs: 0,
+        context_object: context,
     };
 
     let start_at = match def["StartAt"].as_str() {
@@ -156,6 +174,11 @@ struct InterpreterContext {
     /// exceeded that bound in real AWS.
     is_express: bool,
     simulated_wait_secs: u64,
+    /// AWS States context object accessible via `$$.<path>` in
+    /// Parameters / ResultSelector / ItemSelector references. Seeded
+    /// by Map iterations (`Map.Item.Index`, `Map.Item.Value`) and
+    /// Parallel branches (`Execution.BranchName`).
+    context_object: Value,
 }
 
 impl InterpreterContext {
@@ -198,7 +221,7 @@ impl InterpreterContext {
         // value whose key ends in `.$` is resolved as a JSONPath into the
         // post-InputPath input; everything else is a static literal.
         let effective_input = match state.get("Parameters") {
-            Some(p) => apply_parameters(p, &after_input_path),
+            Some(p) => apply_parameters_with_ctx(p, &after_input_path, &self.context_object),
             None => after_input_path.clone(),
         };
 
@@ -253,7 +276,9 @@ impl InterpreterContext {
                 let has_result = matches!(state_type, "Pass" | "Task" | "Parallel" | "Map");
                 let after_post = if has_result {
                     let after_selector = match state.get("ResultSelector") {
-                        Some(rs) => apply_parameters(rs, &raw_output),
+                        Some(rs) => {
+                            apply_parameters_with_ctx(rs, &raw_output, &self.context_object)
+                        }
                         None => raw_output.clone(),
                     };
                     apply_result_path(
@@ -465,9 +490,20 @@ impl InterpreterContext {
     ) -> Result<(Value, StateTransition), StateFailed> {
         let branches = state["Branches"].as_array().cloned().unwrap_or_default();
         let mut outputs: Vec<Value> = Vec::with_capacity(branches.len());
-        for branch in &branches {
+        for (i, branch) in branches.iter().enumerate() {
             let branch_def = branch.to_string();
-            let branch_result = execute(&branch_def, &input.to_string(), &self.start_time);
+            let mut branch_context = self.context_object.clone();
+            merge_context_into(
+                &mut branch_context,
+                "Execution",
+                json!({ "BranchName": format!("Branch-{i}") }),
+            );
+            let branch_result = execute_with_context(
+                &branch_def,
+                &input.to_string(),
+                &self.start_time,
+                branch_context,
+            );
             if branch_result.status == "FAILED" {
                 return Err(StateFailed {
                     error: branch_result.error.unwrap_or_default(),
@@ -508,12 +544,23 @@ impl InterpreterContext {
         let item_selector = state.get("ItemSelector").cloned();
         let iter_def_str = iterator_def.to_string();
         let mut outputs: Vec<Value> = Vec::with_capacity(item_array.len());
-        for item in &item_array {
+        for (i, item) in item_array.iter().enumerate() {
+            let mut iter_context = self.context_object.clone();
+            merge_context_into(
+                &mut iter_context,
+                "Map",
+                json!({ "Item": { "Index": i, "Value": item } }),
+            );
             let effective = match &item_selector {
-                Some(sel) if !sel.is_null() => apply_parameters(sel, item),
+                Some(sel) if !sel.is_null() => apply_parameters_with_ctx(sel, item, &iter_context),
                 _ => item.clone(),
             };
-            let item_result = execute(&iter_def_str, &effective.to_string(), &self.start_time);
+            let item_result = execute_with_context(
+                &iter_def_str,
+                &effective.to_string(),
+                &self.start_time,
+                iter_context,
+            );
             if item_result.status == "FAILED" {
                 return Err(StateFailed {
                     error: item_result.error.unwrap_or_default(),
@@ -528,6 +575,15 @@ impl InterpreterContext {
     }
 }
 
+fn merge_context_into(context: &mut Value, key: &str, value: Value) {
+    if !context.is_object() {
+        *context = json!({});
+    }
+    if let Value::Object(map) = context {
+        map.insert(key.to_string(), value);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Parameters / ResultSelector
 // ---------------------------------------------------------------------------
@@ -538,7 +594,13 @@ impl InterpreterContext {
 /// invocation (`States.Format(...)`, `States.JsonToString(...)`, etc.)
 /// and are renamed to drop the suffix in the output. Object / array
 /// values recurse; everything else is a literal.
-fn apply_parameters(template: &Value, source: &Value) -> Value {
+/// Transform a `Parameters` / `ResultSelector` / `ItemSelector`
+/// template against a source object and the AWS States context. The
+/// context object mirrors AWS's runtime context — `{ "Map": { "Item":
+/// { "Index": 0, "Value": ... } } }` inside a Map iteration or
+/// `{ "Execution": { "BranchName": "Branch-0" } }` inside a Parallel
+/// branch.
+fn apply_parameters_with_ctx(template: &Value, source: &Value, context: &Value) -> Value {
     match template {
         Value::Object(map) => {
             let mut out = serde_json::Map::with_capacity(map.len());
@@ -548,19 +610,24 @@ fn apply_parameters(template: &Value, source: &Value) -> Value {
                         Some(s) if s.starts_with("States.") => {
                             evaluate_intrinsic(s, source).unwrap_or_else(|| v.clone())
                         }
+                        Some(path) if path.starts_with("$$") => {
+                            resolve_reference_path(context, &path[1..])
+                        }
                         Some(path) if path.starts_with('$') => resolve_reference_path(source, path),
                         _ => v.clone(),
                     };
                     out.insert(stripped_key.to_string(), resolved);
                 } else {
-                    out.insert(k.clone(), apply_parameters(v, source));
+                    out.insert(k.clone(), apply_parameters_with_ctx(v, source, context));
                 }
             }
             Value::Object(out)
         }
-        Value::Array(arr) => {
-            Value::Array(arr.iter().map(|v| apply_parameters(v, source)).collect())
-        }
+        Value::Array(arr) => Value::Array(
+            arr.iter()
+                .map(|v| apply_parameters_with_ctx(v, source, context))
+                .collect(),
+        ),
         // Scalars pass through.
         _ => template.clone(),
     }
@@ -1227,7 +1294,7 @@ mod tests {
     use super::*;
 
     fn run(def: &str, input: &str) -> ExecResult {
-        execute(def, input, "2024-01-01T00:00:00Z")
+        execute_typed(def, input, "2024-01-01T00:00:00Z", false)
     }
 
     fn run_express(def: &str, input: &str) -> ExecResult {
@@ -2036,6 +2103,112 @@ mod tests {
         let s = v.as_str().unwrap();
         assert_eq!(s.len(), 36);
         assert!(s.chars().filter(|c| *c == '-').count() == 4);
+    }
+
+    #[test]
+    fn map_item_selector_can_read_map_item_index_from_context() {
+        // ItemSelector uses $$.Map.Item.Index to attach a position to
+        // each output. Bare $ still references the raw item.
+        let def = r#"{
+            "StartAt": "ForEach",
+            "States": {
+                "ForEach": {
+                    "Type": "Map",
+                    "End": true,
+                    "ItemsPath": "$",
+                    "ItemSelector": {
+                        "idx.$": "$$.Map.Item.Index",
+                        "value.$": "$"
+                    },
+                    "Iterator": {
+                        "StartAt": "Echo",
+                        "States": { "Echo": { "Type": "Pass", "End": true } }
+                    }
+                }
+            }
+        }"#;
+        let result = run(def, r#"["a", "b", "c"]"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(
+            out,
+            json!([
+                { "idx": 0, "value": "a" },
+                { "idx": 1, "value": "b" },
+                { "idx": 2, "value": "c" }
+            ])
+        );
+    }
+
+    #[test]
+    fn map_iterator_state_can_read_context_via_parameters() {
+        // The Iterator's own Pass state references $$.Map.Item.Index via
+        // Parameters, proving the context propagates into the child
+        // sub-execution.
+        let def = r#"{
+            "StartAt": "ForEach",
+            "States": {
+                "ForEach": {
+                    "Type": "Map",
+                    "End": true,
+                    "ItemsPath": "$",
+                    "Iterator": {
+                        "StartAt": "Tag",
+                        "States": {
+                            "Tag": {
+                                "Type": "Pass",
+                                "Parameters": { "idx.$": "$$.Map.Item.Index" },
+                                "End": true
+                            }
+                        }
+                    }
+                }
+            }
+        }"#;
+        let result = run(def, r#"["x", "y"]"#);
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(out, json!([{ "idx": 0 }, { "idx": 1 }]));
+    }
+
+    #[test]
+    fn parallel_branch_state_can_read_execution_branch_name() {
+        let def = r#"{
+            "StartAt": "Fan",
+            "States": {
+                "Fan": {
+                    "Type": "Parallel",
+                    "End": true,
+                    "Branches": [
+                        {
+                            "StartAt": "A",
+                            "States": {
+                                "A": {
+                                    "Type": "Pass",
+                                    "Parameters": { "branch.$": "$$.Execution.BranchName" },
+                                    "End": true
+                                }
+                            }
+                        },
+                        {
+                            "StartAt": "B",
+                            "States": {
+                                "B": {
+                                    "Type": "Pass",
+                                    "Parameters": { "branch.$": "$$.Execution.BranchName" },
+                                    "End": true
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        }"#;
+        let result = run(def, "{}");
+        let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert_eq!(
+            out,
+            json!([{ "branch": "Branch-0" }, { "branch": "Branch-1" }])
+        );
     }
 
     #[test]
