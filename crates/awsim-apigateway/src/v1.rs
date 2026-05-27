@@ -497,6 +497,12 @@ impl ServiceHandler for ApiGatewayV1Service {
                 operation: "DeleteRequestValidator",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/restapis/{restapi_id}/resources/{resource_id}/methods/{http_method}/responses/{status_code}",
+                operation: "PutMethodResponse",
+                required_query_param: None,
+            },
             // API keys
             RouteDefinition {
                 method: "POST",
@@ -608,6 +614,7 @@ impl ServiceHandler for ApiGatewayV1Service {
             "DeleteModel" => delete_model(&state, &input),
             "CreateRequestValidator" => create_request_validator(&state, &input),
             "DeleteRequestValidator" => delete_request_validator(&state, &input),
+            "PutMethodResponse" => put_method_response(&state, &input),
             "DeleteAuthorizer" => delete_authorizer(&state, &input),
             "CreateApiKey" => create_api_key(&state, &input),
             "GetApiKey" => get_api_key(&state, &input),
@@ -1911,6 +1918,66 @@ fn validate_schema_inner(
     Ok(())
 }
 
+/// Resolve a response payload model name from a method's
+/// `response_models` table using the response's status code and
+/// Content-Type. AWS picks the exact match first, then `*/*`, mirroring
+/// the request side.
+pub fn lookup_response_model<'a>(
+    method: &'a Method,
+    status_code: &str,
+    content_type: Option<&str>,
+) -> Option<&'a str> {
+    let ct = content_type
+        .unwrap_or("application/json")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim();
+    method
+        .response_models
+        .get(&format!("{status_code}/{ct}"))
+        .or_else(|| method.response_models.get(&format!("{status_code}/*/*")))
+        .map(String::as_str)
+}
+
+fn put_method_response(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let api_id = require_str(input, "restapi_id")?.to_string();
+    let resource_id = require_str(input, "resource_id")?.to_string();
+    let http_method = require_str(input, "http_method")?.to_uppercase();
+    let status_code = require_str(input, "status_code")?.to_string();
+    let response_models: HashMap<String, String> = input["responseModels"]
+        .as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    with_api_mut(state, &api_id, |api| {
+        let r = api.resources.get_mut(&resource_id).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Resource {resource_id} not found"),
+            )
+        })?;
+        let method = r.methods.get_mut(&http_method).ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Method {http_method} not configured"),
+            )
+        })?;
+        for (ct, model) in &response_models {
+            method
+                .response_models
+                .insert(format!("{status_code}/{ct}"), model.clone());
+        }
+        Ok(json!({
+            "statusCode": status_code,
+            "responseModels": response_models,
+        }))
+    })
+}
+
 fn check_type(type_field: &str, value: &serde_json::Value, path: &str) -> Result<(), String> {
     let ok = match type_field {
         "object" => value.is_object(),
@@ -2656,6 +2723,80 @@ mod tests {
             models: HashMap::new(),
             request_validators: HashMap::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn put_method_response_persists_response_models() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        svc.handle(
+            "PutMethod",
+            json!({"restapi_id": api_id.clone(), "resource_id": root_id.clone(), "http_method": "GET"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        let resp = svc
+            .handle(
+                "PutMethodResponse",
+                json!({
+                    "restapi_id": api_id.clone(),
+                    "resource_id": root_id.clone(),
+                    "http_method": "GET",
+                    "status_code": "200",
+                    "responseModels": { "application/json": "Item", "*/*": "Generic" }
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp["responseModels"]["application/json"], "Item");
+        let got = svc
+            .handle(
+                "GetMethod",
+                json!({
+                    "restapi_id": api_id,
+                    "resource_id": root_id,
+                    "http_method": "GET",
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            got["methodResponses"]["200"]["responseModels"]["application/json"],
+            "Item"
+        );
+    }
+
+    #[test]
+    fn lookup_response_model_prefers_exact_then_wildcard() {
+        let mut m = Method {
+            http_method: "GET".into(),
+            authorization_type: "NONE".into(),
+            authorizer_id: String::new(),
+            api_key_required: false,
+            request_parameters: HashMap::new(),
+            integration: None,
+            request_models: HashMap::new(),
+            response_models: HashMap::new(),
+            request_validator_id: String::new(),
+        };
+        m.response_models
+            .insert("200/application/json".into(), "Item".into());
+        m.response_models.insert("200/*/*".into(), "Generic".into());
+        assert_eq!(
+            lookup_response_model(&m, "200", Some("application/json")),
+            Some("Item")
+        );
+        assert_eq!(
+            lookup_response_model(&m, "200", Some("text/xml")),
+            Some("Generic")
+        );
+        assert_eq!(
+            lookup_response_model(&m, "404", Some("application/json")),
+            None
+        );
     }
 
     #[test]
