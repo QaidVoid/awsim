@@ -40,6 +40,12 @@ pub struct ServiceEntry {
     pub create_date: f64,
     pub creator_request_id: Option<String>,
     pub r#type: String, // DNS | HTTP
+    /// Monotonic counter bumped on every Register/Deregister against
+    /// this service. Returned as `InstancesRevision` by
+    /// `DiscoverInstances` so callers can detect changes between polls
+    /// without re-comparing the full instance set.
+    #[serde(default)]
+    pub instances_revision: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -250,6 +250,7 @@ pub fn create_service(
             .and_then(|v| v.as_str())
             .map(String::from),
         r#type: svc_type.to_string(),
+        instances_revision: 0,
     };
     let result = json!({ "Service": svc_to_value(&svc) });
     state.services.insert(id, svc);
@@ -372,6 +373,7 @@ pub fn register_instance(
         .insert(instance_key(&service_id, &instance_id), inst);
     if let Some(mut s) = state.services.get_mut(&service_id) {
         s.instance_count += 1;
+        s.instances_revision = s.instances_revision.saturating_add(1);
     }
     let mut targets = HashMap::new();
     targets.insert("INSTANCE".to_string(), instance_id);
@@ -396,10 +398,11 @@ pub fn deregister_instance(
                 format!("Instance {instance_id} not found"),
             )
         })?;
-    if let Some(mut s) = state.services.get_mut(&service_id)
-        && s.instance_count > 0
-    {
-        s.instance_count -= 1;
+    if let Some(mut s) = state.services.get_mut(&service_id) {
+        if s.instance_count > 0 {
+            s.instance_count -= 1;
+        }
+        s.instances_revision = s.instances_revision.saturating_add(1);
     }
     let mut targets = HashMap::new();
     targets.insert("INSTANCE".to_string(), instance_id);
@@ -486,7 +489,7 @@ pub fn discover_instances(
             })
         })
         .collect();
-    Ok(json!({ "Instances": items, "InstancesRevision": 1 }))
+    Ok(json!({ "Instances": items, "InstancesRevision": svc.instances_revision }))
 }
 
 // ---------- Operations ----------
@@ -528,4 +531,99 @@ pub fn list_operations(
         })
         .collect();
     Ok(json!({ "Operations": items }))
+}
+
+#[cfg(test)]
+mod revision_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("servicediscovery", "us-east-1")
+    }
+
+    fn fresh_service() -> (ServiceDiscoveryState, String, String) {
+        let state = ServiceDiscoveryState::default();
+        let ns = create_http_namespace(
+            &state,
+            &json!({ "Name": "ns", "CreatorRequestId": "cr1" }),
+            &ctx(),
+        )
+        .unwrap();
+        let ns_id = ns["OperationId"].as_str().unwrap().to_string();
+        // create_http_namespace records an operation; the namespace
+        // id is stored on the operation's Targets. Look it up.
+        let ns_real = state
+            .operations
+            .get(&ns_id)
+            .unwrap()
+            .targets
+            .get("NAMESPACE")
+            .cloned()
+            .unwrap();
+        let svc = create_service(
+            &state,
+            &json!({ "Name": "svc", "NamespaceId": ns_real, "Type": "HTTP" }),
+            &ctx(),
+        )
+        .unwrap();
+        let svc_id = svc["Service"]["Id"].as_str().unwrap().to_string();
+        let ns_name = "ns".to_string();
+        (state, svc_id, ns_name)
+    }
+
+    #[test]
+    fn instances_revision_bumps_on_register_and_deregister() {
+        let (state, svc_id, ns_name) = fresh_service();
+
+        // Initial: revision 0, no instances.
+        let resp = discover_instances(
+            &state,
+            &json!({ "NamespaceName": ns_name, "ServiceName": "svc" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["InstancesRevision"], 0);
+
+        register_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i1", "Attributes": { "AWS_INSTANCE_IPV4": "1.2.3.4" } }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = discover_instances(
+            &state,
+            &json!({ "NamespaceName": ns_name, "ServiceName": "svc" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["InstancesRevision"], 1);
+
+        register_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i2", "Attributes": { "AWS_INSTANCE_IPV4": "1.2.3.5" } }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = discover_instances(
+            &state,
+            &json!({ "NamespaceName": ns_name, "ServiceName": "svc" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["InstancesRevision"], 2);
+
+        deregister_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i1" }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = discover_instances(
+            &state,
+            &json!({ "NamespaceName": ns_name, "ServiceName": "svc" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["InstancesRevision"], 3);
+    }
 }
