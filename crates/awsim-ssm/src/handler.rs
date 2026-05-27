@@ -111,6 +111,9 @@ impl ServiceHandler for SsmService {
             "DescribeMaintenanceWindowTasks" => {
                 maintenance::describe_maintenance_window_tasks(&state, &input, ctx)
             }
+            "DescribeMaintenanceWindowsForTarget" => {
+                maintenance::describe_maintenance_windows_for_target(&state, &input, ctx)
+            }
 
             // OpsCenter
             "CreateOpsItem" => documents::create_ops_item(&state, &input, ctx),

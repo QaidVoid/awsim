@@ -15,6 +15,141 @@ fn now_epoch_secs() -> u64 {
         .as_secs()
 }
 
+/// Maximum number of entries AWS accepts in a maintenance-window
+/// `Targets` list. Real AWS bounces oversize requests with
+/// `InvalidParameters`.
+const MAX_TARGETS: usize = 50;
+
+/// Validate one maintenance-window Target entry.
+///
+/// Each entry must be a JSON object with:
+/// - `Key` set to one of `InstanceIds`, `tag:<TagKey>`,
+///   `resource-groups:Name`, or `resource-groups:ResourceTypeFilters`.
+///   `tag:` keys must have a non-empty `<TagKey>` suffix.
+/// - `Values` set to a non-empty array of 1..=50 strings.
+///
+/// Returns an `InvalidParameters` error pointing at the first
+/// violation; the rest of the list is not inspected.
+pub(crate) fn validate_target_entry(entry: &Value) -> Result<(), AwsError> {
+    let obj = entry.as_object().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameters",
+            "Maintenance window target entry must be a JSON object.",
+        )
+    })?;
+    let key = obj.get("Key").and_then(|v| v.as_str()).ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameters",
+            "Maintenance window target entry must have a string `Key`.",
+        )
+    })?;
+    let key_ok = key == "InstanceIds"
+        || key == "resource-groups:Name"
+        || key == "resource-groups:ResourceTypeFilters"
+        || key
+            .strip_prefix("tag:")
+            .map(|tail| !tail.is_empty())
+            .unwrap_or(false);
+    if !key_ok {
+        return Err(AwsError::bad_request(
+            "InvalidParameters",
+            format!(
+                "Maintenance window target Key `{key}` must be one of \
+                 `InstanceIds`, `tag:<TagKey>`, `resource-groups:Name`, or \
+                 `resource-groups:ResourceTypeFilters`."
+            ),
+        ));
+    }
+    let values = obj
+        .get("Values")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameters",
+                format!("Maintenance window target `{key}` must have a `Values` array."),
+            )
+        })?;
+    if values.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameters",
+            format!("Maintenance window target `{key}` must have at least one value."),
+        ));
+    }
+    if values.len() > MAX_TARGETS {
+        return Err(AwsError::bad_request(
+            "InvalidParameters",
+            format!(
+                "Maintenance window target `{key}` has {} values; the maximum is {MAX_TARGETS}.",
+                values.len()
+            ),
+        ));
+    }
+    for v in values {
+        if !v.is_string() {
+            return Err(AwsError::bad_request(
+                "InvalidParameters",
+                format!("Maintenance window target `{key}` values must be strings."),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate the `Targets` array on a maintenance-window register
+/// call. Real AWS bounces oversize lists and malformed entries at
+/// the API boundary, so we mirror that here.
+pub(crate) fn validate_targets(targets: &[Value]) -> Result<(), AwsError> {
+    if targets.len() > MAX_TARGETS {
+        return Err(AwsError::bad_request(
+            "InvalidParameters",
+            format!(
+                "Maintenance window `Targets` has {} entries; the maximum is {MAX_TARGETS}.",
+                targets.len()
+            ),
+        ));
+    }
+    for entry in targets {
+        validate_target_entry(entry)?;
+    }
+    Ok(())
+}
+
+/// Resolve a `Targets` list to the concrete set of instance IDs the
+/// maintenance window would dispatch to. Only the `InstanceIds` key
+/// resolves locally — `tag:*` and `resource-groups:*` resolutions
+/// require an EC2 / ResourceGroups lookup that AWSim does not yet
+/// thread into SSM, so those entries are skipped (returning the
+/// empty set for now matches the behaviour of a maintenance window
+/// whose targets reference instances that don't exist).
+///
+/// Used by [`describe_maintenance_windows_for_target`] to answer
+/// "which windows would run against this instance?" without firing
+/// the windows.
+pub(crate) fn resolve_targets_to_instance_ids(targets: &[Value]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for entry in targets {
+        let Some(obj) = entry.as_object() else {
+            continue;
+        };
+        if obj.get("Key").and_then(|v| v.as_str()) != Some("InstanceIds") {
+            continue;
+        }
+        let Some(values) = obj.get("Values").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for v in values {
+            if let Some(id) = v.as_str() {
+                let id = id.to_string();
+                if seen.insert(id.clone()) {
+                    out.push(id);
+                }
+            }
+        }
+    }
+    out
+}
+
 pub fn get_maintenance_window(
     state: &SsmState,
     input: &Value,
@@ -113,6 +248,7 @@ pub fn register_target_with_maintenance_window(
         .unwrap_or("INSTANCE")
         .to_string();
     let targets = input["Targets"].as_array().cloned().unwrap_or_default();
+    validate_targets(&targets)?;
     let name = input["Name"].as_str().unwrap_or("").to_string();
 
     let window_target_id = Uuid::new_v4().to_string();
@@ -154,6 +290,7 @@ pub fn register_task_with_maintenance_window(
         .unwrap_or("RUN_COMMAND")
         .to_string();
     let targets = input["Targets"].as_array().cloned().unwrap_or_default();
+    validate_targets(&targets)?;
     let priority = input["Priority"].as_u64().unwrap_or(1);
     let max_concurrency = input["MaxConcurrency"].as_str().unwrap_or("1").to_string();
     let max_errors = input["MaxErrors"].as_str().unwrap_or("0").to_string();
@@ -203,6 +340,50 @@ pub fn describe_maintenance_window_targets(
         .collect();
 
     Ok(json!({ "Targets": targets }))
+}
+
+/// Resolve a request-side `Targets` array (e.g. `Key=InstanceIds,
+/// Values=i-abc`) to the maintenance windows that would dispatch
+/// against any of those instances.
+///
+/// Real AWS evaluates this lazily — the SDK / console uses it to
+/// preview "which windows would fire against my fleet?" without
+/// actually firing them. AWSim mirrors that: every registered
+/// target list is resolved through [`resolve_targets_to_instance_ids`],
+/// and a window matches when at least one of its targets covers an
+/// instance the caller asked about.
+pub fn describe_maintenance_windows_for_target(
+    state: &SsmState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let requested = input["Targets"].as_array().cloned().unwrap_or_default();
+    validate_targets(&requested)?;
+    let requested_ids = resolve_targets_to_instance_ids(&requested);
+    let requested_set: std::collections::HashSet<&str> =
+        requested_ids.iter().map(String::as_str).collect();
+
+    // Walk every registered window target and collect the windows
+    // whose configured target set intersects the requested set.
+    let mut matched: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for entry in state.maintenance_window_targets.iter() {
+        let configured = resolve_targets_to_instance_ids(&entry.value().targets);
+        let hit = configured
+            .iter()
+            .any(|id| requested_set.contains(id.as_str()));
+        if hit {
+            let window_id = entry.value().window_id.clone();
+            if let Some(window) = state.maintenance_windows.get(&window_id) {
+                matched.insert(window_id, window.name.clone());
+            }
+        }
+    }
+
+    let identities: Vec<Value> = matched
+        .into_iter()
+        .map(|(window_id, name)| json!({ "WindowId": window_id, "Name": name }))
+        .collect();
+    Ok(json!({ "WindowIdentities": identities }))
 }
 
 pub fn describe_maintenance_window_tasks(
@@ -977,4 +1158,172 @@ pub fn list_document_versions(
         .unwrap_or_default();
 
     Ok(json!({ "DocumentVersions": versions }))
+}
+
+#[cfg(test)]
+mod target_tests {
+    use super::*;
+    use crate::operations::documents::create_maintenance_window;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("ssm", "us-east-1")
+    }
+
+    fn make_window(state: &SsmState, name: &str) -> String {
+        let resp = create_maintenance_window(
+            state,
+            &json!({
+                "Name": name,
+                "Schedule": "cron(0 0 * * ? *)",
+                "Duration": 1,
+                "Cutoff": 0,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        resp["WindowId"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn validate_target_rejects_non_object_entry() {
+        let err = validate_target_entry(&json!("just-a-string")).unwrap_err();
+        assert_eq!(err.code, "InvalidParameters");
+    }
+
+    #[test]
+    fn validate_target_rejects_unknown_key() {
+        let err = validate_target_entry(&json!({
+            "Key": "nope:Name",
+            "Values": ["v"]
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameters");
+        assert!(err.message.contains("Key"), "{:?}", err.message);
+    }
+
+    #[test]
+    fn validate_target_accepts_documented_keys() {
+        for key in [
+            "InstanceIds",
+            "tag:Environment",
+            "resource-groups:Name",
+            "resource-groups:ResourceTypeFilters",
+        ] {
+            validate_target_entry(&json!({
+                "Key": key,
+                "Values": ["v1"],
+            }))
+            .unwrap_or_else(|e| panic!("expected `{key}` to validate, got {e:?}"));
+        }
+    }
+
+    #[test]
+    fn validate_target_rejects_tag_key_without_suffix() {
+        let err = validate_target_entry(&json!({
+            "Key": "tag:",
+            "Values": ["v"]
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameters");
+    }
+
+    #[test]
+    fn validate_target_requires_non_empty_values() {
+        let err = validate_target_entry(&json!({
+            "Key": "InstanceIds",
+            "Values": []
+        }))
+        .unwrap_err();
+        assert!(err.message.contains("at least one value"), "{err:?}");
+    }
+
+    #[test]
+    fn register_target_rejects_malformed_target() {
+        let state = SsmState::default();
+        let window_id = make_window(&state, "win-1");
+        let err = register_target_with_maintenance_window(
+            &state,
+            &json!({
+                "WindowId": window_id,
+                "Targets": [{ "Key": "InstanceIds", "Values": [] }],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameters");
+    }
+
+    #[test]
+    fn resolve_targets_dedups_instance_ids_across_entries() {
+        let resolved = resolve_targets_to_instance_ids(&[
+            json!({ "Key": "InstanceIds", "Values": ["i-a", "i-b"] }),
+            json!({ "Key": "InstanceIds", "Values": ["i-b", "i-c"] }),
+            json!({ "Key": "tag:Environment", "Values": ["prod"] }),
+        ]);
+        assert_eq!(resolved, vec!["i-a", "i-b", "i-c"]);
+    }
+
+    #[test]
+    fn describe_windows_for_target_returns_only_intersecting_windows() {
+        let state = SsmState::default();
+        let win_a = make_window(&state, "win-a");
+        let win_b = make_window(&state, "win-b");
+
+        // win-a targets i-1, win-b targets i-2.
+        register_target_with_maintenance_window(
+            &state,
+            &json!({
+                "WindowId": win_a,
+                "Targets": [{ "Key": "InstanceIds", "Values": ["i-1"] }],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        register_target_with_maintenance_window(
+            &state,
+            &json!({
+                "WindowId": win_b,
+                "Targets": [{ "Key": "InstanceIds", "Values": ["i-2"] }],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let resp = describe_maintenance_windows_for_target(
+            &state,
+            &json!({
+                "Targets": [{ "Key": "InstanceIds", "Values": ["i-1"] }],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let identities = resp["WindowIdentities"].as_array().unwrap();
+        assert_eq!(identities.len(), 1);
+        assert_eq!(identities[0]["WindowId"], json!(win_a));
+    }
+
+    #[test]
+    fn describe_windows_for_target_returns_empty_for_unmatched_instance() {
+        let state = SsmState::default();
+        let win = make_window(&state, "win-x");
+        register_target_with_maintenance_window(
+            &state,
+            &json!({
+                "WindowId": win,
+                "Targets": [{ "Key": "InstanceIds", "Values": ["i-1"] }],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let resp = describe_maintenance_windows_for_target(
+            &state,
+            &json!({
+                "Targets": [{ "Key": "InstanceIds", "Values": ["i-unknown"] }],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(resp["WindowIdentities"].as_array().unwrap().is_empty());
+    }
 }
