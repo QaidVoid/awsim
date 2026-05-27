@@ -219,6 +219,12 @@ pub fn write_capacity_units(bytes: usize, transactional: bool) -> f64 {
 /// `ReturnConsumedCapacity` of `TOTAL` or `INDEXES`. Returns `None` for
 /// `NONE` (or absent), matching the AWS contract that the field is only
 /// present when explicitly requested.
+///
+/// `INDEXES` adds the AWS `Table` sub-object (base-table breakdown) plus
+/// empty `LocalSecondaryIndexes` / `GlobalSecondaryIndexes` maps. The
+/// simulator doesn't yet track per-index capacity separately, but the
+/// presence of the `Table` block is itself the documented signal that
+/// callers requested the detailed shape.
 pub fn build_consumed_capacity(
     input: &Value,
     table_name: &str,
@@ -238,6 +244,25 @@ pub fn build_consumed_capacity(
     }
     if write_units > 0.0 {
         cc.insert("WriteCapacityUnits".into(), Value::from(write_units));
+    }
+    if mode == "INDEXES" {
+        let mut table = serde_json::Map::new();
+        table.insert("CapacityUnits".into(), Value::from(total));
+        if read_units > 0.0 {
+            table.insert("ReadCapacityUnits".into(), Value::from(read_units));
+        }
+        if write_units > 0.0 {
+            table.insert("WriteCapacityUnits".into(), Value::from(write_units));
+        }
+        cc.insert("Table".into(), Value::Object(table));
+        cc.insert(
+            "LocalSecondaryIndexes".into(),
+            Value::Object(Default::default()),
+        );
+        cc.insert(
+            "GlobalSecondaryIndexes".into(),
+            Value::Object(Default::default()),
+        );
     }
     Some(Value::Object(cc))
 }
@@ -300,5 +325,52 @@ mod expr_attr_value_tests {
         });
         let err = validate_expr_attr_values(&input).unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+}
+
+#[cfg(test)]
+mod consumed_capacity_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn returns_none_when_unset() {
+        let cc = build_consumed_capacity(&json!({}), "t", 1.0, 0.0);
+        assert!(cc.is_none());
+    }
+
+    #[test]
+    fn total_mode_omits_table_and_index_subfields() {
+        let cc = build_consumed_capacity(
+            &json!({ "ReturnConsumedCapacity": "TOTAL" }),
+            "orders",
+            1.0,
+            0.5,
+        )
+        .unwrap();
+        assert_eq!(cc["TableName"], "orders");
+        assert_eq!(cc["CapacityUnits"], 1.5);
+        assert!(cc.get("Table").is_none());
+        assert!(cc.get("LocalSecondaryIndexes").is_none());
+        assert!(cc.get("GlobalSecondaryIndexes").is_none());
+    }
+
+    #[test]
+    fn indexes_mode_emits_table_block_and_index_maps() {
+        let cc = build_consumed_capacity(
+            &json!({ "ReturnConsumedCapacity": "INDEXES" }),
+            "orders",
+            1.0,
+            0.5,
+        )
+        .unwrap();
+        assert_eq!(cc["TableName"], "orders");
+        assert_eq!(cc["CapacityUnits"], 1.5);
+        let table = cc["Table"].as_object().unwrap();
+        assert_eq!(table["CapacityUnits"], 1.5);
+        assert_eq!(table["ReadCapacityUnits"], 1.0);
+        assert_eq!(table["WriteCapacityUnits"], 0.5);
+        assert!(cc["LocalSecondaryIndexes"].is_object());
+        assert!(cc["GlobalSecondaryIndexes"].is_object());
     }
 }
