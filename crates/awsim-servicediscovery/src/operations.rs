@@ -43,6 +43,52 @@ fn service_arn(ctx: &RequestContext, id: &str) -> String {
     )
 }
 
+/// Build the per-type `Properties` block AWS returns in
+/// `DescribeNamespace`. HTTP namespaces only carry `HttpProperties`;
+/// DNS namespaces carry `DnsProperties` with a generated
+/// `HostedZoneId` and a `SOA.TTL` (default 15s, overridable from
+/// caller-supplied `Properties.DnsProperties.SOA.TTL`).
+fn namespace_properties(
+    namespace_type: &str,
+    name: &str,
+    id: &str,
+    caller: Option<&Value>,
+) -> Value {
+    match namespace_type {
+        "HTTP" => json!({
+            "HttpProperties": {
+                "HttpName": caller
+                    .and_then(|v| v.get("HttpProperties"))
+                    .and_then(|h| h.get("HttpName"))
+                    .and_then(Value::as_str)
+                    .unwrap_or(name),
+            },
+        }),
+        "DNS_PUBLIC" | "DNS_PRIVATE" => {
+            let ttl = caller
+                .and_then(|v| v.get("DnsProperties"))
+                .and_then(|d| d.get("SOA"))
+                .and_then(|s| s.get("TTL"))
+                .and_then(Value::as_i64)
+                .unwrap_or(15);
+            // Generated hosted zone id mirrors how AWS surfaces a
+            // (private/public) zone for the namespace; we use the
+            // first 14 chars of the namespace uuid so the id is stable.
+            let hosted_zone_id = format!("Z{}", id.trim_start_matches('n').trim_start_matches('-'))
+                .chars()
+                .take(14)
+                .collect::<String>();
+            json!({
+                "DnsProperties": {
+                    "HostedZoneId": hosted_zone_id,
+                    "SOA": { "TTL": ttl },
+                },
+            })
+        }
+        _ => json!({}),
+    }
+}
+
 /// Stable string representation of the JSON request body used as the
 /// hash input for [`IdempotencyCache`] lookups. Two requests collide
 /// iff their canonical forms match exactly, so callers must normalize
@@ -168,6 +214,7 @@ fn create_namespace_inner(
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "Name")?.to_string();
     let id = new_id('n');
+    let properties = namespace_properties(namespace_type, &name, &id, input.get("Properties"));
     let n = Namespace {
         id: id.clone(),
         arn: namespace_arn(ctx, &id),
@@ -183,7 +230,7 @@ fn create_namespace_inner(
             .get("CreatorRequestId")
             .and_then(|v| v.as_str())
             .map(String::from),
-        properties: input.get("Properties").cloned(),
+        properties: Some(properties),
     };
     state.namespaces.insert(id.clone(), n);
     let mut targets = HashMap::new();
@@ -1631,6 +1678,79 @@ mod revision_tests {
             &ctx(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn http_namespace_has_http_properties() {
+        let state = ServiceDiscoveryState::default();
+        let op = create_http_namespace(&state, &json!({ "Name": "http-ns" }), &ctx()).unwrap();
+        let ns_id = state
+            .operations
+            .get(op["OperationId"].as_str().unwrap())
+            .unwrap()
+            .targets
+            .get("NAMESPACE")
+            .cloned()
+            .unwrap();
+        let ns = state.namespaces.get(&ns_id).unwrap();
+        let p = ns.properties.as_ref().unwrap();
+        assert_eq!(p["HttpProperties"]["HttpName"], "http-ns");
+        assert!(p.get("DnsProperties").is_none());
+    }
+
+    #[test]
+    fn private_dns_namespace_has_dns_properties_with_default_ttl() {
+        let state = ServiceDiscoveryState::default();
+        let op = create_private_dns_namespace(
+            &state,
+            &json!({ "Name": "priv", "Vpc": "vpc-0123abcd" }),
+            &ctx(),
+        )
+        .unwrap();
+        let ns_id = state
+            .operations
+            .get(op["OperationId"].as_str().unwrap())
+            .unwrap()
+            .targets
+            .get("NAMESPACE")
+            .cloned()
+            .unwrap();
+        let ns = state.namespaces.get(&ns_id).unwrap();
+        let p = ns.properties.as_ref().unwrap();
+        assert_eq!(p["DnsProperties"]["SOA"]["TTL"], 15);
+        assert!(
+            p["DnsProperties"]["HostedZoneId"]
+                .as_str()
+                .unwrap()
+                .starts_with('Z')
+        );
+    }
+
+    #[test]
+    fn public_dns_namespace_honors_caller_soa_ttl() {
+        let state = ServiceDiscoveryState::default();
+        let op = create_public_dns_namespace(
+            &state,
+            &json!({
+                "Name": "pub",
+                "Properties": { "DnsProperties": { "SOA": { "TTL": 300 } } },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let ns_id = state
+            .operations
+            .get(op["OperationId"].as_str().unwrap())
+            .unwrap()
+            .targets
+            .get("NAMESPACE")
+            .cloned()
+            .unwrap();
+        let ns = state.namespaces.get(&ns_id).unwrap();
+        assert_eq!(
+            ns.properties.as_ref().unwrap()["DnsProperties"]["SOA"]["TTL"],
+            300
+        );
     }
 
     #[test]
