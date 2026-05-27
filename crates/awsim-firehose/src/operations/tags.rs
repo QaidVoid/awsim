@@ -79,3 +79,122 @@ pub fn list_tags_for_delivery_stream(
         "HasMoreTags": false,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::DeliveryStream;
+    use std::collections::HashMap;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("firehose", "us-east-1")
+    }
+
+    fn state_with_stream(name: &str) -> FirehoseState {
+        let state = FirehoseState::default();
+        state.streams.insert(
+            name.into(),
+            DeliveryStream {
+                name: name.into(),
+                arn: format!("arn:aws:firehose:us-east-1:123456789012:deliverystream/{name}"),
+                status: "ACTIVE".into(),
+                stream_type: "DirectPut".into(),
+                version_id: "1".into(),
+                create_timestamp: 0,
+                last_update_timestamp: 0,
+                destinations: Vec::new(),
+                has_more_destinations: false,
+                tags: HashMap::new(),
+                encryption_enabled: false,
+                encryption_key_type: None,
+                encryption_key_arn: None,
+            },
+        );
+        state
+    }
+
+    #[test]
+    fn tag_rejects_aws_prefix() {
+        let state = state_with_stream("s1");
+        let err = tag_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "s1",
+                "Tags": [{ "Key": "aws:internal", "Value": "v" }],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(
+            err.code.contains("Validation") || err.code.contains("InvalidParameter"),
+            "expected validation, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn untag_rejects_aws_prefix() {
+        let state = state_with_stream("s1");
+        let err = untag_delivery_stream(
+            &state,
+            &json!({ "DeliveryStreamName": "s1", "TagKeys": ["aws:internal"] }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(
+            err.code.contains("Validation") || err.code.contains("InvalidParameter"),
+            "expected validation, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn tag_rejects_out_of_charset_value() {
+        let state = state_with_stream("s1");
+        let err = tag_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "s1",
+                "Tags": [{ "Key": "env", "Value": "\u{0007}beep" }],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert!(
+            err.code.contains("Validation") || err.code.contains("InvalidParameter"),
+            "expected validation, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn tag_persists_well_formed_tags_then_untag_removes_them() {
+        let state = state_with_stream("s1");
+        tag_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "s1",
+                "Tags": [
+                    { "Key": "env", "Value": "prod" },
+                    { "Key": "team", "Value": "data" },
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let listed =
+            list_tags_for_delivery_stream(&state, &json!({ "DeliveryStreamName": "s1" }), &ctx())
+                .unwrap();
+        assert_eq!(listed["Tags"].as_array().unwrap().len(), 2);
+
+        untag_delivery_stream(
+            &state,
+            &json!({ "DeliveryStreamName": "s1", "TagKeys": ["env"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let listed =
+            list_tags_for_delivery_stream(&state, &json!({ "DeliveryStreamName": "s1" }), &ctx())
+                .unwrap();
+        let tags = listed["Tags"].as_array().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0]["Key"], "team");
+    }
+}
