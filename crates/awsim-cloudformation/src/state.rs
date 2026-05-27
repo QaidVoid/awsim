@@ -73,6 +73,17 @@ pub struct Change {
     pub action: String,
     pub logical_resource_id: String,
     pub resource_type: String,
+    /// `True`, `False`, or `Conditional` — only set for `Modify`
+    /// actions. AWS computes this from per-resource-type property
+    /// metadata; AWSim uses a conservative heuristic (any non-tag
+    /// property change implies replacement) since the simulator
+    /// doesn't carry the per-resource property schema.
+    pub replacement: Option<String>,
+    /// Scope of the change: any combination of `Properties`,
+    /// `Metadata`, `Tags`, `CreationPolicy`, `UpdatePolicy`, and
+    /// `DeletionPolicy`. Empty for `Add` / `Remove` actions, since
+    /// AWS leaves Scope null in those cases.
+    pub scope: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
