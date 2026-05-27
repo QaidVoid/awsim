@@ -152,12 +152,44 @@ pub fn put_subscription_filter(
 
     require_log_group(state, log_group_name)?;
 
+    // AWS validates RoleArn shape upfront — must be an IAM role ARN.
+    // Persist for downstream delivery (which uses it to assume into
+    // the destination's account).
+    let role_arn = match input["roleArn"].as_str() {
+        Some(s) if !s.is_empty() => {
+            if !s.starts_with("arn:aws:iam::") || !s.contains(":role/") {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterException",
+                    format!("roleArn `{s}` must be an IAM role ARN."),
+                ));
+            }
+            Some(s.to_string())
+        }
+        _ => None,
+    };
+
+    // Distribution: AWS accepts Random (default) and ByLogStream.
+    // The latter is honoured by the delivery loop when sharding events
+    // across Kinesis stream shards.
+    let distribution = input["distribution"]
+        .as_str()
+        .unwrap_or("Random")
+        .to_string();
+    if !matches!(distribution.as_str(), "Random" | "ByLogStream") {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!("distribution `{distribution}` must be Random or ByLogStream."),
+        ));
+    }
+
     let filter = SubscriptionFilter {
         filter_name: filter_name.to_string(),
         log_group_name: log_group_name.to_string(),
         filter_pattern,
         destination_arn: destination_arn.to_string(),
         creation_time: now_millis(),
+        role_arn,
+        distribution,
     };
 
     info!(
@@ -193,13 +225,18 @@ pub fn describe_subscription_filters(
         .iter()
         .filter(|e| e.key().0 == log_group_name && e.filter_name.starts_with(filter_name_prefix))
         .map(|e| {
-            json!({
+            let mut obj = json!({
                 "filterName": e.filter_name,
                 "logGroupName": e.log_group_name,
                 "filterPattern": e.filter_pattern,
                 "destinationArn": e.destination_arn,
                 "creationTime": e.creation_time,
-            })
+                "distribution": e.distribution,
+            });
+            if let Some(ref r) = e.role_arn {
+                obj["roleArn"] = json!(r);
+            }
+            obj
         })
         .take(limit)
         .collect();
@@ -535,4 +572,124 @@ pub fn stop_query(
     }
 
     Ok(json!({ "success": true }))
+}
+
+#[cfg(test)]
+mod subscription_filter_tests {
+    use super::*;
+    use crate::SqliteStore;
+    use crate::operations::log_groups::create_log_group;
+    use std::sync::Arc;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("logs", "us-east-1")
+    }
+
+    fn fresh_state_with_group(name: &str) -> LogsState {
+        let dir = std::env::temp_dir().join(format!("awsim-logs-sub-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(SqliteStore::open(dir.join("logs.db")).unwrap());
+        let state = LogsState::default();
+        state.set_sqlite(store);
+        create_log_group(&state, &json!({ "logGroupName": name }), &ctx()).unwrap();
+        state
+    }
+
+    #[test]
+    fn defaults_distribution_to_random() {
+        let state = fresh_state_with_group("g");
+        put_subscription_filter(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "filterName": "f1",
+                "destinationArn": "arn:aws:lambda:us-east-1:000000000000:function:fn",
+                "filterPattern": ""
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp =
+            describe_subscription_filters(&state, &json!({ "logGroupName": "g" }), &ctx()).unwrap();
+        let first = &resp["subscriptionFilters"][0];
+        assert_eq!(first["distribution"], "Random");
+    }
+
+    #[test]
+    fn accepts_by_log_stream_distribution() {
+        let state = fresh_state_with_group("g");
+        put_subscription_filter(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "filterName": "f1",
+                "destinationArn": "arn:aws:lambda:us-east-1:000000000000:function:fn",
+                "distribution": "ByLogStream"
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp =
+            describe_subscription_filters(&state, &json!({ "logGroupName": "g" }), &ctx()).unwrap();
+        assert_eq!(
+            resp["subscriptionFilters"][0]["distribution"],
+            "ByLogStream"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_distribution() {
+        let state = fresh_state_with_group("g");
+        let err = put_subscription_filter(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "filterName": "f1",
+                "destinationArn": "arn:aws:lambda:us-east-1:000000000000:function:fn",
+                "distribution": "RoundRobin"
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn rejects_non_role_arn_role_arn() {
+        let state = fresh_state_with_group("g");
+        let err = put_subscription_filter(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "filterName": "f1",
+                "destinationArn": "arn:aws:lambda:us-east-1:000000000000:function:fn",
+                "roleArn": "arn:aws:iam::000000000000:user/alice"
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn accepts_well_formed_role_arn() {
+        let state = fresh_state_with_group("g");
+        put_subscription_filter(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "filterName": "f1",
+                "destinationArn": "arn:aws:lambda:us-east-1:000000000000:function:fn",
+                "roleArn": "arn:aws:iam::000000000000:role/cwlogs"
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp =
+            describe_subscription_filters(&state, &json!({ "logGroupName": "g" }), &ctx()).unwrap();
+        assert_eq!(
+            resp["subscriptionFilters"][0]["roleArn"],
+            "arn:aws:iam::000000000000:role/cwlogs"
+        );
+    }
 }

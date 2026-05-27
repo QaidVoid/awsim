@@ -94,6 +94,13 @@ pub struct SubscriptionFilter {
     pub filter_pattern: String,
     pub destination_arn: String,
     pub creation_time: u64,
+    /// IAM role CloudWatch Logs assumes when delivering to the
+    /// destination. AWS validates it as an IAM role ARN.
+    pub role_arn: Option<String>,
+    /// `Distribution`: AWS supports `Random` (default) and
+    /// `ByLogStream`. Persisted verbatim and surfaced on describe so
+    /// the delivery layer can fan out by stream key when configured.
+    pub distribution: String,
 }
 
 /// A metric filter on a log group.
@@ -214,12 +221,14 @@ pub struct LogsRegionSnapshot {
 impl Serialize for SubscriptionFilter {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut s = ser.serialize_struct("SubscriptionFilter", 5)?;
+        let mut s = ser.serialize_struct("SubscriptionFilter", 7)?;
         s.serialize_field("filter_name", &self.filter_name)?;
         s.serialize_field("log_group_name", &self.log_group_name)?;
         s.serialize_field("filter_pattern", &self.filter_pattern)?;
         s.serialize_field("destination_arn", &self.destination_arn)?;
         s.serialize_field("creation_time", &self.creation_time)?;
+        s.serialize_field("role_arn", &self.role_arn)?;
+        s.serialize_field("distribution", &self.distribution)?;
         s.end()
     }
 }
@@ -233,6 +242,10 @@ impl<'de> Deserialize<'de> for SubscriptionFilter {
             filter_pattern: String,
             destination_arn: String,
             creation_time: u64,
+            #[serde(default)]
+            role_arn: Option<String>,
+            #[serde(default = "default_subscription_distribution")]
+            distribution: String,
         }
         let w = Wire::deserialize(de)?;
         Ok(SubscriptionFilter {
@@ -241,8 +254,14 @@ impl<'de> Deserialize<'de> for SubscriptionFilter {
             filter_pattern: w.filter_pattern,
             destination_arn: w.destination_arn,
             creation_time: w.creation_time,
+            role_arn: w.role_arn,
+            distribution: w.distribution,
         })
     }
+}
+
+fn default_subscription_distribution() -> String {
+    "Random".to_string()
 }
 
 impl Serialize for MetricFilter {
