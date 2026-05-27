@@ -30,6 +30,16 @@ pub struct ResourceDef {
     pub properties: Value,
     pub depends_on: Vec<String>,
     pub condition: Option<String>,
+    /// AWS lifecycle attributes parsed verbatim and surfaced
+    /// downstream. `DeletionPolicy` drives DeleteStack behavior
+    /// (`Retain` skips the resource so it survives the stack);
+    /// `CreationPolicy` and `UpdatePolicy` are stored for future
+    /// rolling-update support but not yet enforced in the simulator.
+    pub deletion_policy: Option<String>,
+    #[allow(dead_code)]
+    pub creation_policy: Option<Value>,
+    #[allow(dead_code)]
+    pub update_policy: Option<Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -229,12 +239,39 @@ pub fn validate_and_parse(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        let deletion_policy = resource
+            .get("DeletionPolicy")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let creation_policy = resource
+            .get("CreationPolicy")
+            .filter(|v| !v.is_null())
+            .cloned();
+        let update_policy = resource
+            .get("UpdatePolicy")
+            .filter(|v| !v.is_null())
+            .cloned();
+
+        if let Some(ref dp) = deletion_policy
+            && !matches!(
+                dp.as_str(),
+                "Delete" | "Retain" | "Snapshot" | "RetainExceptOnCreate"
+            )
+        {
+            return Err(invalid_template(format!(
+                "Resource '{logical_id}' DeletionPolicy `{dp}` is not Delete, Retain, Snapshot, or RetainExceptOnCreate."
+            )));
+        }
+
         resource_defs.push(ResourceDef {
             logical_id: logical_id.clone(),
             resource_type,
             properties,
             depends_on,
             condition,
+            deletion_policy,
+            creation_policy,
+            update_policy,
         });
     }
 

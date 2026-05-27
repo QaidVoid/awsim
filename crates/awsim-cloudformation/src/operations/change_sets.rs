@@ -313,6 +313,7 @@ pub fn execute_change_set(
                 resource_status: "CREATE_COMPLETE".to_string(),
                 resource_status_reason: None,
                 timestamp: now.clone(),
+                deletion_policy: r.deletion_policy.clone(),
             }
         })
         .collect();
@@ -514,6 +515,7 @@ mod change_set_diff_tests {
                     resource_status: "CREATE_COMPLETE".into(),
                     resource_status_reason: None,
                     timestamp: now_iso8601(),
+                    deletion_policy: None,
                 }],
                 events: Vec::new(),
                 change_sets: HashMap::new(),
@@ -586,6 +588,7 @@ mod change_set_diff_tests {
                     resource_status: "CREATE_COMPLETE".into(),
                     resource_status_reason: None,
                     timestamp: now_iso8601(),
+                    deletion_policy: None,
                 }],
                 events: Vec::new(),
                 change_sets: HashMap::new(),
@@ -649,6 +652,7 @@ mod change_set_diff_tests {
                         resource_status: "CREATE_COMPLETE".into(),
                         resource_status_reason: None,
                         timestamp: now_iso8601(),
+                        deletion_policy: None,
                     },
                     StackResource {
                         logical_resource_id: "B".into(),
@@ -657,6 +661,7 @@ mod change_set_diff_tests {
                         resource_status: "CREATE_COMPLETE".into(),
                         resource_status_reason: None,
                         timestamp: now_iso8601(),
+                        deletion_policy: None,
                     },
                 ],
                 events: Vec::new(),

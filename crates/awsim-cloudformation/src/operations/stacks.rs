@@ -97,6 +97,9 @@ fn resource_to_value(r: &StackResource, stack: &Stack) -> Value {
     if let Some(reason) = &r.resource_status_reason {
         obj["ResourceStatusReason"] = Value::String(reason.clone());
     }
+    if let Some(dp) = &r.deletion_policy {
+        obj["DeletionPolicy"] = Value::String(dp.clone());
+    }
     obj
 }
 
@@ -182,6 +185,7 @@ fn build_resources(parsed: &template::ParsedTemplate, now: &str) -> Vec<StackRes
                 resource_status: "CREATE_COMPLETE".to_string(),
                 resource_status_reason: None,
                 timestamp: now.to_string(),
+                deletion_policy: r.deletion_policy.clone(),
             }
         })
         .collect()
@@ -410,9 +414,16 @@ pub fn delete_stack(
     }
 
     if let Some((_, mut stack)) = state.stacks.remove(stack_name) {
-        // Emit one DeleteResource event per resource before marking deleted.
+        // Resources tagged `DeletionPolicy=Retain` survive the
+        // DeleteStack: AWS keeps the underlying resource around and
+        // surfaces it on the stack record with `DELETE_SKIPPED`
+        // status. The DeleteResource event is suppressed so
+        // downstream service crates don't tear them down either.
         if let Some(ref bus) = ctx.event_bus {
             for resource in &stack.resources {
+                if resource.deletion_policy.as_deref() == Some("Retain") {
+                    continue;
+                }
                 bus.publish(InternalEvent {
                     source: "cloudformation".to_string(),
                     event_type: "cloudformation:DeleteResource".to_string(),
@@ -428,9 +439,21 @@ pub fn delete_stack(
             }
         }
 
+        let now = now_iso8601();
+        for resource in &mut stack.resources {
+            if resource.deletion_policy.as_deref() == Some("Retain") {
+                resource.resource_status = "DELETE_SKIPPED".to_string();
+                resource.resource_status_reason =
+                    Some("Resource retained due to DeletionPolicy.".to_string());
+            } else {
+                resource.resource_status = "DELETE_COMPLETE".to_string();
+            }
+            resource.timestamp = now.clone();
+        }
+
         // Mark as DELETE_COMPLETE (keep entry with status for ListStacks)
         stack.status = "DELETE_COMPLETE".to_string();
-        stack.updated_at = Some(now_iso8601());
+        stack.updated_at = Some(now);
         state.stacks.insert(stack_name.to_string(), stack);
     }
     // DeleteStack is idempotent — no error if not found
@@ -1046,5 +1069,67 @@ mod capabilities_tests {
         let merged = effective_resource_tags(&stack_tags, &properties);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0]["Key"], "good");
+    }
+
+    #[test]
+    fn delete_stack_retains_resources_with_retain_policy() {
+        let state = CloudFormationState::default();
+        let template = r#"{
+          "Resources": {
+            "Keep": {
+              "Type": "AWS::S3::Bucket",
+              "DeletionPolicy": "Retain"
+            },
+            "Drop": {
+              "Type": "AWS::S3::Bucket"
+            }
+          }
+        }"#;
+        create_stack(
+            &state,
+            &json!({"StackName": "s", "TemplateBody": template}),
+            &ctx(),
+        )
+        .unwrap();
+        delete_stack(&state, &json!({"StackName": "s"}), &ctx()).unwrap();
+
+        let described = describe_stacks(&state, &json!({"StackName": "s"})).unwrap();
+        let stack = &described["Stacks"]["member"][0];
+        assert_eq!(stack["StackStatus"], "DELETE_COMPLETE");
+
+        let resources = list_stack_resources(&state, &json!({"StackName": "s"})).unwrap();
+        let summaries = resources["StackResourceSummaries"]["member"]
+            .as_array()
+            .unwrap();
+        let keep = summaries
+            .iter()
+            .find(|r| r["LogicalResourceId"] == "Keep")
+            .expect("retained resource visible");
+        assert_eq!(keep["ResourceStatus"], "DELETE_SKIPPED");
+        let drop = summaries
+            .iter()
+            .find(|r| r["LogicalResourceId"] == "Drop")
+            .expect("non-retained resource visible");
+        assert_eq!(drop["ResourceStatus"], "DELETE_COMPLETE");
+    }
+
+    #[test]
+    fn template_with_invalid_deletion_policy_is_rejected() {
+        let state = CloudFormationState::default();
+        let template = r#"{
+          "Resources": {
+            "X": {
+              "Type": "AWS::S3::Bucket",
+              "DeletionPolicy": "Forever"
+            }
+          }
+        }"#;
+        let err = create_stack(
+            &state,
+            &json!({"StackName": "bad", "TemplateBody": template}),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
     }
 }

@@ -39,6 +39,11 @@ pub struct StackResource {
     pub resource_status: String,
     pub resource_status_reason: Option<String>,
     pub timestamp: String,
+    /// `Delete` (default), `Retain`, `Snapshot`, or
+    /// `RetainExceptOnCreate`. Drives DeleteStack behavior; AWS keeps
+    /// retained resources around as the stack moves to DELETE_COMPLETE
+    /// and surfaces them with `DELETE_SKIPPED` status.
+    pub deletion_policy: Option<String>,
 }
 
 #[derive(Debug, Clone)]
