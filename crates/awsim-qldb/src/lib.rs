@@ -46,6 +46,12 @@ fn default_encryption_status() -> String {
     "ENABLED".to_string()
 }
 
+/// AWS QLDB default quota: 5 ledgers per account per region. Above
+/// this, `CreateLedger` returns `LimitExceededException`. The
+/// emulator hardcodes the AWS default; an account-level config
+/// surface can override this later if needed.
+const LEDGER_QUOTA_PER_REGION: usize = 5;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QldbSnapshot {
     pub ledgers: Vec<Ledger>,
@@ -226,6 +232,14 @@ impl ServiceHandler for QldbService {
                     return Err(AwsError::conflict(
                         "ResourceAlreadyExistsException",
                         format!("Ledger {name} already exists"),
+                    ));
+                }
+                if state.ledgers.len() >= LEDGER_QUOTA_PER_REGION {
+                    return Err(AwsError::bad_request(
+                        "LimitExceededException",
+                        format!(
+                            "Account already has {LEDGER_QUOTA_PER_REGION} ledgers in this region.",
+                        ),
                     ));
                 }
                 let tags: HashMap<String, String> = input
@@ -469,6 +483,35 @@ mod tests {
         ))
         .unwrap();
         block_on(svc.handle("DeleteLedger", json!({ "name": "audit" }), &ctx)).unwrap();
+    }
+
+    #[test]
+    fn create_ledger_enforces_per_region_quota() {
+        let svc = QldbService::new();
+        let ctx = RequestContext::new("qldb", "us-east-1");
+        for i in 0..LEDGER_QUOTA_PER_REGION {
+            block_on(svc.handle(
+                "CreateLedger",
+                json!({
+                    "Name": format!("led-{i}"),
+                    "PermissionsMode": "STANDARD",
+                    "DeletionProtection": false,
+                }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+        let err = block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "led-extra",
+                "PermissionsMode": "STANDARD",
+                "DeletionProtection": false,
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "LimitExceededException");
     }
 
     #[test]
