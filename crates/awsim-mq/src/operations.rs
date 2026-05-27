@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use awsim_core::idempotency::{Lookup, hash_request, validate_token};
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -427,17 +428,34 @@ pub fn describe_broker(
     Ok(broker_describe(&b, users))
 }
 
+/// AWS MQ default page size for `ListBrokers` is 100, max 100.
+const LIST_BROKERS_DEFAULT_MAX: usize = 100;
+/// AWS MQ default page size for `ListConfigurations` and `ListUsers`
+/// (both share the 100/100 envelope).
+const LIST_CONFIGS_DEFAULT_MAX: usize = 100;
+const LIST_USERS_DEFAULT_MAX: usize = 100;
+
 pub fn list_brokers(
     state: &MqState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let items: Vec<Value> = state
-        .brokers
-        .iter()
-        .map(|e| broker_summary(e.value()))
-        .collect();
-    Ok(json!({ "BrokerSummaries": items }))
+    let max = cap_max_results(
+        input.get("MaxResults").and_then(|v| v.as_i64()),
+        LIST_BROKERS_DEFAULT_MAX,
+        LIST_BROKERS_DEFAULT_MAX,
+    );
+    let next_token = input.get("NextToken").and_then(|v| v.as_str());
+
+    let mut brokers: Vec<Broker> = state.brokers.iter().map(|e| e.value().clone()).collect();
+    brokers.sort_by(|a, b| a.broker_id.cmp(&b.broker_id));
+    let page = paginate(brokers, max, next_token, |b| b.broker_id.clone())?;
+    let summaries: Vec<Value> = page.items.iter().map(broker_summary).collect();
+    let mut resp = json!({ "BrokerSummaries": summaries });
+    if let Some(t) = page.next_token {
+        resp["NextToken"] = json!(t);
+    }
+    Ok(resp)
 }
 
 pub fn delete_broker(
@@ -635,13 +653,26 @@ pub fn list_users(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let broker_id = require_str(input, "BrokerId")?;
-    let items: Vec<Value> = state
+    let max = cap_max_results(
+        input.get("MaxResults").and_then(|v| v.as_i64()),
+        LIST_USERS_DEFAULT_MAX,
+        LIST_USERS_DEFAULT_MAX,
+    );
+    let next_token = input.get("NextToken").and_then(|v| v.as_str());
+    let mut users: Vec<BrokerUser> = state
         .users
         .iter()
         .filter(|e| e.value().broker_id == broker_id)
-        .map(|e| user_summary(e.value()))
+        .map(|e| e.value().clone())
         .collect();
-    Ok(json!({ "BrokerId": broker_id, "Users": items }))
+    users.sort_by(|a, b| a.username.cmp(&b.username));
+    let page = paginate(users, max, next_token, |u| u.username.clone())?;
+    let summaries: Vec<Value> = page.items.iter().map(user_summary).collect();
+    let mut resp = json!({ "BrokerId": broker_id, "Users": summaries });
+    if let Some(t) = page.next_token {
+        resp["NextToken"] = json!(t);
+    }
+    Ok(resp)
 }
 
 pub fn delete_user(
@@ -931,14 +962,28 @@ pub fn describe_configuration(
 
 pub fn list_configurations(
     state: &MqState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let items: Vec<Value> = state
+    let max = cap_max_results(
+        input.get("MaxResults").and_then(|v| v.as_i64()),
+        LIST_CONFIGS_DEFAULT_MAX,
+        LIST_CONFIGS_DEFAULT_MAX,
+    );
+    let next_token = input.get("NextToken").and_then(|v| v.as_str());
+    let mut configurations: Vec<Configuration> = state
         .configurations
         .iter()
-        .map(|e| {
-            let c = e.value();
+        .map(|e| e.value().clone())
+        .collect();
+    configurations.sort_by(|a, b| a.configuration_id.cmp(&b.configuration_id));
+    let page = paginate(configurations, max, next_token, |c| {
+        c.configuration_id.clone()
+    })?;
+    let items: Vec<Value> = page
+        .items
+        .iter()
+        .map(|c| {
             json!({
                 "Id": c.configuration_id,
                 "Arn": c.configuration_arn,
@@ -949,5 +994,9 @@ pub fn list_configurations(
             })
         })
         .collect();
-    Ok(json!({ "Configurations": items }))
+    let mut resp = json!({ "Configurations": items });
+    if let Some(t) = page.next_token {
+        resp["NextToken"] = json!(t);
+    }
+    Ok(resp)
 }

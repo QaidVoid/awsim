@@ -739,6 +739,79 @@ mod tests {
     }
 
     #[test]
+    fn list_brokers_paginates_with_next_token() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        // Seed enough brokers to overflow a small MaxResults window.
+        for i in 0..5 {
+            block_on(svc.handle(
+                "CreateBroker",
+                json!({
+                    "BrokerName": format!("pg-{i}"),
+                    "EngineType": "RABBITMQ",
+                    "EngineVersion": "3.13",
+                    "HostInstanceType": "mq.t3.micro",
+                }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+
+        let page1 = block_on(svc.handle("ListBrokers", json!({ "MaxResults": 2 }), &ctx)).unwrap();
+        assert_eq!(
+            page1["BrokerSummaries"].as_array().unwrap().len(),
+            2,
+            "first page must respect MaxResults"
+        );
+        let token = page1["NextToken"]
+            .as_str()
+            .expect("first page must hand back a NextToken when more remain");
+
+        let page2 = block_on(svc.handle(
+            "ListBrokers",
+            json!({ "MaxResults": 2, "NextToken": token }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(page2["BrokerSummaries"].as_array().unwrap().len(), 2);
+        let token2 = page2["NextToken"]
+            .as_str()
+            .expect("second page must still hand back a NextToken");
+
+        let page3 = block_on(svc.handle(
+            "ListBrokers",
+            json!({ "MaxResults": 2, "NextToken": token2 }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(page3["BrokerSummaries"].as_array().unwrap().len(), 1);
+        // No more pages -> NextToken absent.
+        assert!(page3.get("NextToken").is_none());
+    }
+
+    #[test]
+    fn list_configurations_paginates_with_next_token() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        for i in 0..3 {
+            block_on(svc.handle(
+                "CreateConfiguration",
+                json!({
+                    "Name": format!("cfg-{i}"),
+                    "EngineType": "RABBITMQ",
+                    "EngineVersion": "3.13",
+                }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+        let page1 =
+            block_on(svc.handle("ListConfigurations", json!({ "MaxResults": 1 }), &ctx)).unwrap();
+        assert_eq!(page1["Configurations"].as_array().unwrap().len(), 1);
+        assert!(page1["NextToken"].as_str().is_some());
+    }
+
+    #[test]
     fn snapshot_round_trips_pending_broker_changes() {
         // Seed a broker, stage UpdateBroker, snapshot, restore into a
         // fresh service, and assert the pending mirror survived.
