@@ -55,6 +55,12 @@ pub fn untag_delivery_stream(
     Ok(json!({}))
 }
 
+/// AWS Firehose caps `ListTagsForDeliveryStream` results at 50 per
+/// page. Callers paginate via `ExclusiveStartTagKey` (the last tag
+/// key returned in the previous page) and watch `HasMoreTags` to
+/// know when to stop.
+const LIST_TAGS_MAX_PAGE: usize = 50;
+
 pub fn list_tags_for_delivery_stream(
     state: &FirehoseState,
     input: &Value,
@@ -63,20 +69,44 @@ pub fn list_tags_for_delivery_stream(
     let name = input["DeliveryStreamName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
+    let limit = match input.get("Limit").and_then(Value::as_i64) {
+        Some(n) if !(1..=LIST_TAGS_MAX_PAGE as i64).contains(&n) => {
+            return Err(AwsError::bad_request(
+                "InvalidArgumentException",
+                format!("Limit `{n}` must be in 1..={LIST_TAGS_MAX_PAGE}."),
+            ));
+        }
+        Some(n) => n as usize,
+        None => LIST_TAGS_MAX_PAGE,
+    };
+    let start_after = input
+        .get("ExclusiveStartTagKey")
+        .and_then(Value::as_str)
+        .map(String::from);
+
     let s = state.streams.get(name).ok_or_else(|| {
         AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {name} not found"),
         )
     })?;
-    let tags: Vec<Value> = s
-        .tags
+    // Stable ordering by tag key so pagination cursor advances
+    // deterministically across calls.
+    let mut keys: Vec<&String> = s.tags.keys().collect();
+    keys.sort();
+    let starting_idx = match start_after {
+        Some(k) => keys.iter().position(|tk| **tk > k).unwrap_or(keys.len()),
+        None => 0,
+    };
+    let end_idx = (starting_idx + limit).min(keys.len());
+    let page = &keys[starting_idx..end_idx];
+    let tags: Vec<Value> = page
         .iter()
-        .map(|(k, v)| json!({ "Key": k, "Value": v }))
+        .map(|k| json!({ "Key": k, "Value": s.tags.get(*k).cloned().unwrap_or_default() }))
         .collect();
     Ok(json!({
         "Tags": tags,
-        "HasMoreTags": false,
+        "HasMoreTags": end_idx < keys.len(),
     }))
 }
 
@@ -162,6 +192,95 @@ mod tests {
             err.code.contains("Validation") || err.code.contains("InvalidParameter"),
             "expected validation, got {err:?}",
         );
+    }
+
+    #[test]
+    fn list_tags_paginates_with_limit_and_has_more_tags() {
+        let state = state_with_stream("s1");
+        let pairs: Vec<(String, String)> = (0..7)
+            .map(|i| (format!("k{i:02}"), format!("v{i}")))
+            .collect();
+        tag_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "s1",
+                "Tags": pairs.iter().map(|(k, v)| json!({ "Key": k, "Value": v })).collect::<Vec<_>>(),
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let page1 = list_tags_for_delivery_stream(
+            &state,
+            &json!({ "DeliveryStreamName": "s1", "Limit": 3 }),
+            &ctx(),
+        )
+        .unwrap();
+        let p1_tags: Vec<&str> = page1["Tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["Key"].as_str().unwrap())
+            .collect();
+        assert_eq!(p1_tags, &["k00", "k01", "k02"]);
+        assert_eq!(page1["HasMoreTags"], true);
+
+        let page2 = list_tags_for_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "s1",
+                "Limit": 3,
+                "ExclusiveStartTagKey": "k02",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let p2_tags: Vec<&str> = page2["Tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["Key"].as_str().unwrap())
+            .collect();
+        assert_eq!(p2_tags, &["k03", "k04", "k05"]);
+        assert_eq!(page2["HasMoreTags"], true);
+
+        let page3 = list_tags_for_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "s1",
+                "Limit": 3,
+                "ExclusiveStartTagKey": "k05",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let p3_tags: Vec<&str> = page3["Tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["Key"].as_str().unwrap())
+            .collect();
+        assert_eq!(p3_tags, &["k06"]);
+        assert_eq!(page3["HasMoreTags"], false);
+    }
+
+    #[test]
+    fn list_tags_rejects_out_of_range_limit() {
+        let state = state_with_stream("s1");
+        let err = list_tags_for_delivery_stream(
+            &state,
+            &json!({ "DeliveryStreamName": "s1", "Limit": 0 }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+        let err = list_tags_for_delivery_stream(
+            &state,
+            &json!({ "DeliveryStreamName": "s1", "Limit": 51 }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
     }
 
     #[test]
