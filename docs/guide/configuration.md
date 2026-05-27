@@ -11,6 +11,7 @@ AWSim is configured through CLI flags and environment variables. All flags have 
 | `--port` | `-p` | `4566` | `AWSIM_PORT` | Port to listen on |
 | `--region` | `-r` | `us-east-1` | `AWSIM_REGION` | Default AWS region |
 | `--account-id` | | `000000000000` | `AWSIM_ACCOUNT_ID` | Simulated AWS account ID |
+| `--partition` | | `aws` | `AWSIM_PARTITION` | AWS partition reflected in every emitted ARN. Use `aws-cn`, `aws-us-gov`, `aws-iso`, or `aws-iso-b` for non-commercial regions. |
 | `--data-dir` | | _(none)_ | `AWSIM_DATA_DIR` | Directory for persistence + per-service SQLite stores |
 | `--log-level` | `-v` | `info` | `AWSIM_LOG_LEVEL` | Log verbosity |
 | _(env only)_ | | `false` | `AWSIM_IAM_ENFORCE` | Enable IAM policy evaluation (see [IAM Enforcement](/guide/iam-enforcement)) |
@@ -59,7 +60,16 @@ When `--https-port` is set, AWSim serves the same router on a TLS listener while
 
 # Via environment variables
 AWSIM_PORT=4000 AWSIM_REGION=eu-west-1 AWSIM_DATA_DIR=/data ./awsim
+
+# Non-commercial partition (GovCloud)
+AWSIM_PARTITION=aws-us-gov AWSIM_REGION=us-gov-west-1 ./awsim
 ```
+
+The partition is woven through every ARN AWSim emits, so SDKs that hard-code
+`aws-cn` / `aws-us-gov` partition prefixes (boto3 endpoint resolvers, AWS CLI
+profiles targeting the partition's endpoint) see a consistent set of ARNs
+across services. Set `AWSIM_PARTITION` together with a matching `AWSIM_REGION`
+(e.g. `aws-cn` with `cn-north-1`) so resource ARNs and signing scopes agree.
 
 ## Log Levels
 
