@@ -489,6 +489,9 @@ mod tests {
             api_key_required: false,
             request_parameters: HashMap::new(),
             integration: None,
+            request_models: HashMap::new(),
+            response_models: HashMap::new(),
+            request_validator_id: String::new(),
         }
     }
 

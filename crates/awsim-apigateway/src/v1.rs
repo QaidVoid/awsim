@@ -73,6 +73,16 @@ pub struct Method {
     pub api_key_required: bool,
     pub request_parameters: HashMap<String, bool>,
     pub integration: Option<Integration>,
+    /// Request payload model names keyed by content type. AWS resolves
+    /// the request's Content-Type against this map (with `*/*` as a
+    /// wildcard fallback) to pick the JSON Schema model.
+    pub request_models: HashMap<String, String>,
+    /// Per-status, per-content-type response model names. Keyed
+    /// `"<statusCode>/<contentType>"` to keep storage flat.
+    pub response_models: HashMap<String, String>,
+    /// `requestValidatorId` referencing a Validator registered on the
+    /// API. Empty when no validator is attached.
+    pub request_validator_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -632,14 +642,55 @@ fn method_to_json(m: &Method) -> Value {
         .as_ref()
         .map(integration_to_json)
         .unwrap_or(Value::Null);
-    json!({
+    let mut obj = json!({
         "httpMethod": m.http_method,
         "authorizationType": m.authorization_type,
         "authorizerId": m.authorizer_id,
         "apiKeyRequired": m.api_key_required,
         "requestParameters": m.request_parameters,
+        "requestModels": m.request_models,
         "methodIntegration": integration,
-    })
+    });
+    if !m.request_validator_id.is_empty() {
+        obj["requestValidatorId"] = json!(m.request_validator_id);
+    }
+    if !m.response_models.is_empty() {
+        // Re-shape flat "<status>/<content-type>" keys into the AWS
+        // nested form `methodResponses.<status>.responseModels.<ct>`
+        // for legibility on GetMethod output.
+        let mut grouped: HashMap<String, HashMap<String, String>> = HashMap::new();
+        for (key, model) in &m.response_models {
+            if let Some((status, ct)) = key.split_once('/') {
+                grouped
+                    .entry(status.to_string())
+                    .or_default()
+                    .insert(ct.to_string(), model.clone());
+            }
+        }
+        let nested: serde_json::Map<String, Value> = grouped
+            .into_iter()
+            .map(|(s, models)| (s, json!({ "responseModels": models })))
+            .collect();
+        obj["methodResponses"] = Value::Object(nested);
+    }
+    obj
+}
+
+/// Resolve a request payload model name from a method's `requestModels`
+/// using the caller's Content-Type. AWS picks the first exact-match
+/// entry, then falls back to `*/*` if no specific binding exists.
+pub fn lookup_request_model<'a>(method: &'a Method, content_type: Option<&str>) -> Option<&'a str> {
+    let ct = content_type
+        .unwrap_or("application/json")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim();
+    method
+        .request_models
+        .get(ct)
+        .or_else(|| method.request_models.get("*/*"))
+        .map(String::as_str)
 }
 
 fn integration_to_json(i: &Integration) -> Value {
@@ -1108,6 +1159,18 @@ fn put_method(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsErro
                 .collect()
         })
         .unwrap_or_default();
+    let request_models: HashMap<String, String> = input["requestModels"]
+        .as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let request_validator_id = input["requestValidatorId"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
 
     with_api_mut(state, &api_id, |api| {
         let resource = api.resources.get_mut(&resource_id).ok_or_else(|| {
@@ -1123,6 +1186,9 @@ fn put_method(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsErro
             api_key_required,
             request_parameters,
             integration: None,
+            request_models,
+            response_models: HashMap::new(),
+            request_validator_id,
         };
         let json = method_to_json(&method);
         resource.methods.insert(http_method, method);
@@ -2311,6 +2377,57 @@ mod tests {
             deployments: vec![],
             authorizers: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn lookup_request_model_exact_then_wildcard() {
+        let mut m = Method {
+            http_method: "POST".into(),
+            authorization_type: "NONE".into(),
+            authorizer_id: String::new(),
+            api_key_required: false,
+            request_parameters: HashMap::new(),
+            integration: None,
+            request_models: HashMap::new(),
+            response_models: HashMap::new(),
+            request_validator_id: String::new(),
+        };
+        m.request_models
+            .insert("application/json".into(), "Item".into());
+        m.request_models.insert("*/*".into(), "Generic".into());
+
+        assert_eq!(
+            lookup_request_model(&m, Some("application/json")),
+            Some("Item")
+        );
+        assert_eq!(
+            lookup_request_model(&m, Some("application/json; charset=utf-8")),
+            Some("Item")
+        );
+        assert_eq!(lookup_request_model(&m, Some("text/xml")), Some("Generic"));
+        assert_eq!(lookup_request_model(&m, None), Some("Item"));
+    }
+
+    #[tokio::test]
+    async fn put_method_persists_request_models_and_validator() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        let resp = svc
+            .handle(
+                "PutMethod",
+                json!({
+                    "restapi_id": api_id.clone(),
+                    "resource_id": root_id,
+                    "http_method": "POST",
+                    "requestModels": { "application/json": "Item" },
+                    "requestValidatorId": "v1"
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp["requestModels"]["application/json"], "Item");
+        assert_eq!(resp["requestValidatorId"], "v1");
     }
 
     #[test]
