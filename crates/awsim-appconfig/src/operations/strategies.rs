@@ -108,7 +108,7 @@ pub fn list_strategies(
 }
 
 /// AWS-predefined strategies all share the `AppConfig.` id prefix and
-/// are read-only — `Update` and `Delete` against them return
+/// are read-only: `Update` and `Delete` against them return
 /// `BadRequestException`. We use the prefix check rather than a
 /// hardcoded set so seeding can add new ones without re-touching the
 /// immutability gate.
