@@ -59,6 +59,14 @@ pub struct LogGroup {
     pub streams: DashMap<String, LogStream>,
     /// `STANDARD` or `INFREQUENT_ACCESS`; surfaced in DescribeLogGroups.
     pub log_group_class: String,
+    /// AWS exposes this via PutDataProtectionPolicy / PutLogGroupClass.
+    /// When `ENABLED`, DeleteLogGroup must refuse until a separate
+    /// PutDataProtectionPolicy turns it back off.
+    pub deletion_protection: String,
+    /// KMS key used to encrypt log events at rest. Validated when the
+    /// group is created (`arn:aws:kms:` prefix) and surfaced by
+    /// DescribeLogGroups for downstream tooling.
+    pub kms_key_id: Option<String>,
 }
 
 impl LogGroup {
@@ -72,6 +80,8 @@ impl LogGroup {
             tags,
             streams: DashMap::new(),
             log_group_class: "STANDARD".to_string(),
+            deletion_protection: "DISABLED".to_string(),
+            kms_key_id: None,
         }
     }
 }
@@ -172,10 +182,18 @@ pub struct LogGroupSnapshot {
     pub streams: Vec<LogStreamSnapshot>,
     #[serde(default = "default_log_group_class")]
     pub log_group_class: String,
+    #[serde(default = "default_deletion_protection")]
+    pub deletion_protection: String,
+    #[serde(default)]
+    pub kms_key_id: Option<String>,
 }
 
 fn default_log_group_class() -> String {
     "STANDARD".to_string()
+}
+
+fn default_deletion_protection() -> String {
+    "DISABLED".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -351,6 +369,8 @@ impl Snapshottable for LogsState {
                     tags: g.tags.clone(),
                     streams,
                     log_group_class: g.log_group_class.clone(),
+                    deletion_protection: g.deletion_protection.clone(),
+                    kms_key_id: g.kms_key_id.clone(),
                 }
             })
             .collect();
@@ -399,6 +419,8 @@ impl Snapshottable for LogsState {
                 tags: gs.tags,
                 streams: DashMap::new(),
                 log_group_class: gs.log_group_class,
+                deletion_protection: gs.deletion_protection,
+                kms_key_id: gs.kms_key_id,
             };
             for ss in gs.streams {
                 let stream = LogStream {

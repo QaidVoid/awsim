@@ -48,8 +48,41 @@ pub fn create_log_group(
         ));
     }
 
+    // kmsKeyId is optional. AWS validates the ARN prefix and rejects
+    // anything that isn't a KMS key reference up front.
+    let kms_key_id = match input["kmsKeyId"].as_str() {
+        Some(s) if !s.is_empty() => {
+            if !s.starts_with("arn:aws:kms:") {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterException",
+                    format!("kmsKeyId `{s}` must be a KMS key ARN."),
+                ));
+            }
+            Some(s.to_string())
+        }
+        _ => None,
+    };
+
+    // logGroupClass-style deletion-protection toggle: AWS lets callers
+    // set this at create time (and via PutDataProtectionPolicy) to
+    // refuse subsequent DeleteLogGroup calls.
+    let deletion_protection = input["logGroupDeletionProtection"]
+        .as_str()
+        .unwrap_or("DISABLED")
+        .to_string();
+    if !matches!(deletion_protection.as_str(), "DISABLED" | "ENABLED") {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!(
+                "logGroupDeletionProtection `{deletion_protection}` must be ENABLED or DISABLED."
+            ),
+        ));
+    }
+
     let mut group = LogGroup::new(name.to_string(), arn.clone(), tags);
     group.log_group_class = log_group_class.to_string();
+    group.kms_key_id = kms_key_id;
+    group.deletion_protection = deletion_protection;
     info!(log_group = %name, class = %log_group_class, "Created log group");
     state.log_groups.insert(name.to_string(), group);
 
@@ -69,6 +102,22 @@ pub fn delete_log_group(
         AwsError::bad_request("InvalidParameterException", "logGroupName is required")
     })?;
 
+    {
+        let group = state.log_groups.get(name).ok_or_else(|| {
+            AwsError::not_found(
+                "ResourceNotFoundException",
+                format!("Log group not found: {name}"),
+            )
+        })?;
+        if group.deletion_protection == "ENABLED" {
+            return Err(AwsError::conflict(
+                "OperationAbortedException",
+                format!(
+                    "Log group `{name}` has deletion protection enabled; turn it off before deleting."
+                ),
+            ));
+        }
+    }
     state.log_groups.remove(name).ok_or_else(|| {
         AwsError::not_found(
             "ResourceNotFoundException",
@@ -116,9 +165,13 @@ pub fn describe_log_groups(
                 "storedBytes": g.stored_bytes,
                 "metricFilterCount": 0,
                 "logGroupClass": g.log_group_class,
+                "logGroupDeletionProtection": g.deletion_protection,
             });
             if let Some(days) = g.retention_in_days {
                 obj["retentionInDays"] = json!(days);
+            }
+            if let Some(ref k) = g.kms_key_id {
+                obj["kmsKeyId"] = json!(k);
             }
             obj
         })
@@ -316,4 +369,99 @@ pub fn list_tags_log_group(
         .collect();
 
     Ok(json!({ "tags": tags }))
+}
+
+#[cfg(test)]
+mod deletion_protection_tests {
+    use super::*;
+    use crate::SqliteStore;
+    use std::sync::Arc;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("logs", "us-east-1")
+    }
+
+    fn fresh_state() -> LogsState {
+        let dir = std::env::temp_dir().join(format!("awsim-logs-dp-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(SqliteStore::open(dir.join("logs.db")).unwrap());
+        let state = LogsState::default();
+        state.set_sqlite(store);
+        state
+    }
+
+    #[test]
+    fn create_log_group_persists_kms_key_and_deletion_protection() {
+        let state = fresh_state();
+        create_log_group(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "kmsKeyId": "arn:aws:kms:us-east-1:000000000000:key/abcd",
+                "logGroupDeletionProtection": "ENABLED",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let g = state.log_groups.get("g").unwrap();
+        assert_eq!(g.deletion_protection, "ENABLED");
+        assert_eq!(
+            g.kms_key_id.as_deref(),
+            Some("arn:aws:kms:us-east-1:000000000000:key/abcd")
+        );
+    }
+
+    #[test]
+    fn create_log_group_rejects_non_kms_key_id() {
+        let state = fresh_state();
+        let err = create_log_group(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "kmsKeyId": "not-an-arn",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn create_log_group_rejects_invalid_deletion_protection_value() {
+        let state = fresh_state();
+        let err = create_log_group(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "logGroupDeletionProtection": "MAYBE",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn delete_log_group_refuses_when_protection_enabled() {
+        let state = fresh_state();
+        create_log_group(
+            &state,
+            &json!({
+                "logGroupName": "g",
+                "logGroupDeletionProtection": "ENABLED",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = delete_log_group(&state, &json!({ "logGroupName": "g" }), &ctx()).unwrap_err();
+        assert_eq!(err.code, "OperationAbortedException");
+    }
+
+    #[test]
+    fn delete_log_group_succeeds_when_protection_disabled() {
+        let state = fresh_state();
+        create_log_group(&state, &json!({ "logGroupName": "g" }), &ctx()).unwrap();
+        delete_log_group(&state, &json!({ "logGroupName": "g" }), &ctx()).unwrap();
+        assert!(state.log_groups.get("g").is_none());
+    }
 }
