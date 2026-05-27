@@ -35,6 +35,10 @@ pub struct Cluster {
     pub sns_topic_arn: Option<String>,
     pub sns_topic_status: String,
     pub description: Option<String>,
+    /// MemoryDB data tiering: when true the cluster spills cold keys
+    /// to NVMe, which AWS only supports on `db.r6gd.*` node types.
+    #[serde(default)]
+    pub data_tiering: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

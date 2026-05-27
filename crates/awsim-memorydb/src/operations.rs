@@ -43,6 +43,7 @@ fn cluster_to_value(c: &Cluster) -> Value {
         "SnsTopicArn": c.sns_topic_arn,
         "SnsTopicStatus": c.sns_topic_status,
         "Description": c.description,
+        "DataTiering": if c.data_tiering { "true" } else { "false" },
         "Shards": [],
     })
 }
@@ -101,6 +102,16 @@ pub fn create_cluster(
         ));
     }
     let node_type = require_str(input, "NodeType")?.to_string();
+    let data_tiering = input
+        .get("DataTiering")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if data_tiering && !node_type.starts_with("db.r6gd.") {
+        return Err(AwsError::bad_request(
+            "InvalidParameterCombinationException",
+            format!("DataTiering=true requires a `db.r6gd.*` node type; got `{node_type}`.",),
+        ));
+    }
     let acl_name = require_str(input, "ACLName")?.to_string();
     let arn_str = arn(ctx, "cluster", &name);
     let endpoint = json!({
@@ -181,6 +192,7 @@ pub fn create_cluster(
             .get("Description")
             .and_then(|v| v.as_str())
             .map(String::from),
+        data_tiering,
     };
     let result = json!({ "Cluster": cluster_to_value(&c) });
     state.clusters.insert(name, c);
@@ -594,6 +606,56 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
         }
+    }
+
+    #[test]
+    fn create_cluster_rejects_data_tiering_without_r6gd_node_type() {
+        let state = MemoryDbState::default();
+        let err = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-dt-bad",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "DataTiering": true,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterCombinationException");
+    }
+
+    #[test]
+    fn create_cluster_accepts_data_tiering_with_r6gd_node_type() {
+        let state = MemoryDbState::default();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-dt-ok",
+                "NodeType": "db.r6gd.xlarge",
+                "ACLName": "open-access",
+                "DataTiering": true,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["DataTiering"], "true");
+    }
+
+    #[test]
+    fn create_cluster_defaults_data_tiering_off() {
+        let state = MemoryDbState::default();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-dt-default",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["DataTiering"], "false");
     }
 
     #[test]
