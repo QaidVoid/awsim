@@ -644,6 +644,8 @@ fn get_credentials_for_identity(
         expiry: AssumedRoleSession::expiry_from_duration(3_600),
         inline_session_policy: None,
         session_policy_arns: Vec::new(),
+        session_tags: Vec::new(),
+        transitive_tag_keys: Vec::new(),
     });
 
     Ok(json!({

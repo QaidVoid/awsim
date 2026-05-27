@@ -174,6 +174,8 @@ mod tests {
             expiry: None,
             inline_session_policy: None,
             session_policy_arns: Vec::new(),
+            session_tags: Vec::new(),
+            transitive_tag_keys: Vec::new(),
         });
 
         let lookup = StsAwarePrincipalLookup::new(sessions, iam);
@@ -224,6 +226,8 @@ mod tests {
             expiry: None,
             inline_session_policy: None,
             session_policy_arns: Vec::new(),
+            session_tags: Vec::new(),
+            transitive_tag_keys: Vec::new(),
         });
 
         let lookup = StsAwarePrincipalLookup::new(sessions, iam);

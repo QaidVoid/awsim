@@ -61,6 +61,14 @@ pub struct AssumedRoleSession {
     /// granting new permissions. Plumbed through to the AuthzEngine so
     /// it can pull the documents from IAM and combine them.
     pub session_policy_arns: Vec<String>,
+    /// Session tags supplied via the `Tags` parameter on `AssumeRole`.
+    /// AWS surfaces these on the temporary credentials and uses them
+    /// when evaluating tag-based conditions on subsequent calls.
+    pub session_tags: Vec<(String, String)>,
+    /// Subset of session tag keys flagged transitive — when this
+    /// session itself calls `AssumeRole`, those tags propagate to the
+    /// new session.
+    pub transitive_tag_keys: Vec<String>,
 }
 
 impl AssumedRoleSession {
@@ -155,6 +163,8 @@ mod tests {
             expiry,
             inline_session_policy: None,
             session_policy_arns: Vec::new(),
+            session_tags: Vec::new(),
+            transitive_tag_keys: Vec::new(),
         }
     }
 

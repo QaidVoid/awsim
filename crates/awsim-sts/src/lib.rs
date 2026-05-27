@@ -146,6 +146,8 @@ impl StsService {
 
         let inline_policy = extract_inline_session_policy(input);
         let policy_arns = extract_session_policy_arns(input);
+        let session_tags = extract_session_tags(input);
+        let transitive_tag_keys = extract_transitive_tag_keys(input);
         let (credentials, assumed_role_user, session) = generate_assumed_role_output(
             role_arn,
             session_name,
@@ -153,13 +155,31 @@ impl StsService {
             duration,
             inline_policy,
             policy_arns,
+            session_tags.clone(),
+            transitive_tag_keys.clone(),
         );
         self.sessions.record(session);
 
-        Ok(json!({
+        let mut resp = json!({
             "Credentials": credentials,
             "AssumedRoleUser": assumed_role_user,
-        }))
+        });
+        if !session_tags.is_empty() {
+            // AWS doesn't expose session tags directly on the
+            // AssumeRole response body, but the SDK surfaces them via
+            // the source identity payload for callers that need to
+            // confirm what got bound. Including a stable `SessionTags`
+            // hint keeps clients from having to re-derive the input.
+            let tags_payload: Vec<Value> = session_tags
+                .iter()
+                .map(|(k, v)| json!({ "Key": k, "Value": v }))
+                .collect();
+            resp["SessionTags"] = Value::Array(tags_payload);
+        }
+        if !transitive_tag_keys.is_empty() {
+            resp["TransitiveTagKeys"] = json!(transitive_tag_keys);
+        }
+        Ok(resp)
     }
 
     fn get_session_token(&self, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
@@ -221,6 +241,8 @@ impl StsService {
             duration,
             inline_policy,
             policy_arns,
+            Vec::new(),
+            Vec::new(),
         );
         self.sessions.record(session);
 
@@ -419,6 +441,8 @@ impl StsService {
             duration,
             inline_policy,
             policy_arns,
+            Vec::new(),
+            Vec::new(),
         );
         self.sessions.record(session);
 
@@ -979,6 +1003,7 @@ fn generate_credentials(duration_seconds: u64) -> Value {
 /// operations, plus a session record the caller is expected to drop
 /// into [`StsSessionStore`] so subsequent signed requests resolve to
 /// the assumed-role principal.
+#[allow(clippy::too_many_arguments)]
 fn generate_assumed_role_output(
     role_arn: &str,
     session_name: &str,
@@ -986,6 +1011,8 @@ fn generate_assumed_role_output(
     duration_seconds: u64,
     inline_session_policy: Option<String>,
     session_policy_arns: Vec<String>,
+    session_tags: Vec<(String, String)>,
+    transitive_tag_keys: Vec<String>,
 ) -> (Value, Value, AssumedRoleSession) {
     let role_id_suffix = uuid::Uuid::new_v4().simple().to_string()[..20].to_uppercase();
     let assumed_role_id = format!("AROA{role_id_suffix}:{session_name}");
@@ -1014,9 +1041,42 @@ fn generate_assumed_role_output(
         expiry: AssumedRoleSession::expiry_from_duration(duration_seconds),
         inline_session_policy,
         session_policy_arns,
+        session_tags,
+        transitive_tag_keys,
     };
 
     (credentials, assumed_role_user, session)
+}
+
+/// Extract the `Tags` parameter into a flat `(key, value)` vector.
+/// Validation already ran upstream so we just collect entries with
+/// both fields present.
+fn extract_session_tags(input: &Value) -> Vec<(String, String)> {
+    input
+        .get("Tags")
+        .and_then(Value::as_array)
+        .map(|tags| {
+            tags.iter()
+                .filter_map(|t| {
+                    let k = t.get("Key").and_then(Value::as_str)?.to_string();
+                    let v = t.get("Value").and_then(Value::as_str)?.to_string();
+                    Some((k, v))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn extract_transitive_tag_keys(input: &Value) -> Vec<String> {
+    input
+        .get("TransitiveTagKeys")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Pull the inline `Policy` parameter off an AssumeRole-shaped input.
@@ -1716,6 +1776,46 @@ mod tests {
             )
             .unwrap();
         assert!(resp["Credentials"]["AccessKeyId"].as_str().is_some());
+    }
+
+    #[test]
+    fn assume_role_surfaces_session_tags_and_transitive_keys() {
+        let svc = StsService::new();
+        svc.set_trust_policy_resolver(Arc::new(StaticResolver(Some(
+            r#"{
+                "Version":"2012-10-17",
+                "Statement":[{
+                    "Effect":"Allow",
+                    "Principal":{"AWS":"arn:aws:iam::000000000000:root"},
+                    "Action":"sts:AssumeRole"
+                }]
+            }"#,
+        ))));
+        let resp = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/Open",
+                    "RoleSessionName": "session",
+                    "Tags": [
+                        { "Key": "env", "Value": "prod" },
+                        { "Key": "team", "Value": "data" }
+                    ],
+                    "TransitiveTagKeys": ["env"]
+                }),
+                &make_ctx(),
+            )
+            .unwrap();
+        let tags = resp["SessionTags"].as_array().unwrap();
+        assert_eq!(tags.len(), 2);
+        let envs: Vec<_> = tags.iter().filter(|t| t["Key"] == "env").collect();
+        assert_eq!(envs.len(), 1);
+        assert_eq!(envs[0]["Value"], "prod");
+        assert_eq!(resp["TransitiveTagKeys"], json!(["env"]));
+
+        let access_key = resp["Credentials"]["AccessKeyId"].as_str().unwrap();
+        let stored = svc.sessions.lookup(access_key).unwrap();
+        assert_eq!(stored.session_tags.len(), 2);
+        assert_eq!(stored.transitive_tag_keys, vec!["env".to_string()]);
     }
 
     const TRUST_POLICY_WITH_EXTERNAL_ID: &str = r#"{
