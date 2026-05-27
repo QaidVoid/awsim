@@ -95,103 +95,20 @@ pub fn put_metric_data(
     }
 
     let mut rows: Vec<MetricDatumRow> = Vec::with_capacity(metric_data.len());
+    let mut unprocessed: Vec<Value> = Vec::new();
 
+    // Per-datum validation gathers failures into UnprocessedMetricData
+    // instead of short-circuiting the whole batch. Top-level errors
+    // (missing Namespace, oversize batch) still hard-fail above.
     for datum in metric_data {
-        let metric_name = datum
-            .get("MetricName")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                AwsError::bad_request("InvalidParameterValue", "MetricName is required")
-            })?
-            .to_string();
-        // AWS requires exactly one of Value or StatisticValues per
-        // datum. When StatisticValues is provided, treat the
-        // aggregate as a single observation whose stored value is
-        // Sum / SampleCount (the mean); SampleCount must be > 0.
-        let raw_value = datum.get("Value").and_then(Value::as_f64);
-        let stats = datum.get("StatisticValues").and_then(Value::as_object);
-        let value = match (raw_value, stats) {
-            (Some(v), None) => v,
-            (None, Some(s)) => {
-                let sum = s.get("Sum").and_then(Value::as_f64).ok_or_else(|| {
-                    AwsError::bad_request(
-                        "InvalidParameterValue",
-                        format!("MetricDatum `{metric_name}` StatisticValues requires Sum."),
-                    )
-                })?;
-                let count = s
-                    .get("SampleCount")
-                    .and_then(Value::as_f64)
-                    .ok_or_else(|| {
-                        AwsError::bad_request(
-                            "InvalidParameterValue",
-                            format!(
-                                "MetricDatum `{metric_name}` StatisticValues requires SampleCount."
-                            ),
-                        )
-                    })?;
-                if count <= 0.0 {
-                    return Err(AwsError::bad_request(
-                        "InvalidParameterValue",
-                        format!(
-                            "MetricDatum `{metric_name}` StatisticValues.SampleCount must be > 0."
-                        ),
-                    ));
-                }
-                sum / count
-            }
-            (Some(_), Some(_)) => {
-                return Err(AwsError::bad_request(
-                    "InvalidParameterValue",
-                    format!(
-                        "MetricDatum `{metric_name}` must specify either Value or StatisticValues, not both."
-                    ),
-                ));
-            }
-            (None, None) => 0.0,
-        };
-        let unit = datum
-            .get("Unit")
-            .and_then(Value::as_str)
-            .unwrap_or("None")
-            .to_string();
-        let timestamp = datum
-            .get("Timestamp")
-            .and_then(Value::as_str)
-            .map(String::from)
-            .unwrap_or_else(chrono_now);
-        let dimensions = datum
-            .get("Dimensions")
-            .map(parse_dimensions)
-            .unwrap_or_default();
-        let ts_ms = parse_timestamp_ms(&timestamp);
-
-        // StorageResolution is documented as 1 (high-res) or 60
-        // (standard). Default to 60; anything else is rejected with
-        // InvalidParameterValue.
-        let storage_resolution = datum
-            .get("StorageResolution")
-            .and_then(Value::as_i64)
-            .unwrap_or(60);
-        if !matches!(storage_resolution, 1 | 60) {
-            return Err(AwsError::bad_request(
-                "InvalidParameterValue",
-                format!(
-                    "MetricDatum `{metric_name}` StorageResolution must be 1 or 60 (got {storage_resolution})."
-                ),
-            ));
+        match validate_datum(&namespace, datum) {
+            Ok(row) => rows.push(row),
+            Err((code, message)) => unprocessed.push(json!({
+                "MetricData": datum.clone(),
+                "ErrorCode": code,
+                "ErrorMessage": message,
+            })),
         }
-
-        rows.push(MetricDatumRow {
-            namespace: namespace.clone(),
-            metric_name,
-            value,
-            unit,
-            timestamp,
-            ts_ms,
-            dimensions_json: dimensions_to_json(&dimensions),
-            storage_resolution: storage_resolution as u32,
-        });
     }
 
     let sqlite = require_sqlite(state)?;
@@ -204,7 +121,101 @@ pub fn put_metric_data(
 
     super::alarms::evaluate_alarms(state, ctx);
 
-    Ok(json!({}))
+    let mut resp = serde_json::Map::new();
+    if !unprocessed.is_empty() {
+        resp.insert("UnprocessedMetricData".into(), Value::Array(unprocessed));
+    }
+    Ok(Value::Object(resp))
+}
+
+fn validate_datum(namespace: &str, datum: &Value) -> Result<MetricDatumRow, (String, String)> {
+    let metric_name = datum
+        .get("MetricName")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            (
+                "InvalidParameterValue".to_string(),
+                "MetricName is required".to_string(),
+            )
+        })?
+        .to_string();
+    let raw_value = datum.get("Value").and_then(Value::as_f64);
+    let stats = datum.get("StatisticValues").and_then(Value::as_object);
+    let value = match (raw_value, stats) {
+        (Some(v), None) => v,
+        (None, Some(s)) => {
+            let sum = s.get("Sum").and_then(Value::as_f64).ok_or_else(|| {
+                (
+                    "InvalidParameterValue".to_string(),
+                    format!("MetricDatum `{metric_name}` StatisticValues requires Sum."),
+                )
+            })?;
+            let count = s
+                .get("SampleCount")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| {
+                    (
+                        "InvalidParameterValue".to_string(),
+                        format!(
+                            "MetricDatum `{metric_name}` StatisticValues requires SampleCount."
+                        ),
+                    )
+                })?;
+            if count <= 0.0 {
+                return Err((
+                    "InvalidParameterValue".to_string(),
+                    format!("MetricDatum `{metric_name}` StatisticValues.SampleCount must be > 0."),
+                ));
+            }
+            sum / count
+        }
+        (Some(_), Some(_)) => {
+            return Err((
+                "InvalidParameterValue".to_string(),
+                format!(
+                    "MetricDatum `{metric_name}` must specify either Value or StatisticValues, not both."
+                ),
+            ));
+        }
+        (None, None) => 0.0,
+    };
+    let unit = datum
+        .get("Unit")
+        .and_then(Value::as_str)
+        .unwrap_or("None")
+        .to_string();
+    let timestamp = datum
+        .get("Timestamp")
+        .and_then(Value::as_str)
+        .map(String::from)
+        .unwrap_or_else(chrono_now);
+    let dimensions = datum
+        .get("Dimensions")
+        .map(parse_dimensions)
+        .unwrap_or_default();
+    let ts_ms = parse_timestamp_ms(&timestamp);
+    let storage_resolution = datum
+        .get("StorageResolution")
+        .and_then(Value::as_i64)
+        .unwrap_or(60);
+    if !matches!(storage_resolution, 1 | 60) {
+        return Err((
+            "InvalidParameterValue".to_string(),
+            format!(
+                "MetricDatum `{metric_name}` StorageResolution must be 1 or 60 (got {storage_resolution})."
+            ),
+        ));
+    }
+    Ok(MetricDatumRow {
+        namespace: namespace.to_string(),
+        metric_name,
+        value,
+        unit,
+        timestamp,
+        ts_ms,
+        dimensions_json: dimensions_to_json(&dimensions),
+        storage_resolution: storage_resolution as u32,
+    })
 }
 
 /// ListMetrics
@@ -567,7 +578,7 @@ mod tests {
     fn put_metric_data_rejects_both_value_and_statistic_values() {
         let state = fresh_state();
         let ctx = ctx();
-        let err = put_metric_data(
+        let resp = put_metric_data(
             &state,
             &json!({
                 "Namespace": "App",
@@ -579,16 +590,23 @@ mod tests {
             }),
             &ctx,
         )
-        .unwrap_err();
-        assert_eq!(err.code, "InvalidParameterValue");
-        assert!(err.message.contains("either Value or StatisticValues"));
+        .unwrap();
+        let unprocessed = resp["UnprocessedMetricData"].as_array().unwrap();
+        assert_eq!(unprocessed.len(), 1);
+        assert_eq!(unprocessed[0]["ErrorCode"], "InvalidParameterValue");
+        assert!(
+            unprocessed[0]["ErrorMessage"]
+                .as_str()
+                .unwrap()
+                .contains("either Value or StatisticValues")
+        );
     }
 
     #[test]
     fn put_metric_data_rejects_invalid_storage_resolution() {
         let state = fresh_state();
         let ctx = ctx();
-        let err = put_metric_data(
+        let resp = put_metric_data(
             &state,
             &json!({
                 "Namespace": "App",
@@ -600,9 +618,15 @@ mod tests {
             }),
             &ctx,
         )
-        .unwrap_err();
-        assert_eq!(err.code, "InvalidParameterValue");
-        assert!(err.message.contains("StorageResolution"));
+        .unwrap();
+        let unprocessed = resp["UnprocessedMetricData"].as_array().unwrap();
+        assert_eq!(unprocessed.len(), 1);
+        assert!(
+            unprocessed[0]["ErrorMessage"]
+                .as_str()
+                .unwrap()
+                .contains("StorageResolution")
+        );
     }
 
     #[test]
@@ -669,7 +693,7 @@ mod tests {
     fn put_metric_data_rejects_zero_sample_count() {
         let state = fresh_state();
         let ctx = ctx();
-        let err = put_metric_data(
+        let resp = put_metric_data(
             &state,
             &json!({
                 "Namespace": "App",
@@ -680,8 +704,30 @@ mod tests {
             }),
             &ctx,
         )
-        .unwrap_err();
-        assert_eq!(err.code, "InvalidParameterValue");
+        .unwrap();
+        let unprocessed = resp["UnprocessedMetricData"].as_array().unwrap();
+        assert_eq!(unprocessed[0]["ErrorCode"], "InvalidParameterValue");
+    }
+
+    #[test]
+    fn put_metric_data_partial_success_persists_good_datum_and_reports_bad() {
+        let state = fresh_state();
+        let ctx = ctx();
+        let resp = put_metric_data(
+            &state,
+            &json!({
+                "Namespace": "App",
+                "MetricData": [
+                    { "MetricName": "Ok", "Value": 1.0 },
+                    { "MetricName": "Bad", "StorageResolution": 30, "Value": 1.0 }
+                ],
+            }),
+            &ctx,
+        )
+        .unwrap();
+        let unprocessed = resp["UnprocessedMetricData"].as_array().unwrap();
+        assert_eq!(unprocessed.len(), 1);
+        assert_eq!(unprocessed[0]["MetricData"]["MetricName"], "Bad");
     }
 
     #[test]
