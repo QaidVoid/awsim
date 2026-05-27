@@ -213,16 +213,26 @@ pub fn get_geo_location(
 
     let mut details = json!({});
     if let Some(c) = continent {
+        let name = crate::geo::continent_name(c).ok_or_else(|| {
+            AwsError::bad_request("InvalidInput", format!("Unknown continent code: {c}"))
+        })?;
         details["ContinentCode"] = json!(c);
-        details["ContinentName"] = json!("Continent");
+        details["ContinentName"] = json!(name);
     }
     if let Some(c) = country {
+        let (_cont, name) = crate::geo::country_info(c).ok_or_else(|| {
+            AwsError::bad_request("InvalidInput", format!("Unknown country code: {c}"))
+        })?;
         details["CountryCode"] = json!(c);
-        details["CountryName"] = json!("Country");
+        details["CountryName"] = json!(name);
     }
     if let Some(s) = subdivision {
+        // AWS only exposes subdivisions for the US.
+        let name = crate::geo::us_subdivision_name(s).ok_or_else(|| {
+            AwsError::bad_request("InvalidInput", format!("Unknown subdivision code: {s}"))
+        })?;
         details["SubdivisionCode"] = json!(s);
-        details["SubdivisionName"] = json!("Subdivision");
+        details["SubdivisionName"] = json!(name);
     }
 
     Ok(json!({
@@ -231,27 +241,51 @@ pub fn get_geo_location(
     }))
 }
 
+/// `ListGeoLocations` — return the full catalog: every continent, every
+/// ISO 3166-1 alpha-2 country, and every US ISO 3166-2 subdivision AWS
+/// recognizes for geolocation routing. Ordering follows AWS's: rows
+/// without a country sort first (continent-only), then country rows by
+/// continent code then country code, then US subdivisions.
 pub fn list_geo_locations(
     _state: &Arc<Route53State>,
     _input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let entries = vec![
-        json!({ "ContinentCode": "AF", "ContinentName": "Africa" }),
-        json!({ "ContinentCode": "AN", "ContinentName": "Antarctica" }),
-        json!({ "ContinentCode": "AS", "ContinentName": "Asia" }),
-        json!({ "ContinentCode": "EU", "ContinentName": "Europe" }),
-        json!({ "ContinentCode": "NA", "ContinentName": "North America" }),
-        json!({ "ContinentCode": "OC", "ContinentName": "Oceania" }),
-        json!({ "ContinentCode": "SA", "ContinentName": "South America" }),
-    ];
+    let mut entries: Vec<Value> = Vec::with_capacity(
+        crate::geo::CONTINENTS.len()
+            + crate::geo::COUNTRIES.len()
+            + crate::geo::US_SUBDIVISIONS.len(),
+    );
+
+    for (code, name) in crate::geo::CONTINENTS {
+        entries.push(json!({
+            "ContinentCode": code,
+            "ContinentName": name,
+        }));
+    }
+    for (cont, code, name) in crate::geo::COUNTRIES {
+        entries.push(json!({
+            "ContinentCode": cont,
+            "CountryCode": code,
+            "CountryName": name,
+        }));
+    }
+    for (code, name) in crate::geo::US_SUBDIVISIONS {
+        entries.push(json!({
+            "ContinentCode": "NA",
+            "CountryCode": "US",
+            "SubdivisionCode": code,
+            "SubdivisionName": name,
+        }));
+    }
+
     Ok(json!({
         "__xml_root": "ListGeoLocationsResponse",
         "GeoLocationDetailsList": {
             "GeoLocationDetails": entries,
         },
         "IsTruncated": false,
-        "MaxItems": "100",
+        "MaxItems": "1000",
     }))
 }
 
@@ -544,5 +578,65 @@ mod get_change_tests {
         state.change_submissions.insert("c-prefix".to_string(), now);
         let resp = get_change(&state, &json!({ "Id": "/change/c-prefix" }), &ctx()).unwrap();
         assert_eq!(resp["ChangeInfo"]["Status"], "PENDING");
+    }
+}
+
+#[cfg(test)]
+mod list_geo_locations_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("route53", "us-east-1")
+    }
+
+    #[test]
+    fn full_catalog_includes_continents_countries_and_us_subdivisions() {
+        let state = Arc::new(Route53State::default());
+        let resp = list_geo_locations(&state, &json!({}), &ctx()).unwrap();
+        let arr = resp["GeoLocationDetailsList"]["GeoLocationDetails"]
+            .as_array()
+            .expect("array");
+        let expected = crate::geo::CONTINENTS.len()
+            + crate::geo::COUNTRIES.len()
+            + crate::geo::US_SUBDIVISIONS.len();
+        assert_eq!(arr.len(), expected, "should return the full catalog");
+
+        // Spot-check: an Asian country, a European country, and a US state.
+        assert!(arr.iter().any(|e| e["CountryCode"] == "JP"
+            && e["CountryName"] == "Japan"
+            && e["ContinentCode"] == "AS"));
+        assert!(arr.iter().any(|e| e["CountryCode"] == "DE"
+            && e["CountryName"] == "Germany"
+            && e["ContinentCode"] == "EU"));
+        assert!(arr.iter().any(|e| e["SubdivisionCode"] == "CA"
+            && e["CountryCode"] == "US"
+            && e["SubdivisionName"] == "California"));
+        assert_eq!(resp["IsTruncated"], false);
+    }
+
+    #[test]
+    fn get_geo_location_resolves_real_names() {
+        let state = Arc::new(Route53State::default());
+        let resp = get_geo_location(&state, &json!({ "ContinentCode": "EU" }), &ctx()).unwrap();
+        assert_eq!(resp["GeoLocationDetails"]["ContinentName"], "Europe");
+
+        let resp = get_geo_location(&state, &json!({ "CountryCode": "JP" }), &ctx()).unwrap();
+        assert_eq!(resp["GeoLocationDetails"]["CountryName"], "Japan");
+
+        let resp = get_geo_location(
+            &state,
+            &json!({ "CountryCode": "US", "SubdivisionCode": "CA" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["GeoLocationDetails"]["SubdivisionName"], "California");
+    }
+
+    #[test]
+    fn get_geo_location_rejects_unknown_codes() {
+        let state = Arc::new(Route53State::default());
+        let err = get_geo_location(&state, &json!({ "ContinentCode": "ZZ" }), &ctx()).unwrap_err();
+        assert!(err.message.contains("ZZ"));
     }
 }
