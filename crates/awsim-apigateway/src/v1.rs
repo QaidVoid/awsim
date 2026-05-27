@@ -101,6 +101,10 @@ pub struct IntegrationResponse {
     pub response_templates: HashMap<String, String>,
     /// Response header mappings (header-name → source expression).
     pub response_parameters: HashMap<String, String>,
+    /// `CONVERT_TO_BINARY` decodes a base64-encoded body before sending
+    /// to the client; `CONVERT_TO_TEXT` base64-encodes a binary body.
+    /// Absent means pass-through.
+    pub content_handling: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -645,12 +649,35 @@ fn integration_to_json(i: &Integration) -> Value {
 }
 
 fn integration_response_to_json(r: &IntegrationResponse) -> Value {
-    json!({
+    let mut obj = json!({
         "statusCode": r.status_code,
         "selectionPattern": r.selection_pattern,
         "responseTemplates": r.response_templates,
         "responseParameters": r.response_parameters,
-    })
+    });
+    if let Some(ref ch) = r.content_handling {
+        obj["contentHandling"] = json!(ch);
+    }
+    obj
+}
+
+/// Apply the `contentHandling` rule to an integration response body.
+/// AWS treats the bytes as opaque payload; `CONVERT_TO_BINARY` base64-
+/// decodes the input string so binary clients receive raw bytes, while
+/// `CONVERT_TO_TEXT` base64-encodes raw bytes for text clients. Missing
+/// or unset values yield the input unchanged. On decode failure the
+/// original bytes pass through, matching AWS's lenient behavior.
+pub fn apply_response_content_handling(body: &[u8], content_handling: Option<&str>) -> Vec<u8> {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    match content_handling {
+        Some("CONVERT_TO_BINARY") => match std::str::from_utf8(body) {
+            Ok(s) => STANDARD.decode(s.trim()).unwrap_or_else(|_| body.to_vec()),
+            Err(_) => body.to_vec(),
+        },
+        Some("CONVERT_TO_TEXT") => STANDARD.encode(body).into_bytes(),
+        _ => body.to_vec(),
+    }
 }
 
 fn stage_to_json(s: &Stage) -> Value {
@@ -1194,11 +1221,24 @@ fn put_integration_response(state: &ApiGatewayV1State, input: &Value) -> Result<
     let resource_id = require_str(input, "resource_id")?.to_string();
     let http_method = require_str(input, "http_method")?.to_uppercase();
     let status_code = require_str(input, "status_code")?.to_string();
+    let content_handling = input["contentHandling"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if let Some(ref ch) = content_handling
+        && !matches!(ch.as_str(), "CONVERT_TO_BINARY" | "CONVERT_TO_TEXT")
+    {
+        return Err(AwsError::bad_request(
+            "BadRequestException",
+            format!("contentHandling '{ch}' must be CONVERT_TO_BINARY or CONVERT_TO_TEXT"),
+        ));
+    }
     let response = IntegrationResponse {
         status_code: status_code.clone(),
         selection_pattern: input["selectionPattern"].as_str().unwrap_or("").to_string(),
         response_templates: parse_template_map(&input["responseTemplates"]),
         response_parameters: parse_template_map(&input["responseParameters"]),
+        content_handling,
     };
     with_api_mut(state, &api_id, |api| {
         let r = api.resources.get_mut(&resource_id).ok_or_else(|| {
@@ -2171,6 +2211,32 @@ mod tests {
     }
 
     #[test]
+    fn content_handling_convert_to_binary_decodes_base64() {
+        let out = apply_response_content_handling(b"aGVsbG8=", Some("CONVERT_TO_BINARY"));
+        assert_eq!(out, b"hello");
+    }
+
+    #[test]
+    fn content_handling_convert_to_text_base64_encodes_bytes() {
+        let out = apply_response_content_handling(&[0x01, 0x02, 0x03], Some("CONVERT_TO_TEXT"));
+        assert_eq!(out, b"AQID");
+    }
+
+    #[test]
+    fn content_handling_missing_passes_through() {
+        let out = apply_response_content_handling(b"hello", None);
+        assert_eq!(out, b"hello");
+    }
+
+    #[test]
+    fn content_handling_invalid_base64_falls_through() {
+        // CONVERT_TO_BINARY on something that isn't valid base64 should
+        // return the original bytes rather than panicking — matches AWS.
+        let out = apply_response_content_handling(b"not-base64!!", Some("CONVERT_TO_BINARY"));
+        assert_eq!(out, b"not-base64!!");
+    }
+
+    #[test]
     fn maybe_compress_gzips_when_threshold_met_and_accept_encoding_supports_gzip() {
         let api = rest_api_with_compression(Some(8));
         let body = b"abcdefghij".repeat(20);
@@ -2798,6 +2864,98 @@ mod tests {
             got["responseTemplates"]["application/json"],
             "{\"ok\":true}"
         );
+    }
+
+    #[tokio::test]
+    async fn put_integration_response_persists_content_handling() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        svc.handle(
+            "PutMethod",
+            json!({"restapi_id": api_id.clone(), "resource_id": root_id.clone(), "http_method": "GET"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "PutIntegration",
+            json!({
+                "restapi_id": api_id.clone(),
+                "resource_id": root_id.clone(),
+                "http_method": "GET",
+                "type": "MOCK"
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "PutIntegrationResponse",
+            json!({
+                "restapi_id": api_id.clone(),
+                "resource_id": root_id.clone(),
+                "http_method": "GET",
+                "status_code": "200",
+                "contentHandling": "CONVERT_TO_BINARY",
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        let got = svc
+            .handle(
+                "GetIntegrationResponse",
+                json!({
+                    "restapi_id": api_id,
+                    "resource_id": root_id,
+                    "http_method": "GET",
+                    "status_code": "200"
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(got["contentHandling"], "CONVERT_TO_BINARY");
+    }
+
+    #[tokio::test]
+    async fn put_integration_response_rejects_unknown_content_handling() {
+        let svc = ApiGatewayV1Service::new();
+        let (api_id, root_id) = make_api(&svc).await;
+        svc.handle(
+            "PutMethod",
+            json!({"restapi_id": api_id.clone(), "resource_id": root_id.clone(), "http_method": "GET"}),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        svc.handle(
+            "PutIntegration",
+            json!({
+                "restapi_id": api_id.clone(),
+                "resource_id": root_id,
+                "http_method": "GET",
+                "type": "MOCK"
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+        let err = svc
+            .handle(
+                "PutIntegrationResponse",
+                json!({
+                    "restapi_id": api_id,
+                    "resource_id": "root",
+                    "http_method": "GET",
+                    "status_code": "200",
+                    "contentHandling": "MAGIC",
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
     }
 
     #[tokio::test]
