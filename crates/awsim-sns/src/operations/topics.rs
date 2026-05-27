@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, KmsKeyLookup, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
 
@@ -15,6 +15,7 @@ pub fn create_topic(
     state: &SnsState,
     input: &Value,
     ctx: &RequestContext,
+    kms_lookup: Option<&dyn KmsKeyLookup>,
 ) -> Result<Value, AwsError> {
     let name = input["Name"]
         .as_str()
@@ -54,6 +55,12 @@ pub fn create_topic(
                 attributes.insert(k.clone(), s.to_string());
             }
         }
+    }
+
+    if let Some(key_ref) = attributes.get("KmsMasterKeyId")
+        && !key_ref.is_empty()
+    {
+        validate_kms_master_key_id(key_ref, ctx, kms_lookup)?;
     }
 
     let mut tags: HashMap<String, String> = HashMap::new();
@@ -185,7 +192,8 @@ pub fn get_topic_attributes(
 pub fn set_topic_attributes(
     state: &SnsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
+    kms_lookup: Option<&dyn KmsKeyLookup>,
 ) -> Result<Value, AwsError> {
     let topic_arn = input["TopicArn"]
         .as_str()
@@ -197,6 +205,10 @@ pub fn set_topic_attributes(
 
     let attr_value = input["AttributeValue"].as_str().unwrap_or("");
 
+    if attr_name == "KmsMasterKeyId" && !attr_value.is_empty() {
+        validate_kms_master_key_id(attr_value, ctx, kms_lookup)?;
+    }
+
     let mut topic = state
         .topics
         .get_mut(topic_arn)
@@ -207,6 +219,38 @@ pub fn set_topic_attributes(
         .insert(attr_name.to_string(), attr_value.to_string());
 
     Ok(json!({}))
+}
+
+/// Validate a `KmsMasterKeyId` value. Accepts:
+///   * the AWS-managed key alias `alias/aws/sns` (no lookup needed),
+///   * any other key id / key ARN / alias / alias ARN — when a
+///     [`KmsKeyLookup`] is wired, the reference must resolve in the
+///     topic's account/region.
+///
+/// When no lookup is wired (standalone tests), only the AWS-managed
+/// alias is accepted opportunistically; any other reference is
+/// allowed through unchanged so SNS keeps working without KMS state.
+fn validate_kms_master_key_id(
+    key_ref: &str,
+    ctx: &RequestContext,
+    lookup: Option<&dyn KmsKeyLookup>,
+) -> Result<(), AwsError> {
+    if key_ref == "alias/aws/sns" {
+        return Ok(());
+    }
+    let Some(lookup) = lookup else {
+        return Ok(());
+    };
+    if lookup
+        .resolve_key(key_ref, &ctx.account_id, &ctx.region)
+        .is_some()
+    {
+        return Ok(());
+    }
+    Err(AwsError::bad_request(
+        "KMSNotFoundException",
+        format!("KmsMasterKeyId `{key_ref}` does not resolve to a KMS key."),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -245,4 +289,61 @@ pub fn now_epoch_str() -> String {
         .unwrap_or_default()
         .as_secs()
         .to_string()
+}
+
+#[cfg(test)]
+mod kms_validation_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    struct StubLookup {
+        known: HashSet<String>,
+    }
+
+    impl KmsKeyLookup for StubLookup {
+        fn resolve_key(&self, key_ref: &str, _account: &str, _region: &str) -> Option<String> {
+            if self.known.contains(key_ref) {
+                Some(key_ref.to_string())
+            } else {
+                None
+            }
+        }
+    }
+
+    fn ctx() -> RequestContext {
+        let mut c = RequestContext::new("sns", "us-east-1");
+        c.account_id = "000000000000".into();
+        c
+    }
+
+    #[test]
+    fn aws_managed_alias_allowed_without_lookup() {
+        validate_kms_master_key_id("alias/aws/sns", &ctx(), None).expect("alias/aws/sns ok");
+    }
+
+    #[test]
+    fn unknown_key_rejected_when_lookup_wired() {
+        let lookup = StubLookup {
+            known: HashSet::new(),
+        };
+        let err = validate_kms_master_key_id("alias/customer", &ctx(), Some(&lookup)).unwrap_err();
+        assert_eq!(err.code, "KMSNotFoundException");
+    }
+
+    #[test]
+    fn known_alias_accepted_when_lookup_wired() {
+        let mut known = HashSet::new();
+        known.insert("alias/customer".to_string());
+        let lookup = StubLookup { known };
+        validate_kms_master_key_id("alias/customer", &ctx(), Some(&lookup))
+            .expect("known alias resolves");
+    }
+
+    #[test]
+    fn without_lookup_non_aws_alias_passes_through() {
+        // Standalone test setup with no KMS state: only the AWS-managed
+        // alias is the safe assertion; anything else must not block
+        // CreateTopic for tests that don't wire KMS.
+        validate_kms_master_key_id("alias/custom", &ctx(), None).expect("no lookup, no block");
+    }
 }

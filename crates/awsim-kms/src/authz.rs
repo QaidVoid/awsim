@@ -1,6 +1,7 @@
-use awsim_core::{AccountRegionStore, GrantLookup, ResourcePolicyLookup};
+use awsim_core::{AccountRegionStore, GrantLookup, KmsKeyLookup, ResourcePolicyLookup};
 use awsim_iam_policy::PolicyDocument;
 
+use crate::operations::keys::resolve_key_id;
 use crate::state::KmsState;
 
 pub struct KmsResourcePolicyLookup {
@@ -71,6 +72,26 @@ fn extract_key_id(arn: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Bridge that lets other service crates validate a `KmsMasterKeyId`
+/// (or any key/alias reference) against the KMS state without taking
+/// a direct dependency on awsim-kms's internals.
+pub struct KmsKeyResolver {
+    store: AccountRegionStore<KmsState>,
+}
+
+impl KmsKeyResolver {
+    pub fn new(store: AccountRegionStore<KmsState>) -> Self {
+        Self { store }
+    }
+}
+
+impl KmsKeyLookup for KmsKeyResolver {
+    fn resolve_key(&self, key_ref: &str, account: &str, region: &str) -> Option<String> {
+        let state = self.store.get(account, region);
+        resolve_key_id(&state, key_ref).ok()
+    }
 }
 
 impl ResourcePolicyLookup for KmsResourcePolicyLookup {

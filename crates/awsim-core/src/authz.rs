@@ -77,6 +77,16 @@ pub trait ScpLookup: Send + Sync {
     fn lookup(&self, principal_arn: &str) -> Vec<PolicyDocument>;
 }
 
+/// Resolve a KMS key reference (key id, key ARN, alias, or alias ARN)
+/// into the canonical key id. Returns `None` when no such key/alias
+/// exists in the given (account, region). Used by service crates that
+/// accept a KMS key reference (SNS topics, SQS queues, log groups,
+/// etc.) and need to validate the reference against awsim-kms without
+/// taking a direct dependency on the kms crate.
+pub trait KmsKeyLookup: Send + Sync {
+    fn resolve_key(&self, key_ref: &str, account: &str, region: &str) -> Option<String>;
+}
+
 pub struct NoopPrincipalLookup;
 
 impl PrincipalLookup for NoopPrincipalLookup {

@@ -1,4 +1,8 @@
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
+use std::sync::Arc;
+
+use awsim_core::{
+    AccountRegionStore, AwsError, KmsKeyLookup, Protocol, RequestContext, ServiceHandler,
+};
 use serde_json::Value;
 use tracing::debug;
 
@@ -8,13 +12,26 @@ use crate::state::{SnsState, SnsStateSnapshot};
 /// The SNS service handler.
 pub struct SnsService {
     store: AccountRegionStore<SnsState>,
+    /// KMS key lookup used to validate `KmsMasterKeyId` on
+    /// CreateTopic / SetTopicAttributes against awsim-kms. `None`
+    /// (e.g. standalone tests) skips the validation.
+    kms_lookup: Option<Arc<dyn KmsKeyLookup>>,
 }
 
 impl SnsService {
     pub fn new() -> Self {
         Self {
             store: AccountRegionStore::new(),
+            kms_lookup: None,
         }
+    }
+
+    /// Plug in the KMS key lookup so topic-attribute updates that set
+    /// `KmsMasterKeyId` are rejected when the key/alias doesn't exist
+    /// in the topic's account/region.
+    pub fn with_kms_lookup(mut self, lookup: Arc<dyn KmsKeyLookup>) -> Self {
+        self.kms_lookup = Some(lookup);
+        self
     }
 
     /// Test-only accessor used to peek at internal subscription state
@@ -62,11 +79,13 @@ impl ServiceHandler for SnsService {
 
         match operation {
             // Topics
-            "CreateTopic" => topics::create_topic(&state, &input, ctx),
+            "CreateTopic" => topics::create_topic(&state, &input, ctx, self.kms_lookup.as_deref()),
             "DeleteTopic" => topics::delete_topic(&state, &input, ctx),
             "ListTopics" => topics::list_topics(&state, &input, ctx),
             "GetTopicAttributes" => topics::get_topic_attributes(&state, &input, ctx),
-            "SetTopicAttributes" => topics::set_topic_attributes(&state, &input, ctx),
+            "SetTopicAttributes" => {
+                topics::set_topic_attributes(&state, &input, ctx, self.kms_lookup.as_deref())
+            }
 
             // Tags
             "TagResource" => tags::tag_resource(&state, &input, ctx),

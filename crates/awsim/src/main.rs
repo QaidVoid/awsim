@@ -2450,7 +2450,15 @@ fn register_services(
     ))));
     state.register(sts, vec![]);
 
-    let sns = Arc::new(awsim_sns::SnsService::new());
+    // KMS service is constructed early (but registered further down)
+    // so SNS can borrow a key-resolver from it for KmsMasterKeyId
+    // validation on CreateTopic / SetTopicAttributes.
+    let kms = Arc::new(awsim_kms::KmsService::new());
+    let kms_store = kms.store();
+    let sns_kms_lookup: Arc<dyn awsim_core::KmsKeyLookup> =
+        Arc::new(awsim_kms::KmsKeyResolver::new(kms_store.clone()));
+
+    let sns = Arc::new(awsim_sns::SnsService::new().with_kms_lookup(sns_kms_lookup));
     let sns_store = sns.store_handle();
     state.register(sns, vec![]);
 
@@ -2553,8 +2561,8 @@ fn register_services(
         Arc::new(awsim_eventbridge::EventBridgeService::new().with_iam_lookup(eb_iam_lookup));
     state.register(eventbridge, vec![]);
 
-    let kms = Arc::new(awsim_kms::KmsService::new());
-    let kms_store = kms.store();
+    // KMS was constructed above (for the SNS key-resolver wiring);
+    // register it here so its routes show up in the right order.
     state.register(kms, vec![]);
 
     let secretsmanager = Arc::new(awsim_secretsmanager::SecretsManagerService::new());

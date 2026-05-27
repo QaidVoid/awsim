@@ -4,7 +4,7 @@ mod operations;
 pub mod state;
 mod util;
 
-pub use authz::{KmsGrantLookup, KmsResourcePolicyLookup};
+pub use authz::{KmsGrantLookup, KmsKeyResolver, KmsResourcePolicyLookup};
 
 use async_trait::async_trait;
 use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};

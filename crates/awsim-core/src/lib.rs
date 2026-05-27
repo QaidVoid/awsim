@@ -22,8 +22,8 @@ pub mod tick;
 pub mod totp;
 
 pub use authz::{
-    AuthzEngine, GrantLookup, NoopPrincipalLookup, PrincipalLookup, ResolvedPrincipal,
-    ResourcePolicyLookup, ScpLookup,
+    AuthzEngine, GrantLookup, KmsKeyLookup, NoopPrincipalLookup, PrincipalLookup,
+    ResolvedPrincipal, ResourcePolicyLookup, ScpLookup,
 };
 // `HandlerByteStream` and `HandlerResult` are defined further down in
 // this file; re-exported here for crate consumers.
