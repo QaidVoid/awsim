@@ -285,6 +285,20 @@ pub struct VirtualMfaDevice {
     pub user: Option<String>,
     pub enable_date: Option<String>,
     pub tags: HashMap<String, String>,
+    /// Lifecycle state for the device. Transitions:
+    ///   `Unassigned` (just created) ->
+    ///   `Active` (after EnableMFADevice with two valid codes) ->
+    ///   `Unassigned` (after DeactivateMFADevice).
+    /// `Resynced` marks a successful ResyncMFADevice without breaking the
+    /// Active state — the field is set to a fresh `Active` afterwards.
+    /// AWS doesn't expose a discrete state field on Virtual MFA, but
+    /// surfacing one keeps the simulator's transitions observable.
+    #[serde(default = "default_mfa_status")]
+    pub status: String,
+}
+
+pub(crate) fn default_mfa_status() -> String {
+    "Unassigned".to_string()
 }
 
 /// IAM login profile (console password) for a user.
