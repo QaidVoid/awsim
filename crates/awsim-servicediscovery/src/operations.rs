@@ -534,20 +534,159 @@ pub fn get_operation(
     }))
 }
 
+/// `ListOperations` — return all operations, optionally narrowed by
+/// the documented filter dimensions: `NAMESPACE_ID`, `SERVICE_ID`,
+/// `STATUS`, `TYPE`, `UPDATE_DATE`. Multiple filters are ANDed. AWS
+/// supports `EQ`/`IN` conditions for the categorical filters and
+/// `BETWEEN` for `UPDATE_DATE` (range over `[start, end]` epoch
+/// seconds, passed as a two-element `Values` list).
 pub fn list_operations(
     state: &ServiceDiscoveryState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    let filters = parse_operation_filters(input.get("Filters"))?;
     let items: Vec<Value> = state
         .operations
         .iter()
+        .filter(|e| operation_matches_filters(e.value(), &filters))
         .map(|e| {
             let o = e.value();
             json!({ "Id": o.id, "Status": o.status })
         })
         .collect();
     Ok(json!({ "Operations": items }))
+}
+
+#[derive(Debug)]
+struct OperationFilter {
+    name: OperationFilterName,
+    values: Vec<String>,
+    condition: OperationFilterCondition,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OperationFilterName {
+    NamespaceId,
+    ServiceId,
+    Status,
+    Type,
+    UpdateDate,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OperationFilterCondition {
+    Eq,
+    In,
+    Between,
+}
+
+fn parse_operation_filters(value: Option<&Value>) -> Result<Vec<OperationFilter>, AwsError> {
+    let Some(arr) = value.and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for f in arr {
+        let name_raw = f
+            .get("Name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AwsError::bad_request("InvalidInput", "Filter.Name is required"))?;
+        let name = match name_raw {
+            "NAMESPACE_ID" => OperationFilterName::NamespaceId,
+            "SERVICE_ID" => OperationFilterName::ServiceId,
+            "STATUS" => OperationFilterName::Status,
+            "TYPE" => OperationFilterName::Type,
+            "UPDATE_DATE" => OperationFilterName::UpdateDate,
+            other => {
+                return Err(AwsError::bad_request(
+                    "InvalidInput",
+                    format!("Unknown ListOperations filter `{other}`."),
+                ));
+            }
+        };
+        let values: Vec<String> = f
+            .get("Values")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if values.is_empty() {
+            return Err(AwsError::bad_request(
+                "InvalidInput",
+                format!("Filter `{name_raw}` requires at least one value."),
+            ));
+        }
+        let condition = match f.get("Condition").and_then(Value::as_str).unwrap_or("EQ") {
+            "EQ" => OperationFilterCondition::Eq,
+            "IN" => OperationFilterCondition::In,
+            "BETWEEN" => OperationFilterCondition::Between,
+            other => {
+                return Err(AwsError::bad_request(
+                    "InvalidInput",
+                    format!("Unknown filter Condition `{other}`."),
+                ));
+            }
+        };
+        if matches!(condition, OperationFilterCondition::Between)
+            && !matches!(name, OperationFilterName::UpdateDate)
+        {
+            return Err(AwsError::bad_request(
+                "InvalidInput",
+                format!("Condition BETWEEN is only valid for UPDATE_DATE, not `{name_raw}`."),
+            ));
+        }
+        if matches!(condition, OperationFilterCondition::Between) && values.len() != 2 {
+            return Err(AwsError::bad_request(
+                "InvalidInput",
+                "BETWEEN condition requires exactly two values (start, end).",
+            ));
+        }
+        out.push(OperationFilter {
+            name,
+            values,
+            condition,
+        });
+    }
+    Ok(out)
+}
+
+fn operation_matches_filters(op: &Operation, filters: &[OperationFilter]) -> bool {
+    filters.iter().all(|f| operation_matches_filter(op, f))
+}
+
+fn operation_matches_filter(op: &Operation, f: &OperationFilter) -> bool {
+    match f.name {
+        OperationFilterName::NamespaceId => match_str(f, op.targets.get("NAMESPACE")),
+        OperationFilterName::ServiceId => match_str(f, op.targets.get("SERVICE")),
+        OperationFilterName::Status => match_str(f, Some(&op.status)),
+        OperationFilterName::Type => match_str(f, Some(&op.r#type)),
+        OperationFilterName::UpdateDate => match f.condition {
+            OperationFilterCondition::Between => {
+                let lo = f.values[0].parse::<f64>().unwrap_or(f64::NEG_INFINITY);
+                let hi = f.values[1].parse::<f64>().unwrap_or(f64::INFINITY);
+                op.update_date >= lo && op.update_date <= hi
+            }
+            _ => f.values.iter().any(|v| {
+                v.parse::<f64>()
+                    .map(|t| (op.update_date - t).abs() < f64::EPSILON)
+                    .unwrap_or(false)
+            }),
+        },
+    }
+}
+
+fn match_str(f: &OperationFilter, actual: Option<&String>) -> bool {
+    let Some(actual) = actual else {
+        return false;
+    };
+    match f.condition {
+        OperationFilterCondition::Eq => f.values.iter().any(|v| v == actual),
+        OperationFilterCondition::In => f.values.iter().any(|v| v == actual),
+        OperationFilterCondition::Between => false,
+    }
 }
 
 /// `UpdateService` — patch the mutable fields of an existing service.
@@ -750,6 +889,159 @@ mod revision_tests {
         )
         .unwrap();
         assert_eq!(resp["InstancesRevision"], 3);
+    }
+
+    #[test]
+    fn list_operations_filters_by_each_dimension() {
+        let (state, svc_id, _) = fresh_service();
+        // Re-create another service so we have two SERVICE_IDs in play.
+        let ns_id = state.services.get(&svc_id).unwrap().namespace_id.clone();
+        let other = create_service(
+            &state,
+            &json!({ "Name": "svc2", "NamespaceId": ns_id, "Type": "HTTP" }),
+            &ctx(),
+        )
+        .unwrap();
+        let other_id = other["Service"]["Id"].as_str().unwrap().to_string();
+
+        // Cause a few operations.
+        register_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i1", "Attributes": {} }),
+            &ctx(),
+        )
+        .unwrap();
+        deregister_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i1" }),
+            &ctx(),
+        )
+        .unwrap();
+        register_instance(
+            &state,
+            &json!({ "ServiceId": other_id, "InstanceId": "i2", "Attributes": {} }),
+            &ctx(),
+        )
+        .unwrap();
+
+        // SERVICE_ID filter narrows to ops touching svc_id only.
+        let resp = list_operations(
+            &state,
+            &json!({ "Filters": [{ "Name": "SERVICE_ID", "Values": [svc_id.clone()] }] }),
+            &ctx(),
+        )
+        .unwrap();
+        let count = resp["Operations"].as_array().unwrap().len();
+        assert!(count >= 2, "expected >=2 ops for svc_id, got {count}");
+
+        // TYPE = REGISTER_INSTANCE returns only register ops.
+        let resp = list_operations(
+            &state,
+            &json!({ "Filters": [{ "Name": "TYPE", "Values": ["REGISTER_INSTANCE"] }] }),
+            &ctx(),
+        )
+        .unwrap();
+        let arr = resp["Operations"].as_array().unwrap();
+        assert!(!arr.is_empty());
+        // All matches must be REGISTER_INSTANCE; introspect via state since
+        // the response trims to Id + Status.
+        for o in arr {
+            let id = o["Id"].as_str().unwrap();
+            assert_eq!(
+                state.operations.get(id).unwrap().r#type,
+                "REGISTER_INSTANCE"
+            );
+        }
+
+        // STATUS=SUCCESS — every op in our emulator collapses to SUCCESS.
+        let resp = list_operations(
+            &state,
+            &json!({ "Filters": [{ "Name": "STATUS", "Values": ["SUCCESS"] }] }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(!resp["Operations"].as_array().unwrap().is_empty());
+        let resp = list_operations(
+            &state,
+            &json!({ "Filters": [{ "Name": "STATUS", "Values": ["FAIL"] }] }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(resp["Operations"].as_array().unwrap().is_empty());
+
+        // NAMESPACE_ID filter against the real namespace yields the
+        // namespace-create op.
+        let resp = list_operations(
+            &state,
+            &json!({ "Filters": [{ "Name": "NAMESPACE_ID", "Values": [ns_id.clone()] }] }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(!resp["Operations"].as_array().unwrap().is_empty());
+
+        // UPDATE_DATE BETWEEN [0, now+1day] catches everything.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let resp = list_operations(
+            &state,
+            &json!({
+                "Filters": [{
+                    "Name": "UPDATE_DATE",
+                    "Condition": "BETWEEN",
+                    "Values": ["0", format!("{}", now + 86400.0)],
+                }],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(!resp["Operations"].as_array().unwrap().is_empty());
+
+        // Multiple filters AND together.
+        let resp = list_operations(
+            &state,
+            &json!({
+                "Filters": [
+                    { "Name": "TYPE", "Values": ["REGISTER_INSTANCE"] },
+                    { "Name": "SERVICE_ID", "Values": [other_id.clone()] },
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let arr = resp["Operations"].as_array().unwrap();
+        assert_eq!(arr.len(), 1, "expected exactly one match, got {arr:?}");
+    }
+
+    #[test]
+    fn list_operations_rejects_unknown_filter() {
+        let state = ServiceDiscoveryState::default();
+        let err = list_operations(
+            &state,
+            &json!({ "Filters": [{ "Name": "FOO", "Values": ["x"] }] }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidInput");
+    }
+
+    #[test]
+    fn list_operations_rejects_between_on_non_date() {
+        let state = ServiceDiscoveryState::default();
+        let err = list_operations(
+            &state,
+            &json!({
+                "Filters": [{
+                    "Name": "STATUS",
+                    "Condition": "BETWEEN",
+                    "Values": ["a", "b"],
+                }],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidInput");
     }
 
     #[test]
