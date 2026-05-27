@@ -141,6 +141,7 @@ pub fn send_templated_email(
     let body_html = template.html.as_deref().map(|s| render_template(s, &data));
     let configuration_set_name = input["ConfigurationSetName"].as_str().map(str::to_string);
     let tags = parse_email_tags(input.get("Tags").or_else(|| input.get("EmailTags")));
+    enforce_configuration_set(state, configuration_set_name.as_deref(), input)?;
 
     let message_id = Uuid::new_v4().to_string();
     let email = SentEmail {
@@ -227,6 +228,7 @@ pub fn send_raw_email(
     let subject = headers.get("subject").cloned();
     let configuration_set_name = input["ConfigurationSetName"].as_str().map(str::to_string);
     let tags = parse_email_tags(input.get("Tags").or_else(|| input.get("EmailTags")));
+    enforce_configuration_set(state, configuration_set_name.as_deref(), input)?;
     // ReturnPath / SourceArn: AWS treats these as identity-routing hints
     // (cross-account sending, bounce destination). We log them for
     // observability; downstream simulator paths don't need them yet.
@@ -361,6 +363,45 @@ fn parse_email_tags(tags: Option<&Value>) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// Apply per-send guards from the named configuration set:
+///
+/// - Missing set yields `ConfigurationSetDoesNotExist` (404).
+/// - `SendingOptions.SendingEnabled = false` yields
+///   `AccountSendingPausedException`, matching AWS when sends are paused.
+/// - `DeliveryOptions.TlsPolicy = REQUIRE` paired with an
+///   `aws-ses-disable-tls` EmailTag yields `MessageRejected`.
+///
+/// Reputation metrics are a passive signal (no rejection); we only
+/// persist them so dashboards can consume the field.
+fn enforce_configuration_set(
+    state: &SesState,
+    name: Option<&str>,
+    input: &Value,
+) -> Result<(), AwsError> {
+    let Some(name) = name else { return Ok(()) };
+    let cs = state.configuration_sets.get(name).ok_or_else(|| {
+        AwsError::not_found(
+            "ConfigurationSetDoesNotExist",
+            format!("Configuration set does not exist: {name}"),
+        )
+    })?;
+    if !cs.sending_enabled {
+        return Err(AwsError::bad_request(
+            "AccountSendingPausedException",
+            format!("ConfigurationSet '{name}' has sending disabled"),
+        ));
+    }
+    if cs.tls_policy.as_deref() == Some("REQUIRE")
+        && tags_signal_no_tls(input.get("EmailTags").or_else(|| input.get("Tags")))
+    {
+        return Err(AwsError::bad_request(
+            "MessageRejected",
+            "ConfigurationSet TlsPolicy is REQUIRE; recipient does not support TLS",
+        ));
+    }
+    Ok(())
+}
+
 /// Returns true when EmailTags carry the `aws-ses-disable-tls` marker
 /// with a truthy value, used by the simulator to model a recipient MTA
 /// without TLS support.
@@ -453,26 +494,7 @@ pub fn send_email(
         }
     }
 
-    // Configuration set lookup + TLS policy enforcement. When the set is
-    // configured with TlsPolicy=REQUIRE we refuse sends that the caller
-    // tags as plaintext-only via the `aws-ses-disable-tls=true` email
-    // tag. This mirrors the AWS behavior of refusing delivery when the
-    // recipient MTA cannot negotiate TLS.
-    if let Some(ref cs_name) = configuration_set_name {
-        let cs = state.configuration_sets.get(cs_name).ok_or_else(|| {
-            AwsError::not_found(
-                "ConfigurationSetDoesNotExist",
-                format!("Configuration set does not exist: {cs_name}"),
-            )
-        })?;
-        if cs.tls_policy.as_deref() == Some("REQUIRE") && tags_signal_no_tls(input.get("EmailTags"))
-        {
-            return Err(AwsError::bad_request(
-                "MessageRejected",
-                "ConfigurationSet TlsPolicy is REQUIRE; recipient does not support TLS",
-            ));
-        }
-    }
+    enforce_configuration_set(state, configuration_set_name.as_deref(), input)?;
 
     // Content — Simple, Raw, or Templated. The Templated branch loads
     // the named template, parses the TemplateData JSON string, and
@@ -629,10 +651,135 @@ mod tls_policy_enforcement_tests {
     }
 
     #[test]
+    fn send_email_rejects_paused_configuration_set() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store);
+        crate::operations::more::create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "SendingOptions": { "SendingEnabled": false }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = send_email(
+            &state,
+            &json!({
+                "FromEmailAddress": "alice@example.com",
+                "Destination": { "ToAddresses": ["bob@example.com"] },
+                "Content": { "Simple": { "Subject": { "Data": "x" }, "Body": { "Text": { "Data": "x" } } } },
+                "ConfigurationSetName": "cs"
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AccountSendingPausedException");
+    }
+
+    #[test]
+    fn send_templated_email_rejects_paused_configuration_set() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store);
+        crate::operations::more::create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "SendingOptions": { "SendingEnabled": false }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        crate::operations::templates::create_email_template(
+            &state,
+            &json!({
+                "TemplateName": "t",
+                "TemplateContent": { "Subject": "s", "Text": "t" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = send_templated_email(
+            &state,
+            &json!({
+                "Source": "alice@example.com",
+                "Destination": { "ToAddresses": ["bob@example.com"] },
+                "Template": "t",
+                "TemplateData": "{}",
+                "ConfigurationSetName": "cs"
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AccountSendingPausedException");
+    }
+
+    #[test]
+    fn send_raw_email_rejects_paused_configuration_set() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store);
+        crate::operations::more::create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "SendingOptions": { "SendingEnabled": false }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = send_raw_email(
+            &state,
+            &json!({
+                "RawMessage": { "Data": "From: a@x.com\r\nTo: b@x.com\r\n\r\nhi" },
+                "ConfigurationSetName": "cs"
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AccountSendingPausedException");
+    }
+
+    #[test]
+    fn send_email_allows_enabled_configuration_set() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store);
+        crate::operations::more::create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "SendingOptions": { "SendingEnabled": true }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        send_email(
+            &state,
+            &json!({
+                "FromEmailAddress": "alice@example.com",
+                "Destination": { "ToAddresses": ["bob@example.com"] },
+                "Content": { "Simple": { "Subject": { "Data": "x" }, "Body": { "Text": { "Data": "x" } } } },
+                "ConfigurationSetName": "cs"
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn send_raw_email_parses_rfc2822_headers_when_destinations_absent() {
         let state = SesState::default();
         let store = open_store();
         state.set_sqlite(store.clone());
+        crate::operations::more::create_configuration_set(
+            &state,
+            &json!({ "ConfigurationSetName": "cs" }),
+            &ctx(),
+        )
+        .unwrap();
         let raw = "From: Alice <alice@example.com>\r\n\
                    To: Bob <bob@example.com>, charlie@example.com\r\n\
                    Cc: cc@example.com\r\n\
