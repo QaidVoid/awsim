@@ -2617,6 +2617,13 @@ fn register_services(
     let ecr_clone = Arc::clone(&ecr);
     state.register(ecr, vec![]);
 
+    // Cloud Map / Service Discovery is registered alongside its
+    // peers further down, but we need its store handle now so ECS
+    // can `RegisterInstance` against it when CreateService passes
+    // serviceRegistries[].
+    let servicediscovery = Arc::new(awsim_servicediscovery::ServiceDiscoveryService::new());
+    let servicediscovery_store = servicediscovery.store();
+
     let ecs_iam_lookup: Arc<dyn awsim_core::PrincipalLookup> =
         Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store.clone()));
     let ecs_secrets_lookup: Arc<dyn awsim_core::SecretLookup> = Arc::new(
@@ -2624,11 +2631,15 @@ fn register_services(
     );
     let ecs_parameters_lookup: Arc<dyn awsim_core::ParameterLookup> =
         Arc::new(awsim_ssm::SsmParameterLookup::new(ssm_store.clone()));
+    let ecs_cloudmap_registrar: Arc<dyn awsim_core::CloudMapRegistrar> = Arc::new(
+        awsim_servicediscovery::CloudMapServiceRegistrar::new(servicediscovery_store),
+    );
     let ecs = Arc::new(
         awsim_ecs::EcsService::new()
             .with_iam_lookup(ecs_iam_lookup)
             .with_secrets_lookup(ecs_secrets_lookup)
-            .with_parameters_lookup(ecs_parameters_lookup),
+            .with_parameters_lookup(ecs_parameters_lookup)
+            .with_cloudmap_registrar(ecs_cloudmap_registrar),
     );
     state.register(ecs, vec![]);
 
@@ -2786,7 +2797,9 @@ fn register_services(
     };
     state.register(Arc::new(xray), xray_routes);
 
-    let servicediscovery = Arc::new(awsim_servicediscovery::ServiceDiscoveryService::new());
+    // servicediscovery was constructed above (so ECS could borrow
+    // its store via the Cloud Map registrar); register it here so
+    // its routes show up in the right order alongside its peers.
     state.register(servicediscovery, vec![]);
 
     // Control plane + AppConfigData data plane both sign as `appconfig`;

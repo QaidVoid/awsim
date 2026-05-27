@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use awsim_core::{
-    AccountRegionStore, AwsError, ParameterLookup, PrincipalLookup, Protocol, RequestContext,
-    SecretLookup, ServiceHandler,
+    AccountRegionStore, AwsError, CloudMapRegistrar, ParameterLookup, PrincipalLookup, Protocol,
+    RequestContext, SecretLookup, ServiceHandler,
 };
 use serde_json::Value;
 use tracing::debug;
@@ -26,6 +26,9 @@ pub struct EcsService {
     /// `containerDefinitions[].secrets[]` references that point at
     /// SSM parameters. `None` skips the validation.
     parameters_lookup: Option<Arc<dyn ParameterLookup>>,
+    /// Cloud Map registrar used to publish ECS services into a Cloud
+    /// Map service whenever CreateService passes `serviceRegistries[]`.
+    cloudmap_registrar: Option<Arc<dyn CloudMapRegistrar>>,
 }
 
 impl EcsService {
@@ -35,6 +38,7 @@ impl EcsService {
             iam_lookup: None,
             secrets_lookup: None,
             parameters_lookup: None,
+            cloudmap_registrar: None,
         }
     }
 
@@ -58,6 +62,14 @@ impl EcsService {
     /// are validated when RunTask materialises the task.
     pub fn with_parameters_lookup(mut self, lookup: Arc<dyn ParameterLookup>) -> Self {
         self.parameters_lookup = Some(lookup);
+        self
+    }
+
+    /// Plug in the Cloud Map registrar so CreateService with
+    /// `serviceRegistries[]` registers an instance per registry, and
+    /// DeleteService cleans them up.
+    pub fn with_cloudmap_registrar(mut self, registrar: Arc<dyn CloudMapRegistrar>) -> Self {
+        self.cloudmap_registrar = Some(registrar);
         self
     }
 }
@@ -119,8 +131,12 @@ impl ServiceHandler for EcsService {
             }
 
             // Services
-            "CreateService" => services::create_service(&state, &input, ctx),
-            "DeleteService" => services::delete_service(&state, &input, ctx),
+            "CreateService" => {
+                services::create_service(&state, &input, ctx, self.cloudmap_registrar.as_deref())
+            }
+            "DeleteService" => {
+                services::delete_service(&state, &input, ctx, self.cloudmap_registrar.as_deref())
+            }
             "DescribeServices" => services::describe_services(&state, &input, ctx),
             "ListServices" => services::list_services(&state, &input, ctx),
             "UpdateService" => services::update_service(&state, &input, ctx),

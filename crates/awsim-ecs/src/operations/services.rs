@@ -25,7 +25,7 @@ fn service_to_json(svc: &Service) -> Value {
         "deployments": [],
         "events": [],
         "loadBalancers": svc.load_balancers,
-        "serviceRegistries": [],
+        "serviceRegistries": svc.service_registries,
         "networkConfiguration": svc.network_configuration.clone().unwrap_or(Value::Null),
         "tags": tags,
         "enableECSManagedTags": svc.enable_ecs_managed_tags,
@@ -50,6 +50,7 @@ pub fn create_service(
     state: &EcsState,
     input: &Value,
     ctx: &RequestContext,
+    cloudmap_registrar: Option<&dyn awsim_core::CloudMapRegistrar>,
 ) -> Result<Value, AwsError> {
     let cluster_id = input["cluster"].as_str().unwrap_or("default");
     let cluster_name = resolve_cluster_name(cluster_id).to_string();
@@ -127,6 +128,39 @@ pub fn create_service(
     }
     let enable_ecs_managed_tags = input["enableECSManagedTags"].as_bool().unwrap_or(false);
 
+    let service_registries: Vec<Value> = input
+        .get("serviceRegistries")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(registrar) = cloudmap_registrar {
+        for entry in &service_registries {
+            let Some(registry_arn) = entry.get("registryArn").and_then(Value::as_str) else {
+                continue;
+            };
+            let mut attrs = std::collections::HashMap::new();
+            if let Some(port) = entry.get("port").and_then(Value::as_i64) {
+                attrs.insert("AWS_INSTANCE_PORT".to_string(), port.to_string());
+            }
+            attrs.insert("ECS_SERVICE_NAME".to_string(), service_name.clone());
+            attrs.insert("ECS_CLUSTER_NAME".to_string(), cluster_name.clone());
+            if !registrar.register_instance(
+                registry_arn,
+                &service_arn,
+                &attrs,
+                &ctx.account_id,
+                &ctx.region,
+            ) {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterException",
+                    format!(
+                        "serviceRegistries[].registryArn `{registry_arn}` does not resolve to a Cloud Map service."
+                    ),
+                ));
+            }
+        }
+    }
+
     let service = Service {
         service_name: service_name.clone(),
         service_arn: service_arn.clone(),
@@ -144,6 +178,7 @@ pub fn create_service(
         tags,
         propagate_tags,
         enable_ecs_managed_tags,
+        service_registries,
     };
 
     info!(cluster = %cluster_name, service = %service_name, "Created ECS service");
@@ -160,7 +195,8 @@ pub fn create_service(
 pub fn delete_service(
     state: &EcsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
+    cloudmap_registrar: Option<&dyn awsim_core::CloudMapRegistrar>,
 ) -> Result<Value, AwsError> {
     let cluster_id = input["cluster"].as_str().unwrap_or("default");
     let cluster_name = resolve_cluster_name(cluster_id);
@@ -189,6 +225,19 @@ pub fn delete_service(
             format!("The specified service '{service_name}' does not exist"),
         )
     })?;
+
+    if let Some(registrar) = cloudmap_registrar {
+        for entry in &svc.service_registries {
+            if let Some(registry_arn) = entry.get("registryArn").and_then(Value::as_str) {
+                registrar.deregister_instance(
+                    registry_arn,
+                    &svc.service_arn,
+                    &ctx.account_id,
+                    &ctx.region,
+                );
+            }
+        }
+    }
 
     info!(cluster = %cluster_name, service = %service_name, "Deleted ECS service");
 
@@ -320,4 +369,161 @@ pub fn update_service(
     info!(cluster = %cluster_name, service = %service_name, "Updated ECS service");
 
     Ok(json!({ "service": service_to_json(svc) }))
+}
+
+#[cfg(test)]
+mod cloudmap_tests {
+    use super::*;
+    use crate::operations::clusters::create_cluster;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("ecs", "us-east-1")
+    }
+
+    #[derive(Default)]
+    struct StubRegistrar {
+        known: HashMap<String, ()>,
+        registered: Mutex<Vec<(String, String)>>,
+        deregistered: Mutex<Vec<(String, String)>>,
+    }
+
+    impl awsim_core::CloudMapRegistrar for StubRegistrar {
+        fn register_instance(
+            &self,
+            registry_arn: &str,
+            instance_id: &str,
+            _attributes: &HashMap<String, String>,
+            _account: &str,
+            _region: &str,
+        ) -> bool {
+            if !self.known.contains_key(registry_arn) {
+                return false;
+            }
+            self.registered
+                .lock()
+                .unwrap()
+                .push((registry_arn.to_string(), instance_id.to_string()));
+            true
+        }
+        fn deregister_instance(
+            &self,
+            registry_arn: &str,
+            instance_id: &str,
+            _account: &str,
+            _region: &str,
+        ) {
+            self.deregistered
+                .lock()
+                .unwrap()
+                .push((registry_arn.to_string(), instance_id.to_string()));
+        }
+    }
+
+    fn registrar_with(registry_arn: &str) -> StubRegistrar {
+        let mut r = StubRegistrar::default();
+        r.known.insert(registry_arn.to_string(), ());
+        r
+    }
+
+    #[test]
+    fn create_service_registers_cloudmap_instance_per_registry() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        let registry = "arn:aws:servicediscovery:us-east-1:000000000000:service/srv-abc";
+        let registrar = registrar_with(registry);
+
+        create_service(
+            &state,
+            &json!({
+                "cluster": "default",
+                "serviceName": "api",
+                "taskDefinition": "web",
+                "serviceRegistries": [{ "registryArn": registry, "port": 8080 }],
+            }),
+            &ctx(),
+            Some(&registrar),
+        )
+        .unwrap();
+
+        let registered = registrar.registered.lock().unwrap();
+        assert_eq!(registered.len(), 1);
+        assert_eq!(registered[0].0, registry);
+    }
+
+    #[test]
+    fn create_service_rejects_unknown_registry() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        let registrar = StubRegistrar::default();
+        let err = create_service(
+            &state,
+            &json!({
+                "cluster": "default",
+                "serviceName": "api",
+                "taskDefinition": "web",
+                "serviceRegistries": [{
+                    "registryArn": "arn:aws:servicediscovery:us-east-1:000000000000:service/missing",
+                }],
+            }),
+            &ctx(),
+            Some(&registrar),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn delete_service_deregisters_each_registry() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        let registry = "arn:aws:servicediscovery:us-east-1:000000000000:service/srv-abc";
+        let registrar = registrar_with(registry);
+
+        create_service(
+            &state,
+            &json!({
+                "cluster": "default",
+                "serviceName": "api",
+                "taskDefinition": "web",
+                "serviceRegistries": [{ "registryArn": registry }],
+            }),
+            &ctx(),
+            Some(&registrar),
+        )
+        .unwrap();
+        delete_service(
+            &state,
+            &json!({ "cluster": "default", "service": "api" }),
+            &ctx(),
+            Some(&registrar),
+        )
+        .unwrap();
+
+        let deregistered = registrar.deregistered.lock().unwrap();
+        assert_eq!(deregistered.len(), 1);
+        assert_eq!(deregistered[0].0, registry);
+    }
+
+    #[test]
+    fn create_service_without_registrar_persists_registries_unvalidated() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        let registry = "arn:aws:servicediscovery:us-east-1:000000000000:service/anything";
+        let resp = create_service(
+            &state,
+            &json!({
+                "cluster": "default",
+                "serviceName": "api",
+                "taskDefinition": "web",
+                "serviceRegistries": [{ "registryArn": registry }],
+            }),
+            &ctx(),
+            None,
+        )
+        .unwrap();
+        let regs = resp["service"]["serviceRegistries"].as_array().unwrap();
+        assert_eq!(regs[0]["registryArn"], registry);
+    }
 }

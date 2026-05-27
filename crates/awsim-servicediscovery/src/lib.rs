@@ -7,14 +7,96 @@ pub mod state;
 
 pub use state::ServiceDiscoveryState;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use awsim_core::{
-    AccountRegionStore, AwsError, Protocol, RequestContext, RouteDefinition, ServiceHandler,
+    AccountRegionStore, AwsError, CloudMapRegistrar, Protocol, RequestContext, RouteDefinition,
+    ServiceHandler,
 };
 use serde_json::Value;
 use tracing::debug;
+
+use state::Instance;
+
+/// Cross-service hook: registers ECS services as Cloud Map instances
+/// when ECS CreateService passes `serviceRegistries[]`. Mirrors AWS's
+/// behavior where ECS auto-calls `RegisterInstance` against the
+/// caller's chosen Cloud Map service.
+pub struct CloudMapServiceRegistrar {
+    store: AccountRegionStore<ServiceDiscoveryState>,
+}
+
+impl CloudMapServiceRegistrar {
+    pub fn new(store: AccountRegionStore<ServiceDiscoveryState>) -> Self {
+        Self { store }
+    }
+}
+
+fn registry_arn_to_service_id(arn: &str) -> Option<&str> {
+    // Real ARN: arn:aws:servicediscovery:{region}:{account}:service/{id}
+    arn.strip_prefix("arn:aws:servicediscovery:")
+        .and_then(|rest| {
+            let mut parts = rest.splitn(3, ':');
+            let _region = parts.next()?;
+            let _account = parts.next()?;
+            let resource = parts.next()?;
+            resource.strip_prefix("service/")
+        })
+}
+
+impl CloudMapRegistrar for CloudMapServiceRegistrar {
+    fn register_instance(
+        &self,
+        registry_arn: &str,
+        instance_id: &str,
+        attributes: &HashMap<String, String>,
+        account: &str,
+        region: &str,
+    ) -> bool {
+        let Some(service_id) = registry_arn_to_service_id(registry_arn) else {
+            return false;
+        };
+        let state = self.store.get(account, region);
+        if !state.services.contains_key(service_id) {
+            return false;
+        }
+        let key = format!("{service_id}:{instance_id}");
+        state.instances.insert(
+            key,
+            Instance {
+                id: instance_id.to_string(),
+                service_id: service_id.to_string(),
+                creator_request_id: None,
+                attributes: attributes.clone(),
+            },
+        );
+        if let Some(mut svc) = state.services.get_mut(service_id) {
+            svc.instance_count += 1;
+        }
+        true
+    }
+
+    fn deregister_instance(
+        &self,
+        registry_arn: &str,
+        instance_id: &str,
+        account: &str,
+        region: &str,
+    ) {
+        let Some(service_id) = registry_arn_to_service_id(registry_arn) else {
+            return;
+        };
+        let state = self.store.get(account, region);
+        let key = format!("{service_id}:{instance_id}");
+        if state.instances.remove(&key).is_some()
+            && let Some(mut svc) = state.services.get_mut(service_id)
+        {
+            svc.instance_count = svc.instance_count.saturating_sub(1);
+        }
+    }
+}
 
 pub struct ServiceDiscoveryService {
     store: AccountRegionStore<ServiceDiscoveryState>,

@@ -105,6 +105,29 @@ pub trait ParameterLookup: Send + Sync {
     fn parameter_exists(&self, parameter_ref: &str, account: &str, region: &str) -> bool;
 }
 
+/// Cross-service hook that lets ECS register a service as a Cloud Map
+/// instance when CreateService specifies `serviceRegistries[]`. Two
+/// distinct return signals: `true` when the registry exists and the
+/// instance was recorded, `false` when the registry ARN doesn't
+/// resolve so the caller can surface a clear error.
+pub trait CloudMapRegistrar: Send + Sync {
+    fn register_instance(
+        &self,
+        registry_arn: &str,
+        instance_id: &str,
+        attributes: &std::collections::HashMap<String, String>,
+        account: &str,
+        region: &str,
+    ) -> bool;
+    fn deregister_instance(
+        &self,
+        registry_arn: &str,
+        instance_id: &str,
+        account: &str,
+        region: &str,
+    );
+}
+
 pub struct NoopPrincipalLookup;
 
 impl PrincipalLookup for NoopPrincipalLookup {

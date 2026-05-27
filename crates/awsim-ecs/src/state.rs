@@ -56,6 +56,11 @@ pub struct Service {
     /// Mirrors `enableECSManagedTags`: when true RunTask layers the
     /// AWS-managed `aws:ecs:*` tags onto each task it spins up.
     pub enable_ecs_managed_tags: bool,
+    /// CloudMap registries this service is published into. Each entry
+    /// is `{registryArn, containerName, containerPort, port}`; when a
+    /// Cloud Map registrar is wired, CreateService calls
+    /// RegisterInstance per registry and DeleteService deregisters.
+    pub service_registries: Vec<Value>,
 }
 
 /// An ECS cluster.
