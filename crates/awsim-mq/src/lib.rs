@@ -739,6 +739,98 @@ mod tests {
     }
 
     #[test]
+    fn update_broker_stages_pending_until_reboot() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let r = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "pending-broker",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+                "HostInstanceType": "mq.t3.micro",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let id = r["BrokerId"].as_str().unwrap().to_string();
+
+        block_on(svc.handle(
+            "UpdateBroker",
+            json!({
+                "BrokerId": id.clone(),
+                "HostInstanceType": "mq.m5.large",
+                "AutoMinorVersionUpgrade": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        // Live config unchanged before reboot; pending mirror reflects
+        // the staged diff via Pending* fields.
+        let pre = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id.clone() }), &ctx))
+            .unwrap();
+        assert_eq!(pre["HostInstanceType"], json!("mq.t3.micro"));
+        assert_eq!(pre["AutoMinorVersionUpgrade"], json!(true));
+        assert_eq!(pre["PendingHostInstanceType"], json!("mq.m5.large"));
+        assert_eq!(pre["PendingAutoMinorVersionUpgrade"], json!(false));
+
+        // Reboot promotes the staged values and clears Pending*.
+        block_on(svc.handle("RebootBroker", json!({ "BrokerId": id.clone() }), &ctx)).unwrap();
+        let post = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id.clone() }), &ctx))
+            .unwrap();
+        assert_eq!(post["HostInstanceType"], json!("mq.m5.large"));
+        assert_eq!(post["AutoMinorVersionUpgrade"], json!(false));
+        assert!(post.get("PendingHostInstanceType").is_none());
+        assert!(post.get("PendingAutoMinorVersionUpgrade").is_none());
+    }
+
+    #[test]
+    fn update_broker_stages_logs_and_configuration_for_reboot() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let r = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "log-rotate",
+                "EngineType": "ACTIVEMQ",
+                "EngineVersion": "5.18",
+                "HostInstanceType": "mq.m5.large",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let id = r["BrokerId"].as_str().unwrap().to_string();
+
+        block_on(svc.handle(
+            "UpdateBroker",
+            json!({
+                "BrokerId": id.clone(),
+                "Logs": { "General": true, "Audit": true },
+                "Configuration": { "Id": "c-new", "Revision": 2 },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let pre = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id.clone() }), &ctx))
+            .unwrap();
+        // No Logs yet on live config — pending only.
+        assert!(pre.get("Logs").is_none());
+        assert_eq!(pre["PendingLogs"]["Audit"], json!(true));
+        assert_eq!(pre["PendingConfiguration"]["Id"], json!("c-new"));
+
+        block_on(svc.handle("RebootBroker", json!({ "BrokerId": id.clone() }), &ctx)).unwrap();
+        let post = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id.clone() }), &ctx))
+            .unwrap();
+        assert_eq!(post["Logs"]["Audit"], json!(true));
+        // LogsSummary was derived from the now-live config.
+        assert_eq!(post["LogsSummary"]["Audit"], json!(true));
+        assert_eq!(post["Configurations"]["Current"]["Id"], json!("c-new"));
+        assert!(post.get("PendingLogs").is_none());
+        assert!(post.get("PendingConfiguration").is_none());
+    }
+
+    #[test]
     fn create_broker_persists_full_config_surface() {
         let svc = MqService::new();
         let ctx = ctx();

@@ -75,6 +75,13 @@ pub struct Broker {
     /// value.
     #[serde(default)]
     pub data_replication_mode: Option<String>,
+    /// In-flight `UpdateBroker` payload. AWS stages the requested
+    /// changes here (so `DescribeBroker.PendingHostInstanceType`,
+    /// `PendingEngineVersion`, etc. reflect what the next reboot will
+    /// apply) without disturbing the live config. `RebootBroker`
+    /// promotes the entries into the live fields and clears this map.
+    #[serde(default)]
+    pub pending: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

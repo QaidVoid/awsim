@@ -113,6 +113,14 @@ fn broker_describe(b: &Broker, users: Vec<Value>) -> Value {
     if let Some(ref v) = b.data_replication_mode {
         obj["DataReplicationMode"] = json!(v);
     }
+    // `Pending*` mirrors. AWS exposes these on DescribeBroker so
+    // callers can see what the next reboot will apply. We map each
+    // staged key into the AWS-documented `Pending<Field>` name.
+    if !b.pending.is_empty() {
+        for (k, v) in &b.pending {
+            obj[format!("Pending{k}")] = v.clone();
+        }
+    }
     obj
 }
 
@@ -310,6 +318,7 @@ pub fn create_broker(
             .get("DataReplicationMode")
             .and_then(|v| v.as_str())
             .map(String::from),
+        pending: HashMap::new(),
     };
     let result = json!({ "BrokerId": id, "BrokerArn": b.broker_arn });
     state.brokers.insert(id.clone(), b);
@@ -445,6 +454,10 @@ pub fn delete_broker(
     Ok(json!({ "BrokerId": id }))
 }
 
+/// `UpdateBroker` stages changes into the broker's `pending` mirror
+/// without disturbing the live config. AWS applies the staged values
+/// on the next `RebootBroker`. The response echoes the *requested*
+/// values (which is also what AWS does today).
 pub fn update_broker(
     state: &MqState,
     input: &Value,
@@ -454,27 +467,54 @@ pub fn update_broker(
     let mut b = state.brokers.get_mut(id).ok_or_else(|| {
         AwsError::not_found("NotFoundException", format!("Broker {id} not found"))
     })?;
+    // Echo the live values back when no override is requested, so the
+    // response shape matches what real AWS returns even on a trivial
+    // UpdateBroker call (no fields set means no diff, but the API
+    // still surfaces the current configuration).
+    let mut resp_host = b.host_instance_type.clone();
+    let mut resp_engine_version = b.engine_version.clone();
+    let mut resp_auto = b.auto_minor_version_upgrade;
+    let mut staged_any = false;
     if let Some(host) = input.get("HostInstanceType").and_then(|v| v.as_str()) {
-        b.host_instance_type = host.to_string();
-        b.broker_instance_type = host.to_string();
+        b.pending
+            .insert("HostInstanceType".to_string(), json!(host));
+        resp_host = host.to_string();
+        staged_any = true;
     }
     if let Some(v) = input.get("EngineVersion").and_then(|v| v.as_str()) {
-        b.engine_version = v.to_string();
+        b.pending.insert("EngineVersion".to_string(), json!(v));
+        resp_engine_version = v.to_string();
+        staged_any = true;
     }
     if let Some(b2) = input
         .get("AutoMinorVersionUpgrade")
         .and_then(|v| v.as_bool())
     {
-        b.auto_minor_version_upgrade = b2;
+        b.pending
+            .insert("AutoMinorVersionUpgrade".to_string(), json!(b2));
+        resp_auto = b2;
+        staged_any = true;
     }
+    if let Some(v) = input.get("Logs").cloned() {
+        b.pending.insert("Logs".to_string(), v);
+        staged_any = true;
+    }
+    if let Some(v) = input.get("Configuration").cloned() {
+        b.pending.insert("Configuration".to_string(), v);
+        staged_any = true;
+    }
+    let _ = staged_any;
     Ok(json!({
         "BrokerId": b.broker_id,
-        "AutoMinorVersionUpgrade": b.auto_minor_version_upgrade,
-        "EngineVersion": b.engine_version,
-        "HostInstanceType": b.host_instance_type,
+        "AutoMinorVersionUpgrade": resp_auto,
+        "EngineVersion": resp_engine_version,
+        "HostInstanceType": resp_host,
     }))
 }
 
+/// `RebootBroker` applies any staged `pending` values into the live
+/// config and clears the pending mirror. This is the only path that
+/// promotes an `UpdateBroker` diff to the user-visible fields.
 pub fn reboot_broker(
     state: &MqState,
     input: &Value,
@@ -484,6 +524,30 @@ pub fn reboot_broker(
     let mut b = state.brokers.get_mut(id).ok_or_else(|| {
         AwsError::not_found("NotFoundException", format!("Broker {id} not found"))
     })?;
+    // Promote staged fields. Drain `pending` so the next describe
+    // shows a clean post-reboot configuration with no stale Pending*.
+    let staged: HashMap<String, Value> = std::mem::take(&mut b.pending);
+    for (k, v) in staged {
+        match (k.as_str(), v) {
+            ("HostInstanceType", Value::String(s)) => {
+                b.host_instance_type = s.clone();
+                b.broker_instance_type = s;
+            }
+            ("EngineVersion", Value::String(s)) => {
+                b.engine_version = s;
+            }
+            ("AutoMinorVersionUpgrade", Value::Bool(v)) => {
+                b.auto_minor_version_upgrade = v;
+            }
+            ("Logs", v) => {
+                b.logs = Some(v);
+            }
+            ("Configuration", v) => {
+                b.configuration = Some(v);
+            }
+            _ => {}
+        }
+    }
     b.broker_state = "RUNNING".to_string();
     Ok(json!({}))
 }
