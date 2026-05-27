@@ -570,12 +570,10 @@ fn apply_parameters(template: &Value, source: &Value) -> Value {
 /// `None` when the call isn't a recognized intrinsic (caller falls back
 /// to treating it as an opaque literal).
 ///
-/// Supported intrinsics:
-/// - `States.Format(template, args...)` — `{}` placeholder substitution.
-/// - `States.JsonToString(path)` — serialize a JSON value to a string.
-/// - `States.StringToJson(path-or-literal)` — parse a string to JSON.
-/// - `States.Array(args...)` — wrap arguments into a JSON array.
-/// - `States.UUID()` — fresh v4 UUID per call.
+/// Implements the documented AWS States intrinsics set. Each function
+/// matches the AWS shape — argument count and return type — closely
+/// enough to slot into existing Parameters / ResultSelector / Map
+/// ItemSelector blocks.
 fn evaluate_intrinsic(expr: &str, source: &Value) -> Option<Value> {
     let expr = expr.trim();
     let (name, args_str) = expr
@@ -625,8 +623,206 @@ fn evaluate_intrinsic(expr: &str, source: &Value) -> Option<Value> {
                 .filter_map(|a| resolve_intrinsic_arg(a, source))
                 .collect(),
         )),
+        "ArrayPartition" => {
+            let arr = resolve_intrinsic_arg(args.first()?, source)?
+                .as_array()?
+                .clone();
+            let size = resolve_intrinsic_arg(args.get(1)?, source)?
+                .as_u64()
+                .filter(|n| *n > 0)? as usize;
+            let chunks: Vec<Value> = arr.chunks(size).map(|c| Value::Array(c.to_vec())).collect();
+            Some(Value::Array(chunks))
+        }
+        "ArrayContains" => {
+            let arr = resolve_intrinsic_arg(args.first()?, source)?;
+            let needle = resolve_intrinsic_arg(args.get(1)?, source)?;
+            Some(Value::Bool(
+                arr.as_array()
+                    .map(|a| a.iter().any(|v| v == &needle))
+                    .unwrap_or(false),
+            ))
+        }
+        "ArrayRange" => {
+            let start = resolve_intrinsic_arg(args.first()?, source)?.as_i64()?;
+            let end = resolve_intrinsic_arg(args.get(1)?, source)?.as_i64()?;
+            let step = resolve_intrinsic_arg(args.get(2)?, source)?.as_i64()?;
+            if step == 0 {
+                return None;
+            }
+            let mut out = Vec::new();
+            let mut v = start;
+            while (step > 0 && v <= end) || (step < 0 && v >= end) {
+                out.push(Value::from(v));
+                v += step;
+            }
+            Some(Value::Array(out))
+        }
+        "ArrayGetItem" => {
+            let arr = resolve_intrinsic_arg(args.first()?, source)?
+                .as_array()?
+                .clone();
+            let idx = resolve_intrinsic_arg(args.get(1)?, source)?.as_u64()? as usize;
+            arr.get(idx).cloned()
+        }
+        "ArrayLength" => {
+            let arr = resolve_intrinsic_arg(args.first()?, source)?;
+            Some(Value::from(arr.as_array().map(|a| a.len() as u64)?))
+        }
+        "ArrayUnique" => {
+            let arr = resolve_intrinsic_arg(args.first()?, source)?
+                .as_array()?
+                .clone();
+            let mut out: Vec<Value> = Vec::with_capacity(arr.len());
+            for v in arr {
+                if !out.contains(&v) {
+                    out.push(v);
+                }
+            }
+            Some(Value::Array(out))
+        }
+        "ArrayConcat" => {
+            let mut out = Vec::new();
+            for a in &args {
+                let v = resolve_intrinsic_arg(a, source)?;
+                if let Some(items) = v.as_array() {
+                    out.extend_from_slice(items);
+                }
+            }
+            Some(Value::Array(out))
+        }
+        "Base64Encode" => {
+            use base64::Engine;
+            use base64::engine::general_purpose::STANDARD;
+            let s = resolve_intrinsic_arg_str(args.first()?, source)?;
+            Some(Value::String(STANDARD.encode(s.as_bytes())))
+        }
+        "Base64Decode" => {
+            use base64::Engine;
+            use base64::engine::general_purpose::STANDARD;
+            let s = resolve_intrinsic_arg_str(args.first()?, source)?;
+            let bytes = STANDARD.decode(s.trim()).ok()?;
+            String::from_utf8(bytes).ok().map(Value::String)
+        }
+        "Hash" => {
+            use sha2::{Digest, Sha256, Sha384, Sha512};
+            let input = resolve_intrinsic_arg_str(args.first()?, source)?;
+            let algo = resolve_intrinsic_arg_str(args.get(1)?, source)?;
+            let digest_hex = match algo.as_str() {
+                "SHA-256" => {
+                    let mut h = Sha256::new();
+                    h.update(input.as_bytes());
+                    format!("{:x}", h.finalize())
+                }
+                "SHA-384" => {
+                    let mut h = Sha384::new();
+                    h.update(input.as_bytes());
+                    format!("{:x}", h.finalize())
+                }
+                "SHA-512" => {
+                    let mut h = Sha512::new();
+                    h.update(input.as_bytes());
+                    format!("{:x}", h.finalize())
+                }
+                _ => return None,
+            };
+            Some(Value::String(digest_hex))
+        }
+        "MathRandom" => {
+            let start = resolve_intrinsic_arg(args.first()?, source)?.as_i64()?;
+            let end = resolve_intrinsic_arg(args.get(1)?, source)?.as_i64()?;
+            if end <= start {
+                return None;
+            }
+            let mut nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos() as u64)
+                .unwrap_or(0);
+            // Mix with caller-provided seed when supplied (AWS optional 3rd arg).
+            if let Some(seed_arg) = args.get(2)
+                && let Some(seed) = resolve_intrinsic_arg(seed_arg, source).and_then(|v| v.as_i64())
+            {
+                nanos ^= seed as u64;
+            }
+            let span = (end - start) as u64;
+            let v = start + (nanos % span) as i64;
+            Some(Value::from(v))
+        }
+        "MathAdd" => {
+            let a = resolve_intrinsic_arg(args.first()?, source)?.as_i64()?;
+            let b = resolve_intrinsic_arg(args.get(1)?, source)?.as_i64()?;
+            Some(Value::from(a + b))
+        }
+        "StringSplit" => {
+            let s = resolve_intrinsic_arg_str(args.first()?, source)?;
+            let sep = resolve_intrinsic_arg_str(args.get(1)?, source)?;
+            let parts = if sep.is_empty() {
+                s.chars().map(|c| Value::String(c.to_string())).collect()
+            } else {
+                s.split(&sep[..])
+                    .map(|p| Value::String(p.to_string()))
+                    .collect::<Vec<_>>()
+            };
+            Some(Value::Array(parts))
+        }
+        "JsonMerge" => {
+            let mut a = resolve_intrinsic_arg(args.first()?, source)?;
+            let b = resolve_intrinsic_arg(args.get(1)?, source)?;
+            let deep = args
+                .get(2)
+                .and_then(|s| resolve_intrinsic_arg(s, source))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            json_merge(&mut a, &b, deep);
+            Some(a)
+        }
         "UUID" => Some(Value::String(uuid::Uuid::new_v4().to_string())),
+        "IsBoolean" => Some(Value::Bool(
+            resolve_intrinsic_arg(args.first()?, source)?.is_boolean(),
+        )),
+        "IsNull" => Some(Value::Bool(
+            resolve_intrinsic_arg(args.first()?, source)?.is_null(),
+        )),
+        "IsNumeric" => Some(Value::Bool(
+            resolve_intrinsic_arg(args.first()?, source)?.is_number(),
+        )),
+        "IsString" => Some(Value::Bool(
+            resolve_intrinsic_arg(args.first()?, source)?.is_string(),
+        )),
+        "IsPresent" => {
+            let v = resolve_intrinsic_arg(args.first()?, source);
+            Some(Value::Bool(matches!(v, Some(ref x) if !x.is_null())))
+        }
+        "IsTimestamp" => {
+            let raw = resolve_intrinsic_arg_str(args.first()?, source)?;
+            // Loose ISO-8601 with optional offset: YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)
+            let re = regex::Regex::new(
+                r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$",
+            )
+            .ok()?;
+            Some(Value::Bool(re.is_match(&raw)))
+        }
         _ => None,
+    }
+}
+
+fn json_merge(target: &mut Value, source: &Value, deep: bool) {
+    match (target, source) {
+        (Value::Object(a), Value::Object(b)) => {
+            for (k, v) in b {
+                if deep
+                    && let Some(existing) = a.get_mut(k)
+                    && existing.is_object()
+                    && v.is_object()
+                {
+                    json_merge(existing, v, true);
+                } else {
+                    a.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        (t, s) => {
+            *t = s.clone();
+        }
     }
 }
 
@@ -1672,5 +1868,182 @@ mod tests {
         assert_eq!(result.status, "SUCCEEDED");
         let out: Value = serde_json::from_str(&result.output.unwrap()).unwrap();
         assert_eq!(out, json!(["a", "b"]));
+    }
+
+    fn run_intrinsic(expr: &str, source: Value) -> Value {
+        evaluate_intrinsic(expr, &source).expect("intrinsic should evaluate")
+    }
+
+    #[test]
+    fn intrinsic_format_substitutes_arguments() {
+        let v = run_intrinsic(
+            "States.Format('hello {} v{}', $.name, $.ver)",
+            json!({ "name": "alex", "ver": 2 }),
+        );
+        assert_eq!(v, json!("hello alex v2"));
+    }
+
+    #[test]
+    fn intrinsic_string_split_basic_and_empty_separator() {
+        assert_eq!(
+            run_intrinsic("States.StringSplit('a,b,c', ',')", Value::Null),
+            json!(["a", "b", "c"])
+        );
+        assert_eq!(
+            run_intrinsic("States.StringSplit('abc', '')", Value::Null),
+            json!(["a", "b", "c"])
+        );
+    }
+
+    #[test]
+    fn intrinsic_array_partition_and_concat() {
+        assert_eq!(
+            run_intrinsic(
+                "States.ArrayPartition($.items, 2)",
+                json!({ "items": [1,2,3,4,5] })
+            ),
+            json!([[1, 2], [3, 4], [5]])
+        );
+        assert_eq!(
+            run_intrinsic(
+                "States.ArrayConcat($.a, $.b)",
+                json!({ "a": [1], "b": [2, 3] })
+            ),
+            json!([1, 2, 3])
+        );
+    }
+
+    #[test]
+    fn intrinsic_array_contains_get_length_range_unique() {
+        assert_eq!(
+            run_intrinsic(
+                "States.ArrayContains($.items, 3)",
+                json!({ "items": [1, 2, 3] })
+            ),
+            json!(true)
+        );
+        assert_eq!(
+            run_intrinsic(
+                "States.ArrayGetItem($.items, 1)",
+                json!({ "items": [10, 20, 30] })
+            ),
+            json!(20)
+        );
+        assert_eq!(
+            run_intrinsic(
+                "States.ArrayLength($.items)",
+                json!({ "items": [1, 2, 3, 4] })
+            ),
+            json!(4)
+        );
+        assert_eq!(
+            run_intrinsic("States.ArrayRange(0, 4, 1)", Value::Null),
+            json!([0, 1, 2, 3, 4])
+        );
+        assert_eq!(
+            run_intrinsic(
+                "States.ArrayUnique($.items)",
+                json!({ "items": [1, 1, 2, 3, 2] })
+            ),
+            json!([1, 2, 3])
+        );
+    }
+
+    #[test]
+    fn intrinsic_base64_round_trips_and_math() {
+        assert_eq!(
+            run_intrinsic("States.Base64Encode('hi')", Value::Null),
+            json!("aGk=")
+        );
+        assert_eq!(
+            run_intrinsic("States.Base64Decode('aGk=')", Value::Null),
+            json!("hi")
+        );
+        assert_eq!(run_intrinsic("States.MathAdd(2, 5)", Value::Null), json!(7));
+    }
+
+    #[test]
+    fn intrinsic_hash_sha256_known_value() {
+        let v = run_intrinsic("States.Hash('hello', 'SHA-256')", Value::Null);
+        assert_eq!(
+            v,
+            json!("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+        );
+    }
+
+    #[test]
+    fn intrinsic_json_merge_shallow_and_deep() {
+        // Shallow: top-level keys overwrite wholesale.
+        let v = run_intrinsic(
+            "States.JsonMerge($.a, $.b, false)",
+            json!({
+                "a": { "x": { "p": 1, "q": 2 } },
+                "b": { "x": { "r": 3 } }
+            }),
+        );
+        assert_eq!(v, json!({ "x": { "r": 3 } }));
+
+        // Deep: nested objects merge recursively.
+        let v = run_intrinsic(
+            "States.JsonMerge($.a, $.b, true)",
+            json!({
+                "a": { "x": { "p": 1, "q": 2 } },
+                "b": { "x": { "r": 3 } }
+            }),
+        );
+        assert_eq!(v, json!({ "x": { "p": 1, "q": 2, "r": 3 } }));
+    }
+
+    #[test]
+    fn intrinsic_is_predicates() {
+        assert_eq!(
+            run_intrinsic("States.IsBoolean($.v)", json!({ "v": true })),
+            json!(true)
+        );
+        assert_eq!(
+            run_intrinsic("States.IsNull($.v)", json!({ "v": null })),
+            json!(true)
+        );
+        assert_eq!(
+            run_intrinsic("States.IsNumeric($.v)", json!({ "v": 2.5 })),
+            json!(true)
+        );
+        assert_eq!(
+            run_intrinsic("States.IsString($.v)", json!({ "v": "hi" })),
+            json!(true)
+        );
+        assert_eq!(
+            run_intrinsic("States.IsPresent($.v)", json!({ "v": null })),
+            json!(false)
+        );
+        assert_eq!(
+            run_intrinsic("States.IsPresent($.v)", json!({ "v": 0 })),
+            json!(true)
+        );
+        assert_eq!(
+            run_intrinsic("States.IsTimestamp('2024-01-15T00:00:00Z')", Value::Null),
+            json!(true)
+        );
+        assert_eq!(
+            run_intrinsic("States.IsTimestamp('not-a-date')", Value::Null),
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn intrinsic_uuid_returns_v4_shaped_string() {
+        let v = run_intrinsic("States.UUID()", Value::Null);
+        let s = v.as_str().unwrap();
+        assert_eq!(s.len(), 36);
+        assert!(s.chars().filter(|c| *c == '-').count() == 4);
+    }
+
+    #[test]
+    fn intrinsic_math_random_within_bounds() {
+        for _ in 0..50 {
+            let v = run_intrinsic("States.MathRandom(10, 20)", Value::Null);
+            let n = v.as_i64().unwrap();
+            assert!((10..20).contains(&n));
+        }
     }
 }
