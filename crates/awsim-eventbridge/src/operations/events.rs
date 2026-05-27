@@ -609,6 +609,7 @@ mod pattern_tests {
             state: "ENABLED".into(),
             event_bus_name: "default".into(),
             targets: vec![],
+            managed_by: None,
         }
     }
 

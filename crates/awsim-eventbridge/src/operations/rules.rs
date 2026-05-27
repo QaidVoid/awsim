@@ -53,17 +53,33 @@ pub fn put_rule(
     }
 
     let description = input["Description"].as_str().unwrap_or("").to_string();
+    let managed_by = input["ManagedBy"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
 
     let arn = format!(
         "arn:aws:events:{}:{}:rule/{}/{}",
         ctx.region, ctx.account_id, bus_name, name
     );
 
-    let existing_targets = bus
+    // AWS rejects mutations to a managed rule unless the caller is
+    // the owning service. External callers (no ManagedBy on the
+    // input or a mismatch) get ManagedRuleException so the simulator
+    // mirrors the production failure mode.
+    let (existing_targets, existing_managed_by) = bus
         .rules
         .get(name)
-        .map(|r| r.targets.clone())
+        .map(|r| (r.targets.clone(), r.managed_by.clone()))
         .unwrap_or_default();
+    if let Some(ref owner) = existing_managed_by
+        && managed_by.as_ref() != Some(owner)
+    {
+        return Err(AwsError::bad_request(
+            "ManagedRuleException",
+            format!("Rule {name} is managed by {owner}; only {owner} can modify it."),
+        ));
+    }
 
     // AWS caps an event bus at 300 rules. Beyond that, PutRule returns
     // LimitExceededException. The check skips when the rule already
@@ -85,6 +101,7 @@ pub fn put_rule(
         state: state_str,
         description,
         targets: existing_targets,
+        managed_by,
     };
 
     info!(rule = %name, bus = %bus_name, "Put rule");
@@ -119,16 +136,27 @@ pub fn delete_rule(
 
     let force = input["Force"].as_bool().unwrap_or(false);
 
-    let target_count = bus
+    let (target_count, managed_by) = bus
         .rules
         .get(name)
-        .map(|r| r.targets.len())
+        .map(|r| (r.targets.len(), r.managed_by.clone()))
         .ok_or_else(|| {
             AwsError::not_found(
                 "ResourceNotFoundException",
                 format!("Rule {name} does not exist on event bus {bus_name}"),
             )
         })?;
+
+    // Managed rules are owned by another service principal; AWS only
+    // lets that owner clean them up. Force=true bypasses the regular
+    // "has targets" guard but it does not bypass managed-rule
+    // ownership.
+    if let Some(owner) = managed_by {
+        return Err(AwsError::bad_request(
+            "ManagedRuleException",
+            format!("Rule {name} is managed by {owner}; only {owner} can delete it."),
+        ));
+    }
 
     // AWS rejects DeleteRule when the rule still has targets attached
     // unless the caller explicitly passes Force=true. The error code is
@@ -286,6 +314,9 @@ fn rule_to_json(rule: &Rule) -> Value {
     }
     if let Some(se) = &rule.schedule_expression {
         obj["ScheduleExpression"] = Value::String(se.clone());
+    }
+    if let Some(mb) = &rule.managed_by {
+        obj["ManagedBy"] = Value::String(mb.clone());
     }
 
     obj

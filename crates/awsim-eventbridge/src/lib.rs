@@ -787,4 +787,99 @@ mod tests {
         let err = block_on(svc.handle("NonExistentOp", json!({}), &ctx)).unwrap_err();
         assert_eq!(err.code, "UnknownOperationException");
     }
+
+    // -----------------------------------------------------------------------
+    // ManagedBy rule tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_put_rule_persists_managed_by_in_describe() {
+        let svc = EventBridgeService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutRule",
+            json!({
+                "Name": "mgd",
+                "EventPattern": r#"{"source":["x"]}"#,
+                "ManagedBy": "owner.amazonaws.com",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let described =
+            block_on(svc.handle("DescribeRule", json!({ "Name": "mgd" }), &ctx)).unwrap();
+        assert_eq!(described["ManagedBy"].as_str(), Some("owner.amazonaws.com"));
+    }
+
+    #[test]
+    fn test_put_rule_external_caller_cannot_overwrite_managed() {
+        let svc = EventBridgeService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutRule",
+            json!({
+                "Name": "mgd",
+                "EventPattern": r#"{"source":["x"]}"#,
+                "ManagedBy": "owner.amazonaws.com",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let err = block_on(svc.handle(
+            "PutRule",
+            json!({ "Name": "mgd", "EventPattern": r#"{"source":["y"]}"# }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ManagedRuleException");
+    }
+
+    #[test]
+    fn test_delete_rule_rejects_managed_rule() {
+        let svc = EventBridgeService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutRule",
+            json!({
+                "Name": "mgd",
+                "EventPattern": r#"{"source":["x"]}"#,
+                "ManagedBy": "owner.amazonaws.com",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let err = block_on(svc.handle("DeleteRule", json!({ "Name": "mgd", "Force": true }), &ctx))
+            .unwrap_err();
+        assert_eq!(err.code, "ManagedRuleException");
+    }
+
+    #[test]
+    fn test_put_rule_owner_can_update_managed_rule() {
+        let svc = EventBridgeService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "PutRule",
+            json!({
+                "Name": "mgd",
+                "EventPattern": r#"{"source":["x"]}"#,
+                "ManagedBy": "owner.amazonaws.com",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "PutRule",
+            json!({
+                "Name": "mgd",
+                "EventPattern": r#"{"source":["y"]}"#,
+                "ManagedBy": "owner.amazonaws.com",
+                "Description": "updated",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let described =
+            block_on(svc.handle("DescribeRule", json!({ "Name": "mgd" }), &ctx)).unwrap();
+        assert_eq!(described["Description"].as_str(), Some("updated"));
+    }
 }
