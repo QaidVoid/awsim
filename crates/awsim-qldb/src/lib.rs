@@ -160,6 +160,12 @@ impl ServiceHandler for QldbService {
                 required_query_param: None,
             },
             RouteDefinition {
+                method: "PATCH",
+                path_pattern: "/ledgers/{name}/permissions-mode",
+                operation: "UpdateLedgerPermissionsMode",
+                required_query_param: None,
+            },
+            RouteDefinition {
                 method: "POST",
                 path_pattern: "/tags/{resourceArn}",
                 operation: "TagResource",
@@ -271,6 +277,28 @@ impl ServiceHandler for QldbService {
                     l.kms_key_arn = Some(k.to_string());
                 }
                 Ok(ledger_to_value(&l))
+            }
+            "UpdateLedgerPermissionsMode" => {
+                let name = require_str(&input, "name").or_else(|_| require_str(&input, "Name"))?;
+                let mode = require_str(&input, "PermissionsMode")?.to_string();
+                if !matches!(mode.as_str(), "ALLOW_ALL" | "STANDARD") {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        format!("PermissionsMode `{mode}` must be ALLOW_ALL or STANDARD."),
+                    ));
+                }
+                let mut l = state.ledgers.get_mut(name).ok_or_else(|| {
+                    AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Ledger {name} not found"),
+                    )
+                })?;
+                l.permissions_mode = mode;
+                Ok(json!({
+                    "Name": l.name,
+                    "Arn": l.arn,
+                    "PermissionsMode": l.permissions_mode,
+                }))
             }
             "DeleteLedger" => {
                 let name = require_str(&input, "name").or_else(|_| require_str(&input, "Name"))?;
@@ -414,6 +442,52 @@ mod tests {
         ))
         .unwrap();
         block_on(svc.handle("DeleteLedger", json!({ "name": "audit" }), &ctx)).unwrap();
+    }
+
+    #[test]
+    fn update_ledger_permissions_mode_persists() {
+        let svc = QldbService::new();
+        let ctx = RequestContext::new("qldb", "us-east-1");
+        block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "audit-mode",
+                "PermissionsMode": "ALLOW_ALL",
+                "DeletionProtection": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let resp = block_on(svc.handle(
+            "UpdateLedgerPermissionsMode",
+            json!({ "name": "audit-mode", "PermissionsMode": "STANDARD" }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(resp["PermissionsMode"], "STANDARD");
+
+        let described =
+            block_on(svc.handle("DescribeLedger", json!({ "name": "audit-mode" }), &ctx)).unwrap();
+        assert_eq!(described["PermissionsMode"], "STANDARD");
+
+        // Round trip via UpdateLedgerPermissionsMode for the other variant.
+        let resp = block_on(svc.handle(
+            "UpdateLedgerPermissionsMode",
+            json!({ "name": "audit-mode", "PermissionsMode": "ALLOW_ALL" }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(resp["PermissionsMode"], "ALLOW_ALL");
+
+        // Bad value still rejected.
+        let err = block_on(svc.handle(
+            "UpdateLedgerPermissionsMode",
+            json!({ "name": "audit-mode", "PermissionsMode": "ROOT" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 
     #[test]
