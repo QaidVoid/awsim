@@ -55,10 +55,36 @@ pub fn rule_arn(
     )
 }
 
-/// DNS name for a load balancer.
-pub fn lb_dns_name(name: &str, region: &str) -> String {
+/// DNS name for a load balancer. AWS prefixes the name with `internal-`
+/// when the scheme is `internal`, and keeps the public host pattern
+/// otherwise. The simulator mirrors that contract so cross-tool URL
+/// matching (Route53 alias targets, app config) lines up.
+pub fn lb_dns_name(name: &str, region: &str, scheme: &str) -> String {
     let rand = random_hex(8);
-    format!("{name}-{rand}.{region}.elb.localhost")
+    let prefix = if scheme == "internal" {
+        "internal-"
+    } else {
+        ""
+    };
+    format!("{prefix}{name}-{rand}.{region}.elb.localhost")
+}
+
+/// AWS publishes a per-region canonical hosted zone ID for each
+/// load-balancer family. We synthesize a deterministic 14-char Z-id so
+/// the field is stable across simulator restarts but still per-region.
+/// `lb_type` may be one of `application`, `network`, `gateway` — they
+/// share an ID space in our model.
+pub fn canonical_hosted_zone_id(region: &str, lb_type: &str) -> String {
+    // Real AWS uses fixed IDs per region; without a static table we
+    // hash region + type to a 14-character upper-hex string with a
+    // `Z` prefix. FNV-1a 64-bit keeps the computation tiny and
+    // deterministic.
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in region.as_bytes().iter().chain(lb_type.as_bytes().iter()) {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("Z{:013X}", hash & 0xFFFFFFFFFFFFFF)
 }
 
 /// Current UTC timestamp in ISO 8601 format.
@@ -119,4 +145,47 @@ fn doy_to_month_day(doy: u64, leap: bool) -> (u64, u64) {
 /// Extract the random suffix from an ARN (last segment).
 pub fn arn_suffix(arn: &str) -> &str {
     arn.rsplit('/').next().unwrap_or("")
+}
+
+#[cfg(test)]
+mod dns_tests {
+    use super::*;
+
+    #[test]
+    fn internal_scheme_prefixes_hostname() {
+        let dns = lb_dns_name("api", "us-east-1", "internal");
+        assert!(dns.starts_with("internal-api-"));
+        assert!(dns.ends_with(".us-east-1.elb.localhost"));
+    }
+
+    #[test]
+    fn public_scheme_does_not_prefix_hostname() {
+        let dns = lb_dns_name("api", "us-east-1", "internet-facing");
+        assert!(!dns.contains("internal-"));
+        assert!(dns.starts_with("api-"));
+    }
+
+    #[test]
+    fn canonical_hosted_zone_id_is_stable_per_region_and_type() {
+        let a = canonical_hosted_zone_id("us-east-1", "application");
+        let b = canonical_hosted_zone_id("us-east-1", "application");
+        assert_eq!(a, b);
+        assert!(a.starts_with('Z'));
+        // 1 for the 'Z' + at most 14 upper-hex chars.
+        assert!((10..=20).contains(&a.len()));
+    }
+
+    #[test]
+    fn canonical_hosted_zone_id_differs_across_regions() {
+        let east = canonical_hosted_zone_id("us-east-1", "application");
+        let west = canonical_hosted_zone_id("us-west-2", "application");
+        assert_ne!(east, west);
+    }
+
+    #[test]
+    fn canonical_hosted_zone_id_differs_across_lb_types() {
+        let app = canonical_hosted_zone_id("us-east-1", "application");
+        let net = canonical_hosted_zone_id("us-east-1", "network");
+        assert_ne!(app, net);
+    }
 }

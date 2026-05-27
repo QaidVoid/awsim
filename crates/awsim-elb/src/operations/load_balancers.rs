@@ -3,17 +3,18 @@ use serde_json::{Value, json};
 
 use crate::{
     error::resource_not_found,
-    ids::{lb_arn, lb_dns_name, now_iso8601},
+    ids::{canonical_hosted_zone_id, lb_arn, lb_dns_name, now_iso8601},
     state::{AttributeKeyValue, ElbState, LoadBalancer},
 };
 
 use super::{extract_string_list, opt_str, require_str};
 
 pub fn lb_to_value(lb: &LoadBalancer) -> Value {
+    let region = lb.arn.split(':').nth(3).unwrap_or("us-east-1");
     json!({
         "LoadBalancerArn": lb.arn,
         "DNSName": lb.dns_name,
-        "CanonicalHostedZoneId": "Z35SXDOTRQ7X7K",
+        "CanonicalHostedZoneId": canonical_hosted_zone_id(region, &lb.lb_type),
         "CreatedTime": lb.created_at,
         "LoadBalancerName": lb.name,
         "Scheme": lb.scheme,
@@ -52,7 +53,7 @@ pub fn create_load_balancer(
     let tags = super::tags::parse_tags_input(input)?;
 
     let arn = lb_arn(&ctx.region, &ctx.account_id, &lb_type, &name);
-    let dns_name = lb_dns_name(&name, &ctx.region);
+    let dns_name = lb_dns_name(&name, &ctx.region, &scheme);
 
     let lb = LoadBalancer {
         arn: arn.clone(),
