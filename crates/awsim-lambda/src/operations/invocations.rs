@@ -13,6 +13,47 @@ fn map_io_err(e: std::io::Error) -> AwsError {
     AwsError::internal(format!("read function code: {e}"))
 }
 
+thread_local! {
+    /// Per-thread stack of function names currently in-flight. Used to
+    /// detect self-invoke chains so a Lambda configured with
+    /// `RecursiveLoop=Terminate` cannot drive itself in an infinite
+    /// loop. Real AWS surfaces the loop at the runtime layer via the
+    /// `X-Amzn-Trace-Id` lineage; AWSim approximates the same defence
+    /// via the synchronous in-process call stack so re-entry through
+    /// the `LambdaInvoker` trait (Secrets Manager rotation calling
+    /// back into Lambda, etc.) is detected.
+    static INVOCATION_STACK: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// RAII guard that pops the current function from the per-thread
+/// invocation stack on drop, ensuring a panicking executor still
+/// clears the entry.
+struct RecursionFrame;
+
+impl RecursionFrame {
+    fn push(name: &str) -> Self {
+        INVOCATION_STACK.with(|s| s.borrow_mut().push(name.to_string()));
+        RecursionFrame
+    }
+
+    fn contains(name: &str) -> bool {
+        INVOCATION_STACK.with(|s| s.borrow().iter().any(|n| n == name))
+    }
+
+    fn snapshot() -> Vec<String> {
+        INVOCATION_STACK.with(|s| s.borrow().clone())
+    }
+}
+
+impl Drop for RecursionFrame {
+    fn drop(&mut self) {
+        INVOCATION_STACK.with(|s| {
+            s.borrow_mut().pop();
+        });
+    }
+}
+
 /// HTTP 429 `TooManyRequestsException` carrying AWS's documented
 /// `Reason=ConcurrentInvocationLimitExceeded` so SDK clients that
 /// branch on the reason still work.
@@ -127,6 +168,7 @@ pub fn invoke(
             f.timeout,
             f.memory_size,
             f.reserved_concurrent_executions,
+            f.recursive_loop.clone(),
         )
     };
 
@@ -139,7 +181,23 @@ pub fn invoke(
         timeout,
         memory_size,
         reserved_concurrent_executions,
+        recursive_loop,
     ) = function_info;
+
+    // RecursiveLoop=Terminate (the default) refuses to drive a
+    // function that is already on the per-thread invocation stack.
+    // DryRun doesn't actually execute, so it skips the gate; every
+    // other path consults it before bumping concurrency.
+    if invocation_type != "DryRun" && recursive_loop != "Allow" && RecursionFrame::contains(name) {
+        let chain = RecursionFrame::snapshot().join(" -> ");
+        return Err(AwsError::bad_request(
+            "InvalidRequestContentException",
+            format!(
+                "Function `{name}` is already on the invocation chain ({chain}); \
+                 RecursiveLoop=Terminate refuses to re-invoke."
+            ),
+        ));
+    }
 
     // DryRun validates the call without executing. AWS responds with HTTP
     // 204 No Content and an empty body — set __status_code so the gateway
@@ -159,6 +217,15 @@ pub fn invoke(
     // briefly exceed the cap by one or two — acceptable for the
     // simulator and consistent with how real Lambda also overshoots
     // slightly before throttling kicks in.
+    // Push onto the recursion stack now so any re-entrant invokes that
+    // run during this synchronous call see the current chain. The
+    // guard drops on return regardless of success, error, or panic.
+    let _recursion_frame = if invocation_type != "DryRun" {
+        Some(RecursionFrame::push(name))
+    } else {
+        None
+    };
+
     let concurrency_slot = if let Some(cap) = reserved_concurrent_executions {
         let current = InvocationSlot::current(state, name);
         if current >= cap {
@@ -497,6 +564,59 @@ mod tests {
         .unwrap();
         assert!(resp.get("LogResult").is_none());
         assert!(resp["__headers"].get("X-Amz-Log-Result").is_none());
+    }
+
+    #[test]
+    fn recursive_loop_terminate_blocks_self_invoke_chain() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        // Default is Terminate. Simulate a Lambda-from-Lambda chain
+        // by pushing the function onto the stack manually before the
+        // recursive invoke. The guard mirrors what a real re-entrant
+        // call would do.
+        let _outer = RecursionFrame::push("f");
+        let err = invoke(
+            &state,
+            &json!({ "FunctionName": "f", "InvocationType": "RequestResponse" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidRequestContentException");
+        assert!(
+            err.message.contains("RecursiveLoop=Terminate"),
+            "error must explain the recursion gate: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn recursive_loop_allow_permits_self_invoke() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        state.functions.get_mut("f").unwrap().recursive_loop = "Allow".to_string();
+        let _outer = RecursionFrame::push("f");
+        // RecursiveLoop=Allow lets the chain proceed.
+        invoke(
+            &state,
+            &json!({ "FunctionName": "f", "InvocationType": "RequestResponse" }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn recursion_frame_pops_on_return() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        invoke(
+            &state,
+            &json!({ "FunctionName": "f", "InvocationType": "RequestResponse" }),
+            &ctx(),
+        )
+        .unwrap();
+        // After the call returns the stack must be empty so an
+        // unrelated subsequent invoke isn't poisoned by stale frames.
+        assert!(RecursionFrame::snapshot().is_empty());
     }
 
     #[test]
