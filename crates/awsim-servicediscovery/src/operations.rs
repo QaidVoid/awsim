@@ -375,6 +375,7 @@ pub fn register_instance(
                 .collect()
         })
         .unwrap_or_default();
+    validate_instance_attributes(&attrs)?;
     let inst = Instance {
         id: instance_id.clone(),
         service_id: service_id.clone(),
@@ -549,6 +550,39 @@ pub fn list_operations(
     Ok(json!({ "Operations": items }))
 }
 
+/// Reserved `AWS_*` attribute keys that `RegisterInstance` accepts.
+/// Anything not in this list but starting with the `AWS_` prefix is
+/// rejected with `InvalidInput`; custom (non-`AWS_`) keys are allowed
+/// through. Values for the bounded set are validated when their
+/// formats matter (e.g. `AWS_INIT_HEALTH_STATUS`).
+const RESERVED_INSTANCE_ATTRS: &[&str] = &[
+    "AWS_ALIAS_DNS_NAME",
+    "AWS_EC2_INSTANCE_ID",
+    "AWS_INIT_HEALTH_STATUS",
+    "AWS_INSTANCE_CNAME",
+    "AWS_INSTANCE_IPV4",
+    "AWS_INSTANCE_IPV6",
+    "AWS_INSTANCE_PORT",
+];
+
+fn validate_instance_attributes(attrs: &HashMap<String, String>) -> Result<(), AwsError> {
+    for (k, v) in attrs {
+        if k.starts_with("AWS_") && !RESERVED_INSTANCE_ATTRS.contains(&k.as_str()) {
+            return Err(AwsError::bad_request(
+                "InvalidInput",
+                format!("Attribute key `{k}` is not in the AWS_* allowlist."),
+            ));
+        }
+        if k == "AWS_INIT_HEALTH_STATUS" && !matches!(v.as_str(), "HEALTHY" | "UNHEALTHY") {
+            return Err(AwsError::bad_request(
+                "InvalidInput",
+                format!("AWS_INIT_HEALTH_STATUS `{v}` must be HEALTHY or UNHEALTHY."),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod revision_tests {
     use super::*;
@@ -641,6 +675,74 @@ mod revision_tests {
         )
         .unwrap();
         assert_eq!(resp["InstancesRevision"], 3);
+    }
+
+    #[test]
+    fn register_rejects_unknown_aws_attribute_key() {
+        let (state, svc_id, _) = fresh_service();
+        let err = register_instance(
+            &state,
+            &json!({
+                "ServiceId": svc_id,
+                "InstanceId": "i1",
+                "Attributes": { "AWS_NOT_REAL": "v" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidInput");
+        assert!(err.message.contains("AWS_"));
+    }
+
+    #[test]
+    fn register_accepts_custom_attribute_key() {
+        let (state, svc_id, _) = fresh_service();
+        register_instance(
+            &state,
+            &json!({
+                "ServiceId": svc_id,
+                "InstanceId": "i1",
+                "Attributes": { "custom-key": "v" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn register_rejects_bad_init_health_status() {
+        let (state, svc_id, _) = fresh_service();
+        let err = register_instance(
+            &state,
+            &json!({
+                "ServiceId": svc_id,
+                "InstanceId": "i1",
+                "Attributes": { "AWS_INIT_HEALTH_STATUS": "MAYBE" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidInput");
+    }
+
+    #[test]
+    fn register_accepts_documented_aws_attrs() {
+        let (state, svc_id, _) = fresh_service();
+        register_instance(
+            &state,
+            &json!({
+                "ServiceId": svc_id,
+                "InstanceId": "i1",
+                "Attributes": {
+                    "AWS_INSTANCE_IPV4": "1.2.3.4",
+                    "AWS_INSTANCE_PORT": "80",
+                    "AWS_INIT_HEALTH_STATUS": "HEALTHY",
+                    "tier": "blue",
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
     }
 
     #[test]
