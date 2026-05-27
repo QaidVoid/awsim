@@ -50,11 +50,31 @@ pub fn put_events(
         }
 
         // Ensure bus exists
-        if !state.event_buses.contains_key(bus_name) {
+        let bus_policy = match state.event_buses.get(bus_name) {
+            Some(b) => b.policy.clone(),
+            None => {
+                failed_count += 1;
+                result_entries.push(json!({
+                    "ErrorCode": "ResourceNotFoundException",
+                    "ErrorMessage": format!("Event bus {bus_name} does not exist"),
+                }));
+                continue;
+            }
+        };
+
+        // Resource policy gate for cross-account writes. AWS evaluates
+        // the bus's resource policy against the caller's account; if
+        // there's no `events:PutEvents` allow, the entry fails with
+        // AccessDeniedException.
+        if !is_authorized_caller(
+            &ctx.account_id,
+            &bus_policy,
+            &source_account_from_entry(entry, ctx),
+        ) {
             failed_count += 1;
             result_entries.push(json!({
-                "ErrorCode": "ResourceNotFoundException",
-                "ErrorMessage": format!("Event bus {bus_name} does not exist"),
+                "ErrorCode": "AccessDeniedException",
+                "ErrorMessage": format!("Cross-account PutEvents on `{bus_name}` requires a matching resource policy."),
             }));
             continue;
         }
@@ -476,6 +496,104 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
+/// Resolve the account that is publishing this entry. AWS uses
+/// `Source` only as a free-form string; the account for the policy
+/// check is the caller's request context, not the entry. We honour an
+/// explicit `Account` field on the entry for tests that want to
+/// simulate a foreign caller without spinning up a separate context.
+fn source_account_from_entry(entry: &Value, ctx: &RequestContext) -> String {
+    entry["Account"]
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| ctx.account_id.clone())
+}
+
+/// Decide whether the caller is authorized to PutEvents on this bus.
+/// Same-account writes always pass; cross-account writes need at
+/// least one resource-policy statement with Effect=Allow,
+/// Action=`events:PutEvents` (or `events:*`/`*`), and a Principal
+/// that matches the caller (root ARN, exact account id, or `*`).
+fn is_authorized_caller(
+    bus_owner: &str,
+    bus_policy: &Option<String>,
+    caller_account: &str,
+) -> bool {
+    if caller_account == bus_owner {
+        return true;
+    }
+    let Some(raw) = bus_policy else {
+        return false;
+    };
+    let Ok(doc): Result<Value, _> = serde_json::from_str(raw) else {
+        return false;
+    };
+    let statements = match doc.get("Statement") {
+        Some(Value::Array(arr)) => arr.clone(),
+        Some(s @ Value::Object(_)) => vec![s.clone()],
+        _ => return false,
+    };
+    for stmt in statements {
+        if stmt.get("Effect").and_then(Value::as_str) != Some("Allow") {
+            continue;
+        }
+        if !statement_action_matches(&stmt) {
+            continue;
+        }
+        if statement_principal_matches(&stmt, caller_account) {
+            return true;
+        }
+    }
+    false
+}
+
+fn statement_action_matches(stmt: &Value) -> bool {
+    let actions: Vec<String> = match stmt.get("Action") {
+        Some(Value::String(s)) => vec![s.clone()],
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+        _ => return false,
+    };
+    actions
+        .iter()
+        .any(|a| matches!(a.as_str(), "events:PutEvents" | "events:*" | "*"))
+}
+
+fn statement_principal_matches(stmt: &Value, caller_account: &str) -> bool {
+    let principal = stmt.get("Principal");
+    match principal {
+        Some(Value::String(s)) if s == "*" => true,
+        Some(Value::Object(map)) => {
+            let aws = map.get("AWS");
+            match aws {
+                Some(Value::String(arn)) => arn_or_account_matches(arn, caller_account),
+                Some(Value::Array(arr)) => arr
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .any(|arn| arn_or_account_matches(arn, caller_account)),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn arn_or_account_matches(arn: &str, caller_account: &str) -> bool {
+    if arn == "*" {
+        return true;
+    }
+    if arn == caller_account {
+        return true;
+    }
+    if let Some(rest) = arn.strip_prefix("arn:aws:iam::")
+        && let Some(account) = rest.split(':').next()
+    {
+        return account == caller_account;
+    }
+    false
+}
+
 #[cfg(test)]
 mod pattern_tests {
     use super::*;
@@ -570,5 +688,79 @@ mod pattern_tests {
     fn unmatched_top_level_field_fails_quickly() {
         let rule = rule_with(r#"{"source":["myapp"]}"#);
         assert!(!matches_pattern(&rule, &json!({ "source": "other" })));
+    }
+
+    #[test]
+    fn same_account_caller_is_always_authorized() {
+        assert!(is_authorized_caller("111111111111", &None, "111111111111"));
+    }
+
+    #[test]
+    fn cross_account_without_policy_is_denied() {
+        assert!(!is_authorized_caller("111111111111", &None, "222222222222"));
+    }
+
+    #[test]
+    fn cross_account_allow_statement_grants_access() {
+        let policy = json!({
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "AWS": "arn:aws:iam::222222222222:root" },
+                "Action": "events:PutEvents"
+            }]
+        })
+        .to_string();
+        assert!(is_authorized_caller(
+            "111111111111",
+            &Some(policy),
+            "222222222222"
+        ));
+    }
+
+    #[test]
+    fn wildcard_principal_grants_any_account() {
+        let policy = json!({
+            "Statement": [{ "Effect": "Allow", "Principal": "*", "Action": "events:*" }]
+        })
+        .to_string();
+        assert!(is_authorized_caller(
+            "111111111111",
+            &Some(policy),
+            "333333333333"
+        ));
+    }
+
+    #[test]
+    fn statement_for_other_account_is_ignored() {
+        let policy = json!({
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "AWS": "arn:aws:iam::555555555555:root" },
+                "Action": "events:PutEvents"
+            }]
+        })
+        .to_string();
+        assert!(!is_authorized_caller(
+            "111111111111",
+            &Some(policy),
+            "222222222222"
+        ));
+    }
+
+    #[test]
+    fn statement_without_putevents_action_is_ignored() {
+        let policy = json!({
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "AWS": "arn:aws:iam::222222222222:root" },
+                "Action": "events:DescribeRule"
+            }]
+        })
+        .to_string();
+        assert!(!is_authorized_caller(
+            "111111111111",
+            &Some(policy),
+            "222222222222"
+        ));
     }
 }

@@ -75,6 +75,10 @@ impl ServiceHandler for EventBridgeService {
             "PutEvents" => events::put_events(&state, &input, ctx),
             "TestEventPattern" => events::test_event_pattern(&input),
 
+            // Resource policy
+            "PutPermission" => buses::put_permission(&state, &input, ctx),
+            "RemovePermission" => buses::remove_permission(&state, &input, ctx),
+
             // Tags
             "TagResource" => tags::tag_resource(&state, &input, ctx),
             "UntagResource" => tags::untag_resource(&state, &input, ctx),

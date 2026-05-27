@@ -64,6 +64,10 @@ pub struct EventBus {
     /// rule_name → Rule
     pub rules: HashMap<String, Rule>,
     pub tags: HashMap<String, String>,
+    /// Resource policy attached to the bus. Authorizes cross-account
+    /// PutEvents callers — AWS denies cross-account writes when no
+    /// statement grants `events:PutEvents` to the calling principal.
+    pub policy: Option<String>,
 }
 
 impl EventBus {
@@ -73,6 +77,7 @@ impl EventBus {
             arn,
             rules: HashMap::new(),
             tags: HashMap::new(),
+            policy: None,
         }
     }
 }
