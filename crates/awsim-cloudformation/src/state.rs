@@ -29,6 +29,10 @@ pub struct Stack {
     /// flips it off via UpdateTerminationProtection. Mirrors AWS's
     /// stack-level safeguard against accidental deletes.
     pub termination_protection: bool,
+    /// SNS topic ARNs that receive a `cloudformation:StackEvent`
+    /// notification on every stack-status transition. AWS supports
+    /// up to 5 ARNs; we accept the same upper bound.
+    pub notification_arns: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

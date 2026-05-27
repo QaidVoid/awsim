@@ -255,6 +255,7 @@ pub fn create_change_set(
             updated_at: None,
             outputs: HashMap::new(),
             termination_protection: false,
+            notification_arns: Vec::new(),
         };
         state.stacks.insert(stack_name.clone(), placeholder_stack);
     }
@@ -523,6 +524,7 @@ mod change_set_diff_tests {
                 updated_at: None,
                 outputs: HashMap::new(),
                 termination_protection: false,
+                notification_arns: Vec::new(),
             },
         );
 
@@ -596,6 +598,7 @@ mod change_set_diff_tests {
                 updated_at: None,
                 outputs: HashMap::new(),
                 termination_protection: false,
+                notification_arns: Vec::new(),
             },
         );
 
@@ -670,6 +673,7 @@ mod change_set_diff_tests {
                 updated_at: None,
                 outputs: HashMap::new(),
                 termination_protection: false,
+                notification_arns: Vec::new(),
             },
         );
 

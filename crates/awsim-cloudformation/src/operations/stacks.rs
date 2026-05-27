@@ -78,6 +78,11 @@ fn stack_to_value(stack: &Stack) -> Value {
         result["LastUpdatedTime"] = Value::String(updated_at.clone());
     }
     result["EnableTerminationProtection"] = json!(stack.termination_protection);
+    if !stack.notification_arns.is_empty() {
+        result["NotificationARNs"] = json!({
+            "member": stack.notification_arns.clone()
+        });
+    }
 
     result
 }
@@ -161,6 +166,70 @@ pub fn effective_resource_tags(
         .into_iter()
         .map(|(k, v)| json!({"Key": k, "Value": v}))
         .collect()
+}
+
+/// AWS allows up to 5 NotificationARNs per stack; mirror the cap.
+const MAX_NOTIFICATION_ARNS: usize = 5;
+
+/// Parse + validate the `NotificationARNs` array from a CreateStack /
+/// UpdateStack input. Returns an empty Vec when absent.
+fn parse_notification_arns(input: &Value) -> Result<Vec<String>, AwsError> {
+    let arr = input.get("NotificationARNs").and_then(Value::as_array);
+    let Some(arr) = arr else {
+        return Ok(Vec::new());
+    };
+    let arns: Vec<String> = arr
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+    if arns.len() > MAX_NOTIFICATION_ARNS {
+        return Err(AwsError::bad_request(
+            "ValidationError",
+            format!("NotificationARNs accepts at most {MAX_NOTIFICATION_ARNS} ARNs."),
+        ));
+    }
+    for arn in &arns {
+        if !arn.starts_with("arn:aws:sns:") {
+            return Err(AwsError::bad_request(
+                "ValidationError",
+                format!("NotificationARN `{arn}` is not a valid SNS topic ARN."),
+            ));
+        }
+    }
+    Ok(arns)
+}
+
+/// Publish a stack-level status event to each NotificationARN as an
+/// internal `sns:Publish` so downstream subscribers see the message.
+/// CFN's documented payload is a CloudFormation-style key=value text
+/// blob; we synthesise the most common keys.
+fn publish_stack_event_notifications(
+    ctx: &RequestContext,
+    stack_name: &str,
+    stack_id: &str,
+    status: &str,
+    timestamp: &str,
+    notification_arns: &[String],
+) {
+    let Some(ref bus) = ctx.event_bus else { return };
+    for topic_arn in notification_arns {
+        let message = format!(
+            "StackId='{stack_id}'\nTimestamp='{timestamp}'\nResourceStatus='{status}'\n\
+             LogicalResourceId='{stack_name}'\nPhysicalResourceId='{stack_id}'\n\
+             ResourceType='AWS::CloudFormation::Stack'\nStackName='{stack_name}'\n",
+        );
+        bus.publish(InternalEvent {
+            source: "cloudformation".to_string(),
+            event_type: "sns:Publish".to_string(),
+            region: ctx.region.clone(),
+            account_id: ctx.account_id.clone(),
+            detail: json!({
+                "topic_arn": topic_arn,
+                "message": message,
+                "subject": format!("AWS CloudFormation Notification — {status}"),
+            }),
+        });
+    }
 }
 
 fn build_resources(parsed: &template::ParsedTemplate, now: &str) -> Vec<StackResource> {
@@ -339,6 +408,7 @@ pub fn create_stack(
     let termination_protection = input["EnableTerminationProtection"]
         .as_bool()
         .unwrap_or(false);
+    let notification_arns = parse_notification_arns(input)?;
 
     let stack = Stack {
         stack_id: stack_id.clone(),
@@ -351,11 +421,21 @@ pub fn create_stack(
         resources,
         events,
         change_sets: HashMap::new(),
-        created_at: now,
+        created_at: now.clone(),
         updated_at: None,
         outputs: HashMap::new(),
         termination_protection,
+        notification_arns: notification_arns.clone(),
     };
+
+    publish_stack_event_notifications(
+        ctx,
+        &stack_name,
+        &stack_id,
+        "CREATE_COMPLETE",
+        &now,
+        &notification_arns,
+    );
 
     // Emit one CreateResource event per resource so the background router
     // can provision each resource in the appropriate service. Stack
@@ -453,7 +533,15 @@ pub fn delete_stack(
 
         // Mark as DELETE_COMPLETE (keep entry with status for ListStacks)
         stack.status = "DELETE_COMPLETE".to_string();
-        stack.updated_at = Some(now);
+        stack.updated_at = Some(now.clone());
+        publish_stack_event_notifications(
+            ctx,
+            stack_name,
+            &stack.stack_id,
+            "DELETE_COMPLETE",
+            &now,
+            &stack.notification_arns,
+        );
         state.stacks.insert(stack_name.to_string(), stack);
     }
     // DeleteStack is idempotent — no error if not found
@@ -464,9 +552,10 @@ pub fn delete_stack(
 pub fn update_stack(
     state: &CloudFormationState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let stack_name = require_str(input, "StackName")?;
+    let new_notification_arns = parse_notification_arns(input)?;
 
     let mut stack = state
         .stacks
@@ -510,9 +599,19 @@ pub fn update_stack(
     stack.resources = resources;
     stack.events.extend(update_events);
     stack.status = "UPDATE_COMPLETE".to_string();
-    stack.updated_at = Some(now);
+    stack.updated_at = Some(now.clone());
+    // UpdateStack replaces NotificationARNs only when the caller
+    // supplied a non-empty list; an absent / empty list keeps the
+    // existing topics. Mirrors AWS's CloudFormation semantics where
+    // omitting a parameter on update leaves the prior value in place.
+    if !new_notification_arns.is_empty() {
+        stack.notification_arns = new_notification_arns;
+    }
 
     let stack_id = stack.stack_id.clone();
+    let topics = stack.notification_arns.clone();
+    drop(stack);
+    publish_stack_event_notifications(ctx, stack_name, &stack_id, "UPDATE_COMPLETE", &now, &topics);
     Ok(json!({ "StackId": stack_id }))
 }
 
@@ -1131,5 +1230,100 @@ mod capabilities_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ValidationError");
+    }
+
+    const MINIMAL_TEMPLATE: &str = r#"{
+      "Resources": {
+        "B": { "Type": "AWS::S3::Bucket" }
+      }
+    }"#;
+
+    #[test]
+    fn create_stack_persists_notification_arns() {
+        let state = CloudFormationState::default();
+        create_stack(
+            &state,
+            &json!({
+                "StackName": "s",
+                "TemplateBody": MINIMAL_TEMPLATE,
+                "NotificationARNs": [
+                    "arn:aws:sns:us-east-1:000000000000:ops",
+                    "arn:aws:sns:us-east-1:000000000000:audit",
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let described = describe_stacks(&state, &json!({"StackName": "s"})).unwrap();
+        let arns = described["Stacks"]["member"][0]["NotificationARNs"]["member"]
+            .as_array()
+            .unwrap();
+        assert_eq!(arns.len(), 2);
+    }
+
+    #[test]
+    fn create_stack_rejects_non_sns_notification_arn() {
+        let state = CloudFormationState::default();
+        let err = create_stack(
+            &state,
+            &json!({
+                "StackName": "s",
+                "TemplateBody": MINIMAL_TEMPLATE,
+                "NotificationARNs": ["arn:aws:sqs:us-east-1:000000000000:q"],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    #[test]
+    fn create_stack_rejects_more_than_five_notification_arns() {
+        let state = CloudFormationState::default();
+        let arns: Vec<String> = (0..6)
+            .map(|i| format!("arn:aws:sns:us-east-1:000000000000:t{i}"))
+            .collect();
+        let err = create_stack(
+            &state,
+            &json!({
+                "StackName": "s",
+                "TemplateBody": MINIMAL_TEMPLATE,
+                "NotificationARNs": arns,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    #[test]
+    fn update_stack_can_replace_notification_arns() {
+        let state = CloudFormationState::default();
+        create_stack(
+            &state,
+            &json!({
+                "StackName": "s",
+                "TemplateBody": MINIMAL_TEMPLATE,
+                "NotificationARNs": ["arn:aws:sns:us-east-1:000000000000:initial"],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        update_stack(
+            &state,
+            &json!({
+                "StackName": "s",
+                "TemplateBody": MINIMAL_TEMPLATE,
+                "NotificationARNs": ["arn:aws:sns:us-east-1:000000000000:replaced"],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let described = describe_stacks(&state, &json!({"StackName": "s"})).unwrap();
+        let arns = described["Stacks"]["member"][0]["NotificationARNs"]["member"]
+            .as_array()
+            .unwrap();
+        assert_eq!(arns.len(), 1);
+        assert_eq!(arns[0], "arn:aws:sns:us-east-1:000000000000:replaced");
     }
 }
