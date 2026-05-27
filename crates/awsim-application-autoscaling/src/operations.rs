@@ -91,6 +91,69 @@ pub(crate) fn is_valid_dimension_for_namespace(ns: &str, dim: &str) -> bool {
     allowed_dimensions(ns).contains(&dim)
 }
 
+/// Per-namespace `ResourceId` shape check. AWS documents a distinct
+/// path-like format for each namespace (e.g. `service/cluster/name`
+/// for ECS); we accept the canonical prefix plus at least one segment
+/// so callers that drift from the docs fail fast rather than getting
+/// silently stored. The generic length and charset envelope is
+/// "1..=1600 chars; no control characters except tab, CR, or LF".
+pub(crate) fn validate_resource_id(ns: &str, rid: &str) -> Result<(), AwsError> {
+    if rid.is_empty() || rid.len() > 1600 {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!("ResourceId must be 1..=1600 chars; got {}.", rid.len()),
+        ));
+    }
+    if rid
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+    {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            "ResourceId contains control characters.",
+        ));
+    }
+    // Every documented prefix is followed by either `/` (path-style:
+    // ecs, dynamodb, ec2, sagemaker, ...) or `:` (colon-style: lambda,
+    // rds, neptune, cassandra, kafka, elasticmapreduce). We accept
+    // both delimiters so callers stay compatible regardless of which
+    // form the AWS docs picked.
+    let starts_ok = |s: &str, prefix: &str| {
+        let with_slash = s.starts_with(&format!("{prefix}/"));
+        let with_colon = s.starts_with(&format!("{prefix}:"));
+        with_slash || with_colon
+    };
+
+    let prefixes: &[&str] = match ns {
+        "appstream" => &["fleet"],
+        "cassandra" => &["keyspace"],
+        "comprehend" => &["document-classifier-endpoint", "entity-recognizer-endpoint"],
+        // `custom-resource` accepts any opaque caller-supplied string.
+        "custom-resource" => return Ok(()),
+        "dynamodb" => &["table"],
+        "ec2" => &["spot-fleet-request", "fleet"],
+        "ecs" => &["service"],
+        "elasticache" => &["replication-group", "cache-cluster"],
+        "elasticmapreduce" => &["instancegroup"],
+        "kafka" => &["cluster"],
+        "lambda" => &["function"],
+        "neptune" => &["cluster"],
+        "rds" => &["cluster"],
+        "sagemaker" => &["endpoint", "inference-component", "variant"],
+        "workspaces" => &["workspacespool"],
+        _ => return Ok(()),
+    };
+    if !prefixes.iter().any(|p| starts_ok(rid, p)) {
+        return Err(AwsError::bad_request(
+            "ValidationException",
+            format!(
+                "ResourceId `{rid}` does not match the documented shape for `{ns}`; expected one of {prefixes:?}.",
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn require_str<'a>(input: &'a Value, key: &str) -> Result<&'a str, AwsError> {
     input
         .get(key)
@@ -158,6 +221,7 @@ pub fn register_scalable_target(
         ));
     }
     let rid = require_str(input, "ResourceId")?.to_string();
+    validate_resource_id(&ns, &rid)?;
     let dim = require_str(input, "ScalableDimension")?.to_string();
     if !is_valid_dimension_for_namespace(&ns, &dim) {
         return Err(AwsError::bad_request(
@@ -526,8 +590,24 @@ mod tests {
     #[test]
     fn register_accepts_documented_service_namespaces() {
         let state = AppAutoScalingState::default();
-        for ns in SERVICE_NAMESPACES {
-            // Pick the first documented dimension for each namespace.
+        // ResourceIds shaped per the documented prefix for each namespace.
+        for (ns, rid) in [
+            ("appstream", "fleet/my-fleet"),
+            ("cassandra", "keyspace/ks/table/tb"),
+            ("comprehend", "document-classifier-endpoint/abc"),
+            ("custom-resource", "anything-goes"),
+            ("dynamodb", "table/my-table"),
+            ("ec2", "spot-fleet-request/sfr-0123"),
+            ("ecs", "service/cluster/svc"),
+            ("elasticache", "replication-group/rg"),
+            ("elasticmapreduce", "instancegroup/ig-1/cluster/c-1"),
+            ("kafka", "cluster/abc-uuid"),
+            ("lambda", "function:my-fn:my-alias"),
+            ("neptune", "cluster:db-cluster"),
+            ("rds", "cluster:db-cluster"),
+            ("sagemaker", "endpoint/my-ep/variant/v1"),
+            ("workspaces", "workspacespool/wsp-abc"),
+        ] {
             let dim = allowed_dimensions(ns)
                 .first()
                 .copied()
@@ -536,13 +616,46 @@ mod tests {
                 &state,
                 &json!({
                     "ServiceNamespace": ns,
-                    "ResourceId": "r",
+                    "ResourceId": rid,
                     "ScalableDimension": dim,
                 }),
                 &ctx(),
             )
             .unwrap_or_else(|e| panic!("namespace `{ns}` should be accepted: {e:?}"));
         }
+    }
+
+    #[test]
+    fn register_rejects_resource_id_with_wrong_prefix() {
+        let state = AppAutoScalingState::default();
+        let err = register_scalable_target(
+            &state,
+            &json!({
+                "ServiceNamespace": "ecs",
+                "ResourceId": "cluster/foo/bar",
+                "ScalableDimension": "ecs:service:DesiredCount",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("service"));
+    }
+
+    #[test]
+    fn register_rejects_empty_resource_id() {
+        let state = AppAutoScalingState::default();
+        let err = register_scalable_target(
+            &state,
+            &json!({
+                "ServiceNamespace": "ecs",
+                "ResourceId": "",
+                "ScalableDimension": "ecs:service:DesiredCount",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 
     #[test]
