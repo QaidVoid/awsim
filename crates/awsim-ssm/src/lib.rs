@@ -3,7 +3,53 @@ mod handler;
 mod operations;
 mod state;
 
+use awsim_core::{AccountRegionStore, ParameterLookup};
+
 pub use handler::SsmService;
+
+/// Cross-service helper: implements [`ParameterLookup`] so other
+/// crates can ask "does parameter `<name|arn>` exist in this account
+/// and region?" without depending on awsim-ssm's internals. Mirrors
+/// [`awsim_secretsmanager::SecretsManagerSecretLookup`].
+pub struct SsmParameterLookup {
+    store: AccountRegionStore<state::SsmState>,
+}
+
+impl SsmParameterLookup {
+    pub fn new(store: AccountRegionStore<state::SsmState>) -> Self {
+        Self { store }
+    }
+}
+
+impl ParameterLookup for SsmParameterLookup {
+    fn parameter_exists(&self, parameter_ref: &str, account: &str, region: &str) -> bool {
+        let state = self.store.get(account, region);
+        // Parameters are stored by their canonical name (which may
+        // start with `/`). Accept both the plain name and the ARN
+        // form `arn:aws:ssm:{region}:{account}:parameter/<name>`.
+        if state.parameters.contains_key(parameter_ref) {
+            return true;
+        }
+        if let Some(name) = parameter_ref.strip_prefix("arn:aws:ssm:") {
+            // Skip past region:account: to the resource segment.
+            let mut parts = name.splitn(3, ':');
+            let _region = parts.next();
+            let _account = parts.next();
+            if let Some(resource) = parts.next()
+                && let Some(name) = resource.strip_prefix("parameter")
+            {
+                // Resource is `parameter/<name>` or `parameter<name>` (when name starts with `/`).
+                let name = name.strip_prefix('/').unwrap_or(name);
+                let with_slash = format!("/{name}");
+                if state.parameters.contains_key(name) || state.parameters.contains_key(&with_slash)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
 
 #[cfg(test)]
 mod tests {

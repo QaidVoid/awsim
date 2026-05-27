@@ -88,6 +88,133 @@ fn build_awsvpc_attachment(network_configuration: &Value) -> Value {
     })
 }
 
+/// Walk every container's `secrets[]` entry on the task definition
+/// and confirm each `valueFrom` resolves to an existing
+/// SecretsManager secret or SSM parameter. AWS rejects RunTask when
+/// any reference fails to resolve; the simulator mirrors that with
+/// `ClientException` when a lookup is wired. Missing lookups are a
+/// no-op so test setups that skip cross-service plumbing keep
+/// working.
+fn validate_container_secrets(
+    state: &EcsState,
+    task_def_arn: &str,
+    ctx: &RequestContext,
+    secrets_lookup: Option<&dyn awsim_core::SecretLookup>,
+    parameters_lookup: Option<&dyn awsim_core::ParameterLookup>,
+) -> Result<(), AwsError> {
+    // Find the task definition for the supplied ARN. RunTask should
+    // already have resolved it; if we can't find it here, skip
+    // validation rather than double-rejecting on a missing TD.
+    let containers = {
+        let mut found: Option<Value> = None;
+        for entry in state.task_definitions.iter() {
+            for td in entry.value() {
+                if td.arn == task_def_arn {
+                    found = Some(td.container_definitions.clone());
+                    break;
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+        }
+        match found {
+            Some(c) => c,
+            None => return Ok(()),
+        }
+    };
+    let Some(arr) = containers.as_array() else {
+        return Ok(());
+    };
+
+    for container in arr {
+        let Some(secrets) = container.get("secrets").and_then(Value::as_array) else {
+            continue;
+        };
+        for secret in secrets {
+            let name = secret
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("<unnamed>");
+            let value_from = secret
+                .get("valueFrom")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    AwsError::bad_request(
+                        "ClientException",
+                        format!("Container secret `{name}` must specify valueFrom."),
+                    )
+                })?;
+
+            let (account, region) = parse_aws_arn_account_region(value_from)
+                .unwrap_or_else(|| (ctx.account_id.clone(), ctx.region.clone()));
+
+            let kind = classify_secret_reference(value_from);
+            match kind {
+                SecretRefKind::SecretsManager => {
+                    if let Some(lookup) = secrets_lookup
+                        && !lookup.secret_exists(value_from, &account, &region)
+                    {
+                        return Err(AwsError::bad_request(
+                            "ClientException",
+                            format!(
+                                "Container secret `{name}` references SecretsManager secret \
+                                 `{value_from}` which does not exist."
+                            ),
+                        ));
+                    }
+                }
+                SecretRefKind::Ssm => {
+                    if let Some(lookup) = parameters_lookup
+                        && !lookup.parameter_exists(value_from, &account, &region)
+                    {
+                        return Err(AwsError::bad_request(
+                            "ClientException",
+                            format!(
+                                "Container secret `{name}` references SSM parameter \
+                                 `{value_from}` which does not exist."
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SecretRefKind {
+    SecretsManager,
+    Ssm,
+}
+
+/// Classify a container `secrets[].valueFrom` value. AWS accepts:
+///   - `arn:aws:secretsmanager:...` → SecretsManager
+///   - `arn:aws:ssm:...:parameter/...` → SSM Parameter Store
+///   - Plain parameter name (e.g. `/myapp/db-pass`) → SSM
+fn classify_secret_reference(value_from: &str) -> SecretRefKind {
+    if value_from.starts_with("arn:aws:secretsmanager:") {
+        SecretRefKind::SecretsManager
+    } else {
+        SecretRefKind::Ssm
+    }
+}
+
+/// Extract `(account, region)` from any well-formed AWS ARN. Returns
+/// `None` for plain parameter names or malformed inputs.
+fn parse_aws_arn_account_region(arn: &str) -> Option<(String, String)> {
+    let rest = arn.strip_prefix("arn:aws:")?;
+    let mut parts = rest.splitn(5, ':');
+    let _service = parts.next()?;
+    let region = parts.next()?;
+    let account = parts.next()?;
+    if region.is_empty() || account.is_empty() {
+        return None;
+    }
+    Some((account.to_string(), region.to_string()))
+}
+
 /// Look up the network mode declared on a task definition by ARN.
 /// Returns `None` when the definition can't be resolved — RunTask
 /// falls back to "no awsvpc handling" in that case rather than
@@ -121,7 +248,13 @@ fn task_definition_tags(state: &EcsState, task_def_arn: &str) -> Vec<(String, St
 // RunTask
 // ---------------------------------------------------------------------------
 
-pub fn run_task(state: &EcsState, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
+pub fn run_task(
+    state: &EcsState,
+    input: &Value,
+    ctx: &RequestContext,
+    secrets_lookup: Option<&dyn awsim_core::SecretLookup>,
+    parameters_lookup: Option<&dyn awsim_core::ParameterLookup>,
+) -> Result<Value, AwsError> {
     let cluster_id = input["cluster"].as_str().unwrap_or("default");
     let cluster_name = resolve_cluster_name(cluster_id).to_string();
 
@@ -184,6 +317,12 @@ pub fn run_task(state: &EcsState, input: &Value, ctx: &RequestContext) -> Result
         let managed = crate::operations::tags::ecs_managed_tags(&cluster_name, None);
         effective_tags = crate::operations::tags::merge_tags(&effective_tags, &managed);
     }
+
+    // Validate every container's `secrets[]` entry resolves to a real
+    // SecretsManager secret or SSM parameter. AWS surfaces the failure
+    // at RunTask time (the task never transitions out of PROVISIONING)
+    // so we reject up front with ClientException.
+    validate_container_secrets(state, &task_def_arn, ctx, secrets_lookup, parameters_lookup)?;
 
     let network_mode = task_definition_network_mode(state, &task_def_arn);
     let requires_network_config = network_mode.as_deref() == Some("awsvpc");
@@ -425,6 +564,8 @@ mod propagate_tags_tests {
                 "tags": [{ "key": "team", "value": "override" }]
             }),
             &ctx(),
+            None,
+            None,
         )
         .unwrap();
         let tags = resp["tasks"][0]["tags"].as_array().unwrap();
@@ -455,6 +596,8 @@ mod propagate_tags_tests {
                 "enableECSManagedTags": true,
             }),
             &ctx(),
+            None,
+            None,
         )
         .unwrap();
         let tags = resp["tasks"][0]["tags"].as_array().unwrap();
@@ -484,6 +627,8 @@ mod propagate_tags_tests {
                 "propagateTags": "MYSTERY"
             }),
             &ctx(),
+            None,
+            None,
         )
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterException");
@@ -523,6 +668,8 @@ mod propagate_tags_tests {
                 }
             }),
             &ctx(),
+            None,
+            None,
         )
         .unwrap();
 
@@ -555,9 +702,140 @@ mod propagate_tags_tests {
             &state,
             &json!({ "cluster": "default", "taskDefinition": "web" }),
             &ctx(),
+            None,
+            None,
         )
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    struct StubSecrets {
+        known: std::collections::HashSet<String>,
+    }
+    impl awsim_core::SecretLookup for StubSecrets {
+        fn secret_exists(&self, secret_ref: &str, _: &str, _: &str) -> bool {
+            self.known.contains(secret_ref)
+        }
+    }
+    struct StubParameters {
+        known: std::collections::HashSet<String>,
+    }
+    impl awsim_core::ParameterLookup for StubParameters {
+        fn parameter_exists(&self, parameter_ref: &str, _: &str, _: &str) -> bool {
+            self.known.contains(parameter_ref)
+        }
+    }
+
+    fn register_with_container_secrets(state: &EcsState, value_from: &str) {
+        register_task_definition(
+            state,
+            &json!({
+                "family": "web",
+                "containerDefinitions": [{
+                    "name": "app",
+                    "image": "img",
+                    "secrets": [{ "name": "DB_PASS", "valueFrom": value_from }]
+                }]
+            }),
+            &ctx(),
+            None,
+            None,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn run_task_rejects_missing_secretsmanager_secret() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        let arn = "arn:aws:secretsmanager:us-east-1:000000000000:secret:db-pass-abc123";
+        register_with_container_secrets(&state, arn);
+        let lookup = StubSecrets {
+            known: std::collections::HashSet::new(),
+        };
+        let err = run_task(
+            &state,
+            &json!({ "cluster": "default", "taskDefinition": "web" }),
+            &ctx(),
+            Some(&lookup),
+            None,
+        )
+        .unwrap_err();
+        assert!(err.message.contains("SecretsManager"), "{err:?}");
+    }
+
+    #[test]
+    fn run_task_accepts_resolvable_secretsmanager_secret() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        let arn = "arn:aws:secretsmanager:us-east-1:000000000000:secret:db-pass-abc123";
+        register_with_container_secrets(&state, arn);
+        let mut known = std::collections::HashSet::new();
+        known.insert(arn.to_string());
+        let lookup = StubSecrets { known };
+        run_task(
+            &state,
+            &json!({ "cluster": "default", "taskDefinition": "web" }),
+            &ctx(),
+            Some(&lookup),
+            None,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn run_task_rejects_missing_ssm_parameter() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        register_with_container_secrets(&state, "/myapp/db");
+        let lookup = StubParameters {
+            known: std::collections::HashSet::new(),
+        };
+        let err = run_task(
+            &state,
+            &json!({ "cluster": "default", "taskDefinition": "web" }),
+            &ctx(),
+            None,
+            Some(&lookup),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("SSM parameter"), "{err:?}");
+    }
+
+    #[test]
+    fn run_task_accepts_resolvable_ssm_parameter() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        register_with_container_secrets(&state, "/myapp/db");
+        let mut known = std::collections::HashSet::new();
+        known.insert("/myapp/db".to_string());
+        let lookup = StubParameters { known };
+        run_task(
+            &state,
+            &json!({ "cluster": "default", "taskDefinition": "web" }),
+            &ctx(),
+            None,
+            Some(&lookup),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn run_task_skips_secret_validation_when_no_lookup_wired() {
+        let state = EcsState::default();
+        create_cluster(&state, &json!({ "clusterName": "default" }), &ctx()).unwrap();
+        register_with_container_secrets(
+            &state,
+            "arn:aws:secretsmanager:us-east-1:000000000000:secret:never-validated",
+        );
+        run_task(
+            &state,
+            &json!({ "cluster": "default", "taskDefinition": "web" }),
+            &ctx(),
+            None,
+            None,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -576,6 +854,8 @@ mod propagate_tags_tests {
             &state,
             &json!({ "cluster": "default", "taskDefinition": "web" }),
             &ctx(),
+            None,
+            None,
         )
         .unwrap();
         let attachments = resp["tasks"][0]["attachments"].as_array().unwrap();

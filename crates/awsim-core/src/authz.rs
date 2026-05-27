@@ -96,6 +96,15 @@ pub trait SecretLookup: Send + Sync {
     fn secret_exists(&self, secret_ref: &str, account: &str, region: &str) -> bool;
 }
 
+/// Resolve an SSM Parameter Store reference (parameter name or ARN).
+/// Returns `true` when the parameter exists in the given (account,
+/// region). Used by service crates that consume SSM parameter
+/// references (ECS container `secrets[].valueFrom`, Lambda layer
+/// configuration, etc.) without depending on awsim-ssm.
+pub trait ParameterLookup: Send + Sync {
+    fn parameter_exists(&self, parameter_ref: &str, account: &str, region: &str) -> bool;
+}
+
 pub struct NoopPrincipalLookup;
 
 impl PrincipalLookup for NoopPrincipalLookup {

@@ -22,7 +22,7 @@ pub mod tick;
 pub mod totp;
 
 pub use authz::{
-    AuthzEngine, GrantLookup, KmsKeyLookup, NoopPrincipalLookup, PrincipalLookup,
+    AuthzEngine, GrantLookup, KmsKeyLookup, NoopPrincipalLookup, ParameterLookup, PrincipalLookup,
     ResolvedPrincipal, ResourcePolicyLookup, ScpLookup, SecretLookup,
 };
 // `HandlerByteStream` and `HandlerResult` are defined further down in

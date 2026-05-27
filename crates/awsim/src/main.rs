@@ -2570,6 +2570,7 @@ fn register_services(
     state.register(secretsmanager, vec![]);
 
     let ssm = Arc::new(awsim_ssm::SsmService::new());
+    let ssm_store = ssm.store();
     state.register(ssm, vec![]);
 
     let stepfunctions = Arc::new(awsim_stepfunctions::StepFunctionsService::new());
@@ -2621,10 +2622,13 @@ fn register_services(
     let ecs_secrets_lookup: Arc<dyn awsim_core::SecretLookup> = Arc::new(
         awsim_secretsmanager::SecretsManagerSecretLookup::new(secrets_store.clone()),
     );
+    let ecs_parameters_lookup: Arc<dyn awsim_core::ParameterLookup> =
+        Arc::new(awsim_ssm::SsmParameterLookup::new(ssm_store.clone()));
     let ecs = Arc::new(
         awsim_ecs::EcsService::new()
             .with_iam_lookup(ecs_iam_lookup)
-            .with_secrets_lookup(ecs_secrets_lookup),
+            .with_secrets_lookup(ecs_secrets_lookup)
+            .with_parameters_lookup(ecs_parameters_lookup),
     );
     state.register(ecs, vec![]);
 

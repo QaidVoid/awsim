@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use awsim_core::{
-    AccountRegionStore, AwsError, PrincipalLookup, Protocol, RequestContext, SecretLookup,
-    ServiceHandler,
+    AccountRegionStore, AwsError, ParameterLookup, PrincipalLookup, Protocol, RequestContext,
+    SecretLookup, ServiceHandler,
 };
 use serde_json::Value;
 use tracing::debug;
@@ -19,8 +19,13 @@ pub struct EcsService {
     iam_lookup: Option<Arc<dyn PrincipalLookup>>,
     /// SecretsManager lookup used to validate
     /// `containerDefinitions[].repositoryCredentials.credentialsParameter`
-    /// at RegisterTaskDefinition. `None` skips the validation.
+    /// at RegisterTaskDefinition and `containerDefinitions[].secrets[]`
+    /// SecretsManager refs at RunTask. `None` skips the validation.
     secrets_lookup: Option<Arc<dyn SecretLookup>>,
+    /// SSM Parameter lookup used to validate
+    /// `containerDefinitions[].secrets[]` references that point at
+    /// SSM parameters. `None` skips the validation.
+    parameters_lookup: Option<Arc<dyn ParameterLookup>>,
 }
 
 impl EcsService {
@@ -29,6 +34,7 @@ impl EcsService {
             store: AccountRegionStore::new(),
             iam_lookup: None,
             secrets_lookup: None,
+            parameters_lookup: None,
         }
     }
 
@@ -44,6 +50,14 @@ impl EcsService {
     /// are verified against the secrets store at registration time.
     pub fn with_secrets_lookup(mut self, lookup: Arc<dyn SecretLookup>) -> Self {
         self.secrets_lookup = Some(lookup);
+        self
+    }
+
+    /// Plug in the SSM Parameter Store lookup so container
+    /// `secrets[].valueFrom` references that point at SSM parameters
+    /// are validated when RunTask materialises the task.
+    pub fn with_parameters_lookup(mut self, lookup: Arc<dyn ParameterLookup>) -> Self {
+        self.parameters_lookup = Some(lookup);
         self
     }
 }
@@ -112,7 +126,13 @@ impl ServiceHandler for EcsService {
             "UpdateService" => services::update_service(&state, &input, ctx),
 
             // Tasks
-            "RunTask" => tasks::run_task(&state, &input, ctx),
+            "RunTask" => tasks::run_task(
+                &state,
+                &input,
+                ctx,
+                self.secrets_lookup.as_deref(),
+                self.parameters_lookup.as_deref(),
+            ),
             "StopTask" => tasks::stop_task(&state, &input, ctx),
             "DescribeTasks" => tasks::describe_tasks(&state, &input, ctx),
             "ListTasks" => tasks::list_tasks(&state, &input, ctx),

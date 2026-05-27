@@ -19,6 +19,14 @@ impl SsmService {
             store: AccountRegionStore::new(),
         }
     }
+
+    /// Borrow the inner store so other crates (ECS container
+    /// `secrets[]`, Lambda Parameter resolution, etc.) can wire a
+    /// [`ParameterLookup`](awsim_core::ParameterLookup) over it and
+    /// validate parameter references against the live state.
+    pub fn store(&self) -> AccountRegionStore<SsmState> {
+        self.store.clone()
+    }
 }
 
 impl Default for SsmService {
