@@ -87,6 +87,96 @@ fn value_to_plain(v: &Value) -> String {
     }
 }
 
+/// SendTemplatedEmail (SES v1) — render a stored template against
+/// TemplateData and send to the recipients. Honors Cc/Bcc/ReplyTo +
+/// ConfigurationSetName + Tags so the persisted row carries the same
+/// metadata as SendEmail. Accepts v1 (`Source`) and v2
+/// (`FromEmailAddress`) sender keys interchangeably.
+pub fn send_templated_email(
+    state: &SesState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let from = input["Source"]
+        .as_str()
+        .or_else(|| input["FromEmailAddress"].as_str())
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Source is required"))?
+        .to_string();
+
+    let destination = &input["Destination"];
+    let to: Vec<String> = address_list(&destination["ToAddresses"]);
+    let cc: Vec<String> = address_list(&destination["CcAddresses"]);
+    let bcc: Vec<String> = address_list(&destination["BccAddresses"]);
+    if to.is_empty() && cc.is_empty() && bcc.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameter",
+            "At least one recipient address is required",
+        ));
+    }
+
+    let reply_to: Vec<String> = address_list(&input["ReplyToAddresses"]);
+    let template_name = input["Template"]
+        .as_str()
+        .or_else(|| input["TemplateName"].as_str())
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Template is required"))?;
+    let template = state.templates.get(template_name).ok_or_else(|| {
+        AwsError::not_found(
+            "TemplateDoesNotExist",
+            format!("Template not found: {template_name}"),
+        )
+    })?;
+
+    let data_str = input["TemplateData"].as_str().unwrap_or("{}");
+    let data: Value = serde_json::from_str(data_str).map_err(|_| {
+        AwsError::bad_request(
+            "InvalidParameter",
+            "TemplateData must be a JSON object string",
+        )
+    })?;
+    let subject = template
+        .subject
+        .as_deref()
+        .map(|s| render_template(s, &data));
+    let body_text = template.text.as_deref().map(|s| render_template(s, &data));
+    let body_html = template.html.as_deref().map(|s| render_template(s, &data));
+    let configuration_set_name = input["ConfigurationSetName"].as_str().map(str::to_string);
+    let tags = parse_email_tags(input.get("Tags").or_else(|| input.get("EmailTags")));
+
+    let message_id = Uuid::new_v4().to_string();
+    let email = SentEmail {
+        message_id: message_id.clone(),
+        from,
+        to,
+        cc,
+        bcc,
+        reply_to,
+        subject,
+        body_text,
+        body_html,
+        raw: None,
+        sent_at: now_epoch(),
+        configuration_set_name,
+        tags,
+    };
+
+    info!(message_id = %message_id, "SES: templated email sent");
+    if let Some(store) = state.sqlite() {
+        store.put_email(&ctx.account_id, &ctx.region, &email)?;
+    }
+    Ok(json!({ "MessageId": message_id }))
+}
+
+fn address_list(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Parse EmailTags input ([{Name, Value}, ...]) into a flat name/value
 /// vector. Entries missing either field are dropped. Empty input yields
 /// an empty vector.
@@ -364,6 +454,94 @@ mod tls_policy_enforcement_tests {
         .unwrap();
         let resp = send_email(&state, &send_input("cs", true), &ctx()).unwrap();
         assert!(resp["MessageId"].is_string());
+    }
+
+    fn open_store() -> std::sync::Arc<crate::SqliteStore> {
+        let path = std::env::temp_dir().join(format!("awsim-ses-cc-{}.db", uuid::Uuid::new_v4()));
+        std::sync::Arc::new(crate::SqliteStore::open(path).unwrap())
+    }
+
+    #[test]
+    fn send_email_records_cc_bcc_reply_to_recipients() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store.clone());
+        send_email(
+            &state,
+            &json!({
+                "FromEmailAddress": "alice@example.com",
+                "Destination": {
+                    "ToAddresses": ["primary@example.com"],
+                    "CcAddresses": ["cc1@example.com", "cc2@example.com"],
+                    "BccAddresses": ["bcc@example.com"]
+                },
+                "ReplyToAddresses": ["alice-reply@example.com"],
+                "Content": { "Simple": { "Subject": { "Data": "hi" }, "Body": { "Text": { "Data": "hi" } } } }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let row = store.list_all().unwrap().into_iter().next().unwrap();
+        assert_eq!(row.email.cc, vec!["cc1@example.com", "cc2@example.com"]);
+        assert_eq!(row.email.bcc, vec!["bcc@example.com"]);
+        assert_eq!(row.email.reply_to, vec!["alice-reply@example.com"]);
+    }
+
+    #[test]
+    fn send_templated_email_renders_and_records_cc_bcc_reply_to() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store.clone());
+        crate::operations::templates::create_email_template(
+            &state,
+            &json!({
+                "TemplateName": "welcome",
+                "TemplateContent": {
+                    "Subject": "Hi {{name}}",
+                    "Text": "Welcome {{name}}.",
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        send_templated_email(
+            &state,
+            &json!({
+                "Source": "alice@example.com",
+                "Destination": {
+                    "ToAddresses": ["primary@example.com"],
+                    "CcAddresses": ["cc@example.com"],
+                    "BccAddresses": ["bcc@example.com"]
+                },
+                "ReplyToAddresses": ["alice-reply@example.com"],
+                "Template": "welcome",
+                "TemplateData": "{\"name\":\"Sam\"}"
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let row = store.list_all().unwrap().into_iter().next().unwrap();
+        assert_eq!(row.email.subject.as_deref(), Some("Hi Sam"));
+        assert_eq!(row.email.body_text.as_deref(), Some("Welcome Sam."));
+        assert_eq!(row.email.cc, vec!["cc@example.com"]);
+        assert_eq!(row.email.bcc, vec!["bcc@example.com"]);
+        assert_eq!(row.email.reply_to, vec!["alice-reply@example.com"]);
+    }
+
+    #[test]
+    fn send_templated_email_rejects_missing_template() {
+        let state = SesState::default();
+        let err = send_templated_email(
+            &state,
+            &json!({
+                "Source": "alice@example.com",
+                "Destination": { "ToAddresses": ["bob@example.com"] },
+                "Template": "missing",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "TemplateDoesNotExist");
     }
 
     #[test]

@@ -86,13 +86,14 @@ impl SqliteStore {
         let cc_json = serde_json::to_string(&email.cc).unwrap_or_else(|_| "[]".into());
         let bcc_json = serde_json::to_string(&email.bcc).unwrap_or_else(|_| "[]".into());
         let tags_json = serde_json::to_string(&email.tags).unwrap_or_else(|_| "[]".into());
+        let reply_to_json = serde_json::to_string(&email.reply_to).unwrap_or_else(|_| "[]".into());
         let conn = self.conn()?;
         conn.execute(
             "INSERT OR REPLACE INTO sent_emails
              (account, region, message_id, sender, to_json, cc_json, bcc_json,
               subject, body_text, body_html, raw, sent_at,
-              configuration_set_name, tags_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+              configuration_set_name, tags_json, reply_to_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 account,
                 region,
@@ -108,6 +109,7 @@ impl SqliteStore {
                 email.sent_at as i64,
                 email.configuration_set_name.as_deref(),
                 &tags_json,
+                &reply_to_json,
             ],
         )
         .map_err(sqlite_err)?;
@@ -121,7 +123,7 @@ impl SqliteStore {
             .prepare(
                 "SELECT account, region, message_id, sender, to_json, cc_json, bcc_json,
                         subject, body_text, body_html, raw, sent_at,
-                        configuration_set_name, tags_json
+                        configuration_set_name, tags_json, reply_to_json
                  FROM sent_emails
                  ORDER BY sent_at DESC, message_id ASC",
             )
@@ -167,6 +169,11 @@ fn row_to_email(row: &rusqlite::Row<'_>) -> rusqlite::Result<SentEmailRow> {
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_default();
+    let reply_to_json: Option<String> = row.get(14).ok();
+    let reply_to: Vec<String> = reply_to_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
     Ok(SentEmailRow {
         account: row.get(0)?,
         region: row.get(1)?,
@@ -176,7 +183,7 @@ fn row_to_email(row: &rusqlite::Row<'_>) -> rusqlite::Result<SentEmailRow> {
             to,
             cc,
             bcc,
-            reply_to: Vec::new(),
+            reply_to,
             subject: row.get(7)?,
             body_text: row.get(8)?,
             body_html: row.get(9)?,
@@ -214,6 +221,7 @@ fn init_schema(conn: &Connection) -> Result<(), AwsError> {
     // no-op on schemas that already carry them.
     add_column_if_missing(conn, "sent_emails", "configuration_set_name", "TEXT")?;
     add_column_if_missing(conn, "sent_emails", "tags_json", "TEXT")?;
+    add_column_if_missing(conn, "sent_emails", "reply_to_json", "TEXT")?;
     Ok(())
 }
 
