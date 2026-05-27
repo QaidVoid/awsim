@@ -569,6 +569,71 @@ impl ServiceHandler for IdentityStoreService {
                     .collect();
                 Ok(json!({ "GroupMemberships": items }))
             }
+            "IsMemberInGroups" => {
+                // AWS-shape: `IsMemberInGroups(IdentityStoreId, MemberId,
+                // GroupIds[])` -> `Results[{GroupId, MemberId,
+                // MembershipExists}]`. Every GroupId must resolve to a
+                // real group in the same store; a missing group is a
+                // hard `ResourceNotFoundException` with
+                // `ResourceType=GROUP` (not a soft `MembershipExists:false`).
+                let store = require_str(&input, "IdentityStoreId")?.to_string();
+                validate_identity_store_id(&store)?;
+                let user_id = input
+                    .get("MemberId")
+                    .and_then(|m| m.get("UserId"))
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        AwsError::bad_request("ValidationException", "MemberId.UserId is required")
+                    })?
+                    .to_string();
+                let group_ids: Vec<String> = input
+                    .get("GroupIds")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| {
+                        AwsError::bad_request("ValidationException", "GroupIds is required")
+                    })?
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+                if group_ids.is_empty() {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        "GroupIds must contain at least one entry.",
+                    ));
+                }
+                if group_ids.len() > 100 {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        format!(
+                            "GroupIds has {} entries; the maximum is 100.",
+                            group_ids.len()
+                        ),
+                    ));
+                }
+                let mut results = Vec::with_capacity(group_ids.len());
+                for group_id in &group_ids {
+                    if !state.groups.contains_key(&group_key(&store, group_id)) {
+                        return Err(AwsError::not_found(
+                            "ResourceNotFoundException",
+                            format!("Group `{group_id}` does not exist in store `{store}`."),
+                        )
+                        .with_extra("ResourceType", Value::String("GROUP".to_string()))
+                        .with_extra("ResourceId", Value::String(group_id.clone())));
+                    }
+                    let exists = state.memberships.iter().any(|e| {
+                        let m = e.value();
+                        m.identity_store_id == store
+                            && m.group_id == *group_id
+                            && m.member_user_id == user_id
+                    });
+                    results.push(json!({
+                        "GroupId": group_id,
+                        "MemberId": { "UserId": user_id.clone() },
+                        "MembershipExists": exists,
+                    }));
+                }
+                Ok(json!({ "Results": results }))
+            }
             "ListGroupMembershipsForMember" => {
                 let store = require_str(&input, "IdentityStoreId")?;
                 let user_id = input
@@ -783,6 +848,112 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
         assert!(err.message.contains("whitespace"), "{}", err.message);
+    }
+
+    #[test]
+    fn is_member_in_groups_returns_per_group_existence() {
+        let svc = IdentityStoreService::new();
+        let ctx = RequestContext::new("identitystore", "us-east-1");
+        let store = "d-0123456789";
+        let u = block_on(svc.handle(
+            "CreateUser",
+            json!({ "IdentityStoreId": store, "UserName": "alice" }),
+            &ctx,
+        ))
+        .unwrap();
+        let g1 = block_on(svc.handle(
+            "CreateGroup",
+            json!({ "IdentityStoreId": store, "DisplayName": "engineers" }),
+            &ctx,
+        ))
+        .unwrap();
+        let g2 = block_on(svc.handle(
+            "CreateGroup",
+            json!({ "IdentityStoreId": store, "DisplayName": "ops" }),
+            &ctx,
+        ))
+        .unwrap();
+        // Add alice to engineers only.
+        block_on(svc.handle(
+            "CreateGroupMembership",
+            json!({
+                "IdentityStoreId": store,
+                "GroupId": g1["GroupId"],
+                "MemberId": { "UserId": u["UserId"] },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let resp = block_on(svc.handle(
+            "IsMemberInGroups",
+            json!({
+                "IdentityStoreId": store,
+                "MemberId": { "UserId": u["UserId"] },
+                "GroupIds": [g1["GroupId"], g2["GroupId"]],
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let results = resp["Results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        // The engineers entry should mark membership true; ops false.
+        let engineers = results
+            .iter()
+            .find(|r| r["GroupId"] == g1["GroupId"])
+            .unwrap();
+        let ops = results
+            .iter()
+            .find(|r| r["GroupId"] == g2["GroupId"])
+            .unwrap();
+        assert_eq!(engineers["MembershipExists"], json!(true));
+        assert_eq!(ops["MembershipExists"], json!(false));
+    }
+
+    #[test]
+    fn is_member_in_groups_rejects_missing_group() {
+        let svc = IdentityStoreService::new();
+        let ctx = RequestContext::new("identitystore", "us-east-1");
+        let store = "d-0123456789";
+        let u = block_on(svc.handle(
+            "CreateUser",
+            json!({ "IdentityStoreId": store, "UserName": "alice" }),
+            &ctx,
+        ))
+        .unwrap();
+        let err = block_on(svc.handle(
+            "IsMemberInGroups",
+            json!({
+                "IdentityStoreId": store,
+                "MemberId": { "UserId": u["UserId"] },
+                "GroupIds": ["g-does-not-exist"],
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundException");
+        let extras = err.extras.as_ref().unwrap();
+        assert_eq!(
+            extras.get("ResourceType").and_then(|v| v.as_str()),
+            Some("GROUP")
+        );
+    }
+
+    #[test]
+    fn is_member_in_groups_requires_non_empty_group_ids() {
+        let svc = IdentityStoreService::new();
+        let ctx = RequestContext::new("identitystore", "us-east-1");
+        let err = block_on(svc.handle(
+            "IsMemberInGroups",
+            json!({
+                "IdentityStoreId": "d-0123456789",
+                "MemberId": { "UserId": "u-1" },
+                "GroupIds": [],
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 
     #[test]
