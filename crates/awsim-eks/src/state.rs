@@ -9,6 +9,32 @@ pub struct EksState {
     pub nodegroups: DashMap<(String, String), Nodegroup>,
     pub fargate_profiles: DashMap<(String, String), FargateProfile>,
     pub resource_tags: DashMap<String, HashMap<String, String>>,
+    /// Cluster-managed addons keyed by `(cluster_name, addon_name)`.
+    /// AWS lets clusters opt into managed addons like `vpc-cni`,
+    /// `coredns`, or `kube-proxy`; configurationValues + resolveConflicts
+    /// control how a CreateAddon / UpdateAddon merges with what already
+    /// exists in the kube cluster.
+    pub addons: DashMap<(String, String), Addon>,
+}
+
+/// EKS managed addon. `resolve_conflicts` controls the create / update
+/// merge strategy and is one of `NONE`, `OVERWRITE`, or `PRESERVE`.
+/// `configuration_values` is opaque JSON/YAML the caller hands in;
+/// AWS doesn't shape-check it, so we don't either — only `serialize`
+/// is meaningful.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Addon {
+    pub cluster_name: String,
+    pub addon_name: String,
+    pub addon_arn: String,
+    pub addon_version: String,
+    pub status: String,
+    pub service_account_role_arn: Option<String>,
+    pub resolve_conflicts: String,
+    pub configuration_values: Option<String>,
+    pub tags: HashMap<String, String>,
+    pub created_at: u64,
+    pub modified_at: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

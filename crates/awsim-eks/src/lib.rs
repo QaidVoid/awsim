@@ -131,6 +131,36 @@ impl ServiceHandler for EksService {
             },
             RouteDefinition {
                 method: "POST",
+                path_pattern: "/clusters/{clusterName}/addons",
+                operation: "CreateAddon",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/clusters/{clusterName}/addons",
+                operation: "ListAddons",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/clusters/{clusterName}/addons/{addonName}",
+                operation: "DescribeAddon",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/clusters/{clusterName}/addons/{addonName}/update",
+                operation: "UpdateAddon",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/clusters/{clusterName}/addons/{addonName}",
+                operation: "DeleteAddon",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
                 path_pattern: "/tags/{resourceArn}",
                 operation: "TagResource",
                 required_query_param: None,
@@ -186,6 +216,11 @@ impl ServiceHandler for EksService {
             "ListFargateProfiles" => {
                 operations::fargate_profiles::list_fargate_profiles(&state, &input, ctx)
             }
+            "CreateAddon" => operations::addons::create_addon(&state, &input, ctx),
+            "DescribeAddon" => operations::addons::describe_addon(&state, &input, ctx),
+            "ListAddons" => operations::addons::list_addons(&state, &input, ctx),
+            "UpdateAddon" => operations::addons::update_addon(&state, &input, ctx),
+            "DeleteAddon" => operations::addons::delete_addon(&state, &input, ctx),
             "TagResource" => operations::tags::tag_resource(&state, &input, ctx),
             "UntagResource" => operations::tags::untag_resource(&state, &input, ctx),
             "ListTagsForResource" => operations::tags::list_tags_for_resource(&state, &input, ctx),
