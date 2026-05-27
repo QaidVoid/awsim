@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
 use awsim_sts::{AssumedRoleSession, StsSessionStore};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -1504,6 +1505,8 @@ fn tag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsEr
         AwsError::bad_request("InvalidParameterException", "ResourceArn is required")
     })?;
 
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
+
     let new_tags: HashMap<String, String> = input["Tags"]
         .as_object()
         .map(|m| {
@@ -1538,12 +1541,15 @@ fn untag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, Aws
         AwsError::bad_request("InvalidParameterException", "ResourceArn is required")
     })?;
 
-    let tag_keys: Vec<&str> = input["TagKeys"]
+    let tag_keys_value = input
+        .get("TagKeys")
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "TagKeys is required"))?;
+    validate_aws_tag_keys(tag_keys_value)?;
+
+    let tag_keys: Vec<&str> = tag_keys_value
         .as_array()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "TagKeys is required"))?
-        .iter()
-        .filter_map(|v| v.as_str())
-        .collect();
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
 
     let pool_id = pool_id_from_arn(resource_arn).ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "Invalid ResourceArn format")
@@ -2655,5 +2661,53 @@ mod tests {
         let list_result2 = list_tags_for_resource(&state, &json!({ "ResourceArn": arn })).unwrap();
         assert!(list_result2["Tags"]["team"].is_null());
         assert_eq!(list_result2["Tags"]["env"], "test");
+    }
+
+    #[test]
+    fn tag_resource_rejects_aws_prefix_via_helper() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create = create_identity_pool(
+            &state,
+            &json!({ "IdentityPoolName": "p", "AllowUnauthenticatedIdentities": false }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create["IdentityPoolId"].as_str().unwrap();
+        let arn = format!("arn:aws:cognito-identity:us-east-1:123456789012:identitypool/{pool_id}");
+
+        let err = tag_resource(
+            &state,
+            &json!({ "ResourceArn": arn, "Tags": { "aws:internal": "v" } }),
+        )
+        .unwrap_err();
+        assert!(
+            err.code.contains("Validation") || err.code.contains("InvalidParameter"),
+            "expected validation, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn untag_resource_rejects_aws_prefix_via_helper() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create = create_identity_pool(
+            &state,
+            &json!({ "IdentityPoolName": "p", "AllowUnauthenticatedIdentities": false }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create["IdentityPoolId"].as_str().unwrap();
+        let arn = format!("arn:aws:cognito-identity:us-east-1:123456789012:identitypool/{pool_id}");
+
+        let err = untag_resource(
+            &state,
+            &json!({ "ResourceArn": arn, "TagKeys": ["aws:internal"] }),
+        )
+        .unwrap_err();
+        assert!(
+            err.code.contains("Validation") || err.code.contains("InvalidParameter"),
+            "expected validation, got {err:?}",
+        );
     }
 }
