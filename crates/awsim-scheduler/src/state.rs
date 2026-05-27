@@ -43,6 +43,12 @@ pub struct SchedulerState {
     pub schedule_groups: DashMap<String, ScheduleGroup>,
     /// ARN → tags (key → value)
     pub tags: DashMap<String, HashMap<String, String>>,
+    /// `ClientToken` cache. AWS Scheduler honors the token for 24h:
+    /// a replay returns the cached response (ScheduleArn); a different
+    /// body under the same token surfaces
+    /// `IdempotencyParameterMismatchException`. See spec 0009 for the
+    /// shared cache mechanics.
+    pub client_token_cache: awsim_core::idempotency::IdempotencyCache<serde_json::Value>,
 }
 
 impl SchedulerState {

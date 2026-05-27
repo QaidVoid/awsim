@@ -280,4 +280,58 @@ mod tests {
         let err = block_on(svc.handle("Bogus", json!({}), &ctx)).unwrap_err();
         assert_eq!(err.code, "UnknownOperationException");
     }
+
+    #[test]
+    fn client_token_replay_returns_cached_schedule_arn() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        let input = json!({
+            "Name": "every-5m",
+            "ScheduleExpression": "rate(5 minutes)",
+            "Target": {
+                "Arn": "arn:aws:lambda:us-east-1:000000000000:function:f",
+                "RoleArn": "arn:aws:iam::000000000000:role/scheduler",
+            },
+            "FlexibleTimeWindow": { "Mode": "OFF" },
+            "ClientToken": "ct-abc",
+        });
+        let first = block_on(svc.handle("CreateSchedule", input.clone(), &ctx)).unwrap();
+        let arn = first["ScheduleArn"].as_str().unwrap().to_string();
+        // Same token + same body must return the cached payload.
+        let second = block_on(svc.handle("CreateSchedule", input, &ctx)).unwrap();
+        assert_eq!(second["ScheduleArn"], json!(arn));
+        let listed = block_on(svc.handle("ListSchedules", json!({}), &ctx)).unwrap();
+        assert_eq!(listed["Schedules"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn client_token_mismatch_raises_idempotency_exception() {
+        let svc = SchedulerService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "first",
+                "ScheduleExpression": "rate(5 minutes)",
+                "Target": { "Arn": "arn:aws:lambda::000000000000:function:a", "RoleArn": "arn:aws:iam::000000000000:role/r" },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+                "ClientToken": "ct-xyz",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let err = block_on(svc.handle(
+            "CreateSchedule",
+            json!({
+                "Name": "different",
+                "ScheduleExpression": "rate(10 minutes)",
+                "Target": { "Arn": "arn:aws:lambda::000000000000:function:b", "RoleArn": "arn:aws:iam::000000000000:role/r" },
+                "FlexibleTimeWindow": { "Mode": "OFF" },
+                "ClientToken": "ct-xyz",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "IdempotencyParameterMismatchException");
+    }
 }

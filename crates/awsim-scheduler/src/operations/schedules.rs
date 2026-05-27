@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::idempotency::{Lookup, hash_request, validate_token};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -21,6 +22,31 @@ pub fn create_schedule(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    // ClientToken idempotency: a same-token replay short-circuits to
+    // the cached `{ScheduleArn}` so callers (CloudFormation, Terraform)
+    // can safely retry create requests on transient network errors
+    // without minting a second schedule. Mismatched bodies surface
+    // IdempotencyParameterMismatchException per AWS docs.
+    let client_token = input
+        .get("ClientToken")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    if let Some(ref token) = client_token {
+        validate_token(token)?;
+        let req_hash = hash_request(&canonical_create_schedule_body(input));
+        match state.client_token_cache.lookup(token, req_hash) {
+            Lookup::Hit(v) => return Ok(v),
+            Lookup::Mismatch => {
+                return Err(AwsError::bad_request(
+                    "IdempotencyParameterMismatchException",
+                    "Request parameters do not match those used in a prior CreateSchedule call \
+                     with the same ClientToken.",
+                ));
+            }
+            Lookup::Miss => {}
+        }
+    }
+
     let name = input["Name"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("ValidationException", "Name is required"))?
@@ -79,7 +105,44 @@ pub fn create_schedule(
 
     state.schedules.insert(key, schedule);
 
-    Ok(json!({ "ScheduleArn": arn }))
+    let result = json!({ "ScheduleArn": arn });
+    if let Some(token) = client_token {
+        let req_hash = hash_request(&canonical_create_schedule_body(input));
+        state
+            .client_token_cache
+            .insert(token, req_hash, result.clone());
+    }
+    Ok(result)
+}
+
+/// Hashable canonical representation of `CreateSchedule`'s body for
+/// the `ClientToken` cache. AWS compares the *request parameters*, so
+/// we strip the `ClientToken` itself before sorting object keys so
+/// that the same logical body always hashes the same.
+fn canonical_create_schedule_body(input: &Value) -> Value {
+    let mut clone = input.clone();
+    if let Some(obj) = clone.as_object_mut() {
+        obj.remove("ClientToken");
+    }
+    fn canonicalise(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let mut sorted: std::collections::BTreeMap<&str, Value> =
+                    std::collections::BTreeMap::new();
+                for (k, v) in map {
+                    sorted.insert(k.as_str(), canonicalise(v));
+                }
+                let mut out = serde_json::Map::new();
+                for (k, v) in sorted {
+                    out.insert(k.to_string(), v);
+                }
+                Value::Object(out)
+            }
+            Value::Array(arr) => Value::Array(arr.iter().map(canonicalise).collect()),
+            other => other.clone(),
+        }
+    }
+    canonicalise(&clone)
 }
 
 // ---------------------------------------------------------------------------
