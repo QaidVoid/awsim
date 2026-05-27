@@ -1,8 +1,20 @@
+use std::collections::HashMap;
+
 use awsim_core::AwsError;
 use awsim_core::tags::{TagOpts, reject_aws_prefix_on_write, validate};
 use serde_json::{Value, json};
 
 use crate::{error::resource_not_found, state::ElbState};
+
+/// Parse and validate Tags on a Create* input. Both ELBv2 (current
+/// service) and Classic ELB tag intake routes through this helper so
+/// the AWS tag rules (length caps, reserved `aws:` prefix on writes,
+/// etc.) are enforced uniformly.
+pub fn parse_tags_input(input: &Value) -> Result<HashMap<String, String>, AwsError> {
+    let tags = parse_tags(input);
+    validate(&tags, &TagOpts::aws_default())?;
+    Ok(tags.into_iter().collect())
+}
 
 /// Parse tags from `Tags.member.N` or `Tags` array. AWS's `member.N`
 /// shape is sparse-tolerant: callers may skip indices, and the parser
@@ -141,6 +153,31 @@ mod parse_tags_tests {
                 ("z".to_string(), "10".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn parse_tags_input_rejects_aws_prefixed_key() {
+        let input = json!({
+            "Tags": [
+                { "Key": "aws:internal", "Value": "denied" }
+            ]
+        });
+        let err = parse_tags_input(&input).unwrap_err();
+        // tag middleware rejects writes to AWS-reserved keys.
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn parse_tags_input_accepts_well_formed_pairs() {
+        let input = json!({
+            "Tags": [
+                { "Key": "env", "Value": "prod" },
+                { "Key": "team", "Value": "data" }
+            ]
+        });
+        let out = parse_tags_input(&input).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out.get("env").map(String::as_str), Some("prod"));
     }
 
     #[test]

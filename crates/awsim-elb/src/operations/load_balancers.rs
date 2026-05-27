@@ -1,6 +1,5 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
-use std::collections::HashMap;
 
 use crate::{
     error::resource_not_found,
@@ -50,6 +49,8 @@ pub fn create_load_balancer(
     let security_groups = extract_string_list(input, "SecurityGroups");
     let vpc_id = opt_str(input, "VpcId").unwrap_or("").to_string();
 
+    let tags = super::tags::parse_tags_input(input)?;
+
     let arn = lb_arn(&ctx.region, &ctx.account_id, &lb_type, &name);
     let dns_name = lb_dns_name(&name, &ctx.region);
 
@@ -62,7 +63,7 @@ pub fn create_load_balancer(
         state: "active".to_string(),
         subnets,
         security_groups,
-        tags: HashMap::new(),
+        tags,
         created_at: now_iso8601(),
         vpc_id,
     };

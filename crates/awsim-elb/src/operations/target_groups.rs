@@ -1,6 +1,5 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
-use std::collections::HashMap;
 
 use crate::{
     error::resource_not_found,
@@ -113,6 +112,8 @@ pub fn create_target_group(
 
     let arn = tg_arn(&ctx.region, &ctx.account_id, &name);
 
+    let tags = super::tags::parse_tags_input(input)?;
+
     let tg = TargetGroup {
         arn: arn.clone(),
         name,
@@ -121,7 +122,7 @@ pub fn create_target_group(
         vpc_id,
         target_type,
         targets: Vec::new(),
-        tags: HashMap::new(),
+        tags,
     };
 
     let result = tg_to_value(&tg);
