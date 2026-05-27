@@ -256,6 +256,7 @@ pub fn create_change_set(
             outputs: HashMap::new(),
             termination_protection: false,
             notification_arns: Vec::new(),
+            on_failure: "ROLLBACK".to_string(),
         };
         state.stacks.insert(stack_name.clone(), placeholder_stack);
     }
@@ -525,6 +526,7 @@ mod change_set_diff_tests {
                 outputs: HashMap::new(),
                 termination_protection: false,
                 notification_arns: Vec::new(),
+                on_failure: "ROLLBACK".to_string(),
             },
         );
 
@@ -599,6 +601,7 @@ mod change_set_diff_tests {
                 outputs: HashMap::new(),
                 termination_protection: false,
                 notification_arns: Vec::new(),
+                on_failure: "ROLLBACK".to_string(),
             },
         );
 
@@ -674,6 +677,7 @@ mod change_set_diff_tests {
                 outputs: HashMap::new(),
                 termination_protection: false,
                 notification_arns: Vec::new(),
+                on_failure: "ROLLBACK".to_string(),
             },
         );
 

@@ -83,6 +83,7 @@ fn stack_to_value(stack: &Stack) -> Value {
             "member": stack.notification_arns.clone()
         });
     }
+    result["DisableRollback"] = json!(stack.on_failure == "DO_NOTHING");
 
     result
 }
@@ -197,6 +198,36 @@ fn parse_notification_arns(input: &Value) -> Result<Vec<String>, AwsError> {
         }
     }
     Ok(arns)
+}
+
+/// Parse + validate `OnFailure`. CFN documents three values
+/// (`DO_NOTHING`, `ROLLBACK`, `DELETE`) and also accepts
+/// `DisableRollback=true` as a synonym for `DO_NOTHING`. The two
+/// inputs are mutually exclusive in real AWS; the simulator rejects
+/// the conflict.
+fn parse_on_failure(input: &Value) -> Result<String, AwsError> {
+    let supplied = input.get("OnFailure").and_then(Value::as_str);
+    let disable_rollback = input.get("DisableRollback").and_then(Value::as_bool);
+
+    if supplied.is_some() && disable_rollback.is_some() {
+        return Err(AwsError::bad_request(
+            "ValidationError",
+            "OnFailure and DisableRollback cannot both be specified.",
+        ));
+    }
+    if let Some(v) = supplied {
+        return match v {
+            "DO_NOTHING" | "ROLLBACK" | "DELETE" => Ok(v.to_string()),
+            other => Err(AwsError::bad_request(
+                "ValidationError",
+                format!("OnFailure `{other}` must be DO_NOTHING, ROLLBACK, or DELETE."),
+            )),
+        };
+    }
+    if let Some(true) = disable_rollback {
+        return Ok("DO_NOTHING".to_string());
+    }
+    Ok("ROLLBACK".to_string())
 }
 
 /// Publish a stack-level status event to each NotificationARN as an
@@ -409,6 +440,7 @@ pub fn create_stack(
         .as_bool()
         .unwrap_or(false);
     let notification_arns = parse_notification_arns(input)?;
+    let on_failure = parse_on_failure(input)?;
 
     let stack = Stack {
         stack_id: stack_id.clone(),
@@ -426,6 +458,7 @@ pub fn create_stack(
         outputs: HashMap::new(),
         termination_protection,
         notification_arns: notification_arns.clone(),
+        on_failure,
     };
 
     publish_stack_event_notifications(
@@ -1325,5 +1358,63 @@ mod capabilities_tests {
             .unwrap();
         assert_eq!(arns.len(), 1);
         assert_eq!(arns[0], "arn:aws:sns:us-east-1:000000000000:replaced");
+    }
+
+    #[test]
+    fn on_failure_defaults_to_rollback() {
+        let v = parse_on_failure(&json!({})).unwrap();
+        assert_eq!(v, "ROLLBACK");
+    }
+
+    #[test]
+    fn on_failure_accepts_all_documented_values() {
+        for v in ["DO_NOTHING", "ROLLBACK", "DELETE"] {
+            assert_eq!(
+                parse_on_failure(&json!({"OnFailure": v})).unwrap(),
+                v,
+                "OnFailure={v}"
+            );
+        }
+    }
+
+    #[test]
+    fn on_failure_rejects_unknown_value() {
+        let err = parse_on_failure(&json!({"OnFailure": "PANIC"})).unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    #[test]
+    fn disable_rollback_true_collapses_to_do_nothing() {
+        assert_eq!(
+            parse_on_failure(&json!({"DisableRollback": true})).unwrap(),
+            "DO_NOTHING"
+        );
+    }
+
+    #[test]
+    fn on_failure_and_disable_rollback_are_mutually_exclusive() {
+        let err = parse_on_failure(&json!({
+            "OnFailure": "DELETE",
+            "DisableRollback": true,
+        }))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+
+    #[test]
+    fn describe_surfaces_disable_rollback_flag_for_do_nothing() {
+        let state = CloudFormationState::default();
+        create_stack(
+            &state,
+            &json!({
+                "StackName": "s",
+                "TemplateBody": MINIMAL_TEMPLATE,
+                "OnFailure": "DO_NOTHING",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let described = describe_stacks(&state, &json!({"StackName": "s"})).unwrap();
+        assert_eq!(described["Stacks"]["member"][0]["DisableRollback"], true);
     }
 }

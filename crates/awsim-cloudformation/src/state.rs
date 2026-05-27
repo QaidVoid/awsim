@@ -33,6 +33,11 @@ pub struct Stack {
     /// notification on every stack-status transition. AWS supports
     /// up to 5 ARNs; we accept the same upper bound.
     pub notification_arns: Vec<String>,
+    /// `DO_NOTHING` | `ROLLBACK` | `DELETE`. AWS's default is
+    /// `ROLLBACK`. The simulator never fails CreateStack, so this is
+    /// stored verbatim for describe round-trip and consulted by the
+    /// rollback path when (future) failures are wired up.
+    pub on_failure: String,
 }
 
 #[derive(Debug, Clone)]
