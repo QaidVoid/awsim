@@ -2,6 +2,7 @@ use awsim_core::{Body, BodyStore, Snapshottable};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
 /// Lambda state — per account and region.
@@ -15,6 +16,70 @@ pub struct LambdaState {
     /// function_name[:qualifier] → EventInvokeConfig
     pub event_invoke_configs: DashMap<String, EventInvokeConfig>,
     pub body_store: OnceLock<Arc<BodyStore>>,
+    /// Per-function active-invocation counter. Used to enforce
+    /// `ReservedConcurrentExecutions` (and AWS's
+    /// `TooManyRequestsException` on overflow). Lazily populated on
+    /// first invoke against the function; entries are never removed
+    /// even when the function is deleted, but the counter resets when
+    /// the LambdaState is dropped or rebuilt from a snapshot.
+    pub active_invocations: DashMap<String, Arc<AtomicU32>>,
+}
+
+/// RAII guard around an active-invocation slot. Increments the
+/// per-function counter on creation; decrements when dropped. Used
+/// by `invoke()` so the slot is always released, even when the
+/// underlying executor panics.
+pub struct InvocationSlot {
+    counter: Arc<AtomicU32>,
+}
+
+impl InvocationSlot {
+    pub fn acquire(state: &LambdaState, function_name: &str) -> Arc<AtomicU32> {
+        let counter = state
+            .active_invocations
+            .entry(function_name.to_string())
+            .or_insert_with(|| Arc::new(AtomicU32::new(0)))
+            .clone();
+        counter.fetch_add(1, Ordering::SeqCst);
+        counter
+    }
+
+    /// Construct from an already-incremented counter handle. The
+    /// caller is responsible for ensuring the counter was bumped via
+    /// `acquire`; the guard handles the decrement.
+    pub fn from_acquired(counter: Arc<AtomicU32>) -> Self {
+        Self { counter }
+    }
+
+    /// Peek the current in-flight count for `function_name` without
+    /// incrementing. Returns 0 when no entry exists.
+    pub fn current(state: &LambdaState, function_name: &str) -> u32 {
+        state
+            .active_invocations
+            .get(function_name)
+            .map(|c| c.load(Ordering::SeqCst))
+            .unwrap_or(0)
+    }
+}
+
+impl Drop for InvocationSlot {
+    fn drop(&mut self) {
+        // Saturating sub so a programming bug that double-drops the
+        // guard can't wrap the counter to u32::MAX.
+        loop {
+            let cur = self.counter.load(Ordering::SeqCst);
+            if cur == 0 {
+                return;
+            }
+            if self
+                .counter
+                .compare_exchange(cur, cur - 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                return;
+            }
+        }
+    }
 }
 
 impl LambdaState {

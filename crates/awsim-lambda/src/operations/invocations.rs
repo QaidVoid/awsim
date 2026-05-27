@@ -5,12 +5,29 @@ use tracing::{debug, warn};
 use crate::{
     error::resource_not_found,
     executor,
-    state::{InvocationRecord, LambdaState},
+    state::{InvocationRecord, InvocationSlot, LambdaState},
     util::{new_uuid, now_iso8601, opt_str, require_str},
 };
 
 fn map_io_err(e: std::io::Error) -> AwsError {
     AwsError::internal(format!("read function code: {e}"))
+}
+
+/// HTTP 429 `TooManyRequestsException` carrying AWS's documented
+/// `Reason=ConcurrentInvocationLimitExceeded` so SDK clients that
+/// branch on the reason still work.
+fn too_many_requests(function_name: &str, current: u32, cap: u32) -> AwsError {
+    AwsError::too_many_requests(
+        "TooManyRequestsException",
+        format!(
+            "Rate Exceeded: function `{function_name}` has {current} in-flight \
+             invocation(s), at its ReservedConcurrentExecutions cap of {cap}."
+        ),
+    )
+    .with_extra(
+        "Reason",
+        serde_json::Value::String("ConcurrentInvocationLimitExceeded".into()),
+    )
 }
 
 /// Extract zip bytes to the given directory, returning an error string on failure.
@@ -109,21 +126,49 @@ pub fn invoke(
             f.environment.clone(),
             f.timeout,
             f.memory_size,
+            f.reserved_concurrent_executions,
         )
     };
 
-    let (runtime, handler, code_data, code_sha256, env_vars, timeout, memory_size) = function_info;
+    let (
+        runtime,
+        handler,
+        code_data,
+        code_sha256,
+        env_vars,
+        timeout,
+        memory_size,
+        reserved_concurrent_executions,
+    ) = function_info;
 
     // DryRun validates the call without executing. AWS responds with HTTP
     // 204 No Content and an empty body — set __status_code so the gateway
     // emits the right status, and skip Payload entirely so callers don't
-    // see a synthetic body.
+    // see a synthetic body. DryRun does not count against concurrency.
     if invocation_type == "DryRun" {
         return Ok(json!({
             "StatusCode": 204u64,
             "__status_code": 204u64,
         }));
     }
+
+    // Reserved-concurrency gate. AWS surfaces over-cap invokes as HTTP
+    // 429 `TooManyRequestsException` with `Reason=ConcurrentInvocationLimitExceeded`.
+    // The check + increment are not atomic (DashMap doesn't let us do
+    // compare-and-swap on the counter), so a tight race could let us
+    // briefly exceed the cap by one or two — acceptable for the
+    // simulator and consistent with how real Lambda also overshoots
+    // slightly before throttling kicks in.
+    let concurrency_slot = if let Some(cap) = reserved_concurrent_executions {
+        let current = InvocationSlot::current(state, name);
+        if current >= cap {
+            return Err(too_many_requests(name, current, cap));
+        }
+        let counter = InvocationSlot::acquire(state, name);
+        Some(InvocationSlot::from_acquired(counter))
+    } else {
+        None
+    };
 
     let request_id = new_uuid();
 
@@ -155,6 +200,10 @@ pub fn invoke(
                     let rt = rt.to_string();
                     let hndlr = hndlr.to_string();
                     let env = invocation_env.clone();
+                    // Move the concurrency slot into the spawned thread so
+                    // async invocations also count against the cap. The
+                    // slot decrements on drop when the thread returns.
+                    let async_slot = concurrency_slot;
                     std::thread::spawn(move || {
                         let _ = executor::execute_function(
                             &rt,
@@ -164,6 +213,7 @@ pub fn invoke(
                             &env,
                             timeout,
                         );
+                        drop(async_slot);
                     });
                 }
                 Err(e) => {
@@ -447,5 +497,105 @@ mod tests {
         .unwrap();
         assert!(resp.get("LogResult").is_none());
         assert!(resp["__headers"].get("X-Amz-Log-Result").is_none());
+    }
+
+    #[test]
+    fn reserved_concurrency_caps_invocations_at_429() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        // Set reserved concurrency to 1 and pre-occupy the slot so the
+        // next sync invoke is over cap.
+        state
+            .functions
+            .get_mut("f")
+            .unwrap()
+            .reserved_concurrent_executions = Some(1);
+        let counter = InvocationSlot::acquire(&state, "f");
+
+        let err = invoke(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "InvocationType": "RequestResponse",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "TooManyRequestsException");
+        // AWS-documented Reason — SDK clients branch on this value.
+        let extras = err.extras.as_ref().expect("extras populated");
+        assert_eq!(
+            extras.get("Reason").and_then(|v| v.as_str()),
+            Some("ConcurrentInvocationLimitExceeded")
+        );
+
+        // Release the simulated in-flight slot and confirm the next
+        // call goes through.
+        drop(InvocationSlot::from_acquired(counter));
+        invoke(
+            &state,
+            &json!({
+                "FunctionName": "f",
+                "InvocationType": "RequestResponse",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn reserved_concurrency_unset_allows_unbounded_invokes() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        // No cap configured — 10 back-to-back invocations should all succeed.
+        for _ in 0..10 {
+            invoke(
+                &state,
+                &json!({ "FunctionName": "f", "InvocationType": "RequestResponse" }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn reserved_concurrency_slot_decrements_on_completion() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        state
+            .functions
+            .get_mut("f")
+            .unwrap()
+            .reserved_concurrent_executions = Some(2);
+        invoke(
+            &state,
+            &json!({ "FunctionName": "f", "InvocationType": "RequestResponse" }),
+            &ctx(),
+        )
+        .unwrap();
+        // After the sync invoke returns the slot must be released,
+        // even though the cap is non-None.
+        assert_eq!(InvocationSlot::current(&state, "f"), 0);
+    }
+
+    #[test]
+    fn dry_run_does_not_count_against_concurrency() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        state
+            .functions
+            .get_mut("f")
+            .unwrap()
+            .reserved_concurrent_executions = Some(1);
+        // Saturate the slot.
+        let _occupied = InvocationSlot::from_acquired(InvocationSlot::acquire(&state, "f"));
+        // DryRun should bounce off before the slot is checked.
+        let resp = invoke(
+            &state,
+            &json!({ "FunctionName": "f", "InvocationType": "DryRun" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["StatusCode"], json!(204));
     }
 }

@@ -100,6 +100,20 @@ impl AwsError {
         }
     }
 
+    /// HTTP 429 Too Many Requests — used by services that throttle on
+    /// concurrency or rate. Lambda raises this with code
+    /// `TooManyRequestsException`; DynamoDB uses
+    /// `ProvisionedThroughputExceededException`.
+    pub fn too_many_requests(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: code.into(),
+            message: message.into(),
+            error_type: ErrorType::Sender,
+            extras: None,
+        }
+    }
+
     pub fn conflict(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
