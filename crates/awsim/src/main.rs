@@ -2618,7 +2618,14 @@ fn register_services(
 
     let ecs_iam_lookup: Arc<dyn awsim_core::PrincipalLookup> =
         Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam_store.clone()));
-    let ecs = Arc::new(awsim_ecs::EcsService::new().with_iam_lookup(ecs_iam_lookup));
+    let ecs_secrets_lookup: Arc<dyn awsim_core::SecretLookup> = Arc::new(
+        awsim_secretsmanager::SecretsManagerSecretLookup::new(secrets_store.clone()),
+    );
+    let ecs = Arc::new(
+        awsim_ecs::EcsService::new()
+            .with_iam_lookup(ecs_iam_lookup)
+            .with_secrets_lookup(ecs_secrets_lookup),
+    );
     state.register(ecs, vec![]);
 
     let ec2 = Arc::new(awsim_ec2::Ec2Service::new());

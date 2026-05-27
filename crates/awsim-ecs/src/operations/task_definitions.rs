@@ -79,6 +79,53 @@ fn validate_task_role_arn(
     Ok(Some(arn.to_string()))
 }
 
+/// Validate a SecretsManager secret reference (name or ARN). ECS
+/// rejects RegisterTaskDefinition when the referenced secret doesn't
+/// exist; mirror that behavior whenever a SecretLookup is wired. When
+/// the secret reference is an ARN, also check the ARN belongs to the
+/// caller's account.
+fn validate_secret_reference(
+    secret_ref: &str,
+    field: &str,
+    ctx: &RequestContext,
+    secrets_lookup: Option<&dyn awsim_core::SecretLookup>,
+) -> Result<(), AwsError> {
+    if secret_ref.is_empty() {
+        return Err(AwsError::bad_request(
+            "ClientException",
+            format!("{field} must not be empty."),
+        ));
+    }
+    let Some(lookup) = secrets_lookup else {
+        return Ok(());
+    };
+    let (account, region) = parse_secretsmanager_arn(secret_ref)
+        .unwrap_or_else(|| (ctx.account_id.clone(), ctx.region.clone()));
+    if !lookup.secret_exists(secret_ref, &account, &region) {
+        return Err(AwsError::bad_request(
+            "ClientException",
+            format!(
+                "{field} `{secret_ref}` does not resolve to an existing SecretsManager secret."
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Returns `(account, region)` when `arn` is a well-formed
+/// SecretsManager secret ARN. Otherwise `None` — the caller falls
+/// back to the request context.
+fn parse_secretsmanager_arn(arn: &str) -> Option<(String, String)> {
+    let rest = arn.strip_prefix("arn:aws:secretsmanager:")?;
+    let mut parts = rest.splitn(4, ':');
+    let region = parts.next()?;
+    let account = parts.next()?;
+    if region.is_empty() || account.is_empty() {
+        return None;
+    }
+    Some((account.to_string(), region.to_string()))
+}
+
 fn parse_iam_role_arn(arn: &str) -> Option<&str> {
     let rest = arn.strip_prefix("arn:aws:iam::")?;
     let (account, tail) = rest.split_once(':')?;
@@ -174,6 +221,7 @@ pub fn register_task_definition(
     input: &Value,
     ctx: &RequestContext,
     iam_lookup: Option<&dyn awsim_core::PrincipalLookup>,
+    secrets_lookup: Option<&dyn awsim_core::SecretLookup>,
 ) -> Result<Value, AwsError> {
     let family = input["family"]
         .as_str()
@@ -279,6 +327,27 @@ pub fn register_task_definition(
         ctx,
         iam_lookup,
     )?;
+
+    // Validate any private-registry repositoryCredentials.credentialsParameter
+    // against the SecretsManager store. AWS rejects RegisterTaskDefinition
+    // when the secret doesn't exist; mirror that when a lookup is wired.
+    if let Some(containers) = container_definitions.as_array() {
+        for container in containers {
+            let Some(cred_param) = container
+                .get("repositoryCredentials")
+                .and_then(|rc| rc.get("credentialsParameter"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            validate_secret_reference(
+                cred_param,
+                "repositoryCredentials.credentialsParameter",
+                ctx,
+                secrets_lookup,
+            )?;
+        }
+    }
 
     let revision = {
         let mut revisions = state.task_definitions.entry(family.clone()).or_default();
@@ -512,7 +581,7 @@ mod placement_tests {
         input["placementConstraints"] = json!([{ "type": "memberOf", "expression": "attribute:ecs.instance-type == t3.medium" }]);
         input["placementStrategy"] =
             json!([{ "type": "spread", "field": "attribute:ecs.availability-zone" }]);
-        let resp = register_task_definition(&state, &input, &ctx(), None).unwrap();
+        let resp = register_task_definition(&state, &input, &ctx(), None, None).unwrap();
         let td = &resp["taskDefinition"];
         assert_eq!(td["placementConstraints"][0]["type"], "memberOf");
         assert_eq!(td["placementStrategy"][0]["type"], "spread");
@@ -523,7 +592,7 @@ mod placement_tests {
         let state = EcsState::default();
         let mut input = base_input();
         input["placementConstraints"] = json!([{ "type": "bogus" }]);
-        let err = register_task_definition(&state, &input, &ctx(), None).unwrap_err();
+        let err = register_task_definition(&state, &input, &ctx(), None, None).unwrap_err();
         assert_eq!(err.code, "ClientException");
     }
 
@@ -532,7 +601,7 @@ mod placement_tests {
         let state = EcsState::default();
         let mut input = base_input();
         input["placementStrategy"] = json!([{ "type": "bogus" }]);
-        let err = register_task_definition(&state, &input, &ctx(), None).unwrap_err();
+        let err = register_task_definition(&state, &input, &ctx(), None, None).unwrap_err();
         assert_eq!(err.code, "ClientException");
     }
 
@@ -541,7 +610,7 @@ mod placement_tests {
         let state = EcsState::default();
         let mut input = base_input();
         input["taskRoleArn"] = json!("arn:aws:iam::000000000000:user/bob");
-        let err = register_task_definition(&state, &input, &ctx(), None).unwrap_err();
+        let err = register_task_definition(&state, &input, &ctx(), None, None).unwrap_err();
         assert!(err.message.contains("IAM role"), "{err:?}");
     }
 
@@ -551,7 +620,7 @@ mod placement_tests {
         let mut input = base_input();
         input["taskRoleArn"] = json!("arn:aws:iam::000000000000:role/task");
         input["executionRoleArn"] = json!("arn:aws:iam::000000000000:role/exec");
-        let resp = register_task_definition(&state, &input, &ctx(), None).unwrap();
+        let resp = register_task_definition(&state, &input, &ctx(), None, None).unwrap();
         let td = &resp["taskDefinition"];
         assert_eq!(td["taskRoleArn"], "arn:aws:iam::000000000000:role/task");
         assert_eq!(
@@ -592,7 +661,8 @@ mod placement_tests {
         let lookup = StubLookup {
             known: std::collections::HashSet::new(),
         };
-        let err = register_task_definition(&state, &input, &ctx(), Some(&lookup)).unwrap_err();
+        let err =
+            register_task_definition(&state, &input, &ctx(), Some(&lookup), None).unwrap_err();
         assert!(err.message.contains("does not exist"), "{err:?}");
     }
 
@@ -605,6 +675,81 @@ mod placement_tests {
         let mut known = std::collections::HashSet::new();
         known.insert(role.clone());
         let lookup = StubLookup { known };
-        register_task_definition(&state, &input, &ctx(), Some(&lookup)).unwrap();
+        register_task_definition(&state, &input, &ctx(), Some(&lookup), None).unwrap();
+    }
+
+    struct StubSecrets {
+        known: std::collections::HashSet<String>,
+    }
+    impl awsim_core::SecretLookup for StubSecrets {
+        fn secret_exists(&self, secret_ref: &str, _: &str, _: &str) -> bool {
+            self.known.contains(secret_ref)
+        }
+    }
+
+    #[test]
+    fn rejects_missing_repository_credentials_secret() {
+        let state = EcsState::default();
+        let mut input = base_input();
+        input["containerDefinitions"] = json!([{
+            "name": "app",
+            "image": "private/repo:tag",
+            "repositoryCredentials": {
+                "credentialsParameter": "arn:aws:secretsmanager:us-east-1:000000000000:secret:dockerhub-abc123"
+            }
+        }]);
+        let lookup = StubSecrets {
+            known: std::collections::HashSet::new(),
+        };
+        let err =
+            register_task_definition(&state, &input, &ctx(), None, Some(&lookup)).unwrap_err();
+        assert!(err.message.contains("does not resolve"), "{err:?}");
+    }
+
+    #[test]
+    fn accepts_present_repository_credentials_secret() {
+        let state = EcsState::default();
+        let mut input = base_input();
+        let arn = "arn:aws:secretsmanager:us-east-1:000000000000:secret:dockerhub-abc123";
+        input["containerDefinitions"] = json!([{
+            "name": "app",
+            "image": "private/repo:tag",
+            "repositoryCredentials": { "credentialsParameter": arn }
+        }]);
+        let mut known = std::collections::HashSet::new();
+        known.insert(arn.to_string());
+        let lookup = StubSecrets { known };
+        register_task_definition(&state, &input, &ctx(), None, Some(&lookup)).unwrap();
+    }
+
+    #[test]
+    fn skips_repository_credentials_validation_when_no_lookup_wired() {
+        let state = EcsState::default();
+        let mut input = base_input();
+        input["containerDefinitions"] = json!([{
+            "name": "app",
+            "image": "private/repo:tag",
+            "repositoryCredentials": {
+                "credentialsParameter": "arn:aws:secretsmanager:us-east-1:000000000000:secret:never-validated"
+            }
+        }]);
+        register_task_definition(&state, &input, &ctx(), None, None).unwrap();
+    }
+
+    #[test]
+    fn rejects_empty_credentials_parameter() {
+        let state = EcsState::default();
+        let mut input = base_input();
+        input["containerDefinitions"] = json!([{
+            "name": "app",
+            "image": "private/repo:tag",
+            "repositoryCredentials": { "credentialsParameter": "" }
+        }]);
+        let lookup = StubSecrets {
+            known: std::collections::HashSet::new(),
+        };
+        let err =
+            register_task_definition(&state, &input, &ctx(), None, Some(&lookup)).unwrap_err();
+        assert!(err.message.contains("must not be empty"), "{err:?}");
     }
 }

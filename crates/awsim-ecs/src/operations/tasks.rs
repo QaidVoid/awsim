@@ -413,6 +413,7 @@ mod propagate_tags_tests {
             }),
             &ctx(),
             None,
+            None,
         )
         .unwrap();
         let resp = run_task(
@@ -443,6 +444,7 @@ mod propagate_tags_tests {
             &json!({ "family": "web", "containerDefinitions": [] }),
             &ctx(),
             None,
+            None,
         )
         .unwrap();
         let resp = run_task(
@@ -471,6 +473,7 @@ mod propagate_tags_tests {
             &json!({ "family": "web", "containerDefinitions": [] }),
             &ctx(),
             None,
+            None,
         )
         .unwrap();
         let err = run_task(
@@ -495,6 +498,7 @@ mod propagate_tags_tests {
                 "networkMode": "awsvpc"
             }),
             &ctx(),
+            None,
             None,
         )
         .unwrap();
@@ -564,6 +568,7 @@ mod propagate_tags_tests {
             &state,
             &json!({ "family": "web", "containerDefinitions": [] }),
             &ctx(),
+            None,
             None,
         )
         .unwrap();

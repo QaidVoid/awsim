@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use awsim_core::{
-    AccountRegionStore, AwsError, PrincipalLookup, Protocol, RequestContext, ServiceHandler,
+    AccountRegionStore, AwsError, PrincipalLookup, Protocol, RequestContext, SecretLookup,
+    ServiceHandler,
 };
 use serde_json::Value;
 use tracing::debug;
@@ -16,6 +17,10 @@ pub struct EcsService {
     /// `executionRoleArn` at RegisterTaskDefinition. `None` keeps the
     /// service working in standalone test setups that don't wire IAM.
     iam_lookup: Option<Arc<dyn PrincipalLookup>>,
+    /// SecretsManager lookup used to validate
+    /// `containerDefinitions[].repositoryCredentials.credentialsParameter`
+    /// at RegisterTaskDefinition. `None` skips the validation.
+    secrets_lookup: Option<Arc<dyn SecretLookup>>,
 }
 
 impl EcsService {
@@ -23,6 +28,7 @@ impl EcsService {
         Self {
             store: AccountRegionStore::new(),
             iam_lookup: None,
+            secrets_lookup: None,
         }
     }
 
@@ -30,6 +36,14 @@ impl EcsService {
     /// are verified against the IAM store at registration time.
     pub fn with_iam_lookup(mut self, lookup: Arc<dyn PrincipalLookup>) -> Self {
         self.iam_lookup = Some(lookup);
+        self
+    }
+
+    /// Plug in the SecretsManager lookup so private-registry
+    /// credentials referenced via `repositoryCredentials.credentialsParameter`
+    /// are verified against the secrets store at registration time.
+    pub fn with_secrets_lookup(mut self, lookup: Arc<dyn SecretLookup>) -> Self {
+        self.secrets_lookup = Some(lookup);
         self
     }
 }
@@ -77,6 +91,7 @@ impl ServiceHandler for EcsService {
                 &input,
                 ctx,
                 self.iam_lookup.as_deref(),
+                self.secrets_lookup.as_deref(),
             ),
             "DeregisterTaskDefinition" => {
                 task_definitions::deregister_task_definition(&state, &input, ctx)

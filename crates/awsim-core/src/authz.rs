@@ -87,6 +87,15 @@ pub trait KmsKeyLookup: Send + Sync {
     fn resolve_key(&self, key_ref: &str, account: &str, region: &str) -> Option<String>;
 }
 
+/// Resolve a SecretsManager secret reference (name or ARN). Returns
+/// `true` when a matching secret exists in the given (account,
+/// region). Used by service crates (ECS repositoryCredentials, ECS
+/// container secrets[], EventBridge connection auth) that need to
+/// validate a secret reference without depending on awsim-secretsmanager.
+pub trait SecretLookup: Send + Sync {
+    fn secret_exists(&self, secret_ref: &str, account: &str, region: &str) -> bool;
+}
+
 pub struct NoopPrincipalLookup;
 
 impl PrincipalLookup for NoopPrincipalLookup {
