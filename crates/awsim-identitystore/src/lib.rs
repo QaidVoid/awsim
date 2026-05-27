@@ -108,6 +108,20 @@ fn require_str<'a>(input: &'a Value, key: &str) -> Result<&'a str, AwsError> {
         .ok_or_else(|| AwsError::bad_request("ValidationException", format!("{key} is required")))
 }
 
+/// Build a `ResourceNotFoundException` carrying the AWS-documented
+/// `ResourceType` and `ResourceId` extras. SDK clients branch on
+/// these to attribute the miss to the right resource (USER / GROUP /
+/// MEMBERSHIP) without parsing the message.
+fn not_found_with_resource(
+    resource_type: &'static str,
+    resource_id: &str,
+    msg: impl Into<String>,
+) -> AwsError {
+    AwsError::not_found("ResourceNotFoundException", msg)
+        .with_extra("ResourceType", Value::String(resource_type.to_string()))
+        .with_extra("ResourceId", Value::String(resource_id.to_string()))
+}
+
 /// IdentityStoreId regex per AWS: `^d-[0-9a-f]{10}$`. AWS rejects
 /// other shapes (legacy `i-*` identifiers, garbage, etc.) at every
 /// API boundary with `ValidationException`.
@@ -357,10 +371,7 @@ impl ServiceHandler for IdentityStoreService {
                 let store = require_str(&input, "IdentityStoreId")?;
                 let user_id = require_str(&input, "UserId")?;
                 let u = state.users.get(&user_key(store, user_id)).ok_or_else(|| {
-                    AwsError::not_found(
-                        "ResourceNotFoundException",
-                        format!("User {user_id} not found"),
-                    )
+                    not_found_with_resource("USER", user_id, format!("User {user_id} not found"))
                 })?;
                 Ok(user_to_value(&u))
             }
@@ -383,10 +394,7 @@ impl ServiceHandler for IdentityStoreService {
                     .find(|e| e.value().identity_store_id == store && e.value().user_name == alt)
                     .map(|e| e.value().user_id.clone());
                 let user_id = user_id.ok_or_else(|| {
-                    AwsError::not_found(
-                        "ResourceNotFoundException",
-                        format!("User {alt} not found"),
-                    )
+                    not_found_with_resource("USER", alt, format!("User {alt} not found"))
                 })?;
                 Ok(json!({ "UserId": user_id, "IdentityStoreId": store }))
             }
@@ -444,8 +452,9 @@ impl ServiceHandler for IdentityStoreService {
                     .users
                     .get_mut(&user_key(store, user_id))
                     .ok_or_else(|| {
-                        AwsError::not_found(
-                            "ResourceNotFoundException",
+                        not_found_with_resource(
+                            "USER",
+                            user_id,
                             format!("User {user_id} not found"),
                         )
                     })?;
@@ -477,8 +486,9 @@ impl ServiceHandler for IdentityStoreService {
                     .users
                     .remove(&user_key(&store, &user_id))
                     .ok_or_else(|| {
-                        AwsError::not_found(
-                            "ResourceNotFoundException",
+                        not_found_with_resource(
+                            "USER",
+                            &user_id,
                             format!("User {user_id} not found"),
                         )
                     })?;
@@ -512,8 +522,9 @@ impl ServiceHandler for IdentityStoreService {
                     .groups
                     .get(&group_key(store, group_id))
                     .ok_or_else(|| {
-                        AwsError::not_found(
-                            "ResourceNotFoundException",
+                        not_found_with_resource(
+                            "GROUP",
+                            group_id,
                             format!("Group {group_id} not found"),
                         )
                     })?;
@@ -571,8 +582,9 @@ impl ServiceHandler for IdentityStoreService {
                     .groups
                     .get_mut(&group_key(store, group_id))
                     .ok_or_else(|| {
-                        AwsError::not_found(
-                            "ResourceNotFoundException",
+                        not_found_with_resource(
+                            "GROUP",
+                            group_id,
                             format!("Group {group_id} not found"),
                         )
                     })?;
@@ -605,8 +617,9 @@ impl ServiceHandler for IdentityStoreService {
                     .groups
                     .remove(&group_key(&store, &group_id))
                     .ok_or_else(|| {
-                        AwsError::not_found(
-                            "ResourceNotFoundException",
+                        not_found_with_resource(
+                            "GROUP",
+                            &group_id,
                             format!("Group {group_id} not found"),
                         )
                     })?;
@@ -627,8 +640,9 @@ impl ServiceHandler for IdentityStoreService {
                     })?
                     .to_string();
                 if !state.groups.contains_key(&group_key(&store, &group_id)) {
-                    return Err(AwsError::not_found(
-                        "ResourceNotFoundException",
+                    return Err(not_found_with_resource(
+                        "GROUP",
+                        &group_id,
                         format!("Group {group_id} not found"),
                     ));
                 }
@@ -649,8 +663,9 @@ impl ServiceHandler for IdentityStoreService {
                     .memberships
                     .get(&ms_key(store, membership_id))
                     .ok_or_else(|| {
-                        AwsError::not_found(
-                            "ResourceNotFoundException",
+                        not_found_with_resource(
+                            "MEMBERSHIP",
+                            membership_id,
                             format!("Membership {membership_id} not found"),
                         )
                     })?;
@@ -714,12 +729,11 @@ impl ServiceHandler for IdentityStoreService {
                 let mut results = Vec::with_capacity(group_ids.len());
                 for group_id in &group_ids {
                     if !state.groups.contains_key(&group_key(&store, group_id)) {
-                        return Err(AwsError::not_found(
-                            "ResourceNotFoundException",
+                        return Err(not_found_with_resource(
+                            "GROUP",
+                            group_id,
                             format!("Group `{group_id}` does not exist in store `{store}`."),
-                        )
-                        .with_extra("ResourceType", Value::String("GROUP".to_string()))
-                        .with_extra("ResourceId", Value::String(group_id.clone())));
+                        ));
                     }
                     let exists = state.memberships.iter().any(|e| {
                         let m = e.value();
@@ -762,8 +776,9 @@ impl ServiceHandler for IdentityStoreService {
                     .memberships
                     .remove(&ms_key(store, membership_id))
                     .ok_or_else(|| {
-                        AwsError::not_found(
-                            "ResourceNotFoundException",
+                        not_found_with_resource(
+                            "MEMBERSHIP",
+                            membership_id,
                             format!("Membership {membership_id} not found"),
                         )
                     })?;
@@ -949,6 +964,64 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
         assert!(err.message.contains("whitespace"), "{}", err.message);
+    }
+
+    #[test]
+    fn not_found_errors_carry_resource_type_and_id() {
+        let svc = IdentityStoreService::new();
+        let ctx = RequestContext::new("identitystore", "us-east-1");
+        let store = "d-0123456789";
+
+        // USER scope
+        let err = block_on(svc.handle(
+            "DescribeUser",
+            json!({ "IdentityStoreId": store, "UserId": "u-missing" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        let extras = err.extras.as_ref().unwrap();
+        assert_eq!(
+            extras.get("ResourceType").and_then(|v| v.as_str()),
+            Some("USER")
+        );
+        assert_eq!(
+            extras.get("ResourceId").and_then(|v| v.as_str()),
+            Some("u-missing")
+        );
+
+        // GROUP scope
+        let err = block_on(svc.handle(
+            "DescribeGroup",
+            json!({ "IdentityStoreId": store, "GroupId": "g-missing" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        let extras = err.extras.as_ref().unwrap();
+        assert_eq!(
+            extras.get("ResourceType").and_then(|v| v.as_str()),
+            Some("GROUP")
+        );
+        assert_eq!(
+            extras.get("ResourceId").and_then(|v| v.as_str()),
+            Some("g-missing")
+        );
+
+        // MEMBERSHIP scope
+        let err = block_on(svc.handle(
+            "DescribeGroupMembership",
+            json!({ "IdentityStoreId": store, "MembershipId": "m-missing" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        let extras = err.extras.as_ref().unwrap();
+        assert_eq!(
+            extras.get("ResourceType").and_then(|v| v.as_str()),
+            Some("MEMBERSHIP")
+        );
+        assert_eq!(
+            extras.get("ResourceId").and_then(|v| v.as_str()),
+            Some("m-missing")
+        );
     }
 
     #[test]
