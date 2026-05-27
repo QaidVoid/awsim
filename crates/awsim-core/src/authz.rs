@@ -128,6 +128,30 @@ pub trait CloudMapRegistrar: Send + Sync {
     );
 }
 
+/// Cross-service hook that lets services synchronously invoke a Lambda
+/// function. Today Secrets Manager uses this to drive the four-step
+/// rotation state machine (`createSecret` -> `setSecret` ->
+/// `testSecret` -> `finishSecret`) against the customer's rotation
+/// Lambda; other services with similar patterns (S3 Object Lambda,
+/// Cognito custom-auth triggers) can adopt the same trait without
+/// taking a direct dependency on awsim-lambda.
+///
+/// Returns the Lambda's response payload as a JSON value on success,
+/// or an `AwsError` with code `ResourceNotFoundException` when the
+/// function ARN doesn't resolve / `LambdaInvocationError` when the
+/// runtime surfaced a `FunctionError`. The implementation is allowed
+/// to block — Secrets Manager rotation already runs on the
+/// `WorkerPool` so this is invoked off the request thread.
+pub trait LambdaInvoker: Send + Sync {
+    fn invoke(
+        &self,
+        function_name: &str,
+        payload: &serde_json::Value,
+        account: &str,
+        region: &str,
+    ) -> Result<serde_json::Value, AwsError>;
+}
+
 pub struct NoopPrincipalLookup;
 
 impl PrincipalLookup for NoopPrincipalLookup {

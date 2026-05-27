@@ -7,8 +7,11 @@ mod util;
 pub use authz::{SecretsManagerResourcePolicyLookup, SecretsManagerSecretLookup};
 
 use async_trait::async_trait;
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
+use awsim_core::{
+    AccountRegionStore, AwsError, LambdaInvoker, Protocol, RequestContext, ServiceHandler,
+};
 use serde_json::Value;
+use std::sync::Arc;
 use tracing::debug;
 
 use state::SecretsState;
@@ -16,17 +19,32 @@ use state::SecretsState;
 /// The Secrets Manager service handler.
 pub struct SecretsManagerService {
     store: AccountRegionStore<SecretsState>,
+    lambda_invoker: Option<Arc<dyn LambdaInvoker>>,
 }
 
 impl SecretsManagerService {
     pub fn new() -> Self {
         Self {
             store: AccountRegionStore::new(),
+            lambda_invoker: None,
         }
+    }
+
+    /// Attach a Lambda invoker so `RotateSecret` can dispatch the
+    /// four-step rotation state machine against the customer's
+    /// rotation Lambda. When absent, `RotateSecret` falls back to the
+    /// in-process simulation (used by tests and bare deployments).
+    pub fn with_lambda_invoker(mut self, invoker: Arc<dyn LambdaInvoker>) -> Self {
+        self.lambda_invoker = Some(invoker);
+        self
     }
 
     pub fn store(&self) -> AccountRegionStore<SecretsState> {
         self.store.clone()
+    }
+
+    pub fn lambda_invoker(&self) -> Option<&Arc<dyn LambdaInvoker>> {
+        self.lambda_invoker.as_ref()
     }
 }
 
@@ -70,7 +88,12 @@ impl ServiceHandler for SecretsManagerService {
             "RestoreSecret" => operations::secrets::restore_secret(&state, &input, ctx),
             "TagResource" => operations::secrets::tag_resource(&state, &input, ctx),
             "UntagResource" => operations::secrets::untag_resource(&state, &input, ctx),
-            "RotateSecret" => operations::secrets::rotate_secret(&state, &input, ctx),
+            "RotateSecret" => operations::secrets::rotate_secret(
+                &state,
+                &input,
+                ctx,
+                self.lambda_invoker.as_deref(),
+            ),
             "CancelRotateSecret" => operations::secrets::cancel_rotate_secret(&state, &input, ctx),
             "ValidateResourcePolicy" => {
                 operations::secrets::validate_resource_policy(&state, &input, ctx)

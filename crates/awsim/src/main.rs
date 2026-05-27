@@ -2571,7 +2571,12 @@ fn register_services(
     // register it here so its routes show up in the right order.
     state.register(kms, vec![]);
 
-    let secretsmanager = Arc::new(awsim_secretsmanager::SecretsManagerService::new());
+    let lambda_invoker: Arc<dyn awsim_core::LambdaInvoker> = Arc::new(
+        awsim_lambda::LambdaServiceInvoker::new(lambda_store.clone()),
+    );
+    let secretsmanager = Arc::new(
+        awsim_secretsmanager::SecretsManagerService::new().with_lambda_invoker(lambda_invoker),
+    );
     let secrets_store = secretsmanager.store();
     state.register(secretsmanager, vec![]);
 

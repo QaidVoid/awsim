@@ -94,6 +94,73 @@ impl Default for LambdaService {
     }
 }
 
+/// Cross-service invoker that lets other services (Secrets Manager
+/// rotation, Cognito triggers, etc.) call a Lambda function
+/// synchronously without depending on the full `LambdaService`
+/// handler. Implements [`awsim_core::LambdaInvoker`].
+///
+/// `function_name` accepts either the bare function name or an
+/// `arn:aws:lambda:region:account:function:name(:qualifier)?` ARN;
+/// the invoker normalises to the bare name before dispatching.
+pub struct LambdaServiceInvoker {
+    store: AccountRegionStore<LambdaState>,
+}
+
+impl LambdaServiceInvoker {
+    pub fn new(store: AccountRegionStore<LambdaState>) -> Self {
+        Self { store }
+    }
+
+    fn normalise_function_name(reference: &str) -> &str {
+        if let Some(rest) = reference.strip_prefix("arn:")
+            && let Some(idx) = rest.rfind(':')
+        {
+            let tail = &rest[idx + 1..];
+            if let Some((name, _qualifier)) = tail.split_once(':') {
+                return name;
+            }
+            return tail;
+        }
+        reference
+    }
+}
+
+impl awsim_core::LambdaInvoker for LambdaServiceInvoker {
+    fn invoke(
+        &self,
+        function_name: &str,
+        payload: &Value,
+        account: &str,
+        region: &str,
+    ) -> Result<Value, AwsError> {
+        let state = self.store.get(account, region);
+        let name = Self::normalise_function_name(function_name);
+        let ctx = RequestContext::new("lambda", region);
+        let input = serde_json::json!({
+            "FunctionName": name,
+            "InvocationType": "RequestResponse",
+            "Payload": payload,
+        });
+        let response = operations::invocations::invoke(&state, &input, &ctx)?;
+        // The `invoke` operation surfaces a `FunctionError` field when
+        // the Lambda runtime reported an error. AWS clients treat that
+        // as a logical failure even though the HTTP status is 200, so
+        // forward it as an `AwsError` so the caller can react.
+        if let Some(err) = response.get("FunctionError").and_then(|v| v.as_str()) {
+            let payload = response
+                .get("Payload")
+                .cloned()
+                .unwrap_or(Value::Null)
+                .to_string();
+            return Err(AwsError::bad_request(
+                "LambdaInvocationError",
+                format!("Lambda {name} returned {err}: {payload}"),
+            ));
+        }
+        Ok(response.get("Payload").cloned().unwrap_or(Value::Null))
+    }
+}
+
 impl BlobInventory for LambdaService {
     fn known_blobs(&self) -> Vec<(String, String, String)> {
         let mut out = Vec::new();

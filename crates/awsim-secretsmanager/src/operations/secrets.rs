@@ -897,7 +897,8 @@ fn validate_schedule_expression(expr: &str) -> Result<(), AwsError> {
 pub fn rotate_secret(
     state: &SecretsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
+    lambda_invoker: Option<&dyn awsim_core::LambdaInvoker>,
 ) -> Result<Value, AwsError> {
     let secret_id = input["SecretId"]
         .as_str()
@@ -945,43 +946,81 @@ pub fn rotate_secret(
     }
     secret.rotation_enabled = true;
 
-    // Simulate rotation: create a new AWSPENDING version then immediately promote it to AWSCURRENT.
+    // Create the new AWSPENDING version up front. Real AWS performs
+    // the same step on the customer's behalf before invoking the
+    // rotation Lambda for `createSecret`.
     let now = now_epoch_f64();
     let pending_vid = new_version_id();
-
-    // Clone the current value into the new version (no real Lambda invocation)
     let current_value = secret
         .versions
         .get(&secret.current_version_id)
         .map(|v| (v.secret_string.clone(), v.secret_binary.clone()));
     let (secret_string, secret_binary) = current_value.unwrap_or((None, None));
+    let pending_version = SecretVersion {
+        version_id: pending_vid.clone(),
+        secret_string,
+        secret_binary,
+        stages: vec!["AWSPENDING".to_string()],
+        created_date: now,
+    };
+    secret.versions.insert(pending_vid.clone(), pending_version);
 
-    // Mark old AWSCURRENT as AWSPREVIOUS
+    let arn = secret.arn.clone();
+    let sname = secret.name.clone();
+    let lambda_arn = secret.rotation_lambda_arn.clone();
     let old_current_id = secret.current_version_id.clone();
+    drop(secret);
+
+    // Dispatch the four-step rotation state machine when a Lambda ARN
+    // is configured AND the gateway has wired up a `LambdaInvoker`.
+    // Any step that fails leaves AWSPENDING in place but does NOT
+    // promote it to AWSCURRENT — matching real AWS, which surfaces
+    // the failure to the caller for retry via the same token.
+    if let (Some(arn_ref), Some(invoker)) = (lambda_arn.as_deref(), lambda_invoker) {
+        for step in ROTATION_STEPS {
+            let payload = json!({
+                "Step": step,
+                "SecretId": arn.clone(),
+                "ClientRequestToken": pending_vid.clone(),
+            });
+            invoker
+                .invoke(arn_ref, &payload, &ctx.account_id, &ctx.region)
+                .map_err(|e| {
+                    // Surface failure with the step name so operators
+                    // can tell which call broke the rotation chain.
+                    error::invalid_request(format!(
+                        "RotateSecret step `{step}` failed: {} ({})",
+                        e.message, e.code
+                    ))
+                })?;
+        }
+    }
+
+    // Promote AWSPENDING -> AWSCURRENT and shift old AWSCURRENT to
+    // AWSPREVIOUS. Done after the Lambda chain so a failed step
+    // leaves the previous version active.
+    let mut secret = state
+        .secrets
+        .get_mut(&name)
+        .ok_or_else(|| error::resource_not_found(secret_id))?;
     if let Some(old_ver) = secret.versions.get_mut(&old_current_id) {
         old_ver.stages.retain(|s| s != "AWSCURRENT");
         if !old_ver.stages.contains(&"AWSPREVIOUS".to_string()) {
             old_ver.stages.push("AWSPREVIOUS".to_string());
         }
     }
-
-    let new_version = SecretVersion {
-        version_id: pending_vid.clone(),
-        secret_string,
-        secret_binary,
-        stages: vec!["AWSCURRENT".to_string()],
-        created_date: now,
-    };
-    secret.versions.insert(pending_vid.clone(), new_version);
+    if let Some(pending) = secret.versions.get_mut(&pending_vid) {
+        pending.stages.retain(|s| s != "AWSPENDING");
+        if !pending.stages.contains(&"AWSCURRENT".to_string()) {
+            pending.stages.push("AWSCURRENT".to_string());
+        }
+    }
     secret.current_version_id = pending_vid.clone();
     secret.last_changed_date = now;
     secret.last_rotated_date = Some(now);
-
-    let arn = secret.arn.clone();
-    let sname = secret.name.clone();
     drop(secret);
 
-    info!(name = %name, "RotateSecret (stub)");
+    info!(name = %name, lambda = ?lambda_arn, "RotateSecret");
 
     Ok(json!({
         "ARN": arn,
@@ -989,6 +1028,11 @@ pub fn rotate_secret(
         "VersionId": pending_vid,
     }))
 }
+
+/// AWS rotation Lambda contract: the Lambda is invoked once per step
+/// in this order. Each call must succeed before the next runs; a
+/// failure aborts the rotation and leaves AWSPENDING in place.
+const ROTATION_STEPS: &[&str] = &["createSecret", "setSecret", "testSecret", "finishSecret"];
 
 // ---------------------------------------------------------------------------
 // CancelRotateSecret
@@ -1755,7 +1799,7 @@ mod tests {
         let before = describe_secret(&state, &json!({ "SecretId": "s" }), &ctx()).unwrap();
         assert!(before.get("LastRotatedDate").is_none());
 
-        rotate_secret(&state, &json!({ "SecretId": "s" }), &ctx()).unwrap();
+        rotate_secret(&state, &json!({ "SecretId": "s" }), &ctx(), None).unwrap();
 
         let after = describe_secret(&state, &json!({ "SecretId": "s" }), &ctx()).unwrap();
         assert!(after.get("LastRotatedDate").is_some());
@@ -2011,6 +2055,145 @@ mod tests {
         assert!(validate_schedule_expression("cron(0 12 * * *)").is_err());
     }
 
+    /// Records every Lambda invocation it sees so tests can assert
+    /// the four steps fired in the right order with the right payload.
+    struct RecordingInvoker {
+        calls: std::sync::Mutex<Vec<(String, Value)>>,
+        fail_on_step: Option<&'static str>,
+    }
+
+    impl RecordingInvoker {
+        fn new() -> Self {
+            Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+                fail_on_step: None,
+            }
+        }
+        fn with_failure(step: &'static str) -> Self {
+            Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+                fail_on_step: Some(step),
+            }
+        }
+        fn calls(&self) -> Vec<(String, Value)> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl awsim_core::LambdaInvoker for RecordingInvoker {
+        fn invoke(
+            &self,
+            function_name: &str,
+            payload: &Value,
+            _account: &str,
+            _region: &str,
+        ) -> Result<Value, AwsError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((function_name.to_string(), payload.clone()));
+            let step = payload.get("Step").and_then(|s| s.as_str()).unwrap_or("");
+            if Some(step) == self.fail_on_step {
+                return Err(error::invalid_request(format!("simulated {step} failure")));
+            }
+            Ok(json!({}))
+        }
+    }
+
+    #[test]
+    fn rotate_secret_dispatches_four_step_state_machine() {
+        let state = SecretsState::default();
+        create_secret(
+            &state,
+            &json!({ "Name": "s", "SecretString": "v0" }),
+            &ctx(),
+        )
+        .unwrap();
+        let invoker = RecordingInvoker::new();
+        let result = rotate_secret(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "RotationLambdaARN": "arn:aws:lambda:us-east-1:000000000000:function:rot",
+            }),
+            &ctx(),
+            Some(&invoker),
+        )
+        .unwrap();
+
+        let calls = invoker.calls();
+        assert_eq!(
+            calls.len(),
+            4,
+            "expected one invocation per rotation step, got {calls:?}"
+        );
+        let steps: Vec<&str> = calls
+            .iter()
+            .map(|(_, p)| p["Step"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            steps,
+            vec!["createSecret", "setSecret", "testSecret", "finishSecret"]
+        );
+        // Every invocation uses the same ClientRequestToken (the new
+        // version id) and addresses the secret by ARN.
+        let first_token = calls[0].1["ClientRequestToken"].as_str().unwrap();
+        for (_, p) in &calls {
+            assert_eq!(p["ClientRequestToken"], json!(first_token));
+            assert!(
+                p["SecretId"].as_str().unwrap().contains("secret:s"),
+                "expected ARN-form SecretId, got {}",
+                p["SecretId"]
+            );
+        }
+
+        // The returned VersionId should be the same one used as the
+        // client token, and the secret should now expose it as AWSCURRENT.
+        assert_eq!(result["VersionId"], json!(first_token));
+        let desc = describe_secret(&state, &json!({ "SecretId": "s" }), &ctx()).unwrap();
+        let stages = desc["VersionIdsToStages"].as_object().unwrap();
+        let curr_stages = stages.get(first_token).unwrap().as_array().unwrap();
+        assert!(
+            curr_stages.iter().any(|v| v == "AWSCURRENT"),
+            "expected new version to be AWSCURRENT, got {curr_stages:?}"
+        );
+    }
+
+    #[test]
+    fn rotate_secret_aborts_when_lambda_step_fails() {
+        let state = SecretsState::default();
+        create_secret(
+            &state,
+            &json!({ "Name": "s", "SecretString": "v0" }),
+            &ctx(),
+        )
+        .unwrap();
+        let original_current = state.secrets.get("s").unwrap().current_version_id.clone();
+
+        let invoker = RecordingInvoker::with_failure("testSecret");
+        let err = rotate_secret(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "RotationLambdaARN": "arn:aws:lambda:us-east-1:000000000000:function:rot",
+            }),
+            &ctx(),
+            Some(&invoker),
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("testSecret"),
+            "error message should name the failing step: {err:?}"
+        );
+        // Only three steps fire (createSecret, setSecret, testSecret).
+        assert_eq!(invoker.calls().len(), 3);
+
+        // The original AWSCURRENT must still be current — failed
+        // rotations don't promote AWSPENDING.
+        let current = state.secrets.get("s").unwrap().current_version_id.clone();
+        assert_eq!(current, original_current);
+    }
+
     #[test]
     fn rotate_secret_rejects_both_after_days_and_schedule() {
         let state = SecretsState::default();
@@ -2025,6 +2208,7 @@ mod tests {
                 }
             }),
             &ctx(),
+            None,
         )
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterException");
@@ -2041,6 +2225,7 @@ mod tests {
                 "RotationRules": { "AutomaticallyAfterDays": 0 }
             }),
             &ctx(),
+            None,
         )
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterException");

@@ -22,7 +22,7 @@ pub mod tick;
 pub mod totp;
 
 pub use authz::{
-    AuthzEngine, CloudMapRegistrar, GrantLookup, KmsKeyLookup, NoopPrincipalLookup,
+    AuthzEngine, CloudMapRegistrar, GrantLookup, KmsKeyLookup, LambdaInvoker, NoopPrincipalLookup,
     ParameterLookup, PrincipalLookup, ResolvedPrincipal, ResourcePolicyLookup, ScpLookup,
     SecretLookup,
 };
