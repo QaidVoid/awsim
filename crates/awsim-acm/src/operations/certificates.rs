@@ -210,6 +210,7 @@ pub fn request_certificate(
         in_use_by: Vec::new(),
         certificate_transparency_logging_preference: ct_logging,
         certificate_type: "AMAZON_ISSUED".to_string(),
+        key_algorithm: key_algorithm.to_string(),
     };
 
     state.certificates.insert(certificate_arn.clone(), cert);
@@ -313,6 +314,17 @@ pub fn list_certificates(
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect()
         });
+    // ListCertificates.Includes.keyTypes filters by the documented key
+    // algorithm strings. Unset means "all key types".
+    let key_types_filter: Option<Vec<String>> = input
+        .get("Includes")
+        .and_then(|v| v.get("keyTypes"))
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
     let max_items = awsim_core::clamp_max_results_strict(
         input.get("MaxItems").and_then(Value::as_i64),
         100,
@@ -326,6 +338,9 @@ pub fn list_certificates(
             status_filter
                 .as_ref()
                 .is_none_or(|set| set.iter().any(|s| s == &e.value().status))
+                && key_types_filter
+                    .as_ref()
+                    .is_none_or(|set| set.iter().any(|s| s == &e.value().key_algorithm))
         })
         .map(|e| {
             let c = e.value();
@@ -516,6 +531,7 @@ pub fn import_certificate(
         in_use_by: Vec::new(),
         certificate_transparency_logging_preference: "ENABLED".to_string(),
         certificate_type: "IMPORTED".to_string(),
+        key_algorithm: "RSA_2048".to_string(),
     };
 
     state.certificates.insert(certificate_arn.clone(), cert);
@@ -639,6 +655,7 @@ mod tests {
             in_use_by: Vec::new(),
             certificate_transparency_logging_preference: "ENABLED".to_string(),
             certificate_type: "AMAZON_ISSUED".to_string(),
+            key_algorithm: "RSA_2048".to_string(),
         }
     }
 
@@ -811,6 +828,34 @@ mod tests {
             second["CertificateSummaryList"].as_array().unwrap().len(),
             1
         );
+    }
+
+    #[test]
+    fn list_certificates_filters_by_includes_key_types() {
+        let state = AcmState::default();
+        request_certificate(
+            &state,
+            &json!({
+                "DomainName": "ec.example.com",
+                "KeyAlgorithm": "EC_prime256v1",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        request_certificate(&state, &json!({ "DomainName": "rsa.example.com" }), &ctx()).unwrap();
+        let resp = list_certificates(
+            &state,
+            &json!({ "Includes": { "keyTypes": ["EC_prime256v1"] } }),
+            &ctx(),
+        )
+        .unwrap();
+        let domains: Vec<&str> = resp["CertificateSummaryList"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["DomainName"].as_str().unwrap())
+            .collect();
+        assert_eq!(domains, vec!["ec.example.com"]);
     }
 
     #[test]

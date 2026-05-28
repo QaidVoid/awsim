@@ -37,6 +37,10 @@ pub struct Certificate {
     /// `INELIGIBLE` because AWS has no key material to renew.
     #[serde(default = "default_cert_type")]
     pub certificate_type: String,
+    /// Key algorithm picked at create/import time. Surfaced via
+    /// `Describe` and filtered via `ListCertificates.Includes.keyTypes`.
+    #[serde(default = "default_key_algorithm")]
+    pub key_algorithm: String,
 }
 
 fn default_ct_pref() -> String {
@@ -45,6 +49,10 @@ fn default_ct_pref() -> String {
 
 fn default_cert_type() -> String {
     "AMAZON_ISSUED".to_string()
+}
+
+fn default_key_algorithm() -> String {
+    "RSA_2048".to_string()
 }
 
 /// Serializable snapshot.
