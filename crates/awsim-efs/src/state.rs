@@ -39,6 +39,9 @@ pub struct FileSystem {
     /// the caller pinned the file system to a single AZ.
     #[serde(default)]
     pub availability_zone_id: Option<String>,
+    /// Resource policy JSON document. AWS limits the document to 20KB.
+    #[serde(default)]
+    pub file_system_policy: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

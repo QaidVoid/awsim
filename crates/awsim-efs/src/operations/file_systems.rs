@@ -196,6 +196,7 @@ pub fn create_file_system(
             .get("AvailabilityZoneId")
             .and_then(|v| v.as_str())
             .map(String::from),
+        file_system_policy: None,
     };
     let result = fs_to_value(&fs);
     state.file_systems.insert(id, fs);
@@ -443,6 +444,94 @@ pub fn put_backup_policy(
     Ok(json!({ "BackupPolicy": { "Status": status } }))
 }
 
+/// Attaches a resource policy JSON document to the file system. AWS
+/// caps the document at 20 KiB and requires valid JSON;
+/// `BypassPolicyLockoutSafetyCheck` is accepted as a no-op pending a
+/// future heuristic.
+pub fn put_file_system_policy(
+    state: &EfsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = input
+        .get("FileSystemId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AwsError::bad_request("BadRequest", "FileSystemId is required"))?;
+    let policy = input
+        .get("Policy")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AwsError::bad_request("BadRequest", "Policy is required"))?
+        .to_string();
+    if policy.len() > 20 * 1024 {
+        return Err(AwsError::bad_request(
+            "PolicyTooLargeException",
+            format!(
+                "Policy document is {} bytes; AWS caps the document at 20 KiB.",
+                policy.len(),
+            ),
+        ));
+    }
+    if let Err(e) = serde_json::from_str::<serde_json::Value>(&policy) {
+        return Err(AwsError::bad_request(
+            "InvalidPolicyException",
+            format!("Policy document is not valid JSON: {e}"),
+        ));
+    }
+    let _bypass = input
+        .get("BypassPolicyLockoutSafetyCheck")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut fs = state.file_systems.get_mut(id).ok_or_else(|| {
+        AwsError::not_found("FileSystemNotFound", format!("File system {id} not found"))
+    })?;
+    fs.file_system_policy = Some(policy.clone());
+    Ok(json!({
+        "FileSystemId": fs.file_system_id,
+        "Policy": policy,
+    }))
+}
+
+/// Returns the previously-attached policy or PolicyNotFound.
+pub fn describe_file_system_policy(
+    state: &EfsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = input
+        .get("FileSystemId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AwsError::bad_request("BadRequest", "FileSystemId is required"))?;
+    let fs = state.file_systems.get(id).ok_or_else(|| {
+        AwsError::not_found("FileSystemNotFound", format!("File system {id} not found"))
+    })?;
+    let policy = fs.file_system_policy.clone().ok_or_else(|| {
+        AwsError::not_found(
+            "PolicyNotFound",
+            format!("File system {id} has no attached policy."),
+        )
+    })?;
+    Ok(json!({
+        "FileSystemId": fs.file_system_id,
+        "Policy": policy,
+    }))
+}
+
+pub fn delete_file_system_policy(
+    state: &EfsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = input
+        .get("FileSystemId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AwsError::bad_request("BadRequest", "FileSystemId is required"))?;
+    let mut fs = state.file_systems.get_mut(id).ok_or_else(|| {
+        AwsError::not_found("FileSystemNotFound", format!("File system {id} not found"))
+    })?;
+    fs.file_system_policy = None;
+    Ok(json!({}))
+}
+
 /// Updates the `ReplicationOverwriteProtection` enum on a file system.
 /// AWS allows `ENABLED` and `DISABLED`; the `REPLICATING` sentinel is
 /// reserved for replica file systems set automatically by the
@@ -531,6 +620,59 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn put_file_system_policy_round_trips_valid_json() {
+        let state = EfsState::default();
+        let resp =
+            create_file_system(&state, &json!({ "CreationToken": "t-pol" }), &ctx()).unwrap();
+        let id = resp["FileSystemId"].as_str().unwrap().to_string();
+        let policy = "{\"Version\":\"2012-10-17\",\"Statement\":[]}";
+        put_file_system_policy(
+            &state,
+            &json!({ "FileSystemId": id, "Policy": policy }),
+            &ctx(),
+        )
+        .unwrap();
+        let described =
+            describe_file_system_policy(&state, &json!({ "FileSystemId": id }), &ctx()).unwrap();
+        assert_eq!(described["Policy"], policy);
+        delete_file_system_policy(&state, &json!({ "FileSystemId": id }), &ctx()).unwrap();
+        let err = describe_file_system_policy(&state, &json!({ "FileSystemId": id }), &ctx())
+            .unwrap_err();
+        assert_eq!(err.code, "PolicyNotFound");
+    }
+
+    #[test]
+    fn put_file_system_policy_rejects_invalid_json() {
+        let state = EfsState::default();
+        let resp =
+            create_file_system(&state, &json!({ "CreationToken": "t-bad-json" }), &ctx()).unwrap();
+        let id = resp["FileSystemId"].as_str().unwrap().to_string();
+        let err = put_file_system_policy(
+            &state,
+            &json!({ "FileSystemId": id, "Policy": "not-json" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidPolicyException");
+    }
+
+    #[test]
+    fn put_file_system_policy_rejects_oversized_document() {
+        let state = EfsState::default();
+        let resp =
+            create_file_system(&state, &json!({ "CreationToken": "t-large" }), &ctx()).unwrap();
+        let id = resp["FileSystemId"].as_str().unwrap().to_string();
+        let huge = format!("\"{}\"", "a".repeat(20 * 1024));
+        let err = put_file_system_policy(
+            &state,
+            &json!({ "FileSystemId": id, "Policy": huge }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "PolicyTooLargeException");
     }
 
     #[test]
