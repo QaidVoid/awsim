@@ -155,12 +155,29 @@ pub fn create_access_point(
         ));
     }
 
-    if let Some(existing) = state
-        .access_points
-        .iter()
-        .find(|e| e.value().client_token == token)
-    {
-        return Ok(ap_to_value(existing.value()));
+    // AWS keeps a 24h idempotency cache keyed by ClientToken; a replay
+    // with the same parameters returns the cached body, while a replay
+    // with different parameters raises IdempotencyParameterMismatch.
+    let request_hash = awsim_core::idempotency::hash_request(&format!(
+        "create_access_point:{fs_id}:{posix}:{root}",
+        posix = input
+            .get("PosixUser")
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
+        root = input
+            .get("RootDirectory")
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
+    ));
+    match state.access_point_idempotency.lookup(&token, request_hash) {
+        awsim_core::idempotency::Lookup::Hit(v) => return Ok(v),
+        awsim_core::idempotency::Lookup::Mismatch => {
+            return Err(AwsError::bad_request(
+                "IdempotencyParameterMismatchException",
+                format!("ClientToken `{token}` was already used with different arguments.",),
+            ));
+        }
+        awsim_core::idempotency::Lookup::Miss => {}
     }
 
     validate_posix_user(input.get("PosixUser"))?;
@@ -185,7 +202,7 @@ pub fn create_access_point(
     let ap = AccessPoint {
         access_point_id: id.clone(),
         access_point_arn: ap_arn(ctx, &id),
-        client_token: token,
+        client_token: token.clone(),
         file_system_id: fs_id,
         posix_user: input.get("PosixUser").cloned(),
         root_directory: input.get("RootDirectory").cloned(),
@@ -194,6 +211,9 @@ pub fn create_access_point(
         tags,
     };
     let result = ap_to_value(&ap);
+    state
+        .access_point_idempotency
+        .insert(&token, request_hash, result.clone());
     state.access_points.insert(id, ap);
     Ok(result)
 }
@@ -270,6 +290,47 @@ mod tests {
     fn fs_id(state: &EfsState) -> String {
         let resp = create_file_system(state, &json!({ "CreationToken": "t-ap" }), &ctx()).unwrap();
         resp["FileSystemId"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn create_access_point_replays_cached_response_on_same_token() {
+        let state = EfsState::default();
+        let fs = fs_id(&state);
+        let body = json!({
+            "ClientToken": "t-idem",
+            "FileSystemId": fs,
+            "PosixUser": { "Uid": 1000, "Gid": 1000 },
+        });
+        let first = create_access_point(&state, &body, &ctx()).unwrap();
+        let second = create_access_point(&state, &body, &ctx()).unwrap();
+        assert_eq!(first["AccessPointId"], second["AccessPointId"]);
+    }
+
+    #[test]
+    fn create_access_point_rejects_param_mismatch_on_replay() {
+        let state = EfsState::default();
+        let fs = fs_id(&state);
+        create_access_point(
+            &state,
+            &json!({
+                "ClientToken": "t-mismatch",
+                "FileSystemId": fs,
+                "PosixUser": { "Uid": 1, "Gid": 1 },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = create_access_point(
+            &state,
+            &json!({
+                "ClientToken": "t-mismatch",
+                "FileSystemId": fs,
+                "PosixUser": { "Uid": 2, "Gid": 2 },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "IdempotencyParameterMismatchException");
     }
 
     #[test]

@@ -10,6 +10,9 @@ pub struct EfsState {
     pub mount_targets: DashMap<String, MountTarget>,
     /// ap_id → AccessPoint
     pub access_points: DashMap<String, AccessPoint>,
+    /// AccessPoint ClientToken idempotency cache. Default 24-hour TTL
+    /// per AWS spec 0009; cached responses are replayed on retry.
+    pub access_point_idempotency: awsim_core::idempotency::IdempotencyCache<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
