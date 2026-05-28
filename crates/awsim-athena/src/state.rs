@@ -10,6 +10,35 @@ pub struct WorkGroup {
     pub state: String, // ENABLED | DISABLED
     pub output_location: Option<String>,
     pub created_at: String,
+    /// User-selected Athena engine version (e.g. `AUTO`,
+    /// `Athena engine version 2`, `Athena engine version 3`). Defaults
+    /// to `AUTO` if the caller omits it.
+    #[serde(default = "default_selected_engine")]
+    pub selected_engine_version: String,
+    /// Engine actually applied at runtime; for `AUTO` this is the
+    /// latest production engine, otherwise it mirrors the selection.
+    #[serde(default = "default_effective_engine")]
+    pub effective_engine_version: String,
+}
+
+fn default_selected_engine() -> String {
+    "AUTO".to_string()
+}
+
+fn default_effective_engine() -> String {
+    "Athena engine version 3".to_string()
+}
+
+/// Resolve a caller-provided `SelectedEngineVersion` to the
+/// `(selected, effective)` pair AWS would return. `AUTO` (and unset)
+/// resolves to engine 3.
+pub fn resolve_engine_version(selected: Option<&str>) -> (String, String) {
+    let sel = selected.unwrap_or("AUTO");
+    let eff = match sel {
+        "AUTO" => "Athena engine version 3",
+        other => other,
+    };
+    (sel.to_string(), eff.to_string())
 }
 
 /// An Athena query execution.
@@ -101,6 +130,8 @@ impl AthenaState {
                 state: "ENABLED".to_string(),
                 output_location: None,
                 created_at: now.to_string(),
+                selected_engine_version: default_selected_engine(),
+                effective_engine_version: default_effective_engine(),
             });
     }
 

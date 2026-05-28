@@ -2,7 +2,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
 
-use crate::state::{AthenaState, WorkGroup};
+use crate::state::{AthenaState, WorkGroup, resolve_engine_version};
 
 fn now_str() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -37,6 +37,9 @@ pub fn create_workgroup(
     let output_location = input["Configuration"]["ResultConfiguration"]["OutputLocation"]
         .as_str()
         .map(|s| s.to_string());
+    let (selected_engine_version, effective_engine_version) = resolve_engine_version(
+        input["Configuration"]["EngineVersion"]["SelectedEngineVersion"].as_str(),
+    );
 
     let wg = WorkGroup {
         name: name.to_string(),
@@ -44,6 +47,8 @@ pub fn create_workgroup(
         state: "ENABLED".to_string(),
         output_location,
         created_at: now_str(),
+        selected_engine_version,
+        effective_engine_version,
     };
 
     info!(name = %name, "Created Athena workgroup");
@@ -160,6 +165,14 @@ pub fn update_workgroup(
         wg.state = state_val.to_string();
     }
 
+    if let Some(sel) =
+        input["ConfigurationUpdates"]["EngineVersion"]["SelectedEngineVersion"].as_str()
+    {
+        let (selected, effective) = resolve_engine_version(Some(sel));
+        wg.selected_engine_version = selected;
+        wg.effective_engine_version = effective;
+    }
+
     info!(name = %name, "Updated Athena workgroup");
     Ok(json!({}))
 }
@@ -177,7 +190,72 @@ fn workgroup_to_value(wg: &WorkGroup) -> Value {
         "Configuration": {
             "ResultConfiguration": {
                 "OutputLocation": wg.output_location
+            },
+            "EngineVersion": {
+                "SelectedEngineVersion": wg.selected_engine_version,
+                "EffectiveEngineVersion": wg.effective_engine_version,
             }
         }
     })
+}
+
+#[cfg(test)]
+mod engine_version_tests {
+    use super::*;
+    use awsim_core::RequestContext;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("athena", "us-east-1")
+    }
+
+    #[test]
+    fn create_workgroup_defaults_engine_to_auto_with_engine_3_effective() {
+        let state = AthenaState::default();
+        create_workgroup(&state, &json!({ "Name": "wg1" }), &ctx()).unwrap();
+        let got = get_workgroup(&state, &json!({ "WorkGroup": "wg1" }), &ctx()).unwrap();
+        let ev = &got["WorkGroup"]["Configuration"]["EngineVersion"];
+        assert_eq!(ev["SelectedEngineVersion"], "AUTO");
+        assert_eq!(ev["EffectiveEngineVersion"], "Athena engine version 3");
+    }
+
+    #[test]
+    fn explicit_engine_version_is_preserved_on_both_fields() {
+        let state = AthenaState::default();
+        create_workgroup(
+            &state,
+            &json!({
+                "Name": "wg2",
+                "Configuration": {
+                    "EngineVersion": { "SelectedEngineVersion": "Athena engine version 2" }
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let got = get_workgroup(&state, &json!({ "WorkGroup": "wg2" }), &ctx()).unwrap();
+        let ev = &got["WorkGroup"]["Configuration"]["EngineVersion"];
+        assert_eq!(ev["SelectedEngineVersion"], "Athena engine version 2");
+        assert_eq!(ev["EffectiveEngineVersion"], "Athena engine version 2");
+    }
+
+    #[test]
+    fn update_workgroup_resolves_engine_version() {
+        let state = AthenaState::default();
+        create_workgroup(&state, &json!({ "Name": "wg3" }), &ctx()).unwrap();
+        update_workgroup(
+            &state,
+            &json!({
+                "WorkGroup": "wg3",
+                "ConfigurationUpdates": {
+                    "EngineVersion": { "SelectedEngineVersion": "AUTO" }
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let got = get_workgroup(&state, &json!({ "WorkGroup": "wg3" }), &ctx()).unwrap();
+        let ev = &got["WorkGroup"]["Configuration"]["EngineVersion"];
+        assert_eq!(ev["SelectedEngineVersion"], "AUTO");
+        assert_eq!(ev["EffectiveEngineVersion"], "Athena engine version 3");
+    }
 }
