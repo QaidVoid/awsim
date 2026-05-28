@@ -130,6 +130,31 @@ pub fn create_file_system(
         ));
     }
 
+    let encrypted = input
+        .get("Encrypted")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let supplied_kms_key = input
+        .get("KmsKeyId")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    // AWS lets EFS default to the AWS-managed CMK alias when
+    // Encrypted=true and no KmsKeyId is provided. Encrypted=false
+    // rejects KmsKeyId outright.
+    let kms_key_id = match (encrypted, supplied_kms_key) {
+        (false, Some(_)) => {
+            return Err(AwsError::bad_request(
+                "BadRequest",
+                "KmsKeyId is only allowed when Encrypted=true.",
+            ));
+        }
+        (true, Some(arn)) => Some(arn),
+        (true, None) => Some(format!(
+            "arn:aws:kms:{}:{}:alias/aws/elasticfilesystem",
+            ctx.region, ctx.account_id
+        )),
+        (false, None) => None,
+    };
     let fs = FileSystem {
         file_system_id: id.clone(),
         file_system_arn: fs_arn(ctx, &id),
@@ -145,14 +170,8 @@ pub fn create_file_system(
             .to_string(),
         throughput_mode,
         provisioned_throughput_in_mibps,
-        encrypted: input
-            .get("Encrypted")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        kms_key_id: input
-            .get("KmsKeyId")
-            .and_then(|v| v.as_str())
-            .map(String::from),
+        encrypted,
+        kms_key_id,
         name,
         tags,
         lifecycle_policies: vec![],
@@ -392,6 +411,38 @@ mod tests {
             &json!({
                 "CreationToken": "t-missing",
                 "ThroughputMode": "provisioned",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn create_file_system_defaults_kms_alias_when_encrypted() {
+        let state = EfsState::default();
+        let resp = create_file_system(
+            &state,
+            &json!({ "CreationToken": "t-enc", "Encrypted": true }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Encrypted"], true);
+        assert_eq!(
+            resp["KmsKeyId"],
+            "arn:aws:kms:us-east-1:000000000000:alias/aws/elasticfilesystem"
+        );
+    }
+
+    #[test]
+    fn create_file_system_rejects_kms_key_when_not_encrypted() {
+        let state = EfsState::default();
+        let err = create_file_system(
+            &state,
+            &json!({
+                "CreationToken": "t-bad-kms",
+                "Encrypted": false,
+                "KmsKeyId": "arn:aws:kms:us-east-1:000000000000:key/abc",
             }),
             &ctx(),
         )
