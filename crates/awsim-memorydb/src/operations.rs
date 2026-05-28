@@ -152,6 +152,7 @@ fn cluster_to_value(c: &Cluster) -> Value {
         "ARN": c.arn,
         "Status": c.status,
         "NodeType": c.node_type,
+        "Engine": c.engine,
         "EngineVersion": c.engine_version,
         "EnginePatchVersion": c.engine_patch_version,
         "ParameterGroupName": c.parameter_group_name,
@@ -310,6 +311,19 @@ pub fn create_cluster(
             format!("DataTiering=true requires a `db.r6gd.*` node type; got `{node_type}`.",),
         ));
     }
+    let engine = match input.get("Engine").and_then(Value::as_str) {
+        Some(e) => {
+            let lower = e.to_ascii_lowercase();
+            if !matches!(lower.as_str(), "redis" | "valkey") {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterValueException",
+                    format!("Engine `{e}` must be one of redis, valkey."),
+                ));
+            }
+            lower
+        }
+        None => "redis".to_string(),
+    };
     if let Some(mw) = input.get("MaintenanceWindow").and_then(Value::as_str) {
         validate_maintenance_window(mw)?;
     }
@@ -359,6 +373,7 @@ pub fn create_cluster(
         arn: arn_str.clone(),
         status: "available".to_string(),
         node_type,
+        engine,
         engine_version: input
             .get("EngineVersion")
             .and_then(|v| v.as_str())
@@ -1020,6 +1035,56 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
         }
+    }
+
+    #[test]
+    fn create_cluster_defaults_engine_to_redis() {
+        let state = MemoryDbState::default();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-engine-default",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["Engine"], "redis");
+    }
+
+    #[test]
+    fn create_cluster_accepts_valkey_engine() {
+        let state = MemoryDbState::default();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-valkey",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "Engine": "VALKEY",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["Engine"], "valkey");
+    }
+
+    #[test]
+    fn create_cluster_rejects_unknown_engine() {
+        let state = MemoryDbState::default();
+        let err = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-engine-bad",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "Engine": "memcached",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
     }
 
     #[test]

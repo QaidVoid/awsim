@@ -17,6 +17,10 @@ pub struct Cluster {
     pub arn: String,
     pub status: String,
     pub node_type: String,
+    /// Cluster engine. AWS supports `redis` and `valkey`. Defaults to
+    /// `redis` on legacy snapshots created before this field existed.
+    #[serde(default = "default_engine")]
+    pub engine: String,
     pub engine_version: String,
     pub engine_patch_version: String,
     pub parameter_group_name: String,
@@ -52,6 +56,10 @@ pub struct Cluster {
     /// `ipv6`. Defaults to `ipv4` when unset on legacy snapshots.
     #[serde(default = "default_ip_discovery")]
     pub ip_discovery: String,
+}
+
+fn default_engine() -> String {
+    "redis".to_string()
 }
 
 fn default_network_type() -> String {
