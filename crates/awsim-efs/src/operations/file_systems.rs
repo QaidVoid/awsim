@@ -406,6 +406,15 @@ pub fn put_backup_policy(
         .and_then(|v| v.as_str())
         .unwrap_or("ENABLED")
         .to_string();
+    // AWS only accepts `ENABLED` and `DISABLED` from clients. The
+    // transient `ENABLING` / `DISABLING` values appear in describe
+    // responses while the lifecycle settles but are not valid inputs.
+    if !matches!(status.as_str(), "ENABLED" | "DISABLED") {
+        return Err(AwsError::bad_request(
+            "BadRequest",
+            format!("BackupPolicy.Status `{status}` must be ENABLED or DISABLED."),
+        ));
+    }
     let mut fs = state.file_systems.get_mut(id).ok_or_else(|| {
         AwsError::not_found("FileSystemNotFound", format!("File system {id} not found"))
     })?;
@@ -496,6 +505,24 @@ mod tests {
             &json!({
                 "CreationToken": "t-missing",
                 "ThroughputMode": "provisioned",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn put_backup_policy_rejects_unknown_status() {
+        let state = EfsState::default();
+        let created =
+            create_file_system(&state, &json!({ "CreationToken": "t-bp-bad" }), &ctx()).unwrap();
+        let id = created["FileSystemId"].as_str().unwrap().to_string();
+        let err = put_backup_policy(
+            &state,
+            &json!({
+                "FileSystemId": id,
+                "BackupPolicy": { "Status": "ENABLING" },
             }),
             &ctx(),
         )
