@@ -209,8 +209,13 @@ pub fn describe_file_systems(
 ) -> Result<Value, AwsError> {
     let id_filter = input.get("FileSystemId").and_then(|v| v.as_str());
     let token_filter = input.get("CreationToken").and_then(|v| v.as_str());
-
-    let items: Vec<Value> = state
+    let max_items = awsim_core::clamp_max_results_strict(
+        input.get("MaxItems").and_then(Value::as_i64),
+        100,
+        1000,
+    )?;
+    let marker = input.get("Marker").and_then(Value::as_str);
+    let mut entries: Vec<(String, Value)> = state
         .file_systems
         .iter()
         .filter(|e| {
@@ -226,10 +231,16 @@ pub fn describe_file_systems(
             }
             true
         })
-        .map(|e| fs_to_value(e.value()))
+        .map(|e| (e.value().file_system_id.clone(), fs_to_value(e.value())))
         .collect();
-
-    Ok(json!({ "FileSystems": items }))
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let page = awsim_core::paginate(entries, max_items, marker, |(k, _)| k.clone())?;
+    let items: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+    let mut body = json!({ "FileSystems": items });
+    if let Some(token) = page.next_token {
+        body["NextMarker"] = json!(token);
+    }
+    Ok(body)
 }
 
 pub fn delete_file_system(

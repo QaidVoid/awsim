@@ -205,8 +205,13 @@ pub fn describe_access_points(
 ) -> Result<Value, AwsError> {
     let ap_filter = input.get("AccessPointId").and_then(|v| v.as_str());
     let fs_filter = input.get("FileSystemId").and_then(|v| v.as_str());
-
-    let items: Vec<Value> = state
+    let max_items = awsim_core::clamp_max_results_strict(
+        input.get("MaxResults").and_then(Value::as_i64),
+        100,
+        1000,
+    )?;
+    let next_token = input.get("NextToken").and_then(Value::as_str);
+    let mut entries: Vec<(String, Value)> = state
         .access_points
         .iter()
         .filter(|e| {
@@ -222,9 +227,16 @@ pub fn describe_access_points(
             }
             true
         })
-        .map(|e| ap_to_value(e.value()))
+        .map(|e| (e.value().access_point_id.clone(), ap_to_value(e.value())))
         .collect();
-    Ok(json!({ "AccessPoints": items }))
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let page = awsim_core::paginate(entries, max_items, next_token, |(k, _)| k.clone())?;
+    let items: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+    let mut body = json!({ "AccessPoints": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
 }
 
 pub fn delete_access_point(
