@@ -198,6 +198,25 @@ pub fn request_certificate(
         ));
     }
 
+    // Optional CertificateType: AMAZON_ISSUED (default) or PRIVATE.
+    // PRIVATE requires a CertificateAuthorityArn that points at an
+    // ACM-PCA CA; reject the combination with InvalidArnException
+    // when CertificateAuthorityArn is missing or malformed.
+    let certificate_type = match input.get("CertificateAuthorityArn").and_then(Value::as_str) {
+        Some(arn) => {
+            if !arn.starts_with("arn:aws:acm-pca:")
+                && !arn.starts_with("arn:aws-cn:acm-pca:")
+                && !arn.starts_with("arn:aws-us-gov:acm-pca:")
+            {
+                return Err(AwsError::bad_request(
+                    "InvalidArnException",
+                    format!("CertificateAuthorityArn `{arn}` must be an ACM-PCA ARN."),
+                ));
+            }
+            "PRIVATE"
+        }
+        None => "AMAZON_ISSUED",
+    };
     let cert = Certificate {
         certificate_arn: certificate_arn.clone(),
         domain_name,
@@ -209,7 +228,7 @@ pub fn request_certificate(
         created_at: now_secs(),
         in_use_by: Vec::new(),
         certificate_transparency_logging_preference: ct_logging,
-        certificate_type: "AMAZON_ISSUED".to_string(),
+        certificate_type: certificate_type.to_string(),
         key_algorithm: key_algorithm.to_string(),
     };
 
@@ -459,6 +478,19 @@ pub fn export_certificate(
         )
     })?;
 
+    // ExportCertificate only works for PRIVATE certificates issued via
+    // ACM-PCA; AMAZON_ISSUED keys are AWS-managed and cannot be
+    // exported. AWS returns InvalidArnException in that case.
+    if cert.certificate_type != "PRIVATE" {
+        return Err(AwsError::bad_request(
+            "InvalidArnException",
+            format!(
+                "Certificate {arn} has Type={} and cannot be exported.",
+                cert.certificate_type
+            ),
+        ));
+    }
+
     let pem = fake_pem_certificate(&cert.domain_name);
     let chain = fake_pem_chain();
     let key = fake_pem_private_key();
@@ -568,6 +600,16 @@ pub fn renew_certificate(
                 "Certificate {arn} is IMPORTED and cannot be renewed; \
                  re-import a new certificate instead."
             ),
+        ));
+    }
+
+    // PRIVATE certs are renewed through ACM-PCA, not ACM. AWS surfaces
+    // RequestInProgressException so callers know to retry against the
+    // PCA control plane.
+    if cert.certificate_type == "PRIVATE" {
+        return Err(AwsError::bad_request(
+            "RequestInProgressException",
+            format!("Certificate {arn} is PRIVATE; renew it through ACM-PCA, not ACM."),
         ));
     }
 
