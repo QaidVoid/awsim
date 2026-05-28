@@ -744,6 +744,83 @@ mod list_delivery_streams_tests {
     }
 
     #[test]
+    fn extended_s3_fields_round_trip_via_create_and_update() {
+        let state = FirehoseState::default();
+        let cfg = json!({
+            "BucketARN": "arn:aws:s3:::data",
+            "RoleARN": "arn:aws:iam::111111111111:role/firehose",
+            "BufferingHints": { "SizeInMBs": 64, "IntervalInSeconds": 300 },
+            "CompressionFormat": "GZIP",
+            "EncryptionConfiguration": {
+                "KMSEncryptionConfig": { "AWSKMSKeyARN": "arn:aws:kms:us-east-1:111111111111:key/abc" }
+            },
+            "CloudWatchLoggingOptions": {
+                "Enabled": true,
+                "LogGroupName": "/aws/firehose/data",
+                "LogStreamName": "S3Delivery",
+            },
+            "DataFormatConversionConfiguration": {
+                "Enabled": true,
+                "SchemaConfiguration": { "RoleARN": "arn:aws:iam::111111111111:role/glue" },
+            },
+            "DynamicPartitioningConfiguration": {
+                "Enabled": true,
+                "RetryOptions": { "DurationInSeconds": 300 },
+            },
+            "FileExtension": ".log.gz",
+            "CustomTimeZone": "UTC",
+        });
+        create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ext-roundtrip",
+                "ExtendedS3DestinationConfiguration": cfg,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let described = describe_delivery_stream(
+            &state,
+            &json!({ "DeliveryStreamName": "ext-roundtrip" }),
+            &ctx(),
+        )
+        .unwrap();
+        let dest = &described["DeliveryStreamDescription"]["Destinations"][0]["ExtendedS3DestinationDescription"];
+        assert_eq!(dest["CompressionFormat"], "GZIP");
+        assert_eq!(dest["FileExtension"], ".log.gz");
+        assert_eq!(dest["CustomTimeZone"], "UTC");
+        assert_eq!(dest["BufferingHints"]["SizeInMBs"], 64);
+        assert_eq!(dest["DynamicPartitioningConfiguration"]["Enabled"], true);
+        let updated_cfg = json!({
+            "BucketARN": "arn:aws:s3:::data",
+            "BufferingHints": { "SizeInMBs": 16, "IntervalInSeconds": 60 },
+            "CompressionFormat": "Snappy",
+            "FileExtension": ".snappy",
+            "CustomTimeZone": "America/Los_Angeles",
+        });
+        update_destination(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ext-roundtrip",
+                "ExtendedS3DestinationConfiguration": updated_cfg,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let described = describe_delivery_stream(
+            &state,
+            &json!({ "DeliveryStreamName": "ext-roundtrip" }),
+            &ctx(),
+        )
+        .unwrap();
+        let dest = &described["DeliveryStreamDescription"]["Destinations"][0]["ExtendedS3DestinationDescription"];
+        assert_eq!(dest["CompressionFormat"], "Snappy");
+        assert_eq!(dest["FileExtension"], ".snappy");
+        assert_eq!(dest["CustomTimeZone"], "America/Los_Angeles");
+        assert_eq!(dest["BufferingHints"]["SizeInMBs"], 16);
+    }
+
+    #[test]
     fn create_persists_source_config_and_describe_echoes_it() {
         let state = FirehoseState::default();
         create_delivery_stream(
