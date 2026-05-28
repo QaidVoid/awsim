@@ -113,6 +113,9 @@ impl ServiceHandler for MemoryDbService {
             "CopySnapshot" => operations::copy_snapshot(&state, &input, ctx),
             "DescribeSnapshots" => operations::describe_snapshots(&state, &input, ctx),
             "DeleteSnapshot" => operations::delete_snapshot(&state, &input, ctx),
+            "TagResource" => operations::tag_resource(&state, &input, ctx),
+            "UntagResource" => operations::untag_resource(&state, &input, ctx),
+            "ListTags" => operations::list_tags(&state, &input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
@@ -125,6 +128,7 @@ impl ServiceHandler for MemoryDbService {
             snapshots: vec![],
             subnet_groups: vec![],
             parameter_groups: vec![],
+            tags: Default::default(),
         };
         for (_, st) in self.store.iter_all() {
             let s = st.to_snapshot();
@@ -134,6 +138,7 @@ impl ServiceHandler for MemoryDbService {
             all.snapshots.extend(s.snapshots);
             all.subnet_groups.extend(s.subnet_groups);
             all.parameter_groups.extend(s.parameter_groups);
+            all.tags.extend(s.tags);
         }
         serde_json::to_vec(&all).ok()
     }

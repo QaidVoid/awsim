@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
@@ -9,6 +11,11 @@ pub struct MemoryDbState {
     pub snapshots: DashMap<String, Snapshot>,
     pub subnet_groups: DashMap<String, SubnetGroup>,
     pub parameter_groups: DashMap<String, ParameterGroup>,
+    /// Tags keyed by resource ARN. AWS MemoryDB allows tagging any
+    /// resource (cluster, user, ACL, snapshot, subnet group, parameter
+    /// group) through the same TagResource API; the per-ARN map keeps
+    /// lookup O(1) without coupling tags to each resource struct.
+    pub tags: DashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +158,8 @@ pub struct MemoryDbSnapshot {
     pub snapshots: Vec<Snapshot>,
     pub subnet_groups: Vec<SubnetGroup>,
     pub parameter_groups: Vec<ParameterGroup>,
+    #[serde(default)]
+    pub tags: HashMap<String, HashMap<String, String>>,
 }
 
 impl MemoryDbState {
@@ -170,6 +179,11 @@ impl MemoryDbState {
                 .iter()
                 .map(|e| e.value().clone())
                 .collect(),
+            tags: self
+                .tags
+                .iter()
+                .map(|e| (e.key().clone(), e.value().clone()))
+                .collect(),
         }
     }
 
@@ -180,6 +194,10 @@ impl MemoryDbState {
         self.snapshots.clear();
         self.subnet_groups.clear();
         self.parameter_groups.clear();
+        self.tags.clear();
+        for (arn, tags) in snap.tags {
+            self.tags.insert(arn, tags);
+        }
         for c in snap.clusters {
             self.clusters.insert(c.name.clone(), c);
         }

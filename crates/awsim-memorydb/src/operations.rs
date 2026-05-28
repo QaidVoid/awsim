@@ -1441,6 +1441,119 @@ pub fn delete_snapshot(
     Ok(json!({}))
 }
 
+/// Validates that an MemoryDB resource ARN refers to an existing
+/// resource in this state. Returns the parsed ARN so the caller can
+/// reuse it as the tag map key.
+fn require_known_arn(state: &MemoryDbState, arn: &str) -> Result<String, AwsError> {
+    let (kind, name) = arn
+        .rsplit_once(':')
+        .and_then(|(_, tail)| tail.split_once('/'))
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterValueException",
+                format!("ResourceArn `{arn}` is malformed."),
+            )
+        })?;
+    let exists = match kind {
+        "cluster" => state.clusters.contains_key(name),
+        "user" => state.users.contains_key(name),
+        "acl" => state.acls.contains_key(name),
+        "snapshot" => state.snapshots.contains_key(name),
+        "subnetgroup" => state.subnet_groups.contains_key(name),
+        "parametergroup" => state.parameter_groups.contains_key(name),
+        _ => {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValueException",
+                format!("ResourceArn `{arn}` does not name a MemoryDB resource type."),
+            ));
+        }
+    };
+    if !exists {
+        return Err(AwsError::not_found(
+            "ResourceNotFoundFault",
+            format!("Resource {arn} not found"),
+        ));
+    }
+    Ok(arn.to_string())
+}
+
+pub fn tag_resource(
+    state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let arn = require_str(input, "ResourceArn")?;
+    let arn = require_known_arn(state, arn)?;
+    let tags = input.get("Tags").and_then(Value::as_array).ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterValueException", "Tags must be a list")
+    })?;
+    let mut entry = state.tags.entry(arn.clone()).or_default();
+    for t in tags {
+        if let (Some(k), Some(v)) = (
+            t.get("Key").and_then(Value::as_str),
+            t.get("Value").and_then(Value::as_str),
+        ) {
+            entry.insert(k.to_string(), v.to_string());
+        }
+    }
+    let tag_list: Vec<Value> = entry
+        .iter()
+        .map(|(k, v)| json!({ "Key": k, "Value": v }))
+        .collect();
+    Ok(json!({ "TagList": tag_list }))
+}
+
+pub fn untag_resource(
+    state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let arn = require_str(input, "ResourceArn")?;
+    let arn = require_known_arn(state, arn)?;
+    let keys = input
+        .get("TagKeys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameterValueException", "TagKeys must be a list")
+        })?;
+    if let Some(mut entry) = state.tags.get_mut(&arn) {
+        for k in keys {
+            if let Some(s) = k.as_str() {
+                entry.remove(s);
+            }
+        }
+    }
+    let tag_list: Vec<Value> = state
+        .tags
+        .get(&arn)
+        .map(|e| {
+            e.iter()
+                .map(|(k, v)| json!({ "Key": k, "Value": v }))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(json!({ "TagList": tag_list }))
+}
+
+pub fn list_tags(
+    state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let arn = require_str(input, "ResourceArn")?;
+    let arn = require_known_arn(state, arn)?;
+    let tag_list: Vec<Value> = state
+        .tags
+        .get(&arn)
+        .map(|e| {
+            e.iter()
+                .map(|(k, v)| json!({ "Key": k, "Value": v }))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(json!({ "TagList": tag_list }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2098,6 +2211,74 @@ mod tests {
             describe_clusters(&state, &json!({ "ShowShardDetails": true }), &ctx()).unwrap();
         let shards = detailed["Clusters"][0]["Shards"].as_array().unwrap();
         assert_eq!(shards.len(), 2);
+    }
+
+    #[test]
+    fn tag_resource_round_trips_cluster_tags() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "tagged-cluster",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let arn = "arn:aws:memorydb:us-east-1:000000000000:cluster/tagged-cluster";
+        tag_resource(
+            &state,
+            &json!({
+                "ResourceArn": arn,
+                "Tags": [{ "Key": "team", "Value": "data" }],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let listed = list_tags(&state, &json!({ "ResourceArn": arn }), &ctx()).unwrap();
+        let entries = listed["TagList"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["Key"], "team");
+        assert_eq!(entries[0]["Value"], "data");
+        untag_resource(
+            &state,
+            &json!({ "ResourceArn": arn, "TagKeys": ["team"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let listed = list_tags(&state, &json!({ "ResourceArn": arn }), &ctx()).unwrap();
+        assert!(listed["TagList"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn tag_resource_rejects_unknown_resource_kind() {
+        let state = MemoryDbState::default();
+        let err = tag_resource(
+            &state,
+            &json!({
+                "ResourceArn": "arn:aws:memorydb:us-east-1:000000000000:user-group/x",
+                "Tags": [],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn tag_resource_returns_not_found_for_missing_resource() {
+        let state = MemoryDbState::default();
+        let err = tag_resource(
+            &state,
+            &json!({
+                "ResourceArn": "arn:aws:memorydb:us-east-1:000000000000:cluster/ghost",
+                "Tags": [],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundFault");
     }
 
     #[test]
