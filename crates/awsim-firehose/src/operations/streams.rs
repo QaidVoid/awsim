@@ -259,11 +259,80 @@ fn validate_source_configuration(
             "InvalidArgumentException",
             format!("DeliveryStreamType={stream_type} requires {expected}, got {actual}."),
         )),
-        (Some(_), Some(_)) => Ok(Some(
-            kinesis.or(msk).or(database).cloned().unwrap_or_default(),
-        )),
+        (Some(_), Some(_)) => {
+            let cfg = kinesis.or(msk).or(database).cloned().unwrap_or_default();
+            if want == Some("KinesisStreamSourceConfiguration") {
+                validate_kinesis_source(&cfg)?;
+            }
+            Ok(Some(cfg))
+        }
         (None, None) => Ok(None),
     }
+}
+
+/// Validates that `KinesisStreamARN` is a Kinesis stream ARN and
+/// `RoleARN` is an IAM role ARN. Both are required per the AWS
+/// Firehose API reference.
+fn validate_kinesis_source(cfg: &Value) -> Result<(), AwsError> {
+    let stream_arn = cfg
+        .get("KinesisStreamARN")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidArgumentException",
+                "KinesisStreamSourceConfiguration.KinesisStreamARN is required.",
+            )
+        })?;
+    if !is_service_arn(stream_arn, "kinesis", "stream/") {
+        return Err(AwsError::bad_request(
+            "InvalidArgumentException",
+            format!(
+                "KinesisStreamSourceConfiguration.KinesisStreamARN `{stream_arn}` must be a Kinesis stream ARN."
+            ),
+        ));
+    }
+    let role_arn = cfg.get("RoleARN").and_then(Value::as_str).ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidArgumentException",
+            "KinesisStreamSourceConfiguration.RoleARN is required.",
+        )
+    })?;
+    if !is_iam_role_arn(role_arn) {
+        return Err(AwsError::bad_request(
+            "InvalidArgumentException",
+            format!(
+                "KinesisStreamSourceConfiguration.RoleARN `{role_arn}` must be an IAM role ARN."
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn is_service_arn(arn: &str, service: &str, resource_prefix: &str) -> bool {
+    let mut it = arn.splitn(6, ':');
+    matches!(
+        (it.next(), it.next(), it.next(), it.next(), it.next(), it.next()),
+        (Some("arn"), Some(p), Some(svc), Some(_region), Some(account), Some(resource))
+            if !p.is_empty()
+                && svc == service
+                && account.len() == 12
+                && account.chars().all(|c| c.is_ascii_digit())
+                && resource.starts_with(resource_prefix)
+                && resource.len() > resource_prefix.len()
+    )
+}
+
+fn is_iam_role_arn(arn: &str) -> bool {
+    let mut it = arn.splitn(6, ':');
+    matches!(
+        (it.next(), it.next(), it.next(), it.next(), it.next(), it.next()),
+        (Some("arn"), Some(p), Some("iam"), Some(""), Some(account), Some(resource))
+            if !p.is_empty()
+                && account.len() == 12
+                && account.chars().all(|c| c.is_ascii_digit())
+                && resource.starts_with("role/")
+                && resource.len() > "role/".len()
+    )
 }
 
 /// Validate ExtendedS3DestinationConfiguration: BufferingHints size
@@ -454,6 +523,60 @@ mod list_delivery_streams_tests {
                 "DeliveryStreamName": "ds-mismatch",
                 "DeliveryStreamType": "MSKAsSource",
                 "KinesisStreamSourceConfiguration": { "KinesisStreamARN": "arn:aws:kinesis:us-east-1:111:stream/x", "RoleARN": "arn:aws:iam::111:role/r" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn create_rejects_kinesis_source_with_bad_stream_arn() {
+        let state = FirehoseState::default();
+        let err = create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-arn",
+                "DeliveryStreamType": "KinesisStreamAsSource",
+                "KinesisStreamSourceConfiguration": {
+                    "KinesisStreamARN": "not-an-arn",
+                    "RoleARN": "arn:aws:iam::111111111111:role/firehose-src",
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn create_rejects_kinesis_source_with_bad_role_arn() {
+        let state = FirehoseState::default();
+        let err = create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-role",
+                "DeliveryStreamType": "KinesisStreamAsSource",
+                "KinesisStreamSourceConfiguration": {
+                    "KinesisStreamARN": "arn:aws:kinesis:us-east-1:111111111111:stream/in",
+                    "RoleARN": "arn:aws:iam::111111111111:user/joe",
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn create_rejects_kinesis_source_missing_required_fields() {
+        let state = FirehoseState::default();
+        let err = create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-empty",
+                "DeliveryStreamType": "KinesisStreamAsSource",
+                "KinesisStreamSourceConfiguration": {},
             }),
             &ctx(),
         )
