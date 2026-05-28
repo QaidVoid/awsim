@@ -501,6 +501,68 @@ impl ServiceHandler for QldbService {
                 state.kinesis_streams.insert(stream_id.clone(), stream);
                 Ok(json!({ "StreamId": stream_id }))
             }
+            "ListJournalKinesisStreamsForLedger" => {
+                let ledger_name =
+                    require_str(&input, "name").or_else(|_| require_str(&input, "LedgerName"))?;
+                if !state.ledgers.contains_key(ledger_name) {
+                    return Err(AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Ledger {ledger_name} not found"),
+                    ));
+                }
+                let max_results = clamp_max_results_strict(
+                    input.get("MaxResults").and_then(Value::as_i64),
+                    100,
+                    100,
+                )?;
+                let starting_token = input.get("NextToken").and_then(Value::as_str);
+                let mut streams: Vec<(String, Value)> = state
+                    .kinesis_streams
+                    .iter()
+                    .filter(|e| e.value().ledger_name == ledger_name)
+                    .map(|e| (e.value().stream_id.clone(), stream_to_value(e.value(), ctx)))
+                    .collect();
+                streams.sort_by(|a, b| a.0.cmp(&b.0));
+                let page = paginate(streams, max_results, starting_token, |(k, _)| k.clone())?;
+                let mut body = json!({
+                    "Streams": page.items.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
+                });
+                if let Some(token) = page.next_token {
+                    body["NextToken"] = json!(token);
+                }
+                Ok(body)
+            }
+            "CancelJournalKinesisStream" => {
+                let _ledger =
+                    require_str(&input, "name").or_else(|_| require_str(&input, "LedgerName"))?;
+                let stream_id =
+                    require_str(&input, "streamId").or_else(|_| require_str(&input, "StreamId"))?;
+                let mut s = state.kinesis_streams.get_mut(stream_id).ok_or_else(|| {
+                    AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Stream {stream_id} not found"),
+                    )
+                })?;
+                // AWS rejects cancels against terminal states with
+                // ResourcePreconditionNotMetException (HTTP 412). The
+                // CANCELED case is idempotent so callers can retry.
+                match s.status.as_str() {
+                    "CANCELED" => {}
+                    "COMPLETED" | "FAILED" => {
+                        return Err(AwsError::precondition_failed(
+                            "ResourcePreconditionNotMetException",
+                            format!(
+                                "Stream {stream_id} is in terminal state `{}` and cannot be canceled.",
+                                s.status,
+                            ),
+                        ));
+                    }
+                    _ => {
+                        s.status = "CANCELED".to_string();
+                    }
+                }
+                Ok(json!({ "StreamId": stream_id }))
+            }
             "DescribeJournalKinesisStream" => {
                 let _ledger =
                     require_str(&input, "name").or_else(|_| require_str(&input, "LedgerName"))?;
@@ -879,6 +941,146 @@ mod tests {
             ))
             .unwrap();
         }
+    }
+
+    #[test]
+    fn list_journal_kinesis_streams_for_ledger_filters_by_ledger() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        for name in ["one", "two"] {
+            block_on(svc.handle(
+                "CreateLedger",
+                json!({
+                    "Name": name,
+                    "PermissionsMode": "ALLOW_ALL",
+                    "DeletionProtection": false,
+                }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+        for ledger in ["one", "one", "two"] {
+            block_on(svc.handle(
+                "StreamJournalToKinesis",
+                json!({
+                    "name": ledger,
+                    "StreamName": format!("s-{ledger}"),
+                    "RoleArn": "arn:aws:iam::000000000000:role/qldb",
+                    "InclusiveStartTime": 1700000000.0,
+                    "KinesisConfiguration": {
+                        "StreamArn": "arn:aws:kinesis:us-east-1:000000000000:stream/k",
+                    },
+                }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+        let resp = block_on(svc.handle(
+            "ListJournalKinesisStreamsForLedger",
+            json!({ "name": "one" }),
+            &ctx,
+        ))
+        .unwrap();
+        let streams = resp["Streams"].as_array().unwrap();
+        assert_eq!(streams.len(), 2);
+        assert!(streams.iter().all(|s| s["LedgerName"] == "one"));
+    }
+
+    #[test]
+    fn cancel_journal_kinesis_stream_marks_canceled_idempotently() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "cancel-target",
+                "PermissionsMode": "ALLOW_ALL",
+                "DeletionProtection": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let created = block_on(svc.handle(
+            "StreamJournalToKinesis",
+            json!({
+                "name": "cancel-target",
+                "StreamName": "cancel-stream",
+                "RoleArn": "arn:aws:iam::000000000000:role/qldb",
+                "InclusiveStartTime": 1700000000.0,
+                "KinesisConfiguration": {
+                    "StreamArn": "arn:aws:kinesis:us-east-1:000000000000:stream/k",
+                },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let stream_id = created["StreamId"].as_str().unwrap().to_string();
+        block_on(svc.handle(
+            "CancelJournalKinesisStream",
+            json!({ "name": "cancel-target", "streamId": stream_id }),
+            &ctx,
+        ))
+        .unwrap();
+        // Idempotent: a second cancel succeeds.
+        block_on(svc.handle(
+            "CancelJournalKinesisStream",
+            json!({ "name": "cancel-target", "streamId": stream_id }),
+            &ctx,
+        ))
+        .unwrap();
+        let desc = block_on(svc.handle(
+            "DescribeJournalKinesisStream",
+            json!({ "name": "cancel-target", "streamId": stream_id }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(desc["Stream"]["Status"], "CANCELED");
+    }
+
+    #[test]
+    fn cancel_journal_kinesis_stream_rejects_terminal_state() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "completed-ledger",
+                "PermissionsMode": "ALLOW_ALL",
+                "DeletionProtection": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let created = block_on(svc.handle(
+            "StreamJournalToKinesis",
+            json!({
+                "name": "completed-ledger",
+                "StreamName": "done",
+                "RoleArn": "arn:aws:iam::000000000000:role/qldb",
+                "InclusiveStartTime": 1700000000.0,
+                "KinesisConfiguration": {
+                    "StreamArn": "arn:aws:kinesis:us-east-1:000000000000:stream/k",
+                },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let stream_id = created["StreamId"].as_str().unwrap().to_string();
+        // Force COMPLETED on the persisted record so the cancel hits a
+        // terminal state.
+        {
+            let st = svc.store.get("000000000000", "us-east-1");
+            let mut entry = st.kinesis_streams.get_mut(&stream_id).unwrap();
+            entry.status = "COMPLETED".to_string();
+        }
+        let err = block_on(svc.handle(
+            "CancelJournalKinesisStream",
+            json!({ "name": "completed-ledger", "streamId": stream_id }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ResourcePreconditionNotMetException");
+        assert_eq!(err.status.as_u16(), 412);
     }
 
     #[test]
