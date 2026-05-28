@@ -1403,6 +1403,123 @@ pub fn describe_service_updates(
     Ok(body)
 }
 
+/// Hardcoded parameter fixtures shared across all default parameter
+/// groups. Mirrors the columns AWS surfaces via DescribeParameters.
+/// Keyed by (family, name) → (description, value, allowed_values,
+/// data_type, change_type).
+const DEFAULT_PARAMETERS: &[(&str, &str, &str, &str, &str, &str, &str)] = &[
+    (
+        "memorydb_redis6",
+        "maxmemory-policy",
+        "Eviction policy when the cluster reaches its memory limit.",
+        "noeviction",
+        "noeviction,allkeys-lru,volatile-lru,allkeys-lfu,volatile-lfu,allkeys-random,volatile-random,volatile-ttl",
+        "string",
+        "immediate",
+    ),
+    (
+        "memorydb_redis6",
+        "timeout",
+        "Idle client timeout in seconds; 0 disables the timeout.",
+        "0",
+        "0-",
+        "integer",
+        "immediate",
+    ),
+    (
+        "memorydb_redis7",
+        "maxmemory-policy",
+        "Eviction policy when the cluster reaches its memory limit.",
+        "noeviction",
+        "noeviction,allkeys-lru,volatile-lru,allkeys-lfu,volatile-lfu,allkeys-random,volatile-random,volatile-ttl",
+        "string",
+        "immediate",
+    ),
+    (
+        "memorydb_redis7",
+        "timeout",
+        "Idle client timeout in seconds; 0 disables the timeout.",
+        "0",
+        "0-",
+        "integer",
+        "immediate",
+    ),
+    (
+        "memorydb_valkey7",
+        "maxmemory-policy",
+        "Eviction policy when the cluster reaches its memory limit.",
+        "noeviction",
+        "noeviction,allkeys-lru,volatile-lru,allkeys-lfu,volatile-lfu,allkeys-random,volatile-random,volatile-ttl",
+        "string",
+        "immediate",
+    ),
+    (
+        "memorydb_valkey8",
+        "maxmemory-policy",
+        "Eviction policy when the cluster reaches its memory limit.",
+        "noeviction",
+        "noeviction,allkeys-lru,volatile-lru,allkeys-lfu,volatile-lfu,allkeys-random,volatile-random,volatile-ttl",
+        "string",
+        "immediate",
+    ),
+];
+
+pub fn describe_parameters(
+    state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let group_name = require_str(input, "ParameterGroupName")?;
+    let group = state.parameter_groups.get(group_name).ok_or_else(|| {
+        AwsError::not_found(
+            "ParameterGroupNotFoundFault",
+            format!("Parameter group {group_name} not found"),
+        )
+    })?;
+    let family = group.family.clone();
+    drop(group);
+    let max_results = awsim_core::clamp_max_results_strict(
+        input.get("MaxResults").and_then(Value::as_i64),
+        100,
+        100,
+    )?;
+    let starting_token = input.get("NextToken").and_then(Value::as_str);
+    let mut entries: Vec<(String, Value)> = DEFAULT_PARAMETERS
+        .iter()
+        .filter(|(fam, ..)| *fam == family)
+        .map(
+            |(fam, name, desc, value, allowed, data_type, change_type)| {
+                (
+                    (*name).to_string(),
+                    json!({
+                        "Name": name,
+                        "Value": value,
+                        "Description": desc,
+                        "DataType": data_type,
+                        "AllowedValues": allowed,
+                        "MinimumEngineVersion": match *fam {
+                            "memorydb_redis6" => "6.2",
+                            "memorydb_redis7" => "7.0",
+                            "memorydb_valkey7" => "7.2",
+                            "memorydb_valkey8" => "8.0",
+                            _ => "7.0",
+                        },
+                        "ChangeType": change_type,
+                    }),
+                )
+            },
+        )
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let page = awsim_core::paginate(entries, max_results, starting_token, |(k, _)| k.clone())?;
+    let items: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+    let mut body = json!({ "Parameters": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
+}
+
 pub fn describe_parameter_groups(
     state: &MemoryDbState,
     _input: &Value,
@@ -2319,6 +2436,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(second["ServiceUpdates"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn describe_parameters_returns_family_fixtures() {
+        let state = MemoryDbState::default();
+        create_parameter_group(
+            &state,
+            &json!({
+                "ParameterGroupName": "pg-redis7",
+                "Family": "memorydb_redis7",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = describe_parameters(
+            &state,
+            &json!({ "ParameterGroupName": "pg-redis7" }),
+            &ctx(),
+        )
+        .unwrap();
+        let names: Vec<&str> = resp["Parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["Name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"maxmemory-policy"));
+        assert!(names.contains(&"timeout"));
+    }
+
+    #[test]
+    fn describe_parameters_returns_not_found_for_unknown_group() {
+        let state = MemoryDbState::default();
+        let err = describe_parameters(&state, &json!({ "ParameterGroupName": "ghost" }), &ctx())
+            .unwrap_err();
+        assert_eq!(err.code, "ParameterGroupNotFoundFault");
     }
 
     #[test]
