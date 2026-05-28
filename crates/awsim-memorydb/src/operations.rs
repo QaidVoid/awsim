@@ -797,6 +797,43 @@ pub fn create_subnet_group(
     Ok(result)
 }
 
+pub fn delete_subnet_group(
+    state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = require_str(input, "SubnetGroupName")?;
+    if name == "default" {
+        return Err(AwsError::bad_request(
+            "InvalidSubnetGroupStateFault",
+            "The default subnet group cannot be deleted.",
+        ));
+    }
+    let in_use = state
+        .clusters
+        .iter()
+        .any(|c| c.value().subnet_group_name == name);
+    if in_use {
+        return Err(AwsError::conflict(
+            "SubnetGroupInUseFault",
+            format!("Subnet group {name} is still attached to one or more clusters."),
+        ));
+    }
+    let (_, g) = state.subnet_groups.remove(name).ok_or_else(|| {
+        AwsError::not_found(
+            "SubnetGroupNotFoundFault",
+            format!("Subnet group {name} not found"),
+        )
+    })?;
+    Ok(json!({ "SubnetGroup": {
+        "Name": g.name,
+        "ARN": g.arn,
+        "Description": g.description,
+        "VpcId": g.vpc_id,
+        "Subnets": g.subnet_ids.iter().map(|id| json!({ "Identifier": id })).collect::<Vec<_>>(),
+    }}))
+}
+
 pub fn describe_subnet_groups(
     state: &MemoryDbState,
     _input: &Value,
@@ -842,6 +879,42 @@ pub fn create_parameter_group(
     }});
     state.parameter_groups.insert(name, g);
     Ok(result)
+}
+
+pub fn delete_parameter_group(
+    state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = require_str(input, "ParameterGroupName")?;
+    if name.starts_with("default.") {
+        return Err(AwsError::bad_request(
+            "InvalidParameterGroupStateFault",
+            format!("The default parameter group {name} cannot be deleted."),
+        ));
+    }
+    let in_use = state
+        .clusters
+        .iter()
+        .any(|c| c.value().parameter_group_name == name);
+    if in_use {
+        return Err(AwsError::conflict(
+            "InvalidParameterGroupStateFault",
+            format!("Parameter group {name} is still attached to one or more clusters."),
+        ));
+    }
+    let (_, g) = state.parameter_groups.remove(name).ok_or_else(|| {
+        AwsError::not_found(
+            "ParameterGroupNotFoundFault",
+            format!("Parameter group {name} not found"),
+        )
+    })?;
+    Ok(json!({ "ParameterGroup": {
+        "Name": g.name,
+        "ARN": g.arn,
+        "Family": g.family,
+        "Description": g.description,
+    }}))
 }
 
 pub fn reset_parameter_group(
@@ -1195,6 +1268,116 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
         }
+    }
+
+    #[test]
+    fn delete_subnet_group_rejects_default_name() {
+        let state = MemoryDbState::default();
+        let err = delete_subnet_group(&state, &json!({ "SubnetGroupName": "default" }), &ctx())
+            .unwrap_err();
+        assert_eq!(err.code, "InvalidSubnetGroupStateFault");
+    }
+
+    #[test]
+    fn delete_subnet_group_rejects_when_cluster_attached() {
+        let state = MemoryDbState::default();
+        create_subnet_group(
+            &state,
+            &json!({
+                "SubnetGroupName": "in-use",
+                "SubnetIds": ["subnet-aaa", "subnet-bbb"],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "uses-subnet",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "SubnetGroupName": "in-use",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = delete_subnet_group(&state, &json!({ "SubnetGroupName": "in-use" }), &ctx())
+            .unwrap_err();
+        assert_eq!(err.code, "SubnetGroupInUseFault");
+    }
+
+    #[test]
+    fn delete_subnet_group_removes_unused_group() {
+        let state = MemoryDbState::default();
+        create_subnet_group(
+            &state,
+            &json!({ "SubnetGroupName": "free", "SubnetIds": ["subnet-x"] }),
+            &ctx(),
+        )
+        .unwrap();
+        delete_subnet_group(&state, &json!({ "SubnetGroupName": "free" }), &ctx()).unwrap();
+        assert!(!state.subnet_groups.contains_key("free"));
+    }
+
+    #[test]
+    fn delete_parameter_group_rejects_default_prefix() {
+        let state = MemoryDbState::default();
+        let err = delete_parameter_group(
+            &state,
+            &json!({ "ParameterGroupName": "default.memorydb-redis7" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterGroupStateFault");
+    }
+
+    #[test]
+    fn delete_parameter_group_rejects_when_cluster_attached() {
+        let state = MemoryDbState::default();
+        create_parameter_group(
+            &state,
+            &json!({
+                "ParameterGroupName": "pg-in-use",
+                "Family": "memorydb_redis7",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "uses-pg",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "ParameterGroupName": "pg-in-use",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = delete_parameter_group(
+            &state,
+            &json!({ "ParameterGroupName": "pg-in-use" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterGroupStateFault");
+    }
+
+    #[test]
+    fn delete_parameter_group_removes_unused_group() {
+        let state = MemoryDbState::default();
+        create_parameter_group(
+            &state,
+            &json!({
+                "ParameterGroupName": "pg-free",
+                "Family": "memorydb_redis7",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        delete_parameter_group(&state, &json!({ "ParameterGroupName": "pg-free" }), &ctx())
+            .unwrap();
+        assert!(!state.parameter_groups.contains_key("pg-free"));
     }
 
     #[test]
