@@ -25,6 +25,11 @@ fn fs_arn(ctx: &RequestContext, id: &str) -> String {
 }
 
 fn fs_to_value(fs: &FileSystem) -> Value {
+    // Refresh the SizeInBytes.Timestamp on every read so callers can
+    // see the metric as "current". Real EFS only refreshes on its own
+    // metric-collection cadence, but the emulator has no tick driver
+    // yet.
+    let now = now_secs();
     json!({
         "FileSystemId": fs.file_system_id,
         "FileSystemArn": fs.file_system_arn,
@@ -36,7 +41,8 @@ fn fs_to_value(fs: &FileSystem) -> Value {
             "Value": fs.size_in_bytes_value,
             "ValueInIA": 0,
             "ValueInStandard": fs.size_in_bytes_value,
-            "Timestamp": fs.creation_time,
+            "ValueInArchive": 0,
+            "Timestamp": now,
         },
         "PerformanceMode": fs.performance_mode,
         "ThroughputMode": fs.throughput_mode,
@@ -416,6 +422,19 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn create_file_system_emits_full_size_in_bytes_block() {
+        let state = EfsState::default();
+        let resp =
+            create_file_system(&state, &json!({ "CreationToken": "t-size" }), &ctx()).unwrap();
+        let size = &resp["SizeInBytes"];
+        assert_eq!(size["Value"], 0);
+        assert_eq!(size["ValueInIA"], 0);
+        assert_eq!(size["ValueInStandard"], 0);
+        assert_eq!(size["ValueInArchive"], 0);
+        assert!(size["Timestamp"].is_number());
     }
 
     #[test]
