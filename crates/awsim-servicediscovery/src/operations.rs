@@ -232,7 +232,20 @@ fn create_namespace_inner(
             .map(String::from),
         properties: Some(properties),
     };
+    let ns_arn = n.arn.clone();
     state.namespaces.insert(id.clone(), n);
+    if let Some(arr) = input.get("Tags").and_then(Value::as_array) {
+        let mut entry = state.tags.entry(ns_arn).or_default();
+        for t in arr {
+            if let (Some(k), Some(v)) = (
+                t.get("Key").and_then(Value::as_str),
+                t.get("Value").and_then(Value::as_str),
+            ) && !k.starts_with("aws:")
+            {
+                entry.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
     let mut targets = HashMap::new();
     targets.insert("NAMESPACE".to_string(), id);
     let op_id = record_operation(state, "CREATE_NAMESPACE", targets);
@@ -415,6 +428,21 @@ fn create_service_inner(
         r#type: svc_type.to_string(),
         instances_revision: 0,
     };
+    // AWS persists `Tags` supplied at create-time so a subsequent
+    // ListTagsForResource against the service ARN returns them.
+    if let Some(arr) = input.get("Tags").and_then(Value::as_array) {
+        let arn = svc.arn.clone();
+        let mut entry = state.tags.entry(arn).or_default();
+        for t in arr {
+            if let (Some(k), Some(v)) = (
+                t.get("Key").and_then(Value::as_str),
+                t.get("Value").and_then(Value::as_str),
+            ) && !k.starts_with("aws:")
+            {
+                entry.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
     let result = json!({ "Service": svc_to_value(&svc) });
     state.services.insert(id, svc);
     if let Some(mut n) = state.namespaces.get_mut(&namespace_id) {
@@ -1207,6 +1235,64 @@ pub fn list_tags_for_resource(
         })
         .unwrap_or_default();
     Ok(json!({ "Tags": tags }))
+}
+
+#[cfg(test)]
+mod tag_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("servicediscovery", "us-east-1")
+    }
+
+    #[test]
+    fn create_http_namespace_tags_are_listable() {
+        let state = ServiceDiscoveryState::default();
+        create_http_namespace(
+            &state,
+            &json!({
+                "Name": "tagged-ns",
+                "Tags": [{ "Key": "team", "Value": "infra" }],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let ns_id = state
+            .namespaces
+            .iter()
+            .map(|e| e.value().id.clone())
+            .next()
+            .unwrap();
+        let ns_arn = format!("arn:aws:servicediscovery:us-east-1:000000000000:namespace/{ns_id}");
+        let listed =
+            list_tags_for_resource(&state, &json!({ "ResourceARN": ns_arn }), &ctx()).unwrap();
+        let entries = listed["Tags"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["Key"], "team");
+    }
+
+    #[test]
+    fn tag_resource_rejects_aws_prefix() {
+        let state = ServiceDiscoveryState::default();
+        create_http_namespace(&state, &json!({ "Name": "ns" }), &ctx()).unwrap();
+        let ns_id = state
+            .namespaces
+            .iter()
+            .map(|e| e.value().id.clone())
+            .next()
+            .unwrap();
+        let ns_arn = format!("arn:aws:servicediscovery:us-east-1:000000000000:namespace/{ns_id}");
+        let err = tag_resource(
+            &state,
+            &json!({
+                "ResourceARN": ns_arn,
+                "Tags": [{ "Key": "aws:owner", "Value": "x" }],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidInput");
+    }
 }
 
 #[cfg(test)]
