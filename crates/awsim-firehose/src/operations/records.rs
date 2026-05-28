@@ -153,6 +153,7 @@ mod put_record_tests {
                 None
             },
             encryption_key_arn: None,
+            source_config: None,
         };
         state.streams.insert(name.to_string(), s);
     }

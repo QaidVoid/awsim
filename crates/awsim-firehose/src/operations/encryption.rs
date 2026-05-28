@@ -131,6 +131,7 @@ mod tests {
                 encryption_enabled: false,
                 encryption_key_type: None,
                 encryption_key_arn: None,
+                source_config: None,
             },
         );
         state

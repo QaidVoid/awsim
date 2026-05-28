@@ -23,6 +23,12 @@ pub struct DeliveryStream {
     pub encryption_enabled: bool,
     pub encryption_key_type: Option<String>,
     pub encryption_key_arn: Option<String>,
+    /// Raw source configuration captured at create time. Populated for
+    /// `KinesisStreamAsSource`, `MSKAsSource`, or `DatabaseAsSource`
+    /// streams; absent for `DirectPut`. Echoed back to clients under
+    /// `Source.<Kind>SourceDescription`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_config: Option<serde_json::Value>,
 }
 
 pub fn now_secs() -> u64 {

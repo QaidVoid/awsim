@@ -38,6 +38,8 @@ pub fn create_delivery_stream(
         validate_extended_s3(ext)?;
     }
 
+    let source_config = validate_source_configuration(&stream_type, input)?;
+
     let arn = format!(
         "arn:aws:firehose:{}:{}:deliverystream/{}",
         ctx.region, ctx.account_id, name
@@ -68,6 +70,7 @@ pub fn create_delivery_stream(
         encryption_enabled: false,
         encryption_key_type: None,
         encryption_key_arn: None,
+        source_config,
     };
     state.streams.insert(name.to_string(), stream);
     Ok(json!({ "DeliveryStreamARN": arn }))
@@ -104,6 +107,15 @@ pub fn describe_delivery_stream(
             format!("Stream {name} not found"),
         )
     })?;
+    let source = s
+        .source_config
+        .as_ref()
+        .map(|cfg| match s.stream_type.as_str() {
+            "KinesisStreamAsSource" => json!({ "KinesisStreamSourceDescription": cfg }),
+            "MSKAsSource" => json!({ "MSKSourceDescription": cfg }),
+            "DatabaseAsSource" => json!({ "DatabaseSourceDescription": cfg }),
+            _ => json!({}),
+        });
     Ok(json!({
         "DeliveryStreamDescription": {
             "DeliveryStreamName": s.name,
@@ -115,6 +127,7 @@ pub fn describe_delivery_stream(
             "LastUpdateTimestamp": s.last_update_timestamp,
             "Destinations": s.destinations,
             "HasMoreDestinations": s.has_more_destinations,
+            "Source": source,
             "DeliveryStreamEncryptionConfiguration": {
                 "Status": if s.encryption_enabled { "ENABLED" } else { "DISABLED" },
                 "KeyType": s.encryption_key_type,
@@ -196,6 +209,61 @@ pub fn update_destination(
     s.last_update_timestamp = now_secs();
     s.version_id = format!("{}", s.version_id.parse::<u64>().unwrap_or(1) + 1);
     Ok(json!({}))
+}
+
+/// Validates and captures the source configuration that pairs with
+/// `DeliveryStreamType`. Returns the raw config JSON (used verbatim
+/// when echoing `Source.<Kind>SourceDescription` on Describe).
+/// `DirectPut` rejects any source block; the source-backed types each
+/// require the matching `*SourceConfiguration` field.
+fn validate_source_configuration(
+    stream_type: &str,
+    input: &Value,
+) -> Result<Option<Value>, AwsError> {
+    let kinesis = input.get("KinesisStreamSourceConfiguration");
+    let msk = input.get("MSKSourceConfiguration");
+    let database = input.get("DatabaseSourceConfiguration");
+    let present: Vec<&str> = [
+        ("KinesisStreamSourceConfiguration", kinesis.is_some()),
+        ("MSKSourceConfiguration", msk.is_some()),
+        ("DatabaseSourceConfiguration", database.is_some()),
+    ]
+    .iter()
+    .filter_map(|(n, p)| if *p { Some(*n) } else { None })
+    .collect();
+    if present.len() > 1 {
+        return Err(AwsError::bad_request(
+            "InvalidArgumentException",
+            format!(
+                "Only one of KinesisStreamSourceConfiguration / MSKSourceConfiguration / DatabaseSourceConfiguration may be set (got {present:?})."
+            ),
+        ));
+    }
+    let want = match stream_type {
+        "DirectPut" => None,
+        "KinesisStreamAsSource" => Some("KinesisStreamSourceConfiguration"),
+        "MSKAsSource" => Some("MSKSourceConfiguration"),
+        "DatabaseAsSource" => Some("DatabaseSourceConfiguration"),
+        _ => return Ok(None),
+    };
+    match (want, present.first().copied()) {
+        (None, Some(n)) => Err(AwsError::bad_request(
+            "InvalidArgumentException",
+            format!("DeliveryStreamType=DirectPut does not accept {n}."),
+        )),
+        (Some(expected), None) => Err(AwsError::bad_request(
+            "InvalidArgumentException",
+            format!("DeliveryStreamType={stream_type} requires {expected}."),
+        )),
+        (Some(expected), Some(actual)) if expected != actual => Err(AwsError::bad_request(
+            "InvalidArgumentException",
+            format!("DeliveryStreamType={stream_type} requires {expected}, got {actual}."),
+        )),
+        (Some(_), Some(_)) => Ok(Some(
+            kinesis.or(msk).or(database).cloned().unwrap_or_default(),
+        )),
+        (None, None) => Ok(None),
+    }
 }
 
 /// Validate ExtendedS3DestinationConfiguration: BufferingHints size
@@ -288,6 +356,7 @@ mod list_delivery_streams_tests {
             encryption_enabled: false,
             encryption_key_type: None,
             encryption_key_arn: None,
+            source_config: None,
         };
         state.streams.insert(name.to_string(), s);
     }
@@ -343,5 +412,81 @@ mod list_delivery_streams_tests {
         let state = FirehoseState::default();
         let err = list_delivery_streams(&state, &json!({ "Limit": 0 }), &ctx()).unwrap_err();
         assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn create_rejects_source_config_on_direct_put() {
+        let state = FirehoseState::default();
+        let err = create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-bad",
+                "DeliveryStreamType": "DirectPut",
+                "KinesisStreamSourceConfiguration": { "KinesisStreamARN": "arn:aws:kinesis:us-east-1:111:stream/x", "RoleARN": "arn:aws:iam::111:role/r" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn create_rejects_kinesis_source_without_config() {
+        let state = FirehoseState::default();
+        let err = create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-missing",
+                "DeliveryStreamType": "KinesisStreamAsSource",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn create_rejects_mismatched_source_config() {
+        let state = FirehoseState::default();
+        let err = create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-mismatch",
+                "DeliveryStreamType": "MSKAsSource",
+                "KinesisStreamSourceConfiguration": { "KinesisStreamARN": "arn:aws:kinesis:us-east-1:111:stream/x", "RoleARN": "arn:aws:iam::111:role/r" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn create_persists_source_config_and_describe_echoes_it() {
+        let state = FirehoseState::default();
+        create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-kinesis",
+                "DeliveryStreamType": "KinesisStreamAsSource",
+                "KinesisStreamSourceConfiguration": {
+                    "KinesisStreamARN": "arn:aws:kinesis:us-east-1:111111111111:stream/in",
+                    "RoleARN": "arn:aws:iam::111111111111:role/firehose-src",
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = describe_delivery_stream(
+            &state,
+            &json!({ "DeliveryStreamName": "ds-kinesis" }),
+            &ctx(),
+        )
+        .unwrap();
+        let desc = &resp["DeliveryStreamDescription"]["Source"]["KinesisStreamSourceDescription"];
+        assert_eq!(
+            desc["KinesisStreamARN"],
+            "arn:aws:kinesis:us-east-1:111111111111:stream/in"
+        );
     }
 }
