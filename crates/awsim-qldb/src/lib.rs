@@ -22,6 +22,10 @@ pub struct QldbState {
     pub kinesis_streams: DashMap<String, JournalKinesisStream>,
     /// JournalS3Export records keyed by `ExportId` (UUID).
     pub s3_exports: DashMap<String, JournalS3Export>,
+    /// Per-ARN tag store for `stream` and `export` resources. Ledger
+    /// tags continue to live on [`Ledger::tags`] for backwards
+    /// compatibility with the original tag map.
+    pub resource_tags: DashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +103,8 @@ pub struct QldbSnapshot {
     pub kinesis_streams: Vec<JournalKinesisStream>,
     #[serde(default)]
     pub s3_exports: Vec<JournalS3Export>,
+    #[serde(default)]
+    pub resource_tags: HashMap<String, HashMap<String, String>>,
 }
 
 impl QldbState {
@@ -111,6 +117,11 @@ impl QldbState {
                 .map(|e| e.value().clone())
                 .collect(),
             s3_exports: self.s3_exports.iter().map(|e| e.value().clone()).collect(),
+            resource_tags: self
+                .resource_tags
+                .iter()
+                .map(|e| (e.key().clone(), e.value().clone()))
+                .collect(),
         }
     }
     pub fn restore_from_snapshot(&self, snap: QldbSnapshot) {
@@ -125,6 +136,10 @@ impl QldbState {
         self.s3_exports.clear();
         for ex in snap.s3_exports {
             self.s3_exports.insert(ex.export_id.clone(), ex);
+        }
+        self.resource_tags.clear();
+        for (arn, tags) in snap.resource_tags {
+            self.resource_tags.insert(arn, tags);
         }
     }
 }
@@ -178,6 +193,175 @@ fn stream_to_value(s: &JournalKinesisStream, ctx: &RequestContext) -> Value {
         "ErrorCause": s.error_cause,
         "StreamName": s.stream_name,
     })
+}
+
+/// Identifies a QLDB resource referenced by ARN. Only the kind and
+/// the trailing identifier are needed to dispatch tag operations.
+enum ResourceRef {
+    Ledger(String),
+    Stream(String),
+    Export(String),
+}
+
+fn parse_resource_arn(arn: &str) -> Result<ResourceRef, AwsError> {
+    let resource = arn.splitn(6, ':').nth(5).ok_or_else(|| {
+        AwsError::bad_request(
+            "BadRequestException",
+            format!("ResourceArn `{arn}` is malformed."),
+        )
+    })?;
+    let (kind, tail) = resource.split_once('/').ok_or_else(|| {
+        AwsError::bad_request(
+            "BadRequestException",
+            format!("ResourceArn `{arn}` is malformed."),
+        )
+    })?;
+    match kind {
+        "ledger" => Ok(ResourceRef::Ledger(tail.to_string())),
+        "stream" => {
+            let stream_id = tail.rsplit('/').next().unwrap_or(tail);
+            Ok(ResourceRef::Stream(stream_id.to_string()))
+        }
+        "export" => {
+            let export_id = tail.rsplit('/').next().unwrap_or(tail);
+            Ok(ResourceRef::Export(export_id.to_string()))
+        }
+        _ => Err(AwsError::bad_request(
+            "BadRequestException",
+            format!("Resource kind `{kind}` is not a QLDB resource type."),
+        )),
+    }
+}
+
+fn apply_resource_tags(
+    state: &QldbState,
+    arn: &str,
+    new_tags: HashMap<String, String>,
+) -> Result<(), AwsError> {
+    match parse_resource_arn(arn)? {
+        ResourceRef::Ledger(name) => {
+            let mut l = state.ledgers.get_mut(&name).ok_or_else(|| {
+                AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("Ledger {name} not found"),
+                )
+            })?;
+            for (k, v) in new_tags {
+                l.tags.insert(k, v);
+            }
+        }
+        ResourceRef::Stream(id) => {
+            if !state.kinesis_streams.contains_key(&id) {
+                return Err(AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("Stream {id} not found"),
+                ));
+            }
+            let mut entry = state.resource_tags.entry(arn.to_string()).or_default();
+            for (k, v) in new_tags {
+                entry.insert(k, v);
+            }
+        }
+        ResourceRef::Export(id) => {
+            if !state.s3_exports.contains_key(&id) {
+                return Err(AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("Export {id} not found"),
+                ));
+            }
+            let mut entry = state.resource_tags.entry(arn.to_string()).or_default();
+            for (k, v) in new_tags {
+                entry.insert(k, v);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn remove_resource_tags(state: &QldbState, arn: &str, keys: &[String]) -> Result<(), AwsError> {
+    match parse_resource_arn(arn)? {
+        ResourceRef::Ledger(name) => {
+            let mut l = state.ledgers.get_mut(&name).ok_or_else(|| {
+                AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("Ledger {name} not found"),
+                )
+            })?;
+            for k in keys {
+                l.tags.remove(k);
+            }
+        }
+        ResourceRef::Stream(id) => {
+            if !state.kinesis_streams.contains_key(&id) {
+                return Err(AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("Stream {id} not found"),
+                ));
+            }
+            if let Some(mut entry) = state.resource_tags.get_mut(arn) {
+                for k in keys {
+                    entry.remove(k);
+                }
+            }
+        }
+        ResourceRef::Export(id) => {
+            if !state.s3_exports.contains_key(&id) {
+                return Err(AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("Export {id} not found"),
+                ));
+            }
+            if let Some(mut entry) = state.resource_tags.get_mut(arn) {
+                for k in keys {
+                    entry.remove(k);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_resource_tags(state: &QldbState, arn: &str) -> Result<HashMap<String, String>, AwsError> {
+    match parse_resource_arn(arn)? {
+        ResourceRef::Ledger(name) => {
+            state
+                .ledgers
+                .get(&name)
+                .map(|l| l.tags.clone())
+                .ok_or_else(|| {
+                    AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Ledger {name} not found"),
+                    )
+                })
+        }
+        ResourceRef::Stream(id) => {
+            if !state.kinesis_streams.contains_key(&id) {
+                return Err(AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("Stream {id} not found"),
+                ));
+            }
+            Ok(state
+                .resource_tags
+                .get(arn)
+                .map(|e| e.value().clone())
+                .unwrap_or_default())
+        }
+        ResourceRef::Export(id) => {
+            if !state.s3_exports.contains_key(&id) {
+                return Err(AwsError::not_found(
+                    "ResourceNotFoundException",
+                    format!("Export {id} not found"),
+                ));
+            }
+            Ok(state
+                .resource_tags
+                .get(arn)
+                .map(|e| e.value().clone())
+                .unwrap_or_default())
+        }
+    }
 }
 
 fn export_to_value(ex: &JournalS3Export) -> Value {
@@ -867,24 +1051,17 @@ impl ServiceHandler for QldbService {
                     .or_else(|| input.get("ResourceArn"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let name = arn.rsplit('/').next().unwrap_or("");
-                let mut l = state.ledgers.get_mut(name).ok_or_else(|| {
-                    AwsError::not_found(
-                        "ResourceNotFoundException",
-                        format!("Ledger {name} not found"),
-                    )
-                })?;
-                if let Some(tags) = input
+                let new_tags: HashMap<String, String> = input
                     .get("Tags")
                     .or_else(|| input.get("tags"))
                     .and_then(|v| v.as_object())
-                {
-                    for (k, v) in tags {
-                        if let Some(s) = v.as_str() {
-                            l.tags.insert(k.clone(), s.to_string());
-                        }
-                    }
-                }
+                    .map(|o| {
+                        o.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                apply_resource_tags(&state, arn, new_tags)?;
                 Ok(json!({}))
             }
             "UntagResource" => {
@@ -893,24 +1070,17 @@ impl ServiceHandler for QldbService {
                     .or_else(|| input.get("ResourceArn"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let name = arn.rsplit('/').next().unwrap_or("");
-                let mut l = state.ledgers.get_mut(name).ok_or_else(|| {
-                    AwsError::not_found(
-                        "ResourceNotFoundException",
-                        format!("Ledger {name} not found"),
-                    )
-                })?;
-                if let Some(keys) = input
+                let keys: Vec<String> = input
                     .get("TagKeys")
                     .or_else(|| input.get("tagKeys"))
                     .and_then(|v| v.as_array())
-                {
-                    for k in keys {
-                        if let Some(s) = k.as_str() {
-                            l.tags.remove(s);
-                        }
-                    }
-                }
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                remove_resource_tags(&state, arn, &keys)?;
                 Ok(json!({}))
             }
             "ListTagsForResource" => {
@@ -919,14 +1089,8 @@ impl ServiceHandler for QldbService {
                     .or_else(|| input.get("ResourceArn"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let name = arn.rsplit('/').next().unwrap_or("");
-                let l = state.ledgers.get(name).ok_or_else(|| {
-                    AwsError::not_found(
-                        "ResourceNotFoundException",
-                        format!("Ledger {name} not found"),
-                    )
-                })?;
-                Ok(json!({ "Tags": l.tags }))
+                let tags = read_resource_tags(&state, arn)?;
+                Ok(json!({ "Tags": tags }))
             }
             _ => Err(AwsError::unknown_operation(operation)),
         }
@@ -937,12 +1101,14 @@ impl ServiceHandler for QldbService {
             ledgers: vec![],
             kinesis_streams: vec![],
             s3_exports: vec![],
+            resource_tags: Default::default(),
         };
         for (_, st) in self.store.iter_all() {
             let s = st.to_snapshot();
             all.ledgers.extend(s.ledgers);
             all.kinesis_streams.extend(s.kinesis_streams);
             all.s3_exports.extend(s.s3_exports);
+            all.resource_tags.extend(s.resource_tags);
         }
         serde_json::to_vec(&all).ok()
     }
@@ -1617,6 +1783,68 @@ mod tests {
         let err = block_on(svc.handle(
             "ListTagsForResource",
             json!({ "resourceArn": "arn:aws:qldb:us-east-1:000000000000:ledger/missing" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundException");
+    }
+
+    #[test]
+    fn tag_resource_round_trips_stream_tags() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "tagged-stream-ledger",
+                "PermissionsMode": "ALLOW_ALL",
+                "DeletionProtection": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let created = block_on(svc.handle(
+            "StreamJournalToKinesis",
+            json!({
+                "name": "tagged-stream-ledger",
+                "StreamName": "stream-x",
+                "RoleArn": "arn:aws:iam::000000000000:role/qldb",
+                "InclusiveStartTime": 1700000000.0,
+                "KinesisConfiguration": {
+                    "StreamArn": "arn:aws:kinesis:us-east-1:000000000000:stream/x",
+                },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let stream_id = created["StreamId"].as_str().unwrap().to_string();
+        let stream_arn =
+            format!("arn:aws:qldb:us-east-1:000000000000:stream/tagged-stream-ledger/{stream_id}",);
+        block_on(svc.handle(
+            "TagResource",
+            json!({ "resourceArn": stream_arn, "Tags": { "team": "qldb" } }),
+            &ctx,
+        ))
+        .unwrap();
+        let listed = block_on(svc.handle(
+            "ListTagsForResource",
+            json!({ "resourceArn": stream_arn }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(listed["Tags"]["team"], "qldb");
+    }
+
+    #[test]
+    fn tag_resource_returns_not_found_for_unknown_stream() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "TagResource",
+            json!({
+                "resourceArn": "arn:aws:qldb:us-east-1:000000000000:stream/missing-ledger/missing-stream",
+                "Tags": {},
+            }),
             &ctx,
         ))
         .unwrap_err();
