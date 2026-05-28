@@ -181,6 +181,9 @@ fn cluster_to_value(c: &Cluster) -> Value {
         "DataTiering": if c.data_tiering { "true" } else { "false" },
         "NetworkType": c.network_type,
         "IpDiscovery": c.ip_discovery,
+        "SnapshotArns": c.snapshot_arns,
+        "SnapshotName": c.snapshot_name,
+        "MultiRegionClusterName": c.multi_region_cluster_name,
         "PendingUpdates": {
             "Resharding": Value::Null,
             "ACLs": Value::Null,
@@ -313,7 +316,24 @@ pub fn create_cluster(
             format!("NumReplicasPerShard `{n}` must be in 0..=5."),
         ));
     }
-    let node_type = require_str(input, "NodeType")?.to_string();
+    let snapshot_seed = input
+        .get("SnapshotName")
+        .and_then(Value::as_str)
+        .and_then(|sn| state.snapshots.get(sn).map(|s| s.cluster_config.clone()));
+    let node_type = match input.get("NodeType").and_then(Value::as_str) {
+        Some(s) => s.to_string(),
+        None => snapshot_seed
+            .as_ref()
+            .and_then(|c| c.get("NodeType"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameterValueException",
+                    "NodeType is required when SnapshotName cannot supply one.",
+                )
+            })?
+            .to_string(),
+    };
     let data_tiering = input
         .get("DataTiering")
         .and_then(Value::as_bool)
@@ -477,6 +497,23 @@ pub fn create_cluster(
         data_tiering,
         network_type,
         ip_discovery,
+        snapshot_arns: input
+            .get("SnapshotArns")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        snapshot_name: input
+            .get("SnapshotName")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        multi_region_cluster_name: input
+            .get("MultiRegionClusterName")
+            .and_then(|v| v.as_str())
+            .map(String::from),
     };
     let result = json!({ "Cluster": cluster_to_value(&c) });
     state.clusters.insert(name, c);
@@ -2503,6 +2540,64 @@ mod tests {
         let nodes = resp["Cluster"]["Shards"][0]["Nodes"].as_array().unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0]["RoleInShard"], "primary");
+    }
+
+    #[test]
+    fn create_cluster_seeds_node_type_from_snapshot() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "donor",
+                "NodeType": "db.r6g.2xlarge",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        create_snapshot(
+            &state,
+            &json!({ "SnapshotName": "donor-snap", "ClusterName": "donor" }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "restored",
+                "ACLName": "open-access",
+                "SnapshotName": "donor-snap",
+                "SnapshotArns": ["arn:aws:s3:::backup/x"],
+                "MultiRegionClusterName": "mr-1",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["NodeType"], "db.r6g.2xlarge");
+        assert_eq!(resp["Cluster"]["SnapshotName"], "donor-snap");
+        assert_eq!(resp["Cluster"]["MultiRegionClusterName"], "mr-1");
+        let arns: Vec<&str> = resp["Cluster"]["SnapshotArns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(arns, vec!["arn:aws:s3:::backup/x"]);
+    }
+
+    #[test]
+    fn create_cluster_requires_node_type_without_snapshot_seed() {
+        let state = MemoryDbState::default();
+        let err = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "no-node-type",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
     }
 
     #[test]

@@ -56,6 +56,20 @@ pub struct Cluster {
     /// `ipv6`. Defaults to `ipv4` when unset on legacy snapshots.
     #[serde(default = "default_ip_discovery")]
     pub ip_discovery: String,
+    /// Snapshot ARNs supplied to seed the cluster at restore time.
+    /// Captured for audit/echo; the emulator does not load object
+    /// data from the ARNs.
+    #[serde(default)]
+    pub snapshot_arns: Vec<String>,
+    /// Snapshot name supplied to seed the cluster at restore time.
+    /// `None` when the cluster was created from scratch.
+    #[serde(default)]
+    pub snapshot_name: Option<String>,
+    /// Name of the multi-region cluster this cluster belongs to, if
+    /// any. Multi-region clusters omit the region from their ARN per
+    /// AWS docs.
+    #[serde(default)]
+    pub multi_region_cluster_name: Option<String>,
 }
 
 fn default_engine() -> String {
