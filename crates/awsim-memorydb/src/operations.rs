@@ -1187,6 +1187,69 @@ pub fn reset_parameter_group(
     }}))
 }
 
+/// Returns the public engine catalog. AWS exposes one row per
+/// (Engine, EngineVersion) pair so clients can pick a target before
+/// calling CreateCluster.
+pub fn describe_engine_versions(
+    _state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let engine_filter = input.get("Engine").and_then(Value::as_str);
+    if let Some(e) = engine_filter
+        && !matches!(e, "redis" | "valkey")
+    {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!("Engine `{e}` must be one of redis, valkey."),
+        ));
+    }
+    let version_filter = input.get("EngineVersion").and_then(Value::as_str);
+    let family_filter = input.get("ParameterGroupFamily").and_then(Value::as_str);
+    let max_results = awsim_core::clamp_max_results_strict(
+        input.get("MaxResults").and_then(Value::as_i64),
+        100,
+        100,
+    )?;
+    let starting_token = input.get("NextToken").and_then(Value::as_str);
+    let mut entries: Vec<(String, Value)> = ENGINE_PATCH_VERSIONS
+        .iter()
+        .filter(|(e, v, _)| {
+            engine_filter.is_none_or(|want| *e == want)
+                && version_filter.is_none_or(|want| *v == want)
+        })
+        .map(|(e, v, patch)| {
+            let family = match (*e, *v) {
+                ("redis", "6.2") => "memorydb_redis6",
+                ("redis", _) => "memorydb_redis7",
+                ("valkey", "7.2") => "memorydb_valkey7",
+                ("valkey", _) => "memorydb_valkey8",
+                _ => "memorydb_redis7",
+            };
+            (
+                format!("{e}-{v}"),
+                json!({
+                    "Engine": e,
+                    "EngineVersion": v,
+                    "EnginePatchVersion": patch,
+                    "ParameterGroupFamily": family,
+                }),
+            )
+        })
+        .filter(|(_, value)| {
+            family_filter.is_none_or(|want| value["ParameterGroupFamily"].as_str() == Some(want))
+        })
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let page = awsim_core::paginate(entries, max_results, starting_token, |(k, _)| k.clone())?;
+    let items: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+    let mut body = json!({ "EngineVersions": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
+}
+
 /// Seeded MemoryDB service-update fixtures. Each entry mirrors the
 /// shape AWS returns from `DescribeServiceUpdates`. The fixture is
 /// intentionally small; callers exercising the filter/pagination
@@ -2175,6 +2238,41 @@ mod tests {
             &ctx(),
         )
         .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn describe_engine_versions_emits_each_supported_pair() {
+        let state = MemoryDbState::default();
+        let resp = describe_engine_versions(&state, &json!({}), &ctx()).unwrap();
+        let entries = resp["EngineVersions"].as_array().unwrap();
+        assert_eq!(entries.len(), ENGINE_PATCH_VERSIONS.len());
+        assert!(
+            entries
+                .iter()
+                .any(|v| v["Engine"] == "valkey" && v["EngineVersion"] == "7.2")
+        );
+    }
+
+    #[test]
+    fn describe_engine_versions_filters_by_engine_and_family() {
+        let state = MemoryDbState::default();
+        let resp = describe_engine_versions(
+            &state,
+            &json!({ "Engine": "valkey", "ParameterGroupFamily": "memorydb_valkey8" }),
+            &ctx(),
+        )
+        .unwrap();
+        let entries = resp["EngineVersions"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["EngineVersion"], "8.0");
+    }
+
+    #[test]
+    fn describe_engine_versions_rejects_unknown_engine() {
+        let state = MemoryDbState::default();
+        let err = describe_engine_versions(&state, &json!({ "Engine": "memcached" }), &ctx())
+            .unwrap_err();
         assert_eq!(err.code, "InvalidParameterValueException");
     }
 
