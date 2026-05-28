@@ -681,13 +681,66 @@ pub fn describe_parameter_groups(
     Ok(json!({ "ParameterGroups": items }))
 }
 
+/// Builds the `ClusterConfiguration` block returned with snapshot
+/// responses. Mirrors AWS by capturing every topology field a restore
+/// would need so the snapshot remains useful after the source cluster
+/// is deleted.
+fn snapshot_cluster_configuration(c: &Cluster) -> Value {
+    let port = c
+        .cluster_endpoint
+        .get("Port")
+        .and_then(Value::as_u64)
+        .unwrap_or(6379);
+    json!({
+        "Name": c.name,
+        "Description": c.description,
+        "NodeType": c.node_type,
+        "EngineVersion": c.engine_version,
+        "MaintenanceWindow": c.maintenance_window,
+        "Port": port,
+        "ParameterGroupName": c.parameter_group_name,
+        "SubnetGroupName": c.subnet_group_name,
+        "VpcId": "vpc-default",
+        "SnapshotRetentionLimit": c.snapshot_retention_limit,
+        "SnapshotWindow": c.snapshot_window,
+        "NumShards": c.number_of_shards,
+        "Shards": [],
+    })
+}
+
+fn snapshot_to_value(s: &Snapshot) -> Value {
+    let config = if s.cluster_config.is_null() {
+        json!({ "Name": s.cluster_name })
+    } else {
+        s.cluster_config.clone()
+    };
+    json!({
+        "Name": s.name,
+        "ARN": s.arn,
+        "Status": s.status,
+        "Source": s.source,
+        "KmsKeyId": s.kms_key_id,
+        "ClusterConfiguration": config,
+    })
+}
+
 pub fn create_snapshot(
     state: &MemoryDbState,
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "SnapshotName")?.to_string();
-    let cluster = require_str(input, "ClusterName")?.to_string();
+    let cluster_name = require_str(input, "ClusterName")?.to_string();
+    let cluster_config = state
+        .clusters
+        .get(&cluster_name)
+        .map(|c| snapshot_cluster_configuration(c.value()))
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "ClusterNotFoundFault",
+                format!("Cluster {cluster_name} not found"),
+            )
+        })?;
     let s = Snapshot {
         name: name.clone(),
         arn: arn(ctx, "snapshot", &name),
@@ -697,16 +750,10 @@ pub fn create_snapshot(
             .get("KmsKeyId")
             .and_then(|v| v.as_str())
             .map(String::from),
-        cluster_name: cluster,
+        cluster_name,
+        cluster_config,
     };
-    let result = json!({ "Snapshot": {
-        "Name": s.name,
-        "ARN": s.arn,
-        "Status": s.status,
-        "Source": s.source,
-        "KmsKeyId": s.kms_key_id,
-        "ClusterConfiguration": { "Name": s.cluster_name },
-    }});
+    let result = json!({ "Snapshot": snapshot_to_value(&s) });
     state.snapshots.insert(name, s);
     Ok(result)
 }
@@ -719,17 +766,7 @@ pub fn describe_snapshots(
     let items: Vec<Value> = state
         .snapshots
         .iter()
-        .map(|e| {
-            let s = e.value();
-            json!({
-                "Name": s.name,
-                "ARN": s.arn,
-                "Status": s.status,
-                "Source": s.source,
-                "KmsKeyId": s.kms_key_id,
-                "ClusterConfiguration": { "Name": s.cluster_name },
-            })
-        })
+        .map(|e| snapshot_to_value(e.value()))
         .collect();
     Ok(json!({ "Snapshots": items }))
 }
@@ -1111,6 +1148,61 @@ mod tests {
         .unwrap();
         assert_eq!(resp["Cluster"]["SnsTopicStatus"], "inactive");
         assert!(resp["Cluster"]["SnsTopicArn"].is_null());
+    }
+
+    #[test]
+    fn create_snapshot_emits_full_cluster_configuration() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "src-cluster",
+                "NodeType": "db.r6g.xlarge",
+                "ACLName": "open-access",
+                "EngineVersion": "7.0",
+                "MaintenanceWindow": "sun:23:00-mon:01:30",
+                "SnapshotWindow": "03:00-04:00",
+                "SnapshotRetentionLimit": 7,
+                "Description": "primary cluster",
+                "NumShards": 3,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = create_snapshot(
+            &state,
+            &json!({
+                "SnapshotName": "snap-1",
+                "ClusterName": "src-cluster",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let cfg = &resp["Snapshot"]["ClusterConfiguration"];
+        assert_eq!(cfg["Name"], "src-cluster");
+        assert_eq!(cfg["NodeType"], "db.r6g.xlarge");
+        assert_eq!(cfg["EngineVersion"], "7.0");
+        assert_eq!(cfg["MaintenanceWindow"], "sun:23:00-mon:01:30");
+        assert_eq!(cfg["SnapshotWindow"], "03:00-04:00");
+        assert_eq!(cfg["SnapshotRetentionLimit"], 7);
+        assert_eq!(cfg["NumShards"], 3);
+        assert_eq!(cfg["Port"], 6379);
+        assert_eq!(cfg["Description"], "primary cluster");
+    }
+
+    #[test]
+    fn create_snapshot_rejects_missing_cluster() {
+        let state = MemoryDbState::default();
+        let err = create_snapshot(
+            &state,
+            &json!({
+                "SnapshotName": "snap-orphan",
+                "ClusterName": "does-not-exist",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ClusterNotFoundFault");
     }
 
     #[test]

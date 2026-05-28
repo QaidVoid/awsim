@@ -88,6 +88,15 @@ pub struct Snapshot {
     pub source: String,
     pub kms_key_id: Option<String>,
     pub cluster_name: String,
+    /// Frozen copy of the source cluster's topology at snapshot time,
+    /// returned to clients verbatim as `ClusterConfiguration`. Legacy
+    /// snapshots without this field default to a minimal `{Name}` shape.
+    #[serde(default = "default_cluster_config")]
+    pub cluster_config: serde_json::Value,
+}
+
+fn default_cluster_config() -> serde_json::Value {
+    serde_json::Value::Null
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
