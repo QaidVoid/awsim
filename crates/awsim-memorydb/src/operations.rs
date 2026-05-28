@@ -541,6 +541,17 @@ pub fn update_cluster(
     if let Some(d) = input.get("Description").and_then(|v| v.as_str()) {
         c.description = Some(d.to_string());
     }
+    if let Some(mw) = input.get("MaintenanceWindow").and_then(Value::as_str) {
+        validate_maintenance_window(mw)?;
+        c.maintenance_window = mw.to_string();
+    }
+    if let Some(sw) = input.get("SnapshotWindow").and_then(Value::as_str) {
+        validate_snapshot_window(sw)?;
+        c.snapshot_window = sw.to_string();
+    }
+    if let Some(n) = input.get("SnapshotRetentionLimit").and_then(Value::as_u64) {
+        c.snapshot_retention_limit = n as u32;
+    }
     // AWS treats `SnsTopicArn: ""` as "clear the topic" (status flips
     // to inactive); a non-empty ARN sets it active.
     if let Some(topic) = input.get("SnsTopicArn").and_then(Value::as_str) {
@@ -1060,6 +1071,60 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
         }
+    }
+
+    #[test]
+    fn update_cluster_persists_validated_window_changes() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-windows-update",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = update_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-windows-update",
+                "MaintenanceWindow": "tue:02:00-tue:04:00",
+                "SnapshotWindow": "05:00-06:00",
+                "SnapshotRetentionLimit": 14,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["MaintenanceWindow"], "tue:02:00-tue:04:00");
+        assert_eq!(resp["Cluster"]["SnapshotWindow"], "05:00-06:00");
+        assert_eq!(resp["Cluster"]["SnapshotRetentionLimit"], 14);
+    }
+
+    #[test]
+    fn update_cluster_rejects_malformed_maintenance_window() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-wupd-bad",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = update_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-wupd-bad",
+                "MaintenanceWindow": "garbage",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
     }
 
     #[test]
