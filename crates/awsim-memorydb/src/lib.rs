@@ -214,11 +214,12 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        assert_eq!(r["Cluster"]["Status"], "available");
+        assert_eq!(r["Cluster"]["Status"], "creating");
         assert_eq!(r["Cluster"]["ClusterEndpoint"]["Port"], 6379);
 
         let described = block_on(svc.handle("DescribeClusters", json!({}), &ctx)).unwrap();
         assert_eq!(described["Clusters"].as_array().unwrap().len(), 1);
+        assert_eq!(described["Clusters"][0]["Status"], "available");
 
         block_on(svc.handle("DeleteCluster", json!({ "ClusterName": "primary" }), &ctx)).unwrap();
     }

@@ -417,7 +417,10 @@ pub fn create_cluster(
     let c = Cluster {
         name: name.clone(),
         arn: arn_str.clone(),
-        status: "available".to_string(),
+        // AWS reports `creating` on CreateCluster and settles to
+        // `available` on the next Describe; the emulator collapses the
+        // settle window to a single observation.
+        status: "creating".to_string(),
         node_type,
         engine,
         engine_version: engine_version_input.to_string(),
@@ -527,6 +530,14 @@ pub fn describe_clusters(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name_filter = input.get("ClusterName").and_then(|v| v.as_str());
+    // Walk any cluster that's still in a transient state to `available`
+    // on first describe. The lifecycle SM lives in spec 0006; until
+    // it's wired in, settle synchronously so clients see steady state.
+    for mut e in state.clusters.iter_mut() {
+        if matches!(e.value().status.as_str(), "creating" | "modifying") {
+            e.value_mut().status = "available".to_string();
+        }
+    }
     // AWS defaults ShowShardDetails to false; the heavy per-node
     // shard payload is only emitted when the caller opts in.
     let show_shards = input
