@@ -314,15 +314,28 @@ pub fn get_namespace(
 
 pub fn list_namespaces(
     state: &ServiceDiscoveryState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let items: Vec<Value> = state
+    let max_results = awsim_core::clamp_max_results_strict(
+        input.get("MaxResults").and_then(Value::as_i64),
+        100,
+        100,
+    )?;
+    let starting_token = input.get("NextToken").and_then(Value::as_str);
+    let mut entries: Vec<(String, Value)> = state
         .namespaces
         .iter()
-        .map(|e| ns_to_value(e.value()))
+        .map(|e| (e.value().id.clone(), ns_to_value(e.value())))
         .collect();
-    Ok(json!({ "Namespaces": items }))
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let page = awsim_core::paginate(entries, max_results, starting_token, |(k, _)| k.clone())?;
+    let items: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+    let mut body = json!({ "Namespaces": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
 }
 
 // ---------- Services ----------
@@ -469,16 +482,29 @@ pub fn list_services(
                 }
             })
         });
-    let items: Vec<Value> = state
+    let max_results = awsim_core::clamp_max_results_strict(
+        input.get("MaxResults").and_then(Value::as_i64),
+        100,
+        100,
+    )?;
+    let starting_token = input.get("NextToken").and_then(Value::as_str);
+    let mut entries: Vec<(String, Value)> = state
         .services
         .iter()
         .filter(|e| match &ns_filter {
             Some(ns) => e.value().namespace_id == *ns,
             None => true,
         })
-        .map(|e| svc_to_value(e.value()))
+        .map(|e| (e.value().id.clone(), svc_to_value(e.value())))
         .collect();
-    Ok(json!({ "Services": items }))
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let page = awsim_core::paginate(entries, max_results, starting_token, |(k, _)| k.clone())?;
+    let items: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+    let mut body = json!({ "Services": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
 }
 
 // ---------- Instances ----------
@@ -587,13 +613,26 @@ pub fn list_instances(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let service_id = require_str(input, "ServiceId")?;
-    let items: Vec<Value> = state
+    let max_results = awsim_core::clamp_max_results_strict(
+        input.get("MaxResults").and_then(Value::as_i64),
+        100,
+        100,
+    )?;
+    let starting_token = input.get("NextToken").and_then(Value::as_str);
+    let mut entries: Vec<(String, Value)> = state
         .instances
         .iter()
         .filter(|e| e.value().service_id == service_id)
-        .map(|e| inst_to_value(e.value()))
+        .map(|e| (e.value().id.clone(), inst_to_value(e.value())))
         .collect();
-    Ok(json!({ "Instances": items }))
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let page = awsim_core::paginate(entries, max_results, starting_token, |(k, _)| k.clone())?;
+    let items: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+    let mut body = json!({ "Instances": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
 }
 
 pub fn discover_instances(
