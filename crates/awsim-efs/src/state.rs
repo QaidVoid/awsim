@@ -31,6 +31,14 @@ pub struct FileSystem {
     pub lifecycle_policies: Vec<serde_json::Value>,
     pub backup_policy_status: String,
     pub file_system_protection_replication_overwrite_protection: String,
+    /// AZ pin used by the `oneZone` storage class. When `Some(_)` AWS
+    /// caps the file system at a single mount target in the named AZ.
+    #[serde(default)]
+    pub availability_zone_name: Option<String>,
+    /// AZ ID counterpart of [`availability_zone_name`]. Populated when
+    /// the caller pinned the file system to a single AZ.
+    #[serde(default)]
+    pub availability_zone_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

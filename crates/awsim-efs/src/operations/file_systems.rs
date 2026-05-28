@@ -55,6 +55,8 @@ fn fs_to_value(fs: &FileSystem) -> Value {
         "FileSystemProtection": {
             "ReplicationOverwriteProtection": fs.file_system_protection_replication_overwrite_protection,
         },
+        "AvailabilityZoneName": fs.availability_zone_name,
+        "AvailabilityZoneId": fs.availability_zone_id,
     })
 }
 
@@ -186,6 +188,14 @@ pub fn create_file_system(
         lifecycle_policies: vec![],
         backup_policy_status: "DISABLED".to_string(),
         file_system_protection_replication_overwrite_protection: "ENABLED".to_string(),
+        availability_zone_name: input
+            .get("AvailabilityZoneName")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        availability_zone_id: input
+            .get("AvailabilityZoneId")
+            .and_then(|v| v.as_str())
+            .map(String::from),
     };
     let result = fs_to_value(&fs);
     state.file_systems.insert(id, fs);
@@ -460,6 +470,23 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn create_file_system_persists_availability_zone_pin() {
+        let state = EfsState::default();
+        let resp = create_file_system(
+            &state,
+            &json!({
+                "CreationToken": "t-az",
+                "AvailabilityZoneName": "us-east-1a",
+                "AvailabilityZoneId": "use1-az1",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["AvailabilityZoneName"], "us-east-1a");
+        assert_eq!(resp["AvailabilityZoneId"], "use1-az1");
     }
 
     #[test]

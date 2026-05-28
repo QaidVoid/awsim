@@ -42,10 +42,24 @@ pub fn create_mount_target(
         .ok_or_else(|| AwsError::bad_request("BadRequest", "SubnetId is required"))?
         .to_string();
 
-    if !state.file_systems.contains_key(&fs_id) {
-        return Err(AwsError::not_found(
-            "FileSystemNotFound",
-            format!("File system {fs_id} not found"),
+    let fs_az_pinned = match state.file_systems.get(&fs_id) {
+        None => {
+            return Err(AwsError::not_found(
+                "FileSystemNotFound",
+                format!("File system {fs_id} not found"),
+            ));
+        }
+        Some(fs) => fs.availability_zone_name.is_some() || fs.availability_zone_id.is_some(),
+    };
+    if fs_az_pinned
+        && state
+            .mount_targets
+            .iter()
+            .any(|e| e.value().file_system_id == fs_id)
+    {
+        return Err(AwsError::bad_request(
+            "MountTargetConflict",
+            "One Zone file systems support only a single mount target.",
         ));
     }
 
@@ -181,4 +195,43 @@ pub fn modify_mount_target_security_groups(
     })?;
     mt.security_groups = groups;
     Ok(json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::file_systems::create_file_system;
+    use crate::state::EfsState;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("efs", "us-east-1")
+    }
+
+    #[test]
+    fn one_zone_file_system_rejects_second_mount_target() {
+        let state = EfsState::default();
+        let resp = create_file_system(
+            &state,
+            &json!({
+                "CreationToken": "t-az-onezone",
+                "AvailabilityZoneName": "us-east-1a",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let fs_id = resp["FileSystemId"].as_str().unwrap().to_string();
+        create_mount_target(
+            &state,
+            &json!({ "FileSystemId": fs_id, "SubnetId": "subnet-a" }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = create_mount_target(
+            &state,
+            &json!({ "FileSystemId": fs_id, "SubnetId": "subnet-b" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "MountTargetConflict");
+    }
 }
