@@ -91,6 +91,7 @@ impl ServiceHandler for MemoryDbService {
             "DescribeClusters" => operations::describe_clusters(&state, &input, ctx),
             "DeleteCluster" => operations::delete_cluster(&state, &input, ctx),
             "UpdateCluster" => operations::update_cluster(&state, &input, ctx),
+            "FailoverShard" => operations::failover_shard(&state, &input, ctx),
             "CreateUser" => operations::create_user(&state, &input, ctx),
             "DescribeUsers" => operations::describe_users(&state, &input, ctx),
             "DeleteUser" => operations::delete_user(&state, &input, ctx),

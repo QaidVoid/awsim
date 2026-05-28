@@ -576,6 +576,33 @@ pub fn delete_cluster(
     Ok(json!({ "Cluster": cluster_to_value(&c) }))
 }
 
+/// Initiates a failover on a single shard of a cluster. Mirrors AWS
+/// FailoverShard by validating that the cluster exists and that
+/// `ShardName` resolves to one of the synthesised shard names (the
+/// 4-digit zero-padded sequence built by [`build_shards`]).
+pub fn failover_shard(
+    state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let cluster_name = require_str(input, "ClusterName")?;
+    let shard_name = require_str(input, "ShardName")?;
+    let c = state.clusters.get(cluster_name).ok_or_else(|| {
+        AwsError::not_found(
+            "ClusterNotFoundFault",
+            format!("Cluster {cluster_name} not found"),
+        )
+    })?;
+    let known: bool = (1..=c.number_of_shards).any(|i| format!("{i:04}") == shard_name);
+    if !known {
+        return Err(AwsError::not_found(
+            "ShardNotFoundFault",
+            format!("Shard {shard_name} not found on cluster {cluster_name}"),
+        ));
+    }
+    Ok(json!({ "Cluster": cluster_to_value(&c) }))
+}
+
 pub fn update_cluster(
     state: &MemoryDbState,
     input: &Value,
@@ -2071,6 +2098,64 @@ mod tests {
             describe_clusters(&state, &json!({ "ShowShardDetails": true }), &ctx()).unwrap();
         let shards = detailed["Clusters"][0]["Shards"].as_array().unwrap();
         assert_eq!(shards.len(), 2);
+    }
+
+    #[test]
+    fn failover_shard_accepts_known_shard_name() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "failover-target",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "NumShards": 3,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = failover_shard(
+            &state,
+            &json!({ "ClusterName": "failover-target", "ShardName": "0002" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["Name"], "failover-target");
+    }
+
+    #[test]
+    fn failover_shard_rejects_unknown_shard_name() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "small",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "NumShards": 1,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = failover_shard(
+            &state,
+            &json!({ "ClusterName": "small", "ShardName": "0002" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ShardNotFoundFault");
+    }
+
+    #[test]
+    fn failover_shard_returns_cluster_not_found_for_unknown_cluster() {
+        let state = MemoryDbState::default();
+        let err = failover_shard(
+            &state,
+            &json!({ "ClusterName": "ghost", "ShardName": "0001" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ClusterNotFoundFault");
     }
 
     #[test]
