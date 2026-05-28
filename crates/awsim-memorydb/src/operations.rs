@@ -19,6 +19,75 @@ fn arn(ctx: &RequestContext, kind: &str, name: &str) -> String {
     )
 }
 
+const VALID_DAYS: [&str; 7] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+fn parse_hhmm(s: &str) -> Option<(u8, u8)> {
+    let (h, m) = s.split_once(':')?;
+    if h.len() != 2 || m.len() != 2 {
+        return None;
+    }
+    let hh: u8 = h.parse().ok()?;
+    let mm: u8 = m.parse().ok()?;
+    if hh > 23 || mm > 59 {
+        return None;
+    }
+    Some((hh, mm))
+}
+
+/// Validates a MemoryDB `MaintenanceWindow` of the form
+/// `ddd:hh24:mi-ddd:hh24:mi` (e.g. `sun:23:00-mon:01:30`). Days must
+/// be one of {sun,mon,tue,wed,thu,fri,sat}; start and end may not be
+/// equal.
+fn validate_maintenance_window(s: &str) -> Result<(), AwsError> {
+    let lower = s.to_ascii_lowercase();
+    let (start, end) = lower.split_once('-').ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!("MaintenanceWindow `{s}` must be `ddd:hh:mm-ddd:hh:mm`."),
+        )
+    })?;
+    let parse = |part: &str| -> Option<(&'static str, u8, u8)> {
+        let mut it = part.splitn(3, ':');
+        let day = it.next()?;
+        let hh = it.next()?;
+        let mm = it.next()?;
+        if it.next().is_some() {
+            return None;
+        }
+        let day_idx = VALID_DAYS.iter().position(|d| *d == day)?;
+        let (h, m) = parse_hhmm(&format!("{hh}:{mm}"))?;
+        Some((VALID_DAYS[day_idx], h, m))
+    };
+    let s_parts = parse(start);
+    let e_parts = parse(end);
+    match (s_parts, e_parts) {
+        (Some(a), Some(b)) if a != b => Ok(()),
+        _ => Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!("MaintenanceWindow `{s}` is malformed."),
+        )),
+    }
+}
+
+/// Validates a MemoryDB `SnapshotWindow` of the form `hh24:mi-hh24:mi`
+/// (e.g. `03:00-04:00`). Start and end must be valid 24-hour clock
+/// times and not equal.
+fn validate_snapshot_window(s: &str) -> Result<(), AwsError> {
+    let (start, end) = s.split_once('-').ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!("SnapshotWindow `{s}` must be `hh:mm-hh:mm`."),
+        )
+    })?;
+    match (parse_hhmm(start), parse_hhmm(end)) {
+        (Some(a), Some(b)) if a != b => Ok(()),
+        _ => Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!("SnapshotWindow `{s}` is malformed."),
+        )),
+    }
+}
+
 fn cluster_to_value(c: &Cluster) -> Value {
     json!({
         "Name": c.name,
@@ -111,6 +180,12 @@ pub fn create_cluster(
             "InvalidParameterCombinationException",
             format!("DataTiering=true requires a `db.r6gd.*` node type; got `{node_type}`.",),
         ));
+    }
+    if let Some(mw) = input.get("MaintenanceWindow").and_then(Value::as_str) {
+        validate_maintenance_window(mw)?;
+    }
+    if let Some(sw) = input.get("SnapshotWindow").and_then(Value::as_str) {
+        validate_snapshot_window(sw)?;
     }
     let acl_name = require_str(input, "ACLName")?.to_string();
     let arn_str = arn(ctx, "cluster", &name);
@@ -656,6 +731,76 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resp["Cluster"]["DataTiering"], "false");
+    }
+
+    #[test]
+    fn create_cluster_rejects_malformed_maintenance_window() {
+        let state = MemoryDbState::default();
+        for bad in [
+            "sun:23:00",
+            "sun:23:00-sun:23:00",
+            "fun:23:00-mon:01:30",
+            "sun:24:00-mon:01:30",
+            "sun:23:60-mon:01:30",
+            "sun-mon",
+            "23:00-01:30",
+        ] {
+            let err = create_cluster(
+                &state,
+                &json!({
+                    "ClusterName": format!("c-mw-{}", bad.len()),
+                    "NodeType": "db.r6g.large",
+                    "ACLName": "open-access",
+                    "MaintenanceWindow": bad,
+                }),
+                &ctx(),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
+        }
+    }
+
+    #[test]
+    fn create_cluster_rejects_malformed_snapshot_window() {
+        let state = MemoryDbState::default();
+        for bad in [
+            "03:00",
+            "03:00-03:00",
+            "24:00-04:00",
+            "03:60-04:00",
+            "3:00-4:00",
+            "0300-0400",
+        ] {
+            let err = create_cluster(
+                &state,
+                &json!({
+                    "ClusterName": format!("c-sw-{}", bad.len()),
+                    "NodeType": "db.r6g.large",
+                    "ACLName": "open-access",
+                    "SnapshotWindow": bad,
+                }),
+                &ctx(),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
+        }
+    }
+
+    #[test]
+    fn create_cluster_accepts_well_formed_windows() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-windows-ok",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "MaintenanceWindow": "SUN:23:00-MON:01:30",
+                "SnapshotWindow": "03:00-04:00",
+            }),
+            &ctx(),
+        )
+        .unwrap();
     }
 
     #[test]
