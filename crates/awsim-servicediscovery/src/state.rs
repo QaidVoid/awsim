@@ -18,6 +18,10 @@ pub struct ServiceDiscoveryState {
     /// duplicate call returns byte-identical output without
     /// re-running the work.
     pub creator_request_cache: IdempotencyCache<Value>,
+    /// Tags keyed by resource ARN. AWS Cloud Map allows tagging
+    /// namespaces, services, and operations through the same
+    /// TagResource API; the per-ARN map keeps lookup O(1).
+    pub tags: DashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

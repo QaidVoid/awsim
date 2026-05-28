@@ -1108,6 +1108,107 @@ fn validate_instance_attributes(attrs: &HashMap<String, String>) -> Result<(), A
     Ok(())
 }
 
+// ---------- Tags ----------
+
+/// Parses `Cloud Map` resource ARN and validates it matches a known
+/// namespace / service / operation. Returns the ARN as-is for use as
+/// the tag-store key.
+fn validate_tag_arn(state: &ServiceDiscoveryState, arn: &str) -> Result<String, AwsError> {
+    let resource = arn.splitn(6, ':').nth(5).ok_or_else(|| {
+        AwsError::bad_request("InvalidInput", format!("ResourceARN `{arn}` is malformed."))
+    })?;
+    let (kind, id) = resource.split_once('/').ok_or_else(|| {
+        AwsError::bad_request("InvalidInput", format!("ResourceARN `{arn}` is malformed."))
+    })?;
+    let exists = match kind {
+        "namespace" => state.namespaces.contains_key(id),
+        "service" => state.services.contains_key(id),
+        "operation" => state.operations.contains_key(id),
+        _ => {
+            return Err(AwsError::bad_request(
+                "InvalidInput",
+                format!("Resource kind `{kind}` is not a Cloud Map resource."),
+            ));
+        }
+    };
+    if !exists {
+        return Err(AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("Resource {arn} not found"),
+        ));
+    }
+    Ok(arn.to_string())
+}
+
+pub fn tag_resource(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let arn = require_str(input, "ResourceARN")?;
+    let arn = validate_tag_arn(state, arn)?;
+    let tags = input
+        .get("Tags")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AwsError::bad_request("InvalidInput", "Tags must be a list"))?;
+    let mut entry = state.tags.entry(arn).or_default();
+    for t in tags {
+        if let (Some(k), Some(v)) = (
+            t.get("Key").and_then(Value::as_str),
+            t.get("Value").and_then(Value::as_str),
+        ) {
+            if k.starts_with("aws:") {
+                return Err(AwsError::bad_request(
+                    "InvalidInput",
+                    format!("Tag key `{k}` may not use the reserved `aws:` prefix."),
+                ));
+            }
+            entry.insert(k.to_string(), v.to_string());
+        }
+    }
+    Ok(json!({}))
+}
+
+pub fn untag_resource(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let arn = require_str(input, "ResourceARN")?;
+    let arn = validate_tag_arn(state, arn)?;
+    let keys = input
+        .get("TagKeys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AwsError::bad_request("InvalidInput", "TagKeys must be a list"))?;
+    if let Some(mut entry) = state.tags.get_mut(&arn) {
+        for k in keys {
+            if let Some(s) = k.as_str() {
+                entry.remove(s);
+            }
+        }
+    }
+    Ok(json!({}))
+}
+
+pub fn list_tags_for_resource(
+    state: &ServiceDiscoveryState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let arn = require_str(input, "ResourceARN")?;
+    let arn = validate_tag_arn(state, arn)?;
+    let tags: Vec<Value> = state
+        .tags
+        .get(&arn)
+        .map(|e| {
+            e.iter()
+                .map(|(k, v)| json!({ "Key": k, "Value": v }))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(json!({ "Tags": tags }))
+}
+
 #[cfg(test)]
 mod revision_tests {
     use super::*;

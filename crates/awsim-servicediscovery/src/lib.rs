@@ -179,6 +179,9 @@ impl ServiceHandler for ServiceDiscoveryService {
             }
             "GetOperation" => operations::get_operation(&state, &input, ctx),
             "ListOperations" => operations::list_operations(&state, &input, ctx),
+            "TagResource" => operations::tag_resource(&state, &input, ctx),
+            "UntagResource" => operations::untag_resource(&state, &input, ctx),
+            "ListTagsForResource" => operations::list_tags_for_resource(&state, &input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
