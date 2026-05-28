@@ -311,8 +311,47 @@ pub fn list_resource_record_sets(
         )
     })?;
 
-    let record_sets: Vec<Value> = zone
-        .record_sets
+    // AWS bounds MaxItems at 1..=300. Both string and integer forms
+    // appear in real requests.
+    let max_items: usize = match input.get("MaxItems") {
+        None => 100,
+        Some(v) => {
+            let n = v
+                .as_str()
+                .and_then(|s| s.parse::<i64>().ok())
+                .or_else(|| v.as_i64())
+                .ok_or_else(|| {
+                    AwsError::bad_request("InvalidInput", "MaxItems must be a positive integer")
+                })?;
+            if !(1..=300).contains(&n) {
+                return Err(AwsError::bad_request(
+                    "InvalidInput",
+                    format!("MaxItems `{n}` must be in 1..=300."),
+                ));
+            }
+            n as usize
+        }
+    };
+    let start_name = input.get("StartRecordName").and_then(Value::as_str);
+    let start_type = input.get("StartRecordType").and_then(Value::as_str);
+    let mut ordered: Vec<&_> = zone.record_sets.iter().collect();
+    // AWS orders by (Name, Type). Name compares lexicographically with
+    // the trailing dot kept; Type is alphabetical (A < AAAA < CNAME).
+    ordered.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.r#type.cmp(&b.r#type)));
+    let start_idx = match start_name {
+        None => 0,
+        Some(name) => ordered
+            .iter()
+            .position(|rs| {
+                rs.name.as_str() > name
+                    || (rs.name == name && start_type.is_none_or(|t| rs.r#type.as_str() >= t))
+            })
+            .unwrap_or(ordered.len()),
+    };
+    let total = ordered.len();
+    let end_idx = (start_idx + max_items).min(total);
+    let is_truncated = end_idx < total;
+    let record_sets: Vec<Value> = ordered[start_idx..end_idx]
         .iter()
         .map(|rs| {
             let mut obj = json!({
@@ -338,12 +377,92 @@ pub fn list_resource_record_sets(
         })
         .collect();
 
-    Ok(json!({
+    let mut body = json!({
         "__xml_root": "ListResourceRecordSetsResponse",
         "ResourceRecordSets": record_sets,
-        "IsTruncated": false,
-        "MaxItems": "300",
-    }))
+        "IsTruncated": is_truncated,
+        "MaxItems": max_items.to_string(),
+    });
+    if is_truncated {
+        body["NextRecordName"] = json!(ordered[end_idx].name);
+        body["NextRecordType"] = json!(ordered[end_idx].r#type);
+    }
+    Ok(body)
+}
+
+#[cfg(test)]
+mod list_record_sets_tests {
+    use super::*;
+    use crate::state::{HostedZone, ResourceRecordSet};
+    use std::collections::HashMap;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("route53", "us-east-1")
+    }
+
+    fn make_state_with_records(names: &[&str]) -> Arc<Route53State> {
+        let state = Arc::new(Route53State::default());
+        let zone = HostedZone {
+            id: "/hostedzone/Z1".to_string(),
+            name: "example.com.".to_string(),
+            caller_reference: "ref".to_string(),
+            record_sets: names
+                .iter()
+                .map(|n| ResourceRecordSet {
+                    name: (*n).to_string(),
+                    r#type: "A".to_string(),
+                    ttl: Some(60),
+                    resource_records: vec!["1.2.3.4".to_string()],
+                    alias_target: None,
+                })
+                .collect(),
+            tags: HashMap::new(),
+            created_at: "2024".to_string(),
+            private_zone: false,
+            vpcs: vec![],
+            comment: None,
+        };
+        state.hosted_zones.insert(zone.id.clone(), zone);
+        state
+    }
+
+    #[test]
+    fn list_paginates_with_max_items_and_start_record_name() {
+        let state =
+            make_state_with_records(&["a.example.", "b.example.", "c.example.", "d.example."]);
+        let first =
+            list_resource_record_sets(&state, &json!({ "Id": "Z1", "MaxItems": "2" }), &ctx())
+                .unwrap();
+        assert_eq!(first["IsTruncated"], true);
+        assert_eq!(first["NextRecordName"], "c.example.");
+        let second = list_resource_record_sets(
+            &state,
+            &json!({
+                "Id": "Z1",
+                "MaxItems": "2",
+                "StartRecordName": "c.example.",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let names: Vec<&str> = second["ResourceRecordSets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["c.example.", "d.example."]);
+        assert_eq!(second["IsTruncated"], false);
+    }
+
+    #[test]
+    fn list_rejects_max_items_out_of_range() {
+        let state = make_state_with_records(&["a.example."]);
+        let err =
+            list_resource_record_sets(&state, &json!({ "Id": "Z1", "MaxItems": "500" }), &ctx())
+                .unwrap_err();
+        assert_eq!(err.code, "InvalidInput");
+    }
 }
 
 #[cfg(test)]
