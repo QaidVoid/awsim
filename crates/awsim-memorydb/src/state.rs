@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,25 @@ pub struct MemoryDbState {
     /// group) through the same TagResource API; the per-ARN map keeps
     /// lookup O(1) without coupling tags to each resource struct.
     pub tags: DashMap<String, HashMap<String, String>>,
+    /// Ring of recent control-plane events emitted by mutating ops.
+    /// Capped at [`MAX_EVENTS`] so a long-running process does not
+    /// grow without bound; oldest entries are evicted first.
+    pub events: Mutex<Vec<Event>>,
+}
+
+/// Maximum number of MemoryDB events retained per account+region. AWS
+/// stores events for 14 days; the emulator caps by count to keep
+/// snapshot sizes bounded.
+pub const MAX_EVENTS: usize = 1_000;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Event {
+    /// Epoch seconds when the event was recorded.
+    pub date: u64,
+    pub source_name: String,
+    /// `cluster | parameter-group | subnet-group | user | acl | snapshot`.
+    pub source_type: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,6 +180,8 @@ pub struct MemoryDbSnapshot {
     pub parameter_groups: Vec<ParameterGroup>,
     #[serde(default)]
     pub tags: HashMap<String, HashMap<String, String>>,
+    #[serde(default)]
+    pub events: Vec<Event>,
 }
 
 impl MemoryDbState {
@@ -184,6 +206,11 @@ impl MemoryDbState {
                 .iter()
                 .map(|e| (e.key().clone(), e.value().clone()))
                 .collect(),
+            events: self
+                .events
+                .lock()
+                .map(|guard| guard.clone())
+                .unwrap_or_default(),
         }
     }
 
@@ -197,6 +224,10 @@ impl MemoryDbState {
         self.tags.clear();
         for (arn, tags) in snap.tags {
             self.tags.insert(arn, tags);
+        }
+        if let Ok(mut guard) = self.events.lock() {
+            guard.clear();
+            guard.extend(snap.events);
         }
         for c in snap.clusters {
             self.clusters.insert(c.name.clone(), c);
@@ -215,6 +246,27 @@ impl MemoryDbState {
         }
         for pg in snap.parameter_groups {
             self.parameter_groups.insert(pg.name.clone(), pg);
+        }
+    }
+
+    /// Append an event to the ring buffer. Drops the oldest entry
+    /// once [`MAX_EVENTS`] is exceeded to keep the buffer bounded.
+    pub fn push_event(&self, source_type: &str, source_name: &str, message: impl Into<String>) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let evt = Event {
+            date: now,
+            source_name: source_name.to_string(),
+            source_type: source_type.to_string(),
+            message: message.into(),
+        };
+        if let Ok(mut guard) = self.events.lock() {
+            if guard.len() >= MAX_EVENTS {
+                guard.remove(0);
+            }
+            guard.push(evt);
         }
     }
 }

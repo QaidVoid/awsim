@@ -516,6 +516,7 @@ pub fn create_cluster(
             .map(String::from),
     };
     let result = json!({ "Cluster": cluster_to_value(&c) });
+    state.push_event("cluster", &name, format!("Cluster {name} created."));
     state.clusters.insert(name, c);
     Ok(result)
 }
@@ -573,6 +574,7 @@ pub fn delete_cluster(
     let (_, c) = state.clusters.remove(name).ok_or_else(|| {
         AwsError::not_found("ClusterNotFoundFault", format!("Cluster {name} not found"))
     })?;
+    state.push_event("cluster", name, format!("Cluster {name} deleted."));
     Ok(json!({ "Cluster": cluster_to_value(&c) }))
 }
 
@@ -1385,6 +1387,7 @@ pub fn create_snapshot(
         cluster_config,
     };
     let result = json!({ "Snapshot": snapshot_to_value(&s) });
+    state.push_event("snapshot", &name, format!("Snapshot {name} created."));
     state.snapshots.insert(name, s);
     Ok(result)
 }
@@ -1528,6 +1531,79 @@ fn require_known_arn(state: &MemoryDbState, arn: &str) -> Result<String, AwsErro
         ));
     }
     Ok(arn.to_string())
+}
+
+pub fn describe_events(
+    state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let source_type = input.get("SourceType").and_then(Value::as_str);
+    if let Some(t) = source_type
+        && !matches!(
+            t,
+            "cluster" | "parameter-group" | "subnet-group" | "user" | "acl" | "snapshot" | "node"
+        )
+    {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!("SourceType `{t}` is not a known MemoryDB source type."),
+        ));
+    }
+    let source_name = input.get("SourceName").and_then(Value::as_str);
+    let duration_min = input.get("Duration").and_then(Value::as_i64).unwrap_or(60);
+    if !(1..=20_160).contains(&duration_min) {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!("Duration `{duration_min}` must be in 1..=20160 minutes."),
+        ));
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let cutoff = now.saturating_sub((duration_min as u64).saturating_mul(60));
+    let max_results = awsim_core::clamp_max_results_strict(
+        input.get("MaxResults").and_then(Value::as_i64),
+        100,
+        100,
+    )?;
+    let starting_token = input.get("NextToken").and_then(Value::as_str);
+    let guard = state
+        .events
+        .lock()
+        .map_err(|_| AwsError::internal("events mutex poisoned"))?;
+    let mut filtered: Vec<crate::state::Event> = guard
+        .iter()
+        .filter(|e| {
+            e.date >= cutoff
+                && source_type.is_none_or(|t| e.source_type == t)
+                && source_name.is_none_or(|n| e.source_name == n)
+        })
+        .cloned()
+        .collect();
+    drop(guard);
+    filtered.sort_by_key(|e| e.date);
+    let page = awsim_core::paginate(filtered, max_results, starting_token, |e| {
+        format!("{}-{}-{}", e.date, e.source_type, e.source_name)
+    })?;
+    let items: Vec<Value> = page
+        .items
+        .iter()
+        .map(|e| {
+            json!({
+                "Date": e.date,
+                "SourceName": e.source_name,
+                "SourceType": e.source_type,
+                "Message": e.message,
+            })
+        })
+        .collect();
+    let mut body = json!({ "Events": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
 }
 
 pub fn tag_resource(
@@ -2264,6 +2340,66 @@ mod tests {
             describe_clusters(&state, &json!({ "ShowShardDetails": true }), &ctx()).unwrap();
         let shards = detailed["Clusters"][0]["Shards"].as_array().unwrap();
         assert_eq!(shards.len(), 2);
+    }
+
+    #[test]
+    fn describe_events_emits_cluster_create_event() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "watch",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = describe_events(&state, &json!({}), &ctx()).unwrap();
+        let events = resp["Events"].as_array().unwrap();
+        assert!(events.iter().any(|e| e["SourceType"] == "cluster"
+            && e["SourceName"] == "watch"
+            && e["Message"].as_str().unwrap().contains("created")));
+    }
+
+    #[test]
+    fn describe_events_filters_by_source_type_and_name() {
+        let state = MemoryDbState::default();
+        for cluster in ["a", "b"] {
+            create_cluster(
+                &state,
+                &json!({
+                    "ClusterName": cluster,
+                    "NodeType": "db.r6g.large",
+                    "ACLName": "open-access",
+                }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        let resp = describe_events(
+            &state,
+            &json!({ "SourceType": "cluster", "SourceName": "a" }),
+            &ctx(),
+        )
+        .unwrap();
+        let events = resp["Events"].as_array().unwrap();
+        assert!(events.iter().all(|e| e["SourceName"] == "a"));
+        assert!(events.iter().any(|e| e["SourceName"] == "a"));
+    }
+
+    #[test]
+    fn describe_events_rejects_duration_out_of_range() {
+        let state = MemoryDbState::default();
+        let err = describe_events(&state, &json!({ "Duration": 20_161 }), &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn describe_events_rejects_unknown_source_type() {
+        let state = MemoryDbState::default();
+        let err = describe_events(&state, &json!({ "SourceType": "vpc" }), &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
     }
 
     #[test]
