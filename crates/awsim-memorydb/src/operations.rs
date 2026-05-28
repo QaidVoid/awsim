@@ -910,15 +910,45 @@ pub fn create_snapshot(
 
 pub fn describe_snapshots(
     state: &MemoryDbState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let items: Vec<Value> = state
+    let snapshot_name = input.get("SnapshotName").and_then(Value::as_str);
+    let cluster_name = input.get("ClusterName").and_then(Value::as_str);
+    let source = input.get("Source").and_then(Value::as_str);
+    if let Some(s) = source
+        && !matches!(s, "manual" | "automated")
+    {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!("Source `{s}` must be one of manual, automated."),
+        ));
+    }
+    let max_results = awsim_core::clamp_max_results_strict(
+        input.get("MaxResults").and_then(Value::as_i64),
+        50,
+        50,
+    )?;
+    let starting_token = input.get("NextToken").and_then(Value::as_str);
+    let mut filtered: Vec<Snapshot> = state
         .snapshots
         .iter()
-        .map(|e| snapshot_to_value(e.value()))
+        .filter(|e| {
+            let s = e.value();
+            snapshot_name.is_none_or(|n| s.name == n)
+                && cluster_name.is_none_or(|n| s.cluster_name == n)
+                && source.is_none_or(|src| s.source == src)
+        })
+        .map(|e| e.value().clone())
         .collect();
-    Ok(json!({ "Snapshots": items }))
+    filtered.sort_by(|a, b| a.name.cmp(&b.name));
+    let page = awsim_core::paginate(filtered, max_results, starting_token, |s| s.name.clone())?;
+    let items: Vec<Value> = page.items.iter().map(snapshot_to_value).collect();
+    let mut body = json!({ "Snapshots": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
 }
 
 pub fn delete_snapshot(
@@ -1578,6 +1608,97 @@ mod tests {
         let nodes = resp["Cluster"]["Shards"][0]["Nodes"].as_array().unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0]["RoleInShard"], "primary");
+    }
+
+    #[test]
+    fn describe_snapshots_filters_by_cluster_and_paginates() {
+        let state = MemoryDbState::default();
+        for cluster in ["cl-a", "cl-b"] {
+            create_cluster(
+                &state,
+                &json!({
+                    "ClusterName": cluster,
+                    "NodeType": "db.r6g.large",
+                    "ACLName": "open-access",
+                }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        for (snap, cluster) in [
+            ("alpha", "cl-a"),
+            ("bravo", "cl-a"),
+            ("charlie", "cl-a"),
+            ("delta", "cl-b"),
+        ] {
+            create_snapshot(
+                &state,
+                &json!({ "SnapshotName": snap, "ClusterName": cluster }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        let first = describe_snapshots(
+            &state,
+            &json!({ "ClusterName": "cl-a", "MaxResults": 2 }),
+            &ctx(),
+        )
+        .unwrap();
+        let names: Vec<String> = first["Snapshots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["alpha", "bravo"]);
+        let token = first["NextToken"].as_str().unwrap().to_string();
+        let second = describe_snapshots(
+            &state,
+            &json!({ "ClusterName": "cl-a", "MaxResults": 2, "NextToken": token }),
+            &ctx(),
+        )
+        .unwrap();
+        let names: Vec<String> = second["Snapshots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["charlie"]);
+    }
+
+    #[test]
+    fn describe_snapshots_filters_by_source_value() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "src-cluster",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        create_snapshot(
+            &state,
+            &json!({ "SnapshotName": "manual-1", "ClusterName": "src-cluster" }),
+            &ctx(),
+        )
+        .unwrap();
+        let manual = describe_snapshots(&state, &json!({ "Source": "manual" }), &ctx()).unwrap();
+        assert_eq!(manual["Snapshots"].as_array().unwrap().len(), 1);
+        let automated =
+            describe_snapshots(&state, &json!({ "Source": "automated" }), &ctx()).unwrap();
+        assert!(automated["Snapshots"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn describe_snapshots_rejects_unknown_source() {
+        let state = MemoryDbState::default();
+        let err =
+            describe_snapshots(&state, &json!({ "Source": "scheduled" }), &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
     }
 
     #[test]
