@@ -27,6 +27,11 @@ pub struct Cluster {
     pub auto_minor_version_upgrade: bool,
     pub cluster_endpoint: serde_json::Value,
     pub number_of_shards: u32,
+    /// Replica count per shard. Combined with [`number_of_shards`] this
+    /// dictates how many `Nodes` entries appear under each shard.
+    /// Defaults to zero (primary only) on legacy snapshots.
+    #[serde(default)]
+    pub num_replicas_per_shard: u32,
     pub tls_enabled: bool,
     pub kms_key_id: Option<String>,
     pub maintenance_window: String,

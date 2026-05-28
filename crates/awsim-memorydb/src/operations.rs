@@ -102,6 +102,50 @@ fn engine_patch_version_for(engine_version: &str) -> &'static str {
         .unwrap_or("7.1.0")
 }
 
+/// Builds the per-cluster `Shards` payload. Each shard owns
+/// `1 + NumReplicasPerShard` nodes; the first is the PRIMARY, the
+/// rest are REPLICAs. Nodes are spread across `us-east-1a/b/c` in
+/// round-robin to mirror AWS multi-AZ placement.
+fn build_shards(c: &Cluster) -> Vec<Value> {
+    let azs = ["us-east-1a", "us-east-1b", "us-east-1c"];
+    let port = c
+        .cluster_endpoint
+        .get("Port")
+        .and_then(Value::as_u64)
+        .unwrap_or(6379);
+    (1..=c.number_of_shards)
+        .map(|shard_idx| {
+            let shard_name = format!("{:04}", shard_idx);
+            let total_nodes = 1 + c.num_replicas_per_shard;
+            let nodes: Vec<Value> = (1..=total_nodes)
+                .map(|node_idx| {
+                    let role = if node_idx == 1 { "primary" } else { "replica" };
+                    let az = azs[((shard_idx + node_idx) as usize) % azs.len()];
+                    let node_name = format!("{}-{shard_name}-{:03}", c.name, node_idx);
+                    json!({
+                        "Name": node_name,
+                        "Status": "available",
+                        "AvailabilityZone": az,
+                        "CreateTime": 0,
+                        "RoleInShard": role,
+                        "Endpoint": {
+                            "Address": format!("{node_name}.{}.memorydb.amazonaws.com", c.name),
+                            "Port": port,
+                        },
+                    })
+                })
+                .collect();
+            json!({
+                "Name": shard_name,
+                "Status": "available",
+                "Slots": "0-16383",
+                "NumberOfNodes": total_nodes,
+                "Nodes": nodes,
+            })
+        })
+        .collect()
+}
+
 fn cluster_to_value(c: &Cluster) -> Value {
     json!({
         "Name": c.name,
@@ -129,7 +173,7 @@ fn cluster_to_value(c: &Cluster) -> Value {
         "DataTiering": if c.data_tiering { "true" } else { "false" },
         "NetworkType": c.network_type,
         "IpDiscovery": c.ip_discovery,
-        "Shards": [],
+        "Shards": build_shards(c),
     })
 }
 
@@ -333,6 +377,11 @@ pub fn create_cluster(
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
             .unwrap_or(1),
+        num_replicas_per_shard: input
+            .get("NumReplicasPerShard")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(0),
         tls_enabled: input
             .get("TLSEnabled")
             .and_then(|v| v.as_bool())
@@ -704,7 +753,7 @@ fn snapshot_cluster_configuration(c: &Cluster) -> Value {
         "SnapshotRetentionLimit": c.snapshot_retention_limit,
         "SnapshotWindow": c.snapshot_window,
         "NumShards": c.number_of_shards,
-        "Shards": [],
+        "Shards": build_shards(c),
     })
 }
 
@@ -1148,6 +1197,57 @@ mod tests {
         .unwrap();
         assert_eq!(resp["Cluster"]["SnsTopicStatus"], "inactive");
         assert!(resp["Cluster"]["SnsTopicArn"].is_null());
+    }
+
+    #[test]
+    fn create_cluster_builds_shards_with_primary_and_replicas() {
+        let state = MemoryDbState::default();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "topo",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "NumShards": 2,
+                "NumReplicasPerShard": 2,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let shards = resp["Cluster"]["Shards"].as_array().unwrap();
+        assert_eq!(shards.len(), 2);
+        for shard in shards {
+            let nodes = shard["Nodes"].as_array().unwrap();
+            assert_eq!(nodes.len(), 3);
+            assert_eq!(nodes[0]["RoleInShard"], "primary");
+            assert_eq!(nodes[1]["RoleInShard"], "replica");
+            assert_eq!(nodes[2]["RoleInShard"], "replica");
+            assert_eq!(shard["NumberOfNodes"], 3);
+        }
+        assert_eq!(shards[0]["Name"], "0001");
+        assert_eq!(shards[1]["Name"], "0002");
+        let first_node = &shards[0]["Nodes"][0];
+        assert_eq!(first_node["Name"], "topo-0001-001");
+        assert_eq!(first_node["Endpoint"]["Port"], 6379);
+    }
+
+    #[test]
+    fn create_cluster_builds_single_node_shard_when_no_replicas() {
+        let state = MemoryDbState::default();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "solo",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "NumShards": 1,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let nodes = resp["Cluster"]["Shards"][0]["Nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0]["RoleInShard"], "primary");
     }
 
     #[test]
