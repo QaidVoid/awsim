@@ -205,6 +205,14 @@ fn user_to_value(state: &MemoryDbState, u: &User) -> Value {
     })
 }
 
+/// Collapses runs of ASCII whitespace into single spaces and trims
+/// the result. Mirrors AWS MemoryDB's normalisation of the opaque
+/// AccessString before persisting it; clients should not observe
+/// raw whitespace artefacts.
+fn normalise_access_string(s: &str) -> String {
+    s.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Parses + validates a MemoryDB `AuthenticationMode` block. Returns
 /// the normalised type (`password` | `iam` | `no-password-required`)
 /// and the supplied `PasswordCount`. Rejects unknown types, rejects
@@ -519,7 +527,13 @@ pub fn create_user(
             format!("User {name} already exists"),
         ));
     }
-    let access = require_str(input, "AccessString")?.to_string();
+    let access = normalise_access_string(require_str(input, "AccessString")?);
+    if access.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            "AccessString must contain at least one non-whitespace token.".to_string(),
+        ));
+    }
     let (auth_type, password_count) = parse_authentication_mode(input)?;
     let u = User {
         name: name.clone(),
@@ -575,7 +589,14 @@ pub fn update_user(
         AwsError::not_found("UserNotFoundFault", format!("User {name} not found"))
     })?;
     if let Some(a) = input.get("AccessString").and_then(|v| v.as_str()) {
-        u.access_string = a.to_string();
+        let normalised = normalise_access_string(a);
+        if normalised.is_empty() {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValueException",
+                "AccessString must contain at least one non-whitespace token.".to_string(),
+            ));
+        }
+        u.access_string = normalised;
     }
     Ok(json!({ "User": user_to_value(state, &u) }))
 }
@@ -1408,6 +1429,63 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn create_user_normalises_access_string_whitespace() {
+        let state = MemoryDbState::default();
+        let resp = create_user(
+            &state,
+            &json!({
+                "UserName": "u-ws",
+                "AccessString": "  on   ~*    +@all  ",
+                "AuthenticationMode": { "Type": "iam" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["User"]["AccessString"], "on ~* +@all");
+    }
+
+    #[test]
+    fn create_user_rejects_blank_access_string() {
+        let state = MemoryDbState::default();
+        let err = create_user(
+            &state,
+            &json!({
+                "UserName": "u-blank",
+                "AccessString": "   \t  ",
+                "AuthenticationMode": { "Type": "iam" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn update_user_normalises_access_string() {
+        let state = MemoryDbState::default();
+        create_user(
+            &state,
+            &json!({
+                "UserName": "u-up",
+                "AccessString": "on ~* +@all",
+                "AuthenticationMode": { "Type": "iam" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = update_user(
+            &state,
+            &json!({
+                "UserName": "u-up",
+                "AccessString": "off    ~keys:*   +get",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["User"]["AccessString"], "off ~keys:* +get");
     }
 
     #[test]
