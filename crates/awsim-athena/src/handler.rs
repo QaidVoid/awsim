@@ -132,4 +132,25 @@ impl ServiceHandler for AthenaService {
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let entries: Vec<(String, String, crate::state::AthenaStateSnapshot)> = self
+            .store
+            .iter_all()
+            .into_iter()
+            .map(|((account, region), state)| (account, region, state.to_snapshot()))
+            .collect();
+        serde_json::to_vec(&entries).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let entries: Vec<(String, String, crate::state::AthenaStateSnapshot)> =
+            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        for (account, region, snap) in entries {
+            self.store
+                .get(&account, &region)
+                .restore_from_snapshot(snap);
+        }
+        Ok(())
+    }
 }
