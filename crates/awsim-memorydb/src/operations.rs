@@ -181,6 +181,12 @@ fn cluster_to_value(c: &Cluster) -> Value {
         "DataTiering": if c.data_tiering { "true" } else { "false" },
         "NetworkType": c.network_type,
         "IpDiscovery": c.ip_discovery,
+        "PendingUpdates": {
+            "Resharding": Value::Null,
+            "ACLs": Value::Null,
+            "ServiceUpdates": [],
+            "LogDeliveryConfigurations": [],
+        },
         "Shards": build_shards(c),
     })
 }
@@ -1054,6 +1060,64 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
         }
+    }
+
+    #[test]
+    fn create_cluster_defaults_auto_minor_version_upgrade_true() {
+        let state = MemoryDbState::default();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-amvu-default",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["AutoMinorVersionUpgrade"], true);
+    }
+
+    #[test]
+    fn create_cluster_honors_auto_minor_version_upgrade_false() {
+        let state = MemoryDbState::default();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-amvu-off",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "AutoMinorVersionUpgrade": false,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["AutoMinorVersionUpgrade"], false);
+    }
+
+    #[test]
+    fn create_cluster_emits_empty_pending_updates_block() {
+        let state = MemoryDbState::default();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-pending",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let pending = &resp["Cluster"]["PendingUpdates"];
+        assert!(pending["Resharding"].is_null());
+        assert!(pending["ACLs"].is_null());
+        assert!(pending["ServiceUpdates"].as_array().unwrap().is_empty());
+        assert!(
+            pending["LogDeliveryConfigurations"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
