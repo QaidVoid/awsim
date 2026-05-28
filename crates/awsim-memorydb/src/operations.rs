@@ -1063,6 +1063,53 @@ pub fn create_snapshot(
     Ok(result)
 }
 
+pub fn copy_snapshot(
+    state: &MemoryDbState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let source_name = require_str(input, "SourceSnapshotName")?.to_string();
+    let target_name = require_str(input, "TargetSnapshotName")?.to_string();
+    if input.get("TargetBucket").is_some() {
+        // AWS routes TargetBucket copies through the S3 export path
+        // (see spec 0008). Until S3 integration lands, surface the
+        // unsupported-mode rejection rather than silently dropping.
+        return Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            "CopySnapshot with TargetBucket is not supported by this emulator.",
+        ));
+    }
+    if state.snapshots.contains_key(&target_name) {
+        return Err(AwsError::conflict(
+            "SnapshotAlreadyExistsFault",
+            format!("Snapshot {target_name} already exists"),
+        ));
+    }
+    let source = state.snapshots.get(&source_name).ok_or_else(|| {
+        AwsError::not_found(
+            "SnapshotNotFoundFault",
+            format!("Snapshot {source_name} not found"),
+        )
+    })?;
+    let kms_override = input
+        .get("KmsKeyId")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let copy = Snapshot {
+        name: target_name.clone(),
+        arn: arn(ctx, "snapshot", &target_name),
+        status: "available".to_string(),
+        source: "manual".to_string(),
+        kms_key_id: kms_override.or_else(|| source.kms_key_id.clone()),
+        cluster_name: source.cluster_name.clone(),
+        cluster_config: source.cluster_config.clone(),
+    };
+    drop(source);
+    let result = json!({ "Snapshot": snapshot_to_value(&copy) });
+    state.snapshots.insert(target_name, copy);
+    Ok(result)
+}
+
 pub fn describe_snapshots(
     state: &MemoryDbState,
     input: &Value,
@@ -2019,6 +2066,110 @@ mod tests {
         let nodes = resp["Cluster"]["Shards"][0]["Nodes"].as_array().unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0]["RoleInShard"], "primary");
+    }
+
+    #[test]
+    fn copy_snapshot_clones_source_into_new_name() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "src-cl",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        create_snapshot(
+            &state,
+            &json!({ "SnapshotName": "orig", "ClusterName": "src-cl" }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = copy_snapshot(
+            &state,
+            &json!({ "SourceSnapshotName": "orig", "TargetSnapshotName": "clone" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Snapshot"]["Name"], "clone");
+        assert_eq!(resp["Snapshot"]["ClusterConfiguration"]["Name"], "src-cl");
+        assert!(state.snapshots.contains_key("clone"));
+    }
+
+    #[test]
+    fn copy_snapshot_rejects_target_bucket_path() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "src-cl2",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        create_snapshot(
+            &state,
+            &json!({ "SnapshotName": "orig2", "ClusterName": "src-cl2" }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = copy_snapshot(
+            &state,
+            &json!({
+                "SourceSnapshotName": "orig2",
+                "TargetSnapshotName": "exported",
+                "TargetBucket": "my-bucket",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn copy_snapshot_returns_not_found_for_missing_source() {
+        let state = MemoryDbState::default();
+        let err = copy_snapshot(
+            &state,
+            &json!({ "SourceSnapshotName": "ghost", "TargetSnapshotName": "next" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "SnapshotNotFoundFault");
+    }
+
+    #[test]
+    fn copy_snapshot_rejects_target_already_exists() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "src-cl3",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        for name in ["a", "b"] {
+            create_snapshot(
+                &state,
+                &json!({ "SnapshotName": name, "ClusterName": "src-cl3" }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        let err = copy_snapshot(
+            &state,
+            &json!({ "SourceSnapshotName": "a", "TargetSnapshotName": "b" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "SnapshotAlreadyExistsFault");
     }
 
     #[test]
