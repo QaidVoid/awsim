@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 
 /// Per-account/region AppSync state.
 #[derive(Debug, Default)]
@@ -13,7 +14,51 @@ pub struct AppSyncState {
     pub source_api_associations: DashMap<String, SourceApiAssociation>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct AppSyncStateSnapshot {
+    #[serde(default)]
+    pub apis: Vec<GraphqlApi>,
+    #[serde(default)]
+    pub tags: Vec<(String, HashMap<String, String>)>,
+    #[serde(default)]
+    pub source_api_associations: Vec<SourceApiAssociation>,
+}
+
+impl AppSyncState {
+    pub fn to_snapshot(&self) -> AppSyncStateSnapshot {
+        AppSyncStateSnapshot {
+            apis: self.apis.iter().map(|e| e.value().clone()).collect(),
+            tags: self
+                .tags
+                .iter()
+                .map(|e| (e.key().clone(), e.value().clone()))
+                .collect(),
+            source_api_associations: self
+                .source_api_associations
+                .iter()
+                .map(|e| e.value().clone())
+                .collect(),
+        }
+    }
+
+    pub fn restore_from_snapshot(&self, snap: AppSyncStateSnapshot) {
+        self.apis.clear();
+        for a in snap.apis {
+            self.apis.insert(a.api_id.clone(), a);
+        }
+        self.tags.clear();
+        for (arn, t) in snap.tags {
+            self.tags.insert(arn, t);
+        }
+        self.source_api_associations.clear();
+        for s in snap.source_api_associations {
+            self.source_api_associations
+                .insert(s.association_id.clone(), s);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphqlApi {
     pub api_id: String,
     pub name: String,
@@ -30,21 +75,21 @@ pub struct GraphqlApi {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
     pub id: String,
     pub description: Option<String>,
     pub expires: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataSource {
     pub name: String,
     pub data_source_type: String,
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Resolver {
     pub type_name: String,
     pub field_name: String,
@@ -54,7 +99,7 @@ pub struct Resolver {
 }
 
 /// A GraphQL type (SDL or JSON).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphqlType {
     pub name: String,
     pub definition: Option<String>,
@@ -63,7 +108,7 @@ pub struct GraphqlType {
 }
 
 /// A merged-source-API association.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceApiAssociation {
     pub association_id: String,
     pub association_arn: String,
@@ -75,7 +120,7 @@ pub struct SourceApiAssociation {
 }
 
 /// An AppSync pipeline function (not Lambda).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSyncFunction {
     pub function_id: String,
     pub function_arn: String,
