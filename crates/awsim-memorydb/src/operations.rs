@@ -602,7 +602,14 @@ pub fn failover_shard(
             format!("Shard {shard_name} not found on cluster {cluster_name}"),
         ));
     }
-    Ok(json!({ "Cluster": cluster_to_value(&c) }))
+    let body = json!({ "Cluster": cluster_to_value(&c) });
+    drop(c);
+    state.push_event(
+        "cluster",
+        cluster_name,
+        format!("Failover initiated on shard {shard_name}."),
+    );
+    Ok(body)
 }
 
 pub fn update_cluster(
@@ -655,7 +662,10 @@ pub fn update_cluster(
             c.sns_topic_status = "active".to_string();
         }
     }
-    Ok(json!({ "Cluster": cluster_to_value(&c) }))
+    let body = json!({ "Cluster": cluster_to_value(&c) });
+    drop(c);
+    state.push_event("cluster", name, format!("Cluster {name} modified."));
+    Ok(body)
 }
 
 pub fn create_user(
@@ -688,6 +698,7 @@ pub fn create_user(
         password_count,
     };
     let result = json!({ "User": user_to_value(state, &u) });
+    state.push_event("user", &name, format!("User {name} created."));
     state.users.insert(name, u);
     Ok(result)
 }
@@ -729,6 +740,7 @@ pub fn delete_user(
     let (_, u) = state.users.remove(name).ok_or_else(|| {
         AwsError::not_found("UserNotFoundFault", format!("User {name} not found"))
     })?;
+    state.push_event("user", name, format!("User {name} deleted."));
     Ok(json!({ "User": user_to_value(state, &u) }))
 }
 
@@ -751,7 +763,10 @@ pub fn update_user(
         }
         u.access_string = normalised;
     }
-    Ok(json!({ "User": user_to_value(state, &u) }))
+    let body = json!({ "User": user_to_value(state, &u) });
+    drop(u);
+    state.push_event("user", name, format!("User {name} modified."));
+    Ok(body)
 }
 
 pub fn create_acl(
@@ -783,6 +798,7 @@ pub fn create_acl(
         minimum_engine_version: "7.1".to_string(),
     };
     let result = json!({ "ACL": acl_to_value(&a) });
+    state.push_event("acl", &name, format!("ACL {name} created."));
     state.acls.insert(name, a);
     Ok(result)
 }
@@ -865,7 +881,10 @@ pub fn update_acl(
             a.user_names.push(user);
         }
     }
-    Ok(json!({ "ACL": acl_to_value(&a) }))
+    let body = json!({ "ACL": acl_to_value(&a) });
+    drop(a);
+    state.push_event("acl", name, format!("ACL {name} modified."));
+    Ok(body)
 }
 
 pub fn delete_acl(
@@ -878,6 +897,7 @@ pub fn delete_acl(
         .acls
         .remove(name)
         .ok_or_else(|| AwsError::not_found("ACLNotFoundFault", format!("ACL {name} not found")))?;
+    state.push_event("acl", name, format!("ACL {name} deleted."));
     Ok(json!({ "ACL": acl_to_value(&a) }))
 }
 
@@ -925,6 +945,11 @@ pub fn create_subnet_group(
         "VpcId": g.vpc_id,
         "Subnets": g.subnet_ids.iter().map(|id| json!({ "Identifier": id })).collect::<Vec<_>>(),
     }});
+    state.push_event(
+        "subnet-group",
+        &name,
+        format!("Subnet group {name} created."),
+    );
     state.subnet_groups.insert(name, g);
     Ok(result)
 }
@@ -957,13 +982,20 @@ pub fn update_subnet_group(
         }
         g.subnet_ids = subnet_ids;
     }
-    Ok(json!({ "SubnetGroup": {
+    let body = json!({ "SubnetGroup": {
         "Name": g.name,
         "ARN": g.arn,
         "Description": g.description,
         "VpcId": g.vpc_id,
         "Subnets": g.subnet_ids.iter().map(|id| json!({ "Identifier": id })).collect::<Vec<_>>(),
-    }}))
+    }});
+    drop(g);
+    state.push_event(
+        "subnet-group",
+        name,
+        format!("Subnet group {name} modified."),
+    );
+    Ok(body)
 }
 
 pub fn delete_subnet_group(
@@ -994,6 +1026,11 @@ pub fn delete_subnet_group(
             format!("Subnet group {name} not found"),
         )
     })?;
+    state.push_event(
+        "subnet-group",
+        name,
+        format!("Subnet group {name} deleted."),
+    );
     Ok(json!({ "SubnetGroup": {
         "Name": g.name,
         "ARN": g.arn,
@@ -1052,6 +1089,11 @@ pub fn create_parameter_group(
         "Family": g.family,
         "Description": g.description,
     }});
+    state.push_event(
+        "parameter-group",
+        &name,
+        format!("Parameter group {name} created."),
+    );
     state.parameter_groups.insert(name, g);
     Ok(result)
 }
@@ -1084,6 +1126,11 @@ pub fn delete_parameter_group(
             format!("Parameter group {name} not found"),
         )
     })?;
+    state.push_event(
+        "parameter-group",
+        name,
+        format!("Parameter group {name} deleted."),
+    );
     Ok(json!({ "ParameterGroup": {
         "Name": g.name,
         "ARN": g.arn,
@@ -1435,6 +1482,11 @@ pub fn copy_snapshot(
     };
     drop(source);
     let result = json!({ "Snapshot": snapshot_to_value(&copy) });
+    state.push_event(
+        "snapshot",
+        &target_name,
+        format!("Snapshot {target_name} copied from {source_name}."),
+    );
     state.snapshots.insert(target_name, copy);
     Ok(result)
 }
@@ -1494,6 +1546,7 @@ pub fn delete_snapshot(
             format!("Snapshot {name} not found"),
         )
     })?;
+    state.push_event("snapshot", name, format!("Snapshot {name} deleted."));
     Ok(json!({}))
 }
 
