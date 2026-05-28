@@ -151,6 +151,19 @@ fn now() -> f64 {
         .as_secs_f64()
 }
 
+/// Constructs a QLDB `CapacityExceededException`. Reserved for future
+/// throttling enforcement; surfacing it now keeps the wire-level
+/// catalogue stable for clients that already retry on the code.
+pub fn capacity_exceeded(message: impl Into<String>) -> AwsError {
+    AwsError::too_many_requests("CapacityExceededException", message)
+}
+
+/// Constructs a QLDB `RateExceededException`. Paired with
+/// [`capacity_exceeded`] in the documented throttling catalogue.
+pub fn rate_exceeded(message: impl Into<String>) -> AwsError {
+    AwsError::too_many_requests("RateExceededException", message)
+}
+
 fn require_str<'a>(input: &'a Value, key: &str) -> Result<&'a str, AwsError> {
     input
         .get(key)
@@ -1886,5 +1899,15 @@ mod tests {
             .unwrap();
         assert!(resp["Tags"]["team"].is_null());
         assert_eq!(resp["Tags"]["env"], "test");
+    }
+
+    #[test]
+    fn capacity_and_rate_exceeded_map_to_http_429() {
+        let cap = capacity_exceeded("table read units exhausted");
+        assert_eq!(cap.status.as_u16(), 429);
+        assert_eq!(cap.code, "CapacityExceededException");
+        let rate = rate_exceeded("client retry budget burned");
+        assert_eq!(rate.status.as_u16(), 429);
+        assert_eq!(rate.code, "RateExceededException");
     }
 }
