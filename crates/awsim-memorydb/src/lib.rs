@@ -174,7 +174,7 @@ mod tests {
         let ctx = ctx();
         block_on(svc.handle(
             "CreateUser",
-            json!({ "UserName": "app", "AccessString": "on ~* +@all", "AuthenticationMode": { "Type": "password" } }),
+            json!({ "UserName": "app", "AccessString": "on ~* +@all", "AuthenticationMode": { "Type": "password", "Passwords": ["hunter2hunter2"] } }),
             &ctx,
         ))
         .unwrap();

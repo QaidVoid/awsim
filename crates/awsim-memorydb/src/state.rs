@@ -65,6 +65,10 @@ pub struct User {
     pub access_string: String,
     pub minimum_engine_version: String,
     pub authentication_mode: String,
+    /// Number of passwords associated with the user. Always zero for
+    /// `iam` / `no-password-required` authentication types.
+    #[serde(default)]
+    pub password_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

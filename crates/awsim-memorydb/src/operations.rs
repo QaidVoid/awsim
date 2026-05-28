@@ -140,9 +140,53 @@ fn user_to_value(u: &User) -> Value {
         "Status": u.status,
         "AccessString": u.access_string,
         "MinimumEngineVersion": u.minimum_engine_version,
-        "Authentication": { "Type": u.authentication_mode, "PasswordCount": 0 },
+        "Authentication": {
+            "Type": u.authentication_mode,
+            "PasswordCount": u.password_count,
+        },
         "ACLNames": [],
     })
+}
+
+/// Parses + validates a MemoryDB `AuthenticationMode` block. Returns
+/// the normalised type (`password` | `iam` | `no-password-required`)
+/// and the supplied `PasswordCount`. Rejects unknown types, rejects
+/// `Passwords` on `iam` / `no-password-required`, and requires at
+/// least one password on `password`.
+fn parse_authentication_mode(input: &Value) -> Result<(String, u32), AwsError> {
+    let mode = match input.get("AuthenticationMode") {
+        Some(m) => m,
+        None => return Ok(("password".to_string(), 0)),
+    };
+    let auth_type = mode
+        .get("Type")
+        .and_then(Value::as_str)
+        .unwrap_or("password")
+        .to_string();
+    if !["password", "iam", "no-password-required"].contains(&auth_type.as_str()) {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            format!(
+                "AuthenticationMode.Type `{auth_type}` must be one of password, iam, no-password-required."
+            ),
+        ));
+    }
+    let passwords = mode
+        .get("Passwords")
+        .and_then(Value::as_array)
+        .map(|a| a.len() as u32)
+        .unwrap_or(0);
+    match auth_type.as_str() {
+        "iam" | "no-password-required" if passwords > 0 => Err(AwsError::bad_request(
+            "InvalidParameterCombinationException",
+            format!("AuthenticationMode.Passwords not allowed when Type=`{auth_type}`."),
+        )),
+        "password" if passwords == 0 => Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            "AuthenticationMode.Passwords is required when Type=`password`.".to_string(),
+        )),
+        _ => Ok((auth_type, passwords)),
+    }
 }
 
 fn acl_to_value(a: &Acl) -> Value {
@@ -395,12 +439,7 @@ pub fn create_user(
         ));
     }
     let access = require_str(input, "AccessString")?.to_string();
-    let auth_type = input
-        .get("AuthenticationMode")
-        .and_then(|m| m.get("Type"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("password")
-        .to_string();
+    let (auth_type, password_count) = parse_authentication_mode(input)?;
     let u = User {
         name: name.clone(),
         arn: arn(ctx, "user", &name),
@@ -408,6 +447,7 @@ pub fn create_user(
         access_string: access,
         minimum_engine_version: "7.1".to_string(),
         authentication_mode: auth_type,
+        password_count,
     };
     let result = json!({ "User": user_to_value(&u) });
     state.users.insert(name, u);
@@ -995,5 +1035,109 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    #[test]
+    fn create_user_defaults_password_count_to_zero_without_passwords() {
+        let state = MemoryDbState::default();
+        let resp = create_user(
+            &state,
+            &json!({
+                "UserName": "u-default",
+                "AccessString": "on ~* +@all",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["User"]["Authentication"]["Type"], "password");
+        assert_eq!(resp["User"]["Authentication"]["PasswordCount"], 0);
+    }
+
+    #[test]
+    fn create_user_accepts_password_mode_with_passwords() {
+        let state = MemoryDbState::default();
+        let resp = create_user(
+            &state,
+            &json!({
+                "UserName": "u-pwd",
+                "AccessString": "on ~* +@all",
+                "AuthenticationMode": {
+                    "Type": "password",
+                    "Passwords": ["hunter2hunter2"],
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["User"]["Authentication"]["Type"], "password");
+        assert_eq!(resp["User"]["Authentication"]["PasswordCount"], 1);
+    }
+
+    #[test]
+    fn create_user_accepts_iam_authentication() {
+        let state = MemoryDbState::default();
+        let resp = create_user(
+            &state,
+            &json!({
+                "UserName": "u-iam",
+                "AccessString": "on ~* +@all",
+                "AuthenticationMode": { "Type": "iam" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["User"]["Authentication"]["Type"], "iam");
+        assert_eq!(resp["User"]["Authentication"]["PasswordCount"], 0);
+    }
+
+    #[test]
+    fn create_user_rejects_passwords_on_iam_type() {
+        let state = MemoryDbState::default();
+        let err = create_user(
+            &state,
+            &json!({
+                "UserName": "u-iam-bad",
+                "AccessString": "on ~* +@all",
+                "AuthenticationMode": {
+                    "Type": "iam",
+                    "Passwords": ["leaked-secret"],
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterCombinationException");
+    }
+
+    #[test]
+    fn create_user_rejects_unknown_authentication_type() {
+        let state = MemoryDbState::default();
+        let err = create_user(
+            &state,
+            &json!({
+                "UserName": "u-bad-type",
+                "AccessString": "on ~* +@all",
+                "AuthenticationMode": { "Type": "saml" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn create_user_requires_passwords_when_type_password_and_block_present() {
+        let state = MemoryDbState::default();
+        let err = create_user(
+            &state,
+            &json!({
+                "UserName": "u-pwd-missing",
+                "AccessString": "on ~* +@all",
+                "AuthenticationMode": { "Type": "password" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
     }
 }
