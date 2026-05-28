@@ -505,13 +505,35 @@ fn collect_destinations(input: &Value) -> Vec<Value> {
     if let Some(es) = input.get("ElasticsearchDestinationConfiguration").cloned() {
         out.push(json!({ "DestinationId": id.clone(), "ElasticsearchDestinationDescription": es }));
     }
+    if let Some(os) = input
+        .get("AmazonOpenSearchServerlessDestinationConfiguration")
+        .cloned()
+    {
+        out.push(
+            json!({ "DestinationId": id.clone(), "AmazonOpenSearchServerlessDestinationDescription": os }),
+        );
+    }
+    if let Some(opensearch) = input
+        .get("AmazonopensearchserviceDestinationConfiguration")
+        .cloned()
+    {
+        out.push(
+            json!({ "DestinationId": id.clone(), "AmazonopensearchserviceDestinationDescription": opensearch }),
+        );
+    }
+    if let Some(splunk) = input.get("SplunkDestinationConfiguration").cloned() {
+        out.push(json!({ "DestinationId": id.clone(), "SplunkDestinationDescription": splunk }));
+    }
     if let Some(http) = input.get("HttpEndpointDestinationConfiguration").cloned() {
         out.push(
             json!({ "DestinationId": id.clone(), "HttpEndpointDestinationDescription": http }),
         );
     }
     if let Some(sf) = input.get("SnowflakeDestinationConfiguration").cloned() {
-        out.push(json!({ "DestinationId": id, "SnowflakeDestinationDescription": sf }));
+        out.push(json!({ "DestinationId": id.clone(), "SnowflakeDestinationDescription": sf }));
+    }
+    if let Some(iceberg) = input.get("IcebergDestinationConfiguration").cloned() {
+        out.push(json!({ "DestinationId": id, "IcebergDestinationDescription": iceberg }));
     }
     out
 }
@@ -837,6 +859,47 @@ mod list_delivery_streams_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ResourceNotFoundException");
+    }
+
+    #[test]
+    fn create_persists_splunk_iceberg_and_opensearch_destinations() {
+        let state = FirehoseState::default();
+        create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-multi",
+                "SplunkDestinationConfiguration": {
+                    "HECEndpoint": "https://splunk.example/services/collector",
+                    "HECToken": "token",
+                },
+                "IcebergDestinationConfiguration": {
+                    "RoleARN": "arn:aws:iam::111111111111:role/firehose",
+                    "CatalogConfiguration": { "CatalogARN": "arn:aws:glue:us-east-1:111111111111:catalog" },
+                },
+                "AmazonopensearchserviceDestinationConfiguration": {
+                    "DomainARN": "arn:aws:es:us-east-1:111111111111:domain/logs",
+                    "IndexName": "idx",
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let described =
+            describe_delivery_stream(&state, &json!({ "DeliveryStreamName": "ds-multi" }), &ctx())
+                .unwrap();
+        let dests = described["DeliveryStreamDescription"]["Destinations"]
+            .as_array()
+            .unwrap();
+        let keys: Vec<String> = dests
+            .iter()
+            .flat_map(|d| d.as_object().unwrap().keys().cloned())
+            .collect();
+        assert!(keys.contains(&"SplunkDestinationDescription".to_string()));
+        assert!(keys.contains(&"IcebergDestinationDescription".to_string()));
+        assert!(
+            keys.contains(&"AmazonopensearchserviceDestinationDescription".to_string()),
+            "keys: {keys:?}"
+        );
     }
 
     #[test]
