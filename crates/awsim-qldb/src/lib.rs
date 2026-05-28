@@ -18,6 +18,27 @@ use tracing::debug;
 #[derive(Debug, Default)]
 pub struct QldbState {
     pub ledgers: DashMap<String, Ledger>,
+    /// JournalKinesisStream records keyed by `StreamId` (UUID).
+    pub kinesis_streams: DashMap<String, JournalKinesisStream>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JournalKinesisStream {
+    pub stream_id: String,
+    pub ledger_name: String,
+    pub stream_name: String,
+    pub role_arn: String,
+    pub kinesis_stream_arn: String,
+    /// AWS accepts epoch seconds for the inclusive lower bound. The
+    /// emulator stores it verbatim and replays it on Describe.
+    pub inclusive_start_time: f64,
+    pub exclusive_end_time: Option<f64>,
+    pub aggregation_enabled: bool,
+    pub creation_time: f64,
+    pub status: String,
+    pub error_cause: Option<String>,
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,18 +77,29 @@ const LEDGER_QUOTA_PER_REGION: usize = 5;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QldbSnapshot {
     pub ledgers: Vec<Ledger>,
+    #[serde(default)]
+    pub kinesis_streams: Vec<JournalKinesisStream>,
 }
 
 impl QldbState {
     pub fn to_snapshot(&self) -> QldbSnapshot {
         QldbSnapshot {
             ledgers: self.ledgers.iter().map(|e| e.value().clone()).collect(),
+            kinesis_streams: self
+                .kinesis_streams
+                .iter()
+                .map(|e| e.value().clone())
+                .collect(),
         }
     }
     pub fn restore_from_snapshot(&self, snap: QldbSnapshot) {
         self.ledgers.clear();
         for l in snap.ledgers {
             self.ledgers.insert(l.name.clone(), l);
+        }
+        self.kinesis_streams.clear();
+        for s in snap.kinesis_streams {
+            self.kinesis_streams.insert(s.stream_id.clone(), s);
         }
     }
 }
@@ -91,6 +123,36 @@ fn ledger_arn(ctx: &RequestContext, name: &str) -> String {
         "arn:aws:qldb:{}:{}:ledger/{}",
         ctx.region, ctx.account_id, name
     )
+}
+
+fn stream_arn(ctx: &RequestContext, ledger: &str, stream_id: &str) -> String {
+    format!(
+        "arn:aws:qldb:{}:{}:stream/{ledger}/{stream_id}",
+        ctx.region, ctx.account_id,
+    )
+}
+
+fn stream_to_value(s: &JournalKinesisStream, ctx: &RequestContext) -> Value {
+    let exclusive = match s.exclusive_end_time {
+        Some(t) => json!(t),
+        None => Value::Null,
+    };
+    json!({
+        "LedgerName": s.ledger_name,
+        "CreationTime": s.creation_time,
+        "InclusiveStartTime": s.inclusive_start_time,
+        "ExclusiveEndTime": exclusive,
+        "RoleArn": s.role_arn,
+        "StreamId": s.stream_id,
+        "Arn": stream_arn(ctx, &s.ledger_name, &s.stream_id),
+        "Status": s.status,
+        "KinesisConfiguration": {
+            "StreamArn": s.kinesis_stream_arn,
+            "AggregationEnabled": s.aggregation_enabled,
+        },
+        "ErrorCause": s.error_cause,
+        "StreamName": s.stream_name,
+    })
 }
 
 fn ledger_to_value(l: &Ledger) -> Value {
@@ -365,6 +427,93 @@ impl ServiceHandler for QldbService {
                     "PermissionsMode": l.permissions_mode,
                 }))
             }
+            "StreamJournalToKinesis" => {
+                let ledger_name = require_str(&input, "name")
+                    .or_else(|_| require_str(&input, "LedgerName"))?
+                    .to_string();
+                if !state.ledgers.contains_key(&ledger_name) {
+                    return Err(AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Ledger {ledger_name} not found"),
+                    ));
+                }
+                let stream_name = require_str(&input, "StreamName")?.to_string();
+                let role_arn = require_str(&input, "RoleArn")?.to_string();
+                let inclusive_start_time = input
+                    .get("InclusiveStartTime")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| {
+                        AwsError::bad_request(
+                            "ValidationException",
+                            "InclusiveStartTime is required and must be a number",
+                        )
+                    })?;
+                let exclusive_end_time = input.get("ExclusiveEndTime").and_then(Value::as_f64);
+                let kinesis = input.get("KinesisConfiguration").ok_or_else(|| {
+                    AwsError::bad_request("ValidationException", "KinesisConfiguration is required")
+                })?;
+                let kinesis_stream_arn = kinesis
+                    .get("StreamArn")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        AwsError::bad_request(
+                            "ValidationException",
+                            "KinesisConfiguration.StreamArn is required",
+                        )
+                    })?
+                    .to_string();
+                if !kinesis_stream_arn.starts_with("arn:") {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        format!(
+                            "KinesisConfiguration.StreamArn `{kinesis_stream_arn}` is not a valid ARN.",
+                        ),
+                    ));
+                }
+                let aggregation_enabled = kinesis
+                    .get("AggregationEnabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let tags: HashMap<String, String> = input
+                    .get("Tags")
+                    .and_then(|v| v.as_object())
+                    .map(|o| {
+                        o.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let stream_id = uuid::Uuid::new_v4().to_string();
+                let stream = JournalKinesisStream {
+                    stream_id: stream_id.clone(),
+                    ledger_name: ledger_name.clone(),
+                    stream_name,
+                    role_arn,
+                    kinesis_stream_arn,
+                    inclusive_start_time,
+                    exclusive_end_time,
+                    aggregation_enabled,
+                    creation_time: now(),
+                    status: "ACTIVE".to_string(),
+                    error_cause: None,
+                    tags,
+                };
+                state.kinesis_streams.insert(stream_id.clone(), stream);
+                Ok(json!({ "StreamId": stream_id }))
+            }
+            "DescribeJournalKinesisStream" => {
+                let _ledger =
+                    require_str(&input, "name").or_else(|_| require_str(&input, "LedgerName"))?;
+                let stream_id =
+                    require_str(&input, "streamId").or_else(|_| require_str(&input, "StreamId"))?;
+                let s = state.kinesis_streams.get(stream_id).ok_or_else(|| {
+                    AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Stream {stream_id} not found"),
+                    )
+                })?;
+                Ok(json!({ "Stream": stream_to_value(&s, ctx) }))
+            }
             "DeleteLedger" => {
                 let name = require_str(&input, "name").or_else(|_| require_str(&input, "Name"))?;
                 let l = state.ledgers.get(name).ok_or_else(|| {
@@ -455,9 +604,14 @@ impl ServiceHandler for QldbService {
     }
 
     fn snapshot(&self) -> Option<Vec<u8>> {
-        let mut all = QldbSnapshot { ledgers: vec![] };
+        let mut all = QldbSnapshot {
+            ledgers: vec![],
+            kinesis_streams: vec![],
+        };
         for (_, st) in self.store.iter_all() {
-            all.ledgers.extend(st.to_snapshot().ledgers);
+            let s = st.to_snapshot();
+            all.ledgers.extend(s.ledgers);
+            all.kinesis_streams.extend(s.kinesis_streams);
         }
         serde_json::to_vec(&all).ok()
     }
@@ -725,6 +879,99 @@ mod tests {
             ))
             .unwrap();
         }
+    }
+
+    #[test]
+    fn stream_journal_to_kinesis_persists_and_describes_stream() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "audit",
+                "PermissionsMode": "ALLOW_ALL",
+                "DeletionProtection": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let resp = block_on(svc.handle(
+            "StreamJournalToKinesis",
+            json!({
+                "name": "audit",
+                "StreamName": "audit-stream",
+                "RoleArn": "arn:aws:iam::000000000000:role/qldb-stream",
+                "InclusiveStartTime": 1700000000.0,
+                "KinesisConfiguration": {
+                    "StreamArn": "arn:aws:kinesis:us-east-1:000000000000:stream/audit-out",
+                    "AggregationEnabled": true,
+                },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let stream_id = resp["StreamId"].as_str().unwrap().to_string();
+        let desc = block_on(svc.handle(
+            "DescribeJournalKinesisStream",
+            json!({ "name": "audit", "streamId": stream_id }),
+            &ctx,
+        ))
+        .unwrap();
+        let s = &desc["Stream"];
+        assert_eq!(s["LedgerName"], "audit");
+        assert_eq!(s["StreamName"], "audit-stream");
+        assert_eq!(s["Status"], "ACTIVE");
+        assert_eq!(s["KinesisConfiguration"]["AggregationEnabled"], true);
+    }
+
+    #[test]
+    fn stream_journal_to_kinesis_rejects_unknown_ledger() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "StreamJournalToKinesis",
+            json!({
+                "name": "ghost",
+                "StreamName": "audit-stream",
+                "RoleArn": "arn:aws:iam::000000000000:role/qldb-stream",
+                "InclusiveStartTime": 1700000000.0,
+                "KinesisConfiguration": {
+                    "StreamArn": "arn:aws:kinesis:us-east-1:000000000000:stream/x",
+                },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundException");
+    }
+
+    #[test]
+    fn stream_journal_to_kinesis_requires_kinesis_stream_arn() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "audit2",
+                "PermissionsMode": "ALLOW_ALL",
+                "DeletionProtection": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let err = block_on(svc.handle(
+            "StreamJournalToKinesis",
+            json!({
+                "name": "audit2",
+                "StreamName": "audit-stream",
+                "RoleArn": "arn:aws:iam::000000000000:role/qldb-stream",
+                "InclusiveStartTime": 1700000000.0,
+                "KinesisConfiguration": {},
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 
     #[test]
