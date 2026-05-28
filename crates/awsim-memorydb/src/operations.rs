@@ -1021,6 +1021,100 @@ pub fn reset_parameter_group(
     }}))
 }
 
+/// Seeded MemoryDB service-update fixtures. Each entry mirrors the
+/// shape AWS returns from `DescribeServiceUpdates`. The fixture is
+/// intentionally small; callers exercising the filter/pagination
+/// surface get deterministic output without an external feed.
+const SERVICE_UPDATE_FIXTURES: &[(&str, &str, &str, &str, &str)] = &[
+    (
+        "memorydb-2024-redis-7-1-patch-001",
+        "redis",
+        "7.1",
+        "security-update",
+        "available",
+    ),
+    (
+        "memorydb-2024-valkey-7-2-patch-001",
+        "valkey",
+        "7.2",
+        "security-update",
+        "available",
+    ),
+    (
+        "memorydb-2024-redis-6-2-patch-005",
+        "redis",
+        "6.2",
+        "security-update",
+        "available",
+    ),
+];
+
+fn service_update_to_value(
+    name: &str,
+    engine: &str,
+    engine_version: &str,
+    update_type: &str,
+    status: &str,
+) -> Value {
+    json!({
+        "ServiceUpdateName": name,
+        "Engine": engine,
+        "EngineVersion": engine_version,
+        "ServiceUpdateType": update_type,
+        "Status": status,
+        "Severity": "important",
+        "Description": format!("Routine {engine} {engine_version} patch."),
+    })
+}
+
+pub fn describe_service_updates(
+    _state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name_filter = input.get("ServiceUpdateName").and_then(Value::as_str);
+    let status_filter: Option<Vec<&str>> = input
+        .get("Status")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect());
+    if let Some(statuses) = status_filter.as_ref() {
+        for s in statuses {
+            if !matches!(*s, "available" | "in-progress" | "complete" | "scheduled") {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterValueException",
+                    format!(
+                        "Status `{s}` must be one of available, in-progress, complete, scheduled.",
+                    ),
+                ));
+            }
+        }
+    }
+    let max_results = awsim_core::clamp_max_results_strict(
+        input.get("MaxResults").and_then(Value::as_i64),
+        100,
+        100,
+    )?;
+    let starting_token = input.get("NextToken").and_then(Value::as_str);
+    let mut updates: Vec<(String, Value)> = SERVICE_UPDATE_FIXTURES
+        .iter()
+        .filter(|(n, _, _, _, s)| {
+            name_filter.is_none_or(|wanted| *n == wanted)
+                && status_filter
+                    .as_ref()
+                    .is_none_or(|set| set.iter().any(|w| w == s))
+        })
+        .map(|(n, e, v, t, s)| (n.to_string(), service_update_to_value(n, e, v, t, s)))
+        .collect();
+    updates.sort_by(|a, b| a.0.cmp(&b.0));
+    let page = awsim_core::paginate(updates, max_results, starting_token, |(k, _)| k.clone())?;
+    let items: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+    let mut body = json!({ "ServiceUpdates": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
+}
+
 pub fn describe_parameter_groups(
     state: &MemoryDbState,
     _input: &Value,
@@ -1594,6 +1688,51 @@ mod tests {
         delete_parameter_group(&state, &json!({ "ParameterGroupName": "pg-free" }), &ctx())
             .unwrap();
         assert!(!state.parameter_groups.contains_key("pg-free"));
+    }
+
+    #[test]
+    fn describe_service_updates_returns_all_seeded_entries_by_default() {
+        let state = MemoryDbState::default();
+        let resp = describe_service_updates(&state, &json!({}), &ctx()).unwrap();
+        let count = resp["ServiceUpdates"].as_array().unwrap().len();
+        assert_eq!(count, SERVICE_UPDATE_FIXTURES.len());
+    }
+
+    #[test]
+    fn describe_service_updates_filters_by_service_update_name() {
+        let state = MemoryDbState::default();
+        let resp = describe_service_updates(
+            &state,
+            &json!({ "ServiceUpdateName": "memorydb-2024-valkey-7-2-patch-001" }),
+            &ctx(),
+        )
+        .unwrap();
+        let updates = resp["ServiceUpdates"].as_array().unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0]["Engine"], "valkey");
+    }
+
+    #[test]
+    fn describe_service_updates_rejects_unknown_status() {
+        let state = MemoryDbState::default();
+        let err = describe_service_updates(&state, &json!({ "Status": ["pending"] }), &ctx())
+            .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn describe_service_updates_paginates_with_max_results() {
+        let state = MemoryDbState::default();
+        let first = describe_service_updates(&state, &json!({ "MaxResults": 1 }), &ctx()).unwrap();
+        assert_eq!(first["ServiceUpdates"].as_array().unwrap().len(), 1);
+        let token = first["NextToken"].as_str().unwrap().to_string();
+        let second = describe_service_updates(
+            &state,
+            &json!({ "MaxResults": 1, "NextToken": token }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(second["ServiceUpdates"].as_array().unwrap().len(), 1);
     }
 
     #[test]
