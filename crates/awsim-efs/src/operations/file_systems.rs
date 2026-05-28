@@ -262,6 +262,16 @@ pub fn delete_file_system(
             "Delete mount targets before deleting the file system",
         ));
     }
+    if state
+        .access_points
+        .iter()
+        .any(|e| e.value().file_system_id == id)
+    {
+        return Err(AwsError::bad_request(
+            "FileSystemInUse",
+            "Delete access points before deleting the file system",
+        ));
+    }
     state.file_systems.remove(id).ok_or_else(|| {
         AwsError::not_found("FileSystemNotFound", format!("File system {id} not found"))
     })?;
@@ -521,6 +531,23 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn delete_file_system_rejects_when_access_points_exist() {
+        use crate::operations::access_points::create_access_point;
+        let state = EfsState::default();
+        let resp =
+            create_file_system(&state, &json!({ "CreationToken": "t-del" }), &ctx()).unwrap();
+        let id = resp["FileSystemId"].as_str().unwrap().to_string();
+        create_access_point(
+            &state,
+            &json!({ "ClientToken": "ap-del", "FileSystemId": id }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = delete_file_system(&state, &json!({ "FileSystemId": id }), &ctx()).unwrap_err();
+        assert_eq!(err.code, "FileSystemInUse");
     }
 
     #[test]
