@@ -223,6 +223,102 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_round_trips_all_resource_fields() {
+        let svc = MemoryDbService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateUser",
+            json!({
+                "UserName": "rt-user",
+                "AccessString": "on ~* +@all",
+                "AuthenticationMode": { "Type": "iam" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "CreateACL",
+            json!({ "ACLName": "rt-acl", "UserNames": ["rt-user"] }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "CreateSubnetGroup",
+            json!({ "SubnetGroupName": "rt-sg", "SubnetIds": ["subnet-a"] }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "CreateParameterGroup",
+            json!({ "ParameterGroupName": "rt-pg", "Family": "memorydb_valkey8" }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "CreateCluster",
+            json!({
+                "ClusterName": "rt-cluster",
+                "NodeType": "db.r6g.xlarge",
+                "ACLName": "rt-acl",
+                "Engine": "valkey",
+                "EngineVersion": "8.0",
+                "MaintenanceWindow": "tue:02:00-tue:04:00",
+                "SnapshotWindow": "05:00-06:00",
+                "SnapshotRetentionLimit": 7,
+                "NumShards": 2,
+                "NumReplicasPerShard": 1,
+                "MultiRegionClusterName": "rt-mr",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "TagResource",
+            json!({
+                "ResourceArn": "arn:aws:memorydb:us-east-1:000000000000:cluster/rt-cluster",
+                "Tags": [{ "Key": "team", "Value": "data" }],
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let bytes = svc.snapshot().expect("encode");
+        let restored = MemoryDbService::new();
+        restored.restore(&bytes).expect("decode");
+        let cluster = block_on(restored.handle(
+            "DescribeClusters",
+            json!({ "ClusterName": "rt-cluster", "ShowShardDetails": true }),
+            &ctx,
+        ))
+        .unwrap();
+        let c = &cluster["Clusters"][0];
+        assert_eq!(c["Engine"], "valkey");
+        assert_eq!(c["EngineVersion"], "8.0");
+        assert_eq!(c["MaintenanceWindow"], "tue:02:00-tue:04:00");
+        assert_eq!(c["SnapshotWindow"], "05:00-06:00");
+        assert_eq!(c["SnapshotRetentionLimit"], 7);
+        assert_eq!(c["MultiRegionClusterName"], "rt-mr");
+        assert_eq!(c["Shards"].as_array().unwrap().len(), 2);
+        let acls = block_on(restored.handle("DescribeACLs", json!({ "ACLName": "rt-acl" }), &ctx))
+            .unwrap();
+        assert!(
+            acls["ACLs"][0]["UserNames"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n == "rt-user")
+        );
+        let tags = block_on(restored.handle(
+            "ListTags",
+            json!({
+                "ResourceArn": "arn:aws:memorydb:us-east-1:000000000000:cluster/rt-cluster",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(tags["TagList"][0]["Key"], "team");
+    }
+
+    #[test]
     fn duplicate_cluster_rejected() {
         let svc = MemoryDbService::new();
         let ctx = ctx();
