@@ -100,6 +100,36 @@ pub fn create_file_system(
         .cloned()
         .or_else(|| input.get("Name").and_then(|v| v.as_str()).map(String::from));
 
+    let throughput_mode = input
+        .get("ThroughputMode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("bursting")
+        .to_string();
+    let provisioned_throughput_in_mibps = input
+        .get("ProvisionedThroughputInMibps")
+        .and_then(|v| v.as_f64());
+    // AWS allows ProvisionedThroughputInMibps in 1..=1024; required when
+    // ThroughputMode=provisioned and rejected otherwise.
+    if throughput_mode == "provisioned" {
+        let mibps = provisioned_throughput_in_mibps.ok_or_else(|| {
+            AwsError::bad_request(
+                "BadRequest",
+                "ProvisionedThroughputInMibps is required when ThroughputMode=provisioned.",
+            )
+        })?;
+        if !(1.0..=1024.0).contains(&mibps) {
+            return Err(AwsError::bad_request(
+                "BadRequest",
+                format!("ProvisionedThroughputInMibps `{mibps}` must be in 1..=1024."),
+            ));
+        }
+    } else if provisioned_throughput_in_mibps.is_some() {
+        return Err(AwsError::bad_request(
+            "BadRequest",
+            "ProvisionedThroughputInMibps is only allowed when ThroughputMode=provisioned.",
+        ));
+    }
+
     let fs = FileSystem {
         file_system_id: id.clone(),
         file_system_arn: fs_arn(ctx, &id),
@@ -113,14 +143,8 @@ pub fn create_file_system(
             .and_then(|v| v.as_str())
             .unwrap_or("generalPurpose")
             .to_string(),
-        throughput_mode: input
-            .get("ThroughputMode")
-            .and_then(|v| v.as_str())
-            .unwrap_or("bursting")
-            .to_string(),
-        provisioned_throughput_in_mibps: input
-            .get("ProvisionedThroughputInMibps")
-            .and_then(|v| v.as_f64()),
+        throughput_mode,
+        provisioned_throughput_in_mibps,
         encrypted: input
             .get("Encrypted")
             .and_then(|v| v.as_bool())
@@ -207,13 +231,41 @@ pub fn update_file_system(
     let mut fs = state.file_systems.get_mut(id).ok_or_else(|| {
         AwsError::not_found("FileSystemNotFound", format!("File system {id} not found"))
     })?;
-    if let Some(mode) = input.get("ThroughputMode").and_then(|v| v.as_str()) {
-        fs.throughput_mode = mode.to_string();
-    }
-    if let Some(p) = input
+    let new_mode = input
+        .get("ThroughputMode")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let new_mibps = input
         .get("ProvisionedThroughputInMibps")
-        .and_then(|v| v.as_f64())
-    {
+        .and_then(|v| v.as_f64());
+    let effective_mode = new_mode
+        .clone()
+        .unwrap_or_else(|| fs.throughput_mode.clone());
+    if effective_mode == "provisioned" {
+        let mibps = new_mibps
+            .or(fs.provisioned_throughput_in_mibps)
+            .ok_or_else(|| {
+                AwsError::bad_request(
+                    "BadRequest",
+                    "ProvisionedThroughputInMibps is required when ThroughputMode=provisioned.",
+                )
+            })?;
+        if !(1.0..=1024.0).contains(&mibps) {
+            return Err(AwsError::bad_request(
+                "BadRequest",
+                format!("ProvisionedThroughputInMibps `{mibps}` must be in 1..=1024."),
+            ));
+        }
+    } else if new_mibps.is_some() {
+        return Err(AwsError::bad_request(
+            "BadRequest",
+            "ProvisionedThroughputInMibps is only allowed when ThroughputMode=provisioned.",
+        ));
+    }
+    if let Some(mode) = new_mode {
+        fs.throughput_mode = mode;
+    }
+    if let Some(p) = new_mibps {
         fs.provisioned_throughput_in_mibps = Some(p);
     }
     Ok(fs_to_value(&fs))
@@ -290,4 +342,77 @@ pub fn put_backup_policy(
     })?;
     fs.backup_policy_status = status.clone();
     Ok(json!({ "BackupPolicy": { "Status": status } }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::EfsState;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("efs", "us-east-1")
+    }
+
+    #[test]
+    fn create_file_system_rejects_provisioned_throughput_without_mode() {
+        let state = EfsState::default();
+        let err = create_file_system(
+            &state,
+            &json!({
+                "CreationToken": "t-no-mode",
+                "ProvisionedThroughputInMibps": 256.0,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn create_file_system_rejects_throughput_out_of_range() {
+        let state = EfsState::default();
+        let err = create_file_system(
+            &state,
+            &json!({
+                "CreationToken": "t-too-high",
+                "ThroughputMode": "provisioned",
+                "ProvisionedThroughputInMibps": 2048.0,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn create_file_system_requires_throughput_when_mode_provisioned() {
+        let state = EfsState::default();
+        let err = create_file_system(
+            &state,
+            &json!({
+                "CreationToken": "t-missing",
+                "ThroughputMode": "provisioned",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn create_file_system_accepts_valid_provisioned_throughput() {
+        let state = EfsState::default();
+        let resp = create_file_system(
+            &state,
+            &json!({
+                "CreationToken": "t-ok",
+                "ThroughputMode": "provisioned",
+                "ProvisionedThroughputInMibps": 128.0,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["ThroughputMode"], "provisioned");
+        assert_eq!(resp["ProvisionedThroughputInMibps"], 128.0);
+    }
 }
