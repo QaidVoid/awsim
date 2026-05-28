@@ -36,6 +36,22 @@ pub fn create_delivery_stream(
 
     if let Some(ext) = input.get("ExtendedS3DestinationConfiguration") {
         validate_extended_s3(ext)?;
+        validate_processing_configuration(ext.get("ProcessingConfiguration"))?;
+    }
+    for cfg_key in [
+        "S3DestinationConfiguration",
+        "RedshiftDestinationConfiguration",
+        "ElasticsearchDestinationConfiguration",
+        "AmazonopensearchserviceDestinationConfiguration",
+        "AmazonOpenSearchServerlessDestinationConfiguration",
+        "SplunkDestinationConfiguration",
+        "HttpEndpointDestinationConfiguration",
+        "SnowflakeDestinationConfiguration",
+        "IcebergDestinationConfiguration",
+    ] {
+        if let Some(cfg) = input.get(cfg_key) {
+            validate_processing_configuration(cfg.get("ProcessingConfiguration"))?;
+        }
     }
 
     let source_config = validate_source_configuration(&stream_type, input)?;
@@ -450,6 +466,60 @@ fn is_iam_role_arn(arn: &str) -> bool {
     )
 }
 
+/// Validates a `ProcessingConfiguration` block: each Processor type
+/// must match the documented enum, and Lambda processors require the
+/// `LambdaArn` parameter. Unknown types are rejected up front so
+/// clients catch typos at CreateDeliveryStream time.
+fn validate_processing_configuration(pc: Option<&Value>) -> Result<(), AwsError> {
+    let Some(pc) = pc else { return Ok(()) };
+    let processors = pc
+        .get("Processors")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for proc in &processors {
+        let p_type = proc.get("Type").and_then(Value::as_str).ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidArgumentException",
+                "ProcessingConfiguration.Processors[].Type is required.",
+            )
+        })?;
+        if !matches!(
+            p_type,
+            "Lambda"
+                | "MetadataExtraction"
+                | "AppendDelimiterToRecord"
+                | "RecordDeAggregation"
+                | "CloudWatchLogProcessing"
+                | "Decompression"
+        ) {
+            return Err(AwsError::bad_request(
+                "InvalidArgumentException",
+                format!(
+                    "Processor Type `{p_type}` must be one of Lambda, MetadataExtraction, AppendDelimiterToRecord, RecordDeAggregation, CloudWatchLogProcessing, Decompression."
+                ),
+            ));
+        }
+        let parameters = proc
+            .get("Parameters")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let has_param = |name: &str| -> bool {
+            parameters
+                .iter()
+                .any(|p| p.get("ParameterName").and_then(Value::as_str) == Some(name))
+        };
+        if p_type == "Lambda" && !has_param("LambdaArn") {
+            return Err(AwsError::bad_request(
+                "InvalidArgumentException",
+                "Lambda processor requires ParameterName=LambdaArn.",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Validate ExtendedS3DestinationConfiguration: BufferingHints size
 /// in `[1, 128]` MiB and interval in `[60, 900]` s, and
 /// CompressionFormat from the documented allowlist.
@@ -859,6 +929,70 @@ mod list_delivery_streams_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ResourceNotFoundException");
+    }
+
+    #[test]
+    fn create_rejects_unknown_processor_type() {
+        let state = FirehoseState::default();
+        let err = create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-bad-proc",
+                "ExtendedS3DestinationConfiguration": {
+                    "BucketARN": "arn:aws:s3:::b",
+                    "ProcessingConfiguration": {
+                        "Processors": [{ "Type": "Tesseract" }],
+                    },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn create_requires_lambda_arn_for_lambda_processor() {
+        let state = FirehoseState::default();
+        let err = create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-lambda-bare",
+                "ExtendedS3DestinationConfiguration": {
+                    "BucketARN": "arn:aws:s3:::b",
+                    "ProcessingConfiguration": {
+                        "Processors": [{ "Type": "Lambda" }],
+                    },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn create_accepts_metadata_extraction_processor() {
+        let state = FirehoseState::default();
+        create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-meta",
+                "ExtendedS3DestinationConfiguration": {
+                    "BucketARN": "arn:aws:s3:::b",
+                    "ProcessingConfiguration": {
+                        "Processors": [
+                            { "Type": "MetadataExtraction", "Parameters": [] },
+                            { "Type": "Lambda", "Parameters": [
+                                { "ParameterName": "LambdaArn", "ParameterValue": "arn:aws:lambda:us-east-1:111111111111:function:transform" }
+                            ] },
+                        ],
+                    },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
     }
 
     #[test]
