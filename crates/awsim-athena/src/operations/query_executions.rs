@@ -5,6 +5,51 @@ use uuid::Uuid;
 
 use crate::state::{AthenaState, QueryExecution};
 
+/// Substitute Athena `?` placeholders with the supplied
+/// `ExecutionParameters`. Placeholders inside single- or double-quoted
+/// string literals are left untouched. Returns
+/// `InvalidRequestException` when the placeholder count doesn't match
+/// the parameter count.
+fn substitute_execution_parameters(query: &str, params: &[String]) -> Result<String, AwsError> {
+    let mut out = String::with_capacity(query.len());
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut iter = params.iter();
+    let mut used = 0usize;
+    for c in query.chars() {
+        match c {
+            '\'' if !in_double => {
+                in_single = !in_single;
+                out.push(c);
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+                out.push(c);
+            }
+            '?' if !in_single && !in_double => match iter.next() {
+                Some(p) => {
+                    out.push_str(p);
+                    used += 1;
+                }
+                None => {
+                    return Err(AwsError::bad_request(
+                        "InvalidRequestException",
+                        "Number of ExecutionParameters does not match the number of ? placeholders",
+                    ));
+                }
+            },
+            _ => out.push(c),
+        }
+    }
+    if used != params.len() {
+        return Err(AwsError::bad_request(
+            "InvalidRequestException",
+            "Number of ExecutionParameters does not match the number of ? placeholders",
+        ));
+    }
+    Ok(out)
+}
+
 fn now_str() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -23,9 +68,20 @@ pub fn start_query_execution(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let query_string = input["QueryString"].as_str().ok_or_else(|| {
+    let raw_query = input["QueryString"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidRequestException", "QueryString is required")
     })?;
+
+    let params: Vec<String> = input
+        .get("ExecutionParameters")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let query_string = substitute_execution_parameters(raw_query, &params)?;
 
     let workgroup = input["WorkGroup"].as_str().unwrap_or("primary").to_string();
     let database = input["QueryExecutionContext"]["Database"]
@@ -301,5 +357,67 @@ mod idempotency_tests {
         let a = start_query_execution(&state, &input, &ctx()).unwrap();
         let b = start_query_execution(&state, &input, &ctx()).unwrap();
         assert_ne!(a["QueryExecutionId"], b["QueryExecutionId"]);
+    }
+}
+
+#[cfg(test)]
+mod execution_parameters_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("athena", "us-east-1")
+    }
+
+    #[test]
+    fn placeholders_are_substituted_left_to_right() {
+        let state = AthenaState::default();
+        let id = start_query_execution(
+            &state,
+            &json!({
+                "QueryString": "SELECT * FROM t WHERE a = ? AND b = ?",
+                "ExecutionParameters": ["'alice'", "42"],
+            }),
+            &ctx(),
+        )
+        .unwrap()["QueryExecutionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let qe = state.query_executions.get(&id).unwrap();
+        assert_eq!(qe.query, "SELECT * FROM t WHERE a = 'alice' AND b = 42");
+    }
+
+    #[test]
+    fn question_marks_inside_string_literals_are_not_placeholders() {
+        let state = AthenaState::default();
+        let id = start_query_execution(
+            &state,
+            &json!({
+                "QueryString": "SELECT 'why?', ? FROM t",
+                "ExecutionParameters": ["1"],
+            }),
+            &ctx(),
+        )
+        .unwrap()["QueryExecutionId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let qe = state.query_executions.get(&id).unwrap();
+        assert_eq!(qe.query, "SELECT 'why?', 1 FROM t");
+    }
+
+    #[test]
+    fn mismatched_parameter_count_returns_invalid_request() {
+        let state = AthenaState::default();
+        let err = start_query_execution(
+            &state,
+            &json!({
+                "QueryString": "SELECT ? , ?",
+                "ExecutionParameters": ["1"],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidRequestException");
     }
 }
