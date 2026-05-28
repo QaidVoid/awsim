@@ -92,6 +92,34 @@ pub fn request_certificate(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DomainName is required"))?
         .to_string();
 
+    // AWS RequestCertificate takes `IdempotencyToken`. If supplied, a
+    // replay with the same args returns the cached response; a replay
+    // with different args is rejected with IdempotentParameterMismatch.
+    let idem_token = input.get("IdempotencyToken").and_then(|v| v.as_str());
+    let request_hash = if idem_token.is_some() {
+        Some(awsim_core::idempotency::hash_request(&format!(
+            "request_certificate:{}:{}",
+            input["DomainName"].as_str().unwrap_or(""),
+            input["SubjectAlternativeNames"],
+        )))
+    } else {
+        None
+    };
+    if let (Some(token), Some(hash)) = (idem_token, request_hash) {
+        match state.request_idempotency.lookup(token, hash) {
+            awsim_core::idempotency::Lookup::Hit(v) => return Ok(v),
+            awsim_core::idempotency::Lookup::Mismatch => {
+                return Err(AwsError::bad_request(
+                    "IdempotentParameterMismatch",
+                    format!(
+                        "IdempotencyToken `{token}` was already used with different arguments."
+                    ),
+                ));
+            }
+            awsim_core::idempotency::Lookup::Miss => {}
+        }
+    }
+
     let validation_method = input["ValidationMethod"]
         .as_str()
         .unwrap_or("DNS")
@@ -234,7 +262,13 @@ pub fn request_certificate(
 
     state.certificates.insert(certificate_arn.clone(), cert);
 
-    Ok(json!({ "CertificateArn": certificate_arn }))
+    let response = json!({ "CertificateArn": certificate_arn });
+    if let (Some(token), Some(hash)) = (idem_token, request_hash) {
+        state
+            .request_idempotency
+            .insert(token, hash, response.clone());
+    }
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------

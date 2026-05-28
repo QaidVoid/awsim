@@ -74,6 +74,10 @@ pub struct AcmState {
     pub certificates: DashMap<String, Certificate>,
     /// Account-level configuration (stored at "default" key)
     pub account_config: DashMap<String, AcmAccountConfig>,
+    /// RequestCertificate IdempotencyToken cache. AWS preserves the
+    /// original response for 24 hours and rejects param mismatches with
+    /// `IdempotentParameterMismatch`.
+    pub request_idempotency: awsim_core::idempotency::IdempotencyCache<serde_json::Value>,
 }
 
 impl AcmState {
