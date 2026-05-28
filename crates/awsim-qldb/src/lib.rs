@@ -390,11 +390,16 @@ impl ServiceHandler for QldbService {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 let name = arn.rsplit('/').next().unwrap_or("");
-                if let Some(mut l) = state.ledgers.get_mut(name)
-                    && let Some(tags) = input
-                        .get("Tags")
-                        .or_else(|| input.get("tags"))
-                        .and_then(|v| v.as_object())
+                let mut l = state.ledgers.get_mut(name).ok_or_else(|| {
+                    AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Ledger {name} not found"),
+                    )
+                })?;
+                if let Some(tags) = input
+                    .get("Tags")
+                    .or_else(|| input.get("tags"))
+                    .and_then(|v| v.as_object())
                 {
                     for (k, v) in tags {
                         if let Some(s) = v.as_str() {
@@ -411,11 +416,16 @@ impl ServiceHandler for QldbService {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 let name = arn.rsplit('/').next().unwrap_or("");
-                if let Some(mut l) = state.ledgers.get_mut(name)
-                    && let Some(keys) = input
-                        .get("TagKeys")
-                        .or_else(|| input.get("tagKeys"))
-                        .and_then(|v| v.as_array())
+                let mut l = state.ledgers.get_mut(name).ok_or_else(|| {
+                    AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Ledger {name} not found"),
+                    )
+                })?;
+                if let Some(keys) = input
+                    .get("TagKeys")
+                    .or_else(|| input.get("tagKeys"))
+                    .and_then(|v| v.as_array())
                 {
                     for k in keys {
                         if let Some(s) = k.as_str() {
@@ -432,12 +442,13 @@ impl ServiceHandler for QldbService {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 let name = arn.rsplit('/').next().unwrap_or("");
-                let tags = state
-                    .ledgers
-                    .get(name)
-                    .map(|l| l.tags.clone())
-                    .unwrap_or_default();
-                Ok(json!({ "Tags": tags }))
+                let l = state.ledgers.get(name).ok_or_else(|| {
+                    AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Ledger {name} not found"),
+                    )
+                })?;
+                Ok(json!({ "Tags": l.tags }))
             }
             _ => Err(AwsError::unknown_operation(operation)),
         }
@@ -714,5 +725,87 @@ mod tests {
             ))
             .unwrap();
         }
+    }
+
+    #[test]
+    fn tag_resource_returns_not_found_for_unknown_ledger() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "TagResource",
+            json!({
+                "resourceArn": "arn:aws:qldb:us-east-1:000000000000:ledger/missing",
+                "Tags": { "team": "qldb" },
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundException");
+    }
+
+    #[test]
+    fn untag_resource_returns_not_found_for_unknown_ledger() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "UntagResource",
+            json!({
+                "resourceArn": "arn:aws:qldb:us-east-1:000000000000:ledger/missing",
+                "TagKeys": ["team"],
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundException");
+    }
+
+    #[test]
+    fn list_tags_returns_not_found_for_unknown_ledger() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "ListTagsForResource",
+            json!({ "resourceArn": "arn:aws:qldb:us-east-1:000000000000:ledger/missing" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundException");
+    }
+
+    #[test]
+    fn tag_resource_round_trips_tags() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "tagged",
+                "PermissionsMode": "ALLOW_ALL",
+                "DeletionProtection": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let arn = "arn:aws:qldb:us-east-1:000000000000:ledger/tagged";
+        block_on(svc.handle(
+            "TagResource",
+            json!({ "resourceArn": arn, "Tags": { "team": "qldb", "env": "test" } }),
+            &ctx,
+        ))
+        .unwrap();
+        let resp = block_on(svc.handle("ListTagsForResource", json!({ "resourceArn": arn }), &ctx))
+            .unwrap();
+        assert_eq!(resp["Tags"]["team"], "qldb");
+        assert_eq!(resp["Tags"]["env"], "test");
+        block_on(svc.handle(
+            "UntagResource",
+            json!({ "resourceArn": arn, "TagKeys": ["team"] }),
+            &ctx,
+        ))
+        .unwrap();
+        let resp = block_on(svc.handle("ListTagsForResource", json!({ "resourceArn": arn }), &ctx))
+            .unwrap();
+        assert!(resp["Tags"]["team"].is_null());
+        assert_eq!(resp["Tags"]["env"], "test");
     }
 }
