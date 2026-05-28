@@ -34,7 +34,9 @@ pub use body_store::{BlobInventory, BodyStore};
 pub use error::AwsError;
 pub use events::{EventBus, InternalEvent};
 pub use gateway::{AppState, BodyStoreHandle};
-pub use pagination::{Page, cap_max_results, decode_token, encode_token, paginate};
+pub use pagination::{
+    Page, cap_max_results, clamp_max_results_strict, decode_token, encode_token, paginate,
+};
 pub use persistence::PersistenceManager;
 pub use protocol::{Protocol, RouteDefinition};
 pub use request_detail::{

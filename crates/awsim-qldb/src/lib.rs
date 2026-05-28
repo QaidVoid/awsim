@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use awsim_core::{
     AccountRegionStore, AwsError, Protocol, RequestContext, RouteDefinition, ServiceHandler,
+    clamp_max_results_strict, paginate,
 };
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -293,15 +294,38 @@ impl ServiceHandler for QldbService {
                 Ok(ledger_to_value(&l))
             }
             "ListLedgers" => {
-                let items: Vec<Value> = state
+                // AWS QLDB ListLedgers caps MaxResults at 100 and uses
+                // the ledger name as the NextToken cursor.
+                let max_results = clamp_max_results_strict(
+                    input.get("MaxResults").and_then(Value::as_i64),
+                    100,
+                    100,
+                )?;
+                let starting_token = input.get("NextToken").and_then(Value::as_str);
+                let mut summaries: Vec<(String, Value)> = state
                     .ledgers
                     .iter()
                     .map(|e| {
                         let l = e.value();
-                        json!({ "Name": l.name, "State": l.state, "CreationDateTime": l.creation_date_time })
+                        (
+                            l.name.clone(),
+                            json!({
+                                "Name": l.name,
+                                "State": l.state,
+                                "CreationDateTime": l.creation_date_time,
+                            }),
+                        )
                     })
                     .collect();
-                Ok(json!({ "Ledgers": items }))
+                summaries.sort_by(|a, b| a.0.cmp(&b.0));
+                let page = paginate(summaries, max_results, starting_token, |(k, _)| k.clone())?;
+                let mut body = json!({
+                    "Ledgers": page.items.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
+                });
+                if let Some(token) = page.next_token {
+                    body["NextToken"] = json!(token);
+                }
+                Ok(body)
             }
             "UpdateLedger" => {
                 let name = require_str(&input, "name").or_else(|_| require_str(&input, "Name"))?;
@@ -621,6 +645,57 @@ mod tests {
         ))
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn list_ledgers_paginates_with_max_results_and_next_token() {
+        let svc = QldbService::new();
+        let ctx = RequestContext::new("qldb", "us-east-1");
+        for name in ["alpha", "bravo", "charlie", "delta", "echo"] {
+            block_on(svc.handle(
+                "CreateLedger",
+                json!({
+                    "Name": name,
+                    "PermissionsMode": "ALLOW_ALL",
+                    "DeletionProtection": false,
+                }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+        let first = block_on(svc.handle("ListLedgers", json!({ "MaxResults": 2 }), &ctx)).unwrap();
+        let names: Vec<String> = first["Ledgers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["alpha", "bravo"]);
+        let token = first["NextToken"].as_str().unwrap().to_string();
+        let second = block_on(svc.handle(
+            "ListLedgers",
+            json!({ "MaxResults": 2, "NextToken": token }),
+            &ctx,
+        ))
+        .unwrap();
+        let names: Vec<String> = second["Ledgers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["charlie", "delta"]);
+    }
+
+    #[test]
+    fn list_ledgers_rejects_max_results_out_of_range() {
+        let svc = QldbService::new();
+        let ctx = RequestContext::new("qldb", "us-east-1");
+        for bad in [0i64, -1, 101, 1000] {
+            let err = block_on(svc.handle("ListLedgers", json!({ "MaxResults": bad }), &ctx))
+                .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "input {bad}");
+        }
     }
 
     #[test]
