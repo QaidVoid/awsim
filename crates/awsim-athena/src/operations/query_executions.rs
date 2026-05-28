@@ -38,6 +38,30 @@ pub fn start_query_execution(
         .as_str()
         .map(|s| s.to_string());
 
+    let client_request_token = input.get("ClientRequestToken").and_then(|v| v.as_str());
+    let request_hash = client_request_token.map(|_| {
+        awsim_core::idempotency::hash_request(&format!(
+            "start_query:{query_string}:{workgroup}:{}:{}:{}",
+            database.as_deref().unwrap_or(""),
+            catalog.as_deref().unwrap_or(""),
+            output_location.as_deref().unwrap_or(""),
+        ))
+    });
+    if let (Some(token), Some(hash)) = (client_request_token, request_hash) {
+        match state.start_query_idempotency.lookup(token, hash) {
+            awsim_core::idempotency::Lookup::Hit(v) => return Ok(v),
+            awsim_core::idempotency::Lookup::Mismatch => {
+                return Err(AwsError::bad_request(
+                    "IdempotentParameterMismatch",
+                    format!(
+                        "ClientRequestToken `{token}` was already used with different arguments."
+                    ),
+                ));
+            }
+            awsim_core::idempotency::Lookup::Miss => {}
+        }
+    }
+
     let now = now_str();
     let id = Uuid::new_v4().to_string();
 
@@ -56,7 +80,13 @@ pub fn start_query_execution(
     info!(id = %id, "Started Athena query execution (stub: SUCCEEDED immediately)");
     state.query_executions.insert(id.clone(), qe);
 
-    Ok(json!({ "QueryExecutionId": id }))
+    let response = json!({ "QueryExecutionId": id });
+    if let (Some(token), Some(hash)) = (client_request_token, request_hash) {
+        state
+            .start_query_idempotency
+            .insert(token, hash, response.clone());
+    }
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -217,4 +247,59 @@ fn query_execution_to_value(qe: &QueryExecution) -> Value {
             "CompletionDateTime": qe.completed_at,
         },
     })
+}
+
+#[cfg(test)]
+mod idempotency_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("athena", "us-east-1")
+    }
+
+    #[test]
+    fn replay_with_same_args_returns_same_query_id() {
+        let state = AthenaState::default();
+        let input = json!({
+            "QueryString": "SELECT 1",
+            "ClientRequestToken": "tok-1",
+            "WorkGroup": "primary",
+        });
+        let first = start_query_execution(&state, &input, &ctx()).unwrap();
+        let second = start_query_execution(&state, &input, &ctx()).unwrap();
+        assert_eq!(first["QueryExecutionId"], second["QueryExecutionId"]);
+    }
+
+    #[test]
+    fn replay_with_different_args_returns_idempotent_parameter_mismatch() {
+        let state = AthenaState::default();
+        start_query_execution(
+            &state,
+            &json!({
+                "QueryString": "SELECT 1",
+                "ClientRequestToken": "tok-2",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = start_query_execution(
+            &state,
+            &json!({
+                "QueryString": "SELECT 2",
+                "ClientRequestToken": "tok-2",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "IdempotentParameterMismatch");
+    }
+
+    #[test]
+    fn omitting_token_runs_fresh_each_time() {
+        let state = AthenaState::default();
+        let input = json!({ "QueryString": "SELECT 1" });
+        let a = start_query_execution(&state, &input, &ctx()).unwrap();
+        let b = start_query_execution(&state, &input, &ctx()).unwrap();
+        assert_ne!(a["QueryExecutionId"], b["QueryExecutionId"]);
+    }
 }

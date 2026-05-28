@@ -1,5 +1,7 @@
+use awsim_core::idempotency::IdempotencyCache;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 
 /// A Glue/Athena workgroup.
@@ -101,6 +103,12 @@ pub struct AthenaState {
     pub prepared_statements: DashMap<String, PreparedStatement>,
     /// Resource ARN → tag key/value map
     pub resource_tags: DashMap<String, HashMap<String, String>>,
+    /// `StartQueryExecution.ClientRequestToken` cache. A replay with
+    /// the same args returns the prior `QueryExecutionId` byte-for-byte;
+    /// a replay with different args raises
+    /// `IdempotentParameterMismatch`. Entries auto-expire after the
+    /// cache's 24h TTL.
+    pub start_query_idempotency: IdempotencyCache<Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
