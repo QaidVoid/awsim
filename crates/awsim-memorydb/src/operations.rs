@@ -768,6 +768,27 @@ pub fn create_subnet_group(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "SubnetGroupName")?.to_string();
+    if state.subnet_groups.contains_key(&name) {
+        return Err(AwsError::conflict(
+            "SubnetGroupAlreadyExistsFault",
+            format!("Subnet group {name} already exists"),
+        ));
+    }
+    let subnet_ids: Vec<String> = input
+        .get("SubnetIds")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    if subnet_ids.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            "SubnetIds must contain at least one subnet.",
+        ));
+    }
     let g = SubnetGroup {
         name: name.clone(),
         arn: arn(ctx, "subnetgroup", &name),
@@ -776,15 +797,7 @@ pub fn create_subnet_group(
             .and_then(|v| v.as_str())
             .map(String::from),
         vpc_id: "vpc-default".to_string(),
-        subnet_ids: input
-            .get("SubnetIds")
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default(),
+        subnet_ids,
     };
     let result = json!({ "SubnetGroup": {
         "Name": g.name,
@@ -862,6 +875,12 @@ pub fn create_parameter_group(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "ParameterGroupName")?.to_string();
+    if state.parameter_groups.contains_key(&name) {
+        return Err(AwsError::conflict(
+            "ParameterGroupAlreadyExistsFault",
+            format!("Parameter group {name} already exists"),
+        ));
+    }
     let g = ParameterGroup {
         name: name.clone(),
         arn: arn(ctx, "parametergroup", &name),
@@ -1315,6 +1334,56 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
         }
+    }
+
+    #[test]
+    fn create_subnet_group_rejects_duplicate_name() {
+        let state = MemoryDbState::default();
+        create_subnet_group(
+            &state,
+            &json!({ "SubnetGroupName": "dup", "SubnetIds": ["subnet-a"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = create_subnet_group(
+            &state,
+            &json!({ "SubnetGroupName": "dup", "SubnetIds": ["subnet-b"] }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "SubnetGroupAlreadyExistsFault");
+    }
+
+    #[test]
+    fn create_subnet_group_rejects_empty_subnet_ids() {
+        let state = MemoryDbState::default();
+        let err = create_subnet_group(&state, &json!({ "SubnetGroupName": "empty" }), &ctx())
+            .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn create_parameter_group_rejects_duplicate_name() {
+        let state = MemoryDbState::default();
+        create_parameter_group(
+            &state,
+            &json!({
+                "ParameterGroupName": "pg-dup",
+                "Family": "memorydb_redis7",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = create_parameter_group(
+            &state,
+            &json!({
+                "ParameterGroupName": "pg-dup",
+                "Family": "memorydb_redis7",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ParameterGroupAlreadyExistsFault");
     }
 
     #[test]
