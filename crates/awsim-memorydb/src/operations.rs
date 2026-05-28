@@ -177,18 +177,31 @@ fn cluster_to_value(c: &Cluster) -> Value {
     })
 }
 
-fn user_to_value(u: &User) -> Value {
+fn acls_referencing(state: &MemoryDbState, user_name: &str) -> Vec<String> {
+    let mut acls: Vec<String> = state
+        .acls
+        .iter()
+        .filter(|e| e.value().user_names.iter().any(|u| u == user_name))
+        .map(|e| e.value().name.clone())
+        .collect();
+    acls.sort();
+    acls
+}
+
+fn user_to_value(state: &MemoryDbState, u: &User) -> Value {
+    let acl_names = acls_referencing(state, &u.name);
     json!({
         "Name": u.name,
         "ARN": u.arn,
         "Status": u.status,
         "AccessString": u.access_string,
         "MinimumEngineVersion": u.minimum_engine_version,
+        "UserGroupCount": acl_names.len() as u32,
         "Authentication": {
             "Type": u.authentication_mode,
             "PasswordCount": u.password_count,
         },
-        "ACLNames": [],
+        "ACLNames": acl_names,
     })
 }
 
@@ -240,6 +253,10 @@ fn acl_to_value(a: &Acl) -> Value {
         "Status": a.status,
         "UserNames": a.user_names,
         "MinimumEngineVersion": a.minimum_engine_version,
+        "PendingChanges": {
+            "UserNamesToAdd": [],
+            "UserNamesToRemove": [],
+        },
         "Clusters": [],
     })
 }
@@ -513,7 +530,7 @@ pub fn create_user(
         authentication_mode: auth_type,
         password_count,
     };
-    let result = json!({ "User": user_to_value(&u) });
+    let result = json!({ "User": user_to_value(state, &u) });
     state.users.insert(name, u);
     Ok(result)
 }
@@ -531,7 +548,7 @@ pub fn describe_users(
             Some(n) => e.value().name == n,
             None => true,
         })
-        .map(|e| user_to_value(e.value()))
+        .map(|e| user_to_value(state, e.value()))
         .collect();
     Ok(json!({ "Users": items }))
 }
@@ -545,7 +562,7 @@ pub fn delete_user(
     let (_, u) = state.users.remove(name).ok_or_else(|| {
         AwsError::not_found("UserNotFoundFault", format!("User {name} not found"))
     })?;
-    Ok(json!({ "User": user_to_value(&u) }))
+    Ok(json!({ "User": user_to_value(state, &u) }))
 }
 
 pub fn update_user(
@@ -560,7 +577,7 @@ pub fn update_user(
     if let Some(a) = input.get("AccessString").and_then(|v| v.as_str()) {
         u.access_string = a.to_string();
     }
-    Ok(json!({ "User": user_to_value(&u) }))
+    Ok(json!({ "User": user_to_value(state, &u) }))
 }
 
 pub fn create_acl(
@@ -1391,6 +1408,58 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn describe_users_populates_user_group_count_and_acl_names() {
+        let state = MemoryDbState::default();
+        create_user(
+            &state,
+            &json!({
+                "UserName": "alice",
+                "AccessString": "on ~* +@all",
+                "AuthenticationMode": { "Type": "iam" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        create_acl(
+            &state,
+            &json!({ "ACLName": "team-a", "UserNames": ["alice"] }),
+            &ctx(),
+        )
+        .unwrap();
+        create_acl(
+            &state,
+            &json!({ "ACLName": "team-b", "UserNames": ["alice", "bob"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = describe_users(&state, &json!({ "UserName": "alice" }), &ctx()).unwrap();
+        let user = &resp["Users"][0];
+        assert_eq!(user["UserGroupCount"], 2);
+        let names: Vec<&str> = user["ACLNames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["team-a", "team-b"]);
+    }
+
+    #[test]
+    fn describe_acls_emits_empty_pending_changes_block() {
+        let state = MemoryDbState::default();
+        create_acl(
+            &state,
+            &json!({ "ACLName": "team-empty", "UserNames": [] }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = describe_acls(&state, &json!({ "ACLName": "team-empty" }), &ctx()).unwrap();
+        let pending = &resp["ACLs"][0]["PendingChanges"];
+        assert!(pending["UserNamesToAdd"].as_array().unwrap().is_empty());
+        assert!(pending["UserNamesToRemove"].as_array().unwrap().is_empty());
     }
 
     #[test]
