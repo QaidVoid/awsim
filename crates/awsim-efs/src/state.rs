@@ -45,6 +45,13 @@ pub struct FileSystem {
     /// Resource policy JSON document. AWS limits the document to 20KB.
     #[serde(default)]
     pub file_system_policy: Option<String>,
+    /// Epoch-seconds timestamp of the last throughput-mode or
+    /// provisioned-MiBps change. AWS enforces a 24-hour cooldown
+    /// between updates; future calls inside this window are rejected
+    /// with `ThroughputLimitExceeded`. `None` when the file system has
+    /// not yet been modified since creation.
+    #[serde(default)]
+    pub throughput_last_modified: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

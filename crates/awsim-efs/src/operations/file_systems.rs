@@ -259,6 +259,7 @@ pub fn create_file_system(
             .and_then(|v| v.as_str())
             .map(String::from),
         file_system_policy: None,
+        throughput_last_modified: None,
     };
     let result = fs_to_value(&fs);
     state.file_systems.insert(id, fs);
@@ -384,6 +385,25 @@ pub fn update_file_system(
             "ProvisionedThroughputInMibps is only allowed when ThroughputMode=provisioned.",
         ));
     }
+    let mode_changed = new_mode.as_ref().is_some_and(|m| m != &fs.throughput_mode);
+    let mibps_changed = new_mibps.is_some_and(|m| Some(m) != fs.provisioned_throughput_in_mibps);
+    if mode_changed || mibps_changed {
+        let cooldown = throughput_cooldown_secs();
+        if let Some(last) = fs.throughput_last_modified {
+            let elapsed = now_secs() - last;
+            if elapsed < cooldown {
+                let remaining = (cooldown - elapsed).max(0.0) as u64;
+                return Err(AwsError::bad_request(
+                    "ThroughputLimitExceeded",
+                    format!(
+                        "Cannot change throughput within 24 hours of the last change; \
+                         retry in {remaining}s.",
+                    ),
+                ));
+            }
+        }
+        fs.throughput_last_modified = Some(now_secs());
+    }
     if let Some(mode) = new_mode {
         fs.throughput_mode = mode;
     }
@@ -391,6 +411,20 @@ pub fn update_file_system(
         fs.provisioned_throughput_in_mibps = Some(p);
     }
     Ok(fs_to_value(&fs))
+}
+
+/// Throughput-change cooldown in seconds. Defaults to 24h to match
+/// AWS; tests and demos can short-circuit to ~0 by setting
+/// `AWSIM_LIFECYCLE_FAST=1`.
+fn throughput_cooldown_secs() -> f64 {
+    if std::env::var("AWSIM_LIFECYCLE_FAST")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        0.0
+    } else {
+        24.0 * 3600.0
+    }
 }
 
 pub fn put_lifecycle_configuration(
@@ -951,6 +985,79 @@ mod tests {
         let first = create_file_system(&state, &body, &ctx()).unwrap();
         let second = create_file_system(&state, &body, &ctx()).unwrap();
         assert_eq!(first["FileSystemId"], second["FileSystemId"]);
+    }
+
+    #[test]
+    fn update_throughput_rejected_within_cooldown_window() {
+        // SAFETY: tests in this module are single-threaded by default and
+        // we restore the env var below.
+        unsafe {
+            std::env::remove_var("AWSIM_LIFECYCLE_FAST");
+        }
+        let state = EfsState::default();
+        let id = create_file_system(&state, &json!({ "CreationToken": "t-cd" }), &ctx()).unwrap()
+            ["FileSystemId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // First change: bursting -> provisioned.
+        update_file_system(
+            &state,
+            &json!({
+                "FileSystemId": id,
+                "ThroughputMode": "provisioned",
+                "ProvisionedThroughputInMibps": 100.0,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // Second change inside the 24h window is rejected.
+        let err = update_file_system(
+            &state,
+            &json!({
+                "FileSystemId": id,
+                "ProvisionedThroughputInMibps": 200.0,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ThroughputLimitExceeded");
+    }
+
+    #[test]
+    fn awsim_lifecycle_fast_short_circuits_the_cooldown() {
+        // SAFETY: see comment above; we reset the env var at end of test.
+        unsafe {
+            std::env::set_var("AWSIM_LIFECYCLE_FAST", "1");
+        }
+        let state = EfsState::default();
+        let id = create_file_system(&state, &json!({ "CreationToken": "t-fast" }), &ctx()).unwrap()
+            ["FileSystemId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        update_file_system(
+            &state,
+            &json!({
+                "FileSystemId": id,
+                "ThroughputMode": "provisioned",
+                "ProvisionedThroughputInMibps": 100.0,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        update_file_system(
+            &state,
+            &json!({
+                "FileSystemId": id,
+                "ProvisionedThroughputInMibps": 200.0,
+            }),
+            &ctx(),
+        )
+        .expect("second change should succeed when fast cooldown is enabled");
+        unsafe {
+            std::env::remove_var("AWSIM_LIFECYCLE_FAST");
+        }
     }
 
     #[test]
