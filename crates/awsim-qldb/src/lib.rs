@@ -20,6 +20,24 @@ pub struct QldbState {
     pub ledgers: DashMap<String, Ledger>,
     /// JournalKinesisStream records keyed by `StreamId` (UUID).
     pub kinesis_streams: DashMap<String, JournalKinesisStream>,
+    /// JournalS3Export records keyed by `ExportId` (UUID).
+    pub s3_exports: DashMap<String, JournalS3Export>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JournalS3Export {
+    pub export_id: String,
+    pub ledger_name: String,
+    pub role_arn: String,
+    pub inclusive_start_time: f64,
+    pub exclusive_end_time: f64,
+    pub output_format: String,
+    pub bucket: String,
+    pub prefix: String,
+    pub object_encryption_type: String,
+    pub kms_key_arn: Option<String>,
+    pub status: String,
+    pub creation_time: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +97,8 @@ pub struct QldbSnapshot {
     pub ledgers: Vec<Ledger>,
     #[serde(default)]
     pub kinesis_streams: Vec<JournalKinesisStream>,
+    #[serde(default)]
+    pub s3_exports: Vec<JournalS3Export>,
 }
 
 impl QldbState {
@@ -90,6 +110,7 @@ impl QldbState {
                 .iter()
                 .map(|e| e.value().clone())
                 .collect(),
+            s3_exports: self.s3_exports.iter().map(|e| e.value().clone()).collect(),
         }
     }
     pub fn restore_from_snapshot(&self, snap: QldbSnapshot) {
@@ -100,6 +121,10 @@ impl QldbState {
         self.kinesis_streams.clear();
         for s in snap.kinesis_streams {
             self.kinesis_streams.insert(s.stream_id.clone(), s);
+        }
+        self.s3_exports.clear();
+        for ex in snap.s3_exports {
+            self.s3_exports.insert(ex.export_id.clone(), ex);
         }
     }
 }
@@ -152,6 +177,30 @@ fn stream_to_value(s: &JournalKinesisStream, ctx: &RequestContext) -> Value {
         },
         "ErrorCause": s.error_cause,
         "StreamName": s.stream_name,
+    })
+}
+
+fn export_to_value(ex: &JournalS3Export) -> Value {
+    let mut encryption = json!({
+        "ObjectEncryptionType": ex.object_encryption_type,
+    });
+    if let Some(arn) = &ex.kms_key_arn {
+        encryption["KmsKeyArn"] = json!(arn);
+    }
+    json!({
+        "LedgerName": ex.ledger_name,
+        "ExportId": ex.export_id,
+        "ExportCreationTime": ex.creation_time,
+        "Status": ex.status,
+        "InclusiveStartTime": ex.inclusive_start_time,
+        "ExclusiveEndTime": ex.exclusive_end_time,
+        "S3ExportConfiguration": {
+            "Bucket": ex.bucket,
+            "Prefix": ex.prefix,
+            "EncryptionConfiguration": encryption,
+        },
+        "RoleArn": ex.role_arn,
+        "OutputFormat": ex.output_format,
     })
 }
 
@@ -427,6 +476,224 @@ impl ServiceHandler for QldbService {
                     "PermissionsMode": l.permissions_mode,
                 }))
             }
+            "ExportJournalToS3" => {
+                let ledger_name = require_str(&input, "name")
+                    .or_else(|_| require_str(&input, "LedgerName"))?
+                    .to_string();
+                if !state.ledgers.contains_key(&ledger_name) {
+                    return Err(AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Ledger {ledger_name} not found"),
+                    ));
+                }
+                let inclusive_start_time = input
+                    .get("InclusiveStartTime")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| {
+                        AwsError::bad_request(
+                            "ValidationException",
+                            "InclusiveStartTime is required and must be a number",
+                        )
+                    })?;
+                let exclusive_end_time = input
+                    .get("ExclusiveEndTime")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| {
+                        AwsError::bad_request(
+                            "ValidationException",
+                            "ExclusiveEndTime is required and must be a number",
+                        )
+                    })?;
+                if exclusive_end_time <= inclusive_start_time {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        "ExclusiveEndTime must be strictly after InclusiveStartTime.",
+                    ));
+                }
+                let role_arn = require_str(&input, "RoleArn")?.to_string();
+                let output_format = input
+                    .get("OutputFormat")
+                    .and_then(Value::as_str)
+                    .unwrap_or("ION_BINARY")
+                    .to_string();
+                if !matches!(output_format.as_str(), "ION_BINARY" | "ION_TEXT" | "JSON") {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        format!(
+                            "OutputFormat `{output_format}` must be ION_BINARY, ION_TEXT, or JSON.",
+                        ),
+                    ));
+                }
+                let s3_cfg = input.get("S3ExportConfiguration").ok_or_else(|| {
+                    AwsError::bad_request(
+                        "ValidationException",
+                        "S3ExportConfiguration is required",
+                    )
+                })?;
+                let bucket = s3_cfg
+                    .get("Bucket")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        AwsError::bad_request(
+                            "ValidationException",
+                            "S3ExportConfiguration.Bucket is required",
+                        )
+                    })?
+                    .to_string();
+                let prefix = s3_cfg
+                    .get("Prefix")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let encryption = s3_cfg.get("EncryptionConfiguration").ok_or_else(|| {
+                    AwsError::bad_request(
+                        "ValidationException",
+                        "S3ExportConfiguration.EncryptionConfiguration is required",
+                    )
+                })?;
+                let object_encryption_type = encryption
+                    .get("ObjectEncryptionType")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        AwsError::bad_request(
+                            "ValidationException",
+                            "EncryptionConfiguration.ObjectEncryptionType is required",
+                        )
+                    })?
+                    .to_string();
+                if !matches!(
+                    object_encryption_type.as_str(),
+                    "SSE_KMS" | "SSE_S3" | "NO_ENCRYPTION"
+                ) {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        format!(
+                            "ObjectEncryptionType `{object_encryption_type}` must be SSE_KMS, SSE_S3, or NO_ENCRYPTION."
+                        ),
+                    ));
+                }
+                let kms_key_arn = encryption
+                    .get("KmsKeyArn")
+                    .and_then(Value::as_str)
+                    .map(String::from);
+                if object_encryption_type == "SSE_KMS" && kms_key_arn.is_none() {
+                    return Err(AwsError::bad_request(
+                        "ValidationException",
+                        "EncryptionConfiguration.KmsKeyArn is required when ObjectEncryptionType=SSE_KMS.",
+                    ));
+                }
+                let export_id = uuid::Uuid::new_v4().to_string();
+                let ex = JournalS3Export {
+                    export_id: export_id.clone(),
+                    ledger_name,
+                    role_arn,
+                    inclusive_start_time,
+                    exclusive_end_time,
+                    output_format,
+                    bucket,
+                    prefix,
+                    object_encryption_type,
+                    kms_key_arn,
+                    status: "IN_PROGRESS".to_string(),
+                    creation_time: now(),
+                };
+                state.s3_exports.insert(export_id.clone(), ex);
+                Ok(json!({ "ExportId": export_id }))
+            }
+            "DescribeJournalS3Export" => {
+                let _ledger =
+                    require_str(&input, "name").or_else(|_| require_str(&input, "LedgerName"))?;
+                let export_id =
+                    require_str(&input, "exportId").or_else(|_| require_str(&input, "ExportId"))?;
+                let ex = state.s3_exports.get(export_id).ok_or_else(|| {
+                    AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Export {export_id} not found"),
+                    )
+                })?;
+                Ok(json!({ "ExportDescription": export_to_value(&ex) }))
+            }
+            "ListJournalS3Exports" => {
+                let max_results = clamp_max_results_strict(
+                    input.get("MaxResults").and_then(Value::as_i64),
+                    100,
+                    100,
+                )?;
+                let starting_token = input.get("NextToken").and_then(Value::as_str);
+                let mut exports: Vec<(String, Value)> = state
+                    .s3_exports
+                    .iter()
+                    .map(|e| (e.value().export_id.clone(), export_to_value(e.value())))
+                    .collect();
+                exports.sort_by(|a, b| a.0.cmp(&b.0));
+                let page = paginate(exports, max_results, starting_token, |(k, _)| k.clone())?;
+                let mut body = json!({
+                    "JournalS3Exports": page.items.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
+                });
+                if let Some(token) = page.next_token {
+                    body["NextToken"] = json!(token);
+                }
+                Ok(body)
+            }
+            "ListJournalS3ExportsForLedger" => {
+                let ledger_name =
+                    require_str(&input, "name").or_else(|_| require_str(&input, "LedgerName"))?;
+                if !state.ledgers.contains_key(ledger_name) {
+                    return Err(AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Ledger {ledger_name} not found"),
+                    ));
+                }
+                let max_results = clamp_max_results_strict(
+                    input.get("MaxResults").and_then(Value::as_i64),
+                    100,
+                    100,
+                )?;
+                let starting_token = input.get("NextToken").and_then(Value::as_str);
+                let mut exports: Vec<(String, Value)> = state
+                    .s3_exports
+                    .iter()
+                    .filter(|e| e.value().ledger_name == ledger_name)
+                    .map(|e| (e.value().export_id.clone(), export_to_value(e.value())))
+                    .collect();
+                exports.sort_by(|a, b| a.0.cmp(&b.0));
+                let page = paginate(exports, max_results, starting_token, |(k, _)| k.clone())?;
+                let mut body = json!({
+                    "JournalS3Exports": page.items.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
+                });
+                if let Some(token) = page.next_token {
+                    body["NextToken"] = json!(token);
+                }
+                Ok(body)
+            }
+            "CancelJournalS3Export" => {
+                let _ledger =
+                    require_str(&input, "name").or_else(|_| require_str(&input, "LedgerName"))?;
+                let export_id =
+                    require_str(&input, "exportId").or_else(|_| require_str(&input, "ExportId"))?;
+                let mut ex = state.s3_exports.get_mut(export_id).ok_or_else(|| {
+                    AwsError::not_found(
+                        "ResourceNotFoundException",
+                        format!("Export {export_id} not found"),
+                    )
+                })?;
+                match ex.status.as_str() {
+                    "CANCELLED" => {}
+                    "COMPLETED" | "FAILED" => {
+                        return Err(AwsError::precondition_failed(
+                            "ResourcePreconditionNotMetException",
+                            format!(
+                                "Export {export_id} is in terminal state `{}` and cannot be canceled.",
+                                ex.status,
+                            ),
+                        ));
+                    }
+                    _ => {
+                        ex.status = "CANCELLED".to_string();
+                    }
+                }
+                Ok(json!({}))
+            }
             "StreamJournalToKinesis" => {
                 let ledger_name = require_str(&input, "name")
                     .or_else(|_| require_str(&input, "LedgerName"))?
@@ -669,11 +936,13 @@ impl ServiceHandler for QldbService {
         let mut all = QldbSnapshot {
             ledgers: vec![],
             kinesis_streams: vec![],
+            s3_exports: vec![],
         };
         for (_, st) in self.store.iter_all() {
             let s = st.to_snapshot();
             all.ledgers.extend(s.ledgers);
             all.kinesis_streams.extend(s.kinesis_streams);
+            all.s3_exports.extend(s.s3_exports);
         }
         serde_json::to_vec(&all).ok()
     }
@@ -941,6 +1210,139 @@ mod tests {
             ))
             .unwrap();
         }
+    }
+
+    #[test]
+    fn export_journal_to_s3_persists_and_describes_export() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "exp-target",
+                "PermissionsMode": "ALLOW_ALL",
+                "DeletionProtection": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let resp = block_on(svc.handle(
+            "ExportJournalToS3",
+            json!({
+                "name": "exp-target",
+                "InclusiveStartTime": 1700000000.0,
+                "ExclusiveEndTime": 1700003600.0,
+                "S3ExportConfiguration": {
+                    "Bucket": "audit-out",
+                    "Prefix": "exp/",
+                    "EncryptionConfiguration": {
+                        "ObjectEncryptionType": "SSE_KMS",
+                        "KmsKeyArn": "arn:aws:kms:us-east-1:000000000000:key/abc",
+                    },
+                },
+                "RoleArn": "arn:aws:iam::000000000000:role/qldb-export",
+                "OutputFormat": "JSON",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let export_id = resp["ExportId"].as_str().unwrap().to_string();
+        let desc = block_on(svc.handle(
+            "DescribeJournalS3Export",
+            json!({ "name": "exp-target", "exportId": export_id }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(desc["ExportDescription"]["Status"], "IN_PROGRESS");
+        assert_eq!(desc["ExportDescription"]["OutputFormat"], "JSON");
+        assert_eq!(
+            desc["ExportDescription"]["S3ExportConfiguration"]["EncryptionConfiguration"]["ObjectEncryptionType"],
+            "SSE_KMS"
+        );
+    }
+
+    #[test]
+    fn export_journal_to_s3_rejects_sse_kms_without_key_arn() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "exp-bad",
+                "PermissionsMode": "ALLOW_ALL",
+                "DeletionProtection": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let err = block_on(svc.handle(
+            "ExportJournalToS3",
+            json!({
+                "name": "exp-bad",
+                "InclusiveStartTime": 1700000000.0,
+                "ExclusiveEndTime": 1700003600.0,
+                "S3ExportConfiguration": {
+                    "Bucket": "audit-out",
+                    "EncryptionConfiguration": { "ObjectEncryptionType": "SSE_KMS" },
+                },
+                "RoleArn": "arn:aws:iam::000000000000:role/qldb-export",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn cancel_journal_s3_export_marks_cancelled_idempotently() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "exp-cancel",
+                "PermissionsMode": "ALLOW_ALL",
+                "DeletionProtection": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let resp = block_on(svc.handle(
+            "ExportJournalToS3",
+            json!({
+                "name": "exp-cancel",
+                "InclusiveStartTime": 1700000000.0,
+                "ExclusiveEndTime": 1700003600.0,
+                "S3ExportConfiguration": {
+                    "Bucket": "audit-out",
+                    "EncryptionConfiguration": { "ObjectEncryptionType": "NO_ENCRYPTION" },
+                },
+                "RoleArn": "arn:aws:iam::000000000000:role/qldb-export",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let export_id = resp["ExportId"].as_str().unwrap().to_string();
+        block_on(svc.handle(
+            "CancelJournalS3Export",
+            json!({ "name": "exp-cancel", "exportId": export_id }),
+            &ctx,
+        ))
+        .unwrap();
+        // Idempotent
+        block_on(svc.handle(
+            "CancelJournalS3Export",
+            json!({ "name": "exp-cancel", "exportId": export_id }),
+            &ctx,
+        ))
+        .unwrap();
+        let desc = block_on(svc.handle(
+            "DescribeJournalS3Export",
+            json!({ "name": "exp-cancel", "exportId": export_id }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(desc["ExportDescription"]["Status"], "CANCELLED");
     }
 
     #[test]
