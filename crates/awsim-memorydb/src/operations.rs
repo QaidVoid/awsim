@@ -844,6 +844,54 @@ pub fn create_parameter_group(
     Ok(result)
 }
 
+pub fn reset_parameter_group(
+    state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = require_str(input, "ParameterGroupName")?;
+    let g = state.parameter_groups.get(name).ok_or_else(|| {
+        AwsError::not_found(
+            "ParameterGroupNotFoundFault",
+            format!("Parameter group {name} not found"),
+        )
+    })?;
+    let all_parameters = input
+        .get("AllParameters")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let parameter_names: Vec<String> = input
+        .get("ParameterNames")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    // AWS rejects redundant inputs (both AllParameters=true and a
+    // ParameterNames list) as well as the empty case where neither
+    // field tells the API which parameters to reset.
+    if all_parameters && !parameter_names.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterCombinationException",
+            "ParameterNames must be empty when AllParameters=true.",
+        ));
+    }
+    if !all_parameters && parameter_names.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            "ParameterNames must not be empty when AllParameters=false.",
+        ));
+    }
+    Ok(json!({ "ParameterGroup": {
+        "Name": g.name,
+        "ARN": g.arn,
+        "Family": g.family,
+        "Description": g.description,
+    }}))
+}
+
 pub fn describe_parameter_groups(
     state: &MemoryDbState,
     _input: &Value,
@@ -1147,6 +1195,113 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
         }
+    }
+
+    #[test]
+    fn reset_parameter_group_accepts_all_parameters_flag() {
+        let state = MemoryDbState::default();
+        create_parameter_group(
+            &state,
+            &json!({
+                "ParameterGroupName": "pg-reset-all",
+                "Family": "memorydb_redis7",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        reset_parameter_group(
+            &state,
+            &json!({
+                "ParameterGroupName": "pg-reset-all",
+                "AllParameters": true,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn reset_parameter_group_accepts_specific_parameter_names() {
+        let state = MemoryDbState::default();
+        create_parameter_group(
+            &state,
+            &json!({
+                "ParameterGroupName": "pg-reset-some",
+                "Family": "memorydb_redis7",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        reset_parameter_group(
+            &state,
+            &json!({
+                "ParameterGroupName": "pg-reset-some",
+                "ParameterNames": ["maxmemory-policy"],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn reset_parameter_group_rejects_all_and_names_combination() {
+        let state = MemoryDbState::default();
+        create_parameter_group(
+            &state,
+            &json!({
+                "ParameterGroupName": "pg-reset-both",
+                "Family": "memorydb_redis7",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = reset_parameter_group(
+            &state,
+            &json!({
+                "ParameterGroupName": "pg-reset-both",
+                "AllParameters": true,
+                "ParameterNames": ["maxmemory-policy"],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterCombinationException");
+    }
+
+    #[test]
+    fn reset_parameter_group_rejects_empty_names_when_all_false() {
+        let state = MemoryDbState::default();
+        create_parameter_group(
+            &state,
+            &json!({
+                "ParameterGroupName": "pg-reset-empty",
+                "Family": "memorydb_redis7",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = reset_parameter_group(
+            &state,
+            &json!({ "ParameterGroupName": "pg-reset-empty" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn reset_parameter_group_returns_not_found_for_unknown_name() {
+        let state = MemoryDbState::default();
+        let err = reset_parameter_group(
+            &state,
+            &json!({
+                "ParameterGroupName": "missing",
+                "AllParameters": true,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ParameterGroupNotFoundFault");
     }
 
     #[test]
