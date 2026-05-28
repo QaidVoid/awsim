@@ -393,6 +393,27 @@ impl ServiceHandler for Route53Service {
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let entries: Vec<(String, String, state::Route53StateSnapshot)> = self
+            .store
+            .iter_all()
+            .into_iter()
+            .map(|((account, region), st)| (account, region, st.to_snapshot()))
+            .collect();
+        serde_json::to_vec(&entries).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let entries: Vec<(String, String, state::Route53StateSnapshot)> =
+            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        for (account, region, snap) in entries {
+            self.store
+                .get(&account, &region)
+                .restore_from_snapshot(snap);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -480,5 +501,26 @@ mod tests {
         ))
         .unwrap_err();
         assert_eq!(err.code, "InvalidInput");
+    }
+
+    #[test]
+    fn snapshot_round_trips_hosted_zones_and_query_logs() {
+        let svc = Route53Service::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateHostedZone",
+            json!({
+                "Name": "snap.example.com.",
+                "CallerReference": "snap-1",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let bytes = svc.snapshot().expect("encode");
+        let restored = Route53Service::new();
+        restored.restore(&bytes).expect("decode");
+        let listed = block_on(restored.handle("ListHostedZones", json!({}), &ctx)).unwrap();
+        let zones = listed["HostedZones"].as_array().unwrap();
+        assert!(zones.iter().any(|z| z["Name"] == "snap.example.com."));
     }
 }

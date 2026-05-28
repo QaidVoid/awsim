@@ -100,3 +100,94 @@ pub struct Route53State {
     /// propagation window.
     pub change_submissions: DashMap<String, u64>,
 }
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct Route53StateSnapshot {
+    #[serde(default)]
+    pub hosted_zones: Vec<HostedZone>,
+    #[serde(default)]
+    pub health_checks: Vec<HealthCheck>,
+    #[serde(default)]
+    pub query_logging_configs: Vec<QueryLoggingConfig>,
+    #[serde(default)]
+    pub traffic_policies: Vec<TrafficPolicy>,
+    #[serde(default)]
+    pub delegation_sets: Vec<DelegationSet>,
+    #[serde(default)]
+    pub vpc_associations: Vec<(String, Vec<VpcAssociation>)>,
+    #[serde(default)]
+    pub change_submissions: Vec<(String, u64)>,
+}
+
+impl Route53State {
+    pub fn to_snapshot(&self) -> Route53StateSnapshot {
+        Route53StateSnapshot {
+            hosted_zones: self
+                .hosted_zones
+                .iter()
+                .map(|e| e.value().clone())
+                .collect(),
+            health_checks: self
+                .health_checks
+                .iter()
+                .map(|e| e.value().clone())
+                .collect(),
+            query_logging_configs: self
+                .query_logging_configs
+                .iter()
+                .map(|e| e.value().clone())
+                .collect(),
+            traffic_policies: self
+                .traffic_policies
+                .iter()
+                .map(|e| e.value().clone())
+                .collect(),
+            delegation_sets: self
+                .delegation_sets
+                .iter()
+                .map(|e| e.value().clone())
+                .collect(),
+            vpc_associations: self
+                .vpc_associations
+                .iter()
+                .map(|e| (e.key().clone(), e.value().clone()))
+                .collect(),
+            change_submissions: self
+                .change_submissions
+                .iter()
+                .map(|e| (e.key().clone(), *e.value()))
+                .collect(),
+        }
+    }
+
+    pub fn restore_from_snapshot(&self, snap: Route53StateSnapshot) {
+        self.hosted_zones.clear();
+        for z in snap.hosted_zones {
+            self.hosted_zones.insert(z.id.clone(), z);
+        }
+        self.health_checks.clear();
+        for h in snap.health_checks {
+            self.health_checks.insert(h.id.clone(), h);
+        }
+        self.query_logging_configs.clear();
+        for q in snap.query_logging_configs {
+            self.query_logging_configs.insert(q.id.clone(), q);
+        }
+        self.traffic_policies.clear();
+        for t in snap.traffic_policies {
+            self.traffic_policies.insert(t.id.clone(), t);
+        }
+        self.delegation_sets.clear();
+        for d in snap.delegation_sets {
+            self.delegation_sets.insert(d.id.clone(), d);
+        }
+        self.vpc_associations.clear();
+        for (k, v) in snap.vpc_associations {
+            self.vpc_associations.insert(k, v);
+        }
+        self.change_submissions.clear();
+        for (k, v) in snap.change_submissions {
+            self.change_submissions.insert(k, v);
+        }
+    }
+}
