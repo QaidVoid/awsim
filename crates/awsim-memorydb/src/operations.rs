@@ -1067,6 +1067,65 @@ fn service_update_to_value(
     })
 }
 
+/// Applies a service-update to one or more clusters. Mirrors AWS by
+/// splitting the request into ProcessedClusters (cluster exists) and
+/// UnprocessedClusters (with an error reason). The chip stops short of
+/// mutating PendingUpdates; the surface is enough for clients that
+/// orchestrate fleet-wide patching.
+pub fn batch_update_cluster(
+    state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let service_update_name = input
+        .get("ServiceUpdate")
+        .and_then(|v| v.get("ServiceUpdateNameToApply"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterValueException",
+                "ServiceUpdate.ServiceUpdateNameToApply is required.",
+            )
+        })?;
+    let known_update = SERVICE_UPDATE_FIXTURES
+        .iter()
+        .any(|(n, _, _, _, _)| *n == service_update_name);
+    if !known_update {
+        return Err(AwsError::not_found(
+            "ServiceUpdateNotFoundFault",
+            format!("Service update {service_update_name} not found"),
+        ));
+    }
+    let cluster_names: Vec<&str> = input
+        .get("ClusterNames")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if cluster_names.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValueException",
+            "ClusterNames must contain at least one cluster.",
+        ));
+    }
+    let mut processed = Vec::new();
+    let mut unprocessed = Vec::new();
+    for name in cluster_names {
+        if let Some(c) = state.clusters.get(name) {
+            processed.push(cluster_to_value(c.value()));
+        } else {
+            unprocessed.push(json!({
+                "ClusterName": name,
+                "ErrorType": "ClusterNotFoundFault",
+                "ErrorMessage": format!("Cluster {name} not found"),
+            }));
+        }
+    }
+    Ok(json!({
+        "ProcessedClusters": processed,
+        "UnprocessedClusters": unprocessed,
+    }))
+}
+
 pub fn describe_service_updates(
     _state: &MemoryDbState,
     input: &Value,
@@ -1688,6 +1747,76 @@ mod tests {
         delete_parameter_group(&state, &json!({ "ParameterGroupName": "pg-free" }), &ctx())
             .unwrap();
         assert!(!state.parameter_groups.contains_key("pg-free"));
+    }
+
+    #[test]
+    fn batch_update_cluster_splits_processed_and_unprocessed() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "live",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = batch_update_cluster(
+            &state,
+            &json!({
+                "ServiceUpdate": { "ServiceUpdateNameToApply": "memorydb-2024-redis-7-1-patch-001" },
+                "ClusterNames": ["live", "ghost"],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["ProcessedClusters"].as_array().unwrap().len(), 1);
+        assert_eq!(resp["ProcessedClusters"][0]["Name"], "live");
+        let unprocessed = resp["UnprocessedClusters"].as_array().unwrap();
+        assert_eq!(unprocessed.len(), 1);
+        assert_eq!(unprocessed[0]["ClusterName"], "ghost");
+        assert_eq!(unprocessed[0]["ErrorType"], "ClusterNotFoundFault");
+    }
+
+    #[test]
+    fn batch_update_cluster_rejects_unknown_service_update_name() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "live",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = batch_update_cluster(
+            &state,
+            &json!({
+                "ServiceUpdate": { "ServiceUpdateNameToApply": "memorydb-fictitious" },
+                "ClusterNames": ["live"],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ServiceUpdateNotFoundFault");
+    }
+
+    #[test]
+    fn batch_update_cluster_rejects_empty_cluster_names() {
+        let state = MemoryDbState::default();
+        let err = batch_update_cluster(
+            &state,
+            &json!({
+                "ServiceUpdate": { "ServiceUpdateNameToApply": "memorydb-2024-redis-7-1-patch-001" },
+                "ClusterNames": [],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
     }
 
     #[test]
