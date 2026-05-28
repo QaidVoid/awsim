@@ -489,6 +489,12 @@ pub fn describe_clusters(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name_filter = input.get("ClusterName").and_then(|v| v.as_str());
+    // AWS defaults ShowShardDetails to false; the heavy per-node
+    // shard payload is only emitted when the caller opts in.
+    let show_shards = input
+        .get("ShowShardDetails")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let items: Vec<Value> = state
         .clusters
         .iter()
@@ -496,7 +502,13 @@ pub fn describe_clusters(
             Some(n) => e.value().name == n,
             None => true,
         })
-        .map(|e| cluster_to_value(e.value()))
+        .map(|e| {
+            let mut v = cluster_to_value(e.value());
+            if !show_shards && let Some(obj) = v.as_object_mut() {
+                obj.remove("Shards");
+            }
+            v
+        })
         .collect();
     Ok(json!({ "Clusters": items }))
 }
@@ -1071,6 +1083,32 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
         }
+    }
+
+    #[test]
+    fn describe_clusters_elides_shards_by_default() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-show",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "NumShards": 2,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let default_resp = describe_clusters(&state, &json!({}), &ctx()).unwrap();
+        let cluster = &default_resp["Clusters"][0];
+        assert!(
+            cluster.get("Shards").is_none(),
+            "Shards should be absent by default: {cluster}"
+        );
+        let detailed =
+            describe_clusters(&state, &json!({ "ShowShardDetails": true }), &ctx()).unwrap();
+        let shards = detailed["Clusters"][0]["Shards"].as_array().unwrap();
+        assert_eq!(shards.len(), 2);
     }
 
     #[test]
