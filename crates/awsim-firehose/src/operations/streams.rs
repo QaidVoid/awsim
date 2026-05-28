@@ -202,12 +202,48 @@ pub fn update_destination(
     let name = input["DeliveryStreamName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
+    let expected_version = input
+        .get("CurrentDeliveryStreamVersionId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidArgumentException",
+                "CurrentDeliveryStreamVersionId is required",
+            )
+        })?;
+    let destination_id = input
+        .get("DestinationId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidArgumentException", "DestinationId is required")
+        })?;
     let mut s = state.streams.get_mut(name).ok_or_else(|| {
         AwsError::bad_request(
             "ResourceNotFoundException",
             format!("Stream {name} not found"),
         )
     })?;
+    // AWS rejects edits that race with another caller's update; the
+    // caller must echo the latest VersionId observed via Describe.
+    if s.version_id != expected_version {
+        return Err(AwsError::bad_request(
+            "ConcurrentModificationException",
+            format!(
+                "CurrentDeliveryStreamVersionId `{expected_version}` does not match the current VersionId `{}`.",
+                s.version_id,
+            ),
+        ));
+    }
+    let known_destination = s
+        .destinations
+        .iter()
+        .any(|d| d.get("DestinationId").and_then(Value::as_str) == Some(destination_id));
+    if !known_destination {
+        return Err(AwsError::bad_request(
+            "ResourceNotFoundException",
+            format!("DestinationId `{destination_id}` does not exist on stream {name}."),
+        ));
+    }
     s.destinations = collect_destinations(input);
     s.last_update_timestamp = now_secs();
     s.version_id = format!("{}", s.version_id.parse::<u64>().unwrap_or(1) + 1);
@@ -744,6 +780,66 @@ mod list_delivery_streams_tests {
     }
 
     #[test]
+    fn update_destination_rejects_stale_version_id() {
+        let state = FirehoseState::default();
+        create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-occ",
+                "ExtendedS3DestinationConfiguration": { "BucketARN": "arn:aws:s3:::b" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let described =
+            describe_delivery_stream(&state, &json!({ "DeliveryStreamName": "ds-occ" }), &ctx())
+                .unwrap();
+        let destination_id =
+            described["DeliveryStreamDescription"]["Destinations"][0]["DestinationId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+        let err = update_destination(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-occ",
+                "CurrentDeliveryStreamVersionId": "9",
+                "DestinationId": destination_id,
+                "ExtendedS3DestinationConfiguration": { "BucketARN": "arn:aws:s3:::b" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ConcurrentModificationException");
+    }
+
+    #[test]
+    fn update_destination_rejects_unknown_destination_id() {
+        let state = FirehoseState::default();
+        create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-bad-dest",
+                "ExtendedS3DestinationConfiguration": { "BucketARN": "arn:aws:s3:::b" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = update_destination(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-bad-dest",
+                "CurrentDeliveryStreamVersionId": "1",
+                "DestinationId": "ghost",
+                "ExtendedS3DestinationConfiguration": { "BucketARN": "arn:aws:s3:::b" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundException");
+    }
+
+    #[test]
     fn extended_s3_fields_round_trip_via_create_and_update() {
         let state = FirehoseState::default();
         let cfg = json!({
@@ -791,6 +887,11 @@ mod list_delivery_streams_tests {
         assert_eq!(dest["CustomTimeZone"], "UTC");
         assert_eq!(dest["BufferingHints"]["SizeInMBs"], 64);
         assert_eq!(dest["DynamicPartitioningConfiguration"]["Enabled"], true);
+        let destination_id =
+            described["DeliveryStreamDescription"]["Destinations"][0]["DestinationId"]
+                .as_str()
+                .unwrap()
+                .to_string();
         let updated_cfg = json!({
             "BucketARN": "arn:aws:s3:::data",
             "BufferingHints": { "SizeInMBs": 16, "IntervalInSeconds": 60 },
@@ -802,6 +903,8 @@ mod list_delivery_streams_tests {
             &state,
             &json!({
                 "DeliveryStreamName": "ext-roundtrip",
+                "CurrentDeliveryStreamVersionId": "1",
+                "DestinationId": destination_id,
                 "ExtendedS3DestinationConfiguration": updated_cfg,
             }),
             &ctx(),

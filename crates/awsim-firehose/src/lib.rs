@@ -185,7 +185,10 @@ mod tests {
         let ctx = ctx();
         block_on(svc.handle(
             "CreateDeliveryStream",
-            json!({ "DeliveryStreamName": "snap-roundtrip" }),
+            json!({
+                "DeliveryStreamName": "snap-roundtrip",
+                "ExtendedS3DestinationConfiguration": { "BucketARN": "arn:aws:s3:::b" },
+            }),
             &ctx,
         ))
         .unwrap();
@@ -198,11 +201,24 @@ mod tests {
             &ctx,
         ))
         .unwrap();
+        let described = block_on(svc.handle(
+            "DescribeDeliveryStream",
+            json!({ "DeliveryStreamName": "snap-roundtrip" }),
+            &ctx,
+        ))
+        .unwrap();
+        let destination_id =
+            described["DeliveryStreamDescription"]["Destinations"][0]["DestinationId"]
+                .as_str()
+                .unwrap()
+                .to_string();
         block_on(svc.handle(
             "UpdateDestination",
             json!({
                 "DeliveryStreamName": "snap-roundtrip",
-                "ExtendedS3DestinationConfiguration": { "BucketARN": "arn:aws:s3:::b" },
+                "CurrentDeliveryStreamVersionId": "1",
+                "DestinationId": destination_id,
+                "ExtendedS3DestinationConfiguration": { "BucketARN": "arn:aws:s3:::c" },
             }),
             &ctx,
         ))
