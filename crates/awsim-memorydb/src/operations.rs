@@ -360,7 +360,11 @@ pub fn create_cluster(
             .get("SnsTopicArn")
             .and_then(|v| v.as_str())
             .map(String::from),
-        sns_topic_status: "active".to_string(),
+        sns_topic_status: if input.get("SnsTopicArn").and_then(Value::as_str).is_some() {
+            "active".to_string()
+        } else {
+            "inactive".to_string()
+        },
         description: input
             .get("Description")
             .and_then(|v| v.as_str())
@@ -422,6 +426,17 @@ pub fn update_cluster(
     }
     if let Some(d) = input.get("Description").and_then(|v| v.as_str()) {
         c.description = Some(d.to_string());
+    }
+    // AWS treats `SnsTopicArn: ""` as "clear the topic" (status flips
+    // to inactive); a non-empty ARN sets it active.
+    if let Some(topic) = input.get("SnsTopicArn").and_then(Value::as_str) {
+        if topic.is_empty() {
+            c.sns_topic_arn = None;
+            c.sns_topic_status = "inactive".to_string();
+        } else {
+            c.sns_topic_arn = Some(topic.to_string());
+            c.sns_topic_status = "active".to_string();
+        }
     }
     Ok(json!({ "Cluster": cluster_to_value(&c) }))
 }
@@ -1035,6 +1050,67 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    #[test]
+    fn create_cluster_sns_topic_status_inactive_without_arn() {
+        let state = MemoryDbState::default();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-sns-none",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["SnsTopicStatus"], "inactive");
+        assert!(resp["Cluster"]["SnsTopicArn"].is_null());
+    }
+
+    #[test]
+    fn create_cluster_sns_topic_status_active_with_arn() {
+        let state = MemoryDbState::default();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-sns-set",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "SnsTopicArn": "arn:aws:sns:us-east-1:111111111111:alerts",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["SnsTopicStatus"], "active");
+    }
+
+    #[test]
+    fn update_cluster_clears_sns_topic_when_empty_arn_supplied() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-sns-clear",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "SnsTopicArn": "arn:aws:sns:us-east-1:111111111111:alerts",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = update_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-sns-clear",
+                "SnsTopicArn": "",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["SnsTopicStatus"], "inactive");
+        assert!(resp["Cluster"]["SnsTopicArn"].is_null());
     }
 
     #[test]
