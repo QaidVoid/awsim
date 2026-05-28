@@ -84,6 +84,54 @@ fn tags_from_input(input: &Value) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
+/// Compare the immutable creation-time args from a fresh `CreateFileSystem`
+/// call against an existing file system. AWS treats two calls with the same
+/// `CreationToken` but differing values for these fields as a conflict.
+fn creation_args_match(fs: &FileSystem, input: &Value) -> bool {
+    let perf = input
+        .get("PerformanceMode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("generalPurpose");
+    if fs.performance_mode != perf {
+        return false;
+    }
+    let encrypted = input
+        .get("Encrypted")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if fs.encrypted != encrypted {
+        return false;
+    }
+    let kms = input.get("KmsKeyId").and_then(|v| v.as_str());
+    if let Some(k) = kms
+        && fs.kms_key_id.as_deref() != Some(k)
+    {
+        return false;
+    }
+    let tmode = input
+        .get("ThroughputMode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("bursting");
+    if fs.throughput_mode != tmode {
+        return false;
+    }
+    let mibps = input
+        .get("ProvisionedThroughputInMibps")
+        .and_then(|v| v.as_f64());
+    if fs.provisioned_throughput_in_mibps != mibps {
+        return false;
+    }
+    let az_name = input.get("AvailabilityZoneName").and_then(|v| v.as_str());
+    if fs.availability_zone_name.as_deref() != az_name {
+        return false;
+    }
+    let az_id = input.get("AvailabilityZoneId").and_then(|v| v.as_str());
+    if fs.availability_zone_id.as_deref() != az_id {
+        return false;
+    }
+    true
+}
+
 pub fn create_file_system(
     state: &EfsState,
     input: &Value,
@@ -95,13 +143,27 @@ pub fn create_file_system(
         .ok_or_else(|| AwsError::bad_request("BadRequest", "CreationToken is required"))?
         .to_string();
 
-    // Idempotency: a fresh call with the same token returns the existing FS.
+    // Idempotency: a replay with the same CreationToken and identical
+    // immutable args returns the cached FS; mismatched args raise
+    // FileSystemAlreadyExists. AWS gates parity on the creation-time
+    // PerformanceMode/Encrypted/KmsKeyId/ThroughputMode/
+    // ProvisionedThroughputInMibps/AvailabilityZoneName/Id tuple.
     if let Some(existing) = state
         .file_systems
         .iter()
         .find(|e| e.value().creation_token == token)
     {
-        return Ok(fs_to_value(existing.value()));
+        let fs = existing.value();
+        if creation_args_match(fs, input) {
+            return Ok(fs_to_value(fs));
+        }
+        return Err(AwsError::conflict(
+            "FileSystemAlreadyExists",
+            format!(
+                "File system {} already exists with CreationToken `{}`.",
+                fs.file_system_id, token
+            ),
+        ));
     }
 
     let id = new_fs_id();
@@ -876,5 +938,43 @@ mod tests {
         .unwrap();
         assert_eq!(resp["ThroughputMode"], "provisioned");
         assert_eq!(resp["ProvisionedThroughputInMibps"], 128.0);
+    }
+
+    #[test]
+    fn replay_with_identical_args_returns_existing_file_system() {
+        let state = EfsState::default();
+        let body = json!({
+            "CreationToken": "t-replay",
+            "PerformanceMode": "generalPurpose",
+            "ThroughputMode": "bursting",
+        });
+        let first = create_file_system(&state, &body, &ctx()).unwrap();
+        let second = create_file_system(&state, &body, &ctx()).unwrap();
+        assert_eq!(first["FileSystemId"], second["FileSystemId"]);
+    }
+
+    #[test]
+    fn replay_with_mismatched_args_returns_file_system_already_exists() {
+        let state = EfsState::default();
+        create_file_system(
+            &state,
+            &json!({
+                "CreationToken": "t-conflict",
+                "PerformanceMode": "generalPurpose",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = create_file_system(
+            &state,
+            &json!({
+                "CreationToken": "t-conflict",
+                "PerformanceMode": "maxIO",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "FileSystemAlreadyExists");
+        assert!(err.message.contains("fs-"));
     }
 }

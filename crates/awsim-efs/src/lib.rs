@@ -317,10 +317,10 @@ mod tests {
         assert!(fs_id.starts_with("fs-"));
         assert_eq!(fs["LifeCycleState"], "available");
 
-        // Idempotency
+        // Idempotency: replay with identical args returns the same FS.
         let again = block_on(svc.handle(
             "CreateFileSystem",
-            json!({ "CreationToken": "tok-1" }),
+            json!({ "CreationToken": "tok-1", "Encrypted": true, "Tags": [{"Key":"Name","Value":"data"}] }),
             &ctx,
         ))
         .unwrap();
