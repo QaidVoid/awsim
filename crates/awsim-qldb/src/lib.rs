@@ -572,7 +572,10 @@ impl ServiceHandler for QldbService {
                 let l = Ledger {
                     name: name.clone(),
                     arn: ledger_arn(ctx, &name),
-                    state: "ACTIVE".to_string(),
+                    // AWS reports CREATING on the initial CreateLedger
+                    // response; the ledger settles to ACTIVE on the
+                    // next DescribeLedger / ListLedgers call.
+                    state: "CREATING".to_string(),
                     creation_date_time: now(),
                     permissions_mode,
                     deletion_protection: input
@@ -593,6 +596,14 @@ impl ServiceHandler for QldbService {
             }
             "DescribeLedger" => {
                 let name = require_str(&input, "name").or_else(|_| require_str(&input, "Name"))?;
+                // Settle any CREATING ledger to ACTIVE on first describe;
+                // mirrors the lifecycle a real QLDB control plane walks
+                // before the ledger is ready to accept transactions.
+                if let Some(mut l) = state.ledgers.get_mut(name)
+                    && l.state == "CREATING"
+                {
+                    l.state = "ACTIVE".to_string();
+                }
                 let l = state.ledgers.get(name).ok_or_else(|| {
                     AwsError::not_found(
                         "ResourceNotFoundException",
@@ -604,6 +615,11 @@ impl ServiceHandler for QldbService {
             "ListLedgers" => {
                 // AWS QLDB ListLedgers caps MaxResults at 100 and uses
                 // the ledger name as the NextToken cursor.
+                for mut e in state.ledgers.iter_mut() {
+                    if e.value().state == "CREATING" {
+                        e.value_mut().state = "ACTIVE".to_string();
+                    }
+                }
                 let max_results = clamp_max_results_strict(
                     input.get("MaxResults").and_then(Value::as_i64),
                     100,
@@ -1320,6 +1336,26 @@ mod tests {
         ))
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_ledger_starts_in_creating_and_settles_to_active() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "lifecycle",
+                "PermissionsMode": "ALLOW_ALL",
+                "DeletionProtection": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(created["State"], "CREATING");
+        let described =
+            block_on(svc.handle("DescribeLedger", json!({ "name": "lifecycle" }), &ctx)).unwrap();
+        assert_eq!(described["State"], "ACTIVE");
     }
 
     #[test]
