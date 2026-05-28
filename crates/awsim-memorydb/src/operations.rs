@@ -813,6 +813,59 @@ pub fn describe_acls(
     Ok(body)
 }
 
+pub fn update_acl(
+    state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = require_str(input, "ACLName")?;
+    let to_add: Vec<String> = input
+        .get("UserNamesToAdd")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let to_remove: Vec<String> = input
+        .get("UserNamesToRemove")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    // AWS rejects ACL updates where the same user appears in both
+    // add and remove lists; the request is contradictory.
+    if to_add.iter().any(|u| to_remove.contains(u)) {
+        return Err(AwsError::bad_request(
+            "InvalidParameterCombinationException",
+            "A user cannot appear in both UserNamesToAdd and UserNamesToRemove.",
+        ));
+    }
+    for user in &to_add {
+        if !state.users.contains_key(user) {
+            return Err(AwsError::not_found(
+                "UserNotFoundFault",
+                format!("User {user} not found"),
+            ));
+        }
+    }
+    let mut a = state
+        .acls
+        .get_mut(name)
+        .ok_or_else(|| AwsError::not_found("ACLNotFoundFault", format!("ACL {name} not found")))?;
+    a.user_names.retain(|u| !to_remove.contains(u));
+    for user in to_add {
+        if !a.user_names.contains(&user) {
+            a.user_names.push(user);
+        }
+    }
+    Ok(json!({ "ACL": acl_to_value(&a) }))
+}
+
 pub fn delete_acl(
     state: &MemoryDbState,
     input: &Value,
@@ -2211,6 +2264,101 @@ mod tests {
             describe_clusters(&state, &json!({ "ShowShardDetails": true }), &ctx()).unwrap();
         let shards = detailed["Clusters"][0]["Shards"].as_array().unwrap();
         assert_eq!(shards.len(), 2);
+    }
+
+    #[test]
+    fn update_acl_adds_and_removes_users() {
+        let state = MemoryDbState::default();
+        for user in ["alice", "bob", "carol"] {
+            create_user(
+                &state,
+                &json!({
+                    "UserName": user,
+                    "AccessString": "on ~* +@all",
+                    "AuthenticationMode": { "Type": "iam" },
+                }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        create_acl(
+            &state,
+            &json!({ "ACLName": "team", "UserNames": ["alice", "bob"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = update_acl(
+            &state,
+            &json!({
+                "ACLName": "team",
+                "UserNamesToAdd": ["carol"],
+                "UserNamesToRemove": ["alice"],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let names: Vec<&str> = resp["ACL"]["UserNames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(!names.contains(&"alice"));
+        assert!(names.contains(&"bob"));
+        assert!(names.contains(&"carol"));
+    }
+
+    #[test]
+    fn update_acl_rejects_overlapping_add_and_remove() {
+        let state = MemoryDbState::default();
+        create_user(
+            &state,
+            &json!({
+                "UserName": "x",
+                "AccessString": "on ~* +@all",
+                "AuthenticationMode": { "Type": "iam" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        create_acl(
+            &state,
+            &json!({ "ACLName": "overlap", "UserNames": [] }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = update_acl(
+            &state,
+            &json!({
+                "ACLName": "overlap",
+                "UserNamesToAdd": ["x"],
+                "UserNamesToRemove": ["x"],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterCombinationException");
+    }
+
+    #[test]
+    fn update_acl_rejects_unknown_user() {
+        let state = MemoryDbState::default();
+        create_acl(
+            &state,
+            &json!({ "ACLName": "empty", "UserNames": [] }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = update_acl(
+            &state,
+            &json!({
+                "ACLName": "empty",
+                "UserNamesToAdd": ["ghost"],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "UserNotFoundFault");
     }
 
     #[test]

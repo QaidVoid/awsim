@@ -99,6 +99,7 @@ impl ServiceHandler for MemoryDbService {
             "CreateACL" => operations::create_acl(&state, &input, ctx),
             "DescribeACLs" => operations::describe_acls(&state, &input, ctx),
             "DeleteACL" => operations::delete_acl(&state, &input, ctx),
+            "UpdateACL" => operations::update_acl(&state, &input, ctx),
             "CreateSubnetGroup" => operations::create_subnet_group(&state, &input, ctx),
             "DescribeSubnetGroups" => operations::describe_subnet_groups(&state, &input, ctx),
             "DeleteSubnetGroup" => operations::delete_subnet_group(&state, &input, ctx),
