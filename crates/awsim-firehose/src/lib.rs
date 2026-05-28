@@ -80,6 +80,22 @@ impl ServiceHandler for FirehoseService {
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let mut all = state::FirehoseSnapshot { streams: vec![] };
+        for (_, st) in self.store.iter_all() {
+            all.streams.extend(st.to_snapshot().streams);
+        }
+        serde_json::to_vec(&all).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let snap: state::FirehoseSnapshot =
+            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        let st = self.store.get("000000000000", "us-east-1");
+        st.restore_from_snapshot(snap);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -161,5 +177,55 @@ mod tests {
         ))
         .unwrap_err();
         assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn snapshot_round_trips_streams_with_encryption_and_version() {
+        let svc = FirehoseService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateDeliveryStream",
+            json!({ "DeliveryStreamName": "snap-roundtrip" }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "StartDeliveryStreamEncryption",
+            json!({
+                "DeliveryStreamName": "snap-roundtrip",
+                "DeliveryStreamEncryptionConfigurationInput": { "KeyType": "AWS_OWNED_CMK" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "UpdateDestination",
+            json!({
+                "DeliveryStreamName": "snap-roundtrip",
+                "ExtendedS3DestinationConfiguration": { "BucketARN": "arn:aws:s3:::b" },
+            }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let bytes = svc.snapshot().expect("snapshot encodes");
+        let restored = FirehoseService::new();
+        restored.restore(&bytes).expect("restore succeeds");
+        let desc = block_on(restored.handle(
+            "DescribeDeliveryStream",
+            json!({ "DeliveryStreamName": "snap-roundtrip" }),
+            &ctx,
+        ))
+        .unwrap();
+        let info = &desc["DeliveryStreamDescription"];
+        assert_eq!(info["VersionId"], "2");
+        assert_eq!(
+            info["DeliveryStreamEncryptionConfiguration"]["Status"],
+            "ENABLED"
+        );
+        assert_eq!(
+            info["DeliveryStreamEncryptionConfiguration"]["KeyType"],
+            "AWS_OWNED_CMK"
+        );
     }
 }

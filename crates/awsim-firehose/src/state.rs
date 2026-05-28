@@ -31,6 +31,26 @@ pub struct DeliveryStream {
     pub source_config: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FirehoseSnapshot {
+    pub streams: Vec<DeliveryStream>,
+}
+
+impl FirehoseState {
+    pub fn to_snapshot(&self) -> FirehoseSnapshot {
+        FirehoseSnapshot {
+            streams: self.streams.iter().map(|e| e.value().clone()).collect(),
+        }
+    }
+
+    pub fn restore_from_snapshot(&self, snap: FirehoseSnapshot) {
+        self.streams.clear();
+        for s in snap.streams {
+            self.streams.insert(s.name.clone(), s);
+        }
+    }
+}
+
 pub fn now_secs() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
