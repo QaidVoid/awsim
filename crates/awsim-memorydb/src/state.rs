@@ -39,6 +39,22 @@ pub struct Cluster {
     /// to NVMe, which AWS only supports on `db.r6gd.*` node types.
     #[serde(default)]
     pub data_tiering: bool,
+    /// Cluster network stack. One of `ipv4`, `ipv6`, or `dual_stack`.
+    /// Defaults to `ipv4` when unset on legacy snapshots.
+    #[serde(default = "default_network_type")]
+    pub network_type: String,
+    /// IP discovery protocol exposed to clients. One of `ipv4` or
+    /// `ipv6`. Defaults to `ipv4` when unset on legacy snapshots.
+    #[serde(default = "default_ip_discovery")]
+    pub ip_discovery: String,
+}
+
+fn default_network_type() -> String {
+    "ipv4".to_string()
+}
+
+fn default_ip_discovery() -> String {
+    "ipv4".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

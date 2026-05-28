@@ -113,6 +113,8 @@ fn cluster_to_value(c: &Cluster) -> Value {
         "SnsTopicStatus": c.sns_topic_status,
         "Description": c.description,
         "DataTiering": if c.data_tiering { "true" } else { "false" },
+        "NetworkType": c.network_type,
+        "IpDiscovery": c.ip_discovery,
         "Shards": [],
     })
 }
@@ -186,6 +188,38 @@ pub fn create_cluster(
     }
     if let Some(sw) = input.get("SnapshotWindow").and_then(Value::as_str) {
         validate_snapshot_window(sw)?;
+    }
+    let network_type = match input.get("NetworkType").and_then(Value::as_str) {
+        Some(v) => {
+            let lower = v.to_ascii_lowercase();
+            if !["ipv4", "ipv6", "dual_stack"].contains(&lower.as_str()) {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterValueException",
+                    format!("NetworkType `{v}` must be one of ipv4, ipv6, dual_stack."),
+                ));
+            }
+            lower
+        }
+        None => "ipv4".to_string(),
+    };
+    let ip_discovery = match input.get("IpDiscovery").and_then(Value::as_str) {
+        Some(v) => {
+            let lower = v.to_ascii_lowercase();
+            if !["ipv4", "ipv6"].contains(&lower.as_str()) {
+                return Err(AwsError::bad_request(
+                    "InvalidParameterValueException",
+                    format!("IpDiscovery `{v}` must be one of ipv4, ipv6."),
+                ));
+            }
+            lower
+        }
+        None => "ipv4".to_string(),
+    };
+    if ip_discovery == "ipv6" && network_type == "ipv4" {
+        return Err(AwsError::bad_request(
+            "InvalidParameterCombinationException",
+            "IpDiscovery=ipv6 requires NetworkType in {ipv6, dual_stack}.".to_string(),
+        ));
     }
     let acl_name = require_str(input, "ACLName")?.to_string();
     let arn_str = arn(ctx, "cluster", &name);
@@ -268,6 +302,8 @@ pub fn create_cluster(
             .and_then(|v| v.as_str())
             .map(String::from),
         data_tiering,
+        network_type,
+        ip_discovery,
     };
     let result = json!({ "Cluster": cluster_to_value(&c) });
     state.clusters.insert(name, c);
@@ -784,6 +820,77 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
         }
+    }
+
+    #[test]
+    fn create_cluster_defaults_network_fields_to_ipv4() {
+        let state = MemoryDbState::default();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-net-default",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["NetworkType"], "ipv4");
+        assert_eq!(resp["Cluster"]["IpDiscovery"], "ipv4");
+    }
+
+    #[test]
+    fn create_cluster_accepts_dual_stack_ipv6() {
+        let state = MemoryDbState::default();
+        let resp = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-dual-stack",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "NetworkType": "DUAL_STACK",
+                "IpDiscovery": "IPV6",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["NetworkType"], "dual_stack");
+        assert_eq!(resp["Cluster"]["IpDiscovery"], "ipv6");
+    }
+
+    #[test]
+    fn create_cluster_rejects_unknown_network_type() {
+        let state = MemoryDbState::default();
+        let err = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-net-bad",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "NetworkType": "ipv5",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn create_cluster_rejects_ipv6_discovery_on_ipv4_network() {
+        let state = MemoryDbState::default();
+        let err = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-ip-mismatch",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "NetworkType": "ipv4",
+                "IpDiscovery": "ipv6",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterCombinationException");
     }
 
     #[test]
