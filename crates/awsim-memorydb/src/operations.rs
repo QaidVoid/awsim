@@ -810,6 +810,43 @@ pub fn create_subnet_group(
     Ok(result)
 }
 
+pub fn update_subnet_group(
+    state: &MemoryDbState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = require_str(input, "SubnetGroupName")?;
+    let mut g = state.subnet_groups.get_mut(name).ok_or_else(|| {
+        AwsError::not_found(
+            "SubnetGroupNotFoundFault",
+            format!("Subnet group {name} not found"),
+        )
+    })?;
+    if let Some(d) = input.get("Description").and_then(|v| v.as_str()) {
+        g.description = Some(d.to_string());
+    }
+    if let Some(arr) = input.get("SubnetIds").and_then(|v| v.as_array()) {
+        let subnet_ids: Vec<String> = arr
+            .iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect();
+        if subnet_ids.is_empty() {
+            return Err(AwsError::bad_request(
+                "InvalidParameterValueException",
+                "SubnetIds must contain at least one subnet.",
+            ));
+        }
+        g.subnet_ids = subnet_ids;
+    }
+    Ok(json!({ "SubnetGroup": {
+        "Name": g.name,
+        "ARN": g.arn,
+        "Description": g.description,
+        "VpcId": g.vpc_id,
+        "Subnets": g.subnet_ids.iter().map(|id| json!({ "Identifier": id })).collect::<Vec<_>>(),
+    }}))
+}
+
 pub fn delete_subnet_group(
     state: &MemoryDbState,
     input: &Value,
@@ -1334,6 +1371,69 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
         }
+    }
+
+    #[test]
+    fn update_subnet_group_replaces_description_and_subnets() {
+        let state = MemoryDbState::default();
+        create_subnet_group(
+            &state,
+            &json!({
+                "SubnetGroupName": "sg-up",
+                "Description": "old",
+                "SubnetIds": ["subnet-a"],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = update_subnet_group(
+            &state,
+            &json!({
+                "SubnetGroupName": "sg-up",
+                "Description": "new",
+                "SubnetIds": ["subnet-b", "subnet-c"],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["SubnetGroup"]["Description"], "new");
+        let subnets: Vec<&str> = resp["SubnetGroup"]["Subnets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Identifier"].as_str().unwrap())
+            .collect();
+        assert_eq!(subnets, vec!["subnet-b", "subnet-c"]);
+    }
+
+    #[test]
+    fn update_subnet_group_rejects_empty_subnet_ids() {
+        let state = MemoryDbState::default();
+        create_subnet_group(
+            &state,
+            &json!({ "SubnetGroupName": "sg-empty", "SubnetIds": ["subnet-x"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = update_subnet_group(
+            &state,
+            &json!({ "SubnetGroupName": "sg-empty", "SubnetIds": [] }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValueException");
+    }
+
+    #[test]
+    fn update_subnet_group_returns_not_found_for_unknown_name() {
+        let state = MemoryDbState::default();
+        let err = update_subnet_group(
+            &state,
+            &json!({ "SubnetGroupName": "ghost", "Description": "x" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "SubnetGroupNotFoundFault");
     }
 
     #[test]

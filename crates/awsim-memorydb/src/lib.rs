@@ -101,6 +101,7 @@ impl ServiceHandler for MemoryDbService {
             "CreateSubnetGroup" => operations::create_subnet_group(&state, &input, ctx),
             "DescribeSubnetGroups" => operations::describe_subnet_groups(&state, &input, ctx),
             "DeleteSubnetGroup" => operations::delete_subnet_group(&state, &input, ctx),
+            "UpdateSubnetGroup" => operations::update_subnet_group(&state, &input, ctx),
             "CreateParameterGroup" => operations::create_parameter_group(&state, &input, ctx),
             "DescribeParameterGroups" => operations::describe_parameter_groups(&state, &input, ctx),
             "DeleteParameterGroup" => operations::delete_parameter_group(&state, &input, ctx),
