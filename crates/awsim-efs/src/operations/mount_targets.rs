@@ -62,8 +62,21 @@ pub fn create_mount_target(
             "One Zone file systems support only a single mount target.",
         ));
     }
+    // AWS rejects a second mount target in the same subnet for the
+    // same file system with MountTargetConflict.
+    if state.mount_targets.iter().any(|e| {
+        let v = e.value();
+        v.file_system_id == fs_id && v.subnet_id == subnet_id
+    }) {
+        return Err(AwsError::bad_request(
+            "MountTargetConflict",
+            format!("A mount target already exists for file system {fs_id} in subnet {subnet_id}.",),
+        ));
+    }
 
-    let security_groups = input
+    // AWS caps mount-target security groups at 5; SecurityGroupLimitExceeded
+    // is the documented error code.
+    let security_groups: Vec<String> = input
         .get("SecurityGroups")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -71,7 +84,16 @@ pub fn create_mount_target(
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect()
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| vec!["sg-default".to_string()]);
+    if security_groups.len() > 5 {
+        return Err(AwsError::bad_request(
+            "SecurityGroupLimitExceeded",
+            format!(
+                "A mount target may attach at most 5 security groups (got {}).",
+                security_groups.len()
+            ),
+        ));
+    }
 
     let id = new_mt_id();
     let mt = MountTarget {
@@ -205,6 +227,47 @@ mod tests {
 
     fn ctx() -> RequestContext {
         RequestContext::new("efs", "us-east-1")
+    }
+
+    #[test]
+    fn create_mount_target_rejects_duplicate_subnet() {
+        let state = EfsState::default();
+        let resp =
+            create_file_system(&state, &json!({ "CreationToken": "t-dup" }), &ctx()).unwrap();
+        let fs_id = resp["FileSystemId"].as_str().unwrap().to_string();
+        create_mount_target(
+            &state,
+            &json!({ "FileSystemId": fs_id, "SubnetId": "subnet-a" }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = create_mount_target(
+            &state,
+            &json!({ "FileSystemId": fs_id, "SubnetId": "subnet-a" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "MountTargetConflict");
+    }
+
+    #[test]
+    fn create_mount_target_caps_security_groups_at_five() {
+        let state = EfsState::default();
+        let resp = create_file_system(&state, &json!({ "CreationToken": "t-sg" }), &ctx()).unwrap();
+        let fs_id = resp["FileSystemId"].as_str().unwrap().to_string();
+        let err = create_mount_target(
+            &state,
+            &json!({
+                "FileSystemId": fs_id,
+                "SubnetId": "subnet-cap",
+                "SecurityGroups": [
+                    "sg-1", "sg-2", "sg-3", "sg-4", "sg-5", "sg-6",
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "SecurityGroupLimitExceeded");
     }
 
     #[test]
