@@ -16,6 +16,99 @@ fn ap_arn(ctx: &RequestContext, id: &str) -> String {
     )
 }
 
+/// Validates `PosixUser` fields when supplied. AWS requires Uid and
+/// Gid as non-negative integers and caps `SecondaryGids` at 16.
+fn validate_posix_user(posix: Option<&Value>) -> Result<(), AwsError> {
+    let Some(p) = posix else { return Ok(()) };
+    let uid = p.get("Uid").and_then(Value::as_i64).ok_or_else(|| {
+        AwsError::bad_request(
+            "BadRequest",
+            "PosixUser.Uid is required and must be an integer",
+        )
+    })?;
+    let gid = p.get("Gid").and_then(Value::as_i64).ok_or_else(|| {
+        AwsError::bad_request(
+            "BadRequest",
+            "PosixUser.Gid is required and must be an integer",
+        )
+    })?;
+    if uid < 0 || gid < 0 {
+        return Err(AwsError::bad_request(
+            "BadRequest",
+            "PosixUser.Uid and Gid must be non-negative.",
+        ));
+    }
+    if let Some(secondary) = p.get("SecondaryGids").and_then(Value::as_array) {
+        if secondary.len() > 16 {
+            return Err(AwsError::bad_request(
+                "BadRequest",
+                format!(
+                    "PosixUser.SecondaryGids may have at most 16 entries (got {}).",
+                    secondary.len()
+                ),
+            ));
+        }
+        for v in secondary {
+            let g = v.as_i64().ok_or_else(|| {
+                AwsError::bad_request(
+                    "BadRequest",
+                    "PosixUser.SecondaryGids entries must be integers.",
+                )
+            })?;
+            if g < 0 {
+                return Err(AwsError::bad_request(
+                    "BadRequest",
+                    "PosixUser.SecondaryGids entries must be non-negative.",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates `RootDirectory`. AWS requires `CreationInfo` (with
+/// OwnerUid / OwnerGid / Permissions) whenever Path is not `/`, and
+/// Permissions must parse as a 1-4 digit octal string.
+fn validate_root_directory(root: Option<&Value>) -> Result<(), AwsError> {
+    let Some(rd) = root else { return Ok(()) };
+    let path = rd
+        .get("Path")
+        .and_then(Value::as_str)
+        .unwrap_or("/")
+        .to_string();
+    let creation_info = rd.get("CreationInfo");
+    if path != "/" && creation_info.is_none() {
+        return Err(AwsError::bad_request(
+            "BadRequest",
+            "RootDirectory.CreationInfo is required when Path != \"/\".",
+        ));
+    }
+    if let Some(ci) = creation_info {
+        ci.get("OwnerUid").and_then(Value::as_i64).ok_or_else(|| {
+            AwsError::bad_request("BadRequest", "CreationInfo.OwnerUid is required.")
+        })?;
+        ci.get("OwnerGid").and_then(Value::as_i64).ok_or_else(|| {
+            AwsError::bad_request("BadRequest", "CreationInfo.OwnerGid is required.")
+        })?;
+        let perms = ci
+            .get("Permissions")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                AwsError::bad_request(
+                    "BadRequest",
+                    "CreationInfo.Permissions is required (octal string).",
+                )
+            })?;
+        if perms.is_empty() || perms.len() > 4 || !perms.chars().all(|c| ('0'..='7').contains(&c)) {
+            return Err(AwsError::bad_request(
+                "BadRequest",
+                format!("CreationInfo.Permissions `{perms}` must be a 1-4 digit octal."),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn tags_to_array(tags: &HashMap<String, String>) -> Value {
     Value::Array(
         tags.iter()
@@ -69,6 +162,9 @@ pub fn create_access_point(
     {
         return Ok(ap_to_value(existing.value()));
     }
+
+    validate_posix_user(input.get("PosixUser"))?;
+    validate_root_directory(input.get("RootDirectory"))?;
 
     let tags: HashMap<String, String> = input
         .get("Tags")
@@ -147,4 +243,103 @@ pub fn delete_access_point(
         )
     })?;
     Ok(json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::file_systems::create_file_system;
+    use crate::state::EfsState;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("efs", "us-east-1")
+    }
+
+    fn fs_id(state: &EfsState) -> String {
+        let resp = create_file_system(state, &json!({ "CreationToken": "t-ap" }), &ctx()).unwrap();
+        resp["FileSystemId"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn create_access_point_rejects_invalid_permissions() {
+        let state = EfsState::default();
+        let fs = fs_id(&state);
+        let err = create_access_point(
+            &state,
+            &json!({
+                "ClientToken": "t-perms",
+                "FileSystemId": fs,
+                "RootDirectory": {
+                    "Path": "/app",
+                    "CreationInfo": {
+                        "OwnerUid": 1000,
+                        "OwnerGid": 1000,
+                        "Permissions": "9999",
+                    },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn create_access_point_requires_creation_info_when_path_not_root() {
+        let state = EfsState::default();
+        let fs = fs_id(&state);
+        let err = create_access_point(
+            &state,
+            &json!({
+                "ClientToken": "t-missing-ci",
+                "FileSystemId": fs,
+                "RootDirectory": { "Path": "/team-x" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn create_access_point_caps_secondary_gids() {
+        let state = EfsState::default();
+        let fs = fs_id(&state);
+        let secondary: Vec<u32> = (0..17).collect();
+        let err = create_access_point(
+            &state,
+            &json!({
+                "ClientToken": "t-gids",
+                "FileSystemId": fs,
+                "PosixUser": { "Uid": 1, "Gid": 2, "SecondaryGids": secondary },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn create_access_point_accepts_valid_octal_perms() {
+        let state = EfsState::default();
+        let fs = fs_id(&state);
+        create_access_point(
+            &state,
+            &json!({
+                "ClientToken": "t-ok",
+                "FileSystemId": fs,
+                "PosixUser": { "Uid": 1000, "Gid": 1000 },
+                "RootDirectory": {
+                    "Path": "/data",
+                    "CreationInfo": {
+                        "OwnerUid": 1000,
+                        "OwnerGid": 1000,
+                        "Permissions": "0755",
+                    },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
 }
