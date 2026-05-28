@@ -299,23 +299,54 @@ pub fn describe_certificate(
 
 pub fn list_certificates(
     state: &AcmState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let list: Vec<Value> = state
+    // AWS ListCertificates accepts `CertificateStatuses` as an array of
+    // status strings; absence of the filter returns every status the
+    // service has issued, not just `ISSUED`.
+    let status_filter: Option<Vec<String>> = input
+        .get("CertificateStatuses")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
+    let max_items = awsim_core::clamp_max_results_strict(
+        input.get("MaxItems").and_then(Value::as_i64),
+        100,
+        1000,
+    )?;
+    let starting_token = input.get("NextToken").and_then(Value::as_str);
+    let mut entries: Vec<(String, Value)> = state
         .certificates
         .iter()
+        .filter(|e| {
+            status_filter
+                .as_ref()
+                .is_none_or(|set| set.iter().any(|s| s == &e.value().status))
+        })
         .map(|e| {
             let c = e.value();
-            json!({
-                "CertificateArn": c.certificate_arn,
-                "DomainName": c.domain_name,
-                "Status": c.status,
-            })
+            (
+                c.certificate_arn.clone(),
+                json!({
+                    "CertificateArn": c.certificate_arn,
+                    "DomainName": c.domain_name,
+                    "Status": c.status,
+                }),
+            )
         })
         .collect();
-
-    Ok(json!({ "CertificateSummaryList": list }))
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let page = awsim_core::paginate(entries, max_items, starting_token, |(k, _)| k.clone())?;
+    let items: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+    let mut body = json!({ "CertificateSummaryList": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
 }
 
 // ---------------------------------------------------------------------------
@@ -748,5 +779,60 @@ mod tests {
         assert_eq!(desc["Certificate"]["Type"], "AMAZON_ISSUED");
         assert_eq!(desc["Certificate"]["RenewalEligibility"], "ELIGIBLE");
         renew_certificate(&state, &json!({ "CertificateArn": arn }), &ctx()).unwrap();
+    }
+
+    #[test]
+    fn list_certificates_paginates_with_max_items_and_next_token() {
+        let state = AcmState::default();
+        for i in 0..3 {
+            request_certificate(
+                &state,
+                &json!({ "DomainName": format!("d{i}.example.com") }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        let first = list_certificates(&state, &json!({ "MaxItems": 2 }), &ctx()).unwrap();
+        let arns: Vec<String> = first["CertificateSummaryList"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["CertificateArn"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(arns.len(), 2);
+        let token = first["NextToken"].as_str().unwrap().to_string();
+        let second = list_certificates(
+            &state,
+            &json!({ "MaxItems": 2, "NextToken": token }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(
+            second["CertificateSummaryList"].as_array().unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn list_certificates_filters_by_status() {
+        let state = AcmState::default();
+        request_certificate(
+            &state,
+            &json!({ "DomainName": "active.example.com" }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = list_certificates(
+            &state,
+            &json!({ "CertificateStatuses": ["EXPIRED"] }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(
+            resp["CertificateSummaryList"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 }
