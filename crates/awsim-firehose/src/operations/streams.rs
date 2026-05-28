@@ -64,7 +64,11 @@ pub fn create_delivery_stream(
     let stream = DeliveryStream {
         name: name.to_string(),
         arn: arn.clone(),
-        status: "ACTIVE".to_string(),
+        // AWS reports CREATING immediately after create, then settles
+        // to ACTIVE once provisioning finishes. The emulator advances
+        // the state on the next Describe call rather than running a
+        // background task.
+        status: "CREATING".to_string(),
         stream_type,
         version_id: "1".to_string(),
         create_timestamp: now_secs(),
@@ -117,6 +121,14 @@ pub fn describe_delivery_stream(
     let name = input["DeliveryStreamName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidArgumentException", "DeliveryStreamName is required")
     })?;
+    // Advance any pending CREATING stream to ACTIVE on first observe.
+    // AWS settles ~1-2 minutes after CreateDeliveryStream returns; the
+    // emulator collapses that to "next Describe wins".
+    if let Some(mut s) = state.streams.get_mut(name)
+        && s.status == "CREATING"
+    {
+        s.status = "ACTIVE".to_string();
+    }
     let s = state.streams.get(name).ok_or_else(|| {
         AwsError::bad_request(
             "ResourceNotFoundException",
@@ -929,6 +941,28 @@ mod list_delivery_streams_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ResourceNotFoundException");
+    }
+
+    #[test]
+    fn create_stream_starts_in_creating_and_settles_to_active() {
+        let state = FirehoseState::default();
+        create_delivery_stream(
+            &state,
+            &json!({ "DeliveryStreamName": "ds-status" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(state.streams.get("ds-status").unwrap().status, "CREATING");
+        let desc = describe_delivery_stream(
+            &state,
+            &json!({ "DeliveryStreamName": "ds-status" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(
+            desc["DeliveryStreamDescription"]["DeliveryStreamStatus"],
+            "ACTIVE"
+        );
     }
 
     #[test]
