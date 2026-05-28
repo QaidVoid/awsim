@@ -495,22 +495,36 @@ pub fn describe_clusters(
         .get("ShowShardDetails")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let items: Vec<Value> = state
+    let max_results = awsim_core::clamp_max_results_strict(
+        input.get("MaxResults").and_then(Value::as_i64),
+        100,
+        100,
+    )?;
+    let starting_token = input.get("NextToken").and_then(Value::as_str);
+    let mut filtered: Vec<Cluster> = state
         .clusters
         .iter()
-        .filter(|e| match name_filter {
-            Some(n) => e.value().name == n,
-            None => true,
-        })
-        .map(|e| {
-            let mut v = cluster_to_value(e.value());
+        .filter(|e| name_filter.is_none_or(|n| e.value().name == n))
+        .map(|e| e.value().clone())
+        .collect();
+    filtered.sort_by(|a, b| a.name.cmp(&b.name));
+    let page = awsim_core::paginate(filtered, max_results, starting_token, |c| c.name.clone())?;
+    let items: Vec<Value> = page
+        .items
+        .iter()
+        .map(|c| {
+            let mut v = cluster_to_value(c);
             if !show_shards && let Some(obj) = v.as_object_mut() {
                 obj.remove("Shards");
             }
             v
         })
         .collect();
-    Ok(json!({ "Clusters": items }))
+    let mut body = json!({ "Clusters": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
 }
 
 pub fn delete_cluster(
@@ -618,16 +632,26 @@ pub fn describe_users(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name_filter = input.get("UserName").and_then(|v| v.as_str());
-    let items: Vec<Value> = state
+    let max_results = awsim_core::clamp_max_results_strict(
+        input.get("MaxResults").and_then(Value::as_i64),
+        100,
+        100,
+    )?;
+    let starting_token = input.get("NextToken").and_then(Value::as_str);
+    let mut filtered: Vec<User> = state
         .users
         .iter()
-        .filter(|e| match name_filter {
-            Some(n) => e.value().name == n,
-            None => true,
-        })
-        .map(|e| user_to_value(state, e.value()))
+        .filter(|e| name_filter.is_none_or(|n| e.value().name == n))
+        .map(|e| e.value().clone())
         .collect();
-    Ok(json!({ "Users": items }))
+    filtered.sort_by(|a, b| a.name.cmp(&b.name));
+    let page = awsim_core::paginate(filtered, max_results, starting_token, |u| u.name.clone())?;
+    let items: Vec<Value> = page.items.iter().map(|u| user_to_value(state, u)).collect();
+    let mut body = json!({ "Users": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
 }
 
 pub fn delete_user(
@@ -703,16 +727,26 @@ pub fn describe_acls(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name_filter = input.get("ACLName").and_then(|v| v.as_str());
-    let items: Vec<Value> = state
+    let max_results = awsim_core::clamp_max_results_strict(
+        input.get("MaxResults").and_then(Value::as_i64),
+        100,
+        100,
+    )?;
+    let starting_token = input.get("NextToken").and_then(Value::as_str);
+    let mut filtered: Vec<Acl> = state
         .acls
         .iter()
-        .filter(|e| match name_filter {
-            Some(n) => e.value().name == n,
-            None => true,
-        })
-        .map(|e| acl_to_value(e.value()))
+        .filter(|e| name_filter.is_none_or(|n| e.value().name == n))
+        .map(|e| e.value().clone())
         .collect();
-    Ok(json!({ "ACLs": items }))
+    filtered.sort_by(|a, b| a.name.cmp(&b.name));
+    let page = awsim_core::paginate(filtered, max_results, starting_token, |a| a.name.clone())?;
+    let items: Vec<Value> = page.items.iter().map(acl_to_value).collect();
+    let mut body = json!({ "ACLs": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
 }
 
 pub fn delete_acl(
@@ -1113,6 +1147,45 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
         }
+    }
+
+    #[test]
+    fn describe_clusters_paginates_with_max_results_and_next_token() {
+        let state = MemoryDbState::default();
+        for name in ["alpha", "bravo", "charlie", "delta", "echo"] {
+            create_cluster(
+                &state,
+                &json!({
+                    "ClusterName": name,
+                    "NodeType": "db.r6g.large",
+                    "ACLName": "open-access",
+                }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        let first = describe_clusters(&state, &json!({ "MaxResults": 2 }), &ctx()).unwrap();
+        let names: Vec<String> = first["Clusters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["alpha", "bravo"]);
+        let token = first["NextToken"].as_str().unwrap().to_string();
+        let second = describe_clusters(
+            &state,
+            &json!({ "MaxResults": 2, "NextToken": token }),
+            &ctx(),
+        )
+        .unwrap();
+        let names: Vec<String> = second["Clusters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["charlie", "delta"]);
     }
 
     #[test]
