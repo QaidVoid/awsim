@@ -89,17 +89,24 @@ fn validate_snapshot_window(s: &str) -> Result<(), AwsError> {
 }
 
 /// AWS-published MemoryDB engine versions and their newest patch
-/// release. Mirrors `aws memorydb describe-engine-versions` output for
-/// the supported control-plane engine identifiers.
-const ENGINE_PATCH_VERSIONS: &[(&str, &str)] =
-    &[("7.1", "7.1.0"), ("7.0", "7.0.7"), ("6.2", "6.2.6")];
+/// release, keyed by (engine, version). Mirrors
+/// `aws memorydb describe-engine-versions` output for the supported
+/// control-plane engine identifiers. Redis 6.2/7.0/7.1 plus the
+/// Valkey-fork 7.2 (memorydb_valkey7) and 8.0 (memorydb_valkey8)
+/// engines.
+const ENGINE_PATCH_VERSIONS: &[(&str, &str, &str)] = &[
+    ("redis", "7.1", "7.1.0"),
+    ("redis", "7.0", "7.0.7"),
+    ("redis", "6.2", "6.2.6"),
+    ("valkey", "8.0", "8.0.0"),
+    ("valkey", "7.2", "7.2.4"),
+];
 
-fn engine_patch_version_for(engine_version: &str) -> &'static str {
+fn engine_patch_version_for(engine: &str, engine_version: &str) -> Option<&'static str> {
     ENGINE_PATCH_VERSIONS
         .iter()
-        .find(|(v, _)| *v == engine_version)
-        .map(|(_, p)| *p)
-        .unwrap_or("7.1.0")
+        .find(|(e, v, _)| *e == engine && *v == engine_version)
+        .map(|(_, _, p)| *p)
 }
 
 /// Builds the per-cluster `Shards` payload. Each shard owns
@@ -324,6 +331,19 @@ pub fn create_cluster(
         }
         None => "redis".to_string(),
     };
+    let engine_version_input = input
+        .get("EngineVersion")
+        .and_then(|v| v.as_str())
+        .unwrap_or(if engine == "valkey" { "7.2" } else { "7.1" });
+    let engine_patch =
+        engine_patch_version_for(&engine, engine_version_input).ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterCombinationException",
+                format!(
+                    "Engine `{engine}` does not support EngineVersion `{engine_version_input}`.",
+                ),
+            )
+        })?;
     if let Some(mw) = input.get("MaintenanceWindow").and_then(Value::as_str) {
         validate_maintenance_window(mw)?;
     }
@@ -374,18 +394,8 @@ pub fn create_cluster(
         status: "available".to_string(),
         node_type,
         engine,
-        engine_version: input
-            .get("EngineVersion")
-            .and_then(|v| v.as_str())
-            .unwrap_or("7.1")
-            .to_string(),
-        engine_patch_version: engine_patch_version_for(
-            input
-                .get("EngineVersion")
-                .and_then(|v| v.as_str())
-                .unwrap_or("7.1"),
-        )
-        .to_string(),
+        engine_version: engine_version_input.to_string(),
+        engine_patch_version: engine_patch.to_string(),
         parameter_group_name: input
             .get("ParameterGroupName")
             .and_then(|v| v.as_str())
@@ -510,8 +520,17 @@ pub fn update_cluster(
         c.node_type = nt.to_string();
     }
     if let Some(ev) = input.get("EngineVersion").and_then(|v| v.as_str()) {
+        let patch = engine_patch_version_for(&c.engine, ev).ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterCombinationException",
+                format!(
+                    "Engine `{}` does not support EngineVersion `{ev}`.",
+                    c.engine
+                ),
+            )
+        })?;
         c.engine_version = ev.to_string();
-        c.engine_patch_version = engine_patch_version_for(ev).to_string();
+        c.engine_patch_version = patch.to_string();
     }
     if let Some(d) = input.get("Description").and_then(|v| v.as_str()) {
         c.description = Some(d.to_string());
@@ -1090,21 +1109,62 @@ mod tests {
     #[test]
     fn create_cluster_resolves_patch_version_for_each_engine() {
         let state = MemoryDbState::default();
-        for (engine, patch) in [("7.1", "7.1.0"), ("7.0", "7.0.7"), ("6.2", "6.2.6")] {
+        for (engine, version, patch) in [
+            ("redis", "7.1", "7.1.0"),
+            ("redis", "7.0", "7.0.7"),
+            ("redis", "6.2", "6.2.6"),
+            ("valkey", "7.2", "7.2.4"),
+            ("valkey", "8.0", "8.0.0"),
+        ] {
             let resp = create_cluster(
                 &state,
                 &json!({
-                    "ClusterName": format!("c-engine-{engine}"),
+                    "ClusterName": format!("c-{engine}-{version}"),
                     "NodeType": "db.r6g.large",
                     "ACLName": "open-access",
-                    "EngineVersion": engine,
+                    "Engine": engine,
+                    "EngineVersion": version,
                 }),
                 &ctx(),
             )
             .unwrap();
-            assert_eq!(resp["Cluster"]["EngineVersion"], engine);
+            assert_eq!(resp["Cluster"]["Engine"], engine);
+            assert_eq!(resp["Cluster"]["EngineVersion"], version);
             assert_eq!(resp["Cluster"]["EnginePatchVersion"], patch);
         }
+    }
+
+    #[test]
+    fn create_cluster_rejects_engine_version_coupling_mismatch() {
+        let state = MemoryDbState::default();
+        // redis doesn't run valkey 8.0.
+        let err = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-mismatch",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "Engine": "redis",
+                "EngineVersion": "8.0",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterCombinationException");
+        // valkey doesn't run redis 6.2.
+        let err = create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-mismatch2",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "Engine": "valkey",
+                "EngineVersion": "6.2",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterCombinationException");
     }
 
     #[test]
