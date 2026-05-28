@@ -194,6 +194,9 @@ impl ServiceHandler for EfsService {
             }
             "DeleteFileSystem" => operations::file_systems::delete_file_system(&state, &input, ctx),
             "UpdateFileSystem" => operations::file_systems::update_file_system(&state, &input, ctx),
+            "UpdateFileSystemProtection" => {
+                operations::file_systems::update_file_system_protection(&state, &input, ctx)
+            }
             "PutLifecycleConfiguration" => {
                 operations::file_systems::put_lifecycle_configuration(&state, &input, ctx)
             }

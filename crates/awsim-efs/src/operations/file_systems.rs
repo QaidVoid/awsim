@@ -52,6 +52,9 @@ fn fs_to_value(fs: &FileSystem) -> Value {
         "Name": fs.name,
         "Tags": tags_to_array(&fs.tags),
         "OwnerId": "000000000000",
+        "FileSystemProtection": {
+            "ReplicationOverwriteProtection": fs.file_system_protection_replication_overwrite_protection,
+        },
     })
 }
 
@@ -369,6 +372,41 @@ pub fn put_backup_policy(
     Ok(json!({ "BackupPolicy": { "Status": status } }))
 }
 
+/// Updates the `ReplicationOverwriteProtection` enum on a file system.
+/// AWS allows `ENABLED` and `DISABLED`; the `REPLICATING` sentinel is
+/// reserved for replica file systems set automatically by the
+/// replication subsystem.
+pub fn update_file_system_protection(
+    state: &EfsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let id = input
+        .get("FileSystemId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AwsError::bad_request("BadRequest", "FileSystemId is required"))?;
+    let value = input
+        .get("ReplicationOverwriteProtection")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            AwsError::bad_request("BadRequest", "ReplicationOverwriteProtection is required")
+        })?;
+    if !matches!(value, "ENABLED" | "DISABLED") {
+        return Err(AwsError::bad_request(
+            "BadRequest",
+            format!("ReplicationOverwriteProtection `{value}` must be ENABLED or DISABLED.",),
+        ));
+    }
+    let mut fs = state.file_systems.get_mut(id).ok_or_else(|| {
+        AwsError::not_found("FileSystemNotFound", format!("File system {id} not found"))
+    })?;
+    fs.file_system_protection_replication_overwrite_protection = value.to_string();
+    Ok(json!({
+        "FileSystemId": fs.file_system_id,
+        "ReplicationOverwriteProtection": fs.file_system_protection_replication_overwrite_protection,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,6 +455,54 @@ mod tests {
             &json!({
                 "CreationToken": "t-missing",
                 "ThroughputMode": "provisioned",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn create_file_system_emits_file_system_protection_block() {
+        let state = EfsState::default();
+        let resp =
+            create_file_system(&state, &json!({ "CreationToken": "t-protect" }), &ctx()).unwrap();
+        assert_eq!(
+            resp["FileSystemProtection"]["ReplicationOverwriteProtection"],
+            "ENABLED"
+        );
+    }
+
+    #[test]
+    fn update_file_system_protection_toggles_value() {
+        let state = EfsState::default();
+        let created =
+            create_file_system(&state, &json!({ "CreationToken": "t-toggle" }), &ctx()).unwrap();
+        let id = created["FileSystemId"].as_str().unwrap().to_string();
+        let resp = update_file_system_protection(
+            &state,
+            &json!({
+                "FileSystemId": id,
+                "ReplicationOverwriteProtection": "DISABLED",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["ReplicationOverwriteProtection"], "DISABLED");
+    }
+
+    #[test]
+    fn update_file_system_protection_rejects_replicating_value() {
+        let state = EfsState::default();
+        let created =
+            create_file_system(&state, &json!({ "CreationToken": "t-replicating" }), &ctx())
+                .unwrap();
+        let id = created["FileSystemId"].as_str().unwrap().to_string();
+        let err = update_file_system_protection(
+            &state,
+            &json!({
+                "FileSystemId": id,
+                "ReplicationOverwriteProtection": "REPLICATING",
             }),
             &ctx(),
         )
