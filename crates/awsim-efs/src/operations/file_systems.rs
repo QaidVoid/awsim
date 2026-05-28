@@ -323,6 +323,37 @@ pub fn put_lifecycle_configuration(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+    // AWS allows three transition keys per policy entry. Each accepts
+    // a different enum set; reject values outside the documented list.
+    const TRANSITION_DAYS: &[&str] = &[
+        "AFTER_1_DAY",
+        "AFTER_7_DAYS",
+        "AFTER_14_DAYS",
+        "AFTER_30_DAYS",
+        "AFTER_60_DAYS",
+        "AFTER_90_DAYS",
+        "AFTER_180_DAYS",
+        "AFTER_270_DAYS",
+        "AFTER_365_DAYS",
+        "NONE",
+    ];
+    const TRANSITION_PRIMARY: &[&str] = &["AFTER_1_ACCESS", "NONE"];
+    for p in &policies {
+        for (key, allowed) in [
+            ("TransitionToIA", TRANSITION_DAYS),
+            ("TransitionToArchive", TRANSITION_DAYS),
+            ("TransitionToPrimaryStorageClass", TRANSITION_PRIMARY),
+        ] {
+            if let Some(v) = p.get(key).and_then(Value::as_str)
+                && !allowed.contains(&v)
+            {
+                return Err(AwsError::bad_request(
+                    "BadRequest",
+                    format!("{key} `{v}` is not a valid LifecyclePolicy value."),
+                ));
+            }
+        }
+    }
     let mut fs = state.file_systems.get_mut(id).ok_or_else(|| {
         AwsError::not_found("FileSystemNotFound", format!("File system {id} not found"))
     })?;
@@ -470,6 +501,47 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn put_lifecycle_configuration_rejects_unknown_transition() {
+        let state = EfsState::default();
+        let created =
+            create_file_system(&state, &json!({ "CreationToken": "t-lc-bad" }), &ctx()).unwrap();
+        let id = created["FileSystemId"].as_str().unwrap().to_string();
+        let err = put_lifecycle_configuration(
+            &state,
+            &json!({
+                "FileSystemId": id,
+                "LifecyclePolicies": [
+                    { "TransitionToIA": "AFTER_2_DAYS" },
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequest");
+    }
+
+    #[test]
+    fn put_lifecycle_configuration_accepts_documented_enums() {
+        let state = EfsState::default();
+        let created =
+            create_file_system(&state, &json!({ "CreationToken": "t-lc-ok" }), &ctx()).unwrap();
+        let id = created["FileSystemId"].as_str().unwrap().to_string();
+        put_lifecycle_configuration(
+            &state,
+            &json!({
+                "FileSystemId": id,
+                "LifecyclePolicies": [
+                    { "TransitionToIA": "AFTER_30_DAYS" },
+                    { "TransitionToArchive": "AFTER_90_DAYS" },
+                    { "TransitionToPrimaryStorageClass": "AFTER_1_ACCESS" },
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap();
     }
 
     #[test]
