@@ -88,6 +88,20 @@ fn validate_snapshot_window(s: &str) -> Result<(), AwsError> {
     }
 }
 
+/// AWS-published MemoryDB engine versions and their newest patch
+/// release. Mirrors `aws memorydb describe-engine-versions` output for
+/// the supported control-plane engine identifiers.
+const ENGINE_PATCH_VERSIONS: &[(&str, &str)] =
+    &[("7.1", "7.1.0"), ("7.0", "7.0.7"), ("6.2", "6.2.6")];
+
+fn engine_patch_version_for(engine_version: &str) -> &'static str {
+    ENGINE_PATCH_VERSIONS
+        .iter()
+        .find(|(v, _)| *v == engine_version)
+        .map(|(_, p)| *p)
+        .unwrap_or("7.1.0")
+}
+
 fn cluster_to_value(c: &Cluster) -> Value {
     json!({
         "Name": c.name,
@@ -237,7 +251,13 @@ pub fn create_cluster(
             .and_then(|v| v.as_str())
             .unwrap_or("7.1")
             .to_string(),
-        engine_patch_version: "7.1.0".to_string(),
+        engine_patch_version: engine_patch_version_for(
+            input
+                .get("EngineVersion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("7.1"),
+        )
+        .to_string(),
         parameter_group_name: input
             .get("ParameterGroupName")
             .and_then(|v| v.as_str())
@@ -354,6 +374,7 @@ pub fn update_cluster(
     }
     if let Some(ev) = input.get("EngineVersion").and_then(|v| v.as_str()) {
         c.engine_version = ev.to_string();
+        c.engine_patch_version = engine_patch_version_for(ev).to_string();
     }
     if let Some(d) = input.get("Description").and_then(|v| v.as_str()) {
         c.description = Some(d.to_string());
@@ -820,6 +841,53 @@ mod tests {
             .unwrap_err();
             assert_eq!(err.code, "InvalidParameterValueException", "input {bad}");
         }
+    }
+
+    #[test]
+    fn create_cluster_resolves_patch_version_for_each_engine() {
+        let state = MemoryDbState::default();
+        for (engine, patch) in [("7.1", "7.1.0"), ("7.0", "7.0.7"), ("6.2", "6.2.6")] {
+            let resp = create_cluster(
+                &state,
+                &json!({
+                    "ClusterName": format!("c-engine-{engine}"),
+                    "NodeType": "db.r6g.large",
+                    "ACLName": "open-access",
+                    "EngineVersion": engine,
+                }),
+                &ctx(),
+            )
+            .unwrap();
+            assert_eq!(resp["Cluster"]["EngineVersion"], engine);
+            assert_eq!(resp["Cluster"]["EnginePatchVersion"], patch);
+        }
+    }
+
+    #[test]
+    fn update_cluster_refreshes_patch_version_on_engine_bump() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-bump",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+                "EngineVersion": "6.2",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = update_cluster(
+            &state,
+            &json!({
+                "ClusterName": "c-bump",
+                "EngineVersion": "7.0",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["Cluster"]["EngineVersion"], "7.0");
+        assert_eq!(resp["Cluster"]["EnginePatchVersion"], "7.0.7");
     }
 
     #[test]
