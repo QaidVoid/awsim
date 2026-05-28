@@ -155,12 +155,15 @@ pub fn list_delivery_streams(
     };
     let type_filter = input.get("DeliveryStreamType").and_then(Value::as_str);
     if let Some(t) = type_filter
-        && !matches!(t, "DirectPut" | "KinesisStreamAsSource" | "MSKAsSource")
+        && !matches!(
+            t,
+            "DirectPut" | "KinesisStreamAsSource" | "MSKAsSource" | "DatabaseAsSource"
+        )
     {
         return Err(AwsError::bad_request(
             "InvalidArgumentException",
             format!(
-                "DeliveryStreamType `{t}` must be DirectPut, KinesisStreamAsSource, or MSKAsSource."
+                "DeliveryStreamType `{t}` must be DirectPut, KinesisStreamAsSource, MSKAsSource, or DatabaseAsSource."
             ),
         ));
     }
@@ -261,8 +264,10 @@ fn validate_source_configuration(
         )),
         (Some(_), Some(_)) => {
             let cfg = kinesis.or(msk).or(database).cloned().unwrap_or_default();
-            if want == Some("KinesisStreamSourceConfiguration") {
-                validate_kinesis_source(&cfg)?;
+            match want {
+                Some("KinesisStreamSourceConfiguration") => validate_kinesis_source(&cfg)?,
+                Some("MSKSourceConfiguration") => validate_msk_source(&cfg)?,
+                _ => {}
             }
             Ok(Some(cfg))
         }
@@ -303,6 +308,80 @@ fn validate_kinesis_source(cfg: &Value) -> Result<(), AwsError> {
             format!(
                 "KinesisStreamSourceConfiguration.RoleARN `{role_arn}` must be an IAM role ARN."
             ),
+        ));
+    }
+    Ok(())
+}
+
+/// Validates the inner fields of `MSKSourceConfiguration`: a Kafka
+/// cluster ARN, a non-empty TopicName, and an
+/// AuthenticationConfiguration whose Connectivity enum is well-formed.
+fn validate_msk_source(cfg: &Value) -> Result<(), AwsError> {
+    let cluster_arn = cfg
+        .get("MSKClusterARN")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidArgumentException",
+                "MSKSourceConfiguration.MSKClusterARN is required.",
+            )
+        })?;
+    if !is_service_arn(cluster_arn, "kafka", "cluster/") {
+        return Err(AwsError::bad_request(
+            "InvalidArgumentException",
+            format!(
+                "MSKSourceConfiguration.MSKClusterARN `{cluster_arn}` must be a Kafka (MSK) cluster ARN."
+            ),
+        ));
+    }
+    let topic = cfg
+        .get("TopicName")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidArgumentException",
+                "MSKSourceConfiguration.TopicName is required.",
+            )
+        })?;
+    if topic.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidArgumentException",
+            "MSKSourceConfiguration.TopicName must not be empty.",
+        ));
+    }
+    let auth = cfg.get("AuthenticationConfiguration").ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidArgumentException",
+            "MSKSourceConfiguration.AuthenticationConfiguration is required.",
+        )
+    })?;
+    let connectivity = auth
+        .get("Connectivity")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidArgumentException",
+                "AuthenticationConfiguration.Connectivity is required.",
+            )
+        })?;
+    if !matches!(connectivity, "PUBLIC" | "PRIVATE") {
+        return Err(AwsError::bad_request(
+            "InvalidArgumentException",
+            format!(
+                "AuthenticationConfiguration.Connectivity `{connectivity}` must be PUBLIC or PRIVATE."
+            ),
+        ));
+    }
+    let role_arn = auth.get("RoleARN").and_then(Value::as_str).ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidArgumentException",
+            "AuthenticationConfiguration.RoleARN is required.",
+        )
+    })?;
+    if !is_iam_role_arn(role_arn) {
+        return Err(AwsError::bad_request(
+            "InvalidArgumentException",
+            format!("AuthenticationConfiguration.RoleARN `{role_arn}` must be an IAM role ARN."),
         ));
     }
     Ok(())
@@ -577,6 +656,86 @@ mod list_delivery_streams_tests {
                 "DeliveryStreamName": "ds-empty",
                 "DeliveryStreamType": "KinesisStreamAsSource",
                 "KinesisStreamSourceConfiguration": {},
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn list_delivery_streams_accepts_database_as_source_filter() {
+        let state = FirehoseState::default();
+        let resp = list_delivery_streams(
+            &state,
+            &json!({ "DeliveryStreamType": "DatabaseAsSource" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(resp["DeliveryStreamNames"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn create_accepts_msk_source_with_valid_arns() {
+        let state = FirehoseState::default();
+        create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-msk-ok",
+                "DeliveryStreamType": "MSKAsSource",
+                "MSKSourceConfiguration": {
+                    "MSKClusterARN": "arn:aws:kafka:us-east-1:111111111111:cluster/topic/abc",
+                    "TopicName": "events",
+                    "AuthenticationConfiguration": {
+                        "Connectivity": "PRIVATE",
+                        "RoleARN": "arn:aws:iam::111111111111:role/firehose-msk",
+                    },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn create_rejects_msk_source_with_bad_connectivity() {
+        let state = FirehoseState::default();
+        let err = create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-msk-bad",
+                "DeliveryStreamType": "MSKAsSource",
+                "MSKSourceConfiguration": {
+                    "MSKClusterARN": "arn:aws:kafka:us-east-1:111111111111:cluster/topic/abc",
+                    "TopicName": "events",
+                    "AuthenticationConfiguration": {
+                        "Connectivity": "INTERNET",
+                        "RoleARN": "arn:aws:iam::111111111111:role/firehose-msk",
+                    },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidArgumentException");
+    }
+
+    #[test]
+    fn create_rejects_msk_source_with_kinesis_arn() {
+        let state = FirehoseState::default();
+        let err = create_delivery_stream(
+            &state,
+            &json!({
+                "DeliveryStreamName": "ds-msk-arn",
+                "DeliveryStreamType": "MSKAsSource",
+                "MSKSourceConfiguration": {
+                    "MSKClusterARN": "arn:aws:kinesis:us-east-1:111111111111:stream/x",
+                    "TopicName": "events",
+                    "AuthenticationConfiguration": {
+                        "Connectivity": "PUBLIC",
+                        "RoleARN": "arn:aws:iam::111111111111:role/firehose-msk",
+                    },
+                },
             }),
             &ctx(),
         )
