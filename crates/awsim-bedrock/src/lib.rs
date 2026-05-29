@@ -14,7 +14,8 @@ pub use aliases::{AliasKind, AliasSpec, AliasStrategy, AliasTarget};
 pub use backend::{BedrockBackend, BedrockBackends, ResolvedTarget, single_default};
 pub use catalog::{AuthKind, CatalogModel, Provider, ProviderCatalog, ProviderKind, catalog};
 pub use config::{
-    BackendSpec, BedrockConfigError, BedrockSpec, CredentialSpec, build_from_spec, load_from_file,
+    BackendSpec, BedrockConfigError, BedrockSpec, CredentialSpec, ModelPricing, build_from_spec,
+    load_from_file,
 };
 pub use health::{BackendHealth, BackendStatus, CheckRecord, HealthRegistry, probe, run_poller};
 pub use metrics::{

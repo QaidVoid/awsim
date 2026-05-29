@@ -412,6 +412,11 @@ fn collapse_parts(parts: Vec<ContentPart>) -> MessageContent {
 /// Anthropic's native API except that `model` carries the Bedrock
 /// id, not the underlying backend tag — so we restore it from the
 /// caller's bedrock id.
+///
+/// Pricing-free variant for unit tests and call sites that don't
+/// have a `BedrockBackends` handle. Prefer
+/// [`to_bedrock_response_with_pricing`] when a registry is available
+/// so per-id token pricing can flow into the response usage block.
 pub fn to_bedrock_response(bedrock_id: &str, resp: ChatResponse) -> Value {
     let choice = resp.choices.into_iter().next();
     let (text, tool_calls, finish) = match choice {
@@ -475,6 +480,30 @@ fn tool_call_to_use_block(tc: &ToolCall) -> Value {
     })
 }
 
+/// Like [`to_bedrock_response`] but consults the registry's pricing
+/// table for `bedrock_id` and stamps `input_cost` / `output_cost` /
+/// `total_cost` into the `usage` block when a rate is configured.
+/// Ids with no pricing override produce identical output to
+/// [`to_bedrock_response`].
+pub fn to_bedrock_response_with_pricing(
+    backends: &BedrockBackends,
+    bedrock_id: &str,
+    resp: ChatResponse,
+) -> Value {
+    let usage_snapshot = resp.usage.clone().unwrap_or_default();
+    let mut value = to_bedrock_response(bedrock_id, resp);
+    if let Some(usage) = value.get_mut("usage") {
+        let patch = super::pricing_patch(
+            backends,
+            bedrock_id,
+            usage_snapshot.prompt_tokens,
+            usage_snapshot.completion_tokens,
+        );
+        super::merge_pricing_into_usage(usage, patch);
+    }
+    value
+}
+
 /// Hit the backend with `stream:true`, accumulate the SSE chunks,
 /// and emit the Anthropic-flavoured streaming-event sequence.
 pub async fn invoke_streaming(
@@ -484,7 +513,21 @@ pub async fn invoke_streaming(
 ) -> Result<Value, AwsError> {
     let acc =
         super::call_chat_stream(backends, bedrock_id, |tag| to_openai_request(tag, body)).await?;
-    let events = build_events(bedrock_id, &acc);
+    let mut events = build_events(bedrock_id, &acc);
+    if let Some(delta) = events
+        .iter_mut()
+        .rev()
+        .find(|e| e.get("type").and_then(Value::as_str) == Some("message_delta"))
+        && let Some(usage) = delta.get_mut("usage")
+    {
+        let patch = super::pricing_patch(
+            backends,
+            bedrock_id,
+            acc.prompt_tokens,
+            acc.completion_tokens,
+        );
+        super::merge_pricing_into_usage(usage, patch);
+    }
     Ok(super::stream_envelope(events))
 }
 
@@ -578,12 +621,80 @@ pub async fn invoke(
     body: &Value,
 ) -> Result<Value, AwsError> {
     let resp = super::call_chat(backends, bedrock_id, |tag| to_openai_request(tag, body)).await?;
-    Ok(to_bedrock_response(bedrock_id, resp))
+    Ok(to_bedrock_response_with_pricing(backends, bedrock_id, resp))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::{BedrockBackend, BedrockBackends};
+    use crate::config::ModelPricing;
+    use crate::model_map::ModelMap;
+    use crate::runtime::openai::Usage;
+    use std::collections::HashMap;
+
+    fn backends_with_pricing(id: &str, pricing: ModelPricing) -> BedrockBackends {
+        let backend = BedrockBackend::new("ollama".to_string(), "http://x".to_string(), None);
+        let registry = BedrockBackends::single(backend, ModelMap::defaults());
+        let mut table = HashMap::new();
+        table.insert(id.to_string(), pricing);
+        registry.with_pricing(table)
+    }
+
+    #[test]
+    fn to_bedrock_response_with_pricing_injects_cost_fields() {
+        let resp = ChatResponse {
+            id: String::new(),
+            model: String::new(),
+            choices: vec![],
+            usage: Some(Usage {
+                prompt_tokens: 1_000_000,
+                completion_tokens: 500_000,
+                total_tokens: 0,
+            }),
+        };
+        let backends = backends_with_pricing(
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            ModelPricing {
+                input_per_million_tokens: Some(3.0),
+                output_per_million_tokens: Some(15.0),
+            },
+        );
+        let v = to_bedrock_response_with_pricing(
+            &backends,
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            resp,
+        );
+        let usage = &v["usage"];
+        assert_eq!(usage["input_tokens"], 1_000_000);
+        assert_eq!(usage["output_tokens"], 500_000);
+        assert!((usage["input_cost"].as_f64().unwrap() - 3.0).abs() < 1e-9);
+        assert!((usage["output_cost"].as_f64().unwrap() - 7.5).abs() < 1e-9);
+        assert!((usage["total_cost"].as_f64().unwrap() - 10.5).abs() < 1e-9);
+        assert_eq!(usage["input_per_million_tokens"], 3.0);
+        assert_eq!(usage["output_per_million_tokens"], 15.0);
+    }
+
+    #[test]
+    fn to_bedrock_response_with_pricing_no_op_when_unregistered() {
+        let resp = ChatResponse {
+            id: String::new(),
+            model: String::new(),
+            choices: vec![],
+            usage: Some(Usage {
+                prompt_tokens: 10,
+                completion_tokens: 20,
+                total_tokens: 0,
+            }),
+        };
+        let backend = BedrockBackend::new("ollama".to_string(), "http://x".to_string(), None);
+        let backends = BedrockBackends::single(backend, ModelMap::defaults());
+        let v = to_bedrock_response_with_pricing(&backends, "unpriced.model:1:0", resp);
+        let usage = &v["usage"];
+        assert_eq!(usage["input_tokens"], 10);
+        assert!(usage.get("input_cost").is_none());
+        assert!(usage.get("total_cost").is_none());
+    }
 
     #[test]
     fn translates_string_content() {

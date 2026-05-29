@@ -606,6 +606,50 @@ pub(crate) fn accumulate_tool_call_delta(slots: &mut Vec<AccumulatedToolCall>, d
 /// `bytes` field. The protocol layer recognises the
 /// `__awsim_eventstream__` marker and turns these descriptors into
 /// the right binary frame format on the wire.
+/// Build the `usage` cost patch for a Bedrock id. Returns `None` when
+/// the operator has not configured pricing for this id, so callers
+/// emit their native usage block unchanged. When pricing is set,
+/// returns an object holding `input_cost`, `output_cost`,
+/// `total_cost` (all USD), and the operator-supplied
+/// `input_per_million_tokens` / `output_per_million_tokens` so
+/// downstream consumers can audit the rate that was applied.
+pub(crate) fn pricing_patch(
+    backends: &BedrockBackends,
+    bedrock_id: &str,
+    prompt_tokens: u32,
+    completion_tokens: u32,
+) -> Option<Value> {
+    let pricing = backends.pricing(bedrock_id)?;
+    let (input_cost, output_cost) = pricing.split_cost_usd(prompt_tokens, completion_tokens);
+    let mut patch = serde_json::Map::new();
+    patch.insert("input_cost".to_string(), Value::from(input_cost));
+    patch.insert("output_cost".to_string(), Value::from(output_cost));
+    patch.insert(
+        "total_cost".to_string(),
+        Value::from(input_cost + output_cost),
+    );
+    if let Some(rate) = pricing.input_per_million_tokens {
+        patch.insert("input_per_million_tokens".to_string(), Value::from(rate));
+    }
+    if let Some(rate) = pricing.output_per_million_tokens {
+        patch.insert("output_per_million_tokens".to_string(), Value::from(rate));
+    }
+    Some(Value::Object(patch))
+}
+
+/// Merge a `pricing_patch` result into an existing `usage` JSON
+/// object. No-op when either side is `None` or `usage` is not an
+/// object, so translator call sites can ignore the case where pricing
+/// was never configured.
+pub(crate) fn merge_pricing_into_usage(usage: &mut Value, patch: Option<Value>) {
+    let (Some(usage_obj), Some(Value::Object(patch_obj))) = (usage.as_object_mut(), patch) else {
+        return;
+    };
+    for (k, v) in patch_obj {
+        usage_obj.insert(k, v);
+    }
+}
+
 pub(crate) fn stream_envelope(chunks: Vec<Value>) -> Value {
     use base64::Engine;
     let frames: Vec<Value> = chunks

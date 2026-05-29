@@ -95,6 +95,52 @@ pub struct BedrockSpec {
     pub invoke: HashMap<String, ModelEntry>,
     #[serde(default)]
     pub embed: HashMap<String, ModelEntry>,
+    /// Per-Bedrock-id token pricing overrides. Real Bedrock returns no
+    /// pricing in its responses, and local backends (Ollama, LM
+    /// Studio) have a literal $0 cost, so downstream consumers that
+    /// want to enforce budgets/rate-limits never see a useful number.
+    /// This table lets operators stamp synthetic USD/MTok rates onto
+    /// arbitrary Bedrock ids; the runtime then injects `input_cost`,
+    /// `output_cost`, and `cost` USD fields into the response usage
+    /// block.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub pricing: HashMap<String, ModelPricing>,
+}
+
+/// Operator-set token pricing for a single Bedrock model id. Either
+/// field may be omitted, in which case that side contributes 0 to the
+/// total. Values are USD per million tokens to match the convention
+/// used by LiteLLM, AWS pricing pages, and the Anthropic console.
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, Default, PartialEq)]
+pub struct ModelPricing {
+    /// USD charged per 1,000,000 prompt tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_per_million_tokens: Option<f64>,
+    /// USD charged per 1,000,000 completion tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_per_million_tokens: Option<f64>,
+}
+
+impl ModelPricing {
+    /// Total USD cost for the given token counts. Missing rates
+    /// contribute 0 so a half-set override still emits a meaningful
+    /// number for the side that *is* priced.
+    pub fn cost_usd(&self, prompt_tokens: u32, completion_tokens: u32) -> f64 {
+        let in_cost =
+            self.input_per_million_tokens.unwrap_or(0.0) * f64::from(prompt_tokens) / 1_000_000.0;
+        let out_cost = self.output_per_million_tokens.unwrap_or(0.0) * f64::from(completion_tokens)
+            / 1_000_000.0;
+        in_cost + out_cost
+    }
+
+    /// Per-side USD cost as a `(input_cost, output_cost)` tuple.
+    pub fn split_cost_usd(&self, prompt_tokens: u32, completion_tokens: u32) -> (f64, f64) {
+        let in_cost =
+            self.input_per_million_tokens.unwrap_or(0.0) * f64::from(prompt_tokens) / 1_000_000.0;
+        let out_cost = self.output_per_million_tokens.unwrap_or(0.0) * f64::from(completion_tokens)
+            / 1_000_000.0;
+        (in_cost, out_cost)
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -263,12 +309,13 @@ pub fn build_from_spec(
         model_map.embed.insert(k, v);
     }
 
-    Ok(BedrockBackends::new_with_aliases(
-        built,
-        spec.default_backend,
-        model_map,
-        spec.aliases,
-    ))
+    let registry =
+        BedrockBackends::new_with_aliases(built, spec.default_backend, model_map, spec.aliases);
+    Ok(if spec.pricing.is_empty() {
+        registry
+    } else {
+        registry.with_pricing(spec.pricing)
+    })
 }
 
 fn resolve_credentials(
@@ -794,6 +841,37 @@ targets = [
         assert_eq!(alias.targets[1].temperature, None);
         // build still validates fine
         let _ = build_from_spec(spec, empty_env).unwrap();
+    }
+
+    #[test]
+    fn pricing_block_round_trips_through_build_from_spec() {
+        let toml_src = r#"
+[backends.ollama]
+endpoint = "http://localhost:11434/v1"
+
+[pricing."anthropic.claude-3-5-sonnet-20241022-v2:0"]
+input_per_million_tokens = 3.0
+output_per_million_tokens = 15.0
+"#;
+        let bs = load_from_str(toml_src, "test".into(), empty_env).unwrap();
+        let pricing = bs
+            .pricing("anthropic.claude-3-5-sonnet-20241022-v2:0")
+            .expect("pricing override should be registered");
+        assert_eq!(pricing.input_per_million_tokens, Some(3.0));
+        assert_eq!(pricing.output_per_million_tokens, Some(15.0));
+        let (in_cost, out_cost) = pricing.split_cost_usd(1_000_000, 500_000);
+        assert!((in_cost - 3.0).abs() < 1e-9);
+        assert!((out_cost - 7.5).abs() < 1e-9);
+        assert!(bs.pricing("not.registered:1:0").is_none());
+    }
+
+    #[test]
+    fn model_pricing_treats_missing_rate_as_zero() {
+        let pricing = ModelPricing {
+            input_per_million_tokens: Some(2.0),
+            output_per_million_tokens: None,
+        };
+        assert_eq!(pricing.cost_usd(500_000, 1_000_000), 1.0);
     }
 
     #[test]

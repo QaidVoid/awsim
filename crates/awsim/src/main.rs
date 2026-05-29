@@ -2360,6 +2360,7 @@ fn build_runtime_config_seed(cli: &Cli) -> Result<runtime_config::RuntimeConfig>
             aliases: Default::default(),
             invoke,
             embed,
+            pricing: Default::default(),
         }
     } else {
         awsim_bedrock::BedrockSpec::default()

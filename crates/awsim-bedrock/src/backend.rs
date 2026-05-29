@@ -16,6 +16,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::aliases::{AliasKind, AliasSpec, AliasTarget, alias_view};
+use crate::config::ModelPricing;
 use crate::health::HealthRegistry;
 use crate::metrics::{MetricsRegistry, RecentInvocations};
 use crate::model_map::{ModelEntry, ModelMap};
@@ -96,6 +97,10 @@ struct BackendsInner {
     /// Optional handle to the recent-invocations ring. When set,
     /// the runtime layer pushes one record per outer-call.
     recent: Option<RecentInvocations>,
+    /// Per-Bedrock-id pricing overrides. Cheap to look up by id, and
+    /// `None` for ids the operator never set (cost augmentation is a
+    /// no-op for those).
+    pricing: HashMap<String, ModelPricing>,
 }
 
 impl BedrockBackends {
@@ -113,6 +118,7 @@ impl BedrockBackends {
             health: None,
             metrics: None,
             recent: None,
+            pricing: HashMap::new(),
         }))
     }
 
@@ -131,6 +137,7 @@ impl BedrockBackends {
             health: None,
             metrics: None,
             recent: None,
+            pricing: HashMap::new(),
         }))
     }
 
@@ -150,6 +157,7 @@ impl BedrockBackends {
             health: None,
             metrics: None,
             recent: None,
+            pricing: HashMap::new(),
         }))
     }
 
@@ -169,8 +177,35 @@ impl BedrockBackends {
             health: Some(health),
             metrics: self.0.metrics.clone(),
             recent: self.0.recent.clone(),
+            pricing: self.0.pricing.clone(),
         };
         Self(Arc::new(inner))
+    }
+
+    /// Replace the per-Bedrock-id pricing table. Used by
+    /// `build_from_spec` to stamp the operator's `[pricing]` block
+    /// onto the live registry, and by hot-swap reloads to pick up
+    /// edits without restarting awsim.
+    #[must_use]
+    pub fn with_pricing(self, pricing: HashMap<String, ModelPricing>) -> Self {
+        let inner = BackendsInner {
+            backends: self.0.backends.clone(),
+            default_name: self.0.default_name.clone(),
+            model_map: self.0.model_map.clone(),
+            aliases: self.0.aliases.clone(),
+            health: self.0.health.clone(),
+            metrics: self.0.metrics.clone(),
+            recent: self.0.recent.clone(),
+            pricing,
+        };
+        Self(Arc::new(inner))
+    }
+
+    /// Pricing override for the given Bedrock id, if the operator set
+    /// one. Callers use this to compute USD cost for the response
+    /// usage block.
+    pub fn pricing(&self, bedrock_id: &str) -> Option<ModelPricing> {
+        self.0.pricing.get(bedrock_id).copied()
     }
 
     /// Attach the process-lifetime metrics + recent-invocations
@@ -187,6 +222,7 @@ impl BedrockBackends {
             health: self.0.health.clone(),
             metrics: Some(metrics),
             recent: Some(recent),
+            pricing: self.0.pricing.clone(),
         };
         Self(Arc::new(inner))
     }
