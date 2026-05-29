@@ -13,6 +13,7 @@
 		type AliasSpec,
 		type BedrockSpec,
 		type ModelMapEntry,
+		type ModelPricing,
 		type RuntimeConfig,
 		type RuntimeConfigEnvelope,
 	} from '$lib/api/runtime-config';
@@ -73,7 +74,11 @@
 
 	let dialogOpen = $state(false);
 	let dialogMode = $state<'add' | 'edit'>('add');
-	let dialogInitial = $state<{ id: string; alias: AliasSpec } | null>(null);
+	let dialogInitial = $state<{
+		id: string;
+		alias: AliasSpec;
+		pricing?: ModelPricing | null;
+	} | null>(null);
 
 	// Inline-tester UI state. Each chat row can expand to a small
 	// prompt panel; only one tester is "running" at a time so we
@@ -282,6 +287,10 @@
 		dialogOpen = true;
 	}
 
+	function pricingFor(id: string): ModelPricing | null {
+		return envelope?.config.bedrock.spec.pricing?.[id] ?? null;
+	}
+
 	function openEdit(row: Row) {
 		dialogMode = 'edit';
 		// Promote legacy entry to an alias-shaped initial value so
@@ -294,11 +303,16 @@
 				strategy: 'first',
 				targets: row.targets.map((t) => ({ backend: t.backend, tag: t.tag })),
 			},
+			pricing: pricingFor(row.id),
 		};
 		dialogOpen = true;
 	}
 
-	async function handleSubmit(result: { id: string; alias: AliasSpec }) {
+	async function handleSubmit(result: {
+		id: string;
+		alias: AliasSpec;
+		pricing?: ModelPricing | null;
+	}) {
 		const id = result.id;
 		const wasLegacy = !(envelope?.config.bedrock.spec.aliases ?? {})[id];
 		await applyMutation((spec) => {
@@ -310,6 +324,14 @@
 			if (wasLegacy) {
 				const table = result.alias.kind === 'embed' ? spec.embed : spec.invoke;
 				delete table[id];
+			}
+			// Pricing: write through when set, delete when cleared so
+			// the table doesn't bloat with empty entries.
+			spec.pricing ??= {};
+			if (result.pricing) {
+				spec.pricing[id] = result.pricing;
+			} else {
+				delete spec.pricing[id];
 			}
 		}, wasLegacy && dialogMode === 'edit' ? 'Promoted to alias' : dialogMode === 'edit' ? 'Alias updated' : 'Mapping added');
 	}
@@ -327,6 +349,9 @@
 			} else {
 				delete spec.embed[row.id];
 			}
+			// Pricing belongs to the id, not the mapping kind, so it
+			// goes away with the row.
+			if (spec.pricing) delete spec.pricing[row.id];
 		}, 'Mapping removed');
 	}
 
@@ -431,6 +456,7 @@
 				<TableBody>
 					{#each filteredRows as row (row.id + '|' + row.kind)}
 						{@const stats = rollupForId(row.id)}
+						{@const priced = pricingFor(row.id)}
 						<TableRow>
 							<TableCell class="font-mono text-xs">{row.id}</TableCell>
 							<TableCell>
@@ -440,6 +466,15 @@
 								{#if row.targets.length > 1}
 									<Badge variant="default" class="ml-1 text-[10px] uppercase" title="Has fallback targets">
 										+{row.targets.length - 1}
+									</Badge>
+								{/if}
+								{#if priced}
+									<Badge
+										variant="outline"
+										class="ml-1 font-mono text-[10px]"
+										title={`Pricing override: in $${priced.input_per_million_tokens ?? 0}/MTok · out $${priced.output_per_million_tokens ?? 0}/MTok`}
+									>
+										${priced.input_per_million_tokens ?? 0}/${priced.output_per_million_tokens ?? 0}
 									</Badge>
 								{/if}
 							</TableCell>
@@ -553,7 +588,7 @@
 											</div>
 											{#if res}
 												<div class="rounded border bg-background p-2 text-xs">
-													<div class="mb-1 flex items-center gap-2 text-muted-foreground">
+													<div class="mb-1 flex flex-wrap items-center gap-2 text-muted-foreground">
 														{#if res.error}
 															<CircleXIcon class="h-3.5 w-3.5 text-rose-500" />
 															<span class="font-semibold text-rose-600">Failed</span>
@@ -562,6 +597,23 @@
 															<span class="font-semibold text-emerald-600">OK</span>
 														{/if}
 														<span class="font-mono">{res.latencyMs}ms</span>
+														{#if res.usage}
+															{#if res.usage.inputTokens !== null}
+																<Badge variant="outline" class="font-mono text-[10px]">
+																	in {res.usage.inputTokens}t
+																</Badge>
+															{/if}
+															{#if res.usage.outputTokens !== null}
+																<Badge variant="outline" class="font-mono text-[10px]">
+																	out {res.usage.outputTokens}t
+																</Badge>
+															{/if}
+															{#if res.usage.totalCost !== null && res.usage.totalCost > 0}
+																<Badge variant="secondary" class="font-mono text-[10px]" title={`input $${(res.usage.inputCost ?? 0).toFixed(6)} + output $${(res.usage.outputCost ?? 0).toFixed(6)}`}>
+																	${res.usage.totalCost.toFixed(6)}
+																</Badge>
+															{/if}
+														{/if}
 													</div>
 													{#if res.error}
 														<pre class="whitespace-pre-wrap text-rose-600">{res.error}</pre>

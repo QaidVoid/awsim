@@ -136,10 +136,26 @@ export async function getGatewayRecent(): Promise<RecentResponse> {
   return (await res.json()) as RecentResponse;
 }
 
+/**
+ * Token + cost summary lifted from a test-prompt's raw Converse
+ * response when pricing is configured. Either side may be `null`
+ * when the response carried tokens but no rate was set, which is
+ * the typical Ollama-and-no-override case.
+ */
+export interface TestPromptUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  inputCost: number | null;
+  outputCost: number | null;
+  totalCost: number | null;
+}
+
 export interface TestPromptResult {
   latencyMs: number;
   response: string | null;
   error: string | null;
+  usage?: TestPromptUsage | null;
 }
 
 /**
@@ -166,7 +182,30 @@ export async function testGatewayPrompt(
     }
     throw new Error(msg);
   }
-  return (await res.json()) as TestPromptResult;
+  const parsed = (await res.json()) as TestPromptResult & {
+    raw?: Record<string, unknown>;
+  };
+  const usage = parseUsageFromRaw(parsed.raw);
+  return { ...parsed, usage };
+}
+
+function parseUsageFromRaw(
+  raw: Record<string, unknown> | undefined,
+): TestPromptUsage | null {
+  const u = (raw?.["usage"] as Record<string, unknown> | undefined) ?? null;
+  if (!u) return null;
+  const num = (k: string): number | null => {
+    const v = u[k];
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  };
+  return {
+    inputTokens: num("inputTokens"),
+    outputTokens: num("outputTokens"),
+    totalTokens: num("totalTokens"),
+    inputCost: num("input_cost"),
+    outputCost: num("output_cost"),
+    totalCost: num("total_cost"),
+  };
 }
 
 export async function recheckGatewayBackend(name: string): Promise<RecheckResult> {

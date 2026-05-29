@@ -65,6 +65,21 @@ export interface AliasSpec {
   targets: AliasTarget[];
 }
 
+/**
+ * Operator-set token pricing for a single Bedrock model id. The
+ * gateway stamps `input_cost` / `output_cost` / `total_cost` (USD)
+ * onto the response usage block when either rate is configured.
+ * Local backends like Ollama report `prompt_tokens` / `completion_tokens`
+ * but no cost, so this is how operators give their consumers a
+ * meaningful USD figure to enforce budgets/rate limits against.
+ *
+ * Values are USD per million tokens (matches LiteLLM + AWS).
+ */
+export interface ModelPricing {
+  input_per_million_tokens?: number | null;
+  output_per_million_tokens?: number | null;
+}
+
 export interface BedrockSpec {
   default_backend?: string | null;
   credentials?: Record<string, CredentialSpec>;
@@ -78,6 +93,12 @@ export interface BedrockSpec {
   aliases?: Record<string, AliasSpec>;
   invoke: Record<string, ModelMapEntry>;
   embed: Record<string, ModelMapEntry>;
+  /**
+   * Per-Bedrock-id pricing overrides. Keyed by the same Bedrock id
+   * the alias / invoke / embed tables use, so an alias and its
+   * pricing edit travel together.
+   */
+  pricing?: Record<string, ModelPricing>;
 }
 
 export interface BedrockSection {

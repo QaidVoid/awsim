@@ -26,6 +26,7 @@
 		AliasKind,
 		AliasSpec,
 		AliasTarget,
+		ModelPricing,
 	} from '$lib/api/runtime-config';
 	import type { CatalogProvider, ProviderCatalog } from '$lib/api/gateway';
 
@@ -35,6 +36,7 @@
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import SlidersIcon from '@lucide/svelte/icons/sliders-horizontal';
+	import DollarSignIcon from '@lucide/svelte/icons/dollar-sign';
 
 	interface BackendOption {
 		name: string;
@@ -44,6 +46,12 @@
 	interface InitialAlias {
 		id: string;
 		alias: AliasSpec;
+		/**
+		 * Optional per-id pricing override. Omitted when neither input
+		 * nor output rate is set; otherwise lands in the runtime
+		 * config's `bedrock.spec.pricing` map.
+		 */
+		pricing?: ModelPricing | null;
 	}
 
 	interface Props {
@@ -81,6 +89,11 @@
 	let bedrockId = $state('');
 	let kind = $state<AliasKind>('chat');
 	let targets = $state<TargetRow[]>([]);
+	// Pricing inputs — empty string means "leave unset / fall back to
+	// $0 cost in responses". We keep these as strings so partial typing
+	// (e.g. "3.") doesn't get clobbered by Number coercion mid-edit.
+	let priceInputPerM = $state<string>('');
+	let priceOutputPerM = $state<string>('');
 	let submitting = $state(false);
 	// Re-seed every closed -> open transition. Without this, stale
 	// text from a previous Cancel persists when the user reopens
@@ -111,6 +124,14 @@
 					(t.max_tokens ?? null) !== null ||
 					(t.temperature ?? null) !== null,
 			}));
+			priceInputPerM =
+				initial.pricing?.input_per_million_tokens != null
+					? String(initial.pricing.input_per_million_tokens)
+					: '';
+			priceOutputPerM =
+				initial.pricing?.output_per_million_tokens != null
+					? String(initial.pricing.output_per_million_tokens)
+					: '';
 		} else {
 			bedrockId = '';
 			kind = 'chat';
@@ -124,7 +145,16 @@
 					_overridesOpen: false,
 				},
 			];
+			priceInputPerM = '';
+			priceOutputPerM = '';
 		}
+	}
+
+	function parsePriceField(raw: string): number | null {
+		const trimmed = raw.trim();
+		if (trimmed === '') return null;
+		const n = Number(trimmed);
+		return Number.isFinite(n) && n >= 0 ? n : null;
 	}
 
 	// Suggested Bedrock ids pulled from the catalog's `bedrock`
@@ -202,7 +232,20 @@
 		return null;
 	});
 
-	let canSubmit = $derived(!idError && !targetsError && !submitting);
+	let priceInputError = $derived.by<string | null>(() => {
+		if (priceInputPerM.trim() === '') return null;
+		const n = Number(priceInputPerM);
+		return Number.isFinite(n) && n >= 0 ? null : 'Must be a non-negative number.';
+	});
+	let priceOutputError = $derived.by<string | null>(() => {
+		if (priceOutputPerM.trim() === '') return null;
+		const n = Number(priceOutputPerM);
+		return Number.isFinite(n) && n >= 0 ? null : 'Must be a non-negative number.';
+	});
+
+	let canSubmit = $derived(
+		!idError && !targetsError && !priceInputError && !priceOutputError && !submitting,
+	);
 
 	async function submit() {
 		if (!canSubmit) return;
@@ -222,8 +265,16 @@
 				return out;
 			}),
 		};
+		const inputRate = parsePriceField(priceInputPerM);
+		const outputRate = parsePriceField(priceOutputPerM);
+		let pricing: ModelPricing | null = null;
+		if (inputRate !== null || outputRate !== null) {
+			pricing = {};
+			if (inputRate !== null) pricing.input_per_million_tokens = inputRate;
+			if (outputRate !== null) pricing.output_per_million_tokens = outputRate;
+		}
 		try {
-			await onSubmit({ id: bedrockId.trim(), alias });
+			await onSubmit({ id: bedrockId.trim(), alias, pricing });
 			onOpenChange(false);
 		} finally {
 			submitting = false;
@@ -461,6 +512,63 @@
 					<p class="text-xs text-amber-600">{targetsError}</p>
 				{/if}
 			{/if}
+
+			<Separator />
+
+			<div class="flex flex-col gap-2">
+				<div class="flex items-center justify-between">
+					<Label class="flex items-center gap-1.5">
+						<DollarSignIcon class="h-3.5 w-3.5" />
+						Pricing override
+						<Badge variant="outline" class="ml-1 text-[10px]">optional · USD / MTok</Badge>
+					</Label>
+				</div>
+				<p class="text-xs text-muted-foreground">
+					Local backends like Ollama report token counts but no cost. Set a USD-per-million-tokens
+					rate here and the gateway stamps <code class="rounded bg-muted/40 px-1 font-mono text-[10px]">input_cost</code>,
+					<code class="rounded bg-muted/40 px-1 font-mono text-[10px]">output_cost</code>, and
+					<code class="rounded bg-muted/40 px-1 font-mono text-[10px]">total_cost</code> onto every response.
+				</p>
+				<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+					<div class="flex flex-col gap-1">
+						<Label for="price-input-per-m" class="text-[10px] uppercase text-muted-foreground">
+							Input ($ / 1M tokens)
+						</Label>
+						<Input
+							id="price-input-per-m"
+							type="number"
+							min="0"
+							step="0.01"
+							bind:value={priceInputPerM}
+							placeholder="e.g. 3.0"
+							class="font-mono"
+						/>
+						{#if priceInputError}
+							<p class="text-xs text-amber-600">{priceInputError}</p>
+						{/if}
+					</div>
+					<div class="flex flex-col gap-1">
+						<Label for="price-output-per-m" class="text-[10px] uppercase text-muted-foreground">
+							Output ($ / 1M tokens)
+						</Label>
+						<Input
+							id="price-output-per-m"
+							type="number"
+							min="0"
+							step="0.01"
+							bind:value={priceOutputPerM}
+							placeholder="e.g. 15.0"
+							class="font-mono"
+							disabled={kind === 'embed'}
+						/>
+						{#if priceOutputError}
+							<p class="text-xs text-amber-600">{priceOutputError}</p>
+						{:else if kind === 'embed'}
+							<p class="text-[10px] text-muted-foreground">Embeddings have no output tokens.</p>
+						{/if}
+					</div>
+				</div>
+			</div>
 		</div>
 
 		<DialogFooter>
