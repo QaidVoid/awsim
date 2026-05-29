@@ -151,7 +151,10 @@
 	}
 
 	function parsePriceField(raw: string): number | null {
-		const trimmed = raw.trim();
+		// `raw` is typed as string but the Input element can hand back
+		// numbers when bound to type="number"; coerce defensively so
+		// neither path crashes.
+		const trimmed = String(raw ?? '').trim();
 		if (trimmed === '') return null;
 		const n = Number(trimmed);
 		return Number.isFinite(n) && n >= 0 ? n : null;
@@ -233,13 +236,15 @@
 	});
 
 	let priceInputError = $derived.by<string | null>(() => {
-		if (priceInputPerM.trim() === '') return null;
-		const n = Number(priceInputPerM);
+		const raw = String(priceInputPerM ?? '').trim();
+		if (raw === '') return null;
+		const n = Number(raw);
 		return Number.isFinite(n) && n >= 0 ? null : 'Must be a non-negative number.';
 	});
 	let priceOutputError = $derived.by<string | null>(() => {
-		if (priceOutputPerM.trim() === '') return null;
-		const n = Number(priceOutputPerM);
+		const raw = String(priceOutputPerM ?? '').trim();
+		if (raw === '') return null;
+		const n = Number(raw);
 		return Number.isFinite(n) && n >= 0 ? null : 'Must be a non-negative number.';
 	});
 
@@ -539,7 +544,8 @@
 							type="number"
 							min="0"
 							step="0.01"
-							bind:value={priceInputPerM}
+							value={priceInputPerM}
+							oninput={(e) => (priceInputPerM = e.currentTarget.value)}
 							placeholder="e.g. 3.0"
 							class="font-mono"
 						/>
@@ -556,7 +562,8 @@
 							type="number"
 							min="0"
 							step="0.01"
-							bind:value={priceOutputPerM}
+							value={priceOutputPerM}
+							oninput={(e) => (priceOutputPerM = e.currentTarget.value)}
 							placeholder="e.g. 15.0"
 							class="font-mono"
 							disabled={kind === 'embed'}
