@@ -74,6 +74,16 @@ struct MetricEntry {
     /// Surfaces in the UI so users see what's currently failing
     /// without having to trawl the ring buffer.
     last_error: Option<String>,
+    /// Cumulative prompt tokens across every successful call routed
+    /// through this `(bedrock_id, backend)` pair. Lets the UI show a
+    /// usage chip and lets operators sanity-check whether a budget
+    /// is healthy before spend even matters.
+    prompt_tokens_total: u64,
+    /// Cumulative completion tokens across every successful call.
+    completion_tokens_total: u64,
+    /// Cumulative USD cost across every successful call. Always 0
+    /// when no pricing override is configured for the id.
+    cost_usd_total: f64,
 }
 
 impl MetricEntry {
@@ -183,6 +193,33 @@ impl MetricsRegistry {
             .record(outcome, latency_ms, err);
     }
 
+    /// Record usage tokens + USD cost on the winning `(bedrock_id,
+    /// backend)` pair. Called once per outer-call when the response
+    /// carried a usage block, after the per-attempt `record` calls.
+    /// Failed calls don't surface here; only the backend that
+    /// actually produced the response gets the bump.
+    pub fn record_usage(
+        &self,
+        bedrock_id: &str,
+        backend: &str,
+        prompt_tokens: u32,
+        completion_tokens: u32,
+        cost_usd: f64,
+    ) {
+        let key = MetricKey {
+            bedrock_id: bedrock_id.to_string(),
+            backend: backend.to_string(),
+        };
+        let mut entry = self.inner.entry(key).or_default();
+        entry.prompt_tokens_total = entry
+            .prompt_tokens_total
+            .saturating_add(prompt_tokens.into());
+        entry.completion_tokens_total = entry
+            .completion_tokens_total
+            .saturating_add(completion_tokens.into());
+        entry.cost_usd_total += cost_usd;
+    }
+
     /// Snapshot for the admin endpoint. Walks the map, computes
     /// p50/p95 from each entry's histogram, returns a JSON shape
     /// the UI can render without further client-side aggregation.
@@ -203,6 +240,9 @@ impl MetricsRegistry {
                     "p50Ms": v.percentile(0.5),
                     "p95Ms": v.percentile(0.95),
                     "lastError": v.last_error,
+                    "promptTokensTotal": v.prompt_tokens_total,
+                    "completionTokensTotal": v.completion_tokens_total,
+                    "costUsdTotal": v.cost_usd_total,
                 })
             })
             .collect();
@@ -217,13 +257,20 @@ impl MetricsRegistry {
             );
             ka.cmp(&kb)
         });
-        let totals = self.inner.iter().fold((0u64, 0u64, 0u64), |(s, r, f), kv| {
-            (
-                s + kv.value().success,
-                r + kv.value().retriable,
-                f + kv.value().fatal,
-            )
-        });
+        let totals = self
+            .inner
+            .iter()
+            .fold((0u64, 0u64, 0u64, 0u64, 0u64, 0.0_f64), |acc, kv| {
+                let v = kv.value();
+                (
+                    acc.0 + v.success,
+                    acc.1 + v.retriable,
+                    acc.2 + v.fatal,
+                    acc.3 + v.prompt_tokens_total,
+                    acc.4 + v.completion_tokens_total,
+                    acc.5 + v.cost_usd_total,
+                )
+            });
         json!({
             "mappings": by_mapping,
             "totals": {
@@ -231,6 +278,9 @@ impl MetricsRegistry {
                 "retriable": totals.1,
                 "fatal": totals.2,
                 "total": totals.0 + totals.1 + totals.2,
+                "promptTokensTotal": totals.3,
+                "completionTokensTotal": totals.4,
+                "costUsdTotal": totals.5,
             }
         })
     }
@@ -255,6 +305,18 @@ pub struct InvocationRecord {
     pub attempts: Vec<AttemptRecord>,
     pub outcome: Outcome,
     pub total_latency_ms: u64,
+    /// Prompt tokens reported by the upstream on success. `None`
+    /// when the call failed or the backend skipped a usage block
+    /// (some self-hosted endpoints do that to save bytes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u32>,
+    /// Completion tokens reported by the upstream on success.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u32>,
+    /// USD cost computed from the configured pricing override.
+    /// Always `None` when no rate is set, regardless of token counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -323,6 +385,25 @@ mod tests {
     }
 
     #[test]
+    fn record_usage_accumulates_tokens_and_cost_across_calls() {
+        let m = MetricsRegistry::new();
+        m.record("anthropic.x", "ollama", Outcome::Success, 10, None);
+        m.record_usage("anthropic.x", "ollama", 500, 250, 0.001_25);
+        m.record("anthropic.x", "ollama", Outcome::Success, 20, None);
+        m.record_usage("anthropic.x", "ollama", 1_000, 500, 0.002_5);
+        let snap = m.snapshot_json();
+        let row = &snap["mappings"][0];
+        assert_eq!(row["promptTokensTotal"], 1_500);
+        assert_eq!(row["completionTokensTotal"], 750);
+        let cost = row["costUsdTotal"].as_f64().unwrap();
+        assert!((cost - 0.003_75).abs() < 1e-9);
+        let totals = &snap["totals"];
+        assert_eq!(totals["promptTokensTotal"], 1_500);
+        assert_eq!(totals["completionTokensTotal"], 750);
+        assert!((totals["costUsdTotal"].as_f64().unwrap() - 0.003_75).abs() < 1e-9);
+    }
+
+    #[test]
     fn last_error_resets_on_success() {
         let m = MetricsRegistry::new();
         m.record(
@@ -347,6 +428,9 @@ mod tests {
                 attempts: vec![],
                 outcome: Outcome::Success,
                 total_latency_ms: 1,
+                prompt_tokens: None,
+                completion_tokens: None,
+                cost_usd: None,
             });
         }
         let snap = r.snapshot_json();

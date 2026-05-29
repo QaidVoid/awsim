@@ -147,6 +147,10 @@ async fn call_chat(
         });
         match attempt {
             Attempt::Ok(resp) => {
+                let usage = resp
+                    .usage
+                    .as_ref()
+                    .map(|u| (u.prompt_tokens, u.completion_tokens));
                 record_invocation(
                     backends,
                     bedrock_id,
@@ -154,6 +158,7 @@ async fn call_chat(
                     attempts,
                     Outcome::Success,
                     started.elapsed().as_millis() as u64,
+                    usage,
                 );
                 return Ok(resp);
             }
@@ -176,6 +181,7 @@ async fn call_chat(
                     attempts,
                     Outcome::FatalError,
                     started.elapsed().as_millis() as u64,
+                    None,
                 );
                 return Err(e);
             }
@@ -188,6 +194,7 @@ async fn call_chat(
         attempts,
         Outcome::RetriableError,
         started.elapsed().as_millis() as u64,
+        None,
     );
     Err(last_err.unwrap_or_else(|| AwsError::internal("Bedrock backend chat: no attempts ran")))
 }
@@ -215,7 +222,11 @@ fn classify_for_metrics<T>(attempt: &Attempt<T>) -> (Outcome, Option<String>) {
 
 /// Push one outer-call record to the ring + bump the per-mapping
 /// counters. No-ops cleanly when the registries are absent (CLI
-/// single-backend or tests).
+/// single-backend or tests). When `usage` is supplied (success path),
+/// the cumulative token + USD cost on the winning backend is bumped
+/// and the same numbers land on the recent-invocations entry so the
+/// Activity tab can render per-call cost without re-running the
+/// pricing lookup client-side.
 fn record_invocation(
     backends: &BedrockBackends,
     bedrock_id: &str,
@@ -223,6 +234,7 @@ fn record_invocation(
     attempts: Vec<AttemptRecord>,
     outcome: Outcome,
     total_latency_ms: u64,
+    usage: Option<(u32, u32)>,
 ) {
     if let Some(m) = backends.metrics() {
         for a in &attempts {
@@ -235,6 +247,28 @@ fn record_invocation(
             );
         }
     }
+    let (prompt_tokens, completion_tokens, cost_usd) = match usage {
+        Some((p, c)) => {
+            // `cost_for_metrics` is what we bump cumulative counters
+            // by — 0.0 when unpriced. `cost_for_record` is what the
+            // activity-ring entry surfaces — `None` when unpriced so
+            // the UI can render an em-dash rather than a misleading
+            // $0.000.
+            let pricing = backends.pricing(bedrock_id);
+            let cost_for_metrics = pricing.map(|pr| pr.cost_usd(p, c)).unwrap_or(0.0);
+            let cost_for_record = pricing.map(|pr| pr.cost_usd(p, c));
+            if let Some(m) = backends.metrics()
+                && let Some(winning) = attempts
+                    .iter()
+                    .rev()
+                    .find(|a| a.outcome == Outcome::Success)
+            {
+                m.record_usage(bedrock_id, &winning.backend, p, c, cost_for_metrics);
+            }
+            (Some(p), Some(c), cost_for_record)
+        }
+        None => (None, None, None),
+    };
     if let Some(r) = backends.recent() {
         r.push(InvocationRecord {
             at: Utc::now(),
@@ -243,6 +277,9 @@ fn record_invocation(
             attempts,
             outcome,
             total_latency_ms,
+            prompt_tokens,
+            completion_tokens,
+            cost_usd,
         });
     }
 }
@@ -436,6 +473,7 @@ pub(crate) async fn call_chat_stream(
         });
         match attempt {
             Attempt::Ok(acc) => {
+                let usage = Some((acc.prompt_tokens, acc.completion_tokens));
                 record_invocation(
                     backends,
                     bedrock_id,
@@ -443,6 +481,7 @@ pub(crate) async fn call_chat_stream(
                     attempts,
                     Outcome::Success,
                     started.elapsed().as_millis() as u64,
+                    usage,
                 );
                 return Ok(acc);
             }
@@ -465,6 +504,7 @@ pub(crate) async fn call_chat_stream(
                     attempts,
                     Outcome::FatalError,
                     started.elapsed().as_millis() as u64,
+                    None,
                 );
                 return Err(e);
             }
@@ -477,6 +517,7 @@ pub(crate) async fn call_chat_stream(
         attempts,
         Outcome::RetriableError,
         started.elapsed().as_millis() as u64,
+        None,
     );
     Err(last_err
         .unwrap_or_else(|| AwsError::internal("Bedrock backend chat stream: no attempts ran")))
@@ -780,6 +821,12 @@ async fn call_embed(
         });
         match attempt {
             Attempt::Ok(resp) => {
+                // Embeddings have no completion tokens, so report
+                // 0 on the output side. Pricing's `cost_usd` is
+                // multiplied through, which leaves the output rate
+                // contributing nothing — same shape as the
+                // translator-side patch.
+                let usage = resp.usage.as_ref().map(|u| (u.prompt_tokens, 0u32));
                 record_invocation(
                     backends,
                     bedrock_id,
@@ -787,6 +834,7 @@ async fn call_embed(
                     attempts,
                     Outcome::Success,
                     started.elapsed().as_millis() as u64,
+                    usage,
                 );
                 return Ok(resp);
             }
@@ -809,6 +857,7 @@ async fn call_embed(
                     attempts,
                     Outcome::FatalError,
                     started.elapsed().as_millis() as u64,
+                    None,
                 );
                 return Err(e);
             }
@@ -821,6 +870,7 @@ async fn call_embed(
         attempts,
         Outcome::RetriableError,
         started.elapsed().as_millis() as u64,
+        None,
     );
     Err(last_err.unwrap_or_else(|| AwsError::internal("Bedrock backend embed: no attempts ran")))
 }
