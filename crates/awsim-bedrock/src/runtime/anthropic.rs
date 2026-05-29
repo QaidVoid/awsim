@@ -499,7 +499,7 @@ pub fn to_bedrock_response_with_pricing(
             usage_snapshot.prompt_tokens,
             usage_snapshot.completion_tokens,
         );
-        super::merge_pricing_into_usage(usage, patch);
+        super::merge_pricing_into(usage, patch);
     }
     value
 }
@@ -526,7 +526,7 @@ pub async fn invoke_streaming(
             acc.prompt_tokens,
             acc.completion_tokens,
         );
-        super::merge_pricing_into_usage(usage, patch);
+        super::merge_pricing_into(usage, patch);
     }
     Ok(super::stream_envelope(events))
 }

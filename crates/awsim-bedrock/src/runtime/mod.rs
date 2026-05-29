@@ -637,16 +637,63 @@ pub(crate) fn pricing_patch(
     Some(Value::Object(patch))
 }
 
-/// Merge a `pricing_patch` result into an existing `usage` JSON
-/// object. No-op when either side is `None` or `usage` is not an
-/// object, so translator call sites can ignore the case where pricing
-/// was never configured.
-pub(crate) fn merge_pricing_into_usage(usage: &mut Value, patch: Option<Value>) {
-    let (Some(usage_obj), Some(Value::Object(patch_obj))) = (usage.as_object_mut(), patch) else {
+/// Merge a `pricing_patch` result into an existing JSON object
+/// (typically a `usage` block, or the top-level response when the
+/// family has no nested `usage`). No-op when either side is `None`
+/// or the target isn't an object, so translator call sites can
+/// ignore the case where pricing was never configured.
+pub(crate) fn merge_pricing_into(target: &mut Value, patch: Option<Value>) {
+    let (Some(obj), Some(Value::Object(patch_obj))) = (target.as_object_mut(), patch) else {
         return;
     };
     for (k, v) in patch_obj {
-        usage_obj.insert(k, v);
+        obj.insert(k, v);
+    }
+}
+
+#[cfg(test)]
+mod pricing_tests {
+    use super::*;
+    use crate::backend::{BedrockBackend, BedrockBackends};
+    use crate::config::ModelPricing;
+    use crate::model_map::ModelMap;
+    use std::collections::HashMap;
+
+    fn registry(id: &str, pricing: ModelPricing) -> BedrockBackends {
+        let backend = BedrockBackend::new("ollama".to_string(), "http://x".to_string(), None);
+        let registry = BedrockBackends::single(backend, ModelMap::defaults());
+        let mut table = HashMap::new();
+        table.insert(id.to_string(), pricing);
+        registry.with_pricing(table)
+    }
+
+    #[test]
+    fn pricing_patch_returns_none_when_unconfigured() {
+        let backend = BedrockBackend::new("o".to_string(), "http://x".to_string(), None);
+        let r = BedrockBackends::single(backend, ModelMap::defaults());
+        assert!(pricing_patch(&r, "missing", 1, 2).is_none());
+    }
+
+    #[test]
+    fn pricing_patch_emits_input_output_total_costs() {
+        let r = registry(
+            "id",
+            ModelPricing {
+                input_per_million_tokens: Some(2.0),
+                output_per_million_tokens: Some(4.0),
+            },
+        );
+        let patch = pricing_patch(&r, "id", 1_000_000, 500_000).unwrap();
+        assert!((patch["input_cost"].as_f64().unwrap() - 2.0).abs() < 1e-9);
+        assert!((patch["output_cost"].as_f64().unwrap() - 2.0).abs() < 1e-9);
+        assert!((patch["total_cost"].as_f64().unwrap() - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn merge_pricing_into_is_a_no_op_on_non_object_target() {
+        let mut v = Value::String("not an object".to_string());
+        merge_pricing_into(&mut v, Some(serde_json::json!({ "input_cost": 1.0 })));
+        assert_eq!(v, Value::String("not an object".to_string()));
     }
 }
 

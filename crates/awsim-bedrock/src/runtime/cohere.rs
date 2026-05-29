@@ -86,9 +86,17 @@ pub async fn invoke(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    super::call_chat(backends, bedrock_id, |tag| to_openai_request(tag, body))
-        .await
-        .map(|resp| to_bedrock_response(&prompt, resp))
+    let resp = super::call_chat(backends, bedrock_id, |tag| to_openai_request(tag, body)).await?;
+    let usage = resp.usage.clone().unwrap_or_default();
+    let mut value = to_bedrock_response(&prompt, resp);
+    let patch = super::pricing_patch(
+        backends,
+        bedrock_id,
+        usage.prompt_tokens,
+        usage.completion_tokens,
+    );
+    super::merge_pricing_into(&mut value, patch);
+    Ok(value)
 }
 
 pub async fn invoke_streaming(
@@ -110,10 +118,17 @@ pub async fn invoke_streaming(
         "is_finished": false,
         "finish_reason": Value::Null,
     });
-    let stop = json!({
+    let mut stop = json!({
         "is_finished": true,
         "finish_reason": cohere_finish,
     });
+    let patch = super::pricing_patch(
+        backends,
+        bedrock_id,
+        acc.prompt_tokens,
+        acc.completion_tokens,
+    );
+    super::merge_pricing_into(&mut stop, patch);
     Ok(super::stream_envelope(vec![body, stop]))
 }
 

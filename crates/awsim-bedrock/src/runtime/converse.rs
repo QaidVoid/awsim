@@ -427,10 +427,18 @@ pub async fn invoke(
 ) -> Result<Value, AwsError> {
     let started = std::time::Instant::now();
     let resp = super::call_chat(backends, bedrock_id, |tag| to_openai_request(tag, input)).await?;
-    Ok(to_bedrock_response(
-        resp,
-        started.elapsed().as_millis() as u64,
-    ))
+    let usage = resp.usage.clone().unwrap_or_default();
+    let mut value = to_bedrock_response(resp, started.elapsed().as_millis() as u64);
+    if let Some(usage_obj) = value.get_mut("usage") {
+        let patch = super::pricing_patch(
+            backends,
+            bedrock_id,
+            usage.prompt_tokens,
+            usage.completion_tokens,
+        );
+        super::merge_pricing_into(usage_obj, patch);
+    }
+    Ok(value)
 }
 
 pub async fn invoke_streaming(
@@ -477,7 +485,7 @@ pub async fn invoke_streaming(
         events.push(json!({ "contentBlockStop": { "contentBlockIndex": idx } }));
     }
     events.push(json!({ "messageStop": { "stopReason": stop_reason } }));
-    events.push(json!({
+    let mut metadata = json!({
         "metadata": {
             "usage": {
                 "inputTokens":  acc.prompt_tokens,
@@ -486,7 +494,20 @@ pub async fn invoke_streaming(
             },
             "metrics": { "latencyMs": started.elapsed().as_millis() as u64 }
         }
-    }));
+    });
+    if let Some(usage) = metadata
+        .get_mut("metadata")
+        .and_then(|m| m.get_mut("usage"))
+    {
+        let patch = super::pricing_patch(
+            backends,
+            bedrock_id,
+            acc.prompt_tokens,
+            acc.completion_tokens,
+        );
+        super::merge_pricing_into(usage, patch);
+    }
+    events.push(metadata);
     Ok(super::converse_stream_envelope(events))
 }
 

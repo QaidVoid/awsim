@@ -67,9 +67,12 @@ pub async fn invoke(
                 .collect()
         })
         .unwrap_or_default();
-    super::call_embed(backends, bedrock_id, |tag| to_openai_request(tag, body))
-        .await
-        .map(|resp| to_bedrock_response(&texts, resp))
+    let resp = super::call_embed(backends, bedrock_id, |tag| to_openai_request(tag, body)).await?;
+    let prompt_tokens = resp.usage.clone().unwrap_or_default().prompt_tokens;
+    let mut value = to_bedrock_response(&texts, resp);
+    let patch = super::pricing_patch(backends, bedrock_id, prompt_tokens, 0);
+    super::merge_pricing_into(&mut value, patch);
+    Ok(value)
 }
 
 #[cfg(test)]

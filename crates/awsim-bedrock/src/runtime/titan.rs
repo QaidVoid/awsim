@@ -76,9 +76,17 @@ pub async fn invoke(
     bedrock_id: &str,
     body: &Value,
 ) -> Result<Value, AwsError> {
-    super::call_chat(backends, bedrock_id, |tag| to_openai_request(tag, body))
-        .await
-        .map(to_bedrock_response)
+    let resp = super::call_chat(backends, bedrock_id, |tag| to_openai_request(tag, body)).await?;
+    let usage = resp.usage.clone().unwrap_or_default();
+    let mut value = to_bedrock_response(resp);
+    let patch = super::pricing_patch(
+        backends,
+        bedrock_id,
+        usage.prompt_tokens,
+        usage.completion_tokens,
+    );
+    super::merge_pricing_into(&mut value, patch);
+    Ok(value)
 }
 
 /// Single accumulated chunk in Titan streaming format.
@@ -93,13 +101,20 @@ pub async fn invoke_streaming(
         Some("length") => "LENGTH",
         _ => "FINISH",
     };
-    let chunk = json!({
+    let mut chunk = json!({
         "outputText": acc.text,
         "completionReason": completion_reason,
         "index": 0,
         "inputTextTokenCount": acc.prompt_tokens,
         "totalOutputTextTokenCount": acc.completion_tokens,
     });
+    let patch = super::pricing_patch(
+        backends,
+        bedrock_id,
+        acc.prompt_tokens,
+        acc.completion_tokens,
+    );
+    super::merge_pricing_into(&mut chunk, patch);
     Ok(super::stream_envelope(vec![chunk]))
 }
 
