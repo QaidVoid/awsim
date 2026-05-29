@@ -89,6 +89,17 @@ export interface MetricMappingRow {
   p50Ms: number | null;
   p95Ms: number | null;
   lastError: string | null;
+  /** Cumulative prompt tokens routed through this (id, backend) pair. */
+  promptTokensTotal: number;
+  /** Cumulative completion tokens routed through this (id, backend) pair. */
+  completionTokensTotal: number;
+  /**
+   * Cumulative USD cost. Always `0` for ids without a pricing
+   * override; consumers should distinguish "no rate set" from
+   * "zero spent" by checking whether the bedrock id has an entry
+   * in `bedrock.spec.pricing`.
+   */
+  costUsdTotal: number;
 }
 
 export interface MetricTotals {
@@ -96,6 +107,9 @@ export interface MetricTotals {
   retriable: number;
   fatal: number;
   total: number;
+  promptTokensTotal: number;
+  completionTokensTotal: number;
+  costUsdTotal: number;
 }
 
 export interface MetricsResponse {
@@ -124,6 +138,16 @@ export interface InvocationRecord {
   attempts: AttemptRecord[];
   outcome: Outcome;
   totalLatencyMs: number;
+  /** Prompt tokens reported by the upstream on success. */
+  promptTokens?: number | null;
+  /** Completion tokens reported by the upstream on success. */
+  completionTokens?: number | null;
+  /**
+   * USD cost computed from the configured pricing override.
+   * `null`/missing when no rate is set for this bedrock id, so
+   * consumers can render an em-dash rather than a misleading $0.
+   */
+  costUsd?: number | null;
 }
 
 export interface RecentResponse {

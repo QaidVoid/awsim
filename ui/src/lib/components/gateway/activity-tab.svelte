@@ -84,6 +84,16 @@
 		return `${r.at}-${r.bedrockId}`;
 	}
 
+	function formatCost(usd: number): string {
+		// Choose precision based on magnitude so a $3.00 call doesn't
+		// render as "$3.000000" and a $0.0000045 call doesn't truncate
+		// to "$0.00".
+		if (usd === 0) return '$0';
+		if (usd >= 1) return `$${usd.toFixed(2)}`;
+		if (usd >= 0.01) return `$${usd.toFixed(4)}`;
+		return `$${usd.toFixed(6)}`;
+	}
+
 	function toggle(key: string) {
 		expanded[key] = !expanded[key];
 	}
@@ -114,6 +124,13 @@
 					· <span class="text-emerald-600">{totals.success} ok</span>
 					· <span class="text-amber-600">{totals.retriable} retriable</span>
 					· <span class="text-rose-600">{totals.fatal} fatal</span>
+					{#if totals.promptTokensTotal > 0 || totals.completionTokensTotal > 0}
+						· <span class="font-mono">{totals.promptTokensTotal.toLocaleString()} in
+						/ {totals.completionTokensTotal.toLocaleString()} out tokens</span>
+					{/if}
+					{#if totals.costUsdTotal > 0}
+						· <span class="font-mono font-semibold text-foreground">{formatCost(totals.costUsdTotal)} spent</span>
+					{/if}
 				{/if}
 			</p>
 		</div>
@@ -142,6 +159,8 @@
 						<TableHead>Bedrock id</TableHead>
 						<TableHead>Outcome</TableHead>
 						<TableHead>Attempts</TableHead>
+						<TableHead>Tokens</TableHead>
+						<TableHead>Cost</TableHead>
 						<TableHead>Latency</TableHead>
 					</TableRow>
 				</TableHeader>
@@ -174,11 +193,27 @@
 								<Badge variant={ob.variant} class="text-[10px] uppercase">{ob.label}</Badge>
 							</TableCell>
 							<TableCell class="text-xs">{r.attempts.length}</TableCell>
+							<TableCell class="font-mono text-xs text-muted-foreground">
+								{#if r.promptTokens != null || r.completionTokens != null}
+									{r.promptTokens ?? 0} / {r.completionTokens ?? 0}
+								{:else}
+									—
+								{/if}
+							</TableCell>
+							<TableCell class="font-mono text-xs">
+								{#if r.costUsd != null}
+									<span class="font-semibold text-foreground" title="Cost stamped from this id's pricing override">
+										{formatCost(r.costUsd)}
+									</span>
+								{:else}
+									<span class="text-muted-foreground" title="No pricing override set for this Bedrock id">—</span>
+								{/if}
+							</TableCell>
 							<TableCell class="font-mono text-xs">{r.totalLatencyMs}ms</TableCell>
 						</TableRow>
 						{#if isOpen}
 							<TableRow>
-								<TableCell colspan={7} class="bg-muted/30">
+								<TableCell colspan={9} class="bg-muted/30">
 									{#if r.attempts.length === 0}
 										<p class="py-2 text-xs text-muted-foreground">No attempts recorded.</p>
 									{:else}

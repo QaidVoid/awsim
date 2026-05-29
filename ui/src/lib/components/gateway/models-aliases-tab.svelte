@@ -159,12 +159,23 @@
 		}
 	}
 
-	function rollupForId(id: string): { total: number; p50: number | null; p95: number | null } {
+	function rollupForId(id: string): {
+		total: number;
+		p50: number | null;
+		p95: number | null;
+		promptTokens: number;
+		completionTokens: number;
+		costUsd: number;
+	} {
 		const rows = metricsByMapping[id] ?? [];
-		if (rows.length === 0) return { total: 0, p50: null, p95: null };
+		if (rows.length === 0)
+			return { total: 0, p50: null, p95: null, promptTokens: 0, completionTokens: 0, costUsd: 0 };
 		let total = 0;
 		let p50 = 0;
 		let p95 = 0;
+		let promptTokens = 0;
+		let completionTokens = 0;
+		let costUsd = 0;
 		// Aggregate as the max of per-backend percentiles. Exact
 		// percentile-of-the-union would need bucket merging server-
 		// side; max-of-percentiles is the conservative read for a
@@ -174,8 +185,25 @@
 			total += r.total;
 			if (r.p50Ms !== null) p50 = Math.max(p50, r.p50Ms);
 			if (r.p95Ms !== null) p95 = Math.max(p95, r.p95Ms);
+			promptTokens += r.promptTokensTotal;
+			completionTokens += r.completionTokensTotal;
+			costUsd += r.costUsdTotal;
 		}
-		return { total, p50: p50 || null, p95: p95 || null };
+		return {
+			total,
+			p50: p50 || null,
+			p95: p95 || null,
+			promptTokens,
+			completionTokens,
+			costUsd,
+		};
+	}
+
+	function formatCost(usd: number): string {
+		if (usd === 0) return '$0';
+		if (usd >= 1) return `$${usd.toFixed(2)}`;
+		if (usd >= 0.01) return `$${usd.toFixed(4)}`;
+		return `$${usd.toFixed(6)}`;
 	}
 
 	async function reload() {
@@ -514,6 +542,24 @@
 										{#if stats.p95 !== null}
 											<Badge variant="secondary" class="font-mono">
 												p95 {stats.p95}ms
+											</Badge>
+										{/if}
+										{#if stats.promptTokens > 0 || stats.completionTokens > 0}
+											<Badge
+												variant="outline"
+												class="font-mono"
+												title={`Cumulative tokens: ${stats.promptTokens} in / ${stats.completionTokens} out`}
+											>
+												{stats.promptTokens.toLocaleString()}/{stats.completionTokens.toLocaleString()}t
+											</Badge>
+										{/if}
+										{#if stats.costUsd > 0}
+											<Badge
+												variant="default"
+												class="font-mono"
+												title="Cumulative USD cost from the pricing override"
+											>
+												{formatCost(stats.costUsd)}
 											</Badge>
 										{/if}
 									</div>
