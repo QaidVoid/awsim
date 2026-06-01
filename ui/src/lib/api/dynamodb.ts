@@ -331,6 +331,92 @@ export async function setProvisionedThroughput(
   });
 }
 
+/**
+ * Add a Global Secondary Index to an existing table. The hash key
+ * attribute (and the optional range key) are registered in the
+ * table's AttributeDefinitions when they aren't there yet — AWS
+ * rejects UpdateTable.GlobalSecondaryIndexUpdates.Create unless every
+ * KeySchema attribute has a matching definition.
+ *
+ * `nonKeyAttributes` is only meaningful for `INCLUDE`; the resolver
+ * ignores it for KEYS_ONLY and ALL.
+ */
+export interface CreateGsiParams {
+  indexName: string;
+  hashKey: string;
+  hashKeyType: ScalarType;
+  rangeKey?: string;
+  rangeKeyType?: ScalarType;
+  projectionType: "KEYS_ONLY" | "INCLUDE" | "ALL";
+  nonKeyAttributes?: string[];
+}
+
+export async function createGsi(
+  tableName: string,
+  params: CreateGsiParams,
+  existingAttrDefs: AttributeDefinition[],
+): Promise<void> {
+  const known = new Set(existingAttrDefs.map((a) => a.attributeName));
+  const newAttrDefs: { AttributeName: string; AttributeType: string }[] = [];
+  if (!known.has(params.hashKey)) {
+    newAttrDefs.push({
+      AttributeName: params.hashKey,
+      AttributeType: params.hashKeyType,
+    });
+    known.add(params.hashKey);
+  }
+  if (params.rangeKey && !known.has(params.rangeKey)) {
+    newAttrDefs.push({
+      AttributeName: params.rangeKey,
+      AttributeType: params.rangeKeyType ?? "S",
+    });
+  }
+
+  const keySchema: { AttributeName: string; KeyType: string }[] = [
+    { AttributeName: params.hashKey, KeyType: "HASH" },
+  ];
+  if (params.rangeKey) {
+    keySchema.push({ AttributeName: params.rangeKey, KeyType: "RANGE" });
+  }
+
+  const projection: Record<string, unknown> = {
+    ProjectionType: params.projectionType,
+  };
+  if (
+    params.projectionType === "INCLUDE" &&
+    params.nonKeyAttributes &&
+    params.nonKeyAttributes.length > 0
+  ) {
+    projection.NonKeyAttributes = params.nonKeyAttributes;
+  }
+
+  const body: Record<string, unknown> = {
+    TableName: tableName,
+    GlobalSecondaryIndexUpdates: [
+      {
+        Create: {
+          IndexName: params.indexName,
+          KeySchema: keySchema,
+          Projection: projection,
+        },
+      },
+    ],
+  };
+  if (newAttrDefs.length > 0) body.AttributeDefinitions = newAttrDefs;
+
+  await request("UpdateTable", body);
+}
+
+export async function deleteGsi(
+  tableName: string,
+  indexName: string,
+): Promise<void> {
+  await request("UpdateTable", {
+    TableName: tableName,
+    GlobalSecondaryIndexUpdates: [{ Delete: { IndexName: indexName } }],
+  });
+}
+
 export async function describeTtl(name: string): Promise<TtlState> {
   const data = await request<{
     TimeToLiveDescription?: {

@@ -301,7 +301,7 @@
 					<PartiqlTab tableName={selected.name} />
 				</TabsContent>
 				<TabsContent value="indexes" class="m-0 h-full min-w-0">
-					<IndexesTab {detail} />
+					<IndexesTab {detail} onUpdated={refreshDetail} />
 				</TabsContent>
 				<TabsContent value="schema" class="m-0 h-full min-w-0">
 					<SchemaTab {detail} onUpdated={refreshDetail} />
