@@ -461,13 +461,15 @@
 									{/if}
 								</th>
 							{/each}
-							<th class="w-10"></th>
+							<th
+								class="sticky right-0 z-20 w-10 border-l border-border bg-background/95 backdrop-blur-sm"
+							></th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each items as item, i (i)}
 							<tr
-								class="cursor-pointer border-b border-border/40 hover:bg-muted/40"
+								class="group cursor-pointer border-b border-border/40 hover:bg-muted/40"
 								onclick={() => onEdit(item)}
 							>
 								{#each columns as col (col)}
@@ -487,7 +489,9 @@
 										</div>
 									</td>
 								{/each}
-								<td class="px-2 align-top">
+								<td
+									class="sticky right-0 border-l border-border bg-background/95 px-2 align-top backdrop-blur-sm group-hover:bg-muted/95"
+								>
 									<Button
 										variant="ghost"
 										size="icon-xs"
