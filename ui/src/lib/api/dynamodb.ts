@@ -251,6 +251,22 @@ export async function describeTable(name: string): Promise<TableDetail> {
   return mapTable(data.Table ?? {}, name);
 }
 
+/**
+ * Index definition used by both Create-time GSIs and LSIs in the
+ * Create table dialog. `hashKey` is the index PK; for LSIs the
+ * caller is responsible for setting it equal to the table's PK
+ * (AWS rule), and `rangeKey` is required.
+ */
+export interface SecondaryIndexInput {
+  indexName: string;
+  hashKey: string;
+  hashKeyType: ScalarType;
+  rangeKey?: string;
+  rangeKeyType?: ScalarType;
+  projectionType: "KEYS_ONLY" | "INCLUDE" | "ALL";
+  nonKeyAttributes?: string[];
+}
+
 export interface CreateTableParams {
   name: string;
   partitionKey: string;
@@ -258,35 +274,88 @@ export interface CreateTableParams {
   sortKey?: string;
   sortKeyType?: ScalarType;
   deletionProtectionEnabled?: boolean;
+  globalSecondaryIndexes?: SecondaryIndexInput[];
+  localSecondaryIndexes?: SecondaryIndexInput[];
+}
+
+function indexToWire(
+  idx: SecondaryIndexInput,
+): Record<string, unknown> {
+  const keySchema: { AttributeName: string; KeyType: string }[] = [
+    { AttributeName: idx.hashKey, KeyType: "HASH" },
+  ];
+  if (idx.rangeKey) {
+    keySchema.push({ AttributeName: idx.rangeKey, KeyType: "RANGE" });
+  }
+  const projection: Record<string, unknown> = {
+    ProjectionType: idx.projectionType,
+  };
+  if (
+    idx.projectionType === "INCLUDE" &&
+    idx.nonKeyAttributes &&
+    idx.nonKeyAttributes.length > 0
+  ) {
+    projection.NonKeyAttributes = idx.nonKeyAttributes;
+  }
+  return {
+    IndexName: idx.indexName,
+    KeySchema: keySchema,
+    Projection: projection,
+  };
 }
 
 export async function createTable(params: CreateTableParams): Promise<void> {
+  // Build AttributeDefinitions as a union of every key attribute
+  // referenced across the table key schema + GSIs + LSIs. AWS
+  // rejects CreateTable if any KeySchema entry isn't declared.
+  const attrTypes = new Map<string, ScalarType>();
+  attrTypes.set(params.partitionKey, params.partitionKeyType);
+  if (params.sortKey) {
+    attrTypes.set(params.sortKey, params.sortKeyType ?? "S");
+  }
+  for (const idx of [
+    ...(params.globalSecondaryIndexes ?? []),
+    ...(params.localSecondaryIndexes ?? []),
+  ]) {
+    if (!attrTypes.has(idx.hashKey)) {
+      attrTypes.set(idx.hashKey, idx.hashKeyType);
+    }
+    if (idx.rangeKey && !attrTypes.has(idx.rangeKey)) {
+      attrTypes.set(idx.rangeKey, idx.rangeKeyType ?? "S");
+    }
+  }
+
   const attributeDefinitions: {
     AttributeName: string;
     AttributeType: string;
-  }[] = [
-    {
-      AttributeName: params.partitionKey,
-      AttributeType: params.partitionKeyType,
-    },
-  ];
+  }[] = Array.from(attrTypes.entries()).map(([name, type]) => ({
+    AttributeName: name,
+    AttributeType: type,
+  }));
   const keySchema: { AttributeName: string; KeyType: string }[] = [
     { AttributeName: params.partitionKey, KeyType: "HASH" },
   ];
   if (params.sortKey) {
-    attributeDefinitions.push({
-      AttributeName: params.sortKey,
-      AttributeType: params.sortKeyType ?? "S",
-    });
     keySchema.push({ AttributeName: params.sortKey, KeyType: "RANGE" });
   }
-  await request("CreateTable", {
+
+  const body: Record<string, unknown> = {
     TableName: params.name,
     AttributeDefinitions: attributeDefinitions,
     KeySchema: keySchema,
     BillingMode: "PAY_PER_REQUEST",
     DeletionProtectionEnabled: params.deletionProtectionEnabled ?? false,
-  });
+  };
+  if (params.globalSecondaryIndexes && params.globalSecondaryIndexes.length > 0) {
+    body.GlobalSecondaryIndexes =
+      params.globalSecondaryIndexes.map(indexToWire);
+  }
+  if (params.localSecondaryIndexes && params.localSecondaryIndexes.length > 0) {
+    body.LocalSecondaryIndexes =
+      params.localSecondaryIndexes.map(indexToWire);
+  }
+
+  await request("CreateTable", body);
 }
 
 export async function deleteTable(name: string): Promise<void> {
