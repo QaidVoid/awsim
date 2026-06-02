@@ -67,4 +67,26 @@ pub struct StepFunctionsState {
     pub executions: DashMap<String, Execution>,
     /// activityArn → Activity
     pub activities: DashMap<String, Activity>,
+    /// taskToken → suspended `.waitForTaskToken` Task awaiting
+    /// SendTaskSuccess / SendTaskFailure / SendTaskHeartbeat.
+    pub pending_tokens: DashMap<String, PendingTask>,
+}
+
+/// A `.waitForTaskToken` Task whose execution is suspended pending a
+/// callback. Captures everything needed to resume the tail of the state
+/// machine when the token is answered.
+#[derive(Debug, Clone)]
+pub struct PendingTask {
+    pub exec_arn: String,
+    pub definition: String,
+    pub is_express: bool,
+    /// The waiting Task's own state name (used for Catch on failure).
+    pub waiting_state: String,
+    /// The state to resume from on success; `None` if the Task was the
+    /// terminal state.
+    pub next_state: Option<String>,
+    pub input_at_wait: String,
+    pub result_path: Option<String>,
+    pub start_date: String,
+    pub last_heartbeat: u64,
 }

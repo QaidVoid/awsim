@@ -10,11 +10,70 @@ use crate::state::HistoryEvent;
 
 /// Result of executing an ASL state machine.
 pub struct ExecResult {
-    pub status: String, // SUCCEEDED or FAILED
+    pub status: String, // SUCCEEDED, FAILED, or WAITING
     pub output: Option<String>,
     pub error: Option<String>,
     pub cause: Option<String>,
     pub history: Vec<HistoryEvent>,
+    /// Populated only when `status == "WAITING"` (a `.waitForTaskToken`
+    /// Task suspended the execution). `waiting_next` is the state to
+    /// resume from once the token is answered; `None` means the waiting
+    /// Task was the terminal state.
+    pub waiting_token: Option<String>,
+    pub waiting_state: Option<String>,
+    pub waiting_next: Option<String>,
+    pub waiting_input: Option<String>,
+    pub waiting_result_path: Option<String>,
+}
+
+/// Sentinel error used to unwind the recursive interpreter when a
+/// `.waitForTaskToken` Task suspends. It bypasses Retry/Catch and is
+/// recognized by `execute_typed_with_context` as a WAITING outcome.
+const WAIT_SENTINEL: &str = "__awsim.WaitForTaskToken";
+
+impl ExecResult {
+    fn failed(
+        error: impl Into<String>,
+        cause: impl Into<String>,
+        history: Vec<HistoryEvent>,
+    ) -> Self {
+        Self {
+            status: "FAILED".to_string(),
+            output: None,
+            error: Some(error.into()),
+            cause: Some(cause.into()),
+            history,
+            waiting_token: None,
+            waiting_state: None,
+            waiting_next: None,
+            waiting_input: None,
+            waiting_result_path: None,
+        }
+    }
+
+    fn succeeded(output: String, history: Vec<HistoryEvent>) -> Self {
+        Self {
+            status: "SUCCEEDED".to_string(),
+            output: Some(output),
+            error: None,
+            cause: None,
+            history,
+            waiting_token: None,
+            waiting_state: None,
+            waiting_next: None,
+            waiting_input: None,
+            waiting_result_path: None,
+        }
+    }
+}
+
+/// A `.waitForTaskToken` Task that suspended the current run.
+struct PendingWait {
+    token: String,
+    state_name: String,
+    next: Option<String>,
+    input: Value,
+    result_path: Option<String>,
 }
 
 /// Like [`execute_typed`] but seeds the AWS States context object so
@@ -51,71 +110,43 @@ fn execute_typed_with_context(
     let def: Value = match serde_json::from_str(definition) {
         Ok(v) => v,
         Err(e) => {
-            return ExecResult {
-                status: "FAILED".to_string(),
-                output: None,
-                error: Some("InvalidDefinition".to_string()),
-                cause: Some(e.to_string()),
-                history: Vec::new(),
-            };
+            return ExecResult::failed("InvalidDefinition", e.to_string(), Vec::new());
         }
     };
 
     let input_val: Value = serde_json::from_str(input).unwrap_or(Value::Null);
 
-    let mut ctx = InterpreterContext {
-        states: def["States"].clone(),
+    let mut ctx = new_context(def["States"].clone(), start_time, is_express, context);
+
+    let start_at = match def["StartAt"].as_str() {
+        Some(s) => s.to_string(),
+        None => {
+            return ExecResult::failed("InvalidDefinition", "Missing StartAt", ctx.history);
+        }
+    };
+
+    ctx.push_event("ExecutionStarted", json!({ "input": input }));
+
+    let run = ctx.run_state(&start_at, input_val);
+    ctx.into_result(run)
+}
+
+/// Construct a fresh interpreter context.
+fn new_context(
+    states: Value,
+    start_time: &str,
+    is_express: bool,
+    context: Value,
+) -> InterpreterContext {
+    InterpreterContext {
+        states,
         history: Vec::new(),
         event_counter: 0,
         start_time: start_time.to_string(),
         is_express,
         simulated_wait_secs: 0,
         context_object: context,
-    };
-
-    let start_at = match def["StartAt"].as_str() {
-        Some(s) => s.to_string(),
-        None => {
-            return ExecResult {
-                status: "FAILED".to_string(),
-                output: None,
-                error: Some("InvalidDefinition".to_string()),
-                cause: Some("Missing StartAt".to_string()),
-                history: ctx.history,
-            };
-        }
-    };
-
-    ctx.push_event("ExecutionStarted", json!({ "input": input }));
-
-    match ctx.run_state(&start_at, input_val) {
-        Ok(output) => {
-            let output_str = output.to_string();
-            ctx.push_event("ExecutionSucceeded", json!({ "output": output_str }));
-            ExecResult {
-                status: "SUCCEEDED".to_string(),
-                output: Some(output_str),
-                error: None,
-                cause: None,
-                history: ctx.history,
-            }
-        }
-        Err(failure) => {
-            ctx.push_event(
-                "ExecutionFailed",
-                json!({
-                    "error": failure.error,
-                    "cause": failure.cause,
-                }),
-            );
-            ExecResult {
-                status: "FAILED".to_string(),
-                output: None,
-                error: Some(failure.error),
-                cause: Some(failure.cause),
-                history: ctx.history,
-            }
-        }
+        pending_wait: None,
     }
 }
 
@@ -179,9 +210,45 @@ struct InterpreterContext {
     /// by Map iterations (`Map.Item.Index`, `Map.Item.Value`) and
     /// Parallel branches (`Execution.BranchName`).
     context_object: Value,
+    /// Set when a top-level `.waitForTaskToken` Task suspends the run.
+    pending_wait: Option<PendingWait>,
 }
 
 impl InterpreterContext {
+    /// Convert a top-level `run_state` outcome into an [`ExecResult`],
+    /// surfacing a WAITING result when a `.waitForTaskToken` Task
+    /// suspended the execution.
+    fn into_result(mut self, run: Result<Value, StateFailed>) -> ExecResult {
+        match run {
+            Ok(output) => {
+                let output_str = output.to_string();
+                self.push_event("ExecutionSucceeded", json!({ "output": output_str }));
+                ExecResult::succeeded(output_str, self.history)
+            }
+            Err(failure) => {
+                if let Some(wait) = self.pending_wait.take() {
+                    return ExecResult {
+                        status: "WAITING".to_string(),
+                        output: None,
+                        error: None,
+                        cause: None,
+                        history: self.history,
+                        waiting_token: Some(wait.token),
+                        waiting_state: Some(wait.state_name),
+                        waiting_next: wait.next,
+                        waiting_input: Some(wait.input.to_string()),
+                        waiting_result_path: wait.result_path,
+                    };
+                }
+                self.push_event(
+                    "ExecutionFailed",
+                    json!({ "error": failure.error, "cause": failure.cause }),
+                );
+                ExecResult::failed(failure.error, failure.cause, self.history)
+            }
+        }
+    }
+
     fn push_event(&mut self, event_type: &str, details: Value) {
         self.event_counter += 1;
         self.history.push(HistoryEvent {
@@ -249,6 +316,11 @@ impl InterpreterContext {
             match attempt_result {
                 Ok(ok) => break Ok(ok),
                 Err(err) => {
+                    if err.error == WAIT_SENTINEL {
+                        // A waitForTaskToken suspension unwinds straight up,
+                        // skipping Retry and Catch.
+                        break Err(err);
+                    }
                     if attempt < max_attempts && retry_matches(&state, &err.error) {
                         attempt += 1;
                         self.push_event(
@@ -302,6 +374,11 @@ impl InterpreterContext {
                 }
             }
             Err(err) => {
+                // A waitForTaskToken suspension is not a real failure; let
+                // it propagate to the top-level WAITING handler untouched.
+                if err.error == WAIT_SENTINEL {
+                    return Err(err);
+                }
                 // Catch: route to a fallback state with the error info
                 // attached at ResultPath (default `$`). State counts as
                 // succeeded for the purpose of execution status.
@@ -415,6 +492,36 @@ impl InterpreterContext {
             return Err(StateFailed {
                 error: "States.Timeout".to_string(),
                 cause: "Task timed out before producing a result".to_string(),
+            });
+        }
+
+        // `.waitForTaskToken` suspends the execution: register a token and
+        // unwind via the WAIT sentinel. The run is resumed from this
+        // Task's Next by SendTaskSuccess / SendTaskFailure. Only a single
+        // top-level token is modeled (not inside Map/Parallel branches).
+        if matches!(integration, TaskIntegration::WaitForTaskToken) {
+            let token = uuid::Uuid::new_v4().to_string();
+            self.push_event(
+                "TaskScheduled",
+                json!({ "name": state_name, "resource": resource, "taskToken": token }),
+            );
+            let next = match transition(state) {
+                StateTransition::Next(n) => Some(n),
+                StateTransition::End => None,
+            };
+            self.pending_wait = Some(PendingWait {
+                token: token.clone(),
+                state_name: state_name.to_string(),
+                next,
+                input: input.clone(),
+                result_path: state
+                    .get("ResultPath")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+            });
+            return Err(StateFailed {
+                error: WAIT_SENTINEL.to_string(),
+                cause: token,
             });
         }
 
@@ -1348,6 +1455,74 @@ pub fn run_execution(
     is_express: bool,
 ) -> Result<ExecResult, AwsError> {
     Ok(execute_typed(definition, input, start_time, is_express))
+}
+
+/// Resume a `.waitForTaskToken` execution after SendTaskSuccess. The
+/// `output` becomes the waiting Task's result (merged into the pre-wait
+/// input via its ResultPath); the run then continues from `next_state`,
+/// or completes if the Task was terminal. A further waitForTaskToken in
+/// the tail yields another WAITING result.
+#[allow(clippy::too_many_arguments)]
+pub fn resume_execution_success(
+    definition: &str,
+    start_time: &str,
+    is_express: bool,
+    next_state: Option<&str>,
+    input_at_wait: &str,
+    result_path: Option<&str>,
+    output: Value,
+) -> ExecResult {
+    let def: Value = match serde_json::from_str(definition) {
+        Ok(v) => v,
+        Err(e) => return ExecResult::failed("InvalidDefinition", e.to_string(), Vec::new()),
+    };
+    let input_val: Value = serde_json::from_str(input_at_wait).unwrap_or(Value::Null);
+    let merged = apply_result_path(&input_val, &output, result_path);
+    let mut ctx = new_context(def["States"].clone(), start_time, is_express, Value::Null);
+    ctx.push_event("TaskSucceeded", json!({ "output": output }));
+    match next_state {
+        None => {
+            let out = merged.to_string();
+            ctx.push_event("ExecutionSucceeded", json!({ "output": out }));
+            ExecResult::succeeded(out, ctx.history)
+        }
+        Some(ns) => {
+            let run = ctx.run_state(ns, merged);
+            ctx.into_result(run)
+        }
+    }
+}
+
+/// Resume a `.waitForTaskToken` execution after SendTaskFailure. The
+/// failure routes through the waiting Task's Catch when one matches;
+/// otherwise the execution ends FAILED with the supplied error/cause.
+pub fn resume_execution_failure(
+    definition: &str,
+    start_time: &str,
+    is_express: bool,
+    waiting_state_name: &str,
+    input_at_wait: &str,
+    error: &str,
+    cause: &str,
+) -> ExecResult {
+    let def: Value = match serde_json::from_str(definition) {
+        Ok(v) => v,
+        Err(e) => return ExecResult::failed("InvalidDefinition", e.to_string(), Vec::new()),
+    };
+    let input_val: Value = serde_json::from_str(input_at_wait).unwrap_or(Value::Null);
+    let state = def["States"][waiting_state_name].clone();
+    let mut ctx = new_context(def["States"].clone(), start_time, is_express, Value::Null);
+    ctx.push_event("TaskFailed", json!({ "error": error, "cause": cause }));
+    if let Some((next_state, result_path)) = catch_target(&state, error) {
+        let error_payload = json!({ "Error": error, "Cause": cause });
+        let merged = apply_result_path(&input_val, &error_payload, Some(&result_path));
+        ctx.push_event("StateCaught", json!({ "next": next_state, "error": error }));
+        let run = ctx.run_state(&next_state, merged);
+        ctx.into_result(run)
+    } else {
+        ctx.push_event("ExecutionFailed", json!({ "error": error, "cause": cause }));
+        ExecResult::failed(error, cause, ctx.history)
+    }
 }
 
 #[cfg(test)]

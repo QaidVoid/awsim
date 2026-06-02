@@ -6,7 +6,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::asl;
-use crate::state::{Execution, StepFunctionsState};
+use crate::state::{Execution, PendingTask, StepFunctionsState};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -18,6 +18,13 @@ fn now_iso8601() -> String {
         .unwrap_or_default()
         .as_secs()
         .to_string()
+}
+
+pub(crate) fn epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn build_exec_arn(ctx: &RequestContext, sm_name: &str, exec_name: &str) -> String {
@@ -102,22 +109,49 @@ pub fn start_execution(
 
     let result = asl::run_execution(&definition, &exec_input, &start_date, is_express)?;
 
+    // A `.waitForTaskToken` Task suspended the run: register the token so a
+    // SendTaskSuccess/Failure callback can resume, and keep the execution
+    // RUNNING (AWS reports waiting executions as RUNNING).
+    let is_waiting = result.status == "WAITING";
+    if is_waiting && let Some(token) = result.waiting_token.clone() {
+        state.pending_tokens.insert(
+            token,
+            PendingTask {
+                exec_arn: exec_arn.clone(),
+                definition: definition.clone(),
+                is_express,
+                waiting_state: result.waiting_state.clone().unwrap_or_default(),
+                next_state: result.waiting_next.clone(),
+                input_at_wait: result
+                    .waiting_input
+                    .clone()
+                    .unwrap_or_else(|| "{}".to_string()),
+                result_path: result.waiting_result_path.clone(),
+                start_date: start_date.clone(),
+                last_heartbeat: epoch_secs(),
+            },
+        );
+    }
+
+    let stored_status = if is_waiting {
+        "RUNNING".to_string()
+    } else {
+        result.status.clone()
+    };
+    let terminal = stored_status != "RUNNING";
+
     let exec = Execution {
         arn: exec_arn.clone(),
         state_machine_arn: sm_arn.to_string(),
         name: exec_name,
-        status: result.status.clone(),
+        status: stored_status,
         input: exec_input,
-        output: result.output,
+        output: if is_waiting { None } else { result.output },
         start_date: start_date.clone(),
-        stop_date: if result.status != "RUNNING" {
-            Some(now_iso8601())
-        } else {
-            None
-        },
+        stop_date: if terminal { Some(now_iso8601()) } else { None },
         history: result.history,
-        error: result.error,
-        cause: result.cause,
+        error: if is_waiting { None } else { result.error },
+        cause: if is_waiting { None } else { result.cause },
     };
 
     info!(arn = %exec_arn, status = %exec.status, "Started execution");
