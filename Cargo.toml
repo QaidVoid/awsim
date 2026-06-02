@@ -244,12 +244,6 @@ hkdf = "0.12"
 num-bigint = "0.4"
 num-traits = "0.2"
 
-# Allocator — wired into the awsim binary for Linux + macOS only
-# (MSVC builds keep the system allocator). Returns memory to the OS
-# more aggressively than glibc malloc, which keeps idle RSS flat
-# after burst workloads (DDB query loops, bulk imports, etc.).
-tikv-jemallocator = "0.6"
-
 [profile.dev.package.awsim-conformance]
 opt-level = 0
 codegen-units = 256
