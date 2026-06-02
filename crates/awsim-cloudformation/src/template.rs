@@ -36,7 +36,6 @@ pub struct ResourceDef {
     /// `CreationPolicy` and `UpdatePolicy` are stored for future
     /// rolling-update support but not yet enforced in the simulator.
     pub deletion_policy: Option<String>,
-    #[allow(dead_code)]
     pub creation_policy: Option<Value>,
     #[allow(dead_code)]
     pub update_policy: Option<Value>,

@@ -424,17 +424,43 @@ fn build_resources(parsed: &template::ParsedTemplate, now: &str) -> Vec<StackRes
         .map(|r| {
             // Generate a fake physical resource ID for now
             let physical_resource_id = Some(format!("awsim-{}-{}", r.logical_id, &new_uuid()[..8]));
+            // Custom resources and resources with a CreationPolicy signal
+            // count start PENDING (CREATE_IN_PROGRESS) and only complete
+            // once they receive the required SignalResource calls.
+            let required = if is_custom_resource(&r.resource_type) {
+                1
+            } else {
+                r.creation_policy
+                    .as_ref()
+                    .and_then(|cp| cp.get("ResourceSignal"))
+                    .and_then(|rs| rs.get("Count"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32
+            };
+            let resource_status = if required > 0 {
+                "CREATE_IN_PROGRESS"
+            } else {
+                "CREATE_COMPLETE"
+            };
             StackResource {
                 logical_resource_id: r.logical_id.clone(),
                 physical_resource_id,
                 resource_type: r.resource_type.clone(),
-                resource_status: "CREATE_COMPLETE".to_string(),
+                resource_status: resource_status.to_string(),
                 resource_status_reason: None,
                 timestamp: now.to_string(),
                 deletion_policy: r.deletion_policy.clone(),
+                required_signal_count: required,
+                received_signal_count: 0,
             }
         })
         .collect()
+}
+
+/// True for `AWS::CloudFormation::CustomResource` or any `Custom::*`
+/// resource type.
+pub(crate) fn is_custom_resource(resource_type: &str) -> bool {
+    resource_type == "AWS::CloudFormation::CustomResource" || resource_type.starts_with("Custom::")
 }
 
 /// Build stack events from resources.
@@ -638,6 +664,39 @@ pub fn create_stack(
                 .unwrap_or(Value::Object(serde_json::Map::new()));
 
             let effective_tags = effective_resource_tags(&stack.tags, &properties);
+
+            // Custom resources invoke a provider (Lambda/SNS) and stay
+            // PENDING until it calls SignalResource; everything else is
+            // provisioned directly by the CreateResource router.
+            if is_custom_resource(&resource.resource_type) {
+                let service_token = properties
+                    .get("ServiceToken")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let response_url = format!(
+                    "http://cloudformation.{}.localhost/cr-response/{}/{}",
+                    ctx.region, stack_name, resource.logical_resource_id
+                );
+                bus.publish(InternalEvent {
+                    source: "cloudformation".to_string(),
+                    event_type: "cloudformation:CustomResource".to_string(),
+                    region: ctx.region.clone(),
+                    account_id: ctx.account_id.clone(),
+                    detail: json!({
+                        "stackName": stack_name,
+                        "stackId": stack_id,
+                        "logicalId": resource.logical_resource_id,
+                        "resourceType": resource.resource_type,
+                        "serviceToken": service_token,
+                        "requestType": "Create",
+                        "requestId": new_uuid(),
+                        "responseURL": response_url,
+                        "properties": properties,
+                    }),
+                });
+                continue;
+            }
 
             bus.publish(InternalEvent {
                 source: "cloudformation".to_string(),
@@ -1138,8 +1197,67 @@ pub fn update_termination_protection(
     Ok(json!({ "StackId": stack.stack_id }))
 }
 
-/// SignalResource — accept and succeed silently.
-pub fn signal_resource(_state: &CloudFormationState, _input: &Value) -> Result<Value, AwsError> {
+/// SignalResource — record a SUCCESS / FAILURE signal against a custom
+/// or CreationPolicy-gated resource, completing it once it has received
+/// all the signals it requires.
+pub fn signal_resource(state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
+    let stack_name = require_str(input, "StackName")?;
+    let logical_id = require_str(input, "LogicalResourceId")?;
+    let status = require_str(input, "Status")?; // SUCCESS | FAILURE
+    let mut stack = state.stacks.get_mut(stack_name).ok_or_else(|| {
+        AwsError::bad_request(
+            "ValidationError",
+            format!("Stack [{stack_name}] does not exist."),
+        )
+    })?;
+    let now = now_iso8601();
+    let stack_id = stack.stack_id.clone();
+    let sname = stack.stack_name.clone();
+
+    let res = stack
+        .resources
+        .iter_mut()
+        .find(|r| r.logical_resource_id == logical_id)
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "ValidationError",
+                format!("Resource {logical_id} does not exist for stack {stack_name}"),
+            )
+        })?;
+
+    let (new_status, reason) = if status == "SUCCESS" {
+        if res.required_signal_count > 0 {
+            res.received_signal_count = res.received_signal_count.saturating_add(1);
+        }
+        if res.received_signal_count >= res.required_signal_count {
+            ("CREATE_COMPLETE".to_string(), None)
+        } else {
+            // Still waiting on more signals; keep the resource pending.
+            (res.resource_status.clone(), None)
+        }
+    } else {
+        (
+            "CREATE_FAILED".to_string(),
+            Some("Received FAILURE signal".to_string()),
+        )
+    };
+    res.resource_status = new_status.clone();
+    res.resource_status_reason = reason.clone();
+    res.timestamp = now.clone();
+    let resource_type = res.resource_type.clone();
+    let physical_resource_id = res.physical_resource_id.clone();
+
+    stack.events.push(StackEvent {
+        event_id: new_uuid(),
+        stack_id,
+        stack_name: sname,
+        logical_resource_id: logical_id.to_string(),
+        physical_resource_id,
+        resource_type,
+        timestamp: now,
+        resource_status: new_status,
+        resource_status_reason: reason,
+    });
     Ok(json!({}))
 }
 
@@ -1760,6 +1878,107 @@ mod capabilities_tests {
                 "StackPolicyBody": "not-json",
             }),
             &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+    }
+}
+
+#[cfg(test)]
+mod custom_resource_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("cloudformation", "us-east-1")
+    }
+
+    fn res_status(state: &CloudFormationState, stack: &str, logical: &str) -> String {
+        state
+            .stacks
+            .get(stack)
+            .unwrap()
+            .resources
+            .iter()
+            .find(|r| r.logical_resource_id == logical)
+            .unwrap()
+            .resource_status
+            .clone()
+    }
+
+    fn create(state: &CloudFormationState, body: &str) {
+        create_stack(
+            state,
+            &json!({ "StackName": "s", "TemplateBody": body }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    const CUSTOM_TEMPLATE: &str = r#"{"Resources":{"CR":{"Type":"AWS::CloudFormation::CustomResource","Properties":{"ServiceToken":"arn:aws:lambda:us-east-1:000000000000:function:p"}}}}"#;
+
+    #[test]
+    fn custom_resource_starts_pending_and_completes_on_success_signal() {
+        let state = CloudFormationState::default();
+        create(&state, CUSTOM_TEMPLATE);
+        assert_eq!(res_status(&state, "s", "CR"), "CREATE_IN_PROGRESS");
+        signal_resource(
+            &state,
+            &json!({ "StackName": "s", "LogicalResourceId": "CR", "Status": "SUCCESS" }),
+        )
+        .unwrap();
+        assert_eq!(res_status(&state, "s", "CR"), "CREATE_COMPLETE");
+    }
+
+    #[test]
+    fn custom_prefix_resource_is_pending() {
+        let state = CloudFormationState::default();
+        create(
+            &state,
+            r#"{"Resources":{"T":{"Type":"Custom::Thing","Properties":{"ServiceToken":"arn:aws:sns:us-east-1:000000000000:topic"}}}}"#,
+        );
+        assert_eq!(res_status(&state, "s", "T"), "CREATE_IN_PROGRESS");
+    }
+
+    #[test]
+    fn failure_signal_marks_resource_failed() {
+        let state = CloudFormationState::default();
+        create(&state, CUSTOM_TEMPLATE);
+        signal_resource(
+            &state,
+            &json!({ "StackName": "s", "LogicalResourceId": "CR", "Status": "FAILURE" }),
+        )
+        .unwrap();
+        assert_eq!(res_status(&state, "s", "CR"), "CREATE_FAILED");
+    }
+
+    #[test]
+    fn creation_policy_count_requires_all_signals() {
+        let state = CloudFormationState::default();
+        create(
+            &state,
+            r#"{"Resources":{"W":{"Type":"AWS::CloudFormation::WaitCondition","CreationPolicy":{"ResourceSignal":{"Count":2}}}}}"#,
+        );
+        assert_eq!(res_status(&state, "s", "W"), "CREATE_IN_PROGRESS");
+        let sig = json!({ "StackName": "s", "LogicalResourceId": "W", "Status": "SUCCESS" });
+        signal_resource(&state, &sig).unwrap();
+        assert_eq!(res_status(&state, "s", "W"), "CREATE_IN_PROGRESS");
+        signal_resource(&state, &sig).unwrap();
+        assert_eq!(res_status(&state, "s", "W"), "CREATE_COMPLETE");
+    }
+
+    #[test]
+    fn signal_unknown_stack_or_resource_is_validation_error() {
+        let state = CloudFormationState::default();
+        create(&state, CUSTOM_TEMPLATE);
+        let err = signal_resource(
+            &state,
+            &json!({ "StackName": "nope", "LogicalResourceId": "CR", "Status": "SUCCESS" }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationError");
+        let err = signal_resource(
+            &state,
+            &json!({ "StackName": "s", "LogicalResourceId": "ghost", "Status": "SUCCESS" }),
         )
         .unwrap_err();
         assert_eq!(err.code, "ValidationError");

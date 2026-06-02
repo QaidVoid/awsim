@@ -57,6 +57,13 @@ pub struct StackResource {
     /// retained resources around as the stack moves to DELETE_COMPLETE
     /// and surfaces them with `DELETE_SKIPPED` status.
     pub deletion_policy: Option<String>,
+    /// Signals this resource must receive (via SignalResource) before it
+    /// leaves `CREATE_IN_PROGRESS`. Set from
+    /// `CreationPolicy.ResourceSignal.Count`, or 1 for a custom resource;
+    /// 0 means the resource completes immediately.
+    pub required_signal_count: u32,
+    /// SUCCESS signals received so far.
+    pub received_signal_count: u32,
 }
 
 #[derive(Debug, Clone)]

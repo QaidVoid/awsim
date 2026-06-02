@@ -1228,6 +1228,56 @@ pub async fn poll_kinesis_event_sources(
 
 /// Handle a `cloudformation:CreateResource` event by calling the appropriate
 /// service's Create operation.
+/// Invoke a CloudFormation custom resource provider. The ServiceToken is
+/// either a Lambda function ARN (invoked async with the CFN custom-resource
+/// request) or an SNS topic ARN (published to). The provider is expected to
+/// call SignalResource to move the resource out of PENDING.
+pub async fn handle_cf_custom_resource(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+    event: &InternalEvent,
+) {
+    let token = event.detail["serviceToken"].as_str().unwrap_or("");
+    if token.is_empty() {
+        return;
+    }
+    let request = serde_json::json!({
+        "RequestType": event.detail["requestType"],
+        "ResponseURL": event.detail["responseURL"],
+        "StackId": event.detail["stackId"],
+        "RequestId": event.detail["requestId"],
+        "LogicalResourceId": event.detail["logicalId"],
+        "ResourceType": event.detail["resourceType"],
+        "ResourceProperties": event.detail["properties"],
+        "ServiceToken": token,
+    });
+    let request_str = serde_json::to_string(&request).unwrap_or_default();
+    let ctx = RequestContext::new_with_account("cloudformation", &event.region, &event.account_id);
+    if token.contains(":function:")
+        && let Some(lambda) = services.get("lambda")
+    {
+        let func = token.rsplit(":function:").next().unwrap_or(token);
+        let input = serde_json::json!({
+            "FunctionName": func,
+            "InvocationType": "Event",
+            "Payload": request_str,
+        });
+        match lambda.handle("Invoke", input, &ctx).await {
+            Ok(_) => info!(function = %func, "CFN custom resource provider invoked"),
+            Err(e) => {
+                warn!(function = %func, error = %e.message, "CFN custom resource Lambda failed")
+            }
+        }
+    } else if token.contains(":sns:")
+        && let Some(sns) = services.get("sns")
+    {
+        let input = serde_json::json!({ "TopicArn": token, "Message": request_str });
+        match sns.handle("Publish", input, &ctx).await {
+            Ok(_) => info!(topic = %token, "CFN custom resource SNS notified"),
+            Err(e) => warn!(topic = %token, error = %e.message, "CFN custom resource SNS failed"),
+        }
+    }
+}
+
 pub async fn handle_cf_create_resource(
     services: &HashMap<String, Arc<dyn ServiceHandler>>,
     event: &InternalEvent,

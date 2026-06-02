@@ -323,6 +323,8 @@ pub fn execute_change_set(
                 resource_status_reason: None,
                 timestamp: now.clone(),
                 deletion_policy: r.deletion_policy.clone(),
+                required_signal_count: 0,
+                received_signal_count: 0,
             }
         })
         .collect();
@@ -525,6 +527,8 @@ mod change_set_diff_tests {
                     resource_status_reason: None,
                     timestamp: now_iso8601(),
                     deletion_policy: None,
+                    required_signal_count: 0,
+                    received_signal_count: 0,
                 }],
                 events: Vec::new(),
                 change_sets: HashMap::new(),
@@ -601,6 +605,8 @@ mod change_set_diff_tests {
                     resource_status_reason: None,
                     timestamp: now_iso8601(),
                     deletion_policy: None,
+                    required_signal_count: 0,
+                    received_signal_count: 0,
                 }],
                 events: Vec::new(),
                 change_sets: HashMap::new(),
@@ -668,6 +674,8 @@ mod change_set_diff_tests {
                         resource_status_reason: None,
                         timestamp: now_iso8601(),
                         deletion_policy: None,
+                        required_signal_count: 0,
+                        received_signal_count: 0,
                     },
                     StackResource {
                         logical_resource_id: "B".into(),
@@ -677,6 +685,8 @@ mod change_set_diff_tests {
                         resource_status_reason: None,
                         timestamp: now_iso8601(),
                         deletion_policy: None,
+                        required_signal_count: 0,
+                        received_signal_count: 0,
                     },
                 ],
                 events: Vec::new(),

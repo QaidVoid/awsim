@@ -2260,6 +2260,9 @@ fn spawn_event_router(state: &AppState) {
                         "cloudformation:CreateResource" => {
                             integrations::handle_cf_create_resource(&services, &event).await;
                         }
+                        "cloudformation:CustomResource" => {
+                            integrations::handle_cf_custom_resource(&services, &event).await;
+                        }
                         "cloudformation:DeleteResource" => {
                             integrations::handle_cf_delete_resource(&services, &event).await;
                         }
