@@ -52,7 +52,9 @@ pub fn start_encryption(
             format!("Stream {name} not found"),
         )
     })?;
-    s.encryption_enabled = true;
+    // Encryption is asynchronous: the stream enters ENABLING now and the
+    // tick driver promotes it to ENABLED (arming the Encrypted flag).
+    s.encryption_status = "ENABLING".to_string();
     s.encryption_key_type = key_type;
     s.encryption_key_arn = key_arn;
     Ok(json!({}))
@@ -97,9 +99,15 @@ pub fn stop_encryption(
             format!("Stream {name} not found"),
         )
     })?;
-    s.encryption_enabled = false;
-    s.encryption_key_type = None;
-    s.encryption_key_arn = None;
+    // Only ENABLED / ENABLING streams can be stopped; otherwise this is a
+    // no-op transition that AWS rejects.
+    if !matches!(s.encryption_status.as_str(), "ENABLED" | "ENABLING") {
+        return Err(AwsError::bad_request(
+            "ResourceInUseException",
+            "Encryption is not enabled on this delivery stream.",
+        ));
+    }
+    s.encryption_status = "DISABLING".to_string();
     Ok(json!({}))
 }
 
@@ -129,6 +137,7 @@ mod tests {
                 has_more_destinations: false,
                 tags: HashMap::new(),
                 encryption_enabled: false,
+                encryption_status: "DISABLED".into(),
                 encryption_key_type: None,
                 encryption_key_arn: None,
                 source_config: None,
@@ -193,6 +202,67 @@ mod tests {
             &ctx(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn encryption_walks_enabling_then_enabled_on_advance() {
+        let state = state_with_stream("s1");
+        start_encryption(
+            &state,
+            &json!({
+                "DeliveryStreamName": "s1",
+                "DeliveryStreamEncryptionConfigurationInput": { "KeyType": "AWS_OWNED_CMK" },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(
+            state.streams.get("s1").unwrap().encryption_status,
+            "ENABLING"
+        );
+        assert!(!state.streams.get("s1").unwrap().encryption_enabled);
+        state.streams.get_mut("s1").unwrap().advance_encryption();
+        assert_eq!(
+            state.streams.get("s1").unwrap().encryption_status,
+            "ENABLED"
+        );
+        assert!(state.streams.get("s1").unwrap().encryption_enabled);
+    }
+
+    #[test]
+    fn stop_encryption_walks_disabling_then_disabled_and_clears_keys() {
+        let state = state_with_stream("s1");
+        start_encryption(
+            &state,
+            &json!({
+                "DeliveryStreamName": "s1",
+                "DeliveryStreamEncryptionConfigurationInput": {
+                    "KeyType": "CUSTOMER_MANAGED_CMK",
+                    "KeyARN": "arn:aws:kms:us-east-1:123456789012:key/abcdef01-2345-6789-abcd-ef0123456789",
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        state.streams.get_mut("s1").unwrap().advance_encryption(); // -> ENABLED
+        stop_encryption(&state, &json!({ "DeliveryStreamName": "s1" }), &ctx()).unwrap();
+        assert_eq!(
+            state.streams.get("s1").unwrap().encryption_status,
+            "DISABLING"
+        );
+        state.streams.get_mut("s1").unwrap().advance_encryption(); // -> DISABLED
+        let s = state.streams.get("s1").unwrap();
+        assert_eq!(s.encryption_status, "DISABLED");
+        assert!(!s.encryption_enabled);
+        assert!(s.encryption_key_arn.is_none());
+    }
+
+    #[test]
+    fn stop_encryption_rejects_when_already_disabled() {
+        let state = state_with_stream("s1");
+        let err =
+            stop_encryption(&state, &json!({ "DeliveryStreamName": "s1" }), &ctx()).unwrap_err();
+        assert_eq!(err.code, "ResourceInUseException");
     }
 
     #[test]

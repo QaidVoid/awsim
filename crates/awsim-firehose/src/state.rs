@@ -20,7 +20,13 @@ pub struct DeliveryStream {
     pub destinations: Vec<serde_json::Value>,
     pub has_more_destinations: bool,
     pub tags: HashMap<String, String>,
+    /// `true` only once encryption has fully reached ENABLED; drives the
+    /// per-record `Encrypted` flag.
     pub encryption_enabled: bool,
+    /// Wire status DISABLED -> ENABLING -> ENABLED -> DISABLING ->
+    /// DISABLED, advanced by the tick driver.
+    #[serde(default = "default_encryption_status")]
+    pub encryption_status: String,
     pub encryption_key_type: Option<String>,
     pub encryption_key_arn: Option<String>,
     /// Raw source configuration captured at create time. Populated for
@@ -47,6 +53,32 @@ impl FirehoseState {
         self.streams.clear();
         for s in snap.streams {
             self.streams.insert(s.name.clone(), s);
+        }
+    }
+}
+
+pub fn default_encryption_status() -> String {
+    "DISABLED".to_string()
+}
+
+impl DeliveryStream {
+    /// Advance the encryption state one hop: ENABLING -> ENABLED and
+    /// DISABLING -> DISABLED. Idempotent; called from the tick driver.
+    /// Reaching ENABLED arms the `Encrypted` flag; reaching DISABLED
+    /// clears it and the key material.
+    pub fn advance_encryption(&mut self) {
+        match self.encryption_status.as_str() {
+            "ENABLING" => {
+                self.encryption_status = "ENABLED".to_string();
+                self.encryption_enabled = true;
+            }
+            "DISABLING" => {
+                self.encryption_status = "DISABLED".to_string();
+                self.encryption_enabled = false;
+                self.encryption_key_type = None;
+                self.encryption_key_arn = None;
+            }
+            _ => {}
         }
     }
 }

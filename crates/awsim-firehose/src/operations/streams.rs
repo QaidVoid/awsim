@@ -88,6 +88,7 @@ pub fn create_delivery_stream(
             })
             .unwrap_or_default(),
         encryption_enabled: false,
+        encryption_status: "DISABLED".to_string(),
         encryption_key_type: None,
         encryption_key_arn: None,
         source_config,
@@ -157,7 +158,7 @@ pub fn describe_delivery_stream(
             "HasMoreDestinations": s.has_more_destinations,
             "Source": source,
             "DeliveryStreamEncryptionConfiguration": {
-                "Status": if s.encryption_enabled { "ENABLED" } else { "DISABLED" },
+                "Status": s.encryption_status,
                 "KeyType": s.encryption_key_type,
                 "KeyARN": s.encryption_key_arn,
             }
@@ -642,6 +643,7 @@ mod list_delivery_streams_tests {
             has_more_destinations: false,
             tags: Default::default(),
             encryption_enabled: false,
+            encryption_status: "DISABLED".to_string(),
             encryption_key_type: None,
             encryption_key_arn: None,
             source_config: None,

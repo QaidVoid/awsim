@@ -147,6 +147,7 @@ mod put_record_tests {
             has_more_destinations: false,
             tags: Default::default(),
             encryption_enabled: encrypted,
+            encryption_status: if encrypted { "ENABLED" } else { "DISABLED" }.to_string(),
             encryption_key_type: if encrypted {
                 Some("AWS_OWNED_CMK".to_string())
             } else {

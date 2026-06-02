@@ -136,6 +136,7 @@ mod tests {
                 has_more_destinations: false,
                 tags: HashMap::new(),
                 encryption_enabled: false,
+                encryption_status: "DISABLED".into(),
                 encryption_key_type: None,
                 encryption_key_arn: None,
                 source_config: None,

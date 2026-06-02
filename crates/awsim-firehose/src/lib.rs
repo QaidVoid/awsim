@@ -81,6 +81,16 @@ impl ServiceHandler for FirehoseService {
         }
     }
 
+    /// Advance each stream's encryption state machine (ENABLING ->
+    /// ENABLED, DISABLING -> DISABLED) across all tenants.
+    async fn tick(&self) {
+        for (_, state) in self.store.iter_all() {
+            for mut entry in state.streams.iter_mut() {
+                entry.value_mut().advance_encryption();
+            }
+        }
+    }
+
     fn snapshot(&self) -> Option<Vec<u8>> {
         let mut all = state::FirehoseSnapshot { streams: vec![] };
         for (_, st) in self.store.iter_all() {
@@ -201,6 +211,8 @@ mod tests {
             &ctx,
         ))
         .unwrap();
+        // Encryption is async (ENABLING -> ENABLED); advance the tick once.
+        block_on(svc.tick());
         let described = block_on(svc.handle(
             "DescribeDeliveryStream",
             json!({ "DeliveryStreamName": "snap-roundtrip" }),
