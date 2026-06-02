@@ -42,6 +42,10 @@ pub struct Stack {
     /// evaluates each resource change against it and blocks updates
     /// the policy denies. AWS surfaces this as `ValidationError`.
     pub stack_policy_body: Option<String>,
+    /// Absolute unix-seconds deadline from `TimeoutInMinutes`. When a
+    /// resource is still `CREATE_IN_PROGRESS` past this deadline, the
+    /// tick driver rolls the stack back per `on_failure`.
+    pub timeout_deadline_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone)]

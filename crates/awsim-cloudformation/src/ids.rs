@@ -27,13 +27,17 @@ pub fn change_set_arn(
 
 /// Current UTC timestamp in ISO 8601 format.
 pub fn now_iso8601() -> String {
+    let (y, mo, d, h, min, s) = unix_to_ymd_hms(now_unix());
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{min:02}:{s:02}Z")
+}
+
+/// Current unix time in whole seconds.
+pub fn now_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    let (y, mo, d, h, min, s) = unix_to_ymd_hms(secs);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{min:02}:{s:02}Z")
+        .as_secs()
 }
 
 fn unix_to_ymd_hms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {

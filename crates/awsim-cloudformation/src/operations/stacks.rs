@@ -638,6 +638,9 @@ pub fn create_stack(
         notification_arns: notification_arns.clone(),
         on_failure,
         stack_policy_body,
+        timeout_deadline_secs: input["TimeoutInMinutes"]
+            .as_u64()
+            .map(|m| crate::ids::now_unix() + m * 60),
     };
 
     publish_stack_event_notifications(
