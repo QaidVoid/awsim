@@ -89,6 +89,16 @@ impl S3Service {
         }
     }
 
+    /// Build an in-process [`S3ObjectReader`] over this service's store,
+    /// so peers (e.g. Step Functions Distributed Map) can read object
+    /// bytes without a network round trip.
+    pub fn object_reader(&self) -> S3ServiceReader {
+        S3ServiceReader {
+            store: self.store.clone(),
+            body_store: self.body_store.clone(),
+        }
+    }
+
     pub fn body_store(&self) -> Option<&Arc<BodyStore>> {
         self.body_store.as_ref()
     }
@@ -1536,5 +1546,39 @@ impl awsim_core::S3ObjectWriter for S3ServiceWriter {
         });
         operations::object::put_object(&state, &input, &ctx)?;
         Ok(())
+    }
+}
+
+/// In-process [`awsim_core::S3ObjectReader`] backed by the S3 service
+/// store. Returns the decoded object body (S3 is global, so the object
+/// is read from the account's `"global"` region).
+pub struct S3ServiceReader {
+    store: AccountRegionStore<S3State>,
+    body_store: Option<Arc<BodyStore>>,
+}
+
+impl awsim_core::S3ObjectReader for S3ServiceReader {
+    fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        account: &str,
+        _region: &str,
+    ) -> Result<Vec<u8>, AwsError> {
+        let state = self.store.get(account, "global");
+        if let Some(bs) = &self.body_store {
+            state.set_body_store(Arc::clone(bs));
+        }
+        let ctx = RequestContext::new_with_account("s3", "global", account);
+        let resp = operations::object::get_object(
+            &state,
+            &serde_json::json!({ "Bucket": bucket, "Key": key }),
+            &ctx,
+        )?;
+        let b64 = resp["Body"].as_str().unwrap_or("");
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| AwsError::internal(format!("decode s3 object body: {e}")))
     }
 }

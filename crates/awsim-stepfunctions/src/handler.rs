@@ -1,4 +1,8 @@
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
+use std::sync::Arc;
+
+use awsim_core::{
+    AccountRegionStore, AwsError, Protocol, RequestContext, S3ObjectReader, ServiceHandler,
+};
 use serde_json::Value;
 use tracing::debug;
 
@@ -8,13 +12,23 @@ use crate::state::StepFunctionsState;
 /// The Step Functions service handler.
 pub struct StepFunctionsService {
     store: AccountRegionStore<StepFunctionsState>,
+    /// In-process S3 reader used by Distributed Map `ItemReader`.
+    s3_reader: Option<Arc<dyn S3ObjectReader>>,
 }
 
 impl StepFunctionsService {
     pub fn new() -> Self {
         Self {
             store: AccountRegionStore::new(),
+            s3_reader: None,
         }
+    }
+
+    /// Wire the in-process S3 reader so Distributed Map can read CSV
+    /// inventories from the embedded S3.
+    pub fn with_s3_reader(mut self, reader: Arc<dyn S3ObjectReader>) -> Self {
+        self.s3_reader = Some(reader);
+        self
     }
 }
 
@@ -56,8 +70,14 @@ impl ServiceHandler for StepFunctionsService {
             "ListStateMachines" => state_machines::list_state_machines(&state, &input, ctx),
             "UpdateStateMachine" => state_machines::update_state_machine(&state, &input, ctx),
 
-            // Executions
-            "StartExecution" => executions::start_execution(&state, &input, ctx),
+            // Executions. Install the S3 reader context for the synchronous
+            // interpreter (Distributed Map ItemReader) and clear it after.
+            "StartExecution" => {
+                crate::asl::set_s3_context(self.s3_reader.clone(), &ctx.account_id, &ctx.region);
+                let result = executions::start_execution(&state, &input, ctx);
+                crate::asl::clear_s3_context();
+                result
+            }
             "StopExecution" => executions::stop_execution(&state, &input, ctx),
             "DescribeExecution" => executions::describe_execution(&state, &input, ctx),
             "ListExecutions" => executions::list_executions(&state, &input, ctx),

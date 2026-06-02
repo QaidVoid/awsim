@@ -2686,8 +2686,10 @@ fn register_services(
     };
     let s3_store = s3.store();
     // Captured before `s3` is moved into its Arc so Firehose can deliver
-    // objects into the embedded S3 without a network round trip.
+    // objects into the embedded S3, and Step Functions Distributed Map can
+    // read CSV inventories, without a network round trip.
     let firehose_s3_writer: Arc<dyn awsim_core::S3ObjectWriter> = Arc::new(s3.object_writer());
+    let stepfunctions_s3_reader: Arc<dyn awsim_core::S3ObjectReader> = Arc::new(s3.object_reader());
     let s3_routes = {
         use awsim_core::ServiceHandler;
         s3.routes()
@@ -2753,7 +2755,9 @@ fn register_services(
     let ssm_store = ssm.store();
     state.register(ssm, vec![]);
 
-    let stepfunctions = Arc::new(awsim_stepfunctions::StepFunctionsService::new());
+    let stepfunctions = Arc::new(
+        awsim_stepfunctions::StepFunctionsService::new().with_s3_reader(stepfunctions_s3_reader),
+    );
     state.register(stepfunctions, vec![]);
 
     let kinesis = Arc::new(match data_dir {

@@ -167,6 +167,19 @@ pub trait S3ObjectWriter: Send + Sync {
     ) -> Result<(), AwsError>;
 }
 
+/// In-process reader that lets a service fetch an object's raw bytes from
+/// the embedded S3 synchronously (e.g. Step Functions Distributed Map
+/// reading a CSV inventory). Returns the decoded object body.
+pub trait S3ObjectReader: Send + Sync {
+    fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        account: &str,
+        region: &str,
+    ) -> Result<Vec<u8>, AwsError>;
+}
+
 pub struct NoopPrincipalLookup;
 
 impl PrincipalLookup for NoopPrincipalLookup {

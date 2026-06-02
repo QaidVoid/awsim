@@ -3,10 +3,58 @@
 //! Supports: Pass, Succeed, Fail, Wait, Task, Choice, Parallel, Map.
 //! InputPath / OutputPath / ResultPath transformations are supported.
 
+use std::cell::RefCell;
+use std::sync::Arc;
+
 use awsim_core::AwsError;
 use serde_json::{Value, json};
 
 use crate::state::HistoryEvent;
+
+/// (reader, account, region) for the Distributed Map S3 reader context.
+type S3ReaderCtx = (Arc<dyn awsim_core::S3ObjectReader>, String, String);
+
+thread_local! {
+    /// Per-thread S3 reader used by Distributed Map `ItemReader`. The
+    /// interpreter is fully synchronous, so a context set immediately
+    /// before `run_execution` stays valid for the whole run on this
+    /// thread (no await intervenes).
+    static S3_CTX: RefCell<Option<S3ReaderCtx>> = const { RefCell::new(None) };
+}
+
+/// Install the S3 reader context for Distributed Map. Pass `None` to run
+/// without S3 access.
+pub fn set_s3_context(
+    reader: Option<Arc<dyn awsim_core::S3ObjectReader>>,
+    account: &str,
+    region: &str,
+) {
+    S3_CTX.with(|c| {
+        *c.borrow_mut() = reader.map(|r| (r, account.to_string(), region.to_string()));
+    });
+}
+
+/// Clear the S3 reader context after a run completes.
+pub fn clear_s3_context() {
+    S3_CTX.with(|c| *c.borrow_mut() = None);
+}
+
+fn read_item_reader_object(bucket: &str, key: &str) -> Result<Vec<u8>, StateFailed> {
+    S3_CTX.with(|c| match c.borrow().as_ref() {
+        Some((reader, account, region)) => {
+            reader
+                .get_object(bucket, key, account, region)
+                .map_err(|e| StateFailed {
+                    error: "States.ItemReaderFailed".to_string(),
+                    cause: e.message,
+                })
+        }
+        None => Err(StateFailed {
+            error: "States.ItemReaderFailed".to_string(),
+            cause: "no S3 reader is configured for ItemReader".to_string(),
+        }),
+    })
+}
 
 /// Result of executing an ASL state machine.
 pub struct ExecResult {
@@ -629,8 +677,39 @@ impl InterpreterContext {
         state: &Value,
         input: Value,
     ) -> Result<(Value, StateTransition), StateFailed> {
-        let items_path = state["ItemsPath"].as_str().unwrap_or("$");
-        let items = resolve_reference_path(&input, items_path);
+        // Distributed Map ItemReader (S3 CSV) takes precedence over the
+        // in-memory ItemsPath. Only CSV input is supported.
+        let item_array: Vec<Value> = if let Some(reader) =
+            state.get("ItemReader").filter(|r| !r.is_null())
+        {
+            let params = reader
+                .get("Parameters")
+                .map(|p| apply_parameters_with_ctx(p, &input, &self.context_object))
+                .unwrap_or(Value::Null);
+            let bucket = params.get("Bucket").and_then(Value::as_str).unwrap_or("");
+            let key = params.get("Key").and_then(Value::as_str).unwrap_or("");
+            let reader_config = reader.get("ReaderConfig");
+            let input_type = reader_config
+                .and_then(|c| c.get("InputType"))
+                .and_then(Value::as_str)
+                .unwrap_or("CSV");
+            if input_type != "CSV" {
+                return Err(StateFailed {
+                    error: "States.ItemReaderFailed".to_string(),
+                    cause: format!("ItemReader InputType '{input_type}' is unsupported (CSV only)"),
+                });
+            }
+            let bytes = read_item_reader_object(bucket, key)?;
+            csv_to_items(&bytes, reader_config)
+        } else {
+            let items_path = state["ItemsPath"].as_str().unwrap_or("$");
+            let items = resolve_reference_path(&input, items_path);
+            items
+                .as_array()
+                .cloned()
+                .unwrap_or_else(|| vec![items.clone()])
+        };
+
         // ItemProcessor (newer ASL) supersedes Iterator (legacy) but the
         // payload shape is identical; honor either.
         let iterator_def = if state.get("ItemProcessor").is_some() {
@@ -639,17 +718,56 @@ impl InterpreterContext {
             state["Iterator"].clone()
         };
 
-        let item_array: Vec<Value> = items
-            .as_array()
-            .cloned()
-            .unwrap_or_else(|| vec![items.clone()]);
-
         // ItemSelector (Map 2.0) reshapes each item into the payload the
         // iterator receives. AWS evaluates ItemSelector keys ending in
         // `.$` against the raw item, mirroring Parameters. Absent
         // selector falls through to the bare item.
         let item_selector = state.get("ItemSelector").cloned();
         let iter_def_str = iterator_def.to_string();
+
+        // ItemBatcher groups the (selector-applied) items into batches; the
+        // iterator receives `{ ...BatchInput, "Items": [...] }`. AWS order
+        // is ItemReader -> ItemSelector -> ItemBatcher.
+        if let Some(batcher) = state.get("ItemBatcher").filter(|b| !b.is_null()) {
+            let selected: Vec<Value> = item_array
+                .iter()
+                .enumerate()
+                .map(|(i, item)| {
+                    let mut iter_context = self.context_object.clone();
+                    merge_context_into(
+                        &mut iter_context,
+                        "Map",
+                        json!({ "Item": { "Index": i, "Value": item } }),
+                    );
+                    match &item_selector {
+                        Some(sel) if !sel.is_null() => {
+                            apply_parameters_with_ctx(sel, item, &iter_context)
+                        }
+                        _ => item.clone(),
+                    }
+                })
+                .collect();
+            let batches = batch_items(selected, batcher, &input, &self.context_object);
+            let mut outputs: Vec<Value> = Vec::with_capacity(batches.len());
+            for batch in &batches {
+                let item_result = execute_with_context(
+                    &iter_def_str,
+                    &batch.to_string(),
+                    &self.start_time,
+                    self.context_object.clone(),
+                );
+                if item_result.status == "FAILED" {
+                    return Err(StateFailed {
+                        error: item_result.error.unwrap_or_default(),
+                        cause: item_result.cause.unwrap_or_default(),
+                    });
+                }
+                let out = item_result.output.unwrap_or_else(|| "null".to_string());
+                outputs.push(serde_json::from_str(&out).unwrap_or(Value::Null));
+            }
+            return Ok((Value::Array(outputs), transition(state)));
+        }
+
         let mut outputs: Vec<Value> = Vec::with_capacity(item_array.len());
         for (i, item) in item_array.iter().enumerate() {
             let mut iter_context = self.context_object.clone();
@@ -689,6 +807,125 @@ fn merge_context_into(context: &mut Value, key: &str, value: Value) {
     if let Value::Object(map) = context {
         map.insert(key.to_string(), value);
     }
+}
+
+/// Minimal RFC-4180 CSV parser: handles quoted fields with embedded
+/// commas / newlines and doubled-quote escaping. Returns rows of fields.
+fn parse_csv(bytes: &[u8]) -> Vec<Vec<String>> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut field = String::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut in_quotes = false;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if in_quotes {
+            if ch == '"' {
+                if chars.peek() == Some(&'"') {
+                    field.push('"');
+                    chars.next();
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                field.push(ch);
+            }
+        } else {
+            match ch {
+                '"' => in_quotes = true,
+                ',' => row.push(std::mem::take(&mut field)),
+                '\r' => {}
+                '\n' => {
+                    row.push(std::mem::take(&mut field));
+                    rows.push(std::mem::take(&mut row));
+                }
+                _ => field.push(ch),
+            }
+        }
+    }
+    if !field.is_empty() || !row.is_empty() {
+        row.push(field);
+        rows.push(row);
+    }
+    // Drop fully-empty trailing rows (e.g. a blank final line).
+    rows.retain(|r| !(r.len() == 1 && r[0].is_empty()));
+    rows
+}
+
+fn csv_row_to_object(headers: &[String], row: &[String]) -> Value {
+    let mut obj = serde_json::Map::new();
+    for (i, h) in headers.iter().enumerate() {
+        obj.insert(
+            h.clone(),
+            Value::String(row.get(i).cloned().unwrap_or_default()),
+        );
+    }
+    Value::Object(obj)
+}
+
+/// Turn CSV bytes into Map items per `ReaderConfig.CSVHeaderLocation`:
+/// `FIRST_ROW` (default) uses the first row as headers; `GIVEN` uses
+/// `CSVHeaders`.
+fn csv_to_items(bytes: &[u8], reader_config: Option<&Value>) -> Vec<Value> {
+    let rows = parse_csv(bytes);
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let header_loc = reader_config
+        .and_then(|c| c.get("CSVHeaderLocation"))
+        .and_then(Value::as_str)
+        .unwrap_or("FIRST_ROW");
+    match header_loc {
+        "GIVEN" => {
+            let headers: Vec<String> = reader_config
+                .and_then(|c| c.get("CSVHeaders"))
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            rows.iter()
+                .map(|r| csv_row_to_object(&headers, r))
+                .collect()
+        }
+        _ => {
+            let headers = rows[0].clone();
+            rows[1..]
+                .iter()
+                .map(|r| csv_row_to_object(&headers, r))
+                .collect()
+        }
+    }
+}
+
+/// Group selected items into `ItemBatcher` batches. Each batch is
+/// `{ ...BatchInput, "Items": [...] }`; `MaxItemsPerBatch` bounds the
+/// chunk size.
+fn batch_items(items: Vec<Value>, batcher: &Value, input: &Value, context: &Value) -> Vec<Value> {
+    let max = batcher
+        .get("MaxItemsPerBatch")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let chunk = if max == 0 { items.len().max(1) } else { max };
+    let batch_input = batcher
+        .get("BatchInput")
+        .map(|bi| apply_parameters_with_ctx(bi, input, context))
+        .unwrap_or(Value::Null);
+    items
+        .chunks(chunk)
+        .map(|c| {
+            let mut obj = serde_json::Map::new();
+            if let Value::Object(bi) = &batch_input {
+                for (k, v) in bi {
+                    obj.insert(k.clone(), v.clone());
+                }
+            }
+            obj.insert("Items".to_string(), Value::Array(c.to_vec()));
+            Value::Object(obj)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1560,6 +1797,75 @@ mod tests {
         // The earliest entries were evicted; the most recent remain.
         assert!(cache.map.contains_key("$.p9"));
         assert!(!cache.map.contains_key("$.p0"));
+    }
+
+    #[test]
+    fn parse_csv_handles_quotes_and_embedded_commas() {
+        let rows = parse_csv(b"a,b\n1,\"x,y\"\n2,\"he said \"\"hi\"\"\"\n");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[1], vec!["1".to_string(), "x,y".to_string()]);
+        assert_eq!(rows[2], vec!["2".to_string(), "he said \"hi\"".to_string()]);
+    }
+
+    #[test]
+    fn distributed_map_reads_csv_first_row() {
+        struct CsvReader;
+        impl awsim_core::S3ObjectReader for CsvReader {
+            fn get_object(
+                &self,
+                _b: &str,
+                _k: &str,
+                _a: &str,
+                _r: &str,
+            ) -> Result<Vec<u8>, awsim_core::AwsError> {
+                Ok(b"id,name\n1,alice\n2,bob\n".to_vec())
+            }
+        }
+        set_s3_context(Some(Arc::new(CsvReader)), "000000000000", "us-east-1");
+        let def = r#"{
+            "StartAt": "M",
+            "States": {
+                "M": { "Type": "Map", "End": true,
+                    "ItemReader": {
+                        "Resource": "arn:aws:states:::s3:getObject",
+                        "ReaderConfig": { "InputType": "CSV", "CSVHeaderLocation": "FIRST_ROW" },
+                        "Parameters": { "Bucket": "b", "Key": "k.csv" }
+                    },
+                    "ItemProcessor": { "StartAt": "P", "States": { "P": { "Type": "Pass", "End": true } } }
+                }
+            }
+        }"#;
+        let result = run(def, "{}");
+        clear_s3_context();
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(result.output.as_ref().unwrap()).unwrap();
+        let arr = out.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["id"], "1");
+        assert_eq!(arr[0]["name"], "alice");
+        assert_eq!(arr[1]["name"], "bob");
+    }
+
+    #[test]
+    fn distributed_map_item_batcher_groups_with_batch_input() {
+        let def = r#"{
+            "StartAt": "M",
+            "States": {
+                "M": { "Type": "Map", "End": true,
+                    "ItemsPath": "$.items",
+                    "ItemBatcher": { "MaxItemsPerBatch": 2, "BatchInput": { "factor": 10 } },
+                    "ItemProcessor": { "StartAt": "P", "States": { "P": { "Type": "Pass", "End": true } } }
+                }
+            }
+        }"#;
+        let result = run(def, r#"{"items":[1,2,3,4,5]}"#);
+        assert_eq!(result.status, "SUCCEEDED");
+        let out: Value = serde_json::from_str(result.output.as_ref().unwrap()).unwrap();
+        let arr = out.as_array().unwrap();
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0]["Items"], json!([1, 2]));
+        assert_eq!(arr[0]["factor"], 10);
+        assert_eq!(arr[2]["Items"], json!([5]));
     }
 
     fn run_express(def: &str, input: &str) -> ExecResult {
