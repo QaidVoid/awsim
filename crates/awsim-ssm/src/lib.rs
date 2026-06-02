@@ -788,4 +788,75 @@ mod tests {
         let items = block_on(svc.handle("DescribeOpsItems", json!({}), &ctx)).unwrap();
         assert_eq!(items["OpsItemSummaries"].as_array().unwrap().len(), 1);
     }
+
+    // -----------------------------------------------------------------------
+    // Run Command status transitions (tick-driven)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_send_command_status_walks_pending_to_success() {
+        let svc = SsmService::new();
+        let ctx = ctx();
+
+        let sent = block_on(svc.handle(
+            "SendCommand",
+            json!({
+                "DocumentName": "AWS-RunShellScript",
+                "InstanceIds": ["i-0123456789abcdef0"],
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let command_id = sent["Command"]["CommandId"].as_str().unwrap().to_string();
+        assert_eq!(sent["Command"]["Status"].as_str().unwrap(), "Pending");
+
+        // Freshly sent commands stay Pending through a tick.
+        block_on(svc.tick());
+        let inv = block_on(svc.handle(
+            "GetCommandInvocation",
+            json!({ "CommandId": command_id }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(inv["Status"].as_str().unwrap(), "Pending");
+        // Resolved instance id flows through to the invocation view.
+        assert_eq!(inv["InstanceId"].as_str().unwrap(), "i-0123456789abcdef0");
+
+        let store = svc.store();
+        let state = store.get(&ctx.account_id, &ctx.region);
+
+        // Backdate to the InProgress threshold and tick.
+        if let Some(mut c) = state.commands.get_mut(&command_id) {
+            c.created_time = now_secs() - 1;
+        }
+        block_on(svc.tick());
+        let inv = block_on(svc.handle(
+            "GetCommandInvocation",
+            json!({ "CommandId": command_id }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(inv["Status"].as_str().unwrap(), "InProgress");
+
+        // Backdate past the Success threshold and tick.
+        if let Some(mut c) = state.commands.get_mut(&command_id) {
+            c.created_time = now_secs() - 2;
+        }
+        block_on(svc.tick());
+        let inv = block_on(svc.handle(
+            "GetCommandInvocation",
+            json!({ "CommandId": command_id }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(inv["Status"].as_str().unwrap(), "Success");
+        assert!(!inv["StandardOutputContent"].as_str().unwrap().is_empty());
+    }
+
+    fn now_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
 }

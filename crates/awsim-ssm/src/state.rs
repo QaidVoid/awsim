@@ -43,14 +43,24 @@ pub struct Parameter {
     pub policy_text: Option<String>,
 }
 
-/// A stored SSM Run Command record (stub).
+/// A stored SSM Run Command record.
 #[derive(Debug, Clone)]
 pub struct Command {
     pub command_id: String,
     pub document_name: String,
     pub targets: Vec<serde_json::Value>,
+    /// Instance ids resolved at SendCommand time, flattened from
+    /// `InstanceIds` plus any `instanceids` target `Values`.
+    pub instance_ids: Vec<String>,
     pub status: String,
+    /// Unix epoch seconds; used as the absolute base for the
+    /// tick-driven Pending -> InProgress -> Success transitions.
     pub created_time: u64,
+    /// Synthetic stdout surfaced once the command reaches a terminal
+    /// status, mirroring the constant-output stubs used elsewhere.
+    pub std_out: String,
+    /// Synthetic stderr (empty for the success path).
+    pub std_err: String,
 }
 
 /// An SSM Document.

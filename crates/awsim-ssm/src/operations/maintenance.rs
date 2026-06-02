@@ -1131,11 +1131,18 @@ pub fn list_command_invocations(
         .filter(|e| command_id.is_none_or(|id| e.command_id == id))
         .map(|e| {
             let c = e.value();
+            let instance_id = c
+                .instance_ids
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "i-0000000000000000".to_string());
             json!({
                 "CommandId": c.command_id,
-                "InstanceId": "i-0000000000000000",
+                "InstanceId": instance_id,
                 "DocumentName": c.document_name,
                 "Status": c.status,
+                "StandardOutputContent": c.std_out,
+                "StandardErrorContent": c.std_err,
                 "RequestedDateTime": c.created_time,
             })
         })

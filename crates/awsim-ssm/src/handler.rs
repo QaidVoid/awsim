@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
 use serde_json::Value;
 use tracing::debug;
@@ -301,4 +303,45 @@ impl ServiceHandler for SsmService {
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
+
+    /// Advance Run Command status by absolute wall-clock age. Each
+    /// command moves Pending -> InProgress at 1s old and InProgress ->
+    /// Success at 2s old, computed from `created_time` so repeated
+    /// ticks are idempotent and a missed tick cannot lose a step.
+    /// Terminal states (Cancelled / Failed / Success) are never moved.
+    async fn tick(&self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        for (_key, state) in self.store.iter_all() {
+            for mut entry in state.commands.iter_mut() {
+                let c = entry.value_mut();
+                let age = now.saturating_sub(c.created_time);
+                match c.status.as_str() {
+                    "Pending" if age >= COMMAND_SUCCESS_SECS => {
+                        c.status = "Success".to_string();
+                        c.std_out = COMMAND_SYNTHETIC_OUTPUT.to_string();
+                    }
+                    "Pending" if age >= COMMAND_IN_PROGRESS_SECS => {
+                        c.status = "InProgress".to_string();
+                    }
+                    "InProgress" if age >= COMMAND_SUCCESS_SECS => {
+                        c.status = "Success".to_string();
+                        c.std_out = COMMAND_SYNTHETIC_OUTPUT.to_string();
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
+
+/// Age in seconds at which a Pending command becomes InProgress.
+const COMMAND_IN_PROGRESS_SECS: u64 = 1;
+/// Age in seconds at which a command reaches the terminal Success state.
+const COMMAND_SUCCESS_SECS: u64 = 2;
+/// Synthetic stdout stored once a command succeeds, matching the
+/// constant-output convention used by the SSM command stubs.
+const COMMAND_SYNTHETIC_OUTPUT: &str = "Command completed successfully.\n";

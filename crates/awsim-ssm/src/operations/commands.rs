@@ -70,6 +70,25 @@ pub fn send_command(
 
     let targets = input["Targets"].as_array().cloned().unwrap_or_default();
 
+    // Resolve the target instances: explicit InstanceIds plus any
+    // `instanceids` target Values.
+    let mut instance_ids: Vec<String> = input["InstanceIds"]
+        .as_array()
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    for target in &targets {
+        let is_instance_key = target["Key"]
+            .as_str()
+            .is_some_and(|k| k.eq_ignore_ascii_case("instanceids"));
+        if is_instance_key && let Some(values) = target["Values"].as_array() {
+            instance_ids.extend(values.iter().filter_map(|v| v.as_str().map(String::from)));
+        }
+    }
+
     let command_id = new_command_id();
     let now = now_epoch_secs();
 
@@ -77,8 +96,11 @@ pub fn send_command(
         command_id: command_id.clone(),
         document_name: document_name.to_string(),
         targets: targets.clone(),
+        instance_ids,
         status: "Pending".to_string(),
         created_time: now,
+        std_out: String::new(),
+        std_err: String::new(),
     };
 
     info!(command_id = %command_id, document_name, "SendCommand (stub)");
@@ -146,15 +168,19 @@ pub fn get_command_invocation(
         )
     })?;
 
-    let instance_id = input["InstanceId"].as_str().unwrap_or("i-00000000");
+    let instance_id = input["InstanceId"]
+        .as_str()
+        .map(String::from)
+        .or_else(|| command.instance_ids.first().cloned())
+        .unwrap_or_else(|| "i-00000000".to_string());
 
     Ok(json!({
         "CommandId": command.command_id,
         "InstanceId": instance_id,
         "DocumentName": command.document_name,
-        "Status": "Success",
-        "StatusDetails": "Success",
-        "StandardOutputContent": "",
-        "StandardErrorContent": "",
+        "Status": command.status,
+        "StatusDetails": command.status,
+        "StandardOutputContent": command.std_out,
+        "StandardErrorContent": command.std_err,
     }))
 }
